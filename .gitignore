@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# AgentFlow run 目录（intermediate、output、logs）
+.workspace/
+
+# Env / local
+.env
+.env.local
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# --- from capability package[cursor]: agentflow ---
+.cursor/agentflow
+.cursor/agents
+.cursor/hooks
+.cursor/hooks.json
+.cursor/rules
+.cursor/skills
+# --- end capability package[cursor]: agentflow ---

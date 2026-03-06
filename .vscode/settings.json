@@ -1,0 +1,5 @@
+{
+  "yaml.schemas": {
+    ".cursor/agentflow/flow-schema.json": ".cursor/agentflow/pipelines/**/flow.yaml"
+  }
+}
