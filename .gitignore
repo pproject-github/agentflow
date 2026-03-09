@@ -17,10 +17,3 @@ Thumbs.db
 .cursor/commands
 .cursor/skills
 # --- end capability package[cursor]: code_review ---
-
-# --- from capability package[cursor]: agentflow ---
-.cursor/agentflow
-.cursor/agents
-.cursor/hooks
-.cursor/rules
-# --- end capability package[cursor]: agentflow ---

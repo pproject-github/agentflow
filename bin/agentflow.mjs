@@ -91,6 +91,8 @@ const log = {
   },
 };
 
+/** agentflow 包根目录（CLI 所在包的 node_modules 用于解析脚本依赖，如 js-yaml） */
+const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const SKILLS_APPLY = ".cursor/skills/agentflow-apply";
 const RUN_BUILD_REL = ".workspace/agentflow/runBuild";
 const PIPELINES_DIR = ".cursor/agentflow/pipelines";
@@ -189,8 +191,36 @@ function getEffectiveModelName(modelOverride, modelType) {
   return modelRaw || "Auto";
 }
 
+/** 脚本路径：优先从 agentflow 包内加载（使用包内 node_modules），否则回退到工作区 .cursor/skills/agentflow-apply */
 function getScriptPath(workspaceRoot, name) {
-  return path.join(workspaceRoot, SKILLS_APPLY, name);
+  const fromPackage = path.join(PACKAGE_ROOT, SKILLS_APPLY, name);
+  if (fs.existsSync(fromPackage)) return fromPackage;
+  return path.join(path.resolve(workspaceRoot), SKILLS_APPLY, name);
+}
+
+/** 工作区内的 agentflow-apply 目录（能力包安装后的脚本所在处） */
+function getWorkspaceApplyDir(workspaceRoot) {
+  return path.join(path.resolve(workspaceRoot), ".cursor", "skills", "agentflow-apply");
+}
+
+/** 若工作区 .cursor/skills/agentflow-apply 存在 package.json 且缺少 node_modules（或 js-yaml），则执行 npm install，保证脚本可运行。 */
+function ensureAgentflowApplyDeps(workspaceRoot) {
+  const applyDir = getWorkspaceApplyDir(workspaceRoot);
+  const pkgPath = path.join(applyDir, "package.json");
+  const nodeModulesPath = path.join(applyDir, "node_modules");
+  const jsYamlPath = path.join(nodeModulesPath, "js-yaml");
+  if (!fs.existsSync(pkgPath)) return;
+  if (fs.existsSync(jsYamlPath)) return;
+  log.info(chalk.dim("[agentflow] Installing agentflow-apply dependencies in workspace…"));
+  const r = spawnSync("npm", ["install"], {
+    cwd: applyDir,
+    encoding: "utf-8",
+    stdio: ["inherit", "pipe", "inherit"],
+  });
+  if (r.status !== 0) {
+    const out = (r.stdout || "").trim() || r.stderr || "npm install failed";
+    throw new Error(`agentflow-apply npm install failed: ${out}`);
+  }
 }
 
 function runNodeScript(workspaceRoot, scriptName, args, options = {}) {
@@ -571,9 +601,8 @@ function styleStatus(s) {
   return chalk.dim(s || "-");
 }
 
-/** 每轮：当前执行节点（仅当 readyNodes.length > 0）+ 全量节点状态。execIdMap 可选，来自 get-ready-nodes。
- * 若 opts.useStderr 为 true，则输出到 stderr 并可选打印 opts.round 轮次分隔，保证每轮在终端可见且与【开始】/【结束】同流。 */
-function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap = {}, opts = {}) {
+/** 仅打印全量节点状态表（应用进入时展示一次用）。输出到 stderr。 */
+function printNodeStatusTable(instanceStatus, nodes, execIdMap = {}) {
   const idToLabel = new Map();
   const idToType = new Map();
   if (Array.isArray(nodes)) {
@@ -582,30 +611,6 @@ function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap
       idToType.set(n.id, n.type || "-");
     }
   }
-
-  const out = (msg) => {
-    if (opts.useStderr) process.stderr.write(msg + "\n");
-    else log.info(msg);
-  };
-
-  if (opts.useStderr && opts.round != null) {
-    process.stderr.write("\n" + chalk.bold.dim(`────────── 第 ${opts.round} 轮 ──────────`) + "\n");
-  }
-
-  if (readyNodes.length > 0) {
-    const runTable = new Table({
-      head: [chalk.cyan("当前执行节点")],
-      colWidths: [72],
-      style: { head: [], border: ["grey"] },
-    });
-    for (const id of readyNodes) {
-      const label = idToLabel.get(id);
-      runTable.push([label != null ? `${id} ${chalk.dim("(" + label + ")")}` : id]);
-    }
-    out("\n" + chalk.bold("当前执行节点"));
-    out(runTable.toString());
-  }
-
   const order = Array.isArray(nodes) ? nodes.map((n) => n.id) : Object.keys(instanceStatus || {});
   if (order.length === 0) return;
   const statusTable = new Table({
@@ -620,12 +625,13 @@ function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap
     const execId = execIdMap[id] != null ? String(execIdMap[id]) : "-";
     statusTable.push([label, type, styleStatus(status), execId]);
   }
-  out(chalk.bold("节点状态"));
-  out(statusTable.toString());
+  process.stderr.write("\n" + chalk.bold("节点状态") + "\n");
+  process.stderr.write(statusTable.toString() + "\n");
 }
 
 /** parallel 默认 false：多进程同时跑时 Cursor CLI 会写 ~/.cursor/cli-config.json，易产生 rename 竞态 (ENOENT)，故默认串行。 */
 async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false) {
+  ensureAgentflowApplyDeps(workspaceRoot);
   const flowDir = getFlowDir(workspaceRoot, flowName);
   if (!flowDir) {
     throw new Error(
@@ -674,7 +680,8 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
     );
     const { readyNodes = [], allDone, pendingNodes = [], instanceStatus = {}, execIdMap = {} } = parseJsonStdout(readyResult);
 
-    printCurrentNodesAndStatus(readyNodes, instanceStatus, parseOut.nodes, execIdMap, { useStderr: true, round });
+    /** 节点状态仅在进入时（第一轮）展示一次 */
+    if (round === 1) printNodeStatusTable(instanceStatus, parseOut.nodes, execIdMap);
 
     if (readyNodes.length === 0) {
       if (allDone) {
@@ -913,6 +920,7 @@ async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, agentMo
 }
 
 async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceIdArg, agentModel = null, force = true) {
+  ensureAgentflowApplyDeps(workspaceRoot);
   let flowName, uuid, instanceId;
   const flowJsonPathFor = (f, u) => path.join(getRunDir(workspaceRoot, f, u), "intermediate", "flow.json");
 
