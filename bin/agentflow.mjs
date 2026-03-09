@@ -18,6 +18,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const Table = require("cli-table3");
 
+const updateNotifier = require("update-notifier");
+const pkg = require(path.join(__dirname, "..", "package.json"));
+updateNotifier({ pkg }).notify();
+
 /** 节点执行区域分割线（开始/结束标识用） */
 const NODE_SEP = "════════════════════════════════════════════════════════════════";
 

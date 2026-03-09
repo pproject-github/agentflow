@@ -1,6 +1,6 @@
 {
   "name": "agentflow",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CLI to drive AgentFlow apply/replay with Cursor CLI streaming output",
   "type": "module",
   "main": "bin/agentflow.mjs",
@@ -22,6 +22,7 @@
     "cli-table3": "^0.6.5",
     "js-yaml": "^4.1.0",
     "markdansi": "^0.2.1",
-    "ora": "^9.3.0"
+    "ora": "^9.3.0",
+    "update-notifier": "^7.0.0"
   }
 }
