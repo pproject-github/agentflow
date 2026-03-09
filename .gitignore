@@ -13,11 +13,14 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# --- from capability package[cursor]: code_review ---
+.cursor/commands
+.cursor/skills
+# --- end capability package[cursor]: code_review ---
+
 # --- from capability package[cursor]: agentflow ---
 .cursor/agentflow
 .cursor/agents
 .cursor/hooks
-.cursor/hooks.json
 .cursor/rules
-.cursor/skills
 # --- end capability package[cursor]: agentflow ---

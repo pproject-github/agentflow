@@ -21,15 +21,6 @@ const Table = require("cli-table3");
 /** 节点执行区域分割线（开始/结束标识用） */
 const NODE_SEP = "════════════════════════════════════════════════════════════════";
 
-/** 读取 result 文件正文（frontmatter 之后的内容），用于 Print 节点输出到终端 */
-function readResultBody(workspaceRoot, flowName, uuid, resultPathRel) {
-  const resultPath = path.join(getRunDir(workspaceRoot, flowName, uuid), resultPathRel);
-  if (!fs.existsSync(resultPath)) return "";
-  const raw = fs.readFileSync(resultPath, "utf-8");
-  const match = raw.match(/---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n([\s\S]*)$/);
-  return match ? match[1].trim() : "";
-}
-
 /** 当前时间 hh:MM:ss（24 小时） */
 function formatTimeHHMMSS() {
   const d = new Date();
@@ -289,10 +280,13 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     let stderrTotalBytes = 0;
     const stderrBuffer = options.stderrBuffer || null;
     let stderrLineBuffer = "";
+    const flowName = options.flowName ?? null;
+    const uuid = options.uuid ?? null;
 
     function writeStdout(text) {
       if (coloredPrefix) writeWithPrefix(process.stdout, text, coloredPrefix, agentContentColor);
       else if (text) process.stdout.write(agentContentColor(text));
+      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout", text);
     }
 
     function flushStderrLines() {
@@ -323,6 +317,7 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       } else {
         process.stderr.write(chunk);
       }
+      if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stderr", s);
     });
 
     const stdoutWidth = process.stdout.columns ?? 80;
@@ -362,7 +357,16 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
             }
           }
         } catch (_) {
-          writeStdout(line + "\n");
+          let out = line + "\n";
+          if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
+            let subtype = "?";
+            try {
+              const event = JSON.parse(line);
+              if (event && event.type === "tool_call") subtype = event.subtype ?? "?";
+            } catch (_) {}
+            out = `[cursor] tool_call ${subtype}\n`;
+          }
+          writeStdout(out);
         }
       }
     });
@@ -397,12 +401,15 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
   });
 }
 
-/** 本地支持、不经过 Cursor CLI 的节点类型（与 pre-process-node.mjs 中 LOCAL_ONLY_DEFINITION_IDS 一致） */
+/**
+ * 仅 pre+post、不执行任何命令的节点类型；CLI 的「跳过 agent」规则仅由此处维护，pre-process 只提供 definitionId 与可选的 directCommand。
+ * - 留在 LOCAL_ONLY（执行阶段跳过，仅 pre + post）：control_start、control_end、control_if、tool_print、tool_user_check、provide_str、provide_file。
+ * - 需执行一条确定命令的节点（control_anyOne、tool_load_key、tool_save_key）由 pre 输出 directCommand，CLI 执行该命令并跳过 agent，不列入本集合。
+ */
 const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_if",
   "control_start",
   "control_end",
-  "control_anyOne",
   "tool_print",
   "tool_user_check",
   "provide_str",
@@ -410,10 +417,20 @@ const LOCAL_ONLY_DEFINITION_IDS = new Set([
 ]);
 
 /**
+ * 仅 pre+post 且由 CLI 负责写终态的节点：post 后由 CLI 调用 write-result 写入 success，避免 get-ready-nodes 因非终态而循环。
+ * 不含 control_if（pre 已写 success）、tool_user_check（post 已写 pending）。
+ */
+const LOCAL_ONLY_TERMINAL_SUCCESS_IDS = new Set([
+  "control_start",
+  "control_end",
+  "tool_print",
+  "provide_str",
+  "provide_file",
+]);
+
+/**
  * Execute one node: 按 definitionId / directCommand 决定是否走 Cursor CLI。
- * - LOCAL_ONLY_DEFINITION_IDS：预处理已写 result，直接跳过。
- * - directCommand：执行 pre-process 输出的 directCommand，不调 Cursor CLI。
- * - 其余节点：走 Cursor CLI（runCursorAgentForNode）。
+ * 顺序：1) definitionId ∈ LOCAL_ONLY_DEFINITION_IDS → 直接 return（仅 pre+post）；2) preOutput.directCommand 存在 → 执行该命令并 return；3) 否则 → runCursorAgentForNode。
  * options.model: optional Cursor CLI --model (overrides CURSOR_AGENT_MODEL).
  */
 async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput, options = {}) {
@@ -480,6 +497,8 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
         outputPrefix: options.outputPrefix,
         prefixColor: options.prefixColor,
         onToolCall: options.onToolCall,
+        flowName,
+        uuid,
       },
     );
     appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
@@ -508,6 +527,27 @@ function runPostProcess(workspaceRoot, flowName, uuid, instanceId, execId) {
   parseJsonStdout(result);
 }
 
+/**
+ * CLI 侧：对「仅 pre+post、需由 CLI 写终态」的节点，在 post 后写入 result.status = success，避免 get-ready-nodes 循环。
+ */
+function ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput) {
+  if (!preOutput.definitionId || !LOCAL_ONLY_TERMINAL_SUCCESS_IDS.has(preOutput.definitionId)) return;
+  const payload = {
+    status: "success",
+    message: "已通过",
+    execId: preOutput.execId ?? 1,
+  };
+  const result = runNodeScript(
+    workspaceRoot,
+    "write-result.mjs",
+    [workspaceRoot, flowName, uuid, instanceId, "--json", JSON.stringify(payload)],
+    { captureStdout: true },
+  );
+  if (result.status !== 0) {
+    log.warn(`[agentflow] ensureLocalNodeTerminalSuccess write-result failed for ${instanceId}: ${result.stdout || result.stderr || result.status}`);
+  }
+}
+
 /** 开始时：入口信息（仅流程名称与 uuid） */
 function printEntryAndFlowFiles(workspaceRoot, flowName, uuid) {
   const entryTable = new Table({
@@ -531,8 +571,9 @@ function styleStatus(s) {
   return chalk.dim(s || "-");
 }
 
-/** 每轮：当前执行节点（仅当 readyNodes.length > 0）+ 全量节点状态。execIdMap 可选，来自 get-ready-nodes。 */
-function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap = {}) {
+/** 每轮：当前执行节点（仅当 readyNodes.length > 0）+ 全量节点状态。execIdMap 可选，来自 get-ready-nodes。
+ * 若 opts.useStderr 为 true，则输出到 stderr 并可选打印 opts.round 轮次分隔，保证每轮在终端可见且与【开始】/【结束】同流。 */
+function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap = {}, opts = {}) {
   const idToLabel = new Map();
   const idToType = new Map();
   if (Array.isArray(nodes)) {
@@ -540,6 +581,15 @@ function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap
       idToLabel.set(n.id, n.label || n.id);
       idToType.set(n.id, n.type || "-");
     }
+  }
+
+  const out = (msg) => {
+    if (opts.useStderr) process.stderr.write(msg + "\n");
+    else log.info(msg);
+  };
+
+  if (opts.useStderr && opts.round != null) {
+    process.stderr.write("\n" + chalk.bold.dim(`────────── 第 ${opts.round} 轮 ──────────`) + "\n");
   }
 
   if (readyNodes.length > 0) {
@@ -552,8 +602,8 @@ function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap
       const label = idToLabel.get(id);
       runTable.push([label != null ? `${id} ${chalk.dim("(" + label + ")")}` : id]);
     }
-    log.info("\n" + chalk.bold("当前执行节点"));
-    log.info(runTable.toString());
+    out("\n" + chalk.bold("当前执行节点"));
+    out(runTable.toString());
   }
 
   const order = Array.isArray(nodes) ? nodes.map((n) => n.id) : Object.keys(instanceStatus || {});
@@ -570,8 +620,8 @@ function printCurrentNodesAndStatus(readyNodes, instanceStatus, nodes, execIdMap
     const execId = execIdMap[id] != null ? String(execIdMap[id]) : "-";
     statusTable.push([label, type, styleStatus(status), execId]);
   }
-  log.info(chalk.bold("节点状态"));
-  log.info(statusTable.toString());
+  out(chalk.bold("节点状态"));
+  out(statusTable.toString());
 }
 
 /** parallel 默认 false：多进程同时跑时 Cursor CLI 会写 ~/.cursor/cli-config.json，易产生 rename 竞态 (ENOENT)，故默认串行。 */
@@ -624,7 +674,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
     );
     const { readyNodes = [], allDone, pendingNodes = [], instanceStatus = {}, execIdMap = {} } = parseJsonStdout(readyResult);
 
-    printCurrentNodesAndStatus(readyNodes, instanceStatus, parseOut.nodes, execIdMap);
+    printCurrentNodesAndStatus(readyNodes, instanceStatus, parseOut.nodes, execIdMap, { useStderr: true, round });
 
     if (readyNodes.length === 0) {
       if (allDone) {
@@ -698,14 +748,6 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         process.stderr.write("\n" + NODE_SEP + "\n");
         process.stderr.write(chalk.bold.cyan("【开始】节点 ") + instanceId + chalk.dim(" (" + label + ")") + "  " + chalk.dim("model: ") + chalk.yellow(modelLabel) + "\n");
         log.info(chalk.dim("Prompt: ") + promptAbs);
-        if (preOutput.definitionId === "tool_print" && preOutput.resultPath) {
-          const body = readResultBody(workspaceRoot, flowName, uuid, preOutput.resultPath);
-          if (body) {
-            process.stderr.write("\n" + chalk.bold.yellow("【Print 输出】") + "\n");
-            process.stderr.write(body + "\n");
-            process.stderr.write(chalk.dim("────────────────────────────────────────") + "\n");
-          }
-        }
         process.stderr.write(NODE_SEP + "\n\n");
         const startTime = Date.now();
         const initialRunningText = `Running: ${instanceId} (${label})  ${formatDuration(0) + " / " + formatDuration(Date.now() - runStartTime)}`;
@@ -777,6 +819,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         });
       }
       runPostProcess(workspaceRoot, flowName, uuid, instanceId, preOutput.execId);
+      ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput);
       log.debug(`[agentflow] 退出节点 instanceId=${instanceId} execId=${preOutput.execId}`);
     };
 
@@ -934,6 +977,7 @@ async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceI
   process.stderr.write(NODE_SEP + "\n\n");
   await executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput, { model: agentModel, force });
   runPostProcess(workspaceRoot, flowName, uuid, instanceId, preOutput.execId);
+  ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput);
   log.debug(`[agentflow] 退出节点 instanceId=${instanceId} execId=${preOutput.execId}`);
   process.stderr.write("\n" + NODE_SEP + "\n");
   process.stderr.write(chalk.bold.cyan("【结束】节点 ") + instanceId + "\n");

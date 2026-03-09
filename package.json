@@ -1,6 +1,6 @@
 {
   "name": "agentflow",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "CLI to drive AgentFlow apply/replay with Cursor CLI streaming output",
   "type": "module",
   "main": "bin/agentflow.mjs",

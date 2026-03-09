@@ -27,7 +27,7 @@ agentflow --help
 ```
 
 - **apply** — Build run dir, parse flow, then loop: get ready nodes → for each node run pre-process → execute (Cursor agent or direct command) → post-process. Uses Cursor CLI with `--print --output-format stream-json` when executing agent nodes.
-- **replay** — Run a single node: pre-process → execute → post-process. With two args: `replay <uuid> <instanceId>` (flowName read from `.workspace/agentflow/<uuid>/intermediate/flow.json`). With three args: `replay <flowName> <uuid> <instanceId>`.
+- **replay** — Run a single node: pre-process → execute → post-process. With two args: `replay <uuid> <instanceId>` (flowName resolved from run dir under `.workspace/agentflow/runBuild/<flowName>/<uuid>/`). With three args: `replay <flowName> <uuid> <instanceId>`.
 
 ### Options
 
