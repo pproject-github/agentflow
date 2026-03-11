@@ -18,9 +18,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const Table = require("cli-table3");
 
-const updateNotifier = require("update-notifier");
+const updateNotifier = require("update-notifier").default;
 const pkg = require(path.join(__dirname, "..", "package.json"));
 updateNotifier({ pkg }).notify();
+
+/** 当 stderr 非 TTY（如被 desktop 管道捕获）时禁用 chalk，避免日志里出现 [90m 等 ANSI 转义码 */
+if (process.stderr && !process.stderr.isTTY) {
+  chalk.level = 0;
+}
 
 /** 节点执行区域分割线（开始/结束标识用） */
 const NODE_SEP = "════════════════════════════════════════════════════════════════";
@@ -80,6 +85,9 @@ function writeWithPrefix(stream, text, prefix, contentColor = null) {
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 let currentLogLevel = LOG_LEVELS.info;
 
+/** --machine-readable 时向 stdout 输出 JSON 行事件（apply-start/node-start/node-done/node-failed/apply-done/apply-paused），供 UI 解析并展示正在执行的节点 */
+let machineReadable = false;
+
 const log = {
   debug: (msg) => {
     if (currentLogLevel <= LOG_LEVELS.debug) process.stderr.write(chalk.dim(msg) + "\n");
@@ -97,11 +105,51 @@ const log = {
 
 /** agentflow 包根目录（CLI 所在包的 node_modules 用于解析脚本依赖，如 js-yaml） */
 const PACKAGE_ROOT = path.resolve(__dirname, "..");
-const SKILLS_APPLY = ".cursor/skills/agentflow-apply";
+/** 包内 agents 目录（执行器身份 prompt），优先使用，缺失时回退到工作区 .cursor/agents */
+const PACKAGE_AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
+/** apply 子命令所用脚本目录（随包发布，不再从工作区 .cursor/skills/agentflow-apply 加载） */
+const APPLY_SCRIPTS_DIR = path.join(__dirname, "apply");
+/** apply -ai 允许调用的单步脚本名（不含 .mjs），供外部多轮控制 */
+const APPLY_AI_STEPS = [
+  "ensure-run-dir",
+  "parse-flow",
+  "get-ready-nodes",
+  "pre-process-node",
+  "post-process-node",
+  "write-result",
+  "run-tool-nodejs",
+  "check-flow",
+  "collect-nodes",
+  "gc",
+];
 const RUN_BUILD_REL = ".workspace/agentflow/runBuild";
 const PIPELINES_DIR = ".cursor/agentflow/pipelines";
 const PIPELINES_DIR_WORKSPACE = ".workspace/agentflow/pipelines";
+const REFERENCE_DIR_REL = ".workspace/agentflow/reference";
 const RUN_LOG_REL = "logs/log.txt";
+
+/** 包内 reference 目录（npm 安装后与 bin 同包），运行时若工作区缺少则复制到 .workspace/agentflow/reference */
+const PACKAGE_REFERENCE_DIR = path.join(PACKAGE_ROOT, "reference");
+
+/**
+ * 确保工作区 .workspace/agentflow/reference 存在且含包内 reference 文件（全局安装或未跑 postinstall 时补齐）。
+ */
+function ensureReference(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  const destDir = path.join(root, REFERENCE_DIR_REL);
+  if (!fs.existsSync(PACKAGE_REFERENCE_DIR) || !fs.statSync(PACKAGE_REFERENCE_DIR).isDirectory()) return;
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    const names = fs.readdirSync(PACKAGE_REFERENCE_DIR);
+    for (const name of names) {
+      const srcFile = path.join(PACKAGE_REFERENCE_DIR, name);
+      if (fs.statSync(srcFile).isFile()) {
+        const destFile = path.join(destDir, name);
+        if (!fs.existsSync(destFile)) fs.copyFileSync(srcFile, destFile);
+      }
+    }
+  } catch (_) {}
+}
 
 function getRunDir(workspaceRoot, flowName, uuid) {
   return path.join(path.resolve(workspaceRoot), RUN_BUILD_REL, flowName, uuid);
@@ -115,6 +163,31 @@ function getFlowDir(workspaceRoot, flowName) {
   const cursorFlowDir = path.join(root, PIPELINES_DIR, flowName);
   if (fs.existsSync(cursorFlowDir) && fs.existsSync(path.join(cursorFlowDir, "flow.yaml"))) return cursorFlowDir;
   return null;
+}
+
+/** 解析 agent 身份 prompt 路径：优先使用包内 agents/<subagent>.md，否则工作区 .cursor/agents/<subagent>.md */
+function getAgentPath(workspaceRoot, subagent) {
+  const packagePath = path.join(PACKAGE_AGENTS_DIR, `${subagent}.md`);
+  if (fs.existsSync(packagePath)) return path.resolve(packagePath);
+  return path.resolve(workspaceRoot, ".cursor", "agents", `${subagent}.md`);
+}
+
+/**
+ * 读取 agent 文件内容并替换路径占位符为真实路径（方案 A：注入 prompt 用）。
+ * replacements 形如 { workspaceRoot, promptPath, resultPath, intermediatePath, outputDir }，均为绝对路径字符串。
+ * 返回替换后的整段文本；若文件不存在则返回空字符串。
+ */
+function loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements) {
+  const agentPath = getAgentPath(workspaceRoot, subagent);
+  if (!fs.existsSync(agentPath)) return "";
+  let content = fs.readFileSync(agentPath, "utf8");
+  for (const [key, value] of Object.entries(replacements)) {
+    if (value != null && typeof value === "string") {
+      const placeholder = "${" + key + "}";
+      content = content.split(placeholder).join(value);
+    }
+  }
+  return content;
 }
 
 /**
@@ -131,6 +204,14 @@ function appendRunLogLine(workspaceRoot, flowName, uuid, tag, message) {
     const line = `[${new Date().toISOString()}] [${tag}] ${text}\n`;
     fs.appendFileSync(logPath, line, "utf-8");
   } catch (_) {}
+}
+
+/** 发送 CLI 事件：写 run log，且 machineReadable 时向 stdout 输出一行 JSON（含 ts），供 UI 展示当前节点等。 */
+function emitEvent(workspaceRoot, flowName, uuid, payload) {
+  appendRunLogLine(workspaceRoot, flowName, uuid, "cli", payload);
+  if (machineReadable && workspaceRoot && flowName && uuid) {
+    process.stdout.write(JSON.stringify({ ...payload, ts: new Date().toISOString() }) + "\n");
+  }
 }
 
 /** 两参 replay 时根据 uuid 查找 run 目录（扫描 runBuild/<flowName>/<uuid>），返回 flowName 或 null。 */
@@ -174,63 +255,98 @@ function ensureRunStartTime(workspaceRoot, flowName, uuid) {
 }
 const MAX_LOOP_ROUNDS = 10000;
 
-/** modelType（与 pre-process 一致）→ Cursor CLI --model。null 表示不传 --model（用 Cursor 默认）。Auto/自动 同义。可通过 env CURSOR_AGENT_MODEL_<modelType> 覆盖单项。 */
-const MODEL_TYPE_TO_CURSOR_MODEL = {
-  Auto: null,
-  自动: null,
-  规划: null,
-  Code: null,
-  前端: null,
-};
+/**
+ * 解析节点实际使用的 CLI 与模型：
+ * - agentModelOverride（CLI --model 或 CURSOR_AGENT_MODEL）存在时：始终使用 Cursor CLI。
+ * - 否则优先从工作区 .cursor/agentflow/models.json 中按 key 查找 { cli, model }。
+ * - 若配置缺失则根据约定回退：以 "opencode:" 前缀或显式 cli 指定 opencode，其余默认 cursor。
+ */
+const MODEL_CONFIG_REL = path.join(".cursor", "agentflow", "models.json");
+const modelConfigCache = new Map(); // workspaceRoot -> { models: Record<string,{cli,model}> }
 
-/** 解析节点实际使用的 Cursor model 名称（与 runCursorAgentForNode 内逻辑一致），用于日志展示。 */
-function getEffectiveModelName(modelOverride, modelType) {
-  const modelRaw =
-    modelOverride ??
-    process.env.CURSOR_AGENT_MODEL ??
-    (modelType != null && process.env["CURSOR_AGENT_MODEL_" + modelType]) ??
-    (modelType != null && MODEL_TYPE_TO_CURSOR_MODEL[modelType]) ??
-    null;
-  if (modelRaw === false || modelRaw === "false" || modelRaw === "") return "Auto";
-  return modelRaw || "Auto";
+/** UI 格式为「模型 ID - 描述」，传参只用前面的模型 ID。若为 "auto" 则规范为 Cursor 可识别的 "Auto"。 */
+function normalizeCursorModelForCli(value) {
+  if (value == null || value === false || value === "") return "Auto";
+  let s = String(value).trim();
+  if (!s) return "Auto";
+  const dashIdx = s.indexOf(" - ");
+  if (dashIdx >= 0) s = s.slice(0, dashIdx).trim();
+  if (!s) return "Auto";
+  if (/^auto$/i.test(s)) return "Auto";
+  return s;
 }
 
-/** 脚本路径：优先从 agentflow 包内加载（使用包内 node_modules），否则回退到工作区 .cursor/skills/agentflow-apply */
-function getScriptPath(workspaceRoot, name) {
-  const fromPackage = path.join(PACKAGE_ROOT, SKILLS_APPLY, name);
-  if (fs.existsSync(fromPackage)) return fromPackage;
-  return path.join(path.resolve(workspaceRoot), SKILLS_APPLY, name);
-}
-
-/** 工作区内的 agentflow-apply 目录（能力包安装后的脚本所在处） */
-function getWorkspaceApplyDir(workspaceRoot) {
-  return path.join(path.resolve(workspaceRoot), ".cursor", "skills", "agentflow-apply");
-}
-
-/** 若工作区 .cursor/skills/agentflow-apply 存在 package.json 且缺少 node_modules（或 js-yaml），则执行 npm install，保证脚本可运行。 */
-function ensureAgentflowApplyDeps(workspaceRoot) {
-  const applyDir = getWorkspaceApplyDir(workspaceRoot);
-  const pkgPath = path.join(applyDir, "package.json");
-  const nodeModulesPath = path.join(applyDir, "node_modules");
-  const jsYamlPath = path.join(nodeModulesPath, "js-yaml");
-  if (!fs.existsSync(pkgPath)) return;
-  if (fs.existsSync(jsYamlPath)) return;
-  log.info(chalk.dim("[agentflow] Installing agentflow-apply dependencies in workspace…"));
-  const r = spawnSync("npm", ["install"], {
-    cwd: applyDir,
-    encoding: "utf-8",
-    stdio: ["inherit", "pipe", "inherit"],
-  });
-  if (r.status !== 0) {
-    const out = (r.stdout || "").trim() || r.stderr || "npm install failed";
-    throw new Error(`agentflow-apply npm install failed: ${out}`);
+function loadModelConfig(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  if (modelConfigCache.has(root)) return modelConfigCache.get(root);
+  const configPath = path.join(root, MODEL_CONFIG_REL);
+  let config = { models: {} };
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && parsed.models && typeof parsed.models === "object") {
+        config = { models: parsed.models };
+      }
+    }
+  } catch (_) {
+    // ignore parse errors, fall back to empty config
   }
+  modelConfigCache.set(root, config);
+  return config;
+}
+
+function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride) {
+  // CLI --model / CURSOR_AGENT_MODEL 始终表示「Cursor CLI + 覆盖模型」
+  if (agentModelOverride && String(agentModelOverride).trim()) {
+    const model = normalizeCursorModelForCli(agentModelOverride);
+    return {
+      cli: "cursor",
+      model,
+      label: `cursor: ${model}`,
+    };
+  }
+
+  const key = nodeModel && String(nodeModel).trim() ? String(nodeModel).trim() : "";
+  if (key) {
+    const { models } = loadModelConfig(workspaceRoot);
+    const cfg = models[key];
+    if (cfg && typeof cfg === "object" && cfg.cli && cfg.model) {
+      const cli = cfg.cli === "opencode" ? "opencode" : "cursor";
+      const model = String(cfg.model).trim();
+      return { cli, model, label: `${cli}: ${model}` };
+    }
+  }
+
+  // 无配置时的约定：以 "opencode:" 前缀表示 OpenCode，其余默认 Cursor。
+  if (key && key.startsWith("opencode:")) {
+    const model = key.slice("opencode:".length) || "";
+    return {
+      cli: "opencode",
+      model: model || null,
+      label: model ? `opencode: ${model}` : "opencode (default)",
+    };
+  }
+
+  // 默认 Cursor：若未指定节点级 model，则用 CURSOR_AGENT_MODEL / Auto。将 UI 可能写入的 "auto - Auto (current)" 规范为 "Auto"。
+  const envModel = process.env.CURSOR_AGENT_MODEL && String(process.env.CURSOR_AGENT_MODEL).trim();
+  const model = normalizeCursorModelForCli(key || envModel || "Auto");
+  return {
+    cli: "cursor",
+    model,
+    label: model === "Auto" ? "cursor: Auto" : `cursor: ${model}`,
+  };
+}
+
+/** 脚本路径：从 agentflow 包内 bin/apply 目录加载（不兼容：不再从工作区 .cursor/skills/agentflow-apply 加载） */
+function getScriptPath(workspaceRoot, name) {
+  return path.join(APPLY_SCRIPTS_DIR, name);
 }
 
 function runNodeScript(workspaceRoot, scriptName, args, options = {}) {
   const scriptPath = getScriptPath(workspaceRoot, scriptName);
   if (!fs.existsSync(scriptPath)) {
-    throw new Error(`Script not found: ${scriptPath}. Run from workspace root that contains .cursor/skills/agentflow-apply.`);
+    throw new Error(`Script not found: ${scriptPath}. Reinstall the agentflow package.`);
   }
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: workspaceRoot,
@@ -261,29 +377,45 @@ function isValidUuid(value) {
 
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
- * Prompt instructs the agent to act as node executor with promptPath, intermediatePath, resultPath.
+ * Agent 身份文件先按路径变量替换后写入「该节点 intermediate」目录（即 prompt 所在目录）下的 agent-<subagent>.md，传参为「Agent角色定义: 该替换后文件路径」及本任务路径信息。
  */
 function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent }, options = {}) {
   const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absAgentPath = path.resolve(workspaceRoot, ".cursor", "agents", `${subagent}.md`);
-  const absResultPath = path.join(intermediatePath, resultPathRel);
-  const promptText = `请以 agent 模式执行。
-- **agent 身份 prompt**：${absAgentPath}（请先阅读该文件以确定身份与规范）
-- **读取执行 指令 prompt**：${absPromptPath}
-- intermediatePath（run 目录）：${intermediatePath}
-- 将结果写入 resultPath：${absResultPath}
+  const absResultPath = path.join(path.resolve(workspaceRoot, intermediatePath), resultPathRel);
+  const absIntermediatePath = path.resolve(workspaceRoot, intermediatePath);
+  const nodeIntermediateDir = path.dirname(absPromptPath);
+  const outputDir = path.join(absIntermediatePath, "output");
+  const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const replacements = {
+    workspaceRoot: absWorkspaceRoot,
+    promptPath: absPromptPath,
+    resultPath: absResultPath,
+    intermediatePath: absIntermediatePath,
+    outputDir,
+  };
+  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
+  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
+  if (agentContent) {
+    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
+    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
+    agentPathForPrompt = resolvedAgentPath;
+  }
+  const promptText = `Agent角色定义: ${agentPathForPrompt}
+
+请先阅读该文件以确定身份与规范，再按以下路径执行：
+- 读取指令 prompt：${absPromptPath}
+- workspaceRoot（write-result 第一参数）：${absWorkspaceRoot}
+- resultPath：${absResultPath}
+- outputDir：${outputDir}
 请只完成该节点任务，不要修改 flow 或其它节点。`;
 
   const modelRaw =
     options.model ??
     process.env.CURSOR_AGENT_MODEL ??
-    (options.modelType != null && process.env["CURSOR_AGENT_MODEL_" + options.modelType]) ??
-    (options.modelType != null && MODEL_TYPE_TO_CURSOR_MODEL[options.modelType]) ??
     null;
-  /** 避免把 false / "false" 传给 Cursor CLI（会报 Cannot use this model: false） */
-  const model =
-    modelRaw === false || modelRaw === "false" || modelRaw === "" ? "Auto" : (modelRaw || "Auto");
-
+  /** 避免把 false / "false" 传给 Cursor CLI；将 "auto - Auto (current)" 等规范为 "Auto" */
+  const model = normalizeCursorModelForCli(modelRaw);
   const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
   const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
   /** Cursor AI 输出正文用灰色，与 CLI 自身打印区分 */
@@ -300,9 +432,16 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     if (options.force) args.push("--force");
     args.push("--model", model);
     args.push(promptText);
+    if (options.flowName && options.uuid) {
+      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI 完整参数: ${agentCmd} ${JSON.stringify(argvLog)}`);
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`);
+    }
+    /** 使用 inherit 让 Cursor 的 stderr 直接打到终端，便于在 exit 1 无 result 时看到真实报错（否则子进程无 TTY 时 Cursor 可能不往 pipe 写 stderr） */
+    const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
     const child = spawn(agentCmd, args, {
       cwd: workspaceRoot,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
       shell: false,
     });
 
@@ -317,9 +456,11 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     const flowName = options.flowName ?? null;
     const uuid = options.uuid ?? null;
 
+    /** machineReadable 时 Cursor 输出写 stderr，保证 stdout 仅用于 JSON 事件行 */
+    const outStream = machineReadable ? process.stderr : process.stdout;
     function writeStdout(text) {
-      if (coloredPrefix) writeWithPrefix(process.stdout, text, coloredPrefix, agentContentColor);
-      else if (text) process.stdout.write(agentContentColor(text));
+      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
+      else if (text) outStream.write(agentContentColor(text));
       if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout", text);
     }
 
@@ -333,26 +474,28 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       }
     }
 
-    child.stderr.on("data", (chunk) => {
-      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
-      const len = buf.length;
-      while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
-        const drop = stderrChunks.shift();
-        stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
-      }
-      stderrChunks.push(buf);
-      stderrTotalBytes += len;
-      if (stderrBuffer) {
-        stderrBuffer.push(chunk);
-      } else if (coloredPrefix) {
-        stderrLineBuffer += s;
-        flushStderrLines();
-      } else {
-        process.stderr.write(chunk);
-      }
-      if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stderr", s);
-    });
+    if (!useStderrInherit) {
+      child.stderr.on("data", (chunk) => {
+        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
+        const len = buf.length;
+        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
+          const drop = stderrChunks.shift();
+          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
+        }
+        stderrChunks.push(buf);
+        stderrTotalBytes += len;
+        if (stderrBuffer) {
+          stderrBuffer.push(chunk);
+        } else if (coloredPrefix) {
+          stderrLineBuffer += s;
+          flushStderrLines();
+        } else {
+          process.stderr.write(chunk);
+        }
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stderr", s);
+      });
+    }
 
     const stdoutWidth = process.stdout.columns ?? 80;
     const mdStreamer = createMarkdownStreamer({
@@ -360,10 +503,15 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       spacing: "single",
     });
 
+    /** 超过此长度的未解析行只输出摘要，避免整段 JSON 刷屏与写入 run log。需看完整 JSON 时可设 AGENTFLOW_DEBUG_STDOUT=1 */
+    const STDOUT_RAW_CAP = 200;
+    const debugStdout = process.env.AGENTFLOW_DEBUG_STDOUT === "1" || process.env.AGENTFLOW_DEBUG_STDOUT === "true";
+
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => {
       const lines = chunk.split("\n").filter(Boolean);
       for (const line of lines) {
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout-raw", line);
         try {
           const event = JSON.parse(line);
           if (event.type === "assistant" && event.message?.content) {
@@ -382,6 +530,8 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
               : "?";
             const subtype = event.subtype ?? "";
             if (options.onToolCall) options.onToolCall(subtype, toolName);
+          } else if (event.type === "thinking") {
+            if (options.onToolCall) options.onToolCall("thinking", "");
           } else if (event.type === "result") {
             lastResult = event;
             if (event.subtype === "success" && !event.is_error) {
@@ -389,16 +539,28 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
             } else {
               hadError = true;
             }
+          } else {
+            writeStdout(`[cursor-stdout] event: ${event.type ?? "unknown"}\n`);
           }
         } catch (_) {
-          let out = line + "\n";
+          let out;
           if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
             let subtype = "?";
             try {
               const event = JSON.parse(line);
               if (event && event.type === "tool_call") subtype = event.subtype ?? "?";
-            } catch (_) {}
+            } catch (_) {
+              // 大 payload（如 grep 整段结果）会导致 JSON.parse 失败，用正则从行首提取 subtype，避免解析整行
+              const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
+              if (m) subtype = m[1];
+            }
             out = `[cursor] tool_call ${subtype}\n`;
+          } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
+            out = line + "\n";
+          } else if (lastResult == null) {
+            out = `[cursor-stdout] (非 JSON，可能为 Cursor 报错) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`;
+          } else {
+            out = `[cursor-stdout] (解析失败或未处理的一行, ${line.length} 字符)\n`;
           }
           writeStdout(out);
         }
@@ -414,7 +576,7 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
 
     child.on("close", (code) => {
       child.stdout.removeAllListeners();
-      child.stderr.removeAllListeners();
+      if (!useStderrInherit) child.stderr.removeAllListeners();
       child.removeAllListeners();
       const tail = mdStreamer.finish();
       if (tail) writeStdout(tail);
@@ -423,11 +585,129 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       }
       if (code !== 0 && lastResult == null) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        reject(new Error(`Cursor CLI exited ${code}. ${stderr || "No result event received."}`));
+        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        const logHint = flowName && uuid
+          ? ` 检查 run 目录 logs/log.txt 查看完整 Cursor stderr；常见原因：未登录 Cursor、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CURSOR_STDERR_INHERIT=1 后重跑，使 Cursor 的 stderr 直接输出到终端。`
+          : "";
+        const err = new Error(
+          `Cursor CLI exited ${code}. ${stderrTail || "No result event received."}${logHint}`,
+        );
+        err.cursorStderrTail = stderrTail;
+        reject(err);
         return;
       }
       if (hadError || (lastResult && lastResult.is_error)) {
         reject(new Error(lastResult?.result || "Agent reported error."));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+/**
+ * Run OpenCode CLI in non-interactive mode for a node.
+ * 与 Cursor 一致：agent 身份先替换到「该节点 intermediate」目录（prompt 所在目录）/agent-<subagent>.md，再传该路径及本任务路径。
+ */
+function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent }, options = {}) {
+  const absPromptPath = path.resolve(workspaceRoot, promptPath);
+  const absResultPath = path.join(path.resolve(workspaceRoot, intermediatePath), resultPathRel);
+  const absIntermediatePath = path.resolve(workspaceRoot, intermediatePath);
+  const nodeIntermediateDir = path.dirname(absPromptPath);
+  const outputDir = path.join(absIntermediatePath, "output");
+  const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const replacements = {
+    workspaceRoot: absWorkspaceRoot,
+    promptPath: absPromptPath,
+    resultPath: absResultPath,
+    intermediatePath: absIntermediatePath,
+    outputDir,
+  };
+  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
+  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
+  if (agentContent) {
+    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
+    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
+    agentPathForPrompt = resolvedAgentPath;
+  }
+  const promptText = `Agent角色定义: ${agentPathForPrompt}
+
+请先阅读该文件以确定身份与规范，再按以下路径执行：
+- 读取指令 prompt：${absPromptPath}
+- workspaceRoot（write-result 第一参数）：${absWorkspaceRoot}
+- resultPath：${absResultPath}
+- outputDir：${outputDir}
+请只完成该节点任务，不要修改 flow 或其它节点。`;
+
+  const model = options.model && String(options.model).trim();
+  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
+  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
+  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
+
+  return new Promise((resolve, reject) => {
+    const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+    const args = ["run"];
+    if (model) {
+      args.push("--model", model);
+    }
+    args.push("--dir", workspaceRoot);
+    // 使用 "--" 结束选项解析，避免 prompt 以 "---"（frontmatter）开头时被误解析为选项导致打印 help 并 exit 1
+    args.push("--", promptText);
+    const spawnOpts = {
+      cwd: workspaceRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    };
+    // 与 Cursor 的 --trust/--force 对应：非交互下 external_directory 默认 ask 会 auto-reject，需显式 allow
+    // 使用 OPENCODE_CONFIG_CONTENT（优先级高于 opencode.json）确保权限生效
+    if (options.force) {
+      spawnOpts.env = {
+        ...process.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: { external_directory: "allow" },
+        }),
+      };
+    }
+    const child = spawn(opencodeCmd, args, spawnOpts);
+    const flowName = options.flowName ?? null;
+    const uuid = options.uuid ?? null;
+
+    function writeStdout(text) {
+      if (!text) return;
+      if (coloredPrefix) writeWithPrefix(process.stdout, text, coloredPrefix, agentContentColor);
+      else process.stdout.write(agentContentColor(text));
+      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stdout", text);
+    }
+
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => {
+      writeStdout(chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+      if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stderr", s);
+      if (coloredPrefix) {
+        writeWithPrefix(process.stderr, s, coloredPrefix, agentContentColor);
+      } else {
+        process.stderr.write(chunk);
+      }
+    });
+
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(new Error(`OpenCode CLI failed to start: ${err.message}. Ensure '${opencodeCmd}' is in PATH.`));
+    });
+
+    child.on("close", (code) => {
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      if (code !== 0) {
+        reject(new Error(`OpenCode CLI exited ${code}.`));
         return;
       }
       resolve();
@@ -476,7 +756,7 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     return;
   }
   if (directCommand) {
-    appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+    emitEvent(workspaceRoot, flowName, uuid, {
       event: "direct-command-start",
       instanceId,
       directCommand,
@@ -484,7 +764,7 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     try {
       const result = spawnSync(directCommand, [], { cwd: workspaceRoot, shell: true, stdio: "inherit" });
       if (result.status !== 0) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+        emitEvent(workspaceRoot, flowName, uuid, {
           event: "direct-command-failed",
           instanceId,
           directCommand,
@@ -492,14 +772,14 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
         });
         throw new Error(`Direct command failed: ${directCommand}`);
       }
-      appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+      emitEvent(workspaceRoot, flowName, uuid, {
         event: "direct-command-done",
         instanceId,
         directCommand,
       });
     } catch (err) {
       if (err.message && !err.message.includes("Direct command failed")) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+        emitEvent(workspaceRoot, flowName, uuid, {
           event: "direct-command-failed",
           instanceId,
           directCommand,
@@ -511,42 +791,71 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     return;
   }
 
-  appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+  const { cli, model, label: modelLabelResolved } = resolveCliAndModel(
+    workspaceRoot,
+    preOutput.model ?? null,
+    options.model ?? null,
+  );
+
+  emitEvent(workspaceRoot, flowName, uuid, {
     event: "agent-invoke-start",
     instanceId,
     subagent: subagent ?? null,
     promptPath: promptPath ?? null,
     resultPathRel: resultPath ?? null,
-    modelType: preOutput.modelType ?? null,
+    modelCli: cli,
+    model: model ?? null,
   });
   try {
-    await runCursorAgentForNode(
-      workspaceRoot,
-      { promptPath, intermediatePath, resultPathRel: resultPath, subagent },
-      {
-        model: options.model,
-        modelType: preOutput.modelType,
-        stderrBuffer: options.stderrBuffer,
-        force: options.force,
-        outputPrefix: options.outputPrefix,
-        prefixColor: options.prefixColor,
-        onToolCall: options.onToolCall,
-        flowName,
-        uuid,
-      },
-    );
-    appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+    if (cli === "opencode") {
+      await runOpenCodeAgentForNode(
+        workspaceRoot,
+        { promptPath, intermediatePath, resultPathRel: resultPath, subagent },
+        {
+          model,
+          stderrBuffer: options.stderrBuffer,
+          force: options.force,
+          outputPrefix: options.outputPrefix,
+          prefixColor: options.prefixColor,
+          onToolCall: options.onToolCall,
+          flowName,
+          uuid,
+        },
+      );
+    } else {
+      await runCursorAgentForNode(
+        workspaceRoot,
+        { promptPath, intermediatePath, resultPathRel: resultPath, subagent },
+        {
+          model,
+          stderrBuffer: options.stderrBuffer,
+          force: options.force,
+          outputPrefix: options.outputPrefix,
+          prefixColor: options.prefixColor,
+          onToolCall: options.onToolCall,
+          flowName,
+          uuid,
+        },
+      );
+    }
+    emitEvent(workspaceRoot, flowName, uuid, {
       event: "agent-invoke-done",
       instanceId,
       subagent: subagent ?? null,
+      modelCli: cli,
+      model: model ?? null,
     });
   } catch (err) {
-    appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+    const payload = {
       event: "agent-invoke-failed",
       instanceId,
       subagent: subagent ?? null,
+      modelCli: cli,
+      model: model ?? null,
       error: err && err.message ? String(err.message) : String(err),
-    });
+    };
+    if (err && err.cursorStderrTail) payload.cursorStderrTail = err.cursorStderrTail;
+    emitEvent(workspaceRoot, flowName, uuid, payload);
     throw err;
   }
 }
@@ -635,7 +944,7 @@ function printNodeStatusTable(instanceStatus, nodes, execIdMap = {}) {
 
 /** parallel 默认 false：多进程同时跑时 Cursor CLI 会写 ~/.cursor/cli-config.json，易产生 rename 竞态 (ENOENT)，故默认串行。 */
 async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false) {
-  ensureAgentflowApplyDeps(workspaceRoot);
+  ensureReference(workspaceRoot);
   const flowDir = getFlowDir(workspaceRoot, flowName);
   if (!flowDir) {
     throw new Error(
@@ -662,7 +971,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
   if (!parseOut.ok) throw new Error(parseOut.error || "parse-flow failed");
 
   printEntryAndFlowFiles(workspaceRoot, flowName, uuid);
-  appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+  emitEvent(workspaceRoot, flowName, uuid, {
     event: "apply-start",
     flowName,
     uuid,
@@ -690,16 +999,31 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
     if (readyNodes.length === 0) {
       if (allDone) {
         const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+        emitEvent(workspaceRoot, flowName, uuid, {
+          event: "apply-done",
+          flowName,
+          uuid,
+          runDir: getRunDir(workspaceRoot, flowName, uuid),
+          totalElapsed,
+        });
         log.info(`\nApply done. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim("总 " + totalElapsed)}`);
         return;
       }
       if (pendingNodes.length > 0) {
         const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
-        log.info(`\nPaused: uuid=${uuid} pendingNodes=${pendingNodes.join(", ")}  ${chalk.dim("总 " + totalElapsed)}`);
         const resumeExample =
           pendingNodes.length === 1
             ? `agentflow resume ${flowName} ${uuid} ${pendingNodes[0]}`
             : `agentflow resume ${flowName} ${uuid}`;
+        emitEvent(workspaceRoot, flowName, uuid, {
+          event: "apply-paused",
+          flowName,
+          uuid,
+          pendingNodes,
+          totalElapsed,
+          resumeExample,
+        });
+        log.info(`\nPaused: uuid=${uuid} pendingNodes=${pendingNodes.join(", ")}  ${chalk.dim("总 " + totalElapsed)}`);
         log.info(chalk.bold.yellow("→ 继续执行请运行: ") + resumeExample);
         return;
       }
@@ -731,21 +1055,27 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
       const preOutput = parseJsonStdout(preResult);
       preOutputs.push({ instanceId, label: idToLabel.get(instanceId) || instanceId, preOutput });
       log.debug(
-        `[agentflow] 执行节点 instanceId=${instanceId} definitionId=${preOutput.definitionId ?? "-"} promptPath=${preOutput.promptPath} resultPath=${preOutput.resultPath} subagent=${preOutput.subagent} modelType=${preOutput.modelType ?? "-"} execId=${preOutput.execId} directCommand=${preOutput.directCommand ? "yes" : "-"}`,
+        `[agentflow] 执行节点 instanceId=${instanceId} definitionId=${preOutput.definitionId ?? "-"} promptPath=${preOutput.promptPath} resultPath=${preOutput.resultPath} subagent=${preOutput.subagent} role=${preOutput.role ?? "-"} model=${preOutput.model ?? "-"} execId=${preOutput.execId} directCommand=${preOutput.directCommand ? "yes" : "-"}`,
       );
     }
 
     const runOne = async ({ instanceId, label, preOutput, outputPrefix, prefixColor }, isParallel) => {
       if (!isParallel) {
         const isLocalOnly = preOutput.definitionId && LOCAL_ONLY_DEFINITION_IDS.has(preOutput.definitionId);
-        const modelLabel = isLocalOnly ? "(本地)" : getEffectiveModelName(agentModel, preOutput.modelType);
+        const { label: resolvedLabel } = resolveCliAndModel(
+          workspaceRoot,
+          preOutput.model ?? null,
+          agentModel ?? null,
+        );
+        const modelLabel = isLocalOnly ? "(本地)" : resolvedLabel;
         const promptAbs = path.resolve(workspaceRoot, preOutput.promptPath);
         // CLI 侧「开始」信息同时写入终端与 run 日志
-        appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+        emitEvent(workspaceRoot, flowName, uuid, {
           event: "node-start",
           instanceId,
           label,
           definitionId: preOutput.definitionId ?? null,
+          modelCli: isLocalOnly ? null : resolveCliAndModel(workspaceRoot, preOutput.model ?? null, agentModel ?? null).cli,
           model: modelLabel,
           execId: preOutput.execId ?? null,
           promptPathRel: preOutput.promptPath ?? null,
@@ -784,7 +1114,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
             outputPrefix: instanceId,
             prefixColor: (s) => chalk.cyan(s),
             onToolCall(subtype, toolName) {
-              lastToolCallText = `${toolName} ${subtype}`;
+              lastToolCallText = subtype === "thinking" ? "thinking" : `${toolName} ${subtype}`;
               updateSpinnerText();
             },
           });
@@ -792,7 +1122,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
           elapsedStr = formatDuration(Date.now() - startTime);
           const totalStr = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
           spinner.succeed(chalk.green(`Done: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr));
-          appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+          emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-done",
             instanceId,
             label,
@@ -804,7 +1134,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
           elapsedStr = formatDuration(Date.now() - startTime);
           const totalStr = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
           spinner.fail(chalk.red(`Failed: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr));
-          appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+          emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-failed",
             instanceId,
             label,
@@ -840,7 +1170,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         item.outputPrefix = item.instanceId;
         item.prefixColor = PARALLEL_PREFIX_COLORS[i % PARALLEL_PREFIX_COLORS.length];
       });
-      appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+      emitEvent(workspaceRoot, flowName, uuid, {
         event: "parallel-start",
         size: preOutputs.length,
         nodes: preOutputs.map((p) => ({
@@ -878,7 +1208,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
       process.stderr.write("\n" + NODE_SEP + "\n");
       process.stderr.write(chalk.bold.cyan("【结束】并行节点全部完成") + "  " + chalk.dim("总 " + totalStrPar) + "\n");
       process.stderr.write(NODE_SEP + "\n");
-      appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+      emitEvent(workspaceRoot, flowName, uuid, {
         event: "parallel-done",
         size: preOutputs.length,
         total: totalStrPar,
@@ -924,7 +1254,6 @@ async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, agentMo
 }
 
 async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceIdArg, agentModel = null, force = true) {
-  ensureAgentflowApplyDeps(workspaceRoot);
   let flowName, uuid, instanceId;
   const flowJsonPathFor = (f, u) => path.join(getRunDir(workspaceRoot, f, u), "intermediate", "flow.json");
 
@@ -963,7 +1292,7 @@ async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceI
   const promptAbs = path.resolve(workspaceRoot, preOutput.promptPath);
   const isLocalOnlyReplay = preOutput.definitionId && LOCAL_ONLY_DEFINITION_IDS.has(preOutput.definitionId);
   const modelLabelReplay = isLocalOnlyReplay ? "(本地)" : getEffectiveModelName(agentModel, preOutput.modelType);
-  appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+  emitEvent(workspaceRoot, flowName, uuid, {
     event: "replay-start",
     flowName,
     uuid,
@@ -994,7 +1323,7 @@ async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceI
   process.stderr.write("\n" + NODE_SEP + "\n");
   process.stderr.write(chalk.bold.cyan("【结束】节点 ") + instanceId + "\n");
   process.stderr.write(NODE_SEP + "\n");
-  appendRunLogLine(workspaceRoot, flowName, uuid, "cli", {
+  emitEvent(workspaceRoot, flowName, uuid, {
     event: "replay-done",
     flowName,
     uuid,
@@ -1045,13 +1374,14 @@ function listPipelines(workspaceRoot) {
 
 function printHelp() {
   log.info(`
-AgentFlow CLI — drive apply/replay with Cursor CLI streaming.
+AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming.
 
 Usage:
   agentflow list                              列出所有 pipeline
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
   agentflow resume <FlowName> <uuid> [instanceId]  将 pending 节点标为已确认并继续 apply
   agentflow replay [flowName] <uuid> <instanceId>
+  agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
   agentflow --help
 
 Options:
@@ -1059,15 +1389,27 @@ Options:
   --dry-run                (apply only) Print ready nodes and exit without running Cursor agent
   --model <name>           Cursor CLI model (e.g. claude-sonnet). Overrides CURSOR_AGENT_MODEL. Run 'agent models' to list.
   --debug                  Show debug logs (gray, low priority)
-  --force                  Pass --force to Cursor CLI (default: on). Use --no-force to disable.
+  --force                  Pass --force/--trust to Cursor; set OPENCODE_PERMISSION to allow external_directory for OpenCode (default: on). Use --no-force to disable.
   --parallel               Run same-round ready nodes in parallel (default: off; use to enable). Multiple Cursor CLI processes may race on ~/.cursor/cli-config.json.
+  --machine-readable       Emit one JSON event per line to stdout (apply-start/node-start/node-done/node-failed/apply-done/apply-paused). For UI run button: parse stdout to show current node; Cursor agent output goes to stderr.
 
 Apply: builds run dir, parses flow, runs ready nodes in a loop.
+  With -ai / --ai: run a single step for external (AI) multi-round control:
+    agentflow apply -ai ensure-run-dir <workspaceRoot> [uuid] <flowName>
+    agentflow apply -ai parse-flow <workspaceRoot> <flowName> <uuid> [flowDir]
+    agentflow apply -ai get-ready-nodes <workspaceRoot> <flowName> <uuid>
+    agentflow apply -ai pre-process-node <workspaceRoot> <flowName> <uuid> <instanceId>
+    agentflow apply -ai post-process-node <workspaceRoot> <flowName> <uuid> <instanceId> [execId]
+    agentflow apply -ai write-result <workspaceRoot> <flowName> <uuid> <instanceId> --json '<JSON>'
+    agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> [execId] -- <scriptCmd> [args...]
+    agentflow apply -ai check-flow <workspaceRoot> <flowName> [flowDir]
+    agentflow apply -ai collect-nodes <workspaceRoot> <flowName> [runDir]
+    agentflow apply -ai gc <workspaceRoot> [--list] [--dry-run] [--delete] [--keep N] [--older-than N]
 Resume: marks pending node(s) as success (e.g. after UserCheck 确认), then continues apply.
 Replay: runs a single node (pre-process → execute → post-process).
 
 Requires: Node >=18, Cursor CLI ('agent') in PATH for node execution.
-Scripts must exist under <workspace>/.cursor/skills/agentflow-apply/.
+Apply/replay scripts are bundled in the agentflow package (bin/apply/).
 `);
 }
 
@@ -1111,6 +1453,10 @@ async function main() {
     parallel = false;
     argv.splice(argv.indexOf("--no-parallel"), 1);
   }
+  if (argv.includes("--machine-readable")) {
+    machineReadable = true;
+    argv.splice(argv.indexOf("--machine-readable"), 1);
+  }
   const sub = shift();
   if (!sub) {
     printHelp();
@@ -1125,6 +1471,24 @@ async function main() {
   if (sub === "list") {
     listPipelines(workspaceRoot);
   } else if (sub === "apply") {
+    const aiMode = argv[0] === "-ai" || argv[0] === "--ai";
+    if (aiMode) {
+      argv.shift(); // -ai / --ai
+      const step = argv.shift();
+      if (!step || !APPLY_AI_STEPS.includes(step)) {
+        throw new Error(
+          "Missing or invalid step. Usage: agentflow apply -ai <step> <args...>. Steps: " + APPLY_AI_STEPS.join(", "),
+        );
+      }
+      if (argv.length === 0) {
+        throw new Error("Missing args for step " + step + ". Example: agentflow apply -ai ensure-run-dir <workspaceRoot> [uuid] <flowName>");
+      }
+      const stepWorkspaceRoot = path.resolve(argv[0]);
+      ensureReference(stepWorkspaceRoot);
+      const scriptName = step + ".mjs";
+      const result = runNodeScript(stepWorkspaceRoot, scriptName, argv, { captureStdout: false });
+      process.exit(result.status ?? 0);
+    }
     const first = shift();
     if (!first) throw new Error("Missing FlowName or uuid. Usage: agentflow apply <FlowName> [uuid] | agentflow apply <uuid>");
     let flowName, uuidArg;
@@ -1147,8 +1511,15 @@ async function main() {
     const a = shift(), b = shift(), c = shift();
     if (!a || !b) throw new Error("Usage: agentflow replay <uuid> <instanceId> or agentflow replay <flowName> <uuid> <instanceId>");
     await replay(workspaceRoot, a, b, c, agentModel, force);
+  } else if (sub === "run-status") {
+    const flowName = shift();
+    const uuidArg = shift();
+    if (!flowName || !uuidArg) throw new Error("Usage: agentflow run-status <flowName> <uuid>");
+    const result = runNodeScript(workspaceRoot, "get-ready-nodes.mjs", [workspaceRoot, flowName, uuidArg], { captureStdout: true });
+    if (result.stdout) process.stdout.write(result.stdout);
+    process.exit(result.status === 0 ? 0 : 1);
   } else {
-    throw new Error("Unknown command: " + sub + ". Use list, apply, resume, or replay.");
+    throw new Error("Unknown command: " + sub + ". Use list, apply, resume, replay, or run-status.");
   }
 }
 

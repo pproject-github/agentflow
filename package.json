@@ -1,7 +1,7 @@
 {
   "name": "agentflow",
-  "version": "0.1.5",
-  "description": "CLI to drive AgentFlow apply/replay with Cursor CLI streaming output",
+  "version": "0.1.7",
+  "description": "CLI to drive AgentFlow apply/replay with Cursor or OpenCode CLI streaming output",
   "type": "module",
   "main": "bin/agentflow.mjs",
   "bin": {
@@ -17,6 +17,15 @@
     "workflow"
   ],
   "license": "MIT",
+  "files": [
+    "bin",
+    "agents",
+    "reference",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/ensure-workspace-reference.mjs"
+  },
   "dependencies": {
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
