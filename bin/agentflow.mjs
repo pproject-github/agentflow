@@ -384,18 +384,20 @@ function isValidUuid(value) {
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
  * Agent 身份文件先按路径变量替换后写入「该节点 intermediate」目录（即 prompt 所在目录）下的 agent-<subagent>.md，传参为「Agent角色定义: 该替换后文件路径」及本任务路径信息。
  */
-function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent }, options = {}) {
+function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent, instanceId }, options = {}) {
   const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absResultPath = path.join(path.resolve(workspaceRoot, intermediatePath), resultPathRel);
-  const absIntermediatePath = path.resolve(workspaceRoot, intermediatePath);
+  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
+  const absResultPath = path.join(absRunDir, resultPathRel);
   const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = path.join(absIntermediatePath, "output");
+  /** 约定：节点输出目录为 run 目录下 output/<instanceId>，与 get-exec-id outputDirForNode 一致，避免 Agent 写到 output/ 根下 */
+  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
+  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
   const absWorkspaceRoot = path.resolve(workspaceRoot);
   const replacements = {
     workspaceRoot: absWorkspaceRoot,
     promptPath: absPromptPath,
     resultPath: absResultPath,
-    intermediatePath: absIntermediatePath,
+    intermediatePath: path.join(absRunDir, "intermediate"),
     outputDir,
   };
   const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
@@ -614,18 +616,19 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
  * Run OpenCode CLI in non-interactive mode for a node.
  * 与 Cursor 一致：agent 身份先替换到「该节点 intermediate」目录（prompt 所在目录）/agent-<subagent>.md，再传该路径及本任务路径。
  */
-function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent }, options = {}) {
+function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent, instanceId }, options = {}) {
   const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absResultPath = path.join(path.resolve(workspaceRoot, intermediatePath), resultPathRel);
-  const absIntermediatePath = path.resolve(workspaceRoot, intermediatePath);
+  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
+  const absResultPath = path.join(absRunDir, resultPathRel);
   const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = path.join(absIntermediatePath, "output");
+  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
+  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
   const absWorkspaceRoot = path.resolve(workspaceRoot);
   const replacements = {
     workspaceRoot: absWorkspaceRoot,
     promptPath: absPromptPath,
     resultPath: absResultPath,
-    intermediatePath: absIntermediatePath,
+    intermediatePath: path.join(absRunDir, "intermediate"),
     outputDir,
   };
   const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
@@ -815,7 +818,7 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     if (cli === "opencode") {
       await runOpenCodeAgentForNode(
         workspaceRoot,
-        { promptPath, intermediatePath, resultPathRel: resultPath, subagent },
+        { promptPath, intermediatePath, resultPathRel: resultPath, subagent, instanceId },
         {
           model,
           stderrBuffer: options.stderrBuffer,
@@ -830,7 +833,7 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     } else {
       await runCursorAgentForNode(
         workspaceRoot,
-        { promptPath, intermediatePath, resultPathRel: resultPath, subagent },
+        { promptPath, intermediatePath, resultPathRel: resultPath, subagent, instanceId },
         {
           model,
           stderrBuffer: options.stderrBuffer,
@@ -1648,11 +1651,15 @@ async function main() {
     argv.splice(argv.indexOf("--machine-readable"), 1);
   }
   const jsonMode = argv.includes("--json");
-  if (jsonMode) argv.splice(argv.indexOf("--json"), 1);
   const sub = shift();
   if (!sub) {
     printHelp();
     process.exit(1);
+  }
+  // 仅对需要 --json 的顶层子命令移除该参数，避免 apply -ai write-result 时子脚本收不到 --json 与 payload
+  const jsonOnlySubs = ["list-flows", "list-nodes", "read-flow", "read-node", "copy-builtin"];
+  if (jsonMode && jsonOnlySubs.includes(sub)) {
+    argv.splice(argv.indexOf("--json"), 1);
   }
   let agentModel = process.env.CURSOR_AGENT_MODEL || null;
   const modelIdx = argv.indexOf("--model");
