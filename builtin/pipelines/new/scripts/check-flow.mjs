@@ -2,14 +2,13 @@
 /**
  * 检查 flow.yaml 定义：校验 instances、edges、槽位、control_start/control_end、环与 control_anyOne 等。
  * 用法：agentflow apply -ai check-flow <workspaceRoot> <flowName> [flowDir]
- * 或：agentflow apply -ai check-flow <flowYamlPath>（单参时为 flow 目录或 flow.yaml 路径）
+ *   或：agentflow apply -ai check-flow <flowYamlPath>（单参时为 flow 目录或 flow.yaml 路径）
  * 当传 3 个参数时，flowDir 为含 flow.yaml 的目录（相对 workspaceRoot 或绝对路径）；不传时先查 .workspace/agentflow/pipelines/<flowName>，再查 .cursor/agentflow/pipelines/<flowName>。
  * 输出（适配 agentflow apply -ai run-tool-nodejs）：stdout 单行 JSON { "err_code": number, "message": { "result": "<全文>" } }；err_code 恒为 0。
  */
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import yaml from "js-yaml";
 
 /** 由 definitionId 推导 type（与 parse-flow 一致） */
@@ -564,17 +563,13 @@ function main() {
     if (rest.length >= 3) {
       flowDir = path.resolve(root, rest[2]);
     } else {
-      const hasFlowYaml = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
+      const hasFlowYaml = (dir) => fs.existsSync(path.join(dir, "flow.yaml"));
       const workspaceFlowDir = path.join(root, ".workspace", "agentflow", "pipelines", name);
       const cursorFlowDir = path.join(root, ".cursor", "agentflow", "pipelines", name);
-      const builtinPipelinesDir = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."), "builtin", "pipelines");
-      const builtinFlowDir = path.join(builtinPipelinesDir, name);
       if (hasFlowYaml(workspaceFlowDir)) {
         flowDir = workspaceFlowDir;
       } else if (hasFlowYaml(cursorFlowDir)) {
         flowDir = cursorFlowDir;
-      } else if (hasFlowYaml(builtinFlowDir)) {
-        flowDir = builtinFlowDir;
       } else {
         flowDir = cursorFlowDir;
       }

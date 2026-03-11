@@ -130,6 +130,9 @@ const RUN_LOG_REL = "logs/log.txt";
 
 /** 包内 reference 目录（npm 安装后与 bin 同包），运行时若工作区缺少则复制到 .workspace/agentflow/reference */
 const PACKAGE_REFERENCE_DIR = path.join(PACKAGE_ROOT, "reference");
+/** 包内内置节点与流水线（脱离 ai-ability .cursor/agentflow 时使用） */
+const PACKAGE_BUILTIN_NODES_DIR = path.join(PACKAGE_ROOT, "builtin", "nodes");
+const PACKAGE_BUILTIN_PIPELINES_DIR = path.join(PACKAGE_ROOT, "builtin", "pipelines");
 
 /**
  * 确保工作区 .workspace/agentflow/reference 存在且含包内 reference 文件（全局安装或未跑 postinstall 时补齐）。
@@ -155,13 +158,15 @@ function getRunDir(workspaceRoot, flowName, uuid) {
   return path.join(path.resolve(workspaceRoot), RUN_BUILD_REL, flowName, uuid);
 }
 
-/** 解析 flow 目录：优先 .workspace/agentflow/pipelines/<FlowName>，否则 .cursor/agentflow/pipelines/<FlowName>；不存在则返回 null。 */
+/** 解析 flow 目录：优先 .workspace → .cursor/agentflow/pipelines → 包内 builtin/pipelines；不存在则返回 null。 */
 function getFlowDir(workspaceRoot, flowName) {
   const root = path.resolve(workspaceRoot);
   const workspaceFlowDir = path.join(root, PIPELINES_DIR_WORKSPACE, flowName);
   if (fs.existsSync(workspaceFlowDir) && fs.existsSync(path.join(workspaceFlowDir, "flow.yaml"))) return workspaceFlowDir;
   const cursorFlowDir = path.join(root, PIPELINES_DIR, flowName);
   if (fs.existsSync(cursorFlowDir) && fs.existsSync(path.join(cursorFlowDir, "flow.yaml"))) return cursorFlowDir;
+  const builtinFlowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowName);
+  if (fs.existsSync(builtinFlowDir) && fs.existsSync(path.join(builtinFlowDir, "flow.yaml"))) return builtinFlowDir;
   return null;
 }
 
@@ -1342,17 +1347,12 @@ function collectPipelineNamesFromDir(dirPath) {
     .map((e) => e.name);
 }
 
-/** 列出所有 pipeline（.cursor/agentflow/pipelines 与 .workspace/agentflow/pipelines 下含 flow.yaml 的子目录，合并去重）。 */
+/** 列出所有 pipeline（包内 builtin + .workspace + .cursor/agentflow/pipelines，合并去重），带来源列。 */
 function listPipelines(workspaceRoot) {
-  const root = path.resolve(workspaceRoot);
-  const cursorPath = path.join(root, PIPELINES_DIR);
-  const workspacePath = path.join(root, PIPELINES_DIR_WORKSPACE);
-  const fromCursor = collectPipelineNamesFromDir(cursorPath);
-  const fromWorkspace = collectPipelineNamesFromDir(workspacePath);
-  const names = [...new Set([...fromWorkspace, ...fromCursor])].sort();
-  if (names.length === 0) {
+  const rows = listFlowsJson(workspaceRoot);
+  if (rows.length === 0) {
     log.info(
-      "No pipelines found (no subdirs with flow.yaml under " +
+      "No pipelines found (no subdirs with flow.yaml under builtin, " +
         PIPELINES_DIR +
         " or " +
         PIPELINES_DIR_WORKSPACE +
@@ -1361,15 +1361,199 @@ function listPipelines(workspaceRoot) {
     return;
   }
   const table = new Table({
-    head: [chalk.cyan("Pipeline"), chalk.cyan("Apply 示例")],
-    colWidths: [24, 48],
+    head: [chalk.cyan("Pipeline"), chalk.cyan("来源"), chalk.cyan("Apply 示例")],
+    colWidths: [24, 10, 48],
     style: { head: [], border: ["grey"] },
   });
-  for (const name of names) {
-    table.push([name, `agentflow apply ${name}`]);
+  for (const row of rows) {
+    const sourceLabel = row.source === "builtin" ? "builtin" : "user";
+    table.push([row.id, sourceLabel, `agentflow apply ${row.id}`]);
   }
   log.info("\n" + chalk.bold("Pipelines"));
   log.info(table.toString());
+}
+
+/** 解析 .md 节点文件的 frontmatter：返回 { input, output, displayName, description }，槽位为 { type, name, default? }[] */
+function parseNodeFrontmatter(raw) {
+  const m = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  const data = { input: [], output: [], displayName: undefined, description: undefined };
+  if (!m) return data;
+  const fm = m[1];
+  const slotRe = /^\s*-\s+type:\s*["']?([^"'\n]*)["']?(?:\s*\n\s+name:\s*["']?([^"'\n]*)["']?)?(?:\s*\n\s+(?:default|value):\s*(.*))?/gm;
+  const inputBlock = fm.match(/(?:^|\n)\s*input:\s*\n([\s\S]*?)(?=\n\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:|---|$)/m);
+  const outputBlock = fm.match(/(?:^|\n)\s*output:\s*\n([\s\S]*?)(?=\n\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:|---|$)/m);
+  const normalizeSlots = (block) => {
+    if (!block) return [];
+    return block[1]
+      .split(/\n/)
+      .filter((line) => /^\s*-\s+type:/.test(line))
+      .map((line) => {
+        const typeM = line.match(/type:\s*["']?([^"'\n]*)["']?/);
+        const nameM = line.match(/name:\s*["']?([^"'\n]*)["']?/);
+        const defaultM = line.match(/(?:default|value):\s*(.*)$/);
+        return {
+          type: typeM ? typeM[1].trim() : "文本",
+          name: nameM ? nameM[1].trim() : undefined,
+          default: defaultM ? defaultM[1].trim().replace(/^["']|["']$/g, "") : undefined,
+        };
+      });
+  };
+  data.input = normalizeSlots(inputBlock);
+  data.output = normalizeSlots(outputBlock);
+  const descM = fm.match(/\bdescription:\s*["']?([^"'\n#][^\n]*)["']?/);
+  const displayM = fm.match(/\bdisplayName:\s*["']?([^"'\n#][^\n]*)["']?/);
+  if (descM) data.description = descM[1].trim().replace(/^["']|["']$/g, "");
+  if (displayM) data.displayName = displayM[1].trim().replace(/^["']|["']$/g, "");
+  return data;
+}
+
+function listFlowsJson(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  const out = [];
+  const fromBuiltin = collectPipelineNamesFromDir(PACKAGE_BUILTIN_PIPELINES_DIR);
+  for (const name of fromBuiltin) {
+    out.push({ id: name, path: path.join(PACKAGE_BUILTIN_PIPELINES_DIR, name), source: "builtin" });
+  }
+  const fromWorkspace = collectPipelineNamesFromDir(path.join(root, PIPELINES_DIR_WORKSPACE));
+  for (const name of fromWorkspace) {
+    out.push({ id: name, path: path.join(root, PIPELINES_DIR_WORKSPACE, name), source: "user" });
+  }
+  const fromCursor = collectPipelineNamesFromDir(path.join(root, PIPELINES_DIR));
+  for (const name of fromCursor) {
+    if (!out.some((f) => f.id === name && f.source === "user")) {
+      out.push({ id: name, path: path.join(root, PIPELINES_DIR, name), source: "user" });
+    }
+  }
+  out.sort((a, b) => (a.source !== b.source ? (a.source === "builtin" ? -1 : 1) : a.id.localeCompare(b.id)));
+  return out;
+}
+
+function listNodesJson(workspaceRoot, flowId, flowSource) {
+  const root = path.resolve(workspaceRoot);
+  const byId = new Map();
+  const addFromDir = (dir, source, flowIdOpt) => {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
+    const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
+    for (const e of files) {
+      const id = e.name.replace(/\.mdx?$/i, "").replace(/\.markdown$/i, "");
+      let type = "agent";
+      if (/^control/i.test(id)) type = "control";
+      else if (/^provide/i.test(id)) type = "provide";
+      else if (/^tool/i.test(id)) type = "agent";
+      try {
+        const raw = fs.readFileSync(path.join(dir, e.name), "utf-8");
+        const data = parseNodeFrontmatter(raw);
+        const strippedId =
+          id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
+        const label = data.displayName ?? strippedId;
+        byId.set(id, {
+          id,
+          type,
+          label,
+          displayName: data.displayName,
+          description: data.description,
+          inputs: data.input,
+          outputs: data.output,
+          source: flowIdOpt ? "flow" : "project",
+          flowId: flowIdOpt,
+        });
+      } catch (_) {}
+    }
+  };
+  addFromDir(PACKAGE_BUILTIN_NODES_DIR, "project");
+  addFromDir(path.join(root, ".cursor", "agentflow", "nodes"), "project");
+  if (flowId && flowSource) {
+    const flowDir =
+      flowSource === "builtin"
+        ? path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId)
+        : path.join(root, flowSource === "user" ? PIPELINES_DIR_WORKSPACE : PIPELINES_DIR, flowId);
+    addFromDir(path.join(flowDir, "nodes"), "flow", flowId);
+  }
+  return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function readFlowJson(workspaceRoot, flowId, flowSource) {
+  const root = path.resolve(workspaceRoot);
+  let flowDir;
+  if (flowSource === "builtin") {
+    flowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
+  } else {
+    flowDir = path.join(root, PIPELINES_DIR_WORKSPACE, flowId);
+    if (!fs.existsSync(path.join(flowDir, "flow.yaml"))) {
+      flowDir = path.join(root, PIPELINES_DIR, flowId);
+    }
+  }
+  const yamlPath = path.join(flowDir, "flow.yaml");
+  if (!fs.existsSync(yamlPath)) {
+    return { error: "Flow not found: " + flowId };
+  }
+  try {
+    const flowYaml = fs.readFileSync(yamlPath, "utf-8");
+    return { flowYaml };
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
+}
+
+function readNodeJson(workspaceRoot, nodeId, flowId, flowSource) {
+  const root = path.resolve(workspaceRoot);
+  const fileName = nodeId.endsWith(".md") ? nodeId : `${nodeId}.md`;
+  const pathsToTry = [];
+  if (flowId && flowSource) {
+    const flowDir =
+      flowSource === "builtin"
+        ? path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId)
+        : path.join(root, flowSource === "user" ? PIPELINES_DIR_WORKSPACE : PIPELINES_DIR, flowId);
+    pathsToTry.push(path.join(flowDir, "nodes", fileName));
+  }
+  pathsToTry.push(path.join(root, ".cursor", "agentflow", "nodes", fileName));
+  pathsToTry.push(path.join(PACKAGE_BUILTIN_NODES_DIR, fileName));
+  for (const filePath of pathsToTry) {
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const data = parseNodeFrontmatter(raw);
+      const content = raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/, "").trim();
+      let type = "agent";
+      if (/^control/i.test(nodeId)) type = "control";
+      else if (/^provide/i.test(nodeId)) type = "provide";
+      else if (/^tool/i.test(nodeId)) type = "agent";
+      const strippedId =
+        nodeId.replace(/\.md$/, "").replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || nodeId;
+      const label = data.displayName ?? strippedId;
+      return {
+        type,
+        label,
+        displayName: data.displayName,
+        inputs: data.input,
+        outputs: data.output,
+        executionLogic: content || undefined,
+        description: data.description,
+      };
+    } catch (_) {}
+  }
+  return { error: "Node not found: " + nodeId };
+}
+
+function copyBuiltinJson(workspaceRoot, flowId, targetFlowId) {
+  const root = path.resolve(workspaceRoot);
+  const destId = (targetFlowId && targetFlowId.trim()) || flowId;
+  const srcDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
+  const destDir = path.join(root, PIPELINES_DIR_WORKSPACE, destId);
+  if (!fs.existsSync(srcDir) || !fs.existsSync(path.join(srcDir, "flow.yaml"))) {
+    return { success: false, error: "内置流程不存在" };
+  }
+  const existing = collectPipelineNamesFromDir(path.join(root, PIPELINES_DIR_WORKSPACE));
+  if (existing.includes(destId)) {
+    return { success: false, error: "该名称已存在，请换一个" };
+  }
+  try {
+    fs.mkdirSync(path.dirname(destDir), { recursive: true });
+    fs.cpSync(srcDir, destDir, { recursive: true });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) };
+  }
 }
 
 function printHelp() {
@@ -1417,6 +1601,12 @@ async function main() {
   const argv = process.argv.slice(2);
   let workspaceRoot = process.cwd();
   const shift = () => argv.shift();
+  // 支持 --workspace-root 在任意位置（桌面端传 list-flows --json --workspace-root <path>）
+  const wrIdx = argv.indexOf("--workspace-root");
+  if (wrIdx >= 0 && argv[wrIdx + 1]) {
+    workspaceRoot = path.resolve(argv[wrIdx + 1]);
+    argv.splice(wrIdx, 2);
+  }
   while (argv[0] === "--workspace-root") {
     shift();
     workspaceRoot = path.resolve(shift() || "");
@@ -1457,6 +1647,8 @@ async function main() {
     machineReadable = true;
     argv.splice(argv.indexOf("--machine-readable"), 1);
   }
+  const jsonMode = argv.includes("--json");
+  if (jsonMode) argv.splice(argv.indexOf("--json"), 1);
   const sub = shift();
   if (!sub) {
     printHelp();
@@ -1467,6 +1659,77 @@ async function main() {
   if (modelIdx >= 0 && argv[modelIdx + 1]) {
     agentModel = argv[modelIdx + 1];
     argv.splice(modelIdx, 2);
+  }
+  if (sub === "list-flows" && jsonMode) {
+    const list = listFlowsJson(workspaceRoot);
+    process.stdout.write(JSON.stringify(list) + "\n");
+    process.exit(0);
+  }
+  if (sub === "list-nodes" && jsonMode) {
+    let flowId, flowSource;
+    const flowIdIdx = argv.indexOf("--flow-id");
+    if (flowIdIdx >= 0 && argv[flowIdIdx + 1]) {
+      flowId = argv[flowIdIdx + 1];
+      argv.splice(flowIdIdx, 2);
+    }
+    const flowSourceIdx = argv.indexOf("--flow-source");
+    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
+      flowSource = argv[flowSourceIdx + 1];
+      argv.splice(flowSourceIdx, 2);
+    }
+    const list = listNodesJson(workspaceRoot, flowId, flowSource);
+    process.stdout.write(JSON.stringify(list) + "\n");
+    process.exit(0);
+  }
+  if (sub === "read-flow" && jsonMode) {
+    let flowSource = "user";
+    const flowSourceIdx = argv.indexOf("--flow-source");
+    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
+      flowSource = argv[flowSourceIdx + 1];
+      argv.splice(flowSourceIdx, 2);
+    }
+    const flowId = argv.find((a) => !a.startsWith("--"));
+    if (!flowId) {
+      process.stdout.write(JSON.stringify({ error: "Missing flowId" }) + "\n");
+      process.exit(1);
+    }
+    const result = readFlowJson(workspaceRoot, flowId, flowSource);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.error ? 1 : 0);
+  }
+  if (sub === "read-node" && jsonMode) {
+    let flowId, flowSource;
+    const flowIdIdx = argv.indexOf("--flow-id");
+    if (flowIdIdx >= 0 && argv[flowIdIdx + 1]) {
+      flowId = argv[flowIdIdx + 1];
+      argv.splice(flowIdIdx, 2);
+    }
+    const flowSourceIdx = argv.indexOf("--flow-source");
+    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
+      flowSource = argv[flowSourceIdx + 1];
+      argv.splice(flowSourceIdx, 2);
+    }
+    const nodeId = argv.find((a) => !a.startsWith("--"));
+    if (!nodeId) {
+      process.stdout.write(JSON.stringify({ error: "Missing nodeId" }) + "\n");
+      process.exit(1);
+    }
+    const result = readNodeJson(workspaceRoot, nodeId, flowId, flowSource);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.error ? 1 : 0);
+  }
+  if (sub === "copy-builtin" && jsonMode) {
+    const flowId = shift();
+    let targetFlowId;
+    const targetIdx = argv.indexOf("--target");
+    if (targetIdx >= 0 && argv[targetIdx + 1]) targetFlowId = argv[targetIdx + 1];
+    if (!flowId) {
+      process.stdout.write(JSON.stringify({ success: false, error: "Missing flowId" }) + "\n");
+      process.exit(1);
+    }
+    const result = copyBuiltinJson(workspaceRoot, flowId, targetFlowId);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.success ? 0 : 1);
   }
   if (sub === "list") {
     listPipelines(workspaceRoot);
@@ -1518,8 +1781,10 @@ async function main() {
     const result = runNodeScript(workspaceRoot, "get-ready-nodes.mjs", [workspaceRoot, flowName, uuidArg], { captureStdout: true });
     if (result.stdout) process.stdout.write(result.stdout);
     process.exit(result.status === 0 ? 0 : 1);
+  } else if (sub === "list-flows" || sub === "list-nodes" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin") {
+    throw new Error("Use --json with " + sub + ". Example: agentflow list-flows --json --workspace-root <path>");
   } else {
-    throw new Error("Unknown command: " + sub + ". Use list, apply, resume, replay, or run-status.");
+    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, apply, resume, replay, or run-status.");
   }
 }
 

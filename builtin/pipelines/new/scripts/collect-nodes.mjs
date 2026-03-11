@@ -8,12 +8,7 @@
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import yaml from "js-yaml";
-
-const __dirnameCollect = path.dirname(fileURLToPath(import.meta.url));
-const PACKAGE_BUILTIN_NODES_DIR = path.join(path.resolve(__dirnameCollect, "..", ".."), "builtin", "nodes");
-const PACKAGE_BUILTIN_PIPELINES_DIR = path.join(path.resolve(__dirnameCollect, "..", ".."), "builtin", "pipelines");
 
 function extractFrontmatter(raw) {
   const m = raw.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -121,50 +116,33 @@ function main() {
 
   const [workspaceRoot, flowName] = args.map((p) => path.resolve(p));
   const nodesDir = path.join(workspaceRoot, ".cursor", "agentflow", "nodes");
-  const workspaceFlowDir = path.join(workspaceRoot, ".workspace", "agentflow", "pipelines", flowName);
-  const cursorFlowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", flowName);
-  const builtinFlowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowName);
-  const hasFlowYaml = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
-  const flowDir = hasFlowYaml(workspaceFlowDir)
-    ? workspaceFlowDir
-    : hasFlowYaml(cursorFlowDir)
-      ? cursorFlowDir
-      : hasFlowYaml(builtinFlowDir)
-        ? builtinFlowDir
-        : cursorFlowDir;
+  const flowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", flowName);
 
   const out = [];
 
-  // 1. 内置节点：工作区 .cursor/agentflow/nodes + 包内 builtin/nodes，按 definitionId 去重（包内优先）
+  // 1. 内置节点
   out.push("# 节点元数据（内置 + 当前流水线）\n");
   out.push("## 1. 内置节点元数据\n\n");
-  const builtinFiles = new Map();
-  if (fs.existsSync(PACKAGE_BUILTIN_NODES_DIR)) {
-    for (const file of fs.readdirSync(PACKAGE_BUILTIN_NODES_DIR).filter((f) => f.endsWith(".md")).sort()) {
-      builtinFiles.set(file.replace(/\.md$/, ""), path.join(PACKAGE_BUILTIN_NODES_DIR, file));
+  if (!fs.existsSync(nodesDir)) {
+    out.push("（无内置节点目录）\n");
+  } else {
+    const files = fs.readdirSync(nodesDir).filter((f) => f.endsWith(".md")).sort();
+    for (const file of files) {
+      const definitionId = file.replace(/\.md$/, "");
+      const meta = readNodeMeta(path.join(nodesDir, file));
+      if (!meta) continue;
+      out.push(`### ${definitionId}\n`);
+      out.push(`- **displayName**: ${meta.displayName || definitionId}\n`);
+      out.push(`- **description**: ${meta.description || ""}\n`);
+      out.push(`- **input** (handle: input-0, input-1, …):\n`);
+      if (meta.input.length) meta.input.forEach((s, i) => out.push(`  - \`${s.name || "?"}\` (${s.type || "?"}) → input-${i}\n`));
+      else out.push("  - 无\n");
+      out.push(`- **output** (handle: output-0, output-1, …):\n`);
+      if (meta.output.length) meta.output.forEach((s, i) => out.push(`  - \`${s.name || "?"}\` (${s.type || "?"}) → output-${i}\n`));
+      else out.push("  - 无\n");
+      out.push("\n");
     }
   }
-  if (fs.existsSync(nodesDir)) {
-    for (const file of fs.readdirSync(nodesDir).filter((f) => f.endsWith(".md")).sort()) {
-      const id = file.replace(/\.md$/, "");
-      if (!builtinFiles.has(id)) builtinFiles.set(id, path.join(nodesDir, file));
-    }
-  }
-  for (const [definitionId, filePath] of builtinFiles) {
-    const meta = readNodeMeta(filePath);
-    if (!meta) continue;
-    out.push(`### ${definitionId}\n`);
-    out.push(`- **displayName**: ${meta.displayName || definitionId}\n`);
-    out.push(`- **description**: ${meta.description || ""}\n`);
-    out.push(`- **input** (handle: input-0, input-1, …):\n`);
-    if (meta.input.length) meta.input.forEach((s, i) => out.push(`  - \`${s.name || "?"}\` (${s.type || "?"}) → input-${i}\n`));
-    else out.push("  - 无\n");
-    out.push(`- **output** (handle: output-0, output-1, …):\n`);
-    if (meta.output.length) meta.output.forEach((s, i) => out.push(`  - \`${s.name || "?"}\` (${s.type || "?"}) → output-${i}\n`));
-    else out.push("  - 无\n");
-    out.push("\n");
-  }
-  if (builtinFiles.size === 0) out.push("（无内置节点目录）\n");
 
   // 2. 当前流水线节点（来自 flow.yaml instances）
   out.push("## 2. 当前流水线节点元数据\n\n");
@@ -174,16 +152,8 @@ function main() {
     let input = nodeInput || [];
     let output = nodeOutput || [];
     if (input.length === 0 && output.length === 0) {
-      const tryPaths = [
-        path.join(flowDir, "nodes", `${definitionId}.md`),
-        path.join(nodesDir, `${definitionId}.md`),
-        path.join(PACKAGE_BUILTIN_NODES_DIR, `${definitionId}.md`),
-      ];
-      let meta = null;
-      for (const defPath of tryPaths) {
-        meta = readNodeMeta(defPath);
-        if (meta) break;
-      }
+      const defPath = path.join(nodesDir, `${definitionId}.md`);
+      const meta = readNodeMeta(defPath);
       if (meta) {
         input = meta.input;
         output = meta.output;

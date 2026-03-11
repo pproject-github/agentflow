@@ -9,9 +9,13 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import yaml from "js-yaml";
 
 import { loadAllExecIds, latestResultExecId, intermediateResultBasename, intermediateDirForNode, outputDirForNode } from "./get-exec-id.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_BUILTIN_NODES_DIR = path.join(path.resolve(__dirname, "..", ".."), "builtin", "nodes");
 import { logToRunTag } from "./run-log.mjs";
 
 const FLOW_YAML_FILENAME = "flow.yaml";
@@ -51,18 +55,18 @@ function definitionIdToType(definitionId) {
 
 /**
  * 按定义名查找节点类文件，读 frontmatter 中的 definitionId；若无则返回 definitionName。
- * 查找顺序：flowDir/nodes/<name>.md、workspaceRoot/.cursor/agentflow/nodes/<name>.md。
+ * 查找顺序：flowDir/nodes/<name>.md、workspaceRoot/.cursor/agentflow/nodes/<name>.md、包内 builtin/nodes/<name>.md。
  * @param {string} flowDir - 流程目录 pipelines/<flowName>
  * @param {string} definitionName - 实例中引用的定义名（如 user_confirm_scope）
  * @returns {{ definitionId: string, definitionName: string }}
  */
 function resolveDefinitionIdFromNodeClass(flowDir, definitionName) {
-  const flowName = path.basename(flowDir);
   const workspaceRoot = path.resolve(flowDir, "..", "..", "..", "..");
   const fileName = definitionName.endsWith(".md") ? definitionName : `${definitionName}.md`;
   const flowNodesPath = path.join(flowDir, "nodes", fileName);
   const projectNodesPath = path.join(workspaceRoot, ".cursor", "agentflow", "nodes", fileName);
-  for (const filePath of [flowNodesPath, projectNodesPath]) {
+  const packageNodesPath = path.join(PACKAGE_BUILTIN_NODES_DIR, fileName);
+  for (const filePath of [flowNodesPath, projectNodesPath, packageNodesPath]) {
     if (!fs.existsSync(filePath)) continue;
     try {
       const raw = fs.readFileSync(filePath, "utf-8");
@@ -560,7 +564,17 @@ function main() {
     if (args.length >= 4 && args[3]) {
       flowDir = path.resolve(args[3]);
     } else {
-      flowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", name);
+      const hasFlowYaml = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
+      const workspaceFlowDir = path.join(workspaceRoot, ".workspace", "agentflow", "pipelines", name);
+      const cursorFlowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", name);
+      const builtinFlowDir = path.join(path.resolve(__dirname, "..", ".."), "builtin", "pipelines", name);
+      flowDir = hasFlowYaml(workspaceFlowDir)
+        ? workspaceFlowDir
+        : hasFlowYaml(cursorFlowDir)
+          ? cursorFlowDir
+          : hasFlowYaml(builtinFlowDir)
+            ? builtinFlowDir
+            : cursorFlowDir;
     }
     if (args.length >= 3) uuid = args[2];
   } else {

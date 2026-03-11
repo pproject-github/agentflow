@@ -10,6 +10,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+const __dirnameResolved = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_BUILTIN_NODES_DIR = path.join(path.resolve(__dirnameResolved, "..", ".."), "builtin", "nodes");
+
 import { loadFlowDefinition } from "./parse-flow.mjs";
 import { loadAllExecIds, outputDirForNode } from "./get-exec-id.mjs";
 import { computeResolvedInputsForInstance } from "./resolve-inputs.mjs";
@@ -40,7 +43,8 @@ function readNodeDescription(workspaceRoot, flowDir, definitionId) {
   const fileName = definitionId.endsWith(".md") ? definitionId : `${definitionId}.md`;
   const flowNodesPath = path.join(flowDir, "nodes", fileName);
   const projectNodesPath = path.join(workspaceRoot, ".cursor", "agentflow", "nodes", fileName);
-  for (const p of [flowNodesPath, projectNodesPath]) {
+  const packageNodesPath = path.join(PACKAGE_BUILTIN_NODES_DIR, fileName);
+  for (const p of [flowNodesPath, projectNodesPath, packageNodesPath]) {
     try {
       const raw = fs.readFileSync(p, "utf-8");
       const m = raw.match(/^---\s*\n([\s\S]*?)\n---/);

@@ -1,0 +1,799 @@
+instances:
+  start:
+    definitionId: control_start
+    label: Start
+    description: agentflow 的入口，所有流程应从这个节点开始
+    modelType: Auto
+    input: []
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 流程入口
+  scope:
+    definitionId: agent_subAgent
+    label: 确定迁移范围
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: node_scope_filelist.md
+        value: ''
+      - type: 文本
+        name: moduleName
+        value: ''
+    body: |-
+      根据 .cursor/rules/android-module-structure.mdc、module-main-sub-dependency.mdc 
+      确定Push模块迁移范围（iHeima/src/main/java/com/yy/iheima/push/），
+      列出待迁移文件列表，输出到  {node_scope_filelist.md}。
+      并以英文简写新建 模块名称，写入到 ${moduleName}
+  user_confirm_scope:
+    definitionId: tool_user_check
+    label: 用户确认范围
+    description: 等待用户确认，流程暂停。需用户回复 "继续" 才重启流程。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: pre
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: ''
+  migrate:
+    definitionId: agent_subAgent
+    label: 执行迁移
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: node_scope_filelist.md
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: result.md
+        value: ''
+    body: 基于改动范围 ${node_scope_filelist.md}，执行迁移（仅代码、资源移动，不改业务逻辑），可分配多 agent 并行；只迁移不检查；输出迁移后的文件列表到 ${result.md}
+  anyOne_static:
+    definitionId: control_anyOne
+    label: AnyOne(静态环入口)
+    description: 当任一上游输入就绪（success）时，沿 next 继续执行。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev1
+        value: ''
+      - type: 节点
+        name: prev2
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: ''
+  anyOne_gradle:
+    definitionId: control_anyOne
+    label: AnyOne(编译环入口)
+    description: 当任一上游输入就绪（success）时，沿 next 继续执行。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev1
+        value: ''
+      - type: 节点
+        name: prev2
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 静态通过或 spec 确定后进入编译
+  ai_check_ref:
+    definitionId: agent_subAgent
+    label: AI检查引用
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: todo
+        value: ''
+      - type: 文件
+        name: done
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: result
+        value: ''
+    body: 迁移前的文件列表 ${todo}，迁移后的文件列表 ${done}。参考.cursor/rules/module-main-sub-dependency.mdc，检查主模块中是否有直接对迁移后的类有直接依赖的情况，如果有依赖，则列出到 ${result}，错误引用module代码位置：行数 -> 对应被引用的FQCN
+  agent_sum_error:
+    definitionId: agent_subAgent
+    label: 汇总问题
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: err1
+        value: ''
+      - type: 文件
+        name: err2
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: todo.md
+        value: ''
+    body: 融合静态检查结果：${err1}，ai检查结果：${err2}，参考.cursor/rules/module-main-sub-dependency.mdc，需要将静态、ai检查发现的类，使用api中转api提供给主模块使用，以 - [ ]建立todo列表（详细列表），输出到 ${todo.md}
+  gradle_build:
+    definitionId: agent_subAgent
+    label: Gradle编译
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: tasks
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: result
+        value: ''
+      - type: 文件
+        name: name.md
+        value: ''
+    body: |-
+      从 ${tasks} 批量获取未完成的编译任务，串行执行编译，一一执行，不要一次组装多个任务。如果编译通过，则更新 ${tasks}文档（打勾）。如果编译不通过，则将编译错误信息写入 ${result.md}，失败的任务名列表写入 ${name.md}。Gradle的执行时间会比较长（可能超过10min，要等它完成）；
+      注意：这里节点状态改为true，编译问题统一由后续节点修复。
+  fix_dynamic:
+    definitionId: agent_subAgent
+    label: 修复构建
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: todo.md
+        value: ''
+      - type: 文件
+        name: result.md
+        value: ''
+      - type: 文件
+        name: name.md
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 对于失败的任务 ${name.md}，修复 ${result.md} 记录的问题，并重新尝试构建，如果修复后通过，则更新任务表 ${todo.md}，通过则打勾
+  output_doc:
+    definitionId: agent_subAgent
+    label: 输出文档
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 输出迁移与修复文档
+  end:
+    definitionId: control_end
+    label: End
+    description: AgentFlow的结束节点，执行完成后流程结束。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output: []
+    body: 流程出口
+  tool_save_ready_file:
+    definitionId: tool_save_key
+    label: 待迁移文件列表
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<写入的 value>\" } }（err_code 0=成功 1=失败）。"
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: key
+        value: ready_file
+      - type: 文件
+        name: value
+        value: ''
+    output: []
+    body: ''
+  tool_save_module_name:
+    definitionId: tool_save_key
+    label: 模块名称
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<写入的 value>\" } }（err_code 0=成功 1=失败）。"
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: key
+        value: moduleName
+      - type: 文本
+        name: value
+        value: ''
+    output: []
+    body: ''
+  agent_new_module:
+    definitionId: agent_subAgent
+    label: 新建模块
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: moduleName
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 参考模块结构文档.cursor/rules/android-module-structure.mdc，新建模块名称为 ${moduleName}，新建module和module_api。
+  tool_static_analy:
+    definitionId: tool_nodejs
+    label: 静态检测
+    description: 使用 agentflow apply -ai run-tool-nodejs 执行脚本。约定格式为 {"err_code":0,"message":{"result":"..."}}；err_code 为节点执行结果（0=成功、1=失败），后处理据此写 result.status。message 仅含 result（文本），无 next。执行器校验 stdout 并提取 message.result 写入 ${result}。脚本异常或格式非法时节点为 failed。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: todo
+        value: ''
+      - type: 文件
+        name: done
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: result
+        value: ''
+    body: |-
+      .cursor/agentflow/pipelines/live-module-migrate/scripts/check_imports.mjs
+
+      迁移前的文件列表 ${todo}，迁移后的文件列表 ${done}，错误引用module代码位置：行数 -> 对应被引用的FQCN
+  if_static:
+    definitionId: control_if
+    label: If静态
+    description: 判断 AgentSubAgent 运行的结果，结果为 true 时沿 next1 继续，为 false 时沿 next2 继续。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    output:
+      - type: 节点
+        name: next1
+        value: ''
+      - type: 节点
+        name: next2
+        value: ''
+    body: ${prediction}
+  LoadFile:
+    definitionId: tool_load_key
+    label: 待迁移列表
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<value>\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
+    modelType: Auto
+    input: []
+    output:
+      - type: 文件
+        name: result
+        value: ready_file
+    body: ''
+  agent_fix_todo:
+    definitionId: agent_subAgent
+    label: 修复Todo
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: todo.md
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: 从 ${todo.md} 批量获取 todo 进行修复，修复规则为：对于直接使用module类的地方，使用spi（对应api模块）进行中转。本轮尽量批量处理：在依赖关系允许的前提下一次修复多项，修复完成后在 ${todo.md} 把本批修复的项目打勾。
+  control_toBool_static_bool:
+    definitionId: control_toBool
+    label: 静态检查结果转换
+    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: err1
+        value: ''
+      - type: 文件
+        name: err2
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    body: 如果 ${err1} ${err2} 都没问题，则为true，否则 为false
+  control_if_task_gradle:
+    definitionId: control_if
+    label: If完成
+    description: 判断 AgentSubAgent 运行的结果，结果为 true 时沿 next1 继续，为 false 时沿 next2 继续。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    output:
+      - type: 节点
+        name: next1
+        value: ''
+      - type: 节点
+        name: next2
+        value: ''
+    body: ${prediction}
+  control_toBool_gradle_bool:
+    definitionId: control_toBool
+    label: 列表完成结果
+    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: tasks
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    body: ${tasks} 全部打勾完成，则为true。存在 - [ ]则为false
+  control_if_fixed:
+    definitionId: control_if
+    label: If是否修复完
+    description: ${prediction} 结果为 true 时沿 next1 继续，为 false 时沿 next2 继续
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    output:
+      - type: 节点
+        name: next1
+        value: ''
+      - type: 节点
+        name: next2
+        value: ''
+    body: ''
+  to_bool_fix_all:
+    definitionId: control_toBool
+    label: 是否修复完
+    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: todo.md
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: bool
+        name: prediction
+        value: ''
+    body: 检查 ${todo.md} 中的 - [ ] 是否全部完成，全部完成则为true；
+  control_anyOne_start_fix:
+    definitionId: control_anyOne
+    label: 修复入口
+    description: 当任一上游输入就绪（success）时，沿 next 继续执行。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev1
+        value: ''
+      - type: 节点
+        name: prev2
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+    body: ''
+  tool_print_module:
+    definitionId: tool_print
+    label: Print展示
+    description: 以特殊字体样式向用户输出内容，内容为 AgentSubAgent 内的信息。
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: move.md
+        value: ''
+      - type: 文本
+        name: moduleName
+        value: ''
+    output: []
+    body: 展示确认，模块名 ${moduleName}，迁移范围 ${move.md}
+  gradle_tasks:
+    definitionId: agent_subAgent
+    label: 获取java\kotlin编译任务
+    description: 利用SubAgent执行任务
+    modelType: Auto
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: gradletask.md
+        value: ''
+    body: 利用 gradle task获取编译任务，过滤其中 Java、kotlin的编译任务，只需要取debug任务，以- [ ]列表的形式记录到 ${gradletask.md}
+edges:
+  - source: start
+    target: scope
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: scope
+    target: user_confirm_scope
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: migrate
+    target: anyOne_static
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: output_doc
+    target: end
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: scope
+    target: migrate
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: scope
+    target: tool_save_ready_file
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: scope
+    target: tool_save_module_name
+    sourceHandle: output-2
+    targetHandle: input-2
+  - source: scope
+    target: agent_new_module
+    sourceHandle: output-2
+    targetHandle: input-1
+  - source: user_confirm_scope
+    target: agent_new_module
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: agent_new_module
+    target: migrate
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: anyOne_static
+    target: tool_static_analy
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: if_static
+    target: agent_sum_error
+    sourceHandle: output-1
+    targetHandle: input-0
+  - source: anyOne_static
+    target: ai_check_ref
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: migrate
+    target: tool_static_analy
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: migrate
+    target: ai_check_ref
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: LoadFile
+    target: tool_static_analy
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: LoadFile
+    target: ai_check_ref
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: tool_static_analy
+    target: agent_sum_error
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: ai_check_ref
+    target: agent_sum_error
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: fix_dynamic
+    target: anyOne_gradle
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: agent_sum_error
+    target: agent_fix_todo
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: tool_static_analy
+    target: control_toBool_static_bool
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: ai_check_ref
+    target: control_toBool_static_bool
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: control_toBool_static_bool
+    target: if_static
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: control_toBool_static_bool
+    target: if_static
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: control_toBool_gradle_bool
+    target: control_if_task_gradle
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: control_toBool_gradle_bool
+    target: control_if_task_gradle
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: control_if_task_gradle
+    target: output_doc
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: tool_static_analy
+    target: control_toBool_static_bool
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: ai_check_ref
+    target: control_toBool_static_bool
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: agent_sum_error
+    target: to_bool_fix_all
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: to_bool_fix_all
+    target: control_if_fixed
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: to_bool_fix_all
+    target: control_if_fixed
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: control_if_fixed
+    target: anyOne_static
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: control_if_fixed
+    target: agent_fix_todo
+    sourceHandle: output-1
+    targetHandle: input-0
+  - source: agent_sum_error
+    target: control_anyOne_start_fix
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: control_anyOne_start_fix
+    target: to_bool_fix_all
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: agent_fix_todo
+    target: control_anyOne_start_fix
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: user_confirm_scope
+    target: tool_save_ready_file
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: user_confirm_scope
+    target: tool_save_module_name
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: scope
+    target: tool_print_module
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: scope
+    target: tool_print_module
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: scope
+    target: tool_print_module
+    sourceHandle: output-2
+    targetHandle: input-2
+  - source: if_static
+    target: gradle_tasks
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: gradle_tasks
+    target: control_toBool_gradle_bool
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: control_if_task_gradle
+    target: gradle_build
+    sourceHandle: output-1
+    targetHandle: input-0
+  - source: gradle_tasks
+    target: gradle_build
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: gradle_tasks
+    target: anyOne_gradle
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: anyOne_gradle
+    target: control_toBool_gradle_bool
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: gradle_build
+    target: fix_dynamic
+    sourceHandle: output-0
+    targetHandle: input-0
+  - source: gradle_tasks
+    target: fix_dynamic
+    sourceHandle: output-1
+    targetHandle: input-1
+  - source: gradle_build
+    target: fix_dynamic
+    sourceHandle: output-1
+    targetHandle: input-2
+  - source: gradle_build
+    target: fix_dynamic
+    sourceHandle: output-2
+    targetHandle: input-3
+ui:
+  nodePositions:
+    start:
+      x: -311.3935985808113
+      'y': 189.33364422573482
+    scope:
+      x: -135.59616803985895
+      'y': 211.03635446635394
+    user_confirm_scope:
+      x: 118.68285057110319
+      'y': 142.67635535924276
+    migrate:
+      x: 454.43850887412776
+      'y': 293.0722303284743
+    anyOne_static:
+      x: 636.3356270792144
+      'y': 179.57780273715775
+    anyOne_gradle:
+      x: 1570.44781075025
+      'y': 36.43514363175286
+    ai_check_ref:
+      x: 854.0561083522535
+      'y': 230.27105761112705
+    agent_sum_error:
+      x: 1160.1179147475261
+      'y': 283.6990353598391
+    gradle_build:
+      x: 1697.6091606175742
+      'y': 240.16117248977295
+    fix_dynamic:
+      x: 1921.9082328859263
+      'y': 222.03164153416796
+    output_doc:
+      x: 2281.6461618332573
+      'y': 76.22938367968048
+    end:
+      x: 2438.643154035482
+      'y': 73.16499995993682
+    tool_save_ready_file:
+      x: 243.14605812665633
+      'y': 345.1735104800173
+    tool_save_module_name:
+      x: 181.79122152352866
+      'y': 451.2111504138263
+    agent_new_module:
+      x: 311.615164633856
+      'y': 167.5175115653564
+    tool_static_analy:
+      x: 864.4439310076101
+      'y': 102.57258522623499
+    if_static:
+      x: 1187.5325527060475
+      'y': 158.54100448104072
+    LoadFile:
+      x: 668.4525351443111
+      'y': 101.68838590400665
+    agent_fix_todo:
+      x: 1270.1528621363257
+      'y': 473.19951644552344
+    control_toBool_static_bool:
+      x: 1025.1588449783735
+      'y': 150.89465569823832
+    control_if_task_gradle:
+      x: 2003.5050788426774
+      'y': 26.562359179592278
+    control_toBool_gradle_bool:
+      x: 1793.9521181579876
+      'y': 41.97357430969002
+    control_if_fixed:
+      x: 1044.724858760418
+      'y': 464.20322884129985
+    to_bool_fix_all:
+      x: 846.1471441912821
+      'y': 470.79934246403053
+    control_anyOne_start_fix:
+      x: 646.160998442873
+      'y': 452.63622882218414
+    tool_print_module:
+      x: 114.54056509849403
+      'y': -3.3121144881721563
+    gradle_tasks:
+      x: 1358.5325209278358
+      'y': 121.93084682740528
+  description: 模块迁移流程（确定范围→确认→迁移→静态环→编译环→输出文档）
