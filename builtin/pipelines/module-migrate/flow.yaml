@@ -224,7 +224,7 @@ instances:
   tool_save_ready_file:
     definitionId: tool_save_key
     label: 待迁移文件列表
-    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<写入的 value>\" } }（err_code 0=成功 1=失败）。"
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<写入的 value>\\\" } }（err_code 0=成功 1=失败）。"
     modelType: Auto
     input:
       - type: 节点
@@ -241,7 +241,7 @@ instances:
   tool_save_module_name:
     definitionId: tool_save_key
     label: 模块名称
-    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<写入的 value>\" } }（err_code 0=成功 1=失败）。"
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<写入的 value>\\\" } }（err_code 0=成功 1=失败）。"
     modelType: Auto
     input:
       - type: 节点
@@ -275,7 +275,7 @@ instances:
   tool_static_analy:
     definitionId: tool_nodejs
     label: 静态检测
-    description: 使用 agentflow apply -ai run-tool-nodejs 执行脚本。约定格式为 {"err_code":0,"message":{"result":"..."}}；err_code 为节点执行结果（0=成功、1=失败），后处理据此写 result.status。message 仅含 result（文本），无 next。执行器校验 stdout 并提取 message.result 写入 ${result}。脚本异常或格式非法时节点为 failed。
+    description: "|"
     modelType: Auto
     input:
       - type: 节点
@@ -301,7 +301,7 @@ instances:
   if_static:
     definitionId: control_if
     label: If静态
-    description: 判断 AgentSubAgent 运行的结果，结果为 true 时沿 next1 继续，为 false 时沿 next2 继续。
+    description: "约定有且仅有一个 type 为 bool 的 input（名称不限，如 prediction）。该值为 true 时沿 next1 继续，为 false 时沿 next2 继续"
     modelType: Auto
     input:
       - type: 节点
@@ -321,7 +321,7 @@ instances:
   LoadFile:
     definitionId: tool_load_key
     label: 待迁移列表
-    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<value>\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<value>\\\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
     modelType: Auto
     input: []
     output:
@@ -349,7 +349,7 @@ instances:
   control_toBool_static_bool:
     definitionId: control_toBool
     label: 静态检查结果转换
-    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点
@@ -372,7 +372,7 @@ instances:
   control_if_task_gradle:
     definitionId: control_if
     label: If完成
-    description: 判断 AgentSubAgent 运行的结果，结果为 true 时沿 next1 继续，为 false 时沿 next2 继续。
+    description: "约定有且仅有一个 type 为 bool 的 input（名称不限，如 prediction）。该值为 true 时沿 next1 继续，为 false 时沿 next2 继续"
     modelType: Auto
     input:
       - type: 节点
@@ -392,7 +392,7 @@ instances:
   control_toBool_gradle_bool:
     definitionId: control_toBool
     label: 列表完成结果
-    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点
@@ -412,7 +412,7 @@ instances:
   control_if_fixed:
     definitionId: control_if
     label: If是否修复完
-    description: ${prediction} 结果为 true 时沿 next1 继续，为 false 时沿 next2 继续
+    description: "约定有且仅有一个 type 为 bool 的 input（名称不限，如 prediction）。该值为 true 时沿 next1 继续，为 false 时沿 next2 继续"
     modelType: Auto
     input:
       - type: 节点
@@ -432,7 +432,7 @@ instances:
   to_bool_fix_all:
     definitionId: control_toBool
     label: 是否修复完
-    description: 获取 instance中 AgentSubAgent 运行的结果，输出布尔值（true/false），写入 ${prediction}
+    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点

@@ -301,7 +301,7 @@ function main() {
   }
 
   const { role, model } = getRoleAndModelFromFlowJson(workspaceRoot, flowName, uuid, instanceId);
-  const subagent = ROLE_TO_SUBAGENT[role] ?? ROLE_TO_SUBAGENT.普通;
+  const subagent = ROLE_TO_SUBAGENT[role] ?? (role && String(role).trim() ? String(role).trim() : ROLE_TO_SUBAGENT.普通);
 
   const intermediateDir = path.join(runDir, "intermediate");
 

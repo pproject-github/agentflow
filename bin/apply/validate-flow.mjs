@@ -1,16 +1,31 @@
 #!/usr/bin/env node
 /**
- * 检查 flow.yaml 定义：校验 instances、edges、槽位、control_start/control_end、环与 control_anyOne 等。
- * 用法：agentflow apply -ai check-flow <workspaceRoot> <flowName> [flowDir]
- * 或：agentflow apply -ai check-flow <flowYamlPath>（单参时为 flow 目录或 flow.yaml 路径）
- * 当传 3 个参数时，flowDir 为含 flow.yaml 的目录（相对 workspaceRoot 或绝对路径）；不传时先查 .workspace/agentflow/pipelines/<flowName>，再查 .cursor/agentflow/pipelines/<flowName>。
- * 输出（适配 agentflow apply -ai run-tool-nodejs）：stdout 单行 JSON { "err_code": number, "message": { "result": "<全文>" } }；err_code 恒为 0。
+ * 统一流程校验：合并 check-flow 与 validate-for-ui 逻辑（最大集）。
+ * 用法：agentflow apply -ai validate-flow <workspaceRoot> <flowName> <flowDir> [uuid]
+ * 或由 agentflow validate <FlowName> [uuid] 调用；传 uuid 时写入 runDir/intermediate/validation.json。
+ * 输出：stdout 单行 JSON { ok, errors, warnings, validation: { edgeTypeMismatch, nodeRoleMissing, nodeModelMissing }, report? }
  */
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import yaml from "js-yaml";
+
+/** 与前端 flowFormat.VALID_ROLES + 内置 id 一致 */
+const VALID_ROLES = new Set([
+  "需求拆解",
+  "技术规划",
+  "代码执行",
+  "测试回归",
+  "普通",
+  "前端/UI",
+  "agentflow-node-executor-requirement",
+  "agentflow-node-executor-planning",
+  "agentflow-node-executor-code",
+  "agentflow-node-executor-test",
+  "agentflow-node-executor",
+  "agentflow-node-executor-ui",
+]);
 
 /** 由 definitionId 推导 type（与 parse-flow 一致） */
 function definitionIdToType(definitionId) {
@@ -22,7 +37,6 @@ function definitionIdToType(definitionId) {
   return "agent";
 }
 
-/** 从 flow.yaml 的 instance 条目的 input/output 数组解析槽位名与类型 */
 function getSlotsFromInstance(inst) {
   const result = { inputNames: [], outputNames: [], inputTypes: [], outputTypes: [] };
   if (!inst || typeof inst !== "object") return result;
@@ -47,9 +61,6 @@ function getSlotsFromInstance(inst) {
   return result;
 }
 
-/**
- * 从流程目录读取 flow.yaml，返回 { nodes, edges, instances }；不存在或解析失败返回 null。
- */
 function loadFlowYaml(flowDir) {
   const filePath = path.join(flowDir, "flow.yaml");
   if (!fs.existsSync(filePath)) return null;
@@ -89,18 +100,42 @@ function loadFlowYaml(flowDir) {
   }
 }
 
-/**
- * 从 frontmatter 字符串中解析 description 字段（支持 "、'、无引号），返回 trim 后的字符串，无则返回 ""。
- */
+function loadModelLists(workspaceRoot) {
+  const p = path.join(path.resolve(workspaceRoot), ".workspace", "agentflow", "model-lists.json");
+  if (!fs.existsSync(p)) return { cursor: [], opencode: [] };
+  try {
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return {
+      cursor: Array.isArray(data.cursor) ? data.cursor : [],
+      opencode: Array.isArray(data.opencode) ? data.opencode : [],
+    };
+  } catch {
+    return { cursor: [], opencode: [] };
+  }
+}
+
+function loadCustomRoleIds(workspaceRoot) {
+  const agentsPath = path.join(path.resolve(workspaceRoot), ".workspace", "agentflow", "agents.json");
+  if (!fs.existsSync(agentsPath)) return new Set();
+  try {
+    const data = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
+    const list = Array.isArray(data) ? data : (data.agents || []);
+    return new Set(list.filter((a) => a && typeof a.id === "string" && a.id.trim()).map((a) => a.id.trim()));
+  } catch {
+    return new Set();
+  }
+}
+
+function toEdgeId(e) {
+  return `${e.source}__${e.sourceHandle || "output-0"}__${e.target}__${e.targetHandle || "input-0"}`;
+}
+
 function parseDescriptionFromFm(fm) {
   if (!fm || typeof fm !== "string") return "";
   const match = fm.match(/\bdescription:\s*["']?([^"'\n#][^\n]*)["']?/);
   return match ? match[1].trim().replace(/^["']|["']$/g, "") : "";
 }
 
-/**
- * 读取文件 frontmatter 并返回 description。
- */
 function getDescriptionFromFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) return "";
@@ -112,9 +147,6 @@ function getDescriptionFromFile(filePath) {
   }
 }
 
-/**
- * 从正文中提取所有 ${...} 占位符，返回占位符内容列表（如 ["prev", "input.github", "output.next"]）。
- */
 function extractPlaceholders(body) {
   const list = [];
   const re = /\$\{([^}]*)\}/g;
@@ -126,14 +158,10 @@ function extractPlaceholders(body) {
   return list;
 }
 
-/** 转义字符串中的正则特殊字符，用于构造 RegExp。 */
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * 检查正文中槽位名是否被反引号或引号包裹（而非 ${}），若有则加入 warnings。
- */
 function warnSlotNameNotWrappedInDollarBraces(body, inputNames, outputNames, warnings) {
   const allSlotNames = [...new Set([...inputNames, ...outputNames])];
   if (allSlotNames.length === 0) return;
@@ -152,10 +180,6 @@ function warnSlotNameNotWrappedInDollarBraces(body, inputNames, outputNames, war
   }
 }
 
-/**
- * 校验正文中对 input/output 槽位的引用：必须为 ${name}、${input.name} 或 ${output.name}。
- * 返回 { errors: string[], warnings: string[] }，errors 带前缀 "[节点Id] 文件路径: "。
- */
 function validatePlaceholdersInBody(nodeId, filePath, body, inputNames, outputNames) {
   const errors = [];
   const warnings = [];
@@ -194,17 +218,12 @@ function validatePlaceholdersInBody(nodeId, filePath, body, inputNames, outputNa
       }
       continue;
     }
-    // ${name} 形式：name 必须是 input 或 output 槽位名
     if (inputSet.has(ph) || outputSet.has(ph)) continue;
-    // 非槽位名（如 USER_PROMPT）不报错，可选 warning
     if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(ph)) {
       warnings.push(`占位符 \${${ph}} 含非常规标识符，请确认是否为槽位引用`);
     }
   }
-
-  // 若槽位名被 ` 或 " 或 ' 包裹而非 ${}，给出 warning
   warnSlotNameNotWrappedInDollarBraces(body, inputNames, outputNames, warnings);
-
   const prefix = `[${nodeId}] ${filePath}: `;
   return {
     errors: errors.map((e) => prefix + e),
@@ -242,24 +261,20 @@ function topoSort(nodes, edges) {
 }
 
 /**
- * 内部校验核心：接收 nodes、edges、flowDir、nodeIdToSlots 以及从 instances 取 description/body 的 getter（仅 flow.yaml）。
+ * 结构校验核心（不含边类型一致，边类型由下方 computeValidation 统一产出）。
  */
 function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody) {
   const errors = [];
   const warnings = [];
-  const fixesApplied = [];
   const nodeIds = new Set(nodes.map((n) => n.id));
-  const nodesDir = path.join(flowDir, "..", "nodes");
   const builtInNodesDir = path.join(flowDir, "..", "..", "nodes");
 
-  // 必须包含 control_start 与 control_end 各一
   const definitionIds = nodes.map((n) => n.definitionId).filter(Boolean);
   const hasStart = definitionIds.some((d) => d === "control_start");
   const hasEnd = definitionIds.some((d) => d === "control_end");
   if (!hasStart) errors.push("流程必须包含一个 definitionId 为 control_start 的节点");
   if (!hasEnd) errors.push("流程必须包含一个 definitionId 为 control_end 的节点");
 
-  // 仅对内置节点做 description 一致性检查
   for (const n of nodes) {
     const defId = n.definitionId || "";
     if (!defId) continue;
@@ -275,8 +290,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     }
   }
 
-  // 校验 edges：source、target 必须存在；sourceHandle/targetHandle 与槽位一致
-  const edgesToFix = [];
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
     if (!e.source) errors.push(`edge ${i + 1}: 缺少 source`);
@@ -285,14 +298,11 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     else if (!nodeIds.has(e.target)) errors.push(`edge ${i + 1}: target "${e.target}" 不在 nodes 中`);
     if (!e.sourceHandle && e.source) {
       warnings.push(`edge ${i + 1} (${e.source} -> ${e.target}): 缺少 sourceHandle，建议补全为 output-0`);
-      edgesToFix.push({ i, field: "sourceHandle", value: "output-0" });
     }
     if (!e.targetHandle && e.target) {
       warnings.push(`edge ${i + 1} (${e.source} -> ${e.target}): 缺少 targetHandle，建议补全为 input-0`);
-      edgesToFix.push({ i, field: "targetHandle", value: "input-0" });
     }
 
-    // sourceHandle 必须在源节点的 output 槽位范围内
     if (e.source && nodeIds.has(e.source)) {
       const outSlots = nodeIdToSlots[e.source]?.outputNames ?? [];
       const maxOut = outSlots.length - 1;
@@ -313,7 +323,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
       }
     }
 
-    // targetHandle 必须在目标节点的 input 槽位范围内
     if (e.target && nodeIds.has(e.target)) {
       const inSlots = nodeIdToSlots[e.target]?.inputNames ?? [];
       const maxIn = inSlots.length - 1;
@@ -333,32 +342,11 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
         }
       }
     }
-
-    // 边两端槽位类型必须一致（节点↔节点、文本↔文本、文件↔文件）
-    if (e.source && e.target && nodeIds.has(e.source) && nodeIds.has(e.target) && e.sourceHandle && e.targetHandle) {
-      const outMatch = e.sourceHandle.match(/^output-(\d+)$/);
-      const inMatch = e.targetHandle.match(/^input-(\d+)$/);
-      if (outMatch && inMatch) {
-        const outIdx = parseInt(outMatch[1], 10);
-        const inIdx = parseInt(inMatch[1], 10);
-        const srcSlots = nodeIdToSlots[e.source];
-        const tgtSlots = nodeIdToSlots[e.target];
-        const srcType = (srcSlots?.outputTypes?.[outIdx] ?? "").trim();
-        const tgtType = (tgtSlots?.inputTypes?.[inIdx] ?? "").trim();
-        if (srcType && tgtType && srcType !== tgtType) {
-          const srcName = srcSlots?.outputNames?.[outIdx] ?? e.sourceHandle;
-          const tgtName = tgtSlots?.inputNames?.[inIdx] ?? e.targetHandle;
-          errors.push(
-            `edge ${i + 1} (${e.source} -> ${e.target}): 槽位类型不一致，源 ${e.sourceHandle}（${srcName}）为「${srcType}」，目标 ${e.targetHandle}（${tgtName}）为「${tgtType}」，应同为 节点/文本/文件 之一`
-          );
-        }
-      }
-    }
+    // 边类型一致不在此处检查，由 computeValidation 统一产出 edgeTypeMismatch
   }
 
-  // 若有 input 或 output 槽位，应有对应 edge 连接，否则 warning
-  const incomingByNode = new Map(); // nodeId -> Set<targetHandle>
-  const outgoingByNode = new Map(); // nodeId -> Set<sourceHandle>
+  const incomingByNode = new Map();
+  const outgoingByNode = new Map();
   for (const e of edges) {
     if (e.target && nodeIds.has(e.target)) {
       if (!incomingByNode.has(e.target)) incomingByNode.set(e.target, new Set());
@@ -374,7 +362,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     const slots = nodeIdToSlots[n.id] || { inputNames: [], outputNames: [] };
     const inCount = slots.inputNames.length;
     const outCount = slots.outputNames.length;
-    // input 槽位：应有至少一条 edge 的 target 为该节点且 targetHandle 对应该槽位
     const skipInputCheck = defId === "control_start" || defId.startsWith("provide_");
     if (!skipInputCheck && inCount > 0) {
       for (let i = 0; i < inCount; i++) {
@@ -386,7 +373,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
         }
       }
     }
-    // output 槽位：应有至少一条 edge 的 source 为该节点且 sourceHandle 对应该槽位
     const skipOutputCheck = defId === "control_end";
     if (!skipOutputCheck && outCount > 0) {
       for (let i = 0; i < outCount; i++) {
@@ -400,7 +386,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     }
   }
 
-  // 节点正文中 input/output 槽位引用必须为 ${name}、${input.name}、${output.name}
   for (const n of nodes) {
     const slots = nodeIdToSlots[n.id] || { inputNames: [], outputNames: [] };
     const body = (getNodeBody(n) || "").trim();
@@ -417,11 +402,9 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     warnings.push(...placeWarnings);
   }
 
-  // 拓扑序与环检测（支持环：有环时 order 为部分拓扑序，不报错）
   const { order, hasCycle } = topoSort(nodes, edges);
   const cycleNodes = hasCycle ? nodes.filter((n) => !order.includes(n.id)).map((n) => n.id) : [];
 
-  // 节点可达性：仅沿「节点」类型边从 start 到 end 的链路；仅文件/文本边连接视为不可达
   const startNodes = nodes.filter((n) => n.definitionId === "control_start").map((n) => n.id);
   const endNodes = nodes.filter((n) => n.definitionId === "control_end").map((n) => n.id);
   const nodeOnlyEdges = [];
@@ -464,7 +447,6 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     }
   }
 
-  // 有环时：环的入口节点（从环外进入环内的合并点）必须是 control_anyOne
   if (hasCycle && cycleNodes.length > 0) {
     const cycleSet = new Set(cycleNodes);
     const idToNode = new Map(nodes.map((n) => [n.id, n]));
@@ -506,95 +488,189 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     unreachableNodeIds,
   };
 
+  return { errors, warnings, report };
+}
+
+/**
+ * 产出 edgeTypeMismatch、nodeRoleMissing、nodeModelMissing（供前端标红），并返回对应 errors 文案。
+ */
+function computeValidation(loaded, workspaceRoot) {
+  const { nodes, edges, instances } = loaded;
+  const edgeTypeMismatch = [];
+  const nodeRoleMissing = [];
+  const nodeModelMissing = [];
+  const validationErrors = [];
+
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const nodeIdToSlots = {};
+  for (const n of nodes) {
+    nodeIdToSlots[n.id] = getSlotsFromInstance(instances[n.id]);
+  }
+
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    const sh = e.sourceHandle ?? "output-0";
+    const th = e.targetHandle ?? "input-0";
+    const outMatch = sh.match(/^output-(\d+)$/);
+    const inMatch = th.match(/^input-(\d+)$/);
+    if (!outMatch || !inMatch) continue;
+    const outIdx = parseInt(outMatch[1], 10);
+    const inIdx = parseInt(inMatch[1], 10);
+    const srcSlots = nodeIdToSlots[e.source];
+    const tgtSlots = nodeIdToSlots[e.target];
+    const srcType = (srcSlots?.outputTypes?.[outIdx] ?? "").trim();
+    const tgtType = (tgtSlots?.inputTypes?.[inIdx] ?? "").trim();
+    if (srcType && tgtType && srcType !== tgtType) {
+      const edgeId = toEdgeId({ ...e, sourceHandle: sh, targetHandle: th });
+      edgeTypeMismatch.push(edgeId);
+      validationErrors.push(`边类型不一致: ${e.source} ${sh} -> ${e.target} ${th}`);
+    }
+  }
+
+  const validRoles = new Set(VALID_ROLES);
+  if (workspaceRoot) {
+    for (const id of loadCustomRoleIds(workspaceRoot)) validRoles.add(id);
+  }
+  for (const n of nodes) {
+    const role = (instances[n.id] && instances[n.id].role != null) ? String(instances[n.id].role).trim() : "";
+    if (role && !validRoles.has(role)) {
+      nodeRoleMissing.push(n.id);
+      validationErrors.push(`节点角色未配置或不在允许列表: ${n.id}`);
+    }
+  }
+
+  const root = workspaceRoot ? path.resolve(workspaceRoot) : path.dirname(loaded._flowDir || ".");
+  const { cursor: cursorList, opencode: opencodeList } = loadModelLists(root);
+  const opencodeSet = new Set((opencodeList || []).map((s) => String(s).trim()));
+  const cursorSet = new Set(
+    (cursorList || []).map((s) => {
+      const t = String(s).trim();
+      const first = t.split(/\s+-/)[0].trim();
+      return first || t;
+    })
+  );
+  for (const n of nodes) {
+    const model = (instances[n.id] && instances[n.id].model != null) ? String(instances[n.id].model).trim() : "";
+    if (!model) continue;
+    let valid = false;
+    if (model.startsWith("opencode:")) {
+      valid = opencodeSet.has(model.slice(9).trim());
+    } else {
+      const cursorId = model.startsWith("cursor:") ? model.slice(7).trim() : model;
+      valid = cursorSet.has(cursorId) || (cursorList || []).some((c) => String(c).trim() === model || String(c).trim().startsWith(cursorId + " "));
+    }
+    if (!valid) {
+      nodeModelMissing.push(n.id);
+      validationErrors.push(`节点模型未配置或不在模型列表: ${n.id}`);
+    }
+  }
+
   return {
-    ok: errors.length === 0,
-    errors,
-    warnings,
-    fixesApplied,
-    report,
-    nodes,
-    edges,
-    edgesToFix,
+    validation: { edgeTypeMismatch, nodeRoleMissing, nodeModelMissing },
+    validationErrors,
   };
 }
 
-function checkFlowFromYaml(flowDir) {
+function runValidateFlow(flowDir, workspaceRoot) {
   const loaded = loadFlowYaml(flowDir);
   if (!loaded) {
-    return { ok: false, errors: [`未找到 flow.yaml：${path.join(flowDir, "flow.yaml")}`], warnings: [], fixesApplied: [] };
+    return {
+      ok: false,
+      errors: [`未找到 flow.yaml：${path.join(flowDir, "flow.yaml")}`],
+      warnings: [],
+      validation: { edgeTypeMismatch: [], nodeRoleMissing: [], nodeModelMissing: [] },
+      report: null,
+    };
   }
   const { nodes, edges, instances } = loaded;
   if (nodes.length === 0) {
-    return { ok: false, errors: ["flow.yaml 必须包含 instances 且至少一个节点"], warnings: [], fixesApplied: [] };
+    return {
+      ok: false,
+      errors: ["flow.yaml 必须包含 instances 且至少一个节点"],
+      warnings: [],
+      validation: { edgeTypeMismatch: [], nodeRoleMissing: [], nodeModelMissing: [] },
+      report: null,
+    };
   }
+
   const nodeIdToSlots = {};
   for (const n of nodes) {
     nodeIdToSlots[n.id] = getSlotsFromInstance(instances[n.id]);
   }
   const getInstanceDescription = (n) => (instances[n.id] && instances[n.id].description != null ? String(instances[n.id].description) : "");
   const getNodeBody = (n) => (instances[n.id] && instances[n.id].body != null ? String(instances[n.id].body) : "");
-  return checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody);
+
+  const { errors: structureErrors, warnings, report } = checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody);
+
+  loaded._flowDir = flowDir;
+  const { validation, validationErrors } = computeValidation(loaded, workspaceRoot);
+
+  const errors = [...structureErrors, ...validationErrors];
+  const ok = errors.length === 0;
+
+  return {
+    ok,
+    errors,
+    warnings,
+    validation,
+    report,
+  };
+}
+
+function resolveFlowDir(workspaceRoot, flowName, flowDirArg) {
+  if (flowDirArg != null && flowDirArg !== "") {
+    const p = path.resolve(flowDirArg);
+    if (fs.existsSync(path.join(p, "flow.yaml"))) return p;
+  }
+  const hasFlowYaml = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
+  const workspaceFlowDir = path.join(path.resolve(workspaceRoot), ".workspace", "agentflow", "pipelines", flowName);
+  const cursorFlowDir = path.join(path.resolve(workspaceRoot), ".cursor", "agentflow", "pipelines", flowName);
+  const builtinPipelinesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "builtin", "pipelines");
+  const builtinFlowDir = path.join(builtinPipelinesDir, flowName);
+  if (hasFlowYaml(workspaceFlowDir)) return workspaceFlowDir;
+  if (hasFlowYaml(cursorFlowDir)) return cursorFlowDir;
+  if (hasFlowYaml(builtinFlowDir)) return builtinFlowDir;
+  return cursorFlowDir;
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const rest = args.filter((a) => a !== "--fix");
+  const argv = process.argv.slice(2);
+  if (argv.length < 2) {
+    console.error(JSON.stringify({ ok: false, error: "Usage: validate-flow.mjs <workspaceRoot> <flowName> [flowDir] [uuid]" }));
+    process.exit(1);
+  }
+  const workspaceRoot = path.resolve(argv[0]);
+  const flowName = argv[1];
+  let flowDirArg = argv[2];
+  let uuid = null;
+  if (argv.length >= 4 && /^\d{14}$/.test(String(argv[3]).trim())) {
+    uuid = String(argv[3]).trim();
+  } else if (argv.length === 3 && /^\d{14}$/.test(String(argv[2]).trim())) {
+    uuid = String(argv[2]).trim();
+    flowDirArg = null;
+  }
+  const flowDir = resolveFlowDir(workspaceRoot, flowName, flowDirArg);
 
-  let flowDir;
-  if (rest.length === 1) {
-    const arg = rest[0];
-    const p = path.resolve(arg);
-    const hasFlowYaml = (dir) => fs.existsSync(path.join(dir, "flow.yaml"));
-    if (path.basename(p) === "flow.yaml") {
-      flowDir = path.dirname(p);
-    } else if (hasFlowYaml(p)) {
-      flowDir = p;
-    } else {
-      // 单参且路径下无 flow.yaml 时，视为 flowName，解析到 .cursor/agentflow/pipelines/<name>
-      const cwd = process.cwd();
-      const pipelinesDir = path.join(cwd, ".cursor", "agentflow", "pipelines", arg);
-      if (hasFlowYaml(pipelinesDir)) {
-        flowDir = pipelinesDir;
-      } else {
-        flowDir = p;
-      }
-    }
-  } else if (rest.length >= 2) {
-    const root = path.resolve(rest[0]);
-    const name = rest[1];
-    if (rest.length >= 3) {
-      flowDir = path.resolve(root, rest[2]);
-    } else {
-      const hasFlowYaml = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
-      const workspaceFlowDir = path.join(root, ".workspace", "agentflow", "pipelines", name);
-      const cursorFlowDir = path.join(root, ".cursor", "agentflow", "pipelines", name);
-      const builtinPipelinesDir = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."), "builtin", "pipelines");
-      const builtinFlowDir = path.join(builtinPipelinesDir, name);
-      if (hasFlowYaml(workspaceFlowDir)) {
-        flowDir = workspaceFlowDir;
-      } else if (hasFlowYaml(cursorFlowDir)) {
-        flowDir = cursorFlowDir;
-      } else if (hasFlowYaml(builtinFlowDir)) {
-        flowDir = builtinFlowDir;
-      } else {
-        flowDir = cursorFlowDir;
-      }
-    }
-  } else {
-    console.error(JSON.stringify({ ok: false, error: "Usage: agentflow apply -ai check-flow <workspaceRoot> <flowName> [flowDir] | agentflow apply -ai check-flow <flowYamlPath>" }));
+  if (!fs.existsSync(path.join(flowDir, "flow.yaml"))) {
+    console.error(JSON.stringify({ ok: false, error: "flow.yaml not found in " + flowDir }));
     process.exit(1);
   }
 
-  const result = checkFlowFromYaml(flowDir);
-  if (result.fixesApplied === undefined) result.fixesApplied = [];
-  delete result.edgesToFix;
+  const result = runValidateFlow(flowDir, workspaceRoot);
 
-  // 适配 agentflow apply -ai run-tool-nodejs：脚本执行成功则 err_code 恒为 0（有无 error/warning 不影响）；process.exit 仍按 result.ok 供 CLI 使用
-  const resultPayload = {
-    err_code: 0,
-    message: { result: JSON.stringify(result, null, 2) },
-  };
-  console.log(JSON.stringify(resultPayload));
+  if (uuid && flowName) {
+    const runDir = path.join(workspaceRoot, ".workspace", "agentflow", "runBuild", flowName, uuid);
+    const intermediateDir = path.join(runDir, "intermediate");
+    try {
+      fs.mkdirSync(intermediateDir, { recursive: true });
+      fs.writeFileSync(path.join(intermediateDir, "validation.json"), JSON.stringify(result, null, 2), "utf-8");
+    } catch (err) {
+      console.error(JSON.stringify({ ok: false, error: err.message }));
+      process.exit(1);
+    }
+  }
+
+  console.log(JSON.stringify(result));
   process.exit(result.ok ? 0 : 1);
 }
 

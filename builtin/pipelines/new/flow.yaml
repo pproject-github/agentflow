@@ -14,7 +14,7 @@ instances:
   agent_plan:
     definitionId: agent_subAgent
     label: 规划节点
-    description: 基于用户需求规划节点图（nodes + edges），输出为一份 md 供用户先确认
+    description: 利用SubAgent执行任务
     role: 技术规划
     input:
       - type: 节点
@@ -49,7 +49,7 @@ instances:
   agent_create:
     definitionId: agent_subAgent
     label: 创建Flow
-    description: 用户确认完成后执行——在 .cursor/agentflow/pipelines 下创建流程文件夹、编写 flow.yaml（含 instances、edges、ui）。
+    description: 利用SubAgent执行任务
     role: 普通
     input:
       - type: 节点
@@ -83,7 +83,7 @@ instances:
   provide_skills_file:
     definitionId: provide_file
     label: NewSkills
-    description: 直接提供文件路径或内容，不经过执行器；instance 中配置的 value（路径或内容）会写入 resolvedOutputs，供下游引用。
+    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
     role: 普通
     input: []
     output:
@@ -94,7 +94,7 @@ instances:
   provide_requirement:
     definitionId: provide_str
     label: 需求
-    description: 直接提供一段文本，不经过执行器；instance 中配置的 value 会原样写入 resolvedOutputs，供下游引用。
+    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
     role: 普通
     input: []
     output:
@@ -144,7 +144,7 @@ instances:
   tool_user_check:
     definitionId: tool_user_check
     label: UserCheck
-    description: 等待用户确认，流程暂停，status为 pending。需用户回复 \"继续\" 才重启流程.
+    description: 等待用户确认，流程暂停。需用户回复 "继续" 才重启流程。
     role: 普通
     input:
       - type: 节点
@@ -178,7 +178,7 @@ instances:
   provide_flow:
     definitionId: provide_file
     label: FlowsSkills
-    description: 直接提供文件路径或内容，不经过执行器；instance 中配置的 value（路径或内容）会写入 resolvedOutputs，供下游引用。
+    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
     role: 普通
     input: []
     output:
@@ -188,7 +188,7 @@ instances:
   collectNode:
     definitionId: tool_nodejs
     label: 收集Nodes
-    description: 使用 agentflow apply -ai run-tool-nodejs 执行脚本。约定格式为 {\"err_code\":0,\"message\":{\"result\":\"...\"}}；err_code 为节点执行结果（0=成功、1=失败），后处理据此写 result.status。message 仅含 result（文本），无 next。执行器校验 stdout 并提取 message.result 写入 ${result}。
+    description: "|"
     role: 普通
     input:
       - type: 节点
@@ -229,7 +229,7 @@ instances:
   AI_CHECK_FILE:
     definitionId: provide_file
     label: AICheckFile
-    description: 直接提供文件路径或内容，不经过执行器；instance 中配置的 value（路径或内容）会写入 resolvedOutputs，供下游引用。
+    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
     role: 普通
     input: []
     output:
@@ -239,7 +239,7 @@ instances:
   save_flow_name:
     definitionId: tool_save_key
     label: SaveFlowName
-    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<写入的 value>\" } }（err_code 0=成功 1=失败）。"
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<写入的 value>\\\" } }（err_code 0=成功 1=失败）。"
     role: 普通
     input:
       - type: 节点
@@ -255,7 +255,7 @@ instances:
   loadFlowKey:
     definitionId: tool_load_key
     label: LoadFlowName
-    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \"err_code\": 0, \"message\": { \"result\": \"<value>\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
+    description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<value>\\\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
     role: 普通
     input:
       - type: 文本
@@ -268,7 +268,7 @@ instances:
   tool_check_flow:
     definitionId: tool_nodejs
     label: Flow脚本检查
-    description: 使用 agentflow apply -ai run-tool-nodejs 执行脚本。约定格式为 {\"err_code\":0,\"message\":{\"result\":\"...\"}}；err_code 为节点执行结果（0=成功、1=失败），后处理据此写 result.status。message 仅含 result（文本），无 next。执行器校验 stdout 并提取 message.result 写入 ${result}。
+    description: "|"
     role: 普通
     input:
       - type: 节点
@@ -285,7 +285,7 @@ instances:
         name: result
         value: ''
     body: |-
-      执行：agentflow apply -ai check-flow ${workspaceRoot} ${nowFlow}。需要检查的 flow 为：${nowFlow}
+      执行：agentflow apply -ai validate-flow ${workspaceRoot} ${nowFlow}。需要检查的 flow 为：${nowFlow}
   control_if_check:
     definitionId: control_if
     label: Ifcheck
@@ -309,7 +309,7 @@ instances:
   control_toBool_check:
     definitionId: control_toBool
     label: ToBoolCheck
-    description: 获取 instance 中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     role: 普通
     input:
       - type: 节点

@@ -105,8 +105,13 @@ const log = {
 
 /** agentflow 包根目录（CLI 所在包的 node_modules 用于解析脚本依赖，如 js-yaml） */
 const PACKAGE_ROOT = path.resolve(__dirname, "..");
-/** 包内 agents 目录（执行器身份 prompt），优先使用，缺失时回退到工作区 .cursor/agents */
+/** 包内 agents 目录（执行器身份 prompt），优先使用，缺失时回退到工作区 .workspace/agentflow/agents */
 const PACKAGE_AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
+/** 包内 agents 元数据 JSON */
+const PACKAGE_AGENTS_JSON = path.join(PACKAGE_AGENTS_DIR, "agents.json");
+/** 工作区用户角色目录与元数据 JSON */
+const WORKSPACE_AGENTS_DIR_REL = ".workspace/agentflow/agents";
+const WORKSPACE_AGENTS_JSON_REL = ".workspace/agentflow/agents.json";
 /** apply 子命令所用脚本目录（随包发布，不再从工作区 .cursor/skills/agentflow-apply 加载） */
 const APPLY_SCRIPTS_DIR = path.join(__dirname, "apply");
 /** apply -ai 允许调用的单步脚本名（不含 .mjs），供外部多轮控制 */
@@ -118,7 +123,7 @@ const APPLY_AI_STEPS = [
   "post-process-node",
   "write-result",
   "run-tool-nodejs",
-  "check-flow",
+  "validate-flow",
   "collect-nodes",
   "gc",
 ];
@@ -170,11 +175,11 @@ function getFlowDir(workspaceRoot, flowName) {
   return null;
 }
 
-/** 解析 agent 身份 prompt 路径：优先使用包内 agents/<subagent>.md，否则工作区 .cursor/agents/<subagent>.md */
+/** 解析 agent 身份 prompt 路径：优先使用包内 agents/<subagent>.md，否则工作区 .workspace/agentflow/agents/<subagent>.md */
 function getAgentPath(workspaceRoot, subagent) {
   const packagePath = path.join(PACKAGE_AGENTS_DIR, `${subagent}.md`);
   if (fs.existsSync(packagePath)) return path.resolve(packagePath);
-  return path.resolve(workspaceRoot, ".cursor", "agents", `${subagent}.md`);
+  return path.resolve(workspaceRoot, WORKSPACE_AGENTS_DIR_REL, `${subagent}.md`);
 }
 
 /**
@@ -950,6 +955,48 @@ function printNodeStatusTable(instanceStatus, nodes, execIdMap = {}) {
   process.stderr.write(statusTable.toString() + "\n");
 }
 
+/**
+ * apply 启动时执行 validate-flow（统一校验）；errors 则退出，仅 warnings 则提示后继续。
+ */
+function runValidateFlowAndExitIfInvalid(workspaceRoot, flowName, flowDir) {
+  const result = runNodeScript(workspaceRoot, "validate-flow.mjs", [workspaceRoot, flowName, flowDir], {
+    captureStdout: true,
+  });
+  const stdout = (result.stdout || "").trim();
+  if (!stdout) return;
+  let data;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    return;
+  }
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+
+  if (errors.length > 0) {
+    process.stderr.write("\n" + chalk.bold.red("流程校验未通过，请修正后再执行 apply：") + "\n\n");
+    for (const err of errors) {
+      process.stderr.write("  " + chalk.red("• ") + err + "\n");
+    }
+    if (warnings.length > 0) {
+      process.stderr.write("\n" + chalk.yellow("警告：") + "\n");
+      for (const w of warnings) {
+        process.stderr.write("  " + chalk.yellow("• ") + w + "\n");
+      }
+    }
+    process.stderr.write("\n" + chalk.dim("校验命令: agentflow validate " + flowName) + "\n");
+    process.exit(1);
+  }
+
+  if (warnings.length > 0) {
+    process.stderr.write("\n" + chalk.yellow("校验警告：") + "\n");
+    for (const w of warnings) {
+      process.stderr.write("  " + chalk.yellow("• ") + w + "\n");
+    }
+    process.stderr.write("\n");
+  }
+}
+
 /** parallel 默认 false：多进程同时跑时 Cursor CLI 会写 ~/.cursor/cli-config.json，易产生 rename 竞态 (ENOENT)，故默认串行。 */
 async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false) {
   ensureReference(workspaceRoot);
@@ -959,6 +1006,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
       `Flow not found: ${flowName} (no flow.yaml under ${PIPELINES_DIR_WORKSPACE}/${flowName} or ${PIPELINES_DIR}/${flowName})`,
     );
   }
+  runValidateFlowAndExitIfInvalid(workspaceRoot, flowName, flowDir);
   const ensureArgs = [workspaceRoot, uuidArg || "", flowName].filter(Boolean);
   ensureArgs.push(flowDir);
   const ensureResult = runNodeScript(
@@ -1229,7 +1277,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
   throw new Error(`Max rounds (${MAX_LOOP_ROUNDS}) reached. 总 ${totalElapsed}`);
 }
 
-/** 将 pending 节点标为 success 并继续 apply。resume <FlowName> <uuid> [instanceId] */
+/** 将 pending 与 failed 节点标为 success 并继续 apply。resume <FlowName> <uuid> [instanceId] */
 async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, agentModel = null, force = true, parallel = false) {
   let nodesToResume = [];
   if (instanceIdOptional) {
@@ -1241,10 +1289,11 @@ async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, agentMo
       [workspaceRoot, flowName, uuid],
       { captureStdout: true },
     );
-    const { pendingNodes = [] } = parseJsonStdout(readyResult);
-    nodesToResume = pendingNodes;
+    const { pendingNodes = [], instanceStatus = {} } = parseJsonStdout(readyResult);
+    const failedNodes = Object.keys(instanceStatus).filter((id) => instanceStatus[id] === "failed");
+    nodesToResume = [...new Set([...pendingNodes, ...failedNodes])];
   }
-  const payload = JSON.stringify({ status: "success", message: "用户确认继续" });
+  const payload = JSON.stringify({ status: "success", message: "用户确认继续（含重试 failed）" });
   for (const instanceId of nodesToResume) {
     const wr = runNodeScript(
       workspaceRoot,
@@ -1538,6 +1587,301 @@ function readNodeJson(workspaceRoot, nodeId, flowId, flowSource) {
   return { error: "Node not found: " + nodeId };
 }
 
+/** 从 agent .md 文件读取 frontmatter 的 name、description（简易解析，不依赖 yaml 库） */
+function readAgentFrontmatter(filePath) {
+  if (!fs.existsSync(filePath)) return { name: null, description: null };
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const start = raw.indexOf("---");
+    if (start === -1) return { name: null, description: null };
+    const afterFirst = raw.indexOf("---", start + 3);
+    if (afterFirst === -1) return { name: null, description: null };
+    const block = raw.slice(start + 3, afterFirst).trim();
+    let name = null;
+    let description = null;
+    for (const line of block.split("\n")) {
+      const m = line.match(/^\s*name:\s*(.+)$/);
+      if (m) name = m[1].trim().replace(/^["']|["']$/g, "");
+      const d = line.match(/^\s*description:\s*(.+)$/);
+      if (d) description = d[1].trim().replace(/^["']|["']$/g, "");
+    }
+    return { name, description };
+  } catch (_) {
+    return { name: null, description: null };
+  }
+}
+
+/** 列出所有角色：包内 agents.json（builtin）+ 工作区 .workspace/agentflow/agents.json（user）。返回 { id, name, description, source, filepath? }[] */
+function listAgentsJson(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  const out = [];
+
+  // 内置：优先读 agents.json，否则退化为扫描 agents/*.md
+  if (fs.existsSync(PACKAGE_AGENTS_JSON) && fs.statSync(PACKAGE_AGENTS_JSON).isFile()) {
+    try {
+      const raw = fs.readFileSync(PACKAGE_AGENTS_JSON, "utf8");
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        for (const e of arr) {
+          const id = e && typeof e.id === "string" ? e.id.trim() : "";
+          if (!id) continue;
+          const filepath = e.filepath != null ? String(e.filepath) : `agents/${id}.md`;
+          out.push({
+            id,
+            name: e.name != null ? String(e.name) : id,
+            description: e.description != null ? String(e.description) : null,
+            source: "builtin",
+            filepath,
+          });
+        }
+      }
+    } catch (_) {}
+  }
+  if (out.length === 0 && fs.existsSync(PACKAGE_AGENTS_DIR) && fs.statSync(PACKAGE_AGENTS_DIR).isDirectory()) {
+    const names = fs.readdirSync(PACKAGE_AGENTS_DIR);
+    for (const n of names) {
+      if (!n.endsWith(".md")) continue;
+      const id = n.slice(0, -3);
+      const fp = path.join(PACKAGE_AGENTS_DIR, n);
+      if (!fs.statSync(fp).isFile()) continue;
+      const { name, description } = readAgentFrontmatter(fp);
+      out.push({
+        id,
+        name: name || id,
+        description: description || null,
+        source: "builtin",
+        filepath: `agents/${id}.md`,
+      });
+    }
+  }
+
+  // 用户：读 .workspace/agentflow/agents.json；若无则从 .workspace/agentflow/agents/*.md 扫描生成并写入
+  const userAgentsJsonPath = path.join(root, WORKSPACE_AGENTS_JSON_REL);
+  const userAgentsDir = path.join(root, WORKSPACE_AGENTS_DIR_REL);
+  let userList = [];
+  if (fs.existsSync(userAgentsJsonPath) && fs.statSync(userAgentsJsonPath).isFile()) {
+    try {
+      const raw = fs.readFileSync(userAgentsJsonPath, "utf8");
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        userList = arr
+          .filter((e) => e && typeof e.id === "string" && e.id.trim())
+          .map((e) => ({
+            id: e.id.trim(),
+            name: e.name != null ? String(e.name) : e.id.trim(),
+            description: e.description != null ? String(e.description) : null,
+            source: "user",
+            filepath: e.filepath != null ? String(e.filepath) : `${WORKSPACE_AGENTS_DIR_REL}/${e.id.trim()}.md`,
+          }));
+      }
+    } catch (_) {}
+  }
+  if (userList.length === 0 && fs.existsSync(userAgentsDir) && fs.statSync(userAgentsDir).isDirectory()) {
+    const names = fs.readdirSync(userAgentsDir);
+    for (const n of names) {
+      if (!n.endsWith(".md")) continue;
+      const id = n.slice(0, -3);
+      const fp = path.join(userAgentsDir, n);
+      if (!fs.statSync(fp).isFile()) continue;
+      const { name, description } = readAgentFrontmatter(fp);
+      userList.push({
+        id,
+        name: name || id,
+        description: description || null,
+        source: "user",
+        filepath: `${WORKSPACE_AGENTS_DIR_REL}/${id}.md`,
+      });
+    }
+    if (userList.length > 0) {
+      try {
+        fs.mkdirSync(path.dirname(userAgentsJsonPath), { recursive: true });
+        fs.writeFileSync(userAgentsJsonPath, JSON.stringify(userList, null, 2), "utf8");
+      } catch (_) {}
+    }
+  }
+  for (const e of userList) out.push(e);
+
+  out.sort((a, b) => (a.source !== b.source ? (a.source === "builtin" ? -1 : 1) : a.id.localeCompare(b.id)));
+  return out;
+}
+
+/** 列出所有角色（CLI 表格形式，不输出 JSON） */
+function listAgentsTable(workspaceRoot) {
+  const rows = listAgentsJson(workspaceRoot);
+  if (rows.length === 0) {
+    log.info("No agents found (builtin: agents/agents.json, user: .workspace/agentflow/agents.json).");
+    return;
+  }
+  const table = new Table({
+    head: [chalk.cyan("id"), chalk.cyan("name"), chalk.cyan("source"), chalk.cyan("description")],
+    colWidths: [36, 16, 10, 40],
+    style: { head: [], border: ["grey"] },
+  });
+  for (const row of rows) {
+    const sourceLabel = row.source === "builtin" ? "builtin" : "user";
+    const desc = row.description != null ? String(row.description).slice(0, 38) + (String(row.description).length > 38 ? "…" : "") : "";
+    table.push([row.id, row.name || row.id, sourceLabel, desc]);
+  }
+  log.info("\n" + chalk.bold("Agents (roles)"));
+  log.info(table.toString());
+}
+
+/** 将内置角色拷贝到工作区 .workspace/agentflow/agents/<targetId>.md，并更新 .workspace/agentflow/agents.json */
+function copyBuiltinAgentJson(workspaceRoot, builtinAgentId, targetId) {
+  const root = path.resolve(workspaceRoot);
+  const destId = (targetId && String(targetId).trim()) || builtinAgentId;
+  const srcFile = path.join(PACKAGE_AGENTS_DIR, `${builtinAgentId}.md`);
+  const userDir = path.join(root, WORKSPACE_AGENTS_DIR_REL);
+  const destFile = path.join(userDir, `${destId}.md`);
+  const userJsonPath = path.join(root, WORKSPACE_AGENTS_JSON_REL);
+  if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
+    return { success: false, error: "内置角色不存在" };
+  }
+  if (fs.existsSync(destFile)) {
+    return { success: false, error: "该名称已存在，请换一个" };
+  }
+  let name = destId;
+  let description = null;
+  if (fs.existsSync(PACKAGE_AGENTS_JSON) && fs.statSync(PACKAGE_AGENTS_JSON).isFile()) {
+    try {
+      const raw = fs.readFileSync(PACKAGE_AGENTS_JSON, "utf8");
+      const arr = JSON.parse(raw);
+      const built = Array.isArray(arr) ? arr.find((e) => e && e.id === builtinAgentId) : null;
+      if (built) {
+        if (built.name != null) name = String(built.name);
+        if (built.description != null) description = String(built.description);
+      }
+    } catch (_) {}
+  }
+  if (name === destId) {
+    const { name: fmName, description: fmDesc } = readAgentFrontmatter(srcFile);
+    if (fmName) name = fmName;
+    if (fmDesc) description = fmDesc;
+  }
+  try {
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.copyFileSync(srcFile, destFile);
+    const filepath = `${WORKSPACE_AGENTS_DIR_REL}/${destId}.md`;
+    const entry = { id: destId, name, description, filepath };
+    let list = [];
+    if (fs.existsSync(userJsonPath) && fs.statSync(userJsonPath).isFile()) {
+      try {
+        const raw = fs.readFileSync(userJsonPath, "utf8");
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) list = arr.filter((e) => e && e.id !== destId);
+      } catch (_) {}
+    }
+    list.push(entry);
+    list.sort((a, b) => a.id.localeCompare(b.id));
+    fs.mkdirSync(path.dirname(userJsonPath), { recursive: true });
+    fs.writeFileSync(userJsonPath, JSON.stringify(list, null, 2), "utf8");
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) };
+  }
+}
+
+/** 读取角色 markdown 全文，供 UI 展示描述。返回 { content } 或 { error } */
+function readAgentJson(workspaceRoot, agentId) {
+  const agentPath = getAgentPath(workspaceRoot, agentId);
+  if (!fs.existsSync(agentPath) || !fs.statSync(agentPath).isFile()) {
+    return { error: "角色不存在" };
+  }
+  try {
+    const content = fs.readFileSync(agentPath, "utf8");
+    return { content };
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
+}
+
+/** add-role：用户侧在 .workspace/agentflow/agents 创建 .md 并更新 agents.json；--builtin 时在包内 agents 创建并更新 agents.json */
+function addRoleJson(workspaceRoot, opts) {
+  const { builtin = false, id, name, description, contentPath } = opts;
+  const idStr = id && typeof id === "string" ? id.trim() : "";
+  if (!idStr || idStr.includes("/") || idStr.includes("\\") || idStr.includes("..")) {
+    return { success: false, error: "无效的角色 id（需文件名安全）" };
+  }
+  if (builtin) {
+    const destFile = path.join(PACKAGE_AGENTS_DIR, `${idStr}.md`);
+    const destJson = PACKAGE_AGENTS_JSON;
+    if (fs.existsSync(destFile)) {
+      return { success: false, error: "该名称已存在，请换一个" };
+    }
+    let content = `---
+name: ${name != null ? String(name).replace(/\n/g, " ") : idStr}
+description: ${description != null ? String(description).replace(/\n/g, " ") : ""}
+---
+
+## 角色定义
+
+（待编辑）
+`;
+    if (contentPath && fs.existsSync(contentPath) && fs.statSync(contentPath).isFile()) {
+      content = fs.readFileSync(contentPath, "utf8");
+    }
+    try {
+      fs.writeFileSync(destFile, content, "utf8");
+      const filepath = `agents/${idStr}.md`;
+      const entry = { id: idStr, name: name != null ? String(name) : idStr, description: description != null ? String(description) : null, filepath };
+      let list = [];
+      if (fs.existsSync(destJson) && fs.statSync(destJson).isFile()) {
+        try {
+          const raw = fs.readFileSync(destJson, "utf8");
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) list = arr.filter((e) => e && e.id !== idStr);
+        } catch (_) {}
+      }
+      list.push(entry);
+      list.sort((a, b) => a.id.localeCompare(b.id));
+      fs.writeFileSync(destJson, JSON.stringify(list, null, 2), "utf8");
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: (e && e.message) || String(e) };
+    }
+  }
+  const root = path.resolve(workspaceRoot);
+  const userDir = path.join(root, WORKSPACE_AGENTS_DIR_REL);
+  const destFile = path.join(userDir, `${idStr}.md`);
+  const userJsonPath = path.join(root, WORKSPACE_AGENTS_JSON_REL);
+  if (fs.existsSync(destFile)) {
+    return { success: false, error: "该名称已存在，请换一个" };
+  }
+  let content = `---
+name: ${name != null ? String(name).replace(/\n/g, " ") : idStr}
+description: ${description != null ? String(description).replace(/\n/g, " ") : ""}
+---
+
+## 角色定义
+
+（待编辑）
+`;
+  if (contentPath && fs.existsSync(contentPath) && fs.statSync(contentPath).isFile()) {
+    content = fs.readFileSync(contentPath, "utf8");
+  }
+  try {
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(destFile, content, "utf8");
+    const filepath = `${WORKSPACE_AGENTS_DIR_REL}/${idStr}.md`;
+    const entry = { id: idStr, name: name != null ? String(name) : idStr, description: description != null ? String(description) : null, filepath };
+    let list = [];
+    if (fs.existsSync(userJsonPath) && fs.statSync(userJsonPath).isFile()) {
+      try {
+        const raw = fs.readFileSync(userJsonPath, "utf8");
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) list = arr.filter((e) => e && e.id !== idStr);
+      } catch (_) {}
+    }
+    list.push(entry);
+    list.sort((a, b) => a.id.localeCompare(b.id));
+    fs.mkdirSync(path.dirname(userJsonPath), { recursive: true });
+    fs.writeFileSync(userJsonPath, JSON.stringify(list, null, 2), "utf8");
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) };
+  }
+}
+
 function copyBuiltinJson(workspaceRoot, flowId, targetFlowId) {
   const root = path.resolve(workspaceRoot);
   const destId = (targetFlowId && targetFlowId.trim()) || flowId;
@@ -1566,7 +1910,8 @@ AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming.
 Usage:
   agentflow list                              列出所有 pipeline
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
-  agentflow resume <FlowName> <uuid> [instanceId]  将 pending 节点标为已确认并继续 apply
+  agentflow validate <FlowName> [uuid]        校验流程；终端下输出易读结果，--json 或管道时输出 JSON；传 uuid 时写入 runDir/intermediate/validation.json
+  agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
   agentflow replay [flowName] <uuid> <instanceId>
   agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
   agentflow --help
@@ -1589,10 +1934,10 @@ Apply: builds run dir, parses flow, runs ready nodes in a loop.
     agentflow apply -ai post-process-node <workspaceRoot> <flowName> <uuid> <instanceId> [execId]
     agentflow apply -ai write-result <workspaceRoot> <flowName> <uuid> <instanceId> --json '<JSON>'
     agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> [execId] -- <scriptCmd> [args...]
-    agentflow apply -ai check-flow <workspaceRoot> <flowName> [flowDir]
+    agentflow apply -ai validate-flow <workspaceRoot> <flowName> <flowDir> [uuid]
     agentflow apply -ai collect-nodes <workspaceRoot> <flowName> [runDir]
     agentflow apply -ai gc <workspaceRoot> [--list] [--dry-run] [--delete] [--keep N] [--older-than N]
-Resume: marks pending node(s) as success (e.g. after UserCheck 确认), then continues apply.
+Resume: marks pending and failed node(s) as success (e.g. after UserCheck 确认 or retry failed), then continues apply.
 Replay: runs a single node (pre-process → execute → post-process).
 
 Requires: Node >=18, Cursor CLI ('agent') in PATH for node execution.
@@ -1657,7 +2002,7 @@ async function main() {
     process.exit(1);
   }
   // 仅对需要 --json 的顶层子命令移除该参数，避免 apply -ai write-result 时子脚本收不到 --json 与 payload
-  const jsonOnlySubs = ["list-flows", "list-nodes", "read-flow", "read-node", "copy-builtin"];
+  const jsonOnlySubs = ["list-flows", "list-nodes", "read-flow", "read-node", "copy-builtin", "list-agents", "copy-builtin-agent", "read-agent", "add-role"];
   if (jsonMode && jsonOnlySubs.includes(sub)) {
     argv.splice(argv.indexOf("--json"), 1);
   }
@@ -1738,6 +2083,57 @@ async function main() {
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(result.success ? 0 : 1);
   }
+  if (sub === "list-agents" && jsonMode) {
+    const list = listAgentsJson(workspaceRoot);
+    process.stdout.write(JSON.stringify(list) + "\n");
+    process.exit(0);
+  }
+  if (sub === "list-agents") {
+    listAgentsTable(workspaceRoot);
+    process.exit(0);
+  }
+  if (sub === "copy-builtin-agent" && jsonMode) {
+    const builtinAgentId = shift();
+    let targetId;
+    const targetIdx = argv.indexOf("--target");
+    if (targetIdx >= 0 && argv[targetIdx + 1]) targetId = argv[targetIdx + 1];
+    if (!builtinAgentId) {
+      process.stdout.write(JSON.stringify({ success: false, error: "Missing builtinAgentId" }) + "\n");
+      process.exit(1);
+    }
+    const result = copyBuiltinAgentJson(workspaceRoot, builtinAgentId, targetId);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.success ? 0 : 1);
+  }
+  if (sub === "read-agent" && jsonMode) {
+    const agentId = argv.find((a) => !a.startsWith("--"));
+    if (!agentId) {
+      process.stdout.write(JSON.stringify({ error: "Missing agentId" }) + "\n");
+      process.exit(1);
+    }
+    const result = readAgentJson(workspaceRoot, agentId);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.error ? 1 : 0);
+  }
+  if (sub === "add-role" && jsonMode) {
+    let id, name, description, builtin = false, contentPath;
+    const idIdx = argv.indexOf("--id");
+    if (idIdx >= 0 && argv[idIdx + 1]) id = argv[idIdx + 1];
+    const nameIdx = argv.indexOf("--name");
+    if (nameIdx >= 0 && argv[nameIdx + 1]) name = argv[nameIdx + 1];
+    const descIdx = argv.indexOf("--description");
+    if (descIdx >= 0 && argv[descIdx + 1]) description = argv[descIdx + 1];
+    if (argv.includes("--builtin")) builtin = true;
+    const contentIdx = argv.indexOf("--content");
+    if (contentIdx >= 0 && argv[contentIdx + 1]) contentPath = argv[contentIdx + 1];
+    if (!id) {
+      process.stdout.write(JSON.stringify({ success: false, error: "Missing --id" }) + "\n");
+      process.exit(1);
+    }
+    const result = addRoleJson(workspaceRoot, { builtin, id, name, description, contentPath });
+    process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(result.success ? 0 : 1);
+  }
   if (sub === "list") {
     listPipelines(workspaceRoot);
   } else if (sub === "apply") {
@@ -1788,10 +2184,86 @@ async function main() {
     const result = runNodeScript(workspaceRoot, "get-ready-nodes.mjs", [workspaceRoot, flowName, uuidArg], { captureStdout: true });
     if (result.stdout) process.stdout.write(result.stdout);
     process.exit(result.status === 0 ? 0 : 1);
-  } else if (sub === "list-flows" || sub === "list-nodes" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin") {
+  } else if (sub === "validate") {
+    const flowName = shift();
+    if (!flowName) throw new Error("Usage: agentflow validate <FlowName> [uuid]");
+    const wantJson = argv.includes("--json");
+    if (wantJson) argv.splice(argv.indexOf("--json"), 1);
+    const uuidArg = argv.length > 0 && !argv[0].startsWith("--") && isValidUuid(argv[0]) ? shift() : null;
+    const flowDir = getFlowDir(workspaceRoot, flowName);
+    if (!flowDir) {
+      throw new Error(
+        "Flow not found: " +
+          flowName +
+          " (no flow.yaml under .workspace/agentflow/pipelines/" +
+          flowName +
+          " or .cursor/agentflow/pipelines/" +
+          flowName +
+          ")",
+      );
+    }
+    const args = [workspaceRoot, flowName, flowDir];
+    if (uuidArg) args.push(uuidArg);
+    const result = runNodeScript(workspaceRoot, "validate-flow.mjs", args, { captureStdout: true });
+    if (!result.stdout) {
+      process.exit(result.status ?? 1);
+      return;
+    }
+    const isTTY = process.stdout.isTTY === true;
+    if (wantJson || !isTTY) {
+      process.stdout.write(result.stdout);
+      process.exit(result.status ?? 0);
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(result.stdout);
+    } catch {
+      process.stdout.write(result.stdout);
+      process.exit(result.status ?? 0);
+      return;
+    }
+    if (data.error) {
+      process.stderr.write(chalk.red("Error: ") + data.error + "\n");
+      process.exit(1);
+      return;
+    }
+    const ok = data.ok === true;
+    const errs = Array.isArray(data.errors) ? data.errors : [];
+    const warns = Array.isArray(data.warnings) ? data.warnings : [];
+    const v = data.validation || {};
+    const edgeErr = Array.isArray(v.edgeTypeMismatch) ? v.edgeTypeMismatch : [];
+    const roleErr = Array.isArray(v.nodeRoleMissing) ? v.nodeRoleMissing : [];
+    const modelErr = Array.isArray(v.nodeModelMissing) ? v.nodeModelMissing : [];
+    process.stdout.write("\n");
+    process.stdout.write(chalk.bold("校验: ") + flowName + "  ");
+    process.stdout.write(ok ? chalk.green("✓ 通过") + "\n" : chalk.red("✗ 未通过") + "\n");
+    if (!ok || errs.length > 0) {
+      for (const e of errs) {
+        process.stdout.write(chalk.red("  • ") + e + "\n");
+      }
+    }
+    if (edgeErr.length) {
+      process.stdout.write(chalk.yellow("  边类型不匹配: ") + edgeErr.join(", ") + "\n");
+    }
+    if (roleErr.length) {
+      process.stdout.write(chalk.yellow("  节点角色缺失/无效: ") + roleErr.join(", ") + "\n");
+    }
+    if (modelErr.length) {
+      process.stdout.write(chalk.yellow("  节点模型缺失/无效: ") + modelErr.join(", ") + "\n");
+    }
+    if (warns.length > 0) {
+      process.stdout.write(chalk.dim("  警告: ") + "\n");
+      for (const w of warns) {
+        process.stdout.write(chalk.dim("    • ") + w + "\n");
+      }
+    }
+    if (!ok || errs.length > 0 || warns.length > 0) process.stdout.write("\n");
+    process.exit(result.status ?? 0);
+  } else if (sub === "list-flows" || sub === "list-nodes" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin" || sub === "copy-builtin-agent" || sub === "read-agent" || sub === "add-role") {
     throw new Error("Use --json with " + sub + ". Example: agentflow list-flows --json --workspace-root <path>");
   } else {
-    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, apply, resume, replay, or run-status.");
+    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, apply, validate, resume, replay, or run-status.");
   }
 }
 
