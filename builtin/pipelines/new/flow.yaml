@@ -185,6 +185,28 @@ instances:
       - type: 文件
         name: value
         value: .workspace/agentflow/reference/flow-control-capabilities.md
+  provide_nowFlow_key_save:
+    definitionId: provide_str
+    label: FlowKeyName
+    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    role: 普通
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: nowFlow
+    body: ''
+  provide_nowFlow_key_load:
+    definitionId: provide_str
+    label: FlowKeyName
+    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    role: 普通
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: nowFlow
+    body: ''
   collectNode:
     definitionId: tool_nodejs
     label: 收集Nodes
@@ -406,6 +428,14 @@ edges:
     target: save_flow_name
     sourceHandle: output-2
     targetHandle: input-2
+  - source: provide_nowFlow_key_save
+    target: save_flow_name
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: provide_nowFlow_key_load
+    target: loadFlowKey
+    sourceHandle: output-0
+    targetHandle: input-0
   - source: loadFlowKey
     target: agent_ai_check_tool
     sourceHandle: output-0
@@ -489,6 +519,12 @@ ui:
     provide_flow:
       x: -258.73821498428885
       'y': 351.00016245846024
+    provide_nowFlow_key_save:
+      x: 50
+      'y': 380
+    provide_nowFlow_key_load:
+      x: 400
+      'y': 100
     collectNode:
       x: -253.75940968202514
       'y': 11.90795223444617

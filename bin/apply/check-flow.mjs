@@ -454,9 +454,11 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
       "从 control_start 到 control_end 无纯「节点」边构成的路径（仅存在文件/文本边），图不可达。请为 start→end 中间节点补充节点类型（节点→节点）的 edge。"
     );
   }
+  const nodeReachableOptional = (defId) =>
+    defId === "control_start" || defId === "control_end" || defId.startsWith("provide_") || defId === "tool_load_key" || defId === "tool_save_key";
   for (const n of nodes) {
     const defId = n.definitionId || "";
-    if (defId === "control_start" || defId === "control_end" || defId.startsWith("provide_")) continue;
+    if (nodeReachableOptional(defId)) continue;
     if (!nodeReachable.has(n.id)) {
       warnings.push(
         `节点 "${n.id}"（${n.label || n.id}）无节点边可达：仅通过文件/文本边连接，缺少从 start 到该节点的节点链路，执行顺序无法保证`
@@ -487,9 +489,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     .filter(
       (n) =>
         n.definitionId &&
-        n.definitionId !== "control_start" &&
-        n.definitionId !== "control_end" &&
-        !n.definitionId.startsWith("provide_") &&
+        !nodeReachableOptional(n.definitionId) &&
         !nodeReachable.has(n.id)
     )
     .map((n) => n.id);

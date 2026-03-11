@@ -221,6 +221,28 @@ instances:
         value: ''
     output: []
     body: 流程出口
+  provide_key_ready_file:
+    definitionId: provide_str
+    label: KeyReadyFile
+    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    modelType: Auto
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: ready_file
+    body: ''
+  provide_key_module_name:
+    definitionId: provide_str
+    label: KeyModuleName
+    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    modelType: Auto
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: moduleName
+    body: ''
   tool_save_ready_file:
     definitionId: tool_save_key
     label: 待迁移文件列表
@@ -521,6 +543,14 @@ edges:
     target: migrate
     sourceHandle: output-1
     targetHandle: input-1
+  - source: provide_key_ready_file
+    target: tool_save_ready_file
+    sourceHandle: output-0
+    targetHandle: input-1
+  - source: provide_key_module_name
+    target: tool_save_module_name
+    sourceHandle: output-0
+    targetHandle: input-1
   - source: scope
     target: tool_save_ready_file
     sourceHandle: output-1
@@ -751,6 +781,12 @@ ui:
     end:
       x: 2438.643154035482
       'y': 73.16499995993682
+    provide_key_ready_file:
+      x: 50
+      'y': 345.1735104800173
+    provide_key_module_name:
+      x: 50
+      'y': 451.2111504138263
     tool_save_ready_file:
       x: 243.14605812665633
       'y': 345.1735104800173
