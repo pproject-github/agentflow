@@ -131,6 +131,9 @@ const RUN_BUILD_REL = ".workspace/agentflow/runBuild";
 const PIPELINES_DIR = ".cursor/agentflow/pipelines";
 const PIPELINES_DIR_WORKSPACE = ".workspace/agentflow/pipelines";
 const REFERENCE_DIR_REL = ".workspace/agentflow/reference";
+/** 模型列表缓存：.workspace/agentflow/model-lists.json，由 update-model-lists 写入 */
+const WORKSPACE_MODEL_LISTS_REL = ".workspace/agentflow/model-lists.json";
+const WORKSPACE_AGENTFLOW_CONFIG_REL = ".workspace/agentflow/config.json";
 const RUN_LOG_REL = "logs/log.txt";
 
 /** 包内 reference 目录（npm 安装后与 bin 同包），运行时若工作区缺少则复制到 .workspace/agentflow/reference */
@@ -157,6 +160,84 @@ function ensureReference(workspaceRoot) {
       }
     }
   } catch (_) {}
+}
+
+/** 去掉 ANSI 转义码，便于解析 Cursor/OpenCode models 输出 */
+function stripAnsiModelList(text) {
+  return String(text || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+const CURSOR_NON_MODEL_PATTERNS = [
+  /^loading\s+models/i,
+  /^available\s+models$/i,
+  /^tip:\s*use\s+--model/i,
+];
+
+function isCursorModelLine(line) {
+  const lower = line.toLowerCase();
+  if (lower.startsWith("name") || lower === "models" || lower === "model") return false;
+  if (CURSOR_NON_MODEL_PATTERNS.some((re) => re.test(line))) return false;
+  return line.length > 0 && line.length < 200;
+}
+
+function parseModelLines(stdout) {
+  const cleaned = stripAnsiModelList(stdout);
+  const lines = cleaned.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  return lines.filter(isCursorModelLine);
+}
+
+function runCursorModels(workspaceRoot) {
+  return new Promise((resolve) => {
+    const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
+    const child = spawn(agentCmd, ["models"], { cwd: workspaceRoot, shell: false });
+    let out = "";
+    child.stdout?.on("data", (chunk) => { out += chunk.toString("utf-8"); });
+    child.stderr?.on("data", (chunk) => { out += chunk.toString("utf-8"); });
+    child.on("close", (code) => (code === 0 ? resolve(parseModelLines(out)) : resolve([])));
+    child.on("error", () => resolve([]));
+  });
+}
+
+function runOpencodeModels(workspaceRoot, provider) {
+  if (!provider || !String(provider).trim()) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+    const child = spawn(opencodeCmd, ["models", String(provider).trim()], { cwd: workspaceRoot, shell: false });
+    let out = "";
+    child.stdout?.on("data", (chunk) => { out += chunk.toString("utf-8"); });
+    child.stderr?.on("data", (chunk) => { out += chunk.toString("utf-8"); });
+    child.on("close", (code) => (code === 0 ? resolve(parseModelLines(out)) : resolve([])));
+    child.on("error", () => resolve([]));
+  });
+}
+
+/** 拉取 Cursor / OpenCode 模型列表并写入 .workspace/agentflow/model-lists.json；返回 { cursor, opencode } */
+async function updateModelLists(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  let opencodeProvider = "";
+  try {
+    const configPath = path.join(root, WORKSPACE_AGENTFLOW_CONFIG_REL);
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (typeof config?.opencodeProvider === "string") opencodeProvider = config.opencodeProvider.trim();
+    }
+  } catch (_) {}
+
+  const [cursorRaw, opencode] = await Promise.all([
+    runCursorModels(root),
+    runOpencodeModels(root, opencodeProvider),
+  ]);
+  const cursor = cursorRaw.filter(isCursorModelLine);
+  const now = Date.now();
+  const data = { cursor, opencode, cursorFetchedAt: now, opencodeFetchedAt: now };
+
+  const cachePath = path.join(root, WORKSPACE_MODEL_LISTS_REL);
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (_) {}
+
+  return { cursor, opencode };
 }
 
 function getRunDir(workspaceRoot, flowName, uuid) {
@@ -1918,6 +1999,7 @@ Usage:
   agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
   agentflow replay [flowName] <uuid> <instanceId>
   agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
+  agentflow update-model-lists            拉取 Cursor / OpenCode 模型列表并写入 .workspace/agentflow/model-lists.json；--json 时输出 { cursor, opencode }
   agentflow --help
 
 Options:
@@ -2004,6 +2086,11 @@ async function main() {
   if (!sub) {
     printHelp();
     process.exit(1);
+  }
+  if (sub === "update-model-lists") {
+    const result = await updateModelLists(workspaceRoot);
+    if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
+    process.exit(0);
   }
   // 仅对需要 --json 的顶层子命令移除该参数，避免 apply -ai write-result 时子脚本收不到 --json 与 payload
   const jsonOnlySubs = ["list-flows", "list-nodes", "read-flow", "read-node", "copy-builtin", "list-agents", "copy-builtin-agent", "read-agent", "add-role"];
@@ -2267,7 +2354,7 @@ async function main() {
   } else if (sub === "list-flows" || sub === "list-nodes" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin" || sub === "copy-builtin-agent" || sub === "read-agent" || sub === "add-role") {
     throw new Error("Use --json with " + sub + ". Example: agentflow list-flows --json --workspace-root <path>");
   } else {
-    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, apply, validate, resume, replay, or run-status.");
+    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, update-model-lists, apply, validate, resume, replay, or run-status.");
   }
 }
 
