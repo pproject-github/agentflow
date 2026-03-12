@@ -441,6 +441,9 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       "--trust",
       "--workspace", workspaceRoot,
     ];
+    // 非交互下自动批准 MCP 服务器，使 apply/replay 中可用工作区配置的 MCP；可通过 AGENTFLOW_CURSOR_APPROVE_MCPS=0 关闭
+    const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
+    if (approveMcps) args.push("--approve-mcps");
     if (options.force) args.push("--force");
     args.push("--model", model);
     args.push(promptText);
@@ -672,7 +675,8 @@ function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, 
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
     };
-    // 与 Cursor 的 --trust/--force 对应：非交互下 external_directory 默认 ask 会 auto-reject，需显式 allow
+    // 与 Cursor 的 --trust/--force 对应：非交互下 external_directory 默认 ask 会 auto-reject，需显式 allow。
+    // MCP 使用工作区配置（opencode mcp list / 项目 opencode 配置），run 时会自动加载已配置的 MCP 服务器。
     // 使用 OPENCODE_CONFIG_CONTENT（优先级高于 opencode.json）确保权限生效
     if (options.force) {
       spawnOpts.env = {

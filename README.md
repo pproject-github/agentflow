@@ -41,6 +41,12 @@ agentflow --help
 - `CURSOR_AGENT_CMD` — Override Cursor CLI command (default: `agent`).
 - `CURSOR_AGENT_MODEL` — Default Cursor model when节点未在 flow 中声明 `model` 且未通过 `--model` 覆盖时使用。
 - `OPENCODE_CMD` — Override OpenCode CLI command (default: `opencode`)，当节点声明的 `model` 映射到 OpenCode 平台时使用。
+- `AGENTFLOW_CURSOR_APPROVE_MCPS` — 设为 `0` 或 `false` 可关闭 Cursor 的 MCP 自动批准（默认开启，以便 apply/replay 非交互下使用工作区配置的 MCP 服务器）。
+
+### MCP（Model Context Protocol）
+
+- **Cursor CLI**：执行 agent 节点时自动传入 `--approve-mcps`，非交互下使用工作区 `.cursor` 等配置的 MCP 服务器无需手动批准。可通过 `AGENTFLOW_CURSOR_APPROVE_MCPS=0` 关闭。
+- **OpenCode CLI**：`opencode run` 使用 `--dir` 指定工作区，会加载该工作区已配置的 MCP 服务器（如 `opencode mcp add/list` 或项目配置）；无需额外参数。
 
 ### Output
 
