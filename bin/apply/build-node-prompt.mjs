@@ -27,8 +27,9 @@ function resolvePlaceholdersInText(
   opts = {},
 ) {
   if (!text || typeof text !== "string") return "";
-  const { instanceId, currentExecId } = opts;
+  const { instanceId, currentExecId, runDir } = opts;
   const execId = currentExecId ?? 1;
+  const toAbs = (rel) => (runDir && rel ? path.join(runDir, rel) : rel);
   return text.replace(/\$\{([^}]+)\}/g, (_, key) => {
     const k = key.trim();
     if (k.startsWith("input.")) {
@@ -40,7 +41,7 @@ function resolvePlaceholdersInText(
       const v = resolvedOutputs[slot] ?? resolvedOutputs._ ?? "";
       if (v) return v;
       if (instanceId && slot in resolvedOutputs) {
-        return getOutputPathForSlot(instanceId, execId, slot);
+        return toAbs(getOutputPathForSlot(instanceId, execId, slot));
       }
       return "";
     }
@@ -50,20 +51,10 @@ function resolvePlaceholdersInText(
     }
     if (!v && instanceId && (k in resolvedOutputs || (k + ".md") in resolvedOutputs)) {
       const slot = k in resolvedOutputs ? k : k + ".md";
-      v = getOutputPathForSlot(instanceId, execId, slot);
+      v = toAbs(getOutputPathForSlot(instanceId, execId, slot));
     }
     return v;
   });
-}
-
-function readInstanceBody(instancePath) {
-  try {
-    const raw = fs.readFileSync(instancePath, "utf-8");
-    const m = raw.match(/^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)$/);
-    return m ? m[1].trim() : raw.trim();
-  } catch {
-    return "";
-  }
 }
 
 /**
@@ -83,7 +74,6 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
       }
     } catch (_) {}
   }
-  const instancePath = path.join(flowDir, "instance", `${instanceId}.md`);
   const nodeIntermediateDir = path.join(runDir, intermediateDirForNode(instanceId));
   const e = execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
   const promptBasename = intermediatePromptBasename(instanceId, e);
@@ -98,14 +88,14 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
   const instanceBody =
     flowData?.instances?.[instanceId]?.body != null
       ? String(flowData.instances[instanceId].body || "").trim()
-      : readInstanceBody(instancePath);
+      : "";
 
   const { resolvedInputs = {}, resolvedOutputs = {}, systemPrompt = "" } = data;
   const agentSubAgent = resolvePlaceholdersInText(
     instanceBody,
     resolvedInputs,
     resolvedOutputs,
-    { instanceId, currentExecId: e },
+    { instanceId, currentExecId: e, runDir },
   );
 
   const content = `AgentFlowSystem:

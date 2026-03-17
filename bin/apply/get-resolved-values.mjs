@@ -17,26 +17,85 @@ import { loadFlowDefinition } from "./parse-flow.mjs";
 import { loadAllExecIds, outputDirForNode } from "./get-exec-id.mjs";
 import { computeResolvedInputsForInstance } from "./resolve-inputs.mjs";
 
+/** 仅多行标记（无实际内容）时视为空，应回退到节点定义的 description */
+function isEmptyDescription(v) {
+  if (!v || typeof v !== "string") return true;
+  const t = v.trim();
+  return t === "|" || t === ">" || /^[|>]\s*$/.test(t);
+}
+
+/** 解析 frontmatter（如 instance .md），支持 description 多行（| / >）。当前仅 flow.yaml instances 生效，此函数保留供复用。 */
 function parseFrontmatter(raw) {
   const m = raw.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!m) return {};
-  const lines = m[1].split("\n");
+  const fm = m[1];
   const data = {};
-  let section = null;
-  let currentName = null;
-  for (const line of lines) {
-    if (/^\s*description:\s*(.*)$/.test(line)) {
-      const v = line.replace(/^\s*description:\s*/, "").replace(/^["']|["']$/g, "").trim();
-      data.description = v;
-      continue;
-    }
+  const lines = fm.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (/^\s*definitionId:\s*(.*)$/.test(line)) {
       const v = line.replace(/^\s*definitionId:\s*/, "").replace(/^["']|["']$/g, "").trim();
       data.definitionId = v;
       continue;
     }
+    const descMatch = line.match(/^\s*description:\s*(.+)$/);
+    if (descMatch) {
+      const rest = descMatch[1].replace(/^["']|["']$/g, "").trim();
+      if (rest === "|" || rest === ">" || /^[|>]\s*$/.test(rest)) {
+        const keyIndent = line.search(/\S/);
+        const contentLines = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          const contentLine = lines[j];
+          if (contentLine.trim() === "") {
+            contentLines.push("");
+            continue;
+          }
+          const lineIndent = contentLine.search(/\S/);
+          if (lineIndent <= keyIndent) break;
+          contentLines.push(lineIndent >= 0 ? contentLine.slice(lineIndent) : contentLine);
+        }
+        data.description = contentLines.join("\n").trim();
+      } else if (rest) {
+        data.description = rest;
+      }
+      continue;
+    }
   }
   return data;
+}
+
+/**
+ * 从 frontmatter 文本中解析 description 字段，支持单行与 YAML 多行（| 或 >）。
+ * @param {string} frontmatter - --- 与 --- 之间的内容（不含首尾 ---）
+ * @returns {string}
+ */
+function extractDescriptionFromFrontmatter(frontmatter) {
+  const lines = frontmatter.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const singleLineMatch = line.match(/^\s*description:\s*(.+)$/);
+    if (singleLineMatch) {
+      const rest = singleLineMatch[1].replace(/^["']|["']$/g, "").trim();
+      // 多行标记：仅 "|" 或 ">" 或带空格的 "| " / "> "
+      if (rest === "|" || rest === ">" || /^[|>]\s*$/.test(rest)) {
+        const keyIndent = line.search(/\S/);
+        const contentLines = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          const contentLine = lines[j];
+          if (contentLine.trim() === "") {
+            contentLines.push("");
+            continue;
+          }
+          const lineIndent = contentLine.search(/\S/);
+          if (lineIndent <= keyIndent && contentLine.trim() !== "") break;
+          contentLines.push(lineIndent >= 0 ? contentLine.slice(lineIndent) : contentLine);
+        }
+        return contentLines.join("\n").trim();
+      }
+      if (rest) return rest;
+    }
+  }
+  return "";
 }
 
 function readNodeDescription(workspaceRoot, flowDir, definitionId) {
@@ -49,11 +108,8 @@ function readNodeDescription(workspaceRoot, flowDir, definitionId) {
       const raw = fs.readFileSync(p, "utf-8");
       const m = raw.match(/^---\s*\n([\s\S]*?)\n---/);
       if (!m) continue;
-      const descMatch = m[1].match(/^\s*description:\s*(.*)$/m);
-      if (descMatch) {
-        const v = descMatch[1].replace(/^["']|["']$/g, "").trim();
-        if (v) return v;
-      }
+      const v = extractDescriptionFromFrontmatter(m[1]);
+      if (v) return v;
     } catch (_) {}
   }
   return "";
@@ -76,7 +132,8 @@ function resolvePlaceholdersInText(
   opts = {},
 ) {
   if (!text || typeof text !== "string") return "";
-  const { instanceId } = opts;
+  const { instanceId, runDir } = opts;
+  const toAbs = (rel) => (runDir && rel ? path.join(runDir, rel) : rel);
   return text.replace(/\$\{([^}]+)\}/g, (_, key) => {
     const k = key.trim();
     if (k.startsWith("input.")) {
@@ -88,10 +145,10 @@ function resolvePlaceholdersInText(
       const v = resolvedOutputs[slot] ?? resolvedOutputs._ ?? "";
       if (v) return v;
       if (instanceId && slot in resolvedOutputs && opts.currentExecId != null) {
-        return getOutputPathForSlot(instanceId, opts.currentExecId, slot);
+        return toAbs(getOutputPathForSlot(instanceId, opts.currentExecId, slot));
       }
       if (instanceId && slot in resolvedOutputs) {
-        return getOutputPathForSlot(instanceId, 1, slot);
+        return toAbs(getOutputPathForSlot(instanceId, 1, slot));
       }
       return "";
     }
@@ -102,7 +159,7 @@ function resolvePlaceholdersInText(
     }
     if (!v && instanceId && (k in resolvedOutputs || (k + ".md") in resolvedOutputs)) {
       const slot = k in resolvedOutputs ? k : k + ".md";
-      v = getOutputPathForSlot(instanceId, opts.currentExecId ?? 1, slot);
+      v = toAbs(getOutputPathForSlot(instanceId, opts.currentExecId ?? 1, slot));
     }
     return v;
   });
@@ -130,8 +187,6 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
     if (flow.flowDir && typeof flow.flowDir === "string" && flow.flowDir.trim()) {
       flowDir = path.isAbsolute(flow.flowDir) ? flow.flowDir : path.join(workspaceRoot, flow.flowDir);
     }
-    const instancePath = path.join(flowDir, "instance", `${instanceId}.md`);
-
     const raw = computeResolvedInputsForInstance(workspaceRoot, flowName, uuid, instanceId);
     if (!raw.ok) {
       return { ok: false, error: raw.error || "computeResolvedInputsForInstance failed" };
@@ -144,20 +199,22 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
     const execIds = loadAllExecIds(workspaceRoot, flowName, uuid, order);
     const currentExecId = execIds[instanceId] ?? 1;
 
-    // 当前节点 output 路径从结构（outputSlotTypes / nodes）得到槽名，固定路径不含 _execId
+    // 当前节点 output 路径从结构（outputSlotTypes / nodes）得到槽名，固定路径不含 _execId；拼入 prompt 时使用绝对路径
     const resolvedOutputs = {};
     const outSlotNames = (flow.outputSlotTypes && flow.outputSlotTypes[instanceId])
       ? Object.keys(flow.outputSlotTypes[instanceId])
       : [];
     for (const slotName of outSlotNames) {
-      resolvedOutputs[slotName] = getOutputPathForSlot(instanceId, currentExecId, slotName);
+      const rel = getOutputPathForSlot(instanceId, currentExecId, slotName);
+      resolvedOutputs[slotName] = path.join(runDir, rel);
     }
     if (Object.keys(resolvedOutputs).length === 0 && order.includes(instanceId)) {
       const node = flow.nodes?.find((n) => n.id === instanceId);
       const outSlots = node?.output || flow.outputSlotTypes?.[instanceId];
       if (outSlots && typeof outSlots === "object") {
         for (const slotName of Object.keys(outSlots)) {
-          resolvedOutputs[slotName] = getOutputPathForSlot(instanceId, currentExecId, slotName);
+          const rel = getOutputPathForSlot(instanceId, currentExecId, slotName);
+          resolvedOutputs[slotName] = path.join(runDir, rel);
         }
       }
     }
@@ -186,6 +243,14 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
       } catch (_) {}
     }
 
+    // 拼入 prompt 的 resolveInput/output 统一使用绝对路径，避免相对路径歧义
+    for (const slotName of Object.keys(resolvedInputs)) {
+      const v = resolvedInputs[slotName];
+      if (typeof v === "string" && v && (v.startsWith("output/") || v.startsWith("intermediate/"))) {
+        resolvedInputs[slotName] = path.join(runDir, v);
+      }
+    }
+
     let description = "";
     let definitionId = "";
     const flowNode = flow.nodes?.find((n) => n.id === instanceId);
@@ -195,26 +260,22 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
       const inst = flowData.instances[instanceId];
       definitionId = (flowNode?.definitionId ?? inst.definitionId ?? "").trim();
       description = (inst.description || "").trim();
+      if (isEmptyDescription(description)) description = "";
       if (!description && (nameForFile || inst.definitionId)) {
         description = readNodeDescription(workspaceRoot, flowDir, nameForFile || inst.definitionId);
       }
     } else {
-      try {
-        const instanceRaw = fs.readFileSync(instancePath, "utf-8");
-        const data = parseFrontmatter(instanceRaw);
-        definitionId = (flowNode?.definitionId ?? data.definitionId ?? "").trim();
-        description = (data.description || "").trim();
-        if (!description && (nameForFile || data.definitionId)) {
-          description = readNodeDescription(workspaceRoot, flowDir, nameForFile || data.definitionId);
-        }
-      } catch (_) {}
+      definitionId = (flowNode?.definitionId ?? flowNode?.definitionName ?? "").trim();
+      if (nameForFile || definitionId) {
+        description = readNodeDescription(workspaceRoot, flowDir, nameForFile || definitionId);
+      }
     }
 
     const systemPrompt = resolvePlaceholdersInText(
       description,
       resolvedInputs,
       resolvedOutputs,
-      { instanceId, currentExecId },
+      { instanceId, currentExecId, runDir },
     );
 
     return { ok: true, resolvedInputs, resolvedOutputs, systemPrompt };

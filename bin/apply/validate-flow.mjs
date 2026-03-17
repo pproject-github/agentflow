@@ -42,21 +42,19 @@ function getSlotsFromInstance(inst) {
   if (!inst || typeof inst !== "object") return result;
   const inp = Array.isArray(inst.input) ? inst.input : [];
   const out = Array.isArray(inst.output) ? inst.output : [];
-  for (const slot of inp) {
-    const name = slot && (slot.name != null) ? String(slot.name).trim() : "";
+  for (let i = 0; i < inp.length; i++) {
+    const slot = inp[i];
+    const name = (slot && slot.name != null ? String(slot.name).trim() : "") || `input-${i}`;
     const type = slot && (slot.type != null) ? String(slot.type).trim() : "";
-    if (name) {
-      result.inputNames.push(name);
-      result.inputTypes.push(type);
-    }
+    result.inputNames.push(name);
+    result.inputTypes.push(type);
   }
-  for (const slot of out) {
-    const name = slot && (slot.name != null) ? String(slot.name).trim() : "";
+  for (let i = 0; i < out.length; i++) {
+    const slot = out[i];
+    const name = (slot && slot.name != null ? String(slot.name).trim() : "") || `output-${i}`;
     const type = slot && (slot.type != null) ? String(slot.type).trim() : "";
-    if (name) {
-      result.outputNames.push(name);
-      result.outputTypes.push(type);
-    }
+    result.outputNames.push(name);
+    result.outputTypes.push(type);
   }
   return result;
 }
@@ -263,11 +261,29 @@ function topoSort(nodes, edges) {
 /**
  * 结构校验核心（不含边类型一致，边类型由下方 computeValidation 统一产出）。
  */
-function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody) {
+function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody, instances = null) {
   const errors = [];
   const warnings = [];
   const nodeIds = new Set(nodes.map((n) => n.id));
   const builtInNodesDir = path.join(flowDir, "..", "..", "nodes");
+
+  /* 提醒：input/output 槽位未填写 name 时建议补全，便于引用 */
+  if (instances && typeof instances === "object") {
+    for (const n of nodes) {
+      const inst = instances[n.id];
+      if (!inst) continue;
+      const inp = Array.isArray(inst.input) ? inst.input : [];
+      const out = Array.isArray(inst.output) ? inst.output : [];
+      inp.forEach((slot, i) => {
+        const name = slot && slot.name != null ? String(slot.name).trim() : "";
+        if (!name) warnings.push(`节点 "${n.id}" 的 input 第 ${i + 1} 项未填写 name，建议补全（如 value）以便 \${name} 引用`);
+      });
+      out.forEach((slot, i) => {
+        const name = slot && slot.name != null ? String(slot.name).trim() : "";
+        if (!name) warnings.push(`节点 "${n.id}" 的 output 第 ${i + 1} 项未填写 name，建议补全（如 value）以便 \${name} 引用`);
+      });
+    }
+  }
 
   const definitionIds = nodes.map((n) => n.definitionId).filter(Boolean);
   const hasStart = definitionIds.some((d) => d === "control_start");
@@ -438,7 +454,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     );
   }
   const nodeReachableOptional = (defId) =>
-    defId === "control_start" || defId === "control_end" || defId.startsWith("provide_") || defId === "tool_load_key" || defId === "tool_save_key";
+    defId === "control_start" || defId === "control_end" || defId.startsWith("provide_") || defId === "tool_load_key" || defId === "tool_save_key" || defId === "tool_get_env";
   for (const n of nodes) {
     const defId = n.definitionId || "";
     if (nodeReachableOptional(defId)) continue;
@@ -600,7 +616,7 @@ function runValidateFlow(flowDir, workspaceRoot) {
   const getInstanceDescription = (n) => (instances[n.id] && instances[n.id].description != null ? String(instances[n.id].description) : "");
   const getNodeBody = (n) => (instances[n.id] && instances[n.id].body != null ? String(instances[n.id].body) : "");
 
-  const { errors: structureErrors, warnings, report } = checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody);
+  const { errors: structureErrors, warnings, report } = checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescription, getNodeBody, instances);
 
   loaded._flowDir = flowDir;
   const { validation, validationErrors } = computeValidation(loaded, workspaceRoot);
@@ -630,7 +646,8 @@ function resolveFlowDir(workspaceRoot, flowName, flowDirArg) {
   if (hasFlowYaml(workspaceFlowDir)) return workspaceFlowDir;
   if (hasFlowYaml(cursorFlowDir)) return cursorFlowDir;
   if (hasFlowYaml(builtinFlowDir)) return builtinFlowDir;
-  return cursorFlowDir;
+  // 未找到时优先报 .workspace 路径（新建流程写入此处），与 getFlowDir 语义一致
+  return workspaceFlowDir;
 }
 
 function main() {

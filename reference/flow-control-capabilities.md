@@ -19,7 +19,7 @@
 
 ---
 
-## 2. 条件分支（If / IfTrue / IfFalse）
+## 2. 条件分支（If）
 
 - **control_if**：单节点双分支。根据 **prediction**（bool）：为 true 时沿 **next1**（output-0）继续，为 false 时沿 **next2**（output-1）继续。适用于「二选一」分支。
 
@@ -57,14 +57,15 @@
 
 ---
 
-## 5. 全局存储（LoadKey / SaveKey）
+## 5. 全局存储与环境（LoadKey / SaveKey / GetEnv）
 
-用于**当前 flow 在一次 run 内的全局信息保存与读取**：按 key 在 run 目录下的 memory 存储中写入或读取文本，供多节点共享状态、跨分支传递结果。
+用于**当前 flow 在一次 run 内的全局信息保存与读取**：按 key 在 run 目录下的 memory 存储中写入或读取文本，供多节点共享状态、跨分支传递结果。**GetEnv** 从系统环境变量与用户目录 `~/.cursor/config.json` 按 key 读取，用于注入 API Key、工作区配置等。
 
 | 节点 | definitionId   | 作用 |
 |------|----------------|------|
 | **LoadKey** | tool_load_key | 按 **key** 从当前 run 的存储中读取一个值，结果输出到 **result** 槽位，可连到下游节点的 input。 |
 | **SaveKey** | tool_save_key | 按 **key** 将 **value** 写入当前 run 的存储；value 可为字面文本，或 run 内相对路径（如 `output/node_xxx_result.md`），脚本会读文件内容后写入。 |
+| **GetEnv** | tool_get_env | 按 **key** 从系统环境变量与 `~/.cursor/config.json` 读取一个值（优先环境变量）；key 支持点号路径如 `openai.apiKey` 读取 config 嵌套字段；结果输出到 **value** 槽位。 |
 
 **Handle**：
 
@@ -74,14 +75,18 @@
 - **SaveKey**  
   - input: prev → input-0, key → input-1, value → input-2  
   - output: next → output-0  
+- **GetEnv**
+  - input: key → input-0
+  - output: value → output-0
 
 **典型用法**：
 
 1. **保存后再读**：某节点产出结果 → SaveKey（key 固定如 `flowName`，value 接上游 output）→ 下游分支中 LoadKey（同一 key）→ result 连到后续 agent/tool。
 2. **跨分支共享**：并行分支中一路用 SaveKey 写入（如「选中的方案名」），汇合后或另一分支用 LoadKey 读取，保证全 flow 看到同一份全局信息。
 3. **占位符**：instance 中 key/value 可写占位符（如 `${output/node_plan_result.md}`），由 apply 在 resolvedInputs 中解析后传入脚本。
+4. **环境/配置注入**：GetEnv（key 如 `OPENAI_API_KEY` 或 `openai.apiKey`）→ value 连到下游 agent 的 input，用于从环境或 `~/.cursor/config.json` 读取密钥或配置，避免写死在 flow 中。
 
-存储由 apply 通过 `agentflow apply -ai run-tool-nodejs` 调用 load-key/save-key 实现，节点不感知存储路径与格式；数据仅在**当前 run**（同一 uuid 的 `.workspace/agentflow/runBuild/<FlowName>/<uuid>/`）内有效。
+存储由 apply 通过 `agentflow apply -ai run-tool-nodejs` 调用 load-key/save-key 实现；GetEnv 由 `agentflow apply -ai get-env <workspaceRoot> <flowName> <uuid> <instanceId> <execId> <key>` 直接执行，run 上下文通过命令行参数传入，不再经 run-tool-nodejs。LoadKey/SaveKey 数据仅在**当前 run**（同一 uuid 的 `.workspace/agentflow/runBuild/<FlowName>/<uuid>/`）内有效；GetEnv 读取的是系统环境与用户级 `~/.cursor/config.json`，不随 run 隔离。
 
 ---
 
@@ -97,14 +102,17 @@
 
 ---
 
-## 7. 检查 → 修改 → 检查 → 修改
+### 7 入环 → 检查 → 修复 → 检查 → 修复 → 检查 → 出环
 
-**能力**：先执行**检查**节点（如格式校验、规则检查等）；若有问题则进入**修改**节点（如 agent 或 tool 修复），修改完成后再回到**检查**；直到检查通过后从**检查**节点连出到后续或 End。实现「反复检查、反复修改直到通过」的闭环。
+该流程可概括为：**入环 → 检查 → 修复 → 检查 → 修复 → … → 检查通过 → 出环**。参考 **builtin/pipelines/module-migrate** 的连线方式。
 
-**典型结构**（示意）：
+- **入环**：用 **control_anyOne** 汇合两条路——「首次进入」与「上一轮修复完成后再检查」。prev1 / prev2 任一路就绪即从 next 继续，进入**检查**。
+- **检查**：执行检查节点（可并行、可汇总），结果经 **control_toBool** 转为布尔，再接到 **control_if**。
+- **分支**：**control_if** 的 next1（true，通过）→ 出环到后续或 End；next2（false，未通过）→ 进入**修复**。
+- **修复**：修复节点消费检查结果，修改后通过边回到「检查」上游或回到 **AnyOne** 的 prev2，形成环；可再套一层 ToBool + If 判断「是否修完」，未修完再修复、修完再回检查。
+- **出环**：当 **control_if** 为 true 时，从 next1 连到环外节点，不再回到 AnyOne。
 
-- Start → **检查** → ToBool（根据检查结果得到 true/false）
-- ToBool → **control_if**（If）：next1（true，通过）→ 后续 / End；next2（false，未通过）→ **修改** → 回到 **检查**（形成环）
+要点：**AnyOne** 做入环/复入环汇合；**ToBool + If** 做通过/未通过二选一；未通过 → 修复 → 回到检查或 AnyOne（成环）；通过 → 连到环外即出环。
 
 ---
 

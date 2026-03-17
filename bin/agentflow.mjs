@@ -123,9 +123,11 @@ const APPLY_AI_STEPS = [
   "post-process-node",
   "write-result",
   "run-tool-nodejs",
+  "get-env",
   "validate-flow",
   "collect-nodes",
   "gc",
+  "extract-thinking",
 ];
 const RUN_BUILD_REL = ".workspace/agentflow/runBuild";
 const PIPELINES_DIR = ".cursor/agentflow/pipelines";
@@ -265,7 +267,7 @@ function getAgentPath(workspaceRoot, subagent) {
 
 /**
  * 读取 agent 文件内容并替换路径占位符为真实路径（方案 A：注入 prompt 用）。
- * replacements 形如 { workspaceRoot, promptPath, resultPath, intermediatePath, outputDir }，均为绝对路径字符串。
+ * replacements 形如 { workspaceRoot, promptPath, resultPath, intermediatePath, outputDir, flowName, uuid, instanceId }；路径为绝对路径字符串，flowName/uuid/instanceId 为外部传入。
  * 返回替换后的整段文本；若文件不存在则返回空字符串。
  */
 function loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements) {
@@ -334,6 +336,28 @@ function readRunStartTime(workspaceRoot, flowName, uuid) {
     return Number.isFinite(n) && n > 0 ? n : null;
   }
   return null;
+}
+
+/** 从 run 的 memory.md 读取 totalExecutedMs（已累计执行毫秒数，不含 pause 时间），无或非法则返回 0。 */
+function readTotalExecutedMs(workspaceRoot, flowName, uuid) {
+  const memoryPath = path.join(getRunDir(workspaceRoot, flowName, uuid), "memory.md");
+  if (!fs.existsSync(memoryPath)) return 0;
+  const content = fs.readFileSync(memoryPath, "utf-8");
+  for (const line of (content || "").split(/\r?\n/)) {
+    const idx = line.indexOf(": ");
+    if (idx <= 0) continue;
+    const k = line.slice(0, idx).trim();
+    if (k !== "totalExecutedMs") continue;
+    const v = line.slice(idx + 2).trim();
+    const n = parseInt(String(v), 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+  return 0;
+}
+
+/** 将 totalExecutedMs 写入 run 的 memory，用于 pause 后 resume 时累加（总时间不含 pause）。 */
+function saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs) {
+  runNodeScript(workspaceRoot, "save-key.mjs", [workspaceRoot, flowName, uuid, "totalExecutedMs", String(totalExecutedMs)], { captureStdout: true });
 }
 
 /** 确保本 run 有 runStartTime：已有则返回，无则在 memory 写入当前时间并返回（从 start 开始记录，继续跑会累加）。 */
@@ -485,6 +509,9 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     resultPath: absResultPath,
     intermediatePath: path.join(absRunDir, "intermediate"),
     outputDir,
+    flowName: options.flowName ?? "",
+    uuid: options.uuid ?? "",
+    instanceId: instanceId ?? "",
   };
   const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
   let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
@@ -603,6 +630,15 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     const STDOUT_RAW_CAP = 200;
     const debugStdout = process.env.AGENTFLOW_DEBUG_STDOUT === "1" || process.env.AGENTFLOW_DEBUG_STDOUT === "true";
 
+    /** 判断一行是否像 base64（图片或二进制数据），用于友好提示而非输出乱码 */
+    function isLikelyBase64(s) {
+      if (!s || typeof s !== "string") return false;
+      const t = s.trim();
+      if (t.startsWith("data:image/") && t.includes(";base64,")) return true;
+      if (t.length < 80) return false;
+      return /^[A-Za-z0-9+/]+=*$/.test(t);
+    }
+
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => {
       const lines = chunk.split("\n").filter(Boolean);
@@ -651,6 +687,8 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
               if (m) subtype = m[1];
             }
             out = `[cursor] tool_call ${subtype}\n`;
+          } else if (isLikelyBase64(line)) {
+            out = `[cursor-stdout] (base64 图片/数据, ${line.length} 字符)\n`;
           } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
             out = line + "\n";
           } else if (lastResult == null) {
@@ -719,6 +757,9 @@ function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, 
     resultPath: absResultPath,
     intermediatePath: path.join(absRunDir, "intermediate"),
     outputDir,
+    flowName: options.flowName ?? "",
+    uuid: options.uuid ?? "",
+    instanceId: instanceId ?? "",
   };
   const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
   let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
@@ -816,7 +857,7 @@ function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, 
 /**
  * 仅 pre+post、不执行任何命令的节点类型；CLI 的「跳过 agent」规则仅由此处维护，pre-process 只提供 definitionId 与可选的 directCommand。
  * - 留在 LOCAL_ONLY（执行阶段跳过，仅 pre + post）：control_start、control_end、control_if、tool_print、tool_user_check、provide_str、provide_file。
- * - 需执行一条确定命令的节点（control_anyOne、tool_load_key、tool_save_key）由 pre 输出 directCommand，CLI 执行该命令并跳过 agent，不列入本集合。
+ * - 需执行一条确定命令的节点（control_anyOne、tool_load_key、tool_save_key、tool_get_env）由 pre 输出 directCommand，CLI 执行该命令并跳过 agent，不列入本集合。
  */
 const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_if",
@@ -1092,8 +1133,8 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
     );
   }
   runValidateFlowAndExitIfInvalid(workspaceRoot, flowName, flowDir);
-  const ensureArgs = [workspaceRoot, uuidArg || "", flowName].filter(Boolean);
-  ensureArgs.push(flowDir);
+  // ensure-run-dir 仅接受 (workspaceRoot, [uuid], flowName)，不可传入 flowDir，否则会被误当作 flowName 导致 runDir 在绝对路径下创建
+  const ensureArgs = [workspaceRoot, uuidArg ?? "", flowName];
   const ensureResult = runNodeScript(
     workspaceRoot,
     "ensure-run-dir.mjs",
@@ -1121,8 +1162,10 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
     parallel: Boolean(parallel),
   });
 
-  /** 总执行时间起点：从本 run 首次执行开始记录，继续跑时从 memory 读出，会累加 */
+  /** 总执行时间起点：从本 run 首次执行开始记录，继续跑时从 memory 读出（仅用于兼容/预留）。 */
   let runStartTime = null;
+  /** 累计实际执行时间（毫秒），不含 pause；从 memory 读出，每轮累加后 persist。 */
+  let totalExecutedMs = 0;
   let round = 0;
   while (round < MAX_LOOP_ROUNDS) {
     round++;
@@ -1139,7 +1182,8 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
 
     if (readyNodes.length === 0) {
       if (allDone) {
-        const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+        saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
+        const totalElapsed = formatDuration(totalExecutedMs);
         emitEvent(workspaceRoot, flowName, uuid, {
           event: "apply-done",
           flowName,
@@ -1151,7 +1195,8 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         return;
       }
       if (pendingNodes.length > 0) {
-        const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+        saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
+        const totalElapsed = formatDuration(totalExecutedMs);
         const resumeExample =
           pendingNodes.length === 1
             ? `agentflow resume ${flowName} ${uuid} ${pendingNodes[0]}`
@@ -1168,17 +1213,41 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         log.info(chalk.bold.yellow("→ 继续执行请运行: ") + resumeExample);
         return;
       }
-      const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
-      throw new Error("No ready nodes and not all done; flow may be stuck. 总 " + totalElapsed);
+      /* 只要 End 节点已 success，即视为流程执行完毕（绿色） */
+      const endNodeIds = Array.isArray(parseOut.nodes)
+        ? parseOut.nodes.filter((n) => n.definitionId === "control_end").map((n) => n.id)
+        : [];
+      const endReached = endNodeIds.some((id) => instanceStatus[id] === "success");
+      if (endReached) {
+        saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
+        const totalElapsed = formatDuration(totalExecutedMs);
+        emitEvent(workspaceRoot, flowName, uuid, {
+          event: "apply-done",
+          flowName,
+          uuid,
+          runDir: getRunDir(workspaceRoot, flowName, uuid),
+          totalElapsed,
+        });
+        log.info(`\nApply done. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim("总 " + totalElapsed)}`);
+        return;
+      }
+      const totalElapsed = formatDuration(totalExecutedMs);
+      const stuckErr = new Error("No ready nodes and not all done; flow may be stuck. 总 " + totalElapsed);
+      stuckErr.flowName = flowName;
+      stuckErr.uuid = uuid;
+      throw stuckErr;
     }
 
     if (dryRun) {
-      const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+      const totalElapsed = formatDuration(totalExecutedMs);
       log.info(`\n[--dry-run] Would execute nodes: ${readyNodes.join(", ")}. Omit --dry-run to run.  ${chalk.dim("总 " + totalElapsed)}`);
       return;
     }
 
-    if (runStartTime === null) runStartTime = ensureRunStartTime(workspaceRoot, flowName, uuid);
+    if (runStartTime === null) {
+      runStartTime = ensureRunStartTime(workspaceRoot, flowName, uuid);
+      totalExecutedMs = readTotalExecutedMs(workspaceRoot, flowName, uuid);
+    }
 
     const idToLabel = new Map();
     if (Array.isArray(parseOut.nodes)) for (const n of parseOut.nodes) idToLabel.set(n.id, n.label || n.id);
@@ -1232,16 +1301,17 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
         log.info(chalk.dim("Prompt: ") + promptAbs);
         process.stderr.write(NODE_SEP + "\n\n");
         const startTime = Date.now();
-        const initialRunningText = `Running: ${instanceId} (${label})  ${formatDuration(0) + " / " + formatDuration(Date.now() - runStartTime)}`;
+        const getTotalStr = () => formatDuration(totalExecutedMs + (Date.now() - startTime));
+        const initialRunningText = `Running: ${instanceId} (${label})  ${formatDuration(0) + " / " + getTotalStr()}`;
         appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", initialRunningText);
         const spinner = ora({
-          text: `Running: ${instanceId} ${chalk.dim("(" + label + ")")}  ${chalk.dim(formatDuration(0) + " / " + formatDuration(Date.now() - runStartTime))}`,
+          text: `Running: ${instanceId} ${chalk.dim("(" + label + ")")}  ${chalk.dim(formatDuration(0) + " / " + getTotalStr())}`,
           stream: process.stderr,
           discardStdin: false,
         }).start();
         let lastToolCallText = "";
         const updateSpinnerText = () => {
-          const duration = formatDuration(Date.now() - startTime) + " / " + formatDuration(Date.now() - runStartTime);
+          const duration = formatDuration(Date.now() - startTime) + " / " + getTotalStr();
           spinner.text = `Running: ${instanceId} ${chalk.dim("(" + label + ")")}  ${chalk.dim(duration)}${lastToolCallText ? "  " + chalk.dim("| " + lastToolCallText) : ""}`;
         };
         const timeTick = setInterval(updateSpinnerText, 1000);
@@ -1260,8 +1330,10 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
             },
           });
           clearInterval(timeTick);
-          elapsedStr = formatDuration(Date.now() - startTime);
-          const totalStr = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+          const nodeMs = Date.now() - startTime;
+          totalExecutedMs += nodeMs;
+          elapsedStr = formatDuration(nodeMs);
+          const totalStr = formatDuration(totalExecutedMs);
           spinner.succeed(chalk.green(`Done: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr));
           emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-done",
@@ -1272,8 +1344,10 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
           });
         } catch (err) {
           clearInterval(timeTick);
-          elapsedStr = formatDuration(Date.now() - startTime);
-          const totalStr = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+          const nodeMs = Date.now() - startTime;
+          totalExecutedMs += nodeMs;
+          elapsedStr = formatDuration(nodeMs);
+          const totalStr = formatDuration(totalExecutedMs);
           spinner.fail(chalk.red(`Failed: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr));
           emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-failed",
@@ -1284,14 +1358,16 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
             error: err && err.message ? String(err.message) : String(err),
           });
           if (stderrBuffer.length > 0) process.stderr.write(Buffer.concat(stderrBuffer));
+          err.flowName = flowName;
+          err.uuid = uuid;
           throw err;
         }
         if (stderrBuffer.length > 0) process.stderr.write(Buffer.concat(stderrBuffer));
-        const totalStr = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
         process.stderr.write("\n" + NODE_SEP + "\n");
-        process.stderr.write(chalk.bold.cyan("【结束】节点 ") + instanceId + chalk.dim(" (" + label + ")") + (elapsedStr ? "  " + chalk.dim(elapsedStr) : "") + "  " + chalk.dim("总 " + totalStr) + "\n");
+        process.stderr.write(chalk.bold.cyan("【结束】节点 ") + instanceId + chalk.dim(" (" + label + ")") + (elapsedStr ? "  " + chalk.dim(elapsedStr) : "") + "  " + chalk.dim("总 " + formatDuration(totalExecutedMs)) + "\n");
         process.stderr.write(NODE_SEP + "\n");
       } else {
+        const startTime = Date.now();
         await executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput, {
           model: agentModel,
           stderrBuffer: [],
@@ -1299,6 +1375,7 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
           outputPrefix,
           prefixColor,
         });
+        if (!isParallel) totalExecutedMs += Date.now() - startTime;
       }
       runPostProcess(workspaceRoot, flowName, uuid, instanceId, preOutput.execId);
       ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput);
@@ -1344,8 +1421,10 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
       for (const item of preOutputs) log.info(chalk.dim("Prompt: ") + path.resolve(workspaceRoot, item.preOutput.promptPath));
       process.stderr.write(NODE_SEP + "\n\n");
       log.info(chalk.cyan(`Running ${preOutputs.length} nodes in parallel: ${preOutputs.map((p) => p.instanceId).join(", ")}`));
+      const parallelBatchStart = Date.now();
       await Promise.all(preOutputs.map((item) => runOne(item, true)));
-      const totalStrPar = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
+      totalExecutedMs += Date.now() - parallelBatchStart;
+      const totalStrPar = formatDuration(totalExecutedMs);
       process.stderr.write("\n" + NODE_SEP + "\n");
       process.stderr.write(chalk.bold.cyan("【结束】并行节点全部完成") + "  " + chalk.dim("总 " + totalStrPar) + "\n");
       process.stderr.write(NODE_SEP + "\n");
@@ -1358,8 +1437,11 @@ async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null
       for (const item of preOutputs) await runOne(item, false);
     }
   }
-  const totalElapsed = runStartTime != null ? formatDuration(Date.now() - runStartTime) : "-";
-  throw new Error(`Max rounds (${MAX_LOOP_ROUNDS}) reached. 总 ${totalElapsed}`);
+  const totalElapsed = formatDuration(totalExecutedMs);
+  const maxErr = new Error(`Max rounds (${MAX_LOOP_ROUNDS}) reached. 总 ${totalElapsed}`);
+  maxErr.flowName = flowName;
+  maxErr.uuid = uuid;
+  throw maxErr;
 }
 
 /** 将 pending 与 failed 节点标为 success 并继续 apply。resume <FlowName> <uuid> [instanceId] */
@@ -1516,24 +1598,27 @@ function parseNodeFrontmatter(raw) {
   const data = { input: [], output: [], displayName: undefined, description: undefined };
   if (!m) return data;
   const fm = m[1];
-  const slotRe = /^\s*-\s+type:\s*["']?([^"'\n]*)["']?(?:\s*\n\s+name:\s*["']?([^"'\n]*)["']?)?(?:\s*\n\s+(?:default|value):\s*(.*))?/gm;
-  const inputBlock = fm.match(/(?:^|\n)\s*input:\s*\n([\s\S]*?)(?=\n\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:|---|$)/m);
-  const outputBlock = fm.match(/(?:^|\n)\s*output:\s*\n([\s\S]*?)(?=\n\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:|---|$)/m);
+  const inputBlock = fm.match(/(?:^|\n)\s*input:\s*\n([\s\S]*?)\noutput\s*:/m);
+  const outputBlock = fm.match(/(?:^|\n)\s*output:\s*\n([\s\S]*)/m);
   const normalizeSlots = (block) => {
     if (!block) return [];
-    return block[1]
-      .split(/\n/)
-      .filter((line) => /^\s*-\s+type:/.test(line))
-      .map((line) => {
-        const typeM = line.match(/type:\s*["']?([^"'\n]*)["']?/);
-        const nameM = line.match(/name:\s*["']?([^"'\n]*)["']?/);
-        const defaultM = line.match(/(?:default|value):\s*(.*)$/);
-        return {
-          type: typeM ? typeM[1].trim() : "文本",
-          name: nameM ? nameM[1].trim() : undefined,
-          default: defaultM ? defaultM[1].trim().replace(/^["']|["']$/g, "") : undefined,
-        };
+    const text = block[1];
+    const slots = [];
+    const parts = text.split(/\n\s*-\s+type:/).filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      const chunk = (i === 0 ? parts[i] : "  - type:" + parts[i]).trim();
+      const typeM = chunk.match(/type:\s*["']?([^"'\n]*)["']?/);
+      const nameM = chunk.match(/name:\s*["']?([^"'\n]*)["']?/);
+      const defaultM = chunk.match(/(?:default|value):\s*(.*)$/m);
+      let defaultVal = defaultM ? defaultM[1].trim().replace(/^["']|["']$/g, "") : undefined;
+      if (defaultVal === '""' || defaultVal === "''") defaultVal = "";
+      slots.push({
+        type: (typeM && typeM[1].trim()) || "文本",
+        name: nameM ? nameM[1].trim() : "",
+        default: defaultVal !== undefined ? defaultVal : "",
       });
+    }
+    return slots;
   };
   data.input = normalizeSlots(inputBlock);
   data.output = normalizeSlots(outputBlock);
@@ -1607,6 +1692,23 @@ function listNodesJson(workspaceRoot, flowId, flowSource) {
     addFromDir(path.join(flowDir, "nodes"), "flow", flowId);
   }
   return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function printNodesTable(list) {
+  const maxDesc = 56;
+  const truncate = (s) => {
+    if (s == null) return "";
+    const t = String(s).replace(/\r?\n/g, " ").trim();
+    return t.length <= maxDesc ? t : t.slice(0, maxDesc - 2) + "…";
+  };
+  const table = new Table({
+    head: [chalk.bold("id"), chalk.bold("type"), chalk.bold("label"), chalk.bold("source"), chalk.bold("description")],
+    colWidths: [28, 12, 16, 10, maxDesc + 2],
+  });
+  for (const n of list) {
+    table.push([n.id, n.type, n.displayName ?? n.label, n.source, truncate(n.description)]);
+  }
+  process.stdout.write(table.toString() + "\n");
 }
 
 function readFlowJson(workspaceRoot, flowId, flowSource) {
@@ -1999,6 +2101,7 @@ Usage:
   agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
   agentflow replay [flowName] <uuid> <instanceId>
   agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
+  agentflow extract-thinking <flowName> <uuid>  从该次 run 的 logs/log.txt 提取 thinking 与节点执行情况，写入 logs/thinking_by_session_and_nodes.md
   agentflow update-model-lists            拉取 Cursor / OpenCode 模型列表并写入 .workspace/agentflow/model-lists.json；--json 时输出 { cursor, opencode }
   agentflow --help
 
@@ -2020,9 +2123,11 @@ Apply: builds run dir, parses flow, runs ready nodes in a loop.
     agentflow apply -ai post-process-node <workspaceRoot> <flowName> <uuid> <instanceId> [execId]
     agentflow apply -ai write-result <workspaceRoot> <flowName> <uuid> <instanceId> --json '<JSON>'
     agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> [execId] -- <scriptCmd> [args...]
+    agentflow apply -ai get-env <workspaceRoot> <flowName> <uuid> <instanceId> <execId> <key>
     agentflow apply -ai validate-flow <workspaceRoot> <flowName> <flowDir> [uuid]
     agentflow apply -ai collect-nodes <workspaceRoot> <flowName> [runDir]
     agentflow apply -ai gc <workspaceRoot> [--list] [--dry-run] [--delete] [--keep N] [--older-than N]
+    agentflow apply -ai extract-thinking <workspaceRoot> <flowName> <uuid>
 Resume: marks pending and failed node(s) as success (e.g. after UserCheck 确认 or retry failed), then continues apply.
 Replay: runs a single node (pre-process → execute → post-process).
 
@@ -2122,6 +2227,22 @@ async function main() {
     }
     const list = listNodesJson(workspaceRoot, flowId, flowSource);
     process.stdout.write(JSON.stringify(list) + "\n");
+    process.exit(0);
+  }
+  if (sub === "list-nodes" && !jsonMode) {
+    let flowId, flowSource;
+    const flowIdIdx = argv.indexOf("--flow-id");
+    if (flowIdIdx >= 0 && argv[flowIdIdx + 1]) {
+      flowId = argv[flowIdIdx + 1];
+      argv.splice(flowIdIdx, 2);
+    }
+    const flowSourceIdx = argv.indexOf("--flow-source");
+    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
+      flowSource = argv[flowSourceIdx + 1];
+      argv.splice(flowSourceIdx, 2);
+    }
+    const list = listNodesJson(workspaceRoot, flowId, flowSource);
+    printNodesTable(list);
     process.exit(0);
   }
   if (sub === "read-flow" && jsonMode) {
@@ -2275,6 +2396,12 @@ async function main() {
     const result = runNodeScript(workspaceRoot, "get-ready-nodes.mjs", [workspaceRoot, flowName, uuidArg], { captureStdout: true });
     if (result.stdout) process.stdout.write(result.stdout);
     process.exit(result.status === 0 ? 0 : 1);
+  } else if (sub === "extract-thinking") {
+    const flowName = shift();
+    const uuidArg = shift();
+    if (!flowName || !uuidArg) throw new Error("Usage: agentflow extract-thinking <flowName> <uuid>");
+    const result = runNodeScript(workspaceRoot, "extract-thinking.mjs", [workspaceRoot, flowName, uuidArg], { captureStdout: false });
+    process.exit(result.status === 0 ? 0 : 1);
   } else if (sub === "validate") {
     const flowName = shift();
     if (!flowName) throw new Error("Usage: agentflow validate <FlowName> [uuid]");
@@ -2351,14 +2478,17 @@ async function main() {
     }
     if (!ok || errs.length > 0 || warns.length > 0) process.stdout.write("\n");
     process.exit(result.status ?? 0);
-  } else if (sub === "list-flows" || sub === "list-nodes" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin" || sub === "copy-builtin-agent" || sub === "read-agent" || sub === "add-role") {
+  } else if (sub === "list-flows" || sub === "read-flow" || sub === "read-node" || sub === "copy-builtin" || sub === "copy-builtin-agent" || sub === "read-agent" || sub === "add-role") {
     throw new Error("Use --json with " + sub + ". Example: agentflow list-flows --json --workspace-root <path>");
   } else {
-    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, update-model-lists, apply, validate, resume, replay, or run-status.");
+    throw new Error("Unknown command: " + sub + ". Use list, list-flows --json, list-nodes --json, read-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, update-model-lists, apply, validate, resume, replay, run-status, extract-thinking.");
   }
 }
 
 main().catch((err) => {
   log.error("Error: " + err.message);
+  if (err.flowName && err.uuid) {
+    log.info(chalk.bold.yellow("修复后请用 resume 继续: ") + `agentflow resume ${err.flowName} ${err.uuid}`);
+  }
   process.exit(1);
 });

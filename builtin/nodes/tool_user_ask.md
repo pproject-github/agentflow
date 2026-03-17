@@ -1,11 +1,14 @@
 ---
-# 内置节点：用户确认
-description: 利用 **Ask user question**tool询问用户以下问题
+# 内置节点：用户提问
+description: 利用 **Ask user question** tool 询问用户以下问题
 displayName: UserAsk
 input:
-  - type: "节点"
-    name: "pre"
+  - type: 节点
+    name: prev
     default: ""
-output: []
+output:
+  - type: 节点
+    name: next
+    default: ""
 ---
 ${USER_PROMPT}

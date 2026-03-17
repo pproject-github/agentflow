@@ -455,7 +455,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getInstanceDescript
     );
   }
   const nodeReachableOptional = (defId) =>
-    defId === "control_start" || defId === "control_end" || defId.startsWith("provide_") || defId === "tool_load_key" || defId === "tool_save_key";
+    defId === "control_start" || defId === "control_end" || defId.startsWith("provide_") || defId === "tool_load_key" || defId === "tool_save_key" || defId === "tool_get_env";
   for (const n of nodes) {
     const defId = n.definitionId || "";
     if (nodeReachableOptional(defId)) continue;

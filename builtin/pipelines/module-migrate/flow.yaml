@@ -41,7 +41,7 @@ instances:
     modelType: Auto
     input:
       - type: 节点
-        name: pre
+        name: prev
         value: ''
     output:
       - type: 节点
@@ -225,6 +225,7 @@ instances:
     definitionId: provide_str
     label: KeyReadyFile
     description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    userDescription: 提供「待迁移文件列表」在全局存储中的 key 名（ready_file）。下游用 SaveKey 按该 key 写入迁移范围结果，LoadKey 按同一 key 读取。
     modelType: Auto
     input: []
     output:
@@ -236,6 +237,7 @@ instances:
     definitionId: provide_str
     label: KeyModuleName
     description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+    userDescription: 提供「模块名称」在全局存储中的 key 名（moduleName）。下游用 SaveKey 按该 key 写入新建模块名，其他节点可 LoadKey 读取。
     modelType: Auto
     input: []
     output:

@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import { writeResult } from "./write-result.mjs";
 import { loadExecId, intermediateResultBasename, intermediateDirForNode } from "./get-exec-id.mjs";
 import { getResolvedValues } from "./get-resolved-values.mjs";
+import { loadFlowDefinition } from "./parse-flow.mjs";
 import { parseBool, getFirstBoolInputValue } from "./parse-bool.mjs";
 import { logToRunTag } from "./run-log.mjs";
 
@@ -181,9 +182,9 @@ function applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definiti
 
 /**
  * 若为「待用户确认」节点：将 result 的 status 覆写为 pending，流程暂停，等用户再次 apply 时续跑。
- * 识别方式：instance frontmatter 中 waitForUser: true，或 definitionId === "tool_user_check"。
+ * 识别方式：definitionId === "tool_user_check" 或 flow.yaml instances[instanceId].waitForUser 为 true。
  */
-function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId) {
+function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId, inst) {
   const e = execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
   const resultPath = path.join(runDir, intermediateDirForNode(instanceId), intermediateResultBasename(instanceId, e));
   if (!fs.existsSync(resultPath)) return;
@@ -191,21 +192,8 @@ function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runD
   let waitForUser = false;
   if (definitionId === "tool_user_check") {
     waitForUser = true;
-  } else {
-    const instancePath = path.join(
-      workspaceRoot,
-      ".cursor",
-      "agentflow",
-      "pipelines",
-      flowName,
-      "instance",
-      `${instanceId}.md`,
-    );
-    if (fs.existsSync(instancePath)) {
-      const raw = fs.readFileSync(instancePath, "utf-8");
-      const match = raw.match(/\bwaitForUser:\s*(true|yes|1)\b/i);
-      waitForUser = !!match;
-    }
+  } else if (inst != null && (inst.waitForUser === true || inst.waitForUser === "true" || inst.waitForUser === 1 || String(inst.waitForUser).toLowerCase() === "yes")) {
+    waitForUser = true;
   }
 
   if (!waitForUser) return;
@@ -264,30 +252,24 @@ function main() {
 
   try {
     let definitionId = null;
+    let flowData = null;
+    let flowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", flowName);
     const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
     if (fs.existsSync(flowJsonPath)) {
       try {
         const flow = JSON.parse(fs.readFileSync(flowJsonPath, "utf-8"));
         const node = flow?.nodes?.find((n) => n.id === instanceId);
         if (node?.definitionId) definitionId = node.definitionId;
+        if (flow?.flowDir && typeof flow.flowDir === "string" && flow.flowDir.trim()) {
+          flowDir = path.isAbsolute(flow.flowDir) ? flow.flowDir : path.join(workspaceRoot, flow.flowDir);
+        }
       } catch (_) {}
     }
-    if (definitionId == null) {
-      const instancePath = path.join(
-        workspaceRoot,
-        ".cursor",
-        "agentflow",
-        "pipelines",
-        flowName,
-        "instance",
-        `${instanceId}.md`,
-      );
-      if (fs.existsSync(instancePath)) {
-        const instanceRaw = fs.readFileSync(instancePath, "utf-8");
-        const defMatch = instanceRaw.match(/^\s*definitionId:\s*["']?([^"'\n]+)["']?/m);
-        definitionId = defMatch ? defMatch[1].trim() : null;
-      }
+    flowData = loadFlowDefinition(flowDir);
+    if (definitionId == null && flowData?.instances?.[instanceId]?.definitionId) {
+      definitionId = flowData.instances[instanceId].definitionId;
     }
+    const inst = flowData?.instances?.[instanceId] ?? null;
     logToRunTag(workspaceRoot, flowName, uuid, "post-process", {
       event: "start",
       instanceId,
@@ -298,7 +280,7 @@ function main() {
     applyExecutorResultNormalize(workspaceRoot, flowName, uuid, instanceId, execId);
     logToRunTag(workspaceRoot, flowName, uuid, "post-process", { event: "result-normalized", instanceId });
     applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definitionId, execId);
-    applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId);
+    applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId, inst);
 
     const optionalPromptPath = maybeEmitToolPrintPrompt(
       workspaceRoot,

@@ -16,7 +16,7 @@
  *
  * 3) 分支 B（普通节点）：
  *    - buildNodePrompt → writeResult("running") → writeCacheJsonForNode（统一写 .cache.json）；
- *    - 若有 tool_load_key/tool_save_key/control_anyOne 再设 optionalPromptPath，并视情况输出 directCommand 供 CLI 执行；
+ *    - 若有 tool_load_key/tool_save_key/tool_get_env/control_anyOne 再设 optionalPromptPath，并视情况输出 directCommand 供 CLI 执行；
  *    - 返回 promptPath、resultPath、execId、subagent 等。
  *
  * cache.json 流程已统一：control_if 与普通节点均通过 writeCacheJsonForNode 在「prompt 已存在」的前提下执行 computeCacheMd5 并写入 intermediate/<instanceId>/<instanceId>.cache.json，结构一致（含 cacheMd5、cacheInputInfo、execId、inputHandlerExecIds、payload）。
@@ -124,14 +124,17 @@ function shellQuote(s) {
 }
 
 /**
- * 若为 tool_load_key / tool_save_key，写入「直接执行 agentflow apply -ai run-tool-nodejs + load-key/save-key」的 prompt，
+ * 若为 tool_load_key / tool_save_key / tool_get_env，写入「直接执行 agentflow apply -ai run-tool-nodejs + 对应脚本」的 prompt，
  * key/value 从 getResolvedValues 的 resolvedInputs 读取并拼入命令。
  * 返回 { optionalPromptPath, directCommand }，供 AI 用 optionalPromptPath、CLI 用 directCommand 执行。
  * @param {number} execId - 本轮 execId，传入 run-tool-nodejs 以写对 result 文件（第二轮起必须）
  */
 function emitLoadSaveKeyOptionalPrompt(workspaceRoot, flowName, uuid, instanceId, definitionId, execId) {
-  if (definitionId !== "tool_load_key" && definitionId !== "tool_save_key") return null;
-  const scriptName = definitionId === "tool_load_key" ? "load-key.mjs" : "save-key.mjs";
+  if (definitionId !== "tool_load_key" && definitionId !== "tool_save_key" && definitionId !== "tool_get_env") return null;
+  const scriptName =
+    definitionId === "tool_load_key" ? "load-key.mjs"
+    : definitionId === "tool_save_key" ? "save-key.mjs"
+    : "get-env.mjs";
   const runDir = path.join(workspaceRoot, ".workspace", "agentflow", "runBuild", flowName, uuid);
   const nodeIntermediateDir = path.join(runDir, intermediateDirForNode(instanceId));
   const promptFileName = `${instanceId}.run-key.prompt.md`;
@@ -148,12 +151,17 @@ function emitLoadSaveKeyOptionalPrompt(workspaceRoot, flowName, uuid, instanceId
 
   const rootArg = workspaceRoot;
   const keyQuoted = shellQuote(key);
-  const scriptArgs =
-    definitionId === "tool_load_key"
-      ? `${rootArg} ${shellQuote(flowName)} ${uuid} ${keyQuoted}`
-      : `${rootArg} ${shellQuote(flowName)} ${uuid} ${keyQuoted} ${shellQuote(value)}`;
-  const scriptPath = path.join(__dirname, scriptName);
-  const directCommand = `agentflow apply -ai run-tool-nodejs ${rootArg} ${flowName} ${uuid} ${instanceId} ${execId} -- node ${scriptPath} ${scriptArgs}`;
+  const directCommand =
+    definitionId === "tool_get_env"
+      ? `agentflow apply -ai get-env ${rootArg} ${flowName} ${uuid} ${instanceId} ${execId} ${keyQuoted}`
+      : (() => {
+          const scriptArgs =
+            definitionId === "tool_load_key"
+              ? `${rootArg} ${shellQuote(flowName)} ${uuid} ${keyQuoted}`
+              : `${rootArg} ${shellQuote(flowName)} ${uuid} ${keyQuoted} ${shellQuote(value)}`;
+          const scriptPath = path.join(__dirname, definitionId === "tool_load_key" ? "load-key.mjs" : "save-key.mjs");
+          return `agentflow apply -ai run-tool-nodejs ${rootArg} ${flowName} ${uuid} ${instanceId} ${execId} -- node ${scriptPath} ${scriptArgs}`;
+        })();
   const content = `此节点不调用 subagent，请主 agent 在工作区根目录直接执行以下命令完成该节点。
 
 \`\`\`bash

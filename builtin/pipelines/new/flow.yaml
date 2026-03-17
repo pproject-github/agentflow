@@ -23,9 +23,6 @@ instances:
       - type: 文件
         name: nodes.md
         value: ''
-      - type: 文件
-        name: skills.md
-        value: ''
       - type: 文本
         name: message
         value: ''
@@ -40,12 +37,12 @@ instances:
         name: plan.md
         value: ''
       - type: 文本
-        name: nowFlow
+        name: newFlow
         value: ''
     body: |
       用户描述的需求为：${message}。结合现有节点信息 ${nodes.md}，及流程参考 ${flow.yaml}。规划节点图并输出为 ${plan.md}，供用户先确认。
-      新建的flow名称保存到 ${nowFlow}。
-      注意：内置节点的instance应保持和原始node元数据一直（尤其是 description）。
+      新建的 flow 名称保存到 ${newFlow}。该名称须与 agentflow list 列出的已有 pipeline 不同（不可重复）。
+      注意：内置节点的 instance 应保持和原始 node 元数据一致（尤其是 description）。
   agent_create:
     definitionId: agent_subAgent
     label: 创建Flow
@@ -58,6 +55,12 @@ instances:
       - type: 文件
         name: plan.md
         value: ''
+      - type: 文件
+        name: layout.md
+        value: ''
+      - type: 文本
+        name: newFlow
+        value: ''
     output:
       - type: 节点
         name: next
@@ -66,7 +69,8 @@ instances:
         name: script.md
         value: ''
     body: |
-      基于 ${plan.md} 在 .workspace/agentflow/pipelines/<流程名>/ 下**必须生成并写入** flow.yaml（不存在则创建，已存在则按规划覆盖）：
+      基于 ${plan.md} 在 .workspace/agentflow/pipelines/${newFlow}/ 下**必须生成并写入** flow.yaml（不存在则创建，已存在则按规划覆盖）：
+      节点布局参考 ${layout.md}，避免节点排成一条线。
       若有脚本需实现，将脚本路径与功能说明写入 ${script.md}，供下游 agent 实现代码，本节点 **不** 书写代码。
   control_end_new:
     definitionId: control_end
@@ -82,14 +86,14 @@ instances:
       新建流程的出口。
   provide_skills_file:
     definitionId: provide_file
-    label: NewSkills
+    label: LayoutSkills
     description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
     role: 普通
     input: []
     output:
       - type: 文件
         name: value
-        value: .cursor/skills/agentflow-flow-writing/SKILL.md
+        value: .workspace/agentflow/reference/flow-layout.md
     body: ''
   provide_requirement:
     definitionId: provide_str
@@ -148,7 +152,7 @@ instances:
     role: 普通
     input:
       - type: 节点
-        name: pre
+        name: prev
         value: ''
       - type: 文件
         name: check.md
@@ -185,7 +189,7 @@ instances:
       - type: 文件
         name: value
         value: .workspace/agentflow/reference/flow-control-capabilities.md
-  provide_nowFlow_key_save:
+  provide_newFlow_key_save:
     definitionId: provide_str
     label: FlowKeyName
     description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
@@ -194,9 +198,9 @@ instances:
     output:
       - type: 文本
         name: value
-        value: nowFlow
+        value: newFlow
     body: ''
-  provide_nowFlow_key_load:
+  provide_newFlow_key_load:
     definitionId: provide_str
     label: FlowKeyName
     description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
@@ -205,7 +209,7 @@ instances:
     output:
       - type: 文本
         name: value
-        value: nowFlow
+        value: newFlow
     body: ''
   collectNode:
     definitionId: tool_nodejs
@@ -237,7 +241,7 @@ instances:
         name: check.md
         value: ''
       - type: 文本
-        name: nowFlow
+        name: newFlow
         value: ''
     output:
       - type: 节点
@@ -247,7 +251,7 @@ instances:
         name: result.md
         value: ''
     body: |
-      利用 ${check.md} 检查流水线(${nowFlow})是否正常，将检查报告写入${result.md}
+      利用 ${check.md} 检查流水线(${newFlow})是否正常，将检查报告写入${result.md}
   AI_CHECK_FILE:
     definitionId: provide_file
     label: AICheckFile
@@ -269,7 +273,7 @@ instances:
         value: ''
       - type: 文本
         name: key
-        value: nowFlow
+        value: newFlow
       - type: 文本
         name: value
         value: ''
@@ -282,7 +286,7 @@ instances:
     input:
       - type: 文本
         name: key
-        value: nowFlow
+        value: newFlow
     output:
       - type: 文本
         name: result
@@ -297,7 +301,7 @@ instances:
         name: prev
         value: ''
       - type: 文本
-        name: nowFlow
+        name: newFlow
         value: ''
     output:
       - type: 节点
@@ -307,7 +311,8 @@ instances:
         name: result
         value: ''
     body: |-
-      执行：agentflow apply -ai validate-flow ${workspaceRoot} ${nowFlow}。需要检查的 flow 为：${nowFlow}
+      执行：agentflow apply -ai validate-flow ${workspaceRoot} ${newFlow}。需要检查的 flow 为：${newFlow}。
+      校验不通过时，由后续节点修复；本节点状态仍为 success。
   control_if_check:
     definitionId: control_if
     label: Ifcheck
@@ -353,17 +358,21 @@ instances:
     body: 检查 ${err.md} 和 ${err2.md} 都无问题为true，任一有问题则为 false
 edges:
   - source: provide_skills_file
-    target: agent_plan
+    target: agent_create
     sourceHandle: output-0
     targetHandle: input-2
   - source: agent_plan
     target: agent_create
     sourceHandle: output-1
     targetHandle: input-1
+  - source: agent_plan
+    target: agent_create
+    sourceHandle: output-2
+    targetHandle: input-3
   - source: provide_requirement
     target: agent_plan
     sourceHandle: output-0
-    targetHandle: input-3
+    targetHandle: input-2
   - source: agent_create
     target: agent_implement_script
     sourceHandle: output-0
@@ -395,7 +404,7 @@ edges:
   - source: provide_flow
     target: agent_plan
     sourceHandle: output-0
-    targetHandle: input-4
+    targetHandle: input-3
   - source: control_start_new
     target: collectNode
     sourceHandle: output-0
@@ -420,7 +429,7 @@ edges:
     target: agent_fix
     sourceHandle: output-1
     targetHandle: input-2
-  - source: agent_plan
+  - source: tool_user_check
     target: save_flow_name
     sourceHandle: output-0
     targetHandle: input-0
@@ -428,11 +437,11 @@ edges:
     target: save_flow_name
     sourceHandle: output-2
     targetHandle: input-2
-  - source: provide_nowFlow_key_save
+  - source: provide_newFlow_key_save
     target: save_flow_name
     sourceHandle: output-0
     targetHandle: input-1
-  - source: provide_nowFlow_key_load
+  - source: provide_newFlow_key_load
     target: loadFlowKey
     sourceHandle: output-0
     targetHandle: input-0
@@ -499,8 +508,8 @@ ui:
       x: 1471.8052088229888
       'y': 254.85582797003843
     provide_skills_file:
-      x: -271.0088965918219
-      'y': 196.083031965234
+      x: 120
+      'y': 217.2843329442596
     provide_requirement:
       x: -263.595905131459
       'y': 276.4850011544905
@@ -519,10 +528,10 @@ ui:
     provide_flow:
       x: -258.73821498428885
       'y': 351.00016245846024
-    provide_nowFlow_key_save:
+    provide_newFlow_key_save:
       x: 50
       'y': 380
-    provide_nowFlow_key_load:
+    provide_newFlow_key_load:
       x: 400
       'y': 100
     collectNode:

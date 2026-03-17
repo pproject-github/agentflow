@@ -57,7 +57,7 @@ export function computeCacheMd5(workspaceRoot, flowName, uuid, instanceId, execI
   }
   const promptContent = fs.readFileSync(promptPath, "utf-8");
 
-  /** 所有写 .cache.json 的节点（含 control_if、control_anyOne、tool_load_key、tool_save_key、普通节点）均由此处统一解析输入；
+  /** 所有写 .cache.json 的节点（含 control_if、control_anyOne、tool_load_key、tool_save_key、tool_get_env、普通节点）均由此处统一解析输入；
    * 输入来自 getResolvedValues → computeResolvedInputsForInstance，按 flow.edges 的 targetHandle 与 instance 的 input 槽位一一对应赋值，无按 definitionId 的特殊分支。
    * 只要 flow 中该节点的 edge 与 instance 定义正确，各 input 槽会正确赋值。 */
   const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
