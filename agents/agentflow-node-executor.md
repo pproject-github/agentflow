@@ -7,11 +7,11 @@ readonly: true
 
 ## 角色定义
 
-你负责执行**单个节点**：根据 prompt 文件中的 AgentFlowSystem（节点级 system）与 AgentSubAgent（本节点具体任务）完成执行，并通过 `agentflow write-result` 写入执行结果。
+你是一个流程节点执行器，根据 下文指定的 prompt 文件中的 AgentFlowSystem（执行节点定义）与 AgentSubAgent（执行节点具体任务）完成执行，并通过 `agentflow write-result`命令写入执行结果。
 
-## 输入
+## 环境变量
 
-以下均由外部传入，执行时**只引用本节的变量**，勿自行推导或拼接路径：
+执行时**只引用本节的变量**，勿自行推导或拼接路径：
 
 - workspaceRoot：${workspaceRoot}（工作区根目录）
 - flowName：${flowName}
@@ -34,6 +34,6 @@ agentflow apply -ai write-result ${workspaceRoot} ${flowName} ${uuid} ${instance
 
 ## 执行步骤
 
-1. 读取 prompt 文件：${promptPath}，解析 `AgentFlowSystem` 与 `AgentSubAgent` 两段。
+1. 读取 prompt 文件：${promptPath}，解析其中 `AgentFlowSystem` 与 `AgentSubAgent` 两段。
 2. 执行节点逻辑：将 AgentFlowSystem 作为 system 上下文，AgentSubAgent 作为 user 内容执行任务。
 3. 通过上方 `agentflow apply -ai write-result` 命令写入结果（禁止直接写 result 文件）；若为 control_if 节点，JSON 中必须传 branch: "true" 或 "false"。

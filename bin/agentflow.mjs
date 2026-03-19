@@ -492,7 +492,7 @@ function isValidUuid(value) {
 
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
- * Agent 身份文件先按路径变量替换后写入「该节点 intermediate」目录（即 prompt 所在目录）下的 agent-<subagent>.md，传参为「Agent角色定义: 该替换后文件路径」及本任务路径信息。
+ * Agent 身份文件先按路径变量替换后写入「该节点 intermediate」目录下的 agent-<subagent>.md；传给 Cursor 的 prompt 为该文件正文（去掉 YAML frontmatter），不再传路径与任务说明等元指令。
  */
 function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, resultPathRel, subagent, instanceId }, options = {}) {
   const absPromptPath = path.resolve(workspaceRoot, promptPath);
@@ -521,14 +521,11 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
     fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
     agentPathForPrompt = resolvedAgentPath;
   }
-  const promptText = `Agent角色定义: ${agentPathForPrompt}
-
-请先阅读该文件以确定身份与规范，再按以下路径执行：
-- 读取指令 prompt：${absPromptPath}
-- workspaceRoot（write-result 第一参数）：${absWorkspaceRoot}
-- resultPath：${absResultPath}
-- outputDir：${outputDir}
-请只完成该节点任务，不要修改 flow 或其它节点。`;
+  const rawAgentContent =
+    agentContent != null
+      ? agentContent
+      : (fs.existsSync(agentPathForPrompt) ? fs.readFileSync(agentPathForPrompt, "utf8") : "");
+  const promptText = stripYamlFrontmatter(rawAgentContent);
 
   const modelRaw =
     options.model ??
@@ -559,6 +556,7 @@ function runCursorAgentForNode(workspaceRoot, { promptPath, intermediatePath, re
       const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
       appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI 完整参数: ${agentCmd} ${JSON.stringify(argvLog)}`);
       appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`);
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI prompt 完整:\n${promptText}`);
     }
     /** 使用 inherit 让 Cursor 的 stderr 直接打到终端，便于在 exit 1 无 result 时看到真实报错（否则子进程无 TTY 时 Cursor 可能不往 pipe 写 stderr） */
     const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
@@ -769,14 +767,11 @@ function runOpenCodeAgentForNode(workspaceRoot, { promptPath, intermediatePath, 
     fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
     agentPathForPrompt = resolvedAgentPath;
   }
-  const promptText = `Agent角色定义: ${agentPathForPrompt}
-
-请先阅读该文件以确定身份与规范，再按以下路径执行：
-- 读取指令 prompt：${absPromptPath}
-- workspaceRoot（write-result 第一参数）：${absWorkspaceRoot}
-- resultPath：${absResultPath}
-- outputDir：${outputDir}
-请只完成该节点任务，不要修改 flow 或其它节点。`;
+  const rawAgentContent =
+    agentContent != null
+      ? agentContent
+      : (fs.existsSync(agentPathForPrompt) ? fs.readFileSync(agentPathForPrompt, "utf8") : "");
+  const promptText = stripYamlFrontmatter(rawAgentContent);
 
   const model = options.model && String(options.model).trim();
   const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
@@ -1772,6 +1767,16 @@ function readNodeJson(workspaceRoot, nodeId, flowId, flowSource) {
     } catch (_) {}
   }
   return { error: "Node not found: " + nodeId };
+}
+
+/** 去掉 Markdown 顶部的 YAML frontmatter（--- ... ---），返回正文；无 frontmatter 则返回原内容 */
+function stripYamlFrontmatter(content) {
+  if (!content || typeof content !== "string") return "";
+  const first = content.indexOf("---");
+  if (first !== 0) return content.trim();
+  const afterFirst = content.indexOf("---", 3);
+  if (afterFirst === -1) return content.trim();
+  return content.slice(afterFirst + 3).trim();
 }
 
 /** 从 agent .md 文件读取 frontmatter 的 name、description（简易解析，不依赖 yaml 库） */

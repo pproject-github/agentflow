@@ -1,6 +1,6 @@
 {
   "name": "agentflow",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "CLI to drive AgentFlow apply/replay with Cursor or OpenCode CLI streaming output",
   "type": "module",
   "main": "bin/agentflow.mjs",
