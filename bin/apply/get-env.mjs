@@ -18,6 +18,7 @@ import path from "path";
 import os from "os";
 
 import { writeResult } from "./write-result.mjs";
+import { backupResolvedOutputsIfExist } from "./backup-resolved-output.mjs";
 import { outputDirForNode, outputNodeBasename } from "./get-exec-id.mjs";
 
 const RUN_BASE_REL = ".workspace/agentflow/runBuild";
@@ -62,6 +63,7 @@ function main() {
     const runDir = path.join(path.resolve(workspaceRoot), RUN_BASE_REL, flowName, uuid);
     const outputDir = path.join(runDir, outputDirForNode(instanceId));
     fs.mkdirSync(outputDir, { recursive: true });
+    backupResolvedOutputsIfExist(runDir, instanceId, execId, ["value", "result"]);
     const valueFile = path.join(outputDir, outputNodeBasename(instanceId, execId, "value"));
     const resultFile = path.join(outputDir, outputNodeBasename(instanceId, execId, "result"));
     fs.writeFileSync(valueFile, value, "utf-8");

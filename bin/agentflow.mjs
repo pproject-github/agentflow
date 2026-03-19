@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 import chalk from "chalk";
 import ora from "ora";
 import { createMarkdownStreamer, render as renderMarkdown } from "markdansi";
+import { backupResolvedOutputsIfExist } from "./apply/backup-resolved-output.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -930,6 +931,25 @@ async function executeNode(workspaceRoot, flowName, uuid, instanceId, preOutput,
     preOutput.model ?? null,
     options.model ?? null,
   );
+
+  // resolveOutput 完成后写入前：若 output 目录中已存在 resolved 文件，先备份为 原文件名_${execId}
+  const execId = preOutput.execId ?? 1;
+  const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
+  let outSlotNames = [];
+  if (fs.existsSync(flowJsonPath)) {
+    try {
+      const flow = JSON.parse(fs.readFileSync(flowJsonPath, "utf-8"));
+      if (flow.ok && flow.outputSlotTypes && flow.outputSlotTypes[instanceId]) {
+        outSlotNames = Object.keys(flow.outputSlotTypes[instanceId]);
+      }
+      if (outSlotNames.length === 0 && flow.order && flow.order.includes(instanceId)) {
+        const node = flow.nodes?.find((n) => n.id === instanceId);
+        const outSlots = node?.output || flow.outputSlotTypes?.[instanceId];
+        if (outSlots && typeof outSlots === "object") outSlotNames = Object.keys(outSlots);
+      }
+    } catch (_) {}
+  }
+  backupResolvedOutputsIfExist(runDir, instanceId, execId, outSlotNames);
 
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "agent-invoke-start",

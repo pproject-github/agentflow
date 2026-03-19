@@ -15,6 +15,7 @@ import { fileURLToPath } from "url";
 
 import { validateAndParse } from "./validate-script-output.mjs";
 import { writeResult } from "./write-result.mjs";
+import { backupResolvedOutputsIfExist } from "./backup-resolved-output.mjs";
 import { loadExecId, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,8 @@ function main() {
     const errCode = typeof payload.err_code === "number" ? payload.err_code : 1;
     try {
       fs.mkdirSync(outputDir, { recursive: true });
+      const slotsToWrite = [...new Set([...Object.keys(message), "stderr"])];
+      backupResolvedOutputsIfExist(runDir, instanceId, execId, slotsToWrite);
       for (const slot of Object.keys(message)) {
         const content = message[slot];
         if (content == null) continue;
