@@ -54,10 +54,10 @@ Move testing from "when someone remembers" to a **slow-burn loop**: schedule or 
 
 Detailed tutorials available in Wiki docs:
 
-**1. [Module Migration Workflow](docs/wiki/module-migration-workflow.md)**  
+**1. [Module Migration Workflow](docs/wiki/module-migration-workflow.en.md)**  
 Migrate code from main module to submodule: scan → analyze dependencies → migrate → compile → loop fix. Demonstrates how to implement "check-fix-check" cyclic pattern with `control_anyOne` + `control_if`, supporting checkpoint resumption and single-node retry.
 
-**2. [Figma UI Implementation Workflow](docs/wiki/figma-ui-implementation-workflow.md)**  
+**2. [Figma UI Implementation Workflow](docs/wiki/figma-ui-implementation-workflow.en.md)**  
 One-shot implementation of complex Figma designs: parse design → extract components → generate code → screenshot comparison → loop optimization. Demonstrates phased code generation, automated UI verification, and continuous iteration until pixel-perfect accuracy.
 
 ## Usage Guide

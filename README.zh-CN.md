@@ -52,10 +52,10 @@ AgentFlow 不是要取代 Cursor 或 OpenCode，而是**站在它们的肩膀上
 
 详细教程见 Wiki 文档：
 
-**1. [模块迁移工作流](docs/wiki/module-migration-workflow.md)**  
+**1. [模块迁移工作流](docs/wiki/module-migration-workflow.zh-CN.md)**  
 将主模块代码迁移到子模块：扫描 → 分析依赖 → 迁移 → 编译验证 → 循环修复。演示如何用 `control_anyOne` + `control_if` 实现"检查-修复-检查"循环模式，支持断点续跑和单节点重试。
 
-**2. [Figma UI 还原工作流](docs/wiki/figma-ui-implementation-workflow.md)**  
+**2. [Figma UI 还原工作流](docs/wiki/figma-ui-implementation-workflow.zh-CN.md)**  
 一次性还原复杂 Figma 设计稿：解析设计稿 → 拆分组件 → 生成代码 → 截图对比 → 循环优化。演示如何分阶段生成代码、自动化 UI 验证、持续迭代直到还原准确度达标。
 
 ## 使用说明
