@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 /**
  * @param {{
@@ -11,6 +12,7 @@ import { useEffect, useId, useRef, useState } from "react";
  * }} props
  */
 export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArchived = false, onDeleted }) {
+  const { t } = useTranslation();
   const titleId = useId();
   const panelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const [confirmText, setConfirmText] = useState("");
@@ -53,13 +55,13 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setError(typeof j.error === "string" ? j.error : "删除失败");
+        setError(typeof j.error === "string" ? j.error : t("project:deleteModal.deleteFailed"));
         return;
       }
       await onDeleted();
     } catch (err) {
       if (err?.name === "AbortError") {
-        setError("删除请求超时，请重试（可先检查终端中的 UI 服务日志）");
+        setError(t("project:deleteModal.deleteTimeout"));
         return;
       }
       setError(String(err?.message || err));
@@ -88,20 +90,19 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
       >
         <div className="af-shortcuts-panel__head">
           <h2 id={titleId} className="af-shortcuts-panel__title">
-            删除流水线
+            {t("project:deleteModal.title")}
           </h2>
-          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label={t("project:deleteModal.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <form className="af-shortcuts-panel__body af-new-pipeline-form" onSubmit={handleSubmit}>
           <p className="af-new-pipeline-lead">
-            将<strong>永久删除</strong>磁盘上的流水线目录（含 flow.yaml、脚本等），无法撤销。请在下方输入流水线 ID「
-            <strong>{flowId}</strong>」以确认。
+            {t("project:deleteModal.lead", { flowId })}
           </p>
           <label className="af-new-pipeline-field">
-            <span className="af-pipeline-drawer-label">确认流水线名称</span>
+            <span className="af-pipeline-drawer-label">{t("project:deleteModal.confirmLabel")}</span>
             <input
               type="text"
               className="af-new-pipeline-input"
@@ -118,10 +119,10 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
 
           <div className="af-new-pipeline-actions">
             <button type="button" className="af-btn-secondary" onClick={onClose} disabled={submitting}>
-              取消
+              {t("project:deleteModal.cancel")}
             </button>
             <button type="submit" className="af-btn-primary af-btn-destructive" disabled={!matches || submitting}>
-              {submitting ? "删除中…" : "确认删除"}
+              {submitting ? t("project:deleteModal.deleting") : t("project:deleteModal.confirmDelete")}
             </button>
           </div>
         </form>

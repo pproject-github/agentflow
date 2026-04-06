@@ -26,7 +26,26 @@
     "addInput": "Add Input",
     "addOutput": "Add Output",
     "remove": "Remove Node",
-    "duplicate": "Duplicate Node"
+    "duplicate": "Duplicate Node",
+    "nodeType": "Node Type",
+    "displayName": "Display Name",
+    "displayNameHint": "(letters, numbers, underscores, hyphens, do not start with a number)",
+    "role": "Role",
+    "modelHint": "From ~/agentflow/model-lists.json; UI service runs agentflow update-model-lists in background on startup",
+    "defaultModel": "Default",
+    "userPrompt": "User Prompt (USER PROMPT / body)",
+    "systemDescription": "System Description (read-only, from node definition)",
+    "directCommand": "Direct Command (script)",
+    "scriptHint": "(tool_nodejs: skips AI when script exists, executed by pipeline)"
+  },
+  "nodeProps": {
+    "title": "Node Properties",
+    "noInputPins": "No input pins",
+    "noOutputPins": "No output pins",
+    "type": "Type",
+    "name": "Name",
+    "defaultValue": "Default / value",
+    "conversationOutput": "Conversation & Output"
   },
   "actions": {
     "run": "Run Flow",
@@ -40,5 +59,53 @@
     "nodeList": "Node List",
     "runHistory": "Run History",
     "validation": "Validation Results"
+  },
+  "palette": {
+    "workspace": "Workspace",
+    "loading": "Loading...",
+    "archived": "Archived",
+    "noPipelines": "No pipelines",
+    "more": "more",
+    "moreFlows": "more flows",
+    "noRuns": "No run records",
+    "searchNodes": "Search nodes",
+    "noComponents": "No components available (check node library directory)",
+    "noMatch": "No matching nodes, adjust search terms",
+    "selectPipeline": "Select a pipeline from above to load components and canvas",
+    "validationWarnings": "Validation warnings (consistent with agentflow validate slot checks)",
+    "output": "Output",
+    "model": "Model",
+    "userDir": "User Directory"
+  },
+  "pipeline": {
+    "selectPipeline": "Please select a pipeline from the dropdown above",
+    "loadingProps": "Loading node properties...",
+    "pipelineId": "Pipeline ID",
+    "diskPath": "Disk Path",
+    "storageLocation": "Storage Location",
+    "introduction": "Introduction",
+    "metadata": "Metadata",
+    "nodeCount": "Node Count",
+    "nodesUnit": "nodes",
+    "loading": "Loading...",
+    "noRuns": "No run records (run records are generated in the workspace after terminal execution)"
+  },
+  "status": {
+    "saving": "Saving...",
+    "saved": "Saved",
+    "saveFailed": "Save failed",
+    "runInTerminal": "Please use terminal to run"
+  },
+  "roles": {
+    "requirement": "Requirement Analysis",
+    "planning": "Technical Planning",
+    "code": "Code Execution",
+    "test": "Test Regression",
+    "normal": "Normal"
+  },
+  "phases": {
+    "phase": "Phase",
+    "allPhasesComplete": "All phases completed",
+    "currentPhaseComplete": "Current phase completed, waiting for confirmation..."
   }
 }

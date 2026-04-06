@@ -8,6 +8,7 @@ import { machineReadable } from "./log.mjs";
 import { normalizeCursorModelForCli } from "./model-config.mjs";
 import { appendRunLogLine } from "./run-events.mjs";
 import { writeWithPrefix } from "./terminal.mjs";
+import { t } from "./i18n.mjs";
 
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
@@ -244,7 +245,7 @@ export function runCursorAgentForNode(
           (/free plans?/i.test(stderrTail) && /only use auto/i.test(stderrTail)) ||
           /only use auto/i.test(stderrTail);
         if (autoOnly && model !== "Auto" && !options._agentflowAutoRetry) {
-          writeStdout("[agentflow] Cursor 账户限制：检测到仅支持 Auto，自动重试一次（Auto）…\n");
+          writeStdout(t("runner.cursor_account_limit") + "\n");
           runCursorAgentForNode(
             workspaceRoot,
             { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
@@ -549,7 +550,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           if (text) {
             emit({ type: "natural", kind: "assistant", text });
             mdStreamer.push(text);
-            emit({ type: "status", line: "生成回复中…" });
+            emit({ type: "status", line: t("runner.generating_reply") });
           }
         } else if (event.type === "tool_call") {
           const toolName =
@@ -561,7 +562,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         } else if (event.type === "thinking") {
           const thinkText = extractCursorStreamNlText(event);
           if (thinkText) emit({ type: "natural", kind: "thinking", text: thinkText });
-          emit({ type: "status", line: "思考中…" });
+          emit({ type: "status", line: t("runner.thinking") });
           if (options.onToolCall) options.onToolCall("thinking", "");
         } else if (event.type === "result") {
           lastResult = event;
@@ -569,18 +570,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           if (resultNl) emit({ type: "natural", kind: "result", text: resultNl });
           if (event.subtype === "success" && !event.is_error) {
             hadError = false;
-            emit({ type: "status", line: "完成" });
+            emit({ type: "status", line: t("runner.completed") });
           } else {
             hadError = true;
             const errNl = extractCursorResultNl(event);
             if (errNl) emit({ type: "natural", kind: "error", text: errNl });
             emit({
               type: "status",
-              line: truncateComposerLine(String(event.result || "执行失败")),
+              line: truncateComposerLine(String(event.result || t("runner.execution_failed"))),
             });
           }
         } else {
-          emit({ type: "status", line: `事件: ${event.type ?? "unknown"}` });
+          emit({ type: "status", line: `${t("runner.event_label")}: ${event.type ?? "unknown"}` });
         }
       } catch (_) {
         if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {

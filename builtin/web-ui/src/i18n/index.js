@@ -6,11 +6,13 @@ import enCommon from './locales/en/common.json';
 import enFlow from './locales/en/flow.json';
 import enSettings from './locales/en/settings.json';
 import enComposer from './locales/en/composer.json';
+import enProject from './locales/en/project.json';
 
 import zhCommon from './locales/zh/common.json';
 import zhFlow from './locales/zh/flow.json';
 import zhSettings from './locales/zh/settings.json';
 import zhComposer from './locales/zh/composer.json';
+import zhProject from './locales/zh/project.json';
 
 const resources = {
   en: {
@@ -18,12 +20,14 @@ const resources = {
     flow: enFlow,
     settings: enSettings,
     composer: enComposer,
+    project: enProject,
   },
   zh: {
     common: zhCommon,
     flow: zhFlow,
     settings: zhSettings,
     composer: zhComposer,
+    project: zhProject,
   },
 };
 
@@ -32,9 +36,9 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
-    fallbackLng: 'zh',
+    fallbackLng: 'en',
     debug: false,
-    ns: ['common', 'flow', 'settings', 'composer'],
+    ns: ['common', 'flow', 'settings', 'composer', 'project'],
     defaultNS: 'common',
     interpolation: {
       escapeValue: false,

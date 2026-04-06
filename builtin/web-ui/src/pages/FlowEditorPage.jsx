@@ -14,6 +14,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
 import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
@@ -229,7 +230,7 @@ function ComposerStepsTrack({ steps }) {
           `${s.index + 1}. ${desc || "—"}`,
           s.nodeRole ? `角色：${s.nodeRole}` : "",
           s.instanceId ? `实例：${s.instanceId}` : "",
-          modelShow ? `模型：${modelShow}` : "",
+          modelShow ? `${t("flow:palette.model")}：${modelShow}` : "",
         ]
           .filter(Boolean)
           .join("\n");
@@ -302,11 +303,11 @@ function coalesceComposerSegmentsInOrder(segments) {
   return out;
 }
 
-function segmentKindToComposerLabel(kind) {
-  if (kind === "thinking") return "思考";
-  if (kind === "result") return "结果";
-  if (kind === "assistant") return "回复";
-  if (kind === "error") return "错误";
+function segmentKindToComposerLabel(kind, t) {
+  if (kind === "thinking") return t("flow:composer.thinking");
+  if (kind === "result") return t("flow:composer.result");
+  if (kind === "assistant") return t("flow:composer.reply");
+  if (kind === "error") return t("flow:composer.error");
   return String(kind);
 }
 
@@ -333,6 +334,7 @@ function segmentKindToComposerBlockClass(kind) {
  * }} props
  */
 function ComposerThreadContent({ thread, liveSegments, running, className = "", autoScroll = true }) {
+  const { t } = useTranslation();
   const stackRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const stackClass = ["af-composer-ai-stack", "af-composer-ai-stack--in-panel", "af-composer-thread-stack", className]
     .filter(Boolean)
@@ -356,7 +358,7 @@ function ComposerThreadContent({ thread, liveSegments, running, className = "", 
             key={`composer-u-${i}-${item.text.slice(0, 48)}`}
             className="af-composer-ai-block af-composer-ai-block--user-msg"
           >
-            <div className="af-composer-ai-block-label">您的问题</div>
+            <div className="af-composer-ai-block-label">{t("flow:composer.yourQuestion")}</div>
             <div className="af-composer-ai-block-body">{item.text}</div>
           </section>
         ) : (
@@ -377,6 +379,7 @@ function ComposerThreadContent({ thread, liveSegments, running, className = "", 
  * @param {{ segments: Array<{ kind: string, text: string }>, running?: boolean }} props
  */
 function AssistantStreamBlocks({ segments, running = false }) {
+  const { t } = useTranslation();
   const reply = segments.filter((s) => s.kind === "assistant").map((s) => s.text).join("");
   const result = segments.filter((s) => s.kind === "result").map((s) => s.text).join("");
   const omitResult = shouldOmitComposerResult(reply, result);
@@ -392,19 +395,19 @@ function AssistantStreamBlocks({ segments, running = false }) {
     <>
       {orderedBlocks.map((s, i) => (
         <section key={`${s.kind}-${i}`} className={segmentKindToComposerBlockClass(s.kind)}>
-          <div className="af-composer-ai-block-label">{segmentKindToComposerLabel(s.kind)}</div>
+          <div className="af-composer-ai-block-label">{segmentKindToComposerLabel(s.kind, t)}</div>
           <div className="af-composer-ai-block-body">{s.text}</div>
         </section>
       ))}
       {running && !hasBody ? (
         <section className="af-composer-ai-block af-composer-ai-block--reply af-composer-ai-block--pending">
-          <div className="af-composer-ai-block-label">回复</div>
-          <div className="af-composer-ai-block-body">等待响应…</div>
+          <div className="af-composer-ai-block-label">{t("flow:composer.reply")}</div>
+          <div className="af-composer-ai-block-body">{t("flow:composer.waiting")}</div>
         </section>
       ) : null}
       {errText ? (
         <section className="af-composer-ai-block af-composer-ai-block--error">
-          <div className="af-composer-ai-block-label">错误</div>
+          <div className="af-composer-ai-block-label">{t("flow:composer.error")}</div>
           <div className="af-composer-ai-block-body">{errText}</div>
         </section>
       ) : null}
@@ -545,10 +548,10 @@ function flowSourceForWrite(source) {
   return source === "builtin" ? "workspace" : source ?? "user";
 }
 
-function flowSourceLabelZh(source) {
+function flowSourceLabelZh(source, t) {
   if (source === "builtin") return "内置";
-  if (source === "workspace") return "工作区";
-  return "用户目录";
+  if (source === "workspace") return t("flow:palette.workspace");
+  return t("flow:palette.userDir");
 }
 
 const RUN_CONSOLE_HEIGHT_STORAGE_KEY = "af:run-console-height";
@@ -574,6 +577,7 @@ function readRunConsoleHeightPx() {
 }
 
 export default function FlowEditorPage() {
+  const { t } = useTranslation();
   const { navigate, path } = useRoute();
   const [flows, setFlows] = useState([]);
   const [listError, setListError] = useState("");
@@ -652,53 +656,131 @@ export default function FlowEditorPage() {
 
   // 多 Session 支持
   /** @typedef {{ id: string, label: string, thread: Array, segments: Array, running: boolean, statusLine: string, steps: Array, outputDismissed: boolean, createdAt: number, phaseContext: null | { phases: Array, currentPhase: number, isLastPhase: boolean, userPromptOriginal: string, nextPhase: object | null } }} ComposerSession */
-  const COMPOSER_SESSIONS_KEY = "af:composer-sessions";
-  const COMPOSER_ACTIVE_SESSION_KEY = "af:composer-active-session";
 
-  // 从 localStorage 恢复 sessions（排除正在运行的，因为页面刷新后那些任务已终止）
-  const loadSessionsFromStorage = useCallback(() => {
+  const getComposerStorageKey = useCallback((flow) => {
+    if (!flow) return null;
+    const flowId = flow.id;
+    const flowSource = flow.source ?? "user";
+    const flowArchived = flow.archived ? "archived" : "";
+    return {
+      sessionsKey: `af:composer-sessions:${flowId}:${flowSource}${flowArchived ? ":" + flowArchived : ""}`,
+      activeKey: `af:composer-active-session:${flowId}:${flowSource}${flowArchived ? ":" + flowArchived : ""}`,
+    };
+  }, []);
+
+  const loadComposerSessionsForFlow = useCallback((flow) => {
+    const keys = getComposerStorageKey(flow);
+    if (!keys) return { sessions: [], activeSessionId: null };
+
     try {
-      const raw = localStorage.getItem(COMPOSER_SESSIONS_KEY);
-      if (!raw) return null;
+      const raw = localStorage.getItem(keys.sessionsKey);
+      if (!raw) return { sessions: [], activeSessionId: null };
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return null;
-      // 过滤掉运行中的 session，重置它们的 running 状态
-      return parsed.filter(s => s && typeof s.id === "string").map(s => ({
+      if (!Array.isArray(parsed)) return { sessions: [], activeSessionId: null };
+      const sessions = parsed.filter(s => s && typeof s.id === "string").map(s => ({
         ...s,
         running: false,
         statusLine: s.running ? "页面刷新后重置" : s.statusLine,
         steps: [],
       }));
+      let activeSessionId = null;
+      try {
+        activeSessionId = localStorage.getItem(keys.activeKey);
+        if (activeSessionId && !sessions.some(s => s.id === activeSessionId)) {
+          activeSessionId = null;
+        }
+      } catch {
+        activeSessionId = null;
+      }
+      return { sessions, activeSessionId };
     } catch {
-      return null;
+      return { sessions: [], activeSessionId: null };
     }
-  }, []);
+  }, [getComposerStorageKey]);
 
-  const loadActiveSessionIdFromStorage = useCallback((sessions) => {
+  const saveComposerSessionsForFlow = useCallback((flow, sessions, activeSessionId) => {
+    const keys = getComposerStorageKey(flow);
+    if (!keys) return;
     try {
-      const id = localStorage.getItem(COMPOSER_ACTIVE_SESSION_KEY);
-      if (!id) return null;
-      // 确保恢复的 activeSessionId 存在于 sessions 中
-      return sessions?.find(s => s.id === id)?.id || null;
+      localStorage.setItem(keys.sessionsKey, JSON.stringify(sessions));
+      if (activeSessionId) {
+        localStorage.setItem(keys.activeKey, activeSessionId);
+      } else {
+        localStorage.removeItem(keys.activeKey);
+      }
     } catch {
-      return null;
+      // 忽略写入错误
     }
-  }, []);
+  }, [getComposerStorageKey]);
 
-  const initialSessions = loadSessionsFromStorage();
-  const initialActiveSessionId = initialSessions ? loadActiveSessionIdFromStorage(initialSessions) : null;
-
-  const [composerSessions, setComposerSessions] = useState(/** @type {ComposerSession[]} */ (initialSessions || []));
-  const [activeSessionId, setActiveSessionId] = useState(/** @type {string | null} */ (initialActiveSessionId));
   const composerSessionIdRef = useRef(0);
+  const composerSessionsForFlowRef = useRef(/** @type {{ sessions: ComposerSession[], activeSessionId: string | null, flowKey: string | null }} */ ({
+    sessions: [],
+    activeSessionId: null,
+    flowKey: null,
+  }));
 
-  /** 从已有会话标题同步序号，否则从 localStorage 恢复后 ref 仍为 0，新建会得到重复的「对话 1」 */
+  const [composerSessions, setComposerSessions] = useState(/** @type {ComposerSession[]} */ ([]));
+  const [activeSessionId, setActiveSessionId] = useState(/** @type {string | null} */ (null));
+
+  const flowKeyForComposer = useMemo(() => {
+    if (!selected) return null;
+    const flowId = selected.id;
+    const flowSource = selected.source ?? "user";
+    const flowArchived = selected.archived ? "archived" : "";
+    return `${flowId}:${flowSource}${flowArchived ? ":" + flowArchived : ""}`;
+  }, [selected]);
+
+  const initialDataLoadedRef = useRef(false);
+
   useEffect(() => {
-    composerSessionIdRef.current = Math.max(
-      composerSessionIdRef.current,
-      maxDialogueNumFromSessionLabels(composerSessions),
-    );
-  }, [composerSessions]);
+    if (!flowKeyForComposer) {
+      setComposerSessions([]);
+      setActiveSessionId(null);
+      composerSessionsForFlowRef.current = { sessions: [], activeSessionId: null, flowKey: null };
+      return;
+    }
+
+    const ref = composerSessionsForFlowRef.current;
+    if (ref.flowKey === flowKeyForComposer) {
+      return;
+    }
+
+    ref.flowKey = flowKeyForComposer;
+
+    if (initialDataLoadedRef.current && ref.sessions.length > 0) {
+      saveComposerSessionsForFlow(selected, ref.sessions, ref.activeSessionId);
+    }
+
+    const { sessions, activeSessionId } = loadComposerSessionsForFlow(selected);
+
+    if (sessions.length === 0) {
+      const id = `session-1-${Date.now()}`;
+      const newSession = {
+        id,
+        label: "对话 1",
+        thread: [],
+        segments: [],
+        running: false,
+        statusLine: "",
+        steps: [],
+        outputDismissed: false,
+        createdAt: Date.now(),
+        phaseContext: null,
+      };
+      ref.sessions = [newSession];
+      ref.activeSessionId = id;
+      setComposerSessions([newSession]);
+      setActiveSessionId(id);
+    } else {
+      ref.sessions = sessions;
+      ref.activeSessionId = activeSessionId || sessions[0]?.id || null;
+      setComposerSessions(sessions);
+      setActiveSessionId(ref.activeSessionId);
+    }
+
+    initialDataLoadedRef.current = true;
+  }, [flowKeyForComposer, selected, loadComposerSessionsForFlow, saveComposerSessionsForFlow]);
 
   // 当前激活的 session 状态（派生）
   const activeSession = useMemo(() => {
@@ -744,52 +826,20 @@ export default function FlowEditorPage() {
     return id;
   }, []);
 
-  // 初始化默认 session - 只在组件挂载时执行一次
-  useEffect(() => {
-    setComposerSessions((prev) => {
-      if (prev.length === 0) {
-        const id = `session-${++composerSessionIdRef.current}-${Date.now()}`;
-        const newSession = {
-          id,
-          label: "对话 1",
-          thread: [],
-          segments: [],
-          running: false,
-          statusLine: "",
-          steps: [],
-          outputDismissed: false,
-          createdAt: Date.now(),
-          phaseContext: null,
-        };
-        setActiveSessionId(id);
-        return [newSession];
-      }
-      return prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // 持久化 sessions 到 localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem(COMPOSER_SESSIONS_KEY, JSON.stringify(composerSessions));
-    } catch {
-      // 忽略写入错误（如存储配额 exceeded）
-    }
-  }, [composerSessions]);
+    if (!selected || !initialDataLoadedRef.current) return;
+    composerSessionsForFlowRef.current.sessions = composerSessions;
+    composerSessionsForFlowRef.current.activeSessionId = activeSessionId;
+    saveComposerSessionsForFlow(selected, composerSessions, activeSessionId);
+  }, [composerSessions, activeSessionId, selected, saveComposerSessionsForFlow]);
 
-  // 持久化 activeSessionId 到 localStorage
   useEffect(() => {
-    try {
-      if (activeSessionId) {
-        localStorage.setItem(COMPOSER_ACTIVE_SESSION_KEY, activeSessionId);
-      } else {
-        localStorage.removeItem(COMPOSER_ACTIVE_SESSION_KEY);
-      }
-    } catch {
-      // 忽略写入错误
-    }
-  }, [activeSessionId]);
+    composerSessionIdRef.current = Math.max(
+      composerSessionIdRef.current,
+      maxDialogueNumFromSessionLabels(composerSessions),
+    );
+  }, [composerSessions]);
 
   // 关闭 session - 使用函数式更新避免依赖 stale state
   const closeComposerSession = useCallback((sessionId) => {
@@ -1275,8 +1325,8 @@ export default function FlowEditorPage() {
   /** 左下角 toast 语义色 */
   const paletteTipMods = useMemo(() => {
     if (!saveStatus) return "";
-    if (saveStatus.startsWith("保存失败")) return " af-palette-tip--error";
-    if (saveStatus === "已保存") return " af-palette-tip--success";
+    if (saveStatus.startsWith(t("flow:status.saveFailed"))) return " af-palette-tip--error";
+    if (saveStatus === t("flow:status.saved")) return " af-palette-tip--success";
     return " af-palette-tip--info";
   }, [saveStatus]);
 
@@ -1284,12 +1334,11 @@ export default function FlowEditorPage() {
   useEffect(() => {
     if (!saveStatus) return;
     const transient =
-      saveStatus === "已保存" || saveStatus.startsWith("运行请使用终端");
-    if (!transient) return;
-    const ms = saveStatus.startsWith("运行请使用终端") ? 5200 : 2800;
-    const t = window.setTimeout(() => setSaveStatus(""), ms);
-    return () => clearTimeout(t);
-  }, [saveStatus]);
+      saveStatus === t("flow:status.saved") || saveStatus.startsWith(t("flow:status.runInTerminal"));
+    const ms = saveStatus.startsWith(t("flow:status.runInTerminal")) ? 5200 : 2800;
+    const timer = window.setTimeout(() => setSaveStatus(""), ms);
+    return () => clearTimeout(timer);
+  }, [saveStatus, t]);
 
   useEffect(() => {
     setMoveFlowError("");
@@ -1427,7 +1476,7 @@ export default function FlowEditorPage() {
   const persistFlowToServer = useCallback(
     async (nodelist, edgelist) => {
       if (!selected) return;
-      setSaveStatus("保存中…");
+      setSaveStatus(t("flow:status.saving"));
       try {
         const yaml = serializeToFlowYaml(nodelist, edgelist, instancesRef.current, {
           description: flowDescription,
@@ -1444,9 +1493,9 @@ export default function FlowEditorPage() {
           }),
         });
         const data = await r.json();
-        if (!r.ok || !data.success) throw new Error(data.error || "保存失败");
-        instancesRef.current = buildInstancesForYaml(nodelist, instancesRef.current);
-        setSaveStatus("已保存");
+if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFailed"));
+        setFlowDescription(data.description || "");
+        setSaveStatus(t("flow:status.saved"));
         if (selected.source === "builtin" && writeSource === "workspace") {
           const next = { id: selected.id, source: "workspace", path: undefined };
           setSelected(next);
@@ -1454,7 +1503,7 @@ export default function FlowEditorPage() {
           recordPipelineOpened(selected.id, "workspace");
         }
       } catch (e) {
-        setSaveStatus("保存失败: " + (e.message || e));
+        setSaveStatus(t("flow:status.saveFailed") + ": " + (e.message || e));
       }
     },
     [selected, flowDescription],
@@ -2603,14 +2652,14 @@ export default function FlowEditorPage() {
                 disabled={flows.length === 0}
               >
                 {flows.length === 0 ? (
-                  <option value="">加载中…</option>
+                  <option value="">{t("flow:palette.loading")}</option>
                 ) : (
                   <>
-                    {!selected ? <option value="">选择流水线…</option> : null}
+                    {!selected ? <option value="">{t("flow:pipeline.selectPipeline")}</option> : null}
                     {flows.map((f) => (
                       <option key={flowListEntryKey(f)} value={flowListEntryKey(f)}>
-                        {f.id} ({flowSourceLabelZh(f.source ?? "user")})
-                        {f.archived ? " · 已归档" : ""}
+                        {f.id} ({flowSourceLabelZh(f.source ?? "user", t)})
+                        {f.archived ? ` · ${t("flow:palette.archived")}` : ""}
                       </option>
                     ))}
                   </>
@@ -2767,7 +2816,7 @@ export default function FlowEditorPage() {
                 <span className="af-palette-workspace-icon material-symbols-outlined" aria-hidden>
                   folder_open
                 </span>
-                <span className="af-palette-workspace-label">工作区</span>
+                <span className="af-palette-workspace-label">{t("flow:palette.workspace")}</span>
                 <span className="af-palette-workspace-chevron material-symbols-outlined" aria-hidden>
                   {workspaceExpanded ? "expand_less" : "expand_more"}
                 </span>
@@ -2780,7 +2829,7 @@ export default function FlowEditorPage() {
               {workspaceExpanded && (
                 <div className="af-palette-workspace-tree">
                   {workspaceTreeLoading ? (
-                    <div className="af-palette-workspace-loading">加载中…</div>
+                    <div className="af-palette-workspace-loading">{t("flow:palette.loading")}</div>
                   ) : (
                     <>
                       {/* Pipelines 分组 */}
@@ -2808,12 +2857,12 @@ export default function FlowEditorPage() {
                                 <span className="af-palette-workspace-item-label" title={p.id}>
                                   {p.id}
                                 </span>
-                                {p.archived && <span className="af-palette-workspace-item-badge">已归档</span>}
+                                {p.archived && <span className="af-palette-workspace-item-badge">{t("flow:palette.archived")}</span>}
                               </li>
                             ))}
                           </ul>
                         ) : (
-                          <div className="af-palette-workspace-empty">暂无流水线</div>
+                          <div className="af-palette-workspace-empty">{t("flow:palette.noPipelines")}</div>
                         )}
                       </div>
 
@@ -2852,7 +2901,7 @@ export default function FlowEditorPage() {
                             )}
                           </ul>
                         ) : (
-                          <div className="af-palette-workspace-empty">暂无运行记录</div>
+                          <div className="af-palette-workspace-empty">{t("flow:palette.noRuns")}</div>
                         )}
                       </div>
                     </>
@@ -2864,20 +2913,17 @@ export default function FlowEditorPage() {
             <div className="af-node-palette-head">
               <h2 className="af-node-palette-title">Node Palette</h2>
               <label className="af-palette-search-wrap">
-                <span className="af-visually-hidden">搜索节点</span>
+                <span className="af-visually-hidden">{t("flow:palette.searchNodes")}</span>
                 <span className="af-palette-search-icon material-symbols-outlined" aria-hidden>
                   search
                 </span>
                 <input
                   type="search"
-                  className="af-palette-search"
+                  className="af-palette-search-input"
                   value={paletteSearch}
                   onChange={(e) => setPaletteSearch(e.target.value)}
-                  placeholder="搜索节点…"
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={!selected}
-                  aria-label="搜索节点"
+                  placeholder={t("flow:palette.searchNodes") + "…"}
+                  aria-label={t("flow:palette.searchNodes")}
                 />
               </label>
             </div>
@@ -2906,13 +2952,13 @@ export default function FlowEditorPage() {
                 </section>
               ))}
               {selected && palette.length === 0 ? (
-                <p className="af-palette-empty">暂无可用组件（检查节点库目录）</p>
+                <p className="af-palette-empty">{t("flow:palette.noComponents")}</p>
               ) : null}
               {selected && palette.length > 0 && paletteSearch.trim() && filteredPaletteCount === 0 ? (
-                <p className="af-palette-empty">无匹配节点，请调整搜索词</p>
+                <p className="af-palette-empty">{t("flow:palette.noMatch")}</p>
               ) : null}
               {!selected ? (
-                <p className="af-palette-empty">从上方选择一条流水线以加载组件与画布</p>
+                <p className="af-palette-empty">{t("flow:palette.selectPipeline")}</p>
               ) : null}
             </div>
 
@@ -2944,7 +2990,7 @@ export default function FlowEditorPage() {
                 aria-label="流程校验警告"
               >
                 <div className="af-flow-slot-warnings-head">
-                  <div className="af-flow-slot-warnings-title">校验警告（与 agentflow validate 槽位检查一致）</div>
+                  <div className="af-flow-slot-warnings-title">{t("flow:palette.validationWarnings")}</div>
                   <div className="af-flow-slot-warnings-head-actions">
                     <button
                       type="button"
@@ -3103,7 +3149,7 @@ export default function FlowEditorPage() {
                     aria-label="AI 输出"
                   >
                     <div className="af-composer-output-head">
-                      <span className="af-composer-output-title">输出</span>
+                      <span className="af-composer-output-title">{t("flow:palette.output")}</span>
                       <div
                         className={
                           "af-composer-output-status" +
@@ -3452,7 +3498,7 @@ export default function FlowEditorPage() {
                         <div className="af-node-props-expand-panel af-composer-thread-dialog-panel">
                           <div className="af-node-props-expand-head af-composer-thread-dialog-head">
                             <div className="af-composer-thread-dialog-head-main">
-                              <span className="af-node-props-expand-title">对话与输出</span>
+                              <span className="af-node-props-expand-title">{t("flow:nodeProps.conversationOutput")}</span>
                               {/* Session Tabs in Expanded Dialog */}
                               <div className="af-composer-session-tabs" style={{ marginTop: "0.5rem" }}>
                                 {composerSessions.map((session) => (
@@ -3642,7 +3688,7 @@ export default function FlowEditorPage() {
                   />
                 ) : (
                   <div className="af-pipeline-drawer-body">
-                    <p className="af-pipeline-drawer-muted">加载节点属性…</p>
+                    <p className="af-pipeline-drawer-muted">{t("flow:pipeline.loadingProps")}</p>
                   </div>
                 )
               ) : (
@@ -3665,11 +3711,11 @@ export default function FlowEditorPage() {
                     {rightPanel === "settings" ? (
                       <>
                         <label className="af-pipeline-drawer-field">
-                          <span className="af-pipeline-drawer-label">流水线 ID</span>
+                          <span className="af-pipeline-drawer-label">{t("flow:pipeline.pipelineId")}</span>
                           <div className="af-pipeline-drawer-readonly">
                             {selected.id}
                             <span className="af-pipeline-drawer-badge">
-                              {flowSourceLabelZh(selected.source ?? "user")}
+                              {flowSourceLabelZh(selected.source ?? "user", t)}
                             </span>
                             {selected.archived ? (
                               <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">已归档</span>
@@ -3678,7 +3724,7 @@ export default function FlowEditorPage() {
                         </label>
                         {typeof selected.path === "string" && selected.path ? (
                           <label className="af-pipeline-drawer-field">
-                            <span className="af-pipeline-drawer-label">磁盘路径</span>
+                            <span className="af-pipeline-drawer-label">{t("flow:pipeline.diskPath")}</span>
                             <div className="af-pipeline-drawer-readonly af-pipeline-drawer-readonly--mono">
                               {selected.path}
                             </div>
@@ -3691,7 +3737,7 @@ export default function FlowEditorPage() {
                             </p>
                           ) : (
                             <div className="af-pipeline-drawer-field">
-                              <span className="af-pipeline-drawer-label">存储位置</span>
+                              <span className="af-pipeline-drawer-label">{t("flow:pipeline.storageLocation")}</span>
                               <div className="af-pipeline-move-actions">
                                 {selected.source === "user" ? (
                                   <button
@@ -3722,7 +3768,7 @@ export default function FlowEditorPage() {
                           </p>
                         )}
                         <label className="af-pipeline-drawer-field">
-                          <span className="af-pipeline-drawer-label">介绍</span>
+                          <span className="af-pipeline-drawer-label">{t("flow:pipeline.introduction")}</span>
                           <textarea
                             className="af-pipeline-drawer-textarea"
                             value={flowDescription}
@@ -3733,11 +3779,11 @@ export default function FlowEditorPage() {
                           />
                         </label>
                         <div className="af-pipeline-meta-card">
-                          <h3 className="af-pipeline-meta-title">元数据</h3>
+                          <h3 className="af-pipeline-meta-title">{t("flow:pipeline.metadata")}</h3>
                           <dl className="af-pipeline-meta-dl">
                             <div className="af-pipeline-meta-row">
-                              <dt>节点数</dt>
-                              <dd>{nodes.length} 个节点</dd>
+                              <dt>{t("flow:pipeline.nodeCount")}</dt>
+                              <dd>{nodes.length} {t("flow:pipeline.nodesUnit")}</dd>
                             </div>
                           </dl>
                         </div>
@@ -3762,7 +3808,7 @@ export default function FlowEditorPage() {
                         ) : recentRunsError ? (
                           <p className="af-err af-pipeline-drawer-err">{recentRunsError}</p>
                         ) : runsForCurrentFlow.length === 0 ? (
-                          <p className="af-pipeline-drawer-muted">暂无运行记录（终端执行后会在工作区生成运行目录）</p>
+                          <p className="af-pipeline-drawer-muted">{t("flow:pipeline.noRuns")}</p>
                         ) : (
                           <>
                             {execHistoryStats.success +

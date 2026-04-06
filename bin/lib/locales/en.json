@@ -29,7 +29,10 @@
     "copied": "Copied",
     "not_found": "Not found",
     "required": "Required",
-    "optional": "Optional"
+    "optional": "Optional",
+    "total": "Total",
+    "local": "Local",
+    "default": "Default"
   },
   "cli": {
     "description": "AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming",
@@ -57,7 +60,11 @@
     "node_start": "Starting node: {{label}} ({{instanceId}})",
     "node_done": "Node completed: {{label}} ({{instanceId}})",
     "node_failed": "Node failed: {{label}} ({{instanceId}}) - {{error}}",
-    "extract_thinking": "Extract thinking content"
+    "extract_thinking": "Extract thinking content",
+    "dry_run_nodes": "[--dry-run] Would execute nodes: {{nodes}}. Omit --dry-run to run.",
+    "stuck_error": "No ready nodes and not all done; flow may be stuck.",
+    "paused": "Paused",
+    "resume_hint": "To resume, run:"
   },
   "node": {
     "name": "Node",
@@ -72,7 +79,64 @@
       "agent": "Agent Node",
       "control": "Control Node",
       "tool": "Tool Node"
-    }
+    },
+    "start": "[START] Node",
+    "end": "[END] Node",
+    "start_parallel": "[START] Parallel execution",
+    "end_parallel": "[END] All parallel nodes completed",
+    "model_label": "Model",
+    "done_label": "Done",
+    "failed_label": "Failed"
+  },
+  "apply": {
+    "done": "Apply done",
+    "paused": "Paused",
+    "stuck": "Flow may be stuck",
+    "resume_command": "To resume, run:",
+    "user_confirmed": "User confirmed to continue (including retry failed)"
+  },
+  "catalog": {
+    "builtin_agent_not_found": "Built-in agent not found",
+    "name_already_exists": "Name already exists, please choose another",
+    "agent_not_found": "Agent not found",
+    "invalid_agent_id": "Invalid agent id (needs to be filename-safe)",
+    "builtin_flow_not_found": "Built-in flow not found",
+    "builtin_flow_archive_not_supported": "Built-in pipelines do not support archive view",
+    "builtin_flow_archive_path_not_supported": "Built-in pipelines do not support archive path",
+    "type_text": "Text",
+    "pipeline_header": "Pipeline",
+    "source_header": "Source",
+    "apply_example_header": "Apply Example"
+  },
+  "composer": {
+    "edit_context": "## AgentFlow Edit Context",
+    "tool_nodejs_rules_title": "## tool_nodejs Node Writing Rules (Must Follow)",
+    "tool_nodejs_rules_body": "The core of `definitionId: tool_nodejs` is the **`script` field**—must write a complete executable shell/node command.\n- `script`: Pipeline spawns directly, stdout becomes result, exit code determines success/failure\n- `body`: When `script` exists, it serves only as human-readable comment, **will NOT be executed**\n- `script` supports `${}` placeholders referencing input slots and system variables (workspaceRoot, runDir, etc.), values are auto shell-quoted\n- **Do NOT** wrap `${workspaceRoot}` etc. with extra double quotes (e.g., `node \"${workspaceRoot}/...\"`); write `node ${workspaceRoot}/...` instead, otherwise path will contain extra quotes causing execution failure\n- **Forbidden** to only write natural language description in `body` without `script`—this leads to no executable code at runtime\n- If logic is too complex to write complete `script`, use `agent_subAgent` instead (also change definitionId)",
+    "task_title": "## Task",
+    "task_instruction": "Please complete only the above single task, no extra modifications. After completion, sync UI per context instructions.",
+    "validation_passed": "flow validation passed",
+    "validation_passed_detail": "✓ flow.yaml validation passed (validate-flow)",
+    "validation_failed": "flow validation failed, attempting auto-fix...",
+    "fix_task_title": "## Task: Fix flow.yaml to pass validate-flow",
+    "fix_errors_intro": "The following errors must be **all eliminated** (same rules as CLI `agentflow validate` / `validate-flow.mjs`):",
+    "fix_constraints_title": "### Constraints",
+    "fix_constraints_body": "- **Only** edit the \"flow definition file\" `flow.yaml` in context, do not modify unrelated files.\n- Prefer minimal changes: add edges, fix sourceHandle/targetHandle, role, model, instance structure, etc."
+  },
+  "runner": {
+    "cursor_account_limit": "[agentflow] Cursor account limit: detected Auto-only support, auto-retrying once (Auto)...",
+    "generating_reply": "Generating reply...",
+    "thinking": "Thinking...",
+    "completed": "Completed",
+    "execution_failed": "Execution failed",
+    "event_label": "Event"
+  },
+  "tool": {
+    "nodejs_script_hint": "script success/failure determined by exit code (0=success), stdout directly becomes result slot content (plain text, e.g., console.log).",
+    "nodejs_heal_retry": "[tool_nodejs self-heal] {{instanceId}} retry {{attempt}}/{{maxRetries}}: {{detail}}"
+  },
+  "api": {
+    "node_context_marker": "## Node Context",
+    "task_marker": "## Execution Task"
   },
   "ui": {
     "server_start": "UI server started",
@@ -89,7 +153,11 @@
     "missing_required": "Missing required field: {{field}}",
     "exec_failed": "Execution failed: {{command}}",
     "network_error": "Network error",
-    "permission_denied": "Permission denied"
+    "permission_denied": "Permission denied",
+    "read_flow_failed": "Failed to read flow",
+    "read_node_library_failed": "Failed to read node library",
+    "save_failed": "Save failed",
+    "move_failed": "Move failed"
   },
   "env": {
     "cursor_not_cached": "Not cached",

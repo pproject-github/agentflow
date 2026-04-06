@@ -12,8 +12,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** 支持的语言列表 */
 export const SUPPORTED_LANGUAGES = ["en", "zh"];
 
-/** 默认语言 */
-export const DEFAULT_LANGUAGE = "zh";
+/**
+ * 检测系统语言
+ * - 优先使用 LANG/LANGUAGE 环境变量
+ * - macOS/Linux: process.env.LANG (如 zh_CN.UTF-8)
+ * - Windows: process.env.LANGUAGE 或 LC_ALL
+ * @returns {string}
+ */
+function detectSystemLanguage() {
+  const envLang = process.env.LANG || process.env.LANGUAGE || process.env.LC_ALL || "";
+  // 处理形如 zh_CN.UTF-8、en_US.UTF-8 的格式
+  const langCode = envLang.split(".")[0].split("_")[0].toLowerCase();
+  // 默认使用英文，仅在检测到中文时使用中文
+  if (langCode === "zh") return "zh";
+  if (SUPPORTED_LANGUAGES.includes(langCode)) return langCode;
+  return "en";
+}
+
+/** 默认语言（跟随系统） */
+export const DEFAULT_LANGUAGE = detectSystemLanguage();
 
 /** 当前语言 */
 let currentLang = DEFAULT_LANGUAGE;
@@ -22,14 +39,11 @@ let currentLang = DEFAULT_LANGUAGE;
 const localeCache = new Map();
 
 /**
- * 从环境变量解析语言
+ * 从环境变量解析语言（兼容旧 API）
  * @returns {string}
  */
 function detectLanguageFromEnv() {
-  const envLang = process.env.LANG || process.env.LANGUAGE || "";
-  // 处理形如 zh_CN.UTF-8 的格式
-  const langCode = envLang.split(".")[0].split("_")[0].toLowerCase();
-  return SUPPORTED_LANGUAGES.includes(langCode) ? langCode : DEFAULT_LANGUAGE;
+  return detectSystemLanguage();
 }
 
 /**

@@ -29,7 +29,10 @@
     "copied": "已复制",
     "not_found": "未找到",
     "required": "必填",
-    "optional": "可选"
+    "optional": "可选",
+    "total": "总计",
+    "local": "本地",
+    "default": "默认"
   },
   "cli": {
     "description": "AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay",
@@ -57,7 +60,11 @@
     "node_start": "开始执行节点：{{label}} ({{instanceId}})",
     "node_done": "节点完成：{{label}} ({{instanceId}})",
     "node_failed": "节点失败：{{label}} ({{instanceId}}) - {{error}}",
-    "extract_thinking": "提取思考内容"
+    "extract_thinking": "提取思考内容",
+    "dry_run_nodes": "[--dry-run] 将执行节点：{{nodes}}。省略 --dry-run 以实际运行。",
+    "stuck_error": "没有就绪节点且未全部完成；流程可能卡住。",
+    "paused": "已暂停",
+    "resume_hint": "继续执行请运行："
   },
   "node": {
     "name": "节点",
@@ -72,7 +79,64 @@
       "agent": "Agent 节点",
       "control": "控制节点",
       "tool": "工具节点"
-    }
+    },
+    "start": "【开始】节点",
+    "end": "【结束】节点",
+    "start_parallel": "【开始】并行执行",
+    "end_parallel": "【结束】并行节点全部完成",
+    "model_label": "模型",
+    "done_label": "完成",
+    "failed_label": "失败"
+  },
+  "apply": {
+    "done": "Apply 完成",
+    "paused": "已暂停",
+    "stuck": "流程可能卡住",
+    "resume_command": "继续执行请运行：",
+    "user_confirmed": "用户确认继续（含重试 failed）"
+  },
+  "catalog": {
+    "builtin_agent_not_found": "内置角色不存在",
+    "name_already_exists": "该名称已存在，请换一个",
+    "agent_not_found": "角色不存在",
+    "invalid_agent_id": "无效的角色 id（需文件名安全）",
+    "builtin_flow_not_found": "内置流程不存在",
+    "builtin_flow_archive_not_supported": "内置流水线不支持归档视图",
+    "builtin_flow_archive_path_not_supported": "内置流水线不支持归档路径",
+    "type_text": "文本",
+    "pipeline_header": "流水线",
+    "source_header": "来源",
+    "apply_example_header": "Apply 示例"
+  },
+  "composer": {
+    "edit_context": "## AgentFlow 编辑上下文",
+    "tool_nodejs_rules_title": "## tool_nodejs 节点编写规则（必须遵守）",
+    "tool_nodejs_rules_body": "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、runDir 等），值自动 shell-quote\n- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行\n- 如果逻辑太复杂无法写出完整 `script`，应改用 `agent_subAgent`（需同时改 definitionId）",
+    "task_title": "## 任务",
+    "task_instruction": "请只完成上述单一任务，不要做额外修改。完成后按上下文中的指引同步 UI。",
+    "validation_passed": "flow 校验已通过",
+    "validation_passed_detail": "✓ flow.yaml 校验通过（validate-flow）",
+    "validation_failed": "flow 校验未通过，尝试自动修复…",
+    "fix_task_title": "## 任务：修复 flow.yaml 使 validate-flow 通过",
+    "fix_errors_intro": "以下错误必须**全部消除**（与 CLI `agentflow validate` / `validate-flow.mjs` 使用同一套规则）：",
+    "fix_constraints_title": "### 约束",
+    "fix_constraints_body": "- **只**编辑上下文中的「图定义文件」`flow.yaml`，不要改无关文件。\n- 优先最小修改：补边、修正 sourceHandle/targetHandle、role、model、实例结构等。"
+  },
+  "runner": {
+    "cursor_account_limit": "[agentflow] Cursor 账户限制：检测到仅支持 Auto，自动重试一次（Auto）…",
+    "generating_reply": "生成回复中…",
+    "thinking": "思考中…",
+    "completed": "完成",
+    "execution_failed": "执行失败",
+    "event_label": "事件"
+  },
+  "tool": {
+    "nodejs_script_hint": "script 成败以 exit code 为准（0=success），stdout 直接作为 result 槽位内容（纯文本即可，如 console.log）。",
+    "nodejs_heal_retry": "[tool_nodejs 自愈] {{instanceId}} 第 {{attempt}}/{{maxRetries}} 次重试：{{detail}}"
+  },
+  "api": {
+    "node_context_marker": "## 节点上下文",
+    "task_marker": "## 执行任务"
   },
   "ui": {
     "server_start": "UI 服务器启动",
@@ -89,7 +153,11 @@
     "missing_required": "缺少必填项：{{field}}",
     "exec_failed": "执行失败：{{command}}",
     "network_error": "网络错误",
-    "permission_denied": "权限被拒绝"
+    "permission_denied": "权限被拒绝",
+    "read_flow_failed": "读取 flow 失败",
+    "read_node_library_failed": "读取节点库失败",
+    "save_failed": "保存失败",
+    "move_failed": "移动失败"
   },
   "env": {
     "cursor_not_cached": "未缓存",

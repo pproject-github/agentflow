@@ -5,6 +5,7 @@ import ora from "ora";
 import { executeNode, ensureLocalNodeTerminalSuccess, runPostProcess } from "./node-execute.mjs";
 import { log } from "./log.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
+import { t } from "./i18n.mjs";
 import {
   LOCAL_ONLY_DEFINITION_IDS,
   MAX_LOOP_ROUNDS,
@@ -83,7 +84,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           runDir: getRunDir(workspaceRoot, flowName, uuid),
           totalElapsed,
         });
-        log.info(`\nApply done. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim("总 " + totalElapsed)}`);
+        log.info(`\n${t("apply.done")}. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim(t("common.total") + " " + totalElapsed)}`);
         return;
       }
       if (pendingNodes.length > 0) {
@@ -101,8 +102,8 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           totalElapsed,
           resumeExample,
         });
-        log.info(`\nPaused: uuid=${uuid} pendingNodes=${pendingNodes.join(", ")}  ${chalk.dim("总 " + totalElapsed)}`);
-        log.info(chalk.bold.yellow("→ 继续执行请运行: ") + resumeExample);
+        log.info(`\n${t("apply.paused")}: uuid=${uuid} pendingNodes=${pendingNodes.join(", ")}  ${chalk.dim(t("common.total") + " " + totalElapsed)}`);
+        log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
         return;
       }
       const endNodeIds = Array.isArray(parseOut.nodes)
@@ -119,11 +120,11 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           runDir: getRunDir(workspaceRoot, flowName, uuid),
           totalElapsed,
         });
-        log.info(`\nApply done. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim("总 " + totalElapsed)}`);
+        log.info(`\n${t("apply.done")}. uuid=${uuid} runDir=${getRunDir(workspaceRoot, flowName, uuid)}  ${chalk.dim(t("common.total") + " " + totalElapsed)}`);
         return;
       }
       const totalElapsed = formatDuration(totalExecutedMs);
-      const stuckErr = new Error("No ready nodes and not all done; flow may be stuck. 总 " + totalElapsed);
+      const stuckErr = new Error(t("flow.stuck_error") + " " + t("common.total") + " " + totalElapsed);
       stuckErr.flowName = flowName;
       stuckErr.uuid = uuid;
       throw stuckErr;
@@ -131,7 +132,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
 
     if (dryRun) {
       const totalElapsed = formatDuration(totalExecutedMs);
-      log.info(`\n[--dry-run] Would execute nodes: ${readyNodes.join(", ")}. Omit --dry-run to run.  ${chalk.dim("总 " + totalElapsed)}`);
+      log.info(`\n${t("flow.dry_run_nodes", { nodes: readyNodes.join(", ") })}  ${chalk.dim(t("common.total") + " " + totalElapsed)}`);
       return;
     }
 
@@ -161,7 +162,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
       if (!isParallel) {
         const isLocalOnly = preOutput.definitionId && LOCAL_ONLY_DEFINITION_IDS.has(preOutput.definitionId);
         const { label: resolvedLabel } = resolveCliAndModel(workspaceRoot, preOutput.model ?? null, agentModel ?? null);
-        const modelLabel = isLocalOnly ? "(本地)" : resolvedLabel;
+        const modelLabel = isLocalOnly ? `(${t("common.local")})` : resolvedLabel;
         const promptAbs = path.resolve(workspaceRoot, preOutput.promptPath);
         const cliResolved = resolveCliAndModel(workspaceRoot, preOutput.model ?? null, agentModel ?? null);
         emitEvent(workspaceRoot, flowName, uuid, {
@@ -178,11 +179,11 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           subagent: preOutput.subagent ?? null,
           directCommand: preOutput.directCommand ? String(preOutput.directCommand) : null,
         });
-        appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `【开始】节点 ${instanceId} (${label}) model: ${modelLabel}`);
+        appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `${t("node.start")} ${instanceId} (${label}) model: ${modelLabel}`);
         appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `Prompt: ${promptAbs}`);
         process.stderr.write("\n" + NODE_SEP + "\n");
         process.stderr.write(
-          chalk.bold.cyan("【开始】节点 ") + instanceId + chalk.dim(" (" + label + ")") + "  " + chalk.dim("model: ") + chalk.yellow(modelLabel) + "\n",
+          chalk.bold.cyan(t("node.start") + " ") + instanceId + chalk.dim(" (" + label + ")") + "  " + chalk.dim(t("node.model_label") + ": ") + chalk.yellow(modelLabel) + "\n",
         );
         log.info(chalk.dim("Prompt: ") + promptAbs);
         process.stderr.write(NODE_SEP + "\n\n");
@@ -224,7 +225,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           elapsedStr = formatDuration(nodeMs);
           const totalStr = formatDuration(totalExecutedMs);
           spinner.succeed(
-            chalk.green(`Done: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr),
+            chalk.green(`${t("node.done_label")}: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim(t("common.total") + " " + totalStr),
           );
           emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-done",
@@ -240,7 +241,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           elapsedStr = formatDuration(nodeMs);
           const totalStr = formatDuration(totalExecutedMs);
           spinner.fail(
-            chalk.red(`Failed: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim("总 " + totalStr),
+            chalk.red(`${t("node.failed_label")}: ${instanceId}`) + chalk.dim(" (" + label + ")") + "  " + chalk.dim(elapsedStr) + "  " + chalk.dim(t("common.total") + " " + totalStr),
           );
           emitEvent(workspaceRoot, flowName, uuid, {
             event: "node-failed",
@@ -258,12 +259,12 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
         if (stderrBuffer.length > 0) process.stderr.write(Buffer.concat(stderrBuffer));
         process.stderr.write("\n" + NODE_SEP + "\n");
         process.stderr.write(
-          chalk.bold.cyan("【结束】节点 ") +
+          chalk.bold.cyan(t("node.end") + " ") +
             instanceId +
             chalk.dim(" (" + label + ")") +
             (elapsedStr ? "  " + chalk.dim(elapsedStr) : "") +
             "  " +
-            chalk.dim("总 " + formatDuration(totalExecutedMs)) +
+            chalk.dim(t("common.total") + " " + formatDuration(totalExecutedMs)) +
             "\n",
         );
         process.stderr.write(NODE_SEP + "\n");
@@ -304,7 +305,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
         flowName,
         uuid,
         "cli-raw",
-        `【开始】并行执行 ${preOutputs.length} 个节点: ${preOutputs.map((p) => p.instanceId).join(", ")}`,
+        `${t("node.start_parallel")} ${preOutputs.length} 个节点: ${preOutputs.map((p) => p.instanceId).join(", ")}`,
       );
       preOutputs.forEach((item) => {
         const abs = path.resolve(workspaceRoot, item.preOutput.promptPath);
@@ -318,7 +319,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
         `Running ${preOutputs.length} nodes in parallel: ${preOutputs.map((p) => p.instanceId).join(", ")}`,
       );
       process.stderr.write("\n" + NODE_SEP + "\n");
-      process.stderr.write(chalk.bold.cyan("【开始】并行执行 ") + preOutputs.length + " 个节点: " + preOutputs.map((p) => p.instanceId).join(", ") + "\n");
+      process.stderr.write(chalk.bold.cyan(t("node.start_parallel") + " ") + preOutputs.length + " 个节点: " + preOutputs.map((p) => p.instanceId).join(", ") + "\n");
       for (const item of preOutputs) log.info(chalk.dim("Prompt: ") + path.resolve(workspaceRoot, item.preOutput.promptPath));
       process.stderr.write(NODE_SEP + "\n\n");
       log.info(chalk.cyan(`Running ${preOutputs.length} nodes in parallel: ${preOutputs.map((p) => p.instanceId).join(", ")}`));
@@ -327,7 +328,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
       totalExecutedMs += Date.now() - parallelBatchStart;
       const totalStrPar = formatDuration(totalExecutedMs);
       process.stderr.write("\n" + NODE_SEP + "\n");
-      process.stderr.write(chalk.bold.cyan("【结束】并行节点全部完成") + "  " + chalk.dim("总 " + totalStrPar) + "\n");
+      process.stderr.write(chalk.bold.cyan(t("node.end_parallel") + "  ") + chalk.dim(t("common.total") + " " + totalStrPar) + "\n");
       process.stderr.write(NODE_SEP + "\n");
       emitEvent(workspaceRoot, flowName, uuid, {
         event: "parallel-done",
@@ -339,7 +340,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
     }
   }
   const totalElapsed = formatDuration(totalExecutedMs);
-  const maxErr = new Error(`Max rounds (${MAX_LOOP_ROUNDS}) reached. 总 ${totalElapsed}`);
+  const maxErr = new Error(`Max rounds (${MAX_LOOP_ROUNDS}) reached. ${t("common.total")} ${totalElapsed}`);
   maxErr.flowName = flowName;
   maxErr.uuid = uuid;
   throw maxErr;
@@ -358,7 +359,7 @@ export async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, 
     const failedNodes = Object.keys(instanceStatus).filter((id) => instanceStatus[id] === "failed");
     nodesToResume = [...new Set([...pendingNodes, ...failedNodes])];
   }
-  const payload = JSON.stringify({ status: "success", message: "用户确认继续（含重试 failed）" });
+  const payload = JSON.stringify({ status: "success", message: t("apply.user_confirmed") });
   for (const instanceId of nodesToResume) {
     const wr = runNodeScript(
       workspaceRoot,
@@ -409,7 +410,7 @@ export async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, in
   const promptAbs = path.resolve(workspaceRoot, preOutput.promptPath);
   const isLocalOnlyReplay = preOutput.definitionId && LOCAL_ONLY_DEFINITION_IDS.has(preOutput.definitionId);
   const { label: modelLabelReplay } = resolveCliAndModel(workspaceRoot, preOutput.model ?? null, agentModel ?? null);
-  const modelLabelDisplay = isLocalOnlyReplay ? "(本地)" : modelLabelReplay;
+  const modelLabelDisplay = isLocalOnlyReplay ? `(${t("common.local")})` : modelLabelReplay;
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "replay-start",
     flowName,
@@ -422,10 +423,10 @@ export async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, in
     promptPathAbs: promptAbs,
     resultPathRel: preOutput.resultPath ?? null,
   });
-  appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `【开始】replay 节点 ${instanceId} model: ${modelLabelDisplay}`);
+  appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `${t("node.start")} replay 节点 ${instanceId} model: ${modelLabelDisplay}`);
   appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", `Prompt: ${promptAbs}`);
   process.stderr.write("\n" + NODE_SEP + "\n");
-  process.stderr.write(chalk.bold.cyan("【开始】节点 ") + instanceId + "  " + chalk.dim("model: ") + chalk.yellow(modelLabelDisplay) + "\n");
+  process.stderr.write(chalk.bold.cyan(t("node.start") + " ") + instanceId + "  " + chalk.dim(t("node.model_label") + ": ") + chalk.yellow(modelLabelDisplay) + "\n");
   log.info(chalk.dim("Prompt: ") + promptAbs);
   process.stderr.write(NODE_SEP + "\n\n");
   const replayStart = Date.now();
@@ -434,7 +435,7 @@ export async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, in
   ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput);
   log.debug(`[agentflow] 退出节点 instanceId=${instanceId} execId=${preOutput.execId}`);
   process.stderr.write("\n" + NODE_SEP + "\n");
-  process.stderr.write(chalk.bold.cyan("【结束】节点 ") + instanceId + "\n");
+  process.stderr.write(chalk.bold.cyan(t("node.end") + " ") + instanceId + "\n");
   process.stderr.write(NODE_SEP + "\n");
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "replay-done",

@@ -2434,6 +2434,29 @@ button.af-project-card {
   background: var(--af-surface-bright);
 }
 
+.af-palette-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.45rem 0.55rem 0.45rem 2rem;
+  border: none;
+  border-radius: 0.65rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  font-family: var(--af-body);
+  font-size: 12px;
+  outline: none;
+  transition: box-shadow 0.2s, background 0.2s;
+}
+
+.af-palette-search-input::placeholder {
+  color: rgba(202, 195, 216, 0.35);
+}
+
+.af-palette-search-input:focus {
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.4);
+  background: var(--af-surface-bright);
+}
+
 .af-node-palette-scroll {
   flex: 1;
   min-height: 0;

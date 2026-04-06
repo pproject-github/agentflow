@@ -3,6 +3,7 @@ import path from "path";
 import yaml from "js-yaml";
 import chalk from "chalk";
 import { log } from "./log.mjs";
+import { t } from "./i18n.mjs";
 import {
   ARCHIVED_PIPELINES_DIR_NAME,
   LEGACY_NODES_DIR,
@@ -121,8 +122,8 @@ export function listFlowsJson(workspaceRoot) {
 function normalizeFrontmatterSlots(arr) {
   if (!Array.isArray(arr)) return [];
   return arr.map((item) => {
-    if (!item || typeof item !== "object") return { type: "文本", name: "", default: "" };
-    const type = item.type != null ? String(item.type).trim() : "文本";
+    if (!item || typeof item !== "object") return { type: t("catalog.type_text"), name: "", default: "" };
+    const type = item.type != null ? String(item.type).trim() : t("catalog.type_text");
     const name = item.name != null ? String(item.name).trim() : "";
     let def = item.default !== undefined && item.default !== null ? item.default : item.value;
     if (def === undefined || def === null) def = "";
@@ -173,7 +174,7 @@ export function parseNodeFrontmatter(raw) {
       let defaultVal = defaultM ? defaultM[1].trim().replace(/^["']|["']$/g, "") : undefined;
       if (defaultVal === '""' || defaultVal === "''") defaultVal = "";
       slots.push({
-        type: (typeM && typeM[1].trim()) || "文本",
+        type: (typeM && typeM[1].trim()) || t("catalog.type_text"),
         name: nameM ? nameM[1].trim() : "",
         default: defaultVal !== undefined ? defaultVal : "",
       });
@@ -288,7 +289,7 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
   let flowDir;
   if (archived) {
     if (flowSource === "builtin") {
-      return { error: "内置流水线不支持归档视图" };
+      return { error: t("catalog.builtin_flow_archive_not_supported") };
     }
     if (flowSource === "user") {
       flowDir = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId);
@@ -368,7 +369,7 @@ export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) 
   let yamlPath;
   if (archived) {
     if (flowSource === "builtin") {
-      return { error: "内置流水线不支持归档路径" };
+      return { error: t("catalog.builtin_flow_archive_path_not_supported") };
     }
     if (flowSource === "user") {
       yamlPath = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
@@ -493,7 +494,7 @@ export function listPipelines(workspaceRoot) {
     return;
   }
   const table = new Table({
-    head: [chalk.cyan("Pipeline"), chalk.cyan("来源"), chalk.cyan("Apply 示例")],
+    head: [chalk.cyan(t("catalog.pipeline_header")), chalk.cyan(t("catalog.source_header")), chalk.cyan(t("catalog.apply_example_header"))],
     colWidths: [24, 10, 48],
     style: { head: [], border: ["grey"] },
   });

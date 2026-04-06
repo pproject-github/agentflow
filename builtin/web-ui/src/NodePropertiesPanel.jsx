@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BodyPromptEditor } from "./BodyPromptEditor.jsx";
 import { VALID_ROLES } from "./flowFormat.js";
 
@@ -21,6 +22,7 @@ function modelEntryId(entry) {
  * }} p
  */
 function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
+  const { t } = useTranslation();
   const add = () => onSlotsChange([...slots, { type: "节点", name: "", default: "" }]);
   const removeAt = (i) => onSlotsChange(slots.filter((_, j) => j !== i));
   const patch = (i, field, value) => {
@@ -46,14 +48,14 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
       <p className="af-node-props-io-hint">
         与画布上 Handle 序号一致（{handlePrefix}-0、{handlePrefix}-1…）。增删或调整顺序后，原有连线可能失效，保存后请留意校验提示。
       </p>
-      {slots.length === 0 ? <p className="af-node-props-io-empty">当前无{kind === "input" ? "输入" : "输出"}引脚</p> : null}
+      {slots.length === 0 ? <p className="af-node-props-io-empty">{kind === "input" ? t("flow:nodeProps.noInputPins") : t("flow:nodeProps.noOutputPins")}</p> : null}
       {slots.length > 0 ? (
         <div className="af-node-props-io-table" role="group" aria-label={label}>
           <div className="af-node-props-io-table-head" aria-hidden>
             <span>Handle</span>
-            <span>类型</span>
-            <span>名称</span>
-            <span>默认值 / value</span>
+            <span>{t("flow:nodeProps.type")}</span>
+            <span>{t("flow:nodeProps.name")}</span>
+            <span>{t("flow:nodeProps.defaultValue")}</span>
             <span />
           </div>
           {slots.map((s, i) => (
@@ -145,6 +147,7 @@ export function NodePropertiesPanel({
   error,
   ioSlots,
 }) {
+  const { t } = useTranslation();
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [scriptExpanded, setScriptExpanded] = useState(false);
 
@@ -173,7 +176,7 @@ export function NodePropertiesPanel({
   return (
     <>
       <div className="af-pipeline-drawer-head af-node-props-head">
-        <h2 className="af-pipeline-drawer-title">节点属性</h2>
+        <h2 className="af-pipeline-drawer-title">{t("flow:nodeProps.title")}</h2>
         <div className="af-node-props-head-actions">
           <button type="button" className="af-btn-primary af-node-props-save" disabled={disabled} onClick={onSave}>
             保存
@@ -188,14 +191,14 @@ export function NodePropertiesPanel({
         {error ? <p className="af-err af-node-props-err">{error}</p> : null}
 
         <label className="af-pipeline-drawer-field af-node-props-field">
-          <span className="af-node-props-label">节点类型</span>
+          <span className="af-node-props-label">{t("flow:node.nodeType")}</span>
           <div className="af-pipeline-drawer-readonly af-node-props-readonly-mono">{definitionId}</div>
         </label>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
           <span className="af-node-props-label">
-            实例 ID（NAME）
-            <span className="af-node-props-hint">（字母、数字、下划线、短横线，勿以数字开头）</span>
+            {t("flow:node.displayName")}
+            <span className="af-node-props-hint">{t("flow:node.displayNameHint")}</span>
           </span>
           <input
             type="text"
@@ -210,7 +213,7 @@ export function NodePropertiesPanel({
         </label>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
-          <span className="af-node-props-label">显示名称（LABEL）</span>
+          <span className="af-node-props-label">{t("flow:node.displayName")}（LABEL）</span>
           <input
             type="text"
             className="af-node-props-input"
@@ -222,10 +225,10 @@ export function NodePropertiesPanel({
         </label>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
-          <span className="af-node-props-label">角色（ROLE）</span>
+          <span className="af-node-props-label">{t("flow:node.role")}（ROLE）</span>
           <select
             className="af-node-props-select"
-            value={VALID_ROLES.includes(draft.role) ? draft.role : "普通"}
+            value={VALID_ROLES.includes(draft.role) ? draft.role : t("flow:roles.normal")}
             onChange={(e) => update({ role: e.target.value })}
             disabled={disabled}
           >
@@ -238,8 +241,8 @@ export function NodePropertiesPanel({
         </label>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
-          <span className="af-node-props-label">模型（MODEL）</span>
-          <span className="af-node-props-sublabel">来自 ~/agentflow/model-lists.json；UI 服务启动时会后台执行 agentflow update-model-lists</span>
+          <span className="af-node-props-label">{t("flow:node.model")}（MODEL）</span>
+          <span className="af-node-props-sublabel">{t("flow:node.modelHint")}</span>
           <select
             className="af-node-props-select"
             value={(() => {
@@ -251,7 +254,7 @@ export function NodePropertiesPanel({
             disabled={disabled}
             aria-label="模型"
           >
-            <option value="">默认</option>
+            <option value="">{t("flow:node.defaultModel")}</option>
             {currentNotInLists ? (
               <option value={currentNotInLists}>
                 {currentNotInLists}（YAML 中的值，不在当前列表）
@@ -297,8 +300,8 @@ export function NodePropertiesPanel({
           <div className="af-pipeline-drawer-field af-node-props-field af-node-props-field--prompt">
             <div className="af-node-props-prompt-head">
               <span className="af-node-props-label">
-                直接执行命令（script）
-                <span className="af-node-props-hint">（tool_nodejs：有 script 时跳过 AI，由流水线执行）</span>
+                {t("flow:node.directCommand")}（script）
+                <span className="af-node-props-hint">{t("flow:node.scriptHint")}</span>
               </span>
               <button
                 type="button"
@@ -326,7 +329,7 @@ export function NodePropertiesPanel({
 
         <div className="af-pipeline-drawer-field af-node-props-field af-node-props-field--prompt">
           <div className="af-node-props-prompt-head">
-            <span className="af-node-props-label">用户提示（USER PROMPT / body）</span>
+            <span className="af-node-props-label">{t("flow:node.userPrompt")}</span>
             <button
               type="button"
               className="af-icon-btn af-node-props-expand"
@@ -351,7 +354,7 @@ export function NodePropertiesPanel({
         </div>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
-          <span className="af-node-props-label">系统说明（只读，来自节点定义）</span>
+          <span className="af-node-props-label">{t("flow:node.systemDescription")}</span>
           <textarea
             className="af-pipeline-drawer-textarea af-node-props-system-readonly"
             rows={4}
@@ -374,7 +377,7 @@ export function NodePropertiesPanel({
         >
           <div className="af-node-props-expand-panel">
             <div className="af-node-props-expand-head">
-              <span className="af-node-props-expand-title">直接执行命令（script）</span>
+              <span className="af-node-props-expand-title">{t("flow:node.directCommand")}</span>
               <button type="button" className="af-icon-btn" onClick={() => setScriptExpanded(false)} aria-label="收起">
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -405,7 +408,7 @@ export function NodePropertiesPanel({
         >
           <div className="af-node-props-expand-panel">
             <div className="af-node-props-expand-head">
-              <span className="af-node-props-expand-title">用户提示（body）</span>
+              <span className="af-node-props-expand-title">{t("flow:node.body")}</span>
               <button type="button" className="af-icon-btn" onClick={() => setBodyExpanded(false)} aria-label="收起">
                 <span className="material-symbols-outlined">close</span>
               </button>

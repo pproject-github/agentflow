@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { getAgentPath, readAgentFrontmatter } from "./agents-path.mjs";
 import { collectPipelineNamesFromDir } from "./catalog-flows.mjs";
 import { log } from "./log.mjs";
+import { t } from "./i18n.mjs";
 import {
   PACKAGE_AGENTS_DIR,
   PACKAGE_AGENTS_JSON,
@@ -133,10 +134,10 @@ export function copyBuiltinAgentJson(workspaceRoot, builtinAgentId, targetId) {
   const destFile = path.join(userDir, `${destId}.md`);
   const userJsonPath = getUserAgentsJsonAbs();
   if (!fs.existsSync(srcFile) || !fs.statSync(srcFile).isFile()) {
-    return { success: false, error: "内置角色不存在" };
+    return { success: false, error: t("catalog.builtin_agent_not_found") };
   }
   if (fs.existsSync(destFile)) {
-    return { success: false, error: "该名称已存在，请换一个" };
+    return { success: false, error: t("catalog.name_already_exists") };
   }
   let name = destId;
   let description = null;
@@ -182,7 +183,7 @@ export function copyBuiltinAgentJson(workspaceRoot, builtinAgentId, targetId) {
 export function readAgentJson(workspaceRoot, agentId) {
   const agentPath = getAgentPath(workspaceRoot, agentId);
   if (!fs.existsSync(agentPath) || !fs.statSync(agentPath).isFile()) {
-    return { error: "角色不存在" };
+    return { error: t("catalog.agent_not_found") };
   }
   try {
     const content = fs.readFileSync(agentPath, "utf8");
@@ -196,13 +197,13 @@ export function addRoleJson(workspaceRoot, opts) {
   const { builtin = false, id, name, description, contentPath } = opts;
   const idStr = id && typeof id === "string" ? id.trim() : "";
   if (!idStr || idStr.includes("/") || idStr.includes("\\") || idStr.includes("..")) {
-    return { success: false, error: "无效的角色 id（需文件名安全）" };
+    return { success: false, error: t("catalog.invalid_agent_id") };
   }
   if (builtin) {
     const destFile = path.join(PACKAGE_AGENTS_DIR, `${idStr}.md`);
     const destJson = PACKAGE_AGENTS_JSON;
     if (fs.existsSync(destFile)) {
-      return { success: false, error: "该名称已存在，请换一个" };
+      return { success: false, error: t("catalog.name_already_exists") };
     }
     let content = `---
 name: ${name != null ? String(name).replace(/\n/g, " ") : idStr}
@@ -240,7 +241,7 @@ description: ${description != null ? String(description).replace(/\n/g, " ") : "
   const destFile = path.join(userDir, `${idStr}.md`);
   const userJsonPath = getUserAgentsJsonAbs();
   if (fs.existsSync(destFile)) {
-    return { success: false, error: "该名称已存在，请换一个" };
+    return { success: false, error: t("catalog.name_already_exists") };
   }
   let content = `---
 name: ${name != null ? String(name).replace(/\n/g, " ") : idStr}
@@ -283,11 +284,11 @@ export function copyBuiltinJson(workspaceRoot, flowId, targetFlowId) {
   const pipelinesRoot = getUserPipelinesRoot();
   const destDir = path.join(pipelinesRoot, destId);
   if (!fs.existsSync(srcDir) || !fs.existsSync(path.join(srcDir, "flow.yaml"))) {
-    return { success: false, error: "内置流程不存在" };
+    return { success: false, error: t("catalog.builtin_flow_not_found") };
   }
   const existing = collectPipelineNamesFromDir(pipelinesRoot);
   if (existing.includes(destId)) {
-    return { success: false, error: "该名称已存在，请换一个" };
+    return { success: false, error: t("catalog.name_already_exists") };
   }
   try {
     fs.mkdirSync(path.dirname(destDir), { recursive: true });

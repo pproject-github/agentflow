@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { peekSuggestedFlowIdFromZipFile } from "./zipPeekSuggestion.js";
 
 /** 与 bin/lib/flow-write.mjs USER_PIPELINE_ID_RE 一致 */
@@ -9,6 +10,7 @@ const PIPELINE_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
  * @param {{ file: File, onClose: () => void, onImported: (flow: { id: string, source: string }) => void }} props
  */
 export function ImportFlowModal({ file, onClose, onImported }) {
+  const { t } = useTranslation();
   const titleId = useId();
   const panelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const fileInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
@@ -21,8 +23,8 @@ export function ImportFlowModal({ file, onClose, onImported }) {
   const activeFile = pickedFile ?? file;
 
   useEffect(() => {
-    const t = requestAnimationFrame(() => panelRef.current?.focus());
-    return () => cancelAnimationFrame(t);
+    const frameId = requestAnimationFrame(() => panelRef.current?.focus());
+    return () => cancelAnimationFrame(frameId);
   }, []);
 
   useEffect(() => {
@@ -71,7 +73,7 @@ export function ImportFlowModal({ file, onClose, onImported }) {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setError(typeof j.error === "string" ? j.error : "导入失败");
+        setError(typeof j.error === "string" ? j.error : t("project:importModal.importFailed"));
         return;
       }
       onImported({ id: j.flowId, source: j.flowSource ?? "user" });
@@ -101,16 +103,16 @@ export function ImportFlowModal({ file, onClose, onImported }) {
       >
         <div className="af-shortcuts-panel__head">
           <h2 id={titleId} className="af-shortcuts-panel__title">
-            导入流水线
+            {t("project:importModal.title")}
           </h2>
-          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label={t("project:importModal.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <form className="af-shortcuts-panel__body af-new-pipeline-form" onSubmit={submitForm}>
           <p className="af-new-pipeline-lead">
-            已选择文件 <strong className="af-import-filename">{activeFile.name}</strong>。请确认流水线名称与保存位置；ZIP 将保留目录内脚本等文件。
+            {t("project:importModal.lead", { filename: activeFile.name })}
           </p>
 
           <input
@@ -128,25 +130,25 @@ export function ImportFlowModal({ file, onClose, onImported }) {
           />
 
           <label className="af-pipeline-drawer-field">
-            <span className="af-pipeline-drawer-label">名称（必填）</span>
+            <span className="af-pipeline-drawer-label">{t("project:importModal.nameLabel")}</span>
             <input
               className="af-new-pipeline-input"
               type="text"
               name="importFlowId"
               autoComplete="off"
               spellCheck={false}
-              placeholder="例如 my_shared_flow"
+              placeholder={t("project:importModal.namePlaceholder")}
               value={flowId}
               onChange={(e) => setFlowId(e.target.value)}
               aria-invalid={trimmedId.length > 0 && !idOk}
             />
             <span className="af-pipeline-drawer-muted af-new-pipeline-hint">
-              须以英文字母开头，仅可使用字母、数字、下划线 _ 与连字符 -
+              {t("project:importModal.nameHint")}
             </span>
           </label>
 
           <fieldset className="af-new-pipeline-fieldset">
-            <legend className="af-pipeline-drawer-label">保存位置</legend>
+            <legend className="af-pipeline-drawer-label">{t("project:importModal.locationLabel")}</legend>
             <label className="af-new-pipeline-radio">
               <input
                 type="radio"
@@ -155,7 +157,7 @@ export function ImportFlowModal({ file, onClose, onImported }) {
                 checked={targetSpace === "user"}
                 onChange={() => setTargetSpace("user")}
               />
-              <span>用户目录（~/agentflow/pipelines）</span>
+              <span>{t("project:importModal.userDir")}</span>
             </label>
             <label className="af-new-pipeline-radio">
               <input
@@ -165,13 +167,13 @@ export function ImportFlowModal({ file, onClose, onImported }) {
                 checked={targetSpace === "workspace"}
                 onChange={() => setTargetSpace("workspace")}
               />
-              <span>当前工作区（.workspace/agentflow/pipelines）</span>
+              <span>{t("project:importModal.workspaceDir")}</span>
             </label>
           </fieldset>
 
           <div className="af-import-repick">
             <button type="button" className="af-btn-secondary af-import-repick-btn" onClick={() => fileInputRef.current?.click()}>
-              更换文件…
+              {t("project:importModal.changeFile")}
             </button>
           </div>
 
@@ -179,10 +181,10 @@ export function ImportFlowModal({ file, onClose, onImported }) {
 
           <div className="af-new-pipeline-actions">
             <button type="button" className="af-btn-secondary" onClick={onClose} disabled={submitting}>
-              取消
+              {t("project:importModal.cancel")}
             </button>
             <button type="submit" className="af-btn-primary" disabled={!idOk || submitting}>
-              {submitting ? "导入中…" : "导入并打开"}
+              {submitting ? t("project:importModal.importing") : t("project:importModal.importAndOpen")}
             </button>
           </div>
         </form>

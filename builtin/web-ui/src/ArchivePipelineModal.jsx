@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 /**
  * @param {{
@@ -10,6 +11,7 @@ import { useEffect, useId, useRef, useState } from "react";
  * }} props
  */
 export function ArchivePipelineModal({ open, onClose, flowId, flowSource, onArchived }) {
+  const { t } = useTranslation();
   const titleId = useId();
   const panelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const [confirmText, setConfirmText] = useState("");
@@ -47,7 +49,7 @@ export function ArchivePipelineModal({ open, onClose, flowId, flowSource, onArch
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setError(typeof j.error === "string" ? j.error : "归档失败");
+        setError(typeof j.error === "string" ? j.error : t("project:archiveModal.archiveFailed"));
         return;
       }
       onArchived();
@@ -77,19 +79,19 @@ export function ArchivePipelineModal({ open, onClose, flowId, flowSource, onArch
       >
         <div className="af-shortcuts-panel__head">
           <h2 id={titleId} className="af-shortcuts-panel__title">
-            归档流水线
+            {t("project:archiveModal.title")}
           </h2>
-          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label={t("project:archiveModal.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <form className="af-shortcuts-panel__body af-new-pipeline-form" onSubmit={handleSubmit}>
           <p className="af-new-pipeline-lead">
-            归档后流水线将移入「Archived」列表，仍可从该列表打开与编辑。请在下方输入流水线 ID「<strong>{flowId}</strong>」以确认。
+            {t("project:archiveModal.lead", { flowId })}
           </p>
           <label className="af-new-pipeline-field">
-            <span className="af-pipeline-drawer-label">确认流水线名称</span>
+            <span className="af-pipeline-drawer-label">{t("project:archiveModal.confirmLabel")}</span>
             <input
               type="text"
               className="af-new-pipeline-input"
@@ -106,10 +108,10 @@ export function ArchivePipelineModal({ open, onClose, flowId, flowSource, onArch
 
           <div className="af-new-pipeline-actions">
             <button type="button" className="af-btn-secondary" onClick={onClose} disabled={submitting}>
-              取消
+              {t("project:archiveModal.cancel")}
             </button>
             <button type="submit" className="af-btn-primary" disabled={!matches || submitting}>
-              {submitting ? "归档中…" : "确认归档"}
+              {submitting ? t("project:archiveModal.archiving") : t("project:archiveModal.confirmArchive")}
             </button>
           </div>
         </form>

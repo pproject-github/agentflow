@@ -14,6 +14,7 @@ import { executeScriptOp, isSupportedScriptOp } from "./composer-script-ops.mjs"
 import { routeModel } from "./composer-model-router.mjs";
 import { validateComposerFlowYaml, formatValidationErrorsBlock } from "./composer-flow-validate.mjs";
 import { parseInstanceRoleModelMap } from "./composer-flow-instances.mjs";
+import { t } from "./i18n.mjs";
 
 const MAX_PROMPT_CHARS = 500_000;
 const MAX_COMPOSER_VALIDATION_REPAIR = 5;
@@ -67,11 +68,11 @@ function buildAgentStepPrompt(step, flowContext) {
   const parts = [];
   const nodeRole = step.nodeRole != null ? String(step.nodeRole).trim() : "";
   if (nodeRole) {
-    parts.push(`## 执行角色\n${nodeRole}`);
+    parts.push(`## ${t("composer.task_title").replace("## ", "")}\n${nodeRole}`);
     parts.push("");
   }
   if (flowContext) {
-    parts.push("## AgentFlow 编辑上下文");
+    parts.push(t("composer.edit_context"));
     if (flowContext.flowYamlAbs) {
       parts.push(`- 图定义文件：${flowContext.flowYamlAbs}`);
     }
@@ -103,23 +104,15 @@ function buildAgentStepPrompt(step, flowContext) {
   const instMap = flowContext?._instanceMap;
   const targetInst = sid && instMap && instMap[sid];
   if (targetInst && targetInst.definitionId === "tool_nodejs") {
-    parts.push("## tool_nodejs 节点编写规则（必须遵守）");
-    parts.push(
-      "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n" +
-      "- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n" +
-      "- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n" +
-      "- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、runDir 等），值自动 shell-quote\n" +
-      "- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n" +
-      "- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行\n" +
-      "- 如果逻辑太复杂无法写出完整 `script`，应改用 `agent_subAgent`（需同时改 definitionId）"
-    );
+    parts.push(t("composer.tool_nodejs_rules_title"));
+    parts.push(t("composer.tool_nodejs_rules_body"));
     parts.push("");
   }
 
-  parts.push("## 任务");
+  parts.push(t("composer.task_title"));
   parts.push(step.prompt || step.description || "");
   parts.push("");
-  parts.push("请只完成上述单一任务，不要做额外修改。完成后按上下文中的指引同步 UI。");
+  parts.push(t("composer.task_instruction"));
   return parts.join("\n");
 }
 
@@ -207,12 +200,12 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
 
   let last = validateComposerFlowYaml(flowYamlAbs, uiRoot);
   if (last.ok) {
-    emit({ type: "status", line: "flow 校验已通过" });
-    emit({ type: "natural", kind: "assistant", text: "✓ flow.yaml 校验通过（validate-flow）" });
+    emit({ type: "status", line: t("composer.validation_passed") });
+    emit({ type: "natural", kind: "assistant", text: t("composer.validation_passed_detail") });
     return { ok: true, result: last };
   }
 
-  emit({ type: "status", line: "flow 校验未通过，尝试自动修复…" });
+  emit({ type: "status", line: t("composer.validation_failed") });
   emit({
     type: "natural",
     kind: "assistant",
@@ -230,15 +223,14 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
       complexity: "complex",
       description: `自动修复校验错误（第 ${attempt}/${maxRepair} 次）`,
       prompt: [
-        "## 任务：修复 flow.yaml 使 validate-flow 通过",
+        t("composer.fix_task_title"),
         "",
-        "以下错误必须**全部消除**（与 CLI `agentflow validate` / `validate-flow.mjs` 使用同一套规则）：",
+        t("composer.fix_errors_intro"),
         "",
         formatValidationErrorsBlock(last),
         "",
-        "### 约束",
-        "- **只**编辑上下文中的「图定义文件」`flow.yaml`，不要改无关文件。",
-        "- 优先最小修改：补边、修正 sourceHandle/targetHandle、role、model、实例结构等。",
+        t("composer.fix_constraints_title"),
+        t("composer.fix_constraints_body"),
         "- 完成后**保存文件**，并执行上下文中的同步 Web 画布命令（curl）。",
       ].join("\n"),
     };
@@ -286,7 +278,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
 
     last = validateComposerFlowYaml(flowYamlAbs, uiRoot);
     if (last.ok) {
-      emit({ type: "status", line: "flow 校验已通过（自动修复成功）" });
+      emit({ type: "status", line: t("composer.validation_passed") + "（自动修复成功）" });
       emit({ type: "natural", kind: "assistant", text: "✓ 校验修复后 flow.yaml 已通过 validate-flow" });
       return { ok: true, result: last, repairAttempts: attempt };
     }

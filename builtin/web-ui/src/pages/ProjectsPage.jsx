@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   formatRelativeTimeZh,
   loadOpenedEntries,
@@ -20,10 +21,10 @@ function activityIconKind(kind) {
   return "material-symbols-outlined af-act-icon af-act-icon--opened";
 }
 
-function sourceBadgeMeta(source) {
-  if (source === "builtin") return { label: "Built-in", tone: "muted" };
-  if (source === "workspace") return { label: "Workspace", tone: "secondary" };
-  return { label: "User", tone: "primary" };
+function sourceBadgeMeta(source, t) {
+  if (source === "builtin") return { label: t("project:sourceBadge.builtin"), tone: "muted" };
+  if (source === "workspace") return { label: t("project:sourceBadge.workspace"), tone: "secondary" };
+  return { label: t("project:sourceBadge.user"), tone: "primary" };
 }
 
 /** @param {{ source?: string, id: string, archived?: boolean }} f */
@@ -37,12 +38,12 @@ function sourcePathHint(f) {
   return f.archived ? `~/agentflow/pipelines/_archived / ${f.id}` : `~/agentflow/pipelines / ${f.id}`;
 }
 
-const DEFAULT_PIPELINE_CARD_DESC = "打开以在节点画布中编辑此流水线。";
+const DEFAULT_PIPELINE_CARD_DESC_KEY = "project:defaultCardDesc";
 
 /** @param {{ description?: string }} f */
-function pipelineCardDescription(f) {
+function pipelineCardDescription(f, t) {
   const d = f.description != null ? String(f.description).trim() : "";
-  return d !== "" ? d : DEFAULT_PIPELINE_CARD_DESC;
+  return d !== "" ? d : t(DEFAULT_PIPELINE_CARD_DESC_KEY);
 }
 
 /** @param {string} s */
@@ -77,20 +78,22 @@ function HighlightMatch({ children, className = "", query }) {
 /**
  * @param {{ source?: string, id: string, archived?: boolean, description?: string }} f
  * @param {string} q normalized lowercase trimmed query
+ * @param {function} t translation function
  */
-function flowSearchHaystack(f) {
-  const parts = [String(f.id), pipelineCardDescription(f), sourcePathHint(f), sourceBadgeMeta(f.source).label];
-  if (f.archived) parts.push("Archived");
+function flowSearchHaystack(f, q, t) {
+  const parts = [String(f.id), pipelineCardDescription(f, t), sourcePathHint(f), sourceBadgeMeta(f.source, t).label];
+  if (f.archived) parts.push(t("project:archived"));
   return parts.join("\n").toLowerCase();
 }
 
 /**
  * @param {{ source?: string, id: string, archived?: boolean, description?: string }} f
  * @param {string} q normalized lowercase trimmed query
+ * @param {function} t translation function
  */
-function flowMatchesSearch(f, q) {
+function flowMatchesSearch(f, q, t) {
   if (!q) return true;
-  return flowSearchHaystack(f).includes(q);
+  return flowSearchHaystack(f, q, t).includes(q);
 }
 
 /**
@@ -106,6 +109,7 @@ function activityMatchesSearch(query, row) {
 }
 
 export default function ProjectsPage() {
+  const { t } = useTranslation();
   const { navigate, path } = useRoute();
   const [filter, setFilter] = useState("all");
   const [apiFlows, setApiFlows] = useState([]);
@@ -178,18 +182,6 @@ export default function ProjectsPage() {
     }
   }, [path]);
 
-  const displayedFlows = useMemo(
-    () => apiFlows.filter((f) => (filter === "archived" ? f.archived : !f.archived)),
-    [apiFlows, filter],
-  );
-
-  const searchNorm = pipelineSearch.trim().toLowerCase();
-
-  const filteredFlows = useMemo(
-    () => displayedFlows.filter((f) => flowMatchesSearch(f, searchNorm)),
-    [displayedFlows, searchNorm],
-  );
-
   const recentActivity = useMemo(
     () => mergeRecentActivity(recentRuns, loadOpenedEntries(), apiFlows),
     [recentRuns, apiFlows, path],
@@ -198,6 +190,20 @@ export default function ProjectsPage() {
   const filteredRecentActivity = useMemo(
     () => recentActivity.filter((row) => activityMatchesSearch(pipelineSearch, row)),
     [recentActivity, pipelineSearch],
+  );
+
+  const searchNorm = pipelineSearch.trim().toLowerCase();
+
+  const displayedFlows = useMemo(() => {
+    if (filter === "archived") {
+      return apiFlows.filter((f) => f.archived);
+    }
+    return apiFlows.filter((f) => !f.archived);
+  }, [apiFlows, filter]);
+
+  const filteredFlows = useMemo(
+    () => displayedFlows.filter((f) => flowMatchesSearch(f, searchNorm, t)),
+    [displayedFlows, searchNorm, t],
   );
 
   const openFlow = (f) => {
@@ -266,14 +272,14 @@ export default function ProjectsPage() {
             className={filter === "all" ? "af-tab af-tab--active" : "af-tab"}
             onClick={() => setFilter("all")}
           >
-            All
+            {t("project:all")}
           </button>
           <button
             type="button"
             className={filter === "archived" ? "af-tab af-tab--active" : "af-tab"}
             onClick={() => setFilter("archived")}
           >
-            Archived
+            {t("project:archived")}
           </button>
         </div>
         <div className="af-projects-top-right">
@@ -282,8 +288,8 @@ export default function ProjectsPage() {
             <input
               className={"af-search" + (pipelineSearch.trim() ? " af-search--has-clear" : "")}
               type="search"
-              placeholder="SEARCH PIPELINES..."
-              aria-label="Search pipelines"
+              placeholder={t("project:searchPipelines")}
+              aria-label={t("project:searchPipelines")}
               autoComplete="off"
               value={pipelineSearch}
               onChange={(e) => setPipelineSearch(e.target.value)}
@@ -318,7 +324,7 @@ export default function ProjectsPage() {
             <span className="material-symbols-outlined">notifications</span>
           </button>
           <button type="button" className="af-btn-primary af-create-btn" onClick={() => setNewPipelineOpen(true)}>
-            Create New Project
+            {t("project:createNew")}
           </button>
         </div>
       </header>
@@ -326,13 +332,13 @@ export default function ProjectsPage() {
       <div className="af-projects-body">
         <section className="af-projects-main">
           <header className="af-projects-section-head">
-            <h2 className="af-projects-h2">{filter === "archived" ? "Archived Pipelines" : "Active Projects"}</h2>
+            <h2 className="af-projects-h2">{filter === "archived" ? t("project:archivedPipelines") : t("project:activeProjects")}</h2>
             <p className="af-projects-sub">
               {searchNorm
-                ? `筛选结果：${filteredFlows.length} 条（匹配标题、描述、路径与标签）`
+                ? t("project:filterResult", { count: filteredFlows.length })
                 : filter === "archived"
-                  ? "已归档的流水线仍可打开与编辑；文件位于各 pipelines 目录下的 _archived。"
-                  : "Manage your distributed node architectures and monitoring pipelines. 可将 flow.yaml 或 .zip 拖入本页导入分享流程。"}
+                  ? t("project:archivedHint")
+                  : t("project:activeHint")}
             </p>
             {listError ? <p className="af-err af-projects-api-hint">{listError}</p> : null}
           </header>
@@ -347,19 +353,19 @@ export default function ProjectsPage() {
                   onClick={() => openFlow(f)}
                 >
                   <div className="af-project-card-body">
-                    <span className={badgeClass(sourceBadgeMeta(f.source).tone)}>
-                      <HighlightMatch query={pipelineSearch}>{sourceBadgeMeta(f.source).label}</HighlightMatch>
+                    <span className={badgeClass(sourceBadgeMeta(f.source, t).tone)}>
+                      <HighlightMatch query={pipelineSearch}>{sourceBadgeMeta(f.source, t).label}</HighlightMatch>
                     </span>
                     {f.archived ? (
                       <span className={badgeClass("muted")}>
-                        <HighlightMatch query={pipelineSearch}>Archived</HighlightMatch>
+                        <HighlightMatch query={pipelineSearch}>{t("project:archived")}</HighlightMatch>
                       </span>
                     ) : null}
                     <h3 className="af-project-title">
                       <HighlightMatch query={pipelineSearch}>{f.id}</HighlightMatch>
                     </h3>
                     <p className="af-project-desc">
-                      <HighlightMatch query={pipelineSearch}>{pipelineCardDescription(f)}</HighlightMatch>
+                      <HighlightMatch query={pipelineSearch}>{pipelineCardDescription(f, t)}</HighlightMatch>
                     </p>
                     <div className="af-project-path">
                       <span className="material-symbols-outlined af-path-icon">database</span>
@@ -372,38 +378,39 @@ export default function ProjectsPage() {
               ))
             ) : !loaded ? (
               <div className="af-projects-empty-block">
-                <p className="af-projects-empty">加载流水线列表…</p>
+                <p className="af-projects-empty">{t("project:loadingPipelines")}</p>
               </div>
             ) : displayedFlows.length === 0 ? (
               <div className="af-projects-empty-block">
                 <p className="af-projects-empty">
                   {filter === "archived"
-                    ? "暂无归档项目。"
+                    ? t("project:noArchived")
                     : apiFlows.length > 0
-                      ? "暂无未归档流水线；已归档项在 Archived 标签中查看。"
+                      ? t("project:noActive")
                       : listError
-                        ? "未能加载流水线列表。"
-                        : "当前工作区暂无流水线。"}
+                        ? t("project:loadFailed")
+                        : t("project:noPipelines")}
                 </p>
                 {!listError && apiFlows.length === 0 && filter === "all" ? (
                   <p className="af-projects-empty-hint">
-                    在仓库根目录执行 <code className="af-projects-empty-code">agentflow ui</code> 并确认工作区包含{" "}
-                    <code className="af-projects-empty-code">.agentflow/pipelines</code> 或用户目录下的流水线；亦可点击
-                    New Pipeline 新建。
+                    {t("project:emptyHint", {
+                      code1: "agentflow ui",
+                      code2: ".agentflow/pipelines"
+                    })}
                   </p>
                 ) : null}
               </div>
             ) : (
               <div className="af-projects-empty-block">
                 <p className="af-projects-empty">
-                  未找到与「{pipelineSearch.trim()}」匹配的流水线。可尝试其他关键词，或点击清除搜索。
+                  {t("project:noMatch", { query: pipelineSearch.trim() })}
                 </p>
               </div>
             )}
 
             <button type="button" className="af-project-add" onClick={() => setNewPipelineOpen(true)}>
               <span className="material-symbols-outlined af-project-add-icon">add_circle</span>
-              <span className="af-project-add-label">New Pipeline</span>
+              <span className="af-project-add-label">{t("project:newPipeline")}</span>
             </button>
           </div>
         </section>
@@ -412,16 +419,16 @@ export default function ProjectsPage() {
           id="af-recent-activity-panel"
           className={"af-activity" + (!activityPanelOpen ? " af-activity--hidden" : "")}
           aria-hidden={!activityPanelOpen}
-          aria-label="最近打开或最近运行"
+          aria-label={t("project:recentActivity")}
         >
           <h2 className="af-activity-title">
             <span className="af-activity-bullet" />
-            最近打开或最近运行
+            {t("project:recentActivity")}
           </h2>
           <div className="af-activity-list">
             {filteredRecentActivity.length === 0 ? (
               <p className="af-activity-empty">
-                {recentActivity.length === 0 ? "暂无打开或运行记录" : "暂无与关键词匹配的最近记录"}
+                {recentActivity.length === 0 ? t("project:noRecentActivity") : t("project:noMatchRecent")}
               </p>
             ) : (
               filteredRecentActivity.map((row) => (
@@ -440,7 +447,7 @@ export default function ProjectsPage() {
                   <div className="af-activity-meta">
                     <span className={activityIconKind(row.kind)}>{row.kind === "executed" ? "play_arrow" : "visibility"}</span>
                     <p className="af-activity-text">
-                      {row.kind === "executed" ? "最近运行" : "最近打开"} · {formatRelativeTimeZh(row.at)}
+                      {row.kind === "executed" ? t("project:recentRun") : t("project:recentOpen")} · {formatRelativeTimeZh(row.at)}
                     </p>
                   </div>
                 </button>

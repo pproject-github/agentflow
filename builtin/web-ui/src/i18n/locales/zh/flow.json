@@ -26,7 +26,26 @@
     "addInput": "添加输入",
     "addOutput": "添加输出",
     "remove": "删除节点",
-    "duplicate": "复制节点"
+    "duplicate": "复制节点",
+    "nodeType": "节点类型",
+    "displayName": "显示名称",
+    "displayNameHint": "（字母、数字、下划线、短横线，勿以数字开头）",
+    "role": "角色",
+    "modelHint": "来自 ~/agentflow/model-lists.json；UI 服务启动时会后台执行 agentflow update-model-lists",
+    "defaultModel": "默认",
+    "userPrompt": "用户提示（USER PROMPT / body）",
+    "systemDescription": "系统说明（只读，来自节点定义）",
+    "directCommand": "直接执行命令",
+    "scriptHint": "（tool_nodejs：有 script 时跳过 AI，由流水线执行）"
+  },
+  "nodeProps": {
+    "title": "节点属性",
+    "noInputPins": "当前无输入引脚",
+    "noOutputPins": "当前无输出引脚",
+    "type": "类型",
+    "name": "名称",
+    "defaultValue": "默认值 / value",
+    "conversationOutput": "对话与输出"
   },
   "actions": {
     "run": "运行流程",
@@ -40,5 +59,53 @@
     "nodeList": "节点列表",
     "runHistory": "运行历史",
     "validation": "校验结果"
+  },
+  "palette": {
+    "workspace": "工作区",
+    "loading": "加载中…",
+    "archived": "已归档",
+    "noPipelines": "暂无流水线",
+    "more": "更多",
+    "moreFlows": "更多流程",
+    "noRuns": "暂无运行记录",
+    "searchNodes": "搜索节点",
+    "noComponents": "暂无可用组件（检查节点库目录）",
+    "noMatch": "无匹配节点，请调整搜索词",
+    "selectPipeline": "从上方选择一条流水线以加载组件与画布",
+    "validationWarnings": "校验警告（与 agentflow validate 槽位检查一致）",
+    "output": "输出",
+    "model": "模型",
+    "userDir": "用户目录"
+  },
+  "pipeline": {
+    "selectPipeline": "请从顶部下拉选择一条流水线",
+    "loadingProps": "加载节点属性…",
+    "pipelineId": "流水线 ID",
+    "diskPath": "磁盘路径",
+    "storageLocation": "存储位置",
+    "introduction": "介绍",
+    "metadata": "元数据",
+    "nodeCount": "节点数",
+    "nodesUnit": "个节点",
+    "loading": "加载中…",
+    "noRuns": "暂无运行记录（终端执行后会在工作区生成运行目录）"
+  },
+  "status": {
+    "saving": "保存中…",
+    "saved": "已保存",
+    "saveFailed": "保存失败",
+    "runInTerminal": "运行请使用终端"
+  },
+  "roles": {
+    "requirement": "需求拆解",
+    "planning": "技术规划",
+    "code": "代码执行",
+    "test": "测试回归",
+    "normal": "普通"
+  },
+  "phases": {
+    "phase": "阶段",
+    "allPhasesComplete": "所有阶段完成",
+    "currentPhaseComplete": "当前阶段完成，等待确认继续…"
   }
 }
