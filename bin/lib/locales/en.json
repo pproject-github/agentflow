@@ -166,5 +166,80 @@
     "opencode_ready": "Ready",
     "service_normal": "Service normal",
     "service_abnormal": "Some interfaces abnormal"
+  },
+  "type": {
+    "node": "Node",
+    "text": "Text",
+    "file": "File",
+    "bool": "Boolean"
+  },
+  "role": {
+    "normal": "Normal",
+    "planning": "Planning",
+    "code": "Code",
+    "test": "Test",
+    "requirement": "Requirement"
+  },
+  "nodeDef": {
+    "control_start": {
+      "displayName": "Start",
+      "description": "Entry point of AgentFlow, all flows should start from this node"
+    },
+    "control_end": {
+      "displayName": "End",
+      "description": "End point of AgentFlow, flow terminates after this node"
+    },
+    "agent_subAgent": {
+      "displayName": "SubAgent",
+      "description": "Execute tasks using SubAgent"
+    },
+    "tool_user_ask": {
+      "displayName": "Ask User",
+      "description": "Ask user questions using Ask user question tool"
+    },
+    "tool_user_check": {
+      "displayName": "User Confirm",
+      "description": "Wait for user confirmation, flow pauses. Requires user to reply 'continue' to resume"
+    },
+    "control_if": {
+      "displayName": "If Branch",
+      "description": "Has exactly one bool type input. Continues to next1 if true, next2 if false"
+    },
+    "control_anyOne": {
+      "displayName": "Any One",
+      "description": "Continues to next when any upstream input is ready"
+    },
+    "control_toBool": {
+      "displayName": "To Bool",
+      "description": "Convert execution task result to boolean and write to prediction slot"
+    },
+    "tool_nodejs": {
+      "displayName": "Node.js Script",
+      "description": "Execute Node.js script, success determined by exit code, stdout as result"
+    },
+    "tool_print": {
+      "displayName": "Print",
+      "description": "Output content to user with special font style"
+    },
+    "tool_get_env": {
+      "displayName": "Get Env",
+      "description": "Get environment variable value"
+    },
+    "tool_save_key": {
+      "displayName": "Save Key",
+      "description": "Save key-value pair to global storage"
+    },
+    "tool_load_key": {
+      "displayName": "Load Key",
+      "description": "Load key-value from global storage"
+    },
+    "provide_str": {
+      "displayName": "Text",
+      "description": "Provide a text value directly, value will be passed to downstream as-is"
+    },
+    "provide_file": {
+      "displayName": "File",
+      "description": "Provide file path or content directly, value will be passed to downstream as-is"
+    }
   }
 }

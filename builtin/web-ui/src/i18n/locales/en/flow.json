@@ -107,5 +107,11 @@
     "phase": "Phase",
     "allPhasesComplete": "All phases completed",
     "currentPhaseComplete": "Current phase completed, waiting for confirmation..."
+  },
+  "types": {
+    "node": "Node",
+    "text": "Text",
+    "file": "File",
+    "bool": "Boolean"
   }
 }

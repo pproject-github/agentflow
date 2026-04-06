@@ -166,5 +166,80 @@
     "opencode_ready": "就绪",
     "service_normal": "服务正常",
     "service_abnormal": "部分接口异常"
+  },
+  "type": {
+    "node": "节点",
+    "text": "文本",
+    "file": "文件",
+    "bool": "布尔"
+  },
+  "role": {
+    "normal": "普通",
+    "planning": "技术规划",
+    "code": "代码执行",
+    "test": "测试回归",
+    "requirement": "需求拆解"
+  },
+  "nodeDef": {
+    "control_start": {
+      "displayName": "开始",
+      "description": "AgentFlow 的入口，所有流程应从这个节点开始"
+    },
+    "control_end": {
+      "displayName": "结束",
+      "description": "AgentFlow 的结束节点，执行完成后流程结束"
+    },
+    "agent_subAgent": {
+      "displayName": "SubAgent",
+      "description": "利用 SubAgent 执行任务"
+    },
+    "tool_user_ask": {
+      "displayName": "用户提问",
+      "description": "利用 Ask user question tool 询问用户问题"
+    },
+    "tool_user_check": {
+      "displayName": "用户确认",
+      "description": "等待用户确认，流程暂停。需用户回复「继续」才重启流程"
+    },
+    "control_if": {
+      "displayName": "If 分支",
+      "description": "约定有且仅有一个 type 为 bool 的 input。true 时沿 next1 继续，false 时沿 next2 继续"
+    },
+    "control_anyOne": {
+      "displayName": "任一触发",
+      "description": "当任一上游输入就绪时，沿 next 继续执行"
+    },
+    "control_toBool": {
+      "displayName": "转布尔",
+      "description": "根据执行任务内容，得到布尔结论后写入 prediction 槽位"
+    },
+    "tool_nodejs": {
+      "displayName": "Node.js 脚本",
+      "description": "执行 Node.js 脚本，以 exit code 判断成败，stdout 作为结果"
+    },
+    "tool_print": {
+      "displayName": "打印输出",
+      "description": "以特殊字体样式向用户输出内容"
+    },
+    "tool_get_env": {
+      "displayName": "获取环境变量",
+      "description": "获取环境变量值"
+    },
+    "tool_save_key": {
+      "displayName": "保存键值",
+      "description": "保存键值对到全局存储"
+    },
+    "tool_load_key": {
+      "displayName": "加载键值",
+      "description": "从全局存储加载键值"
+    },
+    "provide_str": {
+      "displayName": "文本",
+      "description": "直接提供一段文本，value 会原样供下游引用"
+    },
+    "provide_file": {
+      "displayName": "文件",
+      "description": "直接提供文件路径或内容，value 会原样供下游引用"
+    }
   }
 }

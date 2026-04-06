@@ -107,5 +107,11 @@
     "phase": "阶段",
     "allPhasesComplete": "所有阶段完成",
     "currentPhaseComplete": "当前阶段完成，等待确认继续…"
+  },
+  "types": {
+    "node": "节点",
+    "text": "文本",
+    "file": "文件",
+    "bool": "布尔"
   }
 }

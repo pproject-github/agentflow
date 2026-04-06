@@ -148,3 +148,86 @@ export function tBatch(keys) {
 
 // 初始化（使用环境变量检测）
 initI18n();
+
+/** 中文 type 到英文 key 的映射 */
+export const TYPE_ZH_TO_KEY = {
+  节点: "node",
+  文本: "text",
+  文件: "file",
+  bool: "bool",
+  布尔: "bool",
+};
+
+/** 英文 key 到中文 type 的映射 */
+export const TYPE_KEY_TO_ZH = {
+  node: "节点",
+  text: "文本",
+  file: "文件",
+  bool: "布尔",
+};
+
+/** 中文 role 到英文 key 的映射 */
+export const ROLE_ZH_TO_KEY = {
+  普通: "normal",
+  技术规划: "planning",
+  代码执行: "code",
+  测试回归: "test",
+  需求拆解: "requirement",
+};
+
+/** 英文 key 到中文 role 的映射 */
+export const ROLE_KEY_TO_ZH = {
+  normal: "普通",
+  planning: "技术规划",
+  code: "代码执行",
+  test: "测试回归",
+  requirement: "需求拆解",
+};
+
+/**
+ * 翻译类型名称（支持中英文互转）
+ * @param {string} typeOrKey - 中文类型名或英文 key
+ * @returns {string} 当前语言对应的类型名
+ */
+export function translateType(typeOrKey) {
+  const key = TYPE_ZH_TO_KEY[typeOrKey] || typeOrKey;
+  return t(`type.${key}`);
+}
+
+/**
+ * 翻译角色名称（支持中英文互转）
+ * @param {string} roleOrKey - 中文角色名或英文 key
+ * @returns {string} 当前语言对应的角色名
+ */
+export function translateRole(roleOrKey) {
+  const key = ROLE_ZH_TO_KEY[roleOrKey] || roleOrKey;
+  return t(`role.${key}`);
+}
+
+/**
+ * 获取类型的英文 key（用于内部存储）
+ * @param {string} typeOrKey - 中文类型名或英文 key
+ * @returns {string} 英文 key
+ */
+export function normalizeTypeToKey(typeOrKey) {
+  return TYPE_ZH_TO_KEY[typeOrKey] || typeOrKey;
+}
+
+/**
+ * 获取角色的英文 key（用于内部存储）
+ * @param {string} roleOrKey - 中文角色名或英文 key
+ * @returns {string} 英文 key
+ */
+export function normalizeRoleToKey(roleOrKey) {
+  return ROLE_ZH_TO_KEY[roleOrKey] || roleOrKey;
+}
+
+/**
+ * 翻译节点定义字段
+ * @param {string} definitionId - 节点定义 ID
+ * @param {"displayName" | "description"} field - 字段名
+ * @returns {string}
+ */
+export function translateNodeDef(definitionId, field) {
+  return t(`nodeDef.${definitionId}.${field}`);
+}
