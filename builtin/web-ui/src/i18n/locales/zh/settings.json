@@ -1,0 +1,74 @@
+{
+  "title": "设置",
+  "crumb": {
+    "engine": "引擎设置",
+    "preferences": "全局首选项"
+  },
+  "workspace": {
+    "title": "工作区",
+    "currentPath": "当前工作区根目录",
+    "placeholder": "加载中…",
+    "copyPath": "复制路径",
+    "description": "流水线与节点清单将相对于此目录解析（由启动 UI 时传入）。"
+  },
+  "cursor": {
+    "title": "Cursor CLI",
+    "status": {
+      "cached": "已缓存",
+      "notCached": "未缓存"
+    },
+    "modelPreviewLabel": "Cursor 模型名称列表",
+    "modelList": {
+      "cached": "模型清单已缓存",
+      "empty": "暂无模型列表",
+      "count": "{{count}} 条",
+      "fetchedAt": "更新 {{time}}",
+      "never": "尚未拉取",
+      "refresh": "刷新清单",
+      "fetching": "拉取中…"
+    }
+  },
+  "opencode": {
+    "modelPreviewLabel": "OpenCode 模型名称列表",
+    "title": "OpenCode CLI",
+    "status": {
+      "ready": "就绪",
+      "notFound": "未找到"
+    },
+    "provider": "方案 / Provider 标识",
+    "providerPlaceholder": "例如 bailian-coding-plan",
+    "saving": "正在保存并更新清单…",
+    "description": "对应 CLI opencode models <provider> 的参数；停止输入后会写入用户目录 config 并刷新 model-lists.json。"
+  },
+  "env": {
+    "title": "环境变量",
+    "note": "仅本机、本浏览器",
+    "key": "键",
+    "value": "值",
+    "add": "添加",
+    "delete": "删除 {{key}}",
+    "newKey": "新环境变量键",
+    "newValue": "值（密钥请谨慎）"
+  },
+  "system": {
+    "title": "系统状态",
+    "normal": "服务正常",
+    "abnormal": "部分接口异常",
+    "cursorModels": "Cursor 模型",
+    "opencodeModels": "OpenCode 模型"
+  },
+  "shortcuts": {
+    "title": "快捷入口",
+    "projects": "项目与流水线",
+    "flowEditor": "节点画布"
+  },
+  "language": {
+    "title": "语言",
+    "description": "选择界面显示语言",
+    "options": {
+      "zh": "中文",
+      "en": "English",
+      "ja": "日本語"
+    }
+  }
+}

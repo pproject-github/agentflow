@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "surface-variant": "#353534",
+              "inverse-primary": "#6833ea",
+              "primary-fixed": "#e8deff",
+              "secondary-fixed": "#d1e4ff",
+              "on-secondary-fixed-variant": "#00497d",
+              "error": "#ffb4ab",
+              "surface-bright": "#393939",
+              "surface-tint": "#cdbdff",
+              "on-primary-fixed-variant": "#4f00d0",
+              "tertiary-fixed": "#62ff96",
+              "background": "#131313",
+              "on-tertiary-fixed-variant": "#005226",
+              "surface-dim": "#131313",
+              "on-secondary-container": "#002b4d",
+              "on-tertiary-container": "#e8ffe7",
+              "on-surface-variant": "#cac3d8",
+              "primary-container": "#7c4dff",
+              "surface-container-low": "#1c1b1b",
+              "surface-container-high": "#2a2a2a",
+              "primary-fixed-dim": "#cdbdff",
+              "tertiary": "#00e475",
+              "on-primary-container": "#fcf6ff",
+              "on-tertiary": "#003918",
+              "inverse-surface": "#e5e2e1",
+              "surface-container-highest": "#353534",
+              "surface": "#131313",
+              "outline-variant": "#494455",
+              "on-secondary": "#003258",
+              "on-primary": "#370096",
+              "secondary": "#9ecaff",
+              "primary": "#cdbdff",
+              "on-tertiary-fixed": "#00210b",
+              "surface-container": "#201f1f",
+              "outline": "#948ea1",
+              "on-secondary-fixed": "#001d36",
+              "on-error-container": "#ffdad6",
+              "on-background": "#e5e2e1",
+              "on-surface": "#e5e2e1",
+              "secondary-fixed-dim": "#9ecaff",
+              "tertiary-fixed-dim": "#00e475",
+              "surface-container-lowest": "#0e0e0e",
+              "on-primary-fixed": "#20005f",
+              "error-container": "#93000a",
+              "tertiary-container": "#008441",
+              "on-error": "#690005",
+              "secondary-container": "#1e95f2",
+              "inverse-on-surface": "#313030"
+            },
+            fontFamily: {
+              "headline": ["Space Grotesk"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "1.5rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #131313;
+            color: #e5e2e1;
+            font-family: 'Inter', sans-serif;
+        }
+        .font-space { font-family: 'Space Grotesk', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .node-pulse {
+            background: linear-gradient(135deg, rgba(124, 77, 255, 0.05) 0%, rgba(20, 20, 20, 0) 100%);
+        }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- SideNavBar Component -->
+<aside class="bg-neutral-900 dark:bg-[#1c1b1b] h-screen w-64 docked left-0 border-r-0 flex flex-col h-full py-6 px-4 font-['Space_Grotesk'] tracking-tight">
+<div class="mb-10 px-2">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shadow-[0_0_15px_rgba(124,77,255,0.3)]">
+<span class="material-symbols-outlined text-on-primary-container text-xl" data-icon="hub">hub</span>
+</div>
+<div>
+<h1 class="text-xl font-bold text-[#e5e2e1] tracking-tighter">Agentflow</h1>
+<p class="text-[10px] uppercase tracking-[0.2em] text-[#7c4dff] font-bold">Orchestration Engine</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2.5 text-[#cdbdff] bg-[#2a2a2a] rounded-lg font-bold scale-95 active:scale-90 transition-all duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open">folder_open</span>
+<span>Projects</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-[#e5e2e1]/60 hover:text-[#e5e2e1] hover:bg-[#2a2a2a] transition-colors duration-200 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+<span>Nodes</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-[#e5e2e1]/60 hover:text-[#e5e2e1] hover:bg-[#2a2a2a] transition-colors duration-200 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>Settings</span>
+</a>
+</nav>
+</aside>
+<!-- Main Content Wrapper -->
+<main class="flex-1 flex flex-col min-w-0 bg-surface">
+<!-- TopAppBar Component -->
+<header class="bg-neutral-950/80 dark:bg-[#131313]/80 backdrop-blur-xl flex justify-between items-center h-16 px-8 w-full sticky top-0 z-50">
+<div class="flex items-center gap-8 h-full">
+<div class="flex gap-6 h-full items-end font-['Space_Grotesk'] font-medium uppercase tracking-widest text-xs">
+<a class="text-[#e5e2e1] border-b-2 border-[#7c4dff] pb-2 transition-all" href="#">All</a>
+<a class="text-[#e5e2e1]/40 pb-2 hover:text-[#cdbdff] transition-all" href="#">Archived</a>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40 text-sm" data-icon="search">search</span>
+<input class="bg-[#0e0e0e] border-none rounded-full py-2 pl-10 pr-4 text-[10px] font-['Space_Grotesk'] tracking-widest focus:ring-1 focus:ring-primary-container w-64 transition-all focus-within:bg-[#0e0e0e] text-on-surface" placeholder="SEARCH PIPELINES..." type="text"/>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-on-surface-variant hover:text-[#cdbdff] transition-all relative">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-primary-container rounded-full"></span>
+</button>
+<button class="bg-primary-container text-on-primary-container px-6 py-2 rounded-full font-['Space_Grotesk'] font-bold text-[10px] uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all">
+                        Create New Project
+                    </button>
+</div>
+</div>
+</header>
+<!-- Two Column Dashboard Layout -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left Column: Project Grid -->
+<section class="flex-1 overflow-y-auto p-8">
+<header class="mb-8">
+<h2 class="text-3xl font-headline font-bold tracking-tighter mb-2">Active Projects</h2>
+<p class="text-on-surface-variant text-sm font-body max-w-lg">Manage your distributed node architectures and monitoring pipelines.</p>
+</header>
+<div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+<!-- Card 1 -->
+<div class="bg-surface-container-high rounded-xl p-5 hover:bg-surface-container-highest transition-all group relative overflow-hidden border border-outline-variant/5">
+<div class="absolute top-0 right-0 p-4">
+<span class="flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-tertiary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-tertiary"></span>
+</span>
+</div>
+<div class="mb-4">
+<span class="text-[10px] font-['Space_Grotesk'] text-secondary font-bold tracking-widest uppercase mb-1 block">User</span>
+<h3 class="text-lg font-headline font-bold text-on-surface mb-2">Neural Vector Index</h3>
+<p class="text-xs text-on-surface-variant leading-relaxed">Processing real-time semantic embeds from production firehose. 1.2k req/s.</p><div class="mt-3 flex items-center gap-2 text-[10px] font-mono text-on-surface-variant/40 overflow-hidden"><span class="material-symbols-outlined text-[12px]" data-icon="database">database</span><span class="truncate max-w-[180px]">/mnt/data/pipelines/neural-vector-v1</span></div>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-high rounded-xl p-5 hover:bg-surface-container-highest transition-all group border border-outline-variant/5">
+<div class="mb-4">
+<span class="text-[10px] font-['Space_Grotesk'] text-primary font-bold tracking-widest uppercase mb-1 block">User</span>
+<h3 class="text-lg font-headline font-bold text-on-surface mb-2">Auth Guardian Edge</h3>
+<p class="text-xs text-on-surface-variant leading-relaxed">Edge-deployed authentication middleware with zero-trust node validation.</p><div class="mt-3 flex items-center gap-2 text-[10px] font-mono text-on-surface-variant/40 overflow-hidden"><span class="material-symbols-outlined text-[12px]" data-icon="database">database</span><span class="truncate max-w-[180px]">/mnt/data/pipelines/auth-guardian-edge</span></div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-high rounded-xl p-5 hover:bg-surface-container-highest transition-all group border border-outline-variant/5">
+<div class="mb-4">
+<span class="text-[10px] font-['Space_Grotesk'] font-bold tracking-widest uppercase mb-1 block text-on-surface-variant/60">Built-in</span>
+<h3 class="text-lg font-headline font-bold text-on-surface mb-2">Relational Shadow</h3>
+<p class="text-xs text-on-surface-variant leading-relaxed">Mirroring multi-cloud RDS instances for disaster recovery logic.</p><div class="mt-3 flex items-center gap-2 text-[10px] font-mono text-on-surface-variant/40 overflow-hidden"><span class="material-symbols-outlined text-[12px]" data-icon="database">database</span><span class="truncate max-w-[180px]">/mnt/data/pipelines/relational-shadow-db</span></div>
+</div>
+</div>
+<!-- Card 4 -->
+<div class="bg-surface-container-high rounded-xl p-5 hover:bg-surface-container-highest transition-all group border border-outline-variant/5">
+<div class="mb-4">
+<span class="text-[10px] font-['Space_Grotesk'] font-bold tracking-widest uppercase mb-1 block text-primary">User</span>
+<h3 class="text-lg font-headline font-bold text-on-surface mb-2">Blob Compression</h3>
+<p class="text-xs text-on-surface-variant leading-relaxed">Automated LZ4 compression pipeline for cold storage optimization.</p><div class="mt-3 flex items-center gap-2 text-[10px] font-mono text-on-surface-variant/40 overflow-hidden"><span class="material-symbols-outlined text-[12px]" data-icon="database">database</span><span class="truncate max-w-[180px]">/mnt/data/pipelines/blob-comp-fs</span></div>
+</div>
+</div>
+<!-- Add New Placeholder -->
+<button class="border-2 border-dashed border-outline-variant/20 rounded-xl p-5 flex flex-col items-center justify-center text-on-surface-variant hover:border-primary-container hover:text-primary transition-all group h-full min-h-[160px]">
+<span class="material-symbols-outlined text-3xl mb-2 group-hover:scale-110 transition-transform" data-icon="add_circle">add_circle</span>
+<span class="text-[10px] font-['Space_Grotesk'] uppercase tracking-widest font-bold">New Pipeline</span>
+</button>
+</div>
+</section>
+<!-- Right Column: 最近打开或最近运行 -->
+<aside class="w-80 bg-surface-container-low overflow-y-auto p-6 flex flex-col border-l border-outline-variant/5">
+<h2 class="text-xs font-['Space_Grotesk'] font-bold tracking-[0.06em] text-on-surface-variant mb-6 flex items-center gap-2">
+<span class="w-1 h-1 bg-primary-container rounded-full"></span>
+                    最近打开或最近运行
+                </h2>
+<div class="space-y-1">
+<!-- Recent Item 1 -->
+<div class="group p-3 rounded-lg hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="flex justify-between items-start mb-1">
+<h4 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">Vector Index Alpha</h4>
+<span class="text-[10px] font-mono text-on-surface-variant/40 shrink-0">2m ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-tertiary" data-icon="edit">edit</span>
+<p class="text-[11px] text-on-surface-variant/60 truncate">Deployed updated node logic</p>
+</div>
+</div>
+<!-- Recent Item 2 -->
+<div class="group p-3 rounded-lg hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="flex justify-between items-start mb-1">
+<h4 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">Audit Logs 2024</h4>
+<span class="text-[10px] font-mono text-on-surface-variant/40 shrink-0">15m ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-secondary" data-icon="visibility">visibility</span>
+<p class="text-[11px] text-on-surface-variant/60 truncate">Shared with Security Team</p>
+</div>
+</div>
+<!-- Recent Item 3 -->
+<div class="group p-3 rounded-lg hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="flex justify-between items-start mb-1">
+<h4 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">Edge Cache Policy</h4>
+<span class="text-[10px] font-mono text-on-surface-variant/40 shrink-0">1h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-primary" data-icon="settings">settings</span>
+<p class="text-[11px] text-on-surface-variant/60 truncate">Configured TTL thresholds</p>
+</div>
+</div>
+<!-- Recent Item 4 -->
+<div class="group p-3 rounded-lg hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="flex justify-between items-start mb-1">
+<h4 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">Kafka Consumer G-4</h4>
+<span class="text-[10px] font-mono text-on-surface-variant/40 shrink-0">4h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-error" data-icon="warning">warning</span>
+<p class="text-[11px] text-on-surface-variant/60 truncate">Re-balanced consumer group</p>
+</div>
+</div>
+<!-- Recent Item 5 -->
+<div class="group p-3 rounded-lg hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="flex justify-between items-start mb-1">
+<h4 class="text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">Websocket Bridge</h4>
+<span class="text-[10px] font-mono text-on-surface-variant/40 shrink-0">Yesterday</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-tertiary" data-icon="add">add</span>
+<p class="text-[11px] text-on-surface-variant/60 truncate">Added new output listener</p>
+</div>
+</div>
+</div>
+</aside>
+</div>
+</main>
+</body></html>

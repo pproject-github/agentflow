@@ -1,0 +1,751 @@
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import chalk from "chalk";
+import { createMarkdownStreamer, render as renderMarkdown } from "markdansi";
+import { getAgentPath, loadAgentPromptWithReplacements, stripYamlFrontmatter } from "./agents-path.mjs";
+import { machineReadable } from "./log.mjs";
+import { normalizeCursorModelForCli } from "./model-config.mjs";
+import { appendRunLogLine } from "./run-events.mjs";
+import { writeWithPrefix } from "./terminal.mjs";
+
+/**
+ * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
+ */
+export function runCursorAgentForNode(
+  workspaceRoot,
+  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
+  options = {},
+) {
+  const absPromptPath = path.resolve(workspaceRoot, promptPath);
+  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
+  const absResultPath = path.join(absRunDir, resultPathRel);
+  const nodeIntermediateDir = path.dirname(absPromptPath);
+  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
+  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
+  const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const replacements = {
+    workspaceRoot: absWorkspaceRoot,
+    promptPath: absPromptPath,
+    nodeContext: nodeContext ?? "",
+    taskBody: taskBody ?? "",
+    resultPath: absResultPath,
+    intermediatePath: path.join(absRunDir, "intermediate"),
+    outputDir,
+    flowName: options.flowName ?? "",
+    uuid: options.uuid ?? "",
+    instanceId: instanceId ?? "",
+  };
+  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
+  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
+  if (agentContent) {
+    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
+    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
+    agentPathForPrompt = resolvedAgentPath;
+  }
+  const rawAgentContent =
+    agentContent != null
+      ? agentContent
+      : fs.existsSync(agentPathForPrompt)
+        ? fs.readFileSync(agentPathForPrompt, "utf8")
+        : "";
+  const promptText = stripYamlFrontmatter(rawAgentContent);
+
+  const modelRaw = options.model ?? process.env.CURSOR_AGENT_MODEL ?? null;
+  const model = normalizeCursorModelForCli(modelRaw);
+  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
+  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
+  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
+
+  return new Promise((resolve, reject) => {
+    const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
+    const args = ["--print", "--output-format", "stream-json", "--trust", "--workspace", workspaceRoot];
+    const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
+    if (approveMcps) args.push("--approve-mcps");
+    if (options.force) args.push("--force");
+    args.push("--model", model);
+    args.push(promptText);
+    if (options.flowName && options.uuid) {
+      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI 完整参数: ${agentCmd} ${JSON.stringify(argvLog)}`);
+      appendRunLogLine(
+        workspaceRoot,
+        options.flowName,
+        options.uuid,
+        "cli-raw",
+        `Cursor CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`,
+      );
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI prompt 完整:\n${promptText}`);
+    }
+    const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
+    const child = spawn(agentCmd, args, {
+      cwd: workspaceRoot,
+      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
+      shell: false,
+    });
+
+    let lastResult = null;
+    let hadError = false;
+    const STDERR_CAP_BYTES = 1024 * 1024;
+    const stderrChunks = [];
+    let stderrTotalBytes = 0;
+    const stderrBuffer = options.stderrBuffer || null;
+    let stderrLineBuffer = "";
+    const flowName = options.flowName ?? null;
+    const uuid = options.uuid ?? null;
+
+    const outStream = machineReadable ? process.stderr : process.stdout;
+    function writeStdout(text) {
+      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
+      else if (text) outStream.write(agentContentColor(text));
+      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout", text);
+    }
+
+    function flushStderrLines() {
+      if (!coloredPrefix) return;
+      let idx;
+      while ((idx = stderrLineBuffer.indexOf("\n")) !== -1) {
+        const line = stderrLineBuffer.slice(0, idx + 1);
+        stderrLineBuffer = stderrLineBuffer.slice(idx + 1);
+        writeWithPrefix(process.stderr, line, coloredPrefix, agentContentColor);
+      }
+    }
+
+    if (!useStderrInherit) {
+      child.stderr.on("data", (chunk) => {
+        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
+        const len = buf.length;
+        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
+          const drop = stderrChunks.shift();
+          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
+        }
+        stderrChunks.push(buf);
+        stderrTotalBytes += len;
+        if (stderrBuffer) {
+          stderrBuffer.push(chunk);
+        } else if (coloredPrefix) {
+          stderrLineBuffer += s;
+          flushStderrLines();
+        } else {
+          process.stderr.write(chunk);
+        }
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stderr", s);
+      });
+    }
+
+    const stdoutWidth = process.stdout.columns ?? 80;
+    const mdStreamer = createMarkdownStreamer({
+      render: (md) => renderMarkdown(md, { width: stdoutWidth }),
+      spacing: "single",
+    });
+
+    const STDOUT_RAW_CAP = 200;
+    const debugStdout = process.env.AGENTFLOW_DEBUG_STDOUT === "1" || process.env.AGENTFLOW_DEBUG_STDOUT === "true";
+
+    function isLikelyBase64(s) {
+      if (!s || typeof s !== "string") return false;
+      const t = s.trim();
+      if (t.startsWith("data:image/") && t.includes(";base64,")) return true;
+      if (t.length < 80) return false;
+      return /^[A-Za-z0-9+/]+=*$/.test(t);
+    }
+
+    child.stdout.setEncoding("utf-8");
+    let stdoutLineBuffer = "";
+    child.stdout.on("data", (chunk) => {
+      stdoutLineBuffer += chunk;
+      const idx = stdoutLineBuffer.lastIndexOf("\n");
+      const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
+      if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
+      const lines = complete.split("\n").filter(Boolean);
+      for (const line of lines) {
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout-raw", line);
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "assistant" && event.message?.content) {
+            let text = (event.message.content || [])
+              .filter((c) => c.type === "text" && c.text)
+              .map((c) => c.text)
+              .join("");
+            if (text) {
+              text = text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+              const out = mdStreamer.push(text);
+              if (out) writeStdout(out);
+            }
+          } else if (event.type === "tool_call") {
+            const toolName =
+              event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
+            const subtype = event.subtype ?? "";
+            if (options.onToolCall) options.onToolCall(subtype, toolName);
+          } else if (event.type === "thinking") {
+            if (options.onToolCall) options.onToolCall("thinking", "");
+          } else if (event.type === "result") {
+            lastResult = event;
+            if (event.subtype === "success" && !event.is_error) {
+              hadError = false;
+            } else {
+              hadError = true;
+            }
+          } else {
+            writeStdout(`[cursor-stdout] event: ${event.type ?? "unknown"}\n`);
+          }
+        } catch (_) {
+          let out;
+          if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
+            let subtype = "?";
+            try {
+              const ev = JSON.parse(line);
+              if (ev && ev.type === "tool_call") subtype = ev.subtype ?? "?";
+            } catch {
+              const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
+              if (m) subtype = m[1];
+            }
+            out = `[cursor] tool_call ${subtype}\n`;
+          } else if (isLikelyBase64(line)) {
+            out = `[cursor-stdout] (base64 图片/数据, ${line.length} 字符)\n`;
+          } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
+            out = line + "\n";
+          } else if (lastResult == null) {
+            out = `[cursor-stdout] (非 JSON，可能为 Cursor 报错) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`;
+          } else {
+            out = `[cursor-stdout] (解析失败或未处理的一行, ${line.length} 字符)\n`;
+          }
+          writeStdout(out);
+        }
+      }
+    });
+
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(new Error(`Cursor CLI failed to start: ${err.message}. Ensure '${agentCmd}' is in PATH.`));
+    });
+
+    child.on("close", (code) => {
+      if (stdoutLineBuffer.trim() && flowName && uuid) {
+        appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout-raw", stdoutLineBuffer.trim());
+      }
+      child.stdout.removeAllListeners();
+      if (!useStderrInherit) child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      const tail = mdStreamer.finish();
+      if (tail) writeStdout(tail);
+      if (coloredPrefix && stderrLineBuffer) {
+        writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
+      }
+      if (code !== 0 && lastResult == null) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        const autoOnly =
+          /named models unavailable/i.test(stderrTail) ||
+          (/free plans?/i.test(stderrTail) && /only use auto/i.test(stderrTail)) ||
+          /only use auto/i.test(stderrTail);
+        if (autoOnly && model !== "Auto" && !options._agentflowAutoRetry) {
+          writeStdout("[agentflow] Cursor 账户限制：检测到仅支持 Auto，自动重试一次（Auto）…\n");
+          runCursorAgentForNode(
+            workspaceRoot,
+            { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
+            { ...options, model: "Auto", _agentflowAutoRetry: true },
+          ).then(resolve).catch(reject);
+          return;
+        }
+        const logHint =
+          flowName && uuid
+            ? ` 检查 run 目录 logs/log.txt 查看完整 Cursor stderr；常见原因：未登录 Cursor、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CURSOR_STDERR_INHERIT=1 后重跑，使 Cursor 的 stderr 直接输出到终端。`
+            : "";
+        const err = new Error(`Cursor CLI exited ${code}. ${stderrTail || "No result event received."}${logHint}`);
+        err.cursorStderrTail = stderrTail;
+        reject(err);
+        return;
+      }
+      if (hadError || (lastResult && lastResult.is_error)) {
+        reject(new Error(lastResult?.result || "Agent reported error."));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+/**
+ * Run OpenCode CLI in non-interactive mode for a node.
+ */
+export function runOpenCodeAgentForNode(
+  workspaceRoot,
+  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
+  options = {},
+) {
+  const absPromptPath = path.resolve(workspaceRoot, promptPath);
+  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
+  const absResultPath = path.join(absRunDir, resultPathRel);
+  const nodeIntermediateDir = path.dirname(absPromptPath);
+  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
+  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
+  const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const replacements = {
+    workspaceRoot: absWorkspaceRoot,
+    promptPath: absPromptPath,
+    nodeContext: nodeContext ?? "",
+    taskBody: taskBody ?? "",
+    resultPath: absResultPath,
+    intermediatePath: path.join(absRunDir, "intermediate"),
+    outputDir,
+    flowName: options.flowName ?? "",
+    uuid: options.uuid ?? "",
+    instanceId: instanceId ?? "",
+  };
+  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
+  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
+  if (agentContent) {
+    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
+    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
+    agentPathForPrompt = resolvedAgentPath;
+  }
+  const rawAgentContent =
+    agentContent != null
+      ? agentContent
+      : fs.existsSync(agentPathForPrompt)
+        ? fs.readFileSync(agentPathForPrompt, "utf8")
+        : "";
+  const promptText = stripYamlFrontmatter(rawAgentContent);
+
+  const model = options.model && String(options.model).trim();
+  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
+  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
+  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
+
+  return new Promise((resolve, reject) => {
+    const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+    const args = ["run"];
+    if (model) {
+      args.push("--model", model);
+    }
+    args.push("--dir", workspaceRoot);
+    args.push("--", promptText);
+    const spawnOpts = {
+      cwd: workspaceRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    };
+    if (options.force) {
+      spawnOpts.env = {
+        ...process.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: { external_directory: "allow" },
+        }),
+      };
+    }
+    const child = spawn(opencodeCmd, args, spawnOpts);
+    const flowName = options.flowName ?? null;
+    const uuid = options.uuid ?? null;
+
+    function writeStdout(text) {
+      if (!text) return;
+      if (coloredPrefix) writeWithPrefix(process.stdout, text, coloredPrefix, agentContentColor);
+      else process.stdout.write(agentContentColor(text));
+      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stdout", text);
+    }
+
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => {
+      writeStdout(chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+      if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stderr", s);
+      if (coloredPrefix) {
+        writeWithPrefix(process.stderr, s, coloredPrefix, agentContentColor);
+      } else {
+        process.stderr.write(chunk);
+      }
+    });
+
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(new Error(`OpenCode CLI failed to start: ${err.message}. Ensure '${opencodeCmd}' is in PATH.`));
+    });
+
+    child.on("close", (code) => {
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      if (code !== 0) {
+        reject(new Error(`OpenCode CLI exited ${code}.`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+const COMPOSER_STATUS_MAX = 200;
+
+function truncateComposerLine(s) {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (t.length <= COMPOSER_STATUS_MAX) return t;
+  return t.slice(0, COMPOSER_STATUS_MAX - 1) + "…";
+}
+
+function normalizeStreamTextChunk(t) {
+  if (!t || typeof t !== "string") return "";
+  return t.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+}
+
+/** Cursor stream-json：从 message.content 等提取可展示正文（不含 JSON 包装） */
+function extractCursorStreamNlText(event) {
+  if (!event || typeof event !== "object") return "";
+  const content = event.message?.content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((c) => c && (c.type === "text" || c.type === "thinking") && c.text)
+      .map((c) => c.text);
+    if (parts.length) return normalizeStreamTextChunk(parts.join(""));
+  }
+  if (typeof event.text === "string" && event.text.trim()) return normalizeStreamTextChunk(event.text);
+  if (typeof event.thinking === "string" && event.thinking.trim()) return normalizeStreamTextChunk(event.thinking);
+  return "";
+}
+
+/** result 事件中仅推送可读字符串，跳过 JSON 形态 */
+function extractCursorResultNl(event) {
+  if (!event || typeof event !== "object") return "";
+  const r = event.result;
+  if (typeof r !== "string" || !r.trim()) return "";
+  const t = r.trim();
+  if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+    try {
+      JSON.parse(t);
+      return "";
+    } catch {
+      return normalizeStreamTextChunk(r);
+    }
+  }
+  return normalizeStreamTextChunk(r);
+}
+
+function tryEmitOpenCodeLineAsNatural(line, emit) {
+  const raw = String(line || "");
+  const t = raw.trim();
+  if (!t) return;
+  try {
+    const ev = JSON.parse(t);
+    if (ev && typeof ev === "object") {
+      const ty = ev.type;
+      if (ty === "thinking" || ty === "assistant") {
+        const text = extractCursorStreamNlText(ev);
+        if (text) emit({ type: "natural", kind: ty === "thinking" ? "thinking" : "assistant", text });
+        return;
+      }
+      if (ty === "result") {
+        const text = extractCursorResultNl(ev);
+        if (text) emit({ type: "natural", kind: "result", text });
+        return;
+      }
+    }
+  } catch {
+    /* 非 JSON，按正文行处理 */
+  }
+  if (t.startsWith("{") || t.startsWith("[")) return;
+  emit({ type: "natural", kind: "assistant", text: t });
+}
+
+/**
+ * Cursor CLI：纯文本 prompt，供 Composer / UI 流式使用；不写 process stdout/stderr。
+ * @returns {{ child: import('child_process').ChildProcess, finished: Promise<void> }}
+ */
+export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {}) {
+  const onStreamEvent = typeof options.onStreamEvent === "function" ? options.onStreamEvent : null;
+  const ws = path.resolve(cliWorkspace);
+  const model = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
+  const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
+  // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
+  const args = ["--print", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--workspace", ws];
+  const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
+  if (approveMcps) args.push("--approve-mcps");
+  args.push("--force");
+  args.push("--model", model);
+  args.push(promptText);
+
+  const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
+  const child = spawn(agentCmd, args, {
+    cwd: ws,
+    stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
+    shell: false,
+  });
+
+  let lastResult = null;
+  let hadError = false;
+  const STDERR_CAP_BYTES = 1024 * 1024;
+  const stderrChunks = [];
+  let stderrTotalBytes = 0;
+  let stderrComposerBuffer = "";
+
+  const emit = (payload) => {
+    try {
+      onStreamEvent?.(payload);
+    } catch (_) {}
+  };
+
+  if (!useStderrInherit) {
+    child.stderr.on("data", (chunk) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
+      const len = buf.length;
+      while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
+        const drop = stderrChunks.shift();
+        stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
+      }
+      stderrChunks.push(buf);
+      stderrTotalBytes += len;
+      stderrComposerBuffer += s;
+      let idx;
+      while ((idx = stderrComposerBuffer.indexOf("\n")) !== -1) {
+        const line = stderrComposerBuffer.slice(0, idx);
+        stderrComposerBuffer = stderrComposerBuffer.slice(idx + 1);
+        if (line.trim()) {
+          emit({ type: "status", line: `[stderr] ${truncateComposerLine(line)}` });
+        }
+      }
+    });
+  }
+
+  const stdoutWidth = 80;
+  const mdStreamer = createMarkdownStreamer({
+    render: (md) => renderMarkdown(md, { width: stdoutWidth }),
+    spacing: "single",
+  });
+
+  const STDOUT_RAW_CAP = 200;
+  const debugStdout = process.env.AGENTFLOW_DEBUG_STDOUT === "1" || process.env.AGENTFLOW_DEBUG_STDOUT === "true";
+
+  function isLikelyBase64(s) {
+    if (!s || typeof s !== "string") return false;
+    const t = s.trim();
+    if (t.startsWith("data:image/") && t.includes(";base64,")) return true;
+    if (t.length < 80) return false;
+    return /^[A-Za-z0-9+/]+=*$/.test(t);
+  }
+
+  child.stdout.setEncoding("utf-8");
+  let stdoutLineBuffer = "";
+  child.stdout.on("data", (chunk) => {
+    stdoutLineBuffer += chunk;
+    const idx = stdoutLineBuffer.lastIndexOf("\n");
+    const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
+    if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
+    const lines = complete.split("\n").filter(Boolean);
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "assistant" && event.message?.content) {
+          const text = extractCursorStreamNlText(event);
+          if (text) {
+            emit({ type: "natural", kind: "assistant", text });
+            mdStreamer.push(text);
+            emit({ type: "status", line: "生成回复中…" });
+          }
+        } else if (event.type === "tool_call") {
+          const toolName =
+            event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
+          const subtype = event.subtype ?? "";
+          const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
+          emit({ type: "status", line: statusLine });
+          if (options.onToolCall) options.onToolCall(subtype, toolName);
+        } else if (event.type === "thinking") {
+          const thinkText = extractCursorStreamNlText(event);
+          if (thinkText) emit({ type: "natural", kind: "thinking", text: thinkText });
+          emit({ type: "status", line: "思考中…" });
+          if (options.onToolCall) options.onToolCall("thinking", "");
+        } else if (event.type === "result") {
+          lastResult = event;
+          const resultNl = extractCursorResultNl(event);
+          if (resultNl) emit({ type: "natural", kind: "result", text: resultNl });
+          if (event.subtype === "success" && !event.is_error) {
+            hadError = false;
+            emit({ type: "status", line: "完成" });
+          } else {
+            hadError = true;
+            const errNl = extractCursorResultNl(event);
+            if (errNl) emit({ type: "natural", kind: "error", text: errNl });
+            emit({
+              type: "status",
+              line: truncateComposerLine(String(event.result || "执行失败")),
+            });
+          }
+        } else {
+          emit({ type: "status", line: `事件: ${event.type ?? "unknown"}` });
+        }
+      } catch (_) {
+        if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
+          let subtype = "?";
+          try {
+            const ev = JSON.parse(line);
+            if (ev && ev.type === "tool_call") subtype = ev.subtype ?? "?";
+          } catch {
+            const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
+            if (m) subtype = m[1];
+          }
+          emit({ type: "status", line: `工具调用 (${subtype})` });
+        } else if (isLikelyBase64(line)) {
+          emit({ type: "status", line: `[cursor-stdout] (base64 数据, ${line.length} 字符)` });
+        } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
+          emit({ type: "status", line: truncateComposerLine(line) });
+        } else if (lastResult == null) {
+          emit({
+            type: "status",
+            line: truncateComposerLine(`(非 JSON) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}`),
+          });
+        } else {
+          emit({ type: "status", line: `(未解析行, ${line.length} 字符)` });
+        }
+      }
+    }
+  });
+
+  const finished = new Promise((resolve, reject) => {
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(new Error(`Cursor CLI failed to start: ${err.message}. Ensure '${agentCmd}' is in PATH.`));
+    });
+
+    child.on("close", (code) => {
+      child.stdout.removeAllListeners();
+      if (!useStderrInherit) child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      mdStreamer.finish();
+      if (!useStderrInherit && stderrComposerBuffer.trim()) {
+        const rest = stderrComposerBuffer.trim();
+        emit({ type: "status", line: `[stderr] ${truncateComposerLine(rest)}` });
+      }
+      if (code !== 0 && lastResult == null) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        const err = new Error(`Cursor CLI exited ${code}. ${stderrTail || "No result event received."}`);
+        err.cursorStderrTail = stderrTail;
+        emit({ type: "status", line: truncateComposerLine(err.message) });
+        reject(err);
+        return;
+      }
+      if (hadError || (lastResult && lastResult.is_error)) {
+        const msg = lastResult?.result || "Agent reported error.";
+        emit({ type: "status", line: truncateComposerLine(msg) });
+        reject(new Error(msg));
+        return;
+      }
+      resolve();
+    });
+  });
+
+  return { child, finished };
+}
+
+/**
+ * OpenCode CLI：纯文本 prompt，供 Composer / UI；不写 process stdout/stderr。
+ * @returns {{ child: import('child_process').ChildProcess, finished: Promise<void> }}
+ */
+export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {}) {
+  const onStreamEvent = typeof options.onStreamEvent === "function" ? options.onStreamEvent : null;
+  const ws = path.resolve(cliWorkspace);
+  const model = options.model && String(options.model).trim();
+  const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+  const args = ["run"];
+  if (model) args.push("--model", model);
+  args.push("--dir", ws);
+  args.push("--", promptText);
+
+  const spawnOpts = {
+    cwd: ws,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+  };
+  if (options.force) {
+    spawnOpts.env = {
+      ...process.env,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        permission: { external_directory: "allow" },
+      }),
+    };
+  }
+
+  const child = spawn(opencodeCmd, args, spawnOpts);
+
+  const emit = (payload) => {
+    try {
+      onStreamEvent?.(payload);
+    } catch (_) {}
+  };
+
+  let outBuf = "";
+  let errBuf = "";
+
+  child.stdout.setEncoding("utf-8");
+  child.stdout.on("data", (chunk) => {
+    const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+    outBuf += s;
+    let idx;
+    while ((idx = outBuf.indexOf("\n")) !== -1) {
+      const line = outBuf.slice(0, idx);
+      outBuf = outBuf.slice(idx + 1);
+      if (line) {
+        tryEmitOpenCodeLineAsNatural(line, emit);
+        emit({ type: "status", line: `[stdout] ${truncateComposerLine(line)}` });
+      }
+    }
+  });
+
+  child.stderr.setEncoding("utf-8");
+  child.stderr.on("data", (chunk) => {
+    const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+    errBuf += s;
+    let idx;
+    while ((idx = errBuf.indexOf("\n")) !== -1) {
+      const line = errBuf.slice(0, idx);
+      errBuf = errBuf.slice(idx + 1);
+      if (line) {
+        tryEmitOpenCodeLineAsNatural(line, emit);
+        emit({ type: "status", line: `[stderr] ${truncateComposerLine(line)}` });
+      }
+    }
+  });
+
+  const finished = new Promise((resolve, reject) => {
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(new Error(`OpenCode CLI failed to start: ${err.message}. Ensure '${opencodeCmd}' is in PATH.`));
+    });
+
+    child.on("close", (code) => {
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      if (outBuf.trim()) {
+        tryEmitOpenCodeLineAsNatural(outBuf.trim(), emit);
+        emit({ type: "status", line: truncateComposerLine(outBuf.trim()) });
+      }
+      if (errBuf.trim()) {
+        tryEmitOpenCodeLineAsNatural(errBuf.trim(), emit);
+        emit({ type: "status", line: `[opencode_stderr] ${truncateComposerLine(errBuf.trim())}` });
+      }
+      if (code !== 0) {
+        emit({ type: "status", line: `OpenCode 退出码 ${code}` });
+        reject(new Error(`OpenCode CLI exited ${code}.`));
+        return;
+      }
+      emit({ type: "status", line: "完成" });
+      resolve();
+    });
+  });
+
+  return { child, finished };
+}

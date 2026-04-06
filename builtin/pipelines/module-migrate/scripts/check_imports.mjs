@@ -21,7 +21,8 @@ import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PIPELINE_DIR = path.resolve(__dirname, "..");
-const REPO_ROOT_DEFAULT = path.resolve(PIPELINE_DIR, "..", "..", ".."); // pipeline -> agentflow -> .cursor -> likee_android
+// scripts -> module-migrate -> pipelines -> AgentFlow 包根（传入 --root 可指向业务仓库）
+const REPO_ROOT_DEFAULT = path.resolve(PIPELINE_DIR, "..", "..", "..");
 
 const PRIVACY_GLOBS = [
   "**/sg/bigo/live/accountAuth/**",

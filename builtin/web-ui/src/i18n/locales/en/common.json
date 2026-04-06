@@ -1,0 +1,52 @@
+{
+  "app": {
+    "name": "AgentFlow",
+    "tagline": "AI Workflow Orchestration"
+  },
+  "nav": {
+    "projects": "Projects",
+    "flowEditor": "Flow Editor",
+    "settings": "Settings",
+    "back": "Back"
+  },
+  "common": {
+    "loading": "Loading...",
+    "saving": "Saving...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "close": "Close",
+    "confirm": "Confirm",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "refresh": "Refresh",
+    "search": "Search",
+    "filter": "Filter",
+    "success": "Success",
+    "error": "Error",
+    "warning": "Warning",
+    "info": "Info",
+    "done": "Done",
+    "pending": "Pending",
+    "running": "Running",
+    "notFound": "Not found",
+    "required": "Required",
+    "optional": "Optional"
+  },
+  "status": {
+    "success": "Success",
+    "failed": "Failed",
+    "pending": "Pending",
+    "running": "Running",
+    "skipped": "Skipped"
+  },
+  "nodeTypes": {
+    "agent": "Agent",
+    "control": "Control",
+    "tool": "Tool",
+    "start": "Start",
+    "end": "End"
+  }
+}

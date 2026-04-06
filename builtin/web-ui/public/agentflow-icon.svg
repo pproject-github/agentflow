@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="AgentFlow">
+  <title>AgentFlow</title>
+  <rect width="32" height="32" rx="9" fill="#131313"/>
+  <!-- ‚¹surface_container_high + primary nÓ -->
+  <rect x="4.5" y="11" width="10.5" height="10" rx="3" fill="#2a2a2a" stroke="#7c4dff" stroke-width="1.2"/>
+  <!-- 	:ÉÞ¿ -->
+  <path
+    d="M15.25 14.25C17.8 12.2 19.2 9.8 22.25 9.25"
+    stroke="#cdbdff"
+    stroke-width="1.65"
+    stroke-linecap="round"
+  />
+  <path
+    d="M15.25 17.75C17.8 19.8 19.2 22.2 22.25 22.75"
+    stroke="#7c4dff"
+    stroke-width="1.65"
+    stroke-linecap="round"
+    opacity="0.92"
+  />
+  <!-- î‚¹e®hb + {‹rÏ¹text / file	 -->
+  <rect x="21.75" y="6" width="7.25" height="7" rx="2.25" fill="#353534" stroke="#e8deff" stroke-width="0.95" opacity="0.95"/>
+  <rect x="21.75" y="19" width="7.25" height="7" rx="2.25" fill="#353534" stroke="#9ecaff" stroke-width="0.95" opacity="0.9"/>
+</svg>

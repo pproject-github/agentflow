@@ -1,0 +1,44 @@
+{
+  "title": "流程编辑器",
+  "nodes": "节点",
+  "edges": "连线",
+  "properties": "属性",
+  "composer": {
+    "title": "AI 助手",
+    "placeholder": "让 AI 协助编辑此节点…",
+    "thinking": "思考",
+    "reply": "回复",
+    "result": "结果",
+    "error": "错误",
+    "waiting": "等待响应…",
+    "yourQuestion": "您的问题",
+    "send": "发送",
+    "expand": "展开对话",
+    "collapse": "收起"
+  },
+  "node": {
+    "label": "节点标签",
+    "type": "节点类型",
+    "model": "模型",
+    "body": "内容",
+    "inputs": "输入",
+    "outputs": "输出",
+    "addInput": "添加输入",
+    "addOutput": "添加输出",
+    "remove": "删除节点",
+    "duplicate": "复制节点"
+  },
+  "actions": {
+    "run": "运行流程",
+    "stop": "停止",
+    "resume": "继续",
+    "validate": "校验",
+    "export": "导出",
+    "import": "导入"
+  },
+  "panel": {
+    "nodeList": "节点列表",
+    "runHistory": "运行历史",
+    "validation": "校验结果"
+  }
+}

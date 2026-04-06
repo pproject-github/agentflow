@@ -1,0 +1,19 @@
+{
+  "aiLabels": {
+    "thinking": "思考",
+    "result": "结果",
+    "reply": "回复",
+    "error": "错误"
+  },
+  "placeholders": {
+    "input": "让 AI 协助编辑此节点…",
+    "waiting": "等待响应…"
+  },
+  "actions": {
+    "send": "发送",
+    "stop": "停止",
+    "expand": "展开",
+    "collapse": "收起",
+    "clear": "清空"
+  }
+}

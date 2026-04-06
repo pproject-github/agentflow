@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Development files
+.git/
+.github/
+.vscode/
+*.md
+!README.md
+!README.zh-CN.md
+!LICENSE
+
+# AgentFlow runtime (should not be published)
+.workspace/
+output/
+run/
+logs/
+
+# Test & example directories
+docs/
+skills/
+stitch/
+builtin/web-ui/node_modules/
+builtin/web-ui/src/
+
+# Config files that are dev-only
+.npmrc
+.gitignore
+*.test.js
+*.spec.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+*.tgz

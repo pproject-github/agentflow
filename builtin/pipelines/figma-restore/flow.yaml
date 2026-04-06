@@ -1,0 +1,313 @@
+instances:
+  control_start:
+    definitionId: control_start
+    label: Start
+    role: 普通
+    input: []
+    output:
+      - type: 节点
+        name: next
+        value: ''
+
+  provide_figma_url:
+    definitionId: provide_str
+    label: FigmaURL
+    role: 普通
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: 'https://www.figma.com/design/FILE_KEY/Name?node-id=1-2'
+
+  provide_figma_token:
+    definitionId: provide_str
+    label: FigmaToken
+    role: 普通
+    input: []
+    output:
+      - type: 文本
+        name: value
+        value: ''
+
+  tool_test_scripts:
+    definitionId: tool_nodejs
+    label: 脚本自检
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文本
+        name: result
+        value: ''
+    script: node ${flowDir}/scripts/test-all.mjs
+    body: 运行 scripts/test-all.mjs 对 URL 解析、节点遍历、汇总逻辑做离线单元测试；全部通过后才继续流程。
+
+  tool_fetch_figma_tree:
+    definitionId: tool_nodejs
+    label: 获取Figma节点树与截图
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: figmaUrl
+        value: 'https://www.figma.com/design/FILE_KEY/Name?node-id=1-2'
+      - type: 文本
+        name: figmaToken
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文本
+        name: result
+        value: ''
+    script: node ${flowDir}/scripts/fetch-figma-tree.mjs --figma-url ${figmaUrl} --figma-token ${figmaToken} --run-dir ${runDir}
+    body: 调用 Figma REST API 获取完整文件树 JSON 与目标节点 2x PNG 截图，stdout 输出元数据 JSON 供下游引用。
+
+  agent_semantic_recognize:
+    definitionId: agent_subAgent
+    label: AI语义识别截图结构
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: figmaFetchResult
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: semantic_layout
+        value: output/semantic_layout.md
+    body: |-
+      你是 UI/前端还原助手。输入 ${figmaFetchResult} 为上游「获取Figma节点树与截图」stdout 的整段 JSON 文本。
+      1) 解析 treeJsonPath、screenshotPath（绝对或相对 run 的路径）。
+      2) 若 screenshotPath 可读，结合画面做语义识别：信息架构、分区、主组件、文案层级、栅格/间距印象、与代码侧可映射的「框架」建议（不写具体代码）。
+      3) 将结论写入 ${semantic_layout}（Markdown）：含「概述」「分区与组件」「还原优先级」「与节点树对照的注意点」。
+      仅依赖上述路径与文本；勿臆造未在截图/JSON 中出现的节点名。
+
+  agent_restore_by_tree_dfs:
+    definitionId: agent_subAgent
+    label: 按树深度遍历还原
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文本
+        name: figmaFetchResult
+        value: ''
+      - type: 文件
+        name: semantic_layout
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文件
+        name: restore_plan
+        value: output/figma_restore_plan.json
+    body: |-
+      你是还原编排助手。必读：${figmaFetchResult}（fetch stdout JSON）与 ${semantic_layout}（语义 Markdown）。
+      1) 用 treeJsonPath 读取 Figma FILE JSON，从 document 起做深度优先遍历（与画布层级一致：先父后子）。
+      2) 遇 FRAME / SECTION / GROUP 等容器：role=frame，记录嵌套顺序与 Auto Layout / constraints 要点（若有）。
+      3) 遇 COMPONENT_SET、COMPONENT、INSTANCE：role=component，写组件边界与实例化注意点。
+      4) name 以 img_export 或 icon_export（不区分大小写）开头：role=asset，将 { id, name } 并入 exportNodeIds（去重 id）。
+      5) 将 fileKey、treeJsonPath 从 ${figmaFetchResult} 原样写入根字段，便于下游脚本在缺省 fetchMeta 时回退。
+      6) 输出唯一 JSON 文件到 ${restore_plan}，UTF-8，结构：
+      { "fileKey": "", "treeJsonPath": "", "dfsOrder": [ { "id", "name", "type", "role": "frame|component|asset" } ], "exportNodeIds": [ { "id", "name" } ], "notes": "" }
+
+  tool_export_assets:
+    definitionId: tool_nodejs
+    label: 导出img/icon资源
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: restorePlan
+        value: output/figma_restore_plan.json
+      - type: 文本
+        name: figmaToken
+        value: ''
+      - type: 文本
+        name: fetchMeta
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文本
+        name: result
+        value: ''
+    script: node ${flowDir}/scripts/export-assets.mjs --restore-plan ${restorePlan} --figma-token ${figmaToken} --run-dir ${runDir} --fetch-meta ${fetchMeta}
+    body: 用 fileKey + X-Figma-Token 调 Figma REST API 批量导出 PNG 资源，与 restore_plan 中 exportNodeIds 合并后落盘至 runDir/figma_exports/。
+
+  tool_finalize:
+    definitionId: tool_nodejs
+    label: 汇总交付JSON
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+      - type: 文件
+        name: restore_plan
+        value: output/figma_restore_plan.json
+      - type: 文本
+        name: export_result
+        value: ''
+    output:
+      - type: 节点
+        name: next
+        value: ''
+      - type: 文本
+        name: result
+        value: ''
+    script: node ${flowDir}/scripts/finalize.mjs --restore-plan ${restore_plan} --export-result ${export_result}
+    body: 读取还原计划与资源导出结果，汇总 dfsSteps、exportAssets 计数与完整 exportReport，输出交付摘要 JSON。
+
+  control_end:
+    definitionId: control_end
+    label: End
+    role: 普通
+    input:
+      - type: 节点
+        name: prev
+        value: ''
+    output: []
+
+edges:
+  # Start → 脚本自检
+  - source: control_start
+    target: tool_test_scripts
+    sourceHandle: output-0
+    targetHandle: input-0
+  # 脚本自检 → 获取节点树
+  - source: tool_test_scripts
+    target: tool_fetch_figma_tree
+    sourceHandle: output-0
+    targetHandle: input-0
+  # FigmaURL → 获取节点树.figmaUrl
+  - source: provide_figma_url
+    target: tool_fetch_figma_tree
+    sourceHandle: output-0
+    targetHandle: input-1
+  # FigmaToken → 获取节点树.figmaToken
+  - source: provide_figma_token
+    target: tool_fetch_figma_tree
+    sourceHandle: output-0
+    targetHandle: input-2
+  # 获取节点树.next → AI语义识别.prev
+  - source: tool_fetch_figma_tree
+    target: agent_semantic_recognize
+    sourceHandle: output-0
+    targetHandle: input-0
+  # 获取节点树.result → AI语义识别.figmaFetchResult
+  - source: tool_fetch_figma_tree
+    target: agent_semantic_recognize
+    sourceHandle: output-1
+    targetHandle: input-1
+  # AI语义识别.next → 按树DFS还原.prev
+  - source: agent_semantic_recognize
+    target: agent_restore_by_tree_dfs
+    sourceHandle: output-0
+    targetHandle: input-0
+  # 获取节点树.result → 按树DFS还原.figmaFetchResult
+  - source: tool_fetch_figma_tree
+    target: agent_restore_by_tree_dfs
+    sourceHandle: output-1
+    targetHandle: input-1
+  # AI语义识别.semantic_layout → 按树DFS还原.semantic_layout
+  - source: agent_semantic_recognize
+    target: agent_restore_by_tree_dfs
+    sourceHandle: output-1
+    targetHandle: input-2
+  # 按树DFS还原.next → 导出资源.prev
+  - source: agent_restore_by_tree_dfs
+    target: tool_export_assets
+    sourceHandle: output-0
+    targetHandle: input-0
+  # 按树DFS还原.restore_plan → 导出资源.restorePlan
+  - source: agent_restore_by_tree_dfs
+    target: tool_export_assets
+    sourceHandle: output-1
+    targetHandle: input-1
+  # FigmaToken → 导出资源.figmaToken
+  - source: provide_figma_token
+    target: tool_export_assets
+    sourceHandle: output-0
+    targetHandle: input-2
+  # 获取节点树.result → 导出资源.fetchMeta
+  - source: tool_fetch_figma_tree
+    target: tool_export_assets
+    sourceHandle: output-1
+    targetHandle: input-3
+  # 导出资源.next → 汇总交付.prev
+  - source: tool_export_assets
+    target: tool_finalize
+    sourceHandle: output-0
+    targetHandle: input-0
+  # 按树DFS还原.restore_plan → 汇总交付.restore_plan
+  - source: agent_restore_by_tree_dfs
+    target: tool_finalize
+    sourceHandle: output-1
+    targetHandle: input-1
+  # 导出资源.result → 汇总交付.export_result
+  - source: tool_export_assets
+    target: tool_finalize
+    sourceHandle: output-1
+    targetHandle: input-2
+  # 汇总交付 → End
+  - source: tool_finalize
+    target: control_end
+    sourceHandle: output-0
+    targetHandle: input-0
+
+ui:
+  nodePositions:
+    control_start:
+      x: -200
+      'y': 200
+    provide_figma_url:
+      x: -200
+      'y': 380
+    provide_figma_token:
+      x: -200
+      'y': 500
+    tool_test_scripts:
+      x: 60
+      'y': 200
+    tool_fetch_figma_tree:
+      x: 320
+      'y': 200
+    agent_semantic_recognize:
+      x: 600
+      'y': 120
+    agent_restore_by_tree_dfs:
+      x: 880
+      'y': 200
+    tool_export_assets:
+      x: 1160
+      'y': 320
+    tool_finalize:
+      x: 1440
+      'y': 200
+    control_end:
+      x: 1720
+      'y': 200
+  description: |-
+    Figma 还原：脚本自检 → REST 拉取节点树与截图 → AI 语义识别 → 按树 DFS 产出还原计划 →
+    工具批量导出 img_export/icon_export 资源 → 汇总交付 JSON。
+    所有 tool_nodejs 脚本均为 scripts/ 下独立 .mjs 文件，可单独运行与测试。

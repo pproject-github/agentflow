@@ -1,0 +1,52 @@
+{
+  "app": {
+    "name": "AgentFlow",
+    "tagline": "AI 工作流编排"
+  },
+  "nav": {
+    "projects": "项目",
+    "flowEditor": "流程编辑器",
+    "settings": "设置",
+    "back": "返回"
+  },
+  "common": {
+    "loading": "加载中…",
+    "saving": "保存中…",
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "close": "关闭",
+    "confirm": "确认",
+    "copy": "复制",
+    "copied": "已复制！",
+    "refresh": "刷新",
+    "search": "搜索",
+    "filter": "筛选",
+    "success": "成功",
+    "error": "错误",
+    "warning": "警告",
+    "info": "信息",
+    "done": "完成",
+    "pending": "待处理",
+    "running": "运行中",
+    "notFound": "未找到",
+    "required": "必填",
+    "optional": "可选"
+  },
+  "status": {
+    "success": "成功",
+    "failed": "失败",
+    "pending": "等待",
+    "running": "运行中",
+    "skipped": "跳过"
+  },
+  "nodeTypes": {
+    "agent": "Agent 节点",
+    "control": "控制节点",
+    "tool": "工具节点",
+    "start": "开始",
+    "end": "结束"
+  }
+}

@@ -17,3 +17,6 @@ Thumbs.db
 .cursor/commands
 .cursor/skills
 # --- end capability package[cursor]: code_review ---
+
+# Local skill locks (contain machine-specific paths)
+skills-lock.json

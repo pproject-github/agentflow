@@ -3,6 +3,6 @@
   { "id": "agentflow-node-executor-planning", "name": "技术规划", "description": "规划类节点执行器，强调规划拆解与步骤执行。", "filepath": "agents/agentflow-node-executor-planning.md" },
   { "id": "agentflow-node-executor-code", "name": "代码执行", "description": "代码编写类节点执行器，强调代码实现与准确性。", "filepath": "agents/agentflow-node-executor-code.md" },
   { "id": "agentflow-node-executor-test", "name": "测试回归", "description": "测试回归类节点执行器，行为与通用执行器一致，侧重测试与验证。", "filepath": "agents/agentflow-node-executor-test.md" },
-  { "id": "agentflow-node-executor", "name": "普通", "description": "执行单个节点，按 prompt 中的 AgentFlowSystem 与 AgentSubAgent 完成任务。", "filepath": "agents/agentflow-node-executor.md" },
+  { "id": "agentflow-node-executor", "name": "普通", "description": "通用流程节点执行器，读取 prompt 文件并按其指令完成任务。", "filepath": "agents/agentflow-node-executor.md" },
   { "id": "agentflow-node-executor-ui", "name": "前端/UI", "description": "前端/UI 还原类节点执行器，强调设计落地与视觉一致。", "filepath": "agents/agentflow-node-executor-ui.md" }
 ]

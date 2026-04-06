@@ -319,7 +319,7 @@ instances:
         name: result
         value: ''
     body: |-
-      .cursor/agentflow/pipelines/live-module-migrate/scripts/check_imports.mjs
+      .workspace/agentflow/pipelines/live-module-migrate/scripts/check_imports.mjs
 
       迁移前的文件列表 ${todo}，迁移后的文件列表 ${done}，错误引用module代码位置：行数 -> 对应被引用的FQCN
   if_static:
@@ -373,7 +373,7 @@ instances:
   control_toBool_static_bool:
     definitionId: control_toBool
     label: 静态检查结果转换
-    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+    description: 根据下文的执行任务内容，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点
@@ -416,7 +416,7 @@ instances:
   control_toBool_gradle_bool:
     definitionId: control_toBool
     label: 列表完成结果
-    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+    description: 根据下文的执行任务内容，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点
@@ -456,7 +456,7 @@ instances:
   to_bool_fix_all:
     definitionId: control_toBool
     label: 是否修复完
-    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+    description: 根据下文的执行任务内容，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     modelType: Auto
     input:
       - type: 节点
@@ -493,7 +493,7 @@ instances:
   tool_print_module:
     definitionId: tool_print
     label: Print展示
-    description: 以特殊字体样式向用户输出内容，内容为 AgentSubAgent 内的信息。
+    description: 以特殊字体样式向用户输出内容，内容为执行任务中的信息。
     modelType: Auto
     input:
       - type: 节点

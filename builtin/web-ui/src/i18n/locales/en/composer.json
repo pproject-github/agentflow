@@ -1,0 +1,19 @@
+{
+  "aiLabels": {
+    "thinking": "Thinking",
+    "result": "Result",
+    "reply": "Reply",
+    "error": "Error"
+  },
+  "placeholders": {
+    "input": "Ask AI to help edit this node...",
+    "waiting": "Waiting for response..."
+  },
+  "actions": {
+    "send": "Send",
+    "stop": "Stop",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "clear": "Clear"
+  }
+}

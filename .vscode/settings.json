@@ -1,5 +1,16 @@
 {
+  // Note: The YAML schema validation below requires flow-schema.json to exist
+  // in .workspace/agentflow/ or .cursor/agentflow/. This file is not included
+  // in the repository; you can generate or obtain it separately for enhanced
+  // flow.yaml editing support. The configuration is kept for reference.
   "yaml.schemas": {
-    ".cursor/agentflow/flow-schema.json": ".cursor/agentflow/pipelines/**/flow.yaml"
+    ".workspace/agentflow/flow-schema.json": [
+      ".workspace/agentflow/pipelines/**/flow.yaml",
+      ".cursor/agentflow/pipelines/**/flow.yaml"
+    ],
+    ".cursor/agentflow/flow-schema.json": [
+      ".workspace/agentflow/pipelines/**/flow.yaml",
+      ".cursor/agentflow/pipelines/**/flow.yaml"
+    ]
   }
 }

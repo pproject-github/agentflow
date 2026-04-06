@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-root:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify CLI
+        run: |
+          node bin/agentflow.mjs --help
+
+  test-web-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./builtin/web-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: ./builtin/web-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Web UI
+        run: npm run build
+
+  lint-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for private registry URLs
+        run: |
+          # Ensure no private npm registry URLs in lock files
+          if grep -r "npm.ppx520.com" package-lock.json builtin/web-ui/package-lock.json 2>/dev/null; then
+            echo "Error: Found private registry URLs in lock files"
+            exit 1
+          fi
+          echo "✓ No private registry URLs found"

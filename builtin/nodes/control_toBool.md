@@ -1,6 +1,6 @@
 ---
 # 内置节点：转布尔
-description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+description: 根据下文的执行任务内容，得到 bool 结果后，将 "true" 或 "false" 写入到 ${prediction} ，且仅仅写入 true 或者 false。
 displayName: ToBool
 input:
   - type: 节点

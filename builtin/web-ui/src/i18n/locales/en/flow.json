@@ -1,0 +1,44 @@
+{
+  "title": "Flow Editor",
+  "nodes": "Nodes",
+  "edges": "Edges",
+  "properties": "Properties",
+  "composer": {
+    "title": "AI Assistant",
+    "placeholder": "Ask AI to help with this node...",
+    "thinking": "Thinking",
+    "reply": "Reply",
+    "result": "Result",
+    "error": "Error",
+    "waiting": "Waiting for response...",
+    "yourQuestion": "Your question",
+    "send": "Send",
+    "expand": "Expand conversation",
+    "collapse": "Collapse"
+  },
+  "node": {
+    "label": "Node Label",
+    "type": "Node Type",
+    "model": "Model",
+    "body": "Body",
+    "inputs": "Inputs",
+    "outputs": "Outputs",
+    "addInput": "Add Input",
+    "addOutput": "Add Output",
+    "remove": "Remove Node",
+    "duplicate": "Duplicate Node"
+  },
+  "actions": {
+    "run": "Run Flow",
+    "stop": "Stop",
+    "resume": "Resume",
+    "validate": "Validate",
+    "export": "Export",
+    "import": "Import"
+  },
+  "panel": {
+    "nodeList": "Node List",
+    "runHistory": "Run History",
+    "validation": "Validation Results"
+  }
+}

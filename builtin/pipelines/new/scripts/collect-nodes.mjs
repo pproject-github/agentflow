@@ -8,7 +8,13 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import yaml from "js-yaml";
+import { LEGACY_NODES_DIR, PIPELINES_DIR, PROJECT_NODES_DIR } from "../../../../bin/lib/paths.mjs";
+import { getFlowDir } from "../../../../bin/lib/workspace.mjs";
+
+const __dirnameScript = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_BUILTIN_NODES_DIR = path.join(path.resolve(__dirnameScript, "..", "..", ".."), "nodes");
 
 function extractFrontmatter(raw) {
   const m = raw.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -115,21 +121,29 @@ function main() {
   }
 
   const [workspaceRoot, flowName] = args.map((p) => path.resolve(p));
-  const nodesDir = path.join(workspaceRoot, ".cursor", "agentflow", "nodes");
-  const flowDir = path.join(workspaceRoot, ".cursor", "agentflow", "pipelines", flowName);
+  const nodesDirLegacy = path.join(workspaceRoot, LEGACY_NODES_DIR);
+  const nodesDirNew = path.join(workspaceRoot, PROJECT_NODES_DIR);
+  const flowDir = getFlowDir(workspaceRoot, flowName) || path.join(workspaceRoot, PIPELINES_DIR, flowName);
 
   const out = [];
 
-  // 1. 内置节点
+  // 1. 项目级节点目录：旧 .cursor 与新 .workspace 合并（同 id 新路径优先）
   out.push("# 节点元数据（内置 + 当前流水线）\n");
   out.push("## 1. 内置节点元数据\n\n");
-  if (!fs.existsSync(nodesDir)) {
-    out.push("（无内置节点目录）\n");
+  const projectById = new Map();
+  const mergeProjectDir = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) {
+      projectById.set(file.replace(/\.md$/, ""), path.join(dir, file));
+    }
+  };
+  mergeProjectDir(nodesDirLegacy);
+  mergeProjectDir(nodesDirNew);
+  if (projectById.size === 0) {
+    out.push("（无项目内节点目录）\n");
   } else {
-    const files = fs.readdirSync(nodesDir).filter((f) => f.endsWith(".md")).sort();
-    for (const file of files) {
-      const definitionId = file.replace(/\.md$/, "");
-      const meta = readNodeMeta(path.join(nodesDir, file));
+    for (const definitionId of [...projectById.keys()].sort()) {
+      const meta = readNodeMeta(projectById.get(definitionId));
       if (!meta) continue;
       out.push(`### ${definitionId}\n`);
       out.push(`- **displayName**: ${meta.displayName || definitionId}\n`);
@@ -152,8 +166,17 @@ function main() {
     let input = nodeInput || [];
     let output = nodeOutput || [];
     if (input.length === 0 && output.length === 0) {
-      const defPath = path.join(nodesDir, `${definitionId}.md`);
-      const meta = readNodeMeta(defPath);
+      const tryPaths = [
+        path.join(flowDir, "nodes", `${definitionId}.md`),
+        path.join(nodesDirNew, `${definitionId}.md`),
+        path.join(nodesDirLegacy, `${definitionId}.md`),
+        path.join(PACKAGE_BUILTIN_NODES_DIR, `${definitionId}.md`),
+      ];
+      let meta = null;
+      for (const defPath of tryPaths) {
+        meta = readNodeMeta(defPath);
+        if (meta) break;
+      }
       if (meta) {
         input = meta.input;
         output = meta.output;

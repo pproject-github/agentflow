@@ -1,0 +1,1016 @@
+.designCanvas {
+  min-height: 100vh;
+  width: 100%;
+  background: #0a0a12;
+}
+
+/** SECTION `非SVIP` (67:2749), scrollBehavior SCROLLS — contains FRAME `非SVIP0_当前在0` */
+.nonSvipSection {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100dvh;
+  width: 100%;
+  overflow-x: clip;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.root {
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  background: #0a0a12;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-x: hidden;
+}
+
+.scroll {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/** Reserves vertical space matching `FixedHeaderBar` + safe-area (tune with real header metrics) */
+.headerScrollSpacer {
+  flex-shrink: 0;
+  height: calc(44px + env(safe-area-inset-top, 0px));
+}
+
+.fixedHeader {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: 100%;
+  max-width: 430px;
+  pointer-events: auto;
+}
+
+.sectionPlaceholder {
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.bgLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bgLayer img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* --- `restore_comp_levelInfo_default` (3246:22310) — Figma width 720 @2x --- */
+.levelInfoSection {
+  --design-w: 720;
+  --s: calc(min(100vw, 430px) / var(--design-w));
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* Figma FRAME `3246:22311` status_bar_height — design h 48 @ 720w; invisible in file (opacity 0) */
+.levelInfoStatusReserve {
+  height: calc(var(--s) * 48);
+  width: 100%;
+  flex-shrink: 0;
+}
+
+/* Figma FRAME `3303:13159` 标题栏高度预留 — design h 96 @ 720w */
+.levelInfoTitleReserve {
+  height: calc(var(--s) * 96);
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.levelInfoSheet {
+  position: relative;
+  width: 100%;
+  padding: 0 calc(var(--s) * 16);
+  box-sizing: border-box;
+}
+
+.levelInfoHeroRow {
+  position: relative;
+  width: 100%;
+  min-height: calc(var(--s) * 332);
+}
+
+.levelInfoPersonal {
+  position: relative;
+  z-index: 2;
+  width: calc(100% * 376 / 720);
+  max-width: calc(100% * 376 / 720);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--s) * 12);
+}
+
+.levelInfoAvatarRow {
+  display: flex;
+  align-items: flex-start;
+}
+
+.levelInfoAvatarWrap {
+  position: relative;
+  width: calc(var(--s) * 160);
+  height: calc(var(--s) * 124);
+  flex-shrink: 0;
+}
+
+.levelInfoAvatarCircle {
+  position: absolute;
+  left: calc(var(--s) * 36);
+  top: calc(var(--s) * 18);
+  width: calc(var(--s) * 88);
+  height: calc(var(--s) * 88);
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.levelInfoAvatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.levelInfoAvatarFrame {
+  position: absolute;
+  left: calc(var(--s) * -2);
+  top: calc(var(--s) * -8);
+  width: calc(var(--s) * 165);
+  height: calc(var(--s) * 141);
+  pointer-events: none;
+}
+
+/* INSTANCE `等级=0未达成` — clipsContent in Figma; fills frame box for raster */
+.levelInfoAvatarFrameVariant {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/**
+ * ELLIPSE `Ellipse 1` (I3246:22317;27:699;24:649) — under `img_export_头像框` / `头像挂件 1`.
+ * Design parent `等级=0未达成` 165×141; bbox offset vs parent + size from Figma absoluteBoundingBox.
+ * File marks `visible: false`; keep hidden in UI unless toggling vector-only mode.
+ */
+.levelInfoAvatarFrameEllipse1 {
+  position: absolute;
+  left: calc(100% * 32.32141113281244 / 165);
+  top: calc(100% * 20.03570556640625 / 141.4285888671875);
+  width: calc(100% * 101.3571548461914 / 165);
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 50%;
+  background: rgb(153, 86, 86);
+  box-sizing: border-box;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/**
+ * ELLIPSE `Ellipse 2` (I3246:22317;27:699;24:650) — ~83.68px circle, solid #d9d9d9.
+ * Layer order: Ellipse 1 → Ellipse 2 → `img_export_头像框` raster.
+ */
+.levelInfoAvatarFrameEllipse2 {
+  position: absolute;
+  z-index: 1;
+  left: calc(100% * 41.16070556640625 / 165);
+  top: calc(100% * 28.875 / 141.4285888671875);
+  width: calc(100% * 83.67858123779297 / 165);
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 50%;
+  background: rgb(217, 217, 217);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.levelInfoAvatarFrameImg {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/**
+ * RECTANGLE `头像挂件 1` (I3246:22317;27:699;24:651) — full-bleed over Ellipse 1/2.
+ * Figma image filters: exposure ~+0.09, saturation -1 (grayscale).
+ */
+.levelInfoAvatarFramePendant {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+  pointer-events: none;
+  filter: saturate(0) brightness(1.09);
+}
+
+.levelInfoTextBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--s) * 8);
+  padding-left: calc(var(--s) * 4);
+}
+
+.levelInfoNameRow {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--s) * 4);
+}
+
+/* TEXT `昵称` (3246:22320): 32 / 37.5, Medium 500, #D9D9D9, letterSpacing 0 */
+.levelInfoNickname {
+  margin: 0;
+  width: 100%;
+  font-family: "Likee Font", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(var(--s) * 32);
+  font-weight: 500;
+  line-height: calc(var(--s) * 37.5);
+  letter-spacing: 0;
+  color: #d9d9d9;
+  text-align: left;
+}
+
+/**
+ * TEXT `Likee ID` (3246:22321): 22 / ~25.78, Regular 400, #D9D9D9, layer opacity 0.65;
+ * layout STRETCH, design height 26 @ 720w frame.
+ */
+.levelInfoLikeeId {
+  margin: 0;
+  width: 100%;
+  min-height: calc(var(--s) * 26);
+  box-sizing: border-box;
+  font-family: "Likee Font", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(var(--s) * 22);
+  font-weight: 400;
+  line-height: calc(var(--s) * 25.78125);
+  letter-spacing: 0;
+  text-align: left;
+  color: rgb(217, 217, 217);
+  opacity: 0.65;
+}
+
+/**
+ * FRAME `状态信息` (3246:22322): vertical, gap 8, max-width 320 @ design px.
+ */
+.statusInfoFrame {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--s) * 8);
+  max-width: calc(var(--s) * 320);
+  box-sizing: border-box;
+}
+
+/**
+ * TEXT `状态信息文本` (3246:22323): LikeeFont-Regular 24, line ~28.125px,
+ * solid fill #D9D9D9 with node opacity 0.65 → single rgba (matches Figma render bounds h ~17.85 on one line).
+ */
+.statusInfoText {
+  margin: 0;
+  width: 100%;
+  min-height: calc(var(--s) * 28);
+  box-sizing: border-box;
+  font-family: "Likee Font", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(var(--s) * 24);
+  font-weight: 400;
+  line-height: calc(var(--s) * 28.125);
+  letter-spacing: 0;
+  text-align: left;
+  color: rgba(217, 217, 217, 0.65);
+  overflow-wrap: anywhere;
+}
+
+/**
+ * INSTANCE `升级按钮` (3246:22324): HORIZONTAL auto-layout, hug×fixed 48px,
+ * padding 10 / 24, pill (cornerRadius 999), fill #D9D9D9; text node LikeeFont-Medium 24 / 28.125, black @ 65%.
+ */
+.levelInfoUpgradeBtn {
+  margin-top: calc(var(--s) * 4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: 0;
+  height: calc(var(--s) * 48);
+  padding: calc(var(--s) * 10) calc(var(--s) * 24);
+  border: none;
+  border-radius: calc(var(--s) * 999);
+  background: #d9d9d9;
+  cursor: pointer;
+}
+
+/**
+ * TEXT `升级按钮文本` (I3246:22324;13:1512): LikeeFont-Medium 24 / 28.125, CENTER;
+ * fill #000 @ opacity 0.65; design `characters` default "Upgrade".
+ */
+.levelInfoUpgradeBtnText {
+  display: block;
+  margin: 0;
+  padding: 0;
+  font-family: "Likee Font", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(var(--s) * 24);
+  font-weight: 500;
+  line-height: calc(var(--s) * 28.125);
+  letter-spacing: 0;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+}
+
+.levelInfoUpgradeBtn:active {
+  transform: scale(0.98);
+}
+
+.levelInfoMedal {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: calc(var(--s) * -8);
+  width: calc(100% * 380 / 720);
+  max-width: calc(100% * 380 / 720);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.levelInfoMedalBase {
+  width: 100%;
+  height: calc(var(--s) * 160);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.levelInfoMedalBaseImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+}
+
+.levelInfoMedalIcon {
+  margin-top: calc(var(--s) * -28);
+  width: calc(var(--s) * 280);
+  height: calc(var(--s) * 280);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.levelInfoMedalIconImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 calc(var(--s) * 8) calc(var(--s) * 24) rgba(0, 0, 0, 0.45));
+}
+
+.levelInfoProgressBlock {
+  margin-top: calc(var(--s) * 8);
+  width: 100%;
+  padding-bottom: calc(var(--s) * 24);
+}
+
+.levelInfoTabRow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--s) * 4);
+  margin-bottom: calc(var(--s) * 8);
+}
+
+/**
+ * TEXT `下一等级文本` (3246:22327): LikeeFont-Regular 28 / ~32.8125, fill #D9D9D9, layer opacity 0.65;
+ * textAlignHorizontal CENTER; design frame 360×33 @ 720w (STRETCH + center in `等级tab`).
+ */
+.levelInfoNextLevel {
+  margin: 0;
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: calc(var(--s) * 33);
+  font-family: "Likee Font", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(var(--s) * 28);
+  font-weight: 400;
+  line-height: calc(var(--s) * 32.8125);
+  letter-spacing: 0;
+  text-align: center;
+  color: rgba(217, 217, 217, 0.65);
+}
+
+.levelInfoDecor {
+  width: 100%;
+  height: calc(var(--s) * 120);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.levelDecorInner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/** BOOLEAN_OPERATION `Subtract` — stacked under raster until PNG loads */
+.levelDecorSubtract {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.levelDecorSubtractSvg {
+  display: block;
+}
+
+.levelDecorRaster {
+  position: relative;
+  z-index: 1;
+}
+
+.levelInfoDecorImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+.levelInfoCurrentBadge {
+  position: absolute;
+  bottom: calc(var(--s) * 8);
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(var(--s) * 200);
+  height: calc(var(--s) * 32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.levelInfoCurrentBadgeImg {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.levelInfoProgressWrap {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--s) * 12);
+}
+
+.levelInfoHintLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--s) * 8);
+  font-size: calc(var(--s) * 26);
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.levelInfoHintDiamonds {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--s) * 6);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.levelInfoHintTag {
+  font-weight: 700;
+  color: #f0d49a;
+}
+
+.levelInfoBarSection {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--s) * 8);
+}
+
+.levelInfoBarOuter {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+/* Figma: 进度条容器 656×16 inside 720-wide frame */
+.levelInfoBarInner {
+  width: calc(100% * 656 / 720);
+  max-width: 100%;
+  height: calc(var(--s) * 16);
+  border-radius: calc(var(--s) * 8);
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  box-sizing: border-box;
+  display: block;
+}
+
+.levelInfoBarFill {
+  height: calc(var(--s) * 16);
+  border-radius: calc(var(--s) * 8);
+  background: linear-gradient(90deg, #6a4b2a 0%, #e8b565 55%, #f5e6c8 100%);
+  box-shadow: 0 0 calc(var(--s) * 8) rgba(232, 181, 101, 0.45);
+  min-width: calc(var(--s) * 8);
+  transition: width 0.35s ease;
+}
+
+.levelInfoBarCaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: calc(var(--s) * 24);
+  color: rgba(255, 255, 255, 0.72);
+  padding: 0 calc(var(--s) * 4);
+}
+
+.levelInfoCaptionLeft,
+.levelInfoCaptionRight {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--s) * 6);
+}
+
+.levelInfoCaptionRight {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.levelInfoDiamondMd {
+  display: inline-flex;
+  width: calc(var(--s) * 32);
+  height: calc(var(--s) * 32);
+  flex-shrink: 0;
+}
+
+.levelInfoDiamondSm {
+  display: inline-flex;
+  width: calc(var(--s) * 28);
+  height: calc(var(--s) * 28);
+  flex-shrink: 0;
+}
+
+.levelInfoDiamondImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* --- Fixed header (restore_comp_headerBar_default) --- */
+.fixedHeaderInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  background: linear-gradient(
+    180deg,
+    rgba(10, 10, 18, 0.96) 0%,
+    rgba(10, 10, 18, 0.82) 72%,
+    rgba(10, 10, 18, 0.35) 100%
+  );
+  box-sizing: border-box;
+}
+
+.fixedHeaderIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.fixedHeaderIcon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  display: block;
+  opacity: 0.88;
+}
+
+.fixedHeaderTabs {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.fixedHeaderTabActive {
+  opacity: 1;
+}
+
+.fixedHeaderTabInactive {
+  opacity: 0.42;
+}
+
+.fixedHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- Benefit section (3246:22353) --- */
+.benefitSection {
+  position: relative;
+  z-index: 1;
+  padding: 12px 16px 20px;
+  box-sizing: border-box;
+}
+
+.benefitSectionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.benefitSectionTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.benefitLockedPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.benefitLockedIcon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  opacity: 0.85;
+}
+
+.benefitGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.benefitCard {
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.benefitCardImage {
+  aspect-ratio: 1.15;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.benefitCardImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.benefitCardCaption {
+  margin: 0;
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* --- Store + mall (3246:22383) --- */
+.storeSection {
+  position: relative;
+  z-index: 1;
+  padding: 0 16px 28px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.storeBannerBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.storeSwiper {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  min-height: 120px;
+}
+
+.storeBannerImg {
+  width: 100%;
+  height: auto;
+  min-height: 120px;
+  object-fit: cover;
+  display: block;
+}
+
+.storeBannerSlideHint {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.storeBannerDots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.storeDot,
+.storeDotActive {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.storeDotActive {
+  background: linear-gradient(135deg, #e8b565, #f5e6c8);
+  box-shadow: 0 0 8px rgba(232, 181, 101, 0.5);
+  transform: scale(1.15);
+}
+
+.storeMall {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.storeMallHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.storeMallTitleRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.storeMallTitle {
+  font-size: 17px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.storeMallProgress {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.storeMallBalanceRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.storeMallBalance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.storeMallBalanceLabel {
+  opacity: 0.85;
+}
+
+.storeMallCoin {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.storeMallBalanceNum {
+  font-weight: 600;
+  color: #f0d49a;
+}
+
+.storeMallViewMore {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.storeMallArrow {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  opacity: 0.75;
+}
+
+.storeProductGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.productCard {
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+}
+
+.productCardImageWrap {
+  position: relative;
+  aspect-ratio: 1;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.productCardImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.productCardLockedFloat {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.productCardTierRibbon {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(10, 10, 18, 0.75);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.productCardTierLock {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+  opacity: 0.9;
+}
+
+.productCardStockWarn,
+.productCardStockSoldOut {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom-left-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.productCardStockWarn {
+  background: rgba(180, 120, 40, 0.85);
+  color: #1a1208;
+}
+
+.productCardStockSoldOut {
+  background: rgba(60, 60, 70, 0.92);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.productCardStockIcon {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+}
+
+.productCardBody {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.productCardTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.productCardSubtitle {
+  margin: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.productCardPointsRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.productCardPointsIcon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.productCardPoints {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f0d49a;
+}

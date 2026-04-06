@@ -1,0 +1,74 @@
+{
+  "title": "Settings",
+  "crumb": {
+    "engine": "Engine Settings",
+    "preferences": "Global Preferences"
+  },
+  "workspace": {
+    "title": "Workspace",
+    "currentPath": "Current Workspace Root",
+    "placeholder": "Loading...",
+    "copyPath": "Copy path",
+    "description": "Pipelines and node lists are resolved relative to this directory (passed when starting the UI)."
+  },
+  "cursor": {
+    "title": "Cursor CLI",
+    "status": {
+      "cached": "Cached",
+      "notCached": "Not cached"
+    },
+    "modelPreviewLabel": "Cursor model id list",
+    "modelList": {
+      "cached": "Model list cached",
+      "empty": "No model list",
+      "count": "{{count}} items",
+      "fetchedAt": "Updated {{time}}",
+      "never": "Never fetched",
+      "refresh": "Refresh List",
+      "fetching": "Fetching..."
+    }
+  },
+  "opencode": {
+    "modelPreviewLabel": "OpenCode model id list",
+    "title": "OpenCode CLI",
+    "status": {
+      "ready": "Ready",
+      "notFound": "Not found"
+    },
+    "provider": "Plan / Provider ID",
+    "providerPlaceholder": "e.g., bailian-coding-plan",
+    "saving": "Saving and updating list...",
+    "description": "Corresponds to CLI opencode models <provider> parameter; written to user directory config and triggers model-lists.json refresh after typing stops."
+  },
+  "env": {
+    "title": "Environment Variables",
+    "note": "Local machine, this browser only",
+    "key": "Key",
+    "value": "Value",
+    "add": "Add",
+    "delete": "Delete {{key}}",
+    "newKey": "New env key",
+    "newValue": "Value (be careful with secrets)"
+  },
+  "system": {
+    "title": "System Status",
+    "normal": "Service normal",
+    "abnormal": "Some interfaces abnormal",
+    "cursorModels": "Cursor Models",
+    "opencodeModels": "OpenCode Models"
+  },
+  "shortcuts": {
+    "title": "Shortcuts",
+    "projects": "Projects & Pipelines",
+    "flowEditor": "Node Canvas"
+  },
+  "language": {
+    "title": "Language",
+    "description": "Select your preferred language for the interface",
+    "options": {
+      "zh": "中文",
+      "en": "English",
+      "ja": "日本語"
+    }
+  }
+}

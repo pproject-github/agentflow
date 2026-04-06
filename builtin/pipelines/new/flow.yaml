@@ -69,7 +69,7 @@ instances:
         name: script.md
         value: ''
     body: |
-      基于 ${plan.md} 在 .workspace/agentflow/pipelines/${newFlow}/ 下**必须生成并写入** flow.yaml（不存在则创建，已存在则按规划覆盖）：
+      基于 ${plan.md} 在 ~/agentflow/pipelines/${newFlow}/ 下**必须生成并写入** flow.yaml（不存在则创建，已存在则按规划覆盖）：
       节点布局参考 ${layout.md}，避免节点排成一条线。
       若有脚本需实现，将脚本路径与功能说明写入 ${script.md}，供下游 agent 实现代码，本节点 **不** 书写代码。
   control_end_new:
@@ -93,7 +93,7 @@ instances:
     output:
       - type: 文件
         name: value
-        value: .workspace/agentflow/reference/flow-layout.md
+        value: ~/agentflow/reference/flow-layout.md
     body: ''
   provide_requirement:
     definitionId: provide_str
@@ -188,7 +188,7 @@ instances:
     output:
       - type: 文件
         name: value
-        value: .workspace/agentflow/reference/flow-control-capabilities.md
+        value: ~/agentflow/reference/flow-control-capabilities.md
   provide_newFlow_key_save:
     definitionId: provide_str
     label: FlowKeyName
@@ -227,6 +227,7 @@ instances:
       - type: 文件
         name: result
         value: ''
+    script: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
     body: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
   agent_ai_check_tool:
     definitionId: agent_subAgent
@@ -261,7 +262,7 @@ instances:
     output:
       - type: 文件
         name: value
-        value: .workspace/agentflow/reference/flow-prompt-handler-check.md
+        value: ~/agentflow/reference/flow-prompt-handler-check.md
   save_flow_name:
     definitionId: tool_save_key
     label: SaveFlowName
@@ -336,7 +337,7 @@ instances:
   control_toBool_check:
     definitionId: control_toBool
     label: ToBoolCheck
-    description: 获取下文中 AgentSubAgent 运行的结果，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
+    description: 根据下文的执行任务内容，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
     role: 普通
     input:
       - type: 节点
