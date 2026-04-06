@@ -30,8 +30,10 @@ export function cloneNodeIoDraftSlots(node) {
  * @param {import('@xyflow/react').Node} n
  * @param {Record<string, any>} instances
  * @param {Array<{ id: string, inputs?: any[], outputs?: any[] }>} palette
+ * @param {Record<string, Record<string, { label?: string, body?: string, description?: string }>>} [pipelineTranslations]
+ * @param {string} [flowId]
  */
-export function mergeNodeWithPalette(n, instances, palette) {
+export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations, flowId) {
   const definitionId = n.data?.definitionId || String(n.id).replace(/-\d+$/, "");
   const def = palette.find((p) => p.id === definitionId);
   const inst = instances[n.id];
@@ -65,23 +67,34 @@ export function mergeNodeWithPalette(n, instances, palette) {
       : n.data?.script != null
         ? String(n.data.script)
         : "";
+  const nodeId = String(n.id);
+  const pipelineNodeTranslations = pipelineTranslations?.[flowId]?.[nodeId];
+  const translatedLabel = pipelineNodeTranslations?.label?.label;
+  const translatedBody = pipelineNodeTranslations?.body;
+  const translatedDescription = pipelineNodeTranslations?.description;
   if (!ioFromYamlInstance) {
     if (inputs.length === 0 && def?.inputs?.length) inputs = def.inputs.map((x) => ({ ...x }));
     if (outputs.length === 0 && def?.outputs?.length) outputs = def.outputs.map((x) => ({ ...x }));
   }
   const resolvedDefId = def?.id ?? definitionId;
   const showScriptField = resolvedDefId === "tool_nodejs" || String(mergedScript).trim() !== "";
-  return {
+return {
     ...n,
     type: "flowNode",
     data: {
       ...n.data,
-      label,
+      label: translatedLabel || label,
       definitionId: resolvedDefId,
       schemaType: n.data?.schemaType ?? n.type ?? "agent",
       role: mergedRole,
       model: mergedModel,
-      description: mergedDescription,
+      body: translatedBody || mergedBody,
+      script: mergedScript,
+      inputs,
+      outputs,
+      description: translatedDescription || mergedDescription,
+      originalLabel: label,
+      originalBody: mergedBody,
       body: mergedBody,
       ...(showScriptField ? { script: mergedScript } : {}),
       inputs,
