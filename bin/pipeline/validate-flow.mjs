@@ -15,12 +15,17 @@ import { getModelListsAbs, getRunDir, getUserAgentsJsonAbs, getUserPipelinesRoot
 import { getFlowDir } from "../lib/workspace.mjs";
 
 /** 与前端 flowFormat.VALID_ROLES + 内置 id 一致 */
+const VALID_ROLE_KEYS = ["requirement", "planning", "code", "test", "normal"];
+const ROLE_ZH_TO_KEY = {
+  需求拆解: "requirement",
+  技术规划: "planning",
+  代码执行: "code",
+  测试回归: "test",
+  普通: "normal",
+};
 const VALID_ROLES = new Set([
-  "需求拆解",
-  "技术规划",
-  "代码执行",
-  "测试回归",
-  "普通",
+  ...VALID_ROLE_KEYS,
+  ...Object.keys(ROLE_ZH_TO_KEY),
   "前端/UI",
   "agentflow-node-executor-requirement",
   "agentflow-node-executor-planning",
@@ -424,7 +429,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
     const inIdx = parseInt(inMatch[1], 10);
     const srcType = (nodeIdToSlots[e.source]?.outputTypes?.[outIdx] ?? "").trim();
     const tgtType = (nodeIdToSlots[e.target]?.inputTypes?.[inIdx] ?? "").trim();
-    if (srcType === "节点" && tgtType === "节点") {
+    if ((srcType === "node" || srcType === "节点") && (tgtType === "node" || tgtType === "节点")) {
       nodeOnlyEdges.push({ source: e.source, target: e.target });
     }
   }

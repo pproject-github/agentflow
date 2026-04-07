@@ -91,14 +91,14 @@ export function namesFromSlots(slots) {
  * @param {{ inputs?: { name?: string }[], outputs?: { name?: string }[] }} slots
  * @returns {Array<{ start: number, end: number, message: string }>}
  */
-export function validateBodyPlaceholders(body, slots) {
+export function validateBodyPlaceholders(body, slots, i18n) {
   const names = namesFromSlots(slots);
   const ranges = findClosedPlaceholderRanges(body);
   const invalid = [];
   for (const r of ranges) {
     if (!isValidPlaceholderKey(r.key, names)) {
-      const hint = r.key.trim() === "" ? "(空)" : r.key.trim();
-      invalid.push({ start: r.start, end: r.end, message: `无效占位符: ${hint}` });
+      const hint = r.key.trim() === "" ? i18n("flow:placeholder.empty") : r.key.trim();
+      invalid.push({ start: r.start, end: r.end, message: i18n("flow:placeholder.invalidPlaceholder", { hint }) });
     }
   }
   return invalid;
@@ -161,7 +161,7 @@ export function segmentsToBackdropHtml(segments) {
  * @param {{ inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] }} slots
  * @returns {PlaceholderMenuItem[]}
  */
-export function buildPlaceholderMenuItems(slots) {
+export function buildPlaceholderMenuItems(slots, i18n) {
   /** @type {PlaceholderMenuItem[]} */
   const items = [];
   for (const s of slots?.inputs ?? []) {
@@ -172,7 +172,7 @@ export function buildPlaceholderMenuItems(slots) {
       section: "input",
       insert: `input.${n}`,
       label: n,
-      subtitle: t ? `输入 · ${t}` : "输入",
+      subtitle: t ? i18n("flow:placeholder.inputSubtitle", { type: t }) : i18n("flow:placeholder.inputSubtitleNoType"),
     });
   }
   for (const s of slots?.outputs ?? []) {
@@ -183,12 +183,12 @@ export function buildPlaceholderMenuItems(slots) {
       section: "output",
       insert: `output.${n}`,
       label: n,
-      subtitle: t ? `输出 · ${t}` : "输出",
+      subtitle: t ? i18n("flow:placeholder.outputSubtitle", { type: t }) : i18n("flow:placeholder.outputSubtitleNoType"),
     });
   }
   for (const k of RUNTIME_PLACEHOLDER_KEYS_ORDER) {
     if (RUNTIME_PLACEHOLDER_KEYS.has(k)) {
-      items.push({ section: "runtime", insert: k, label: k, subtitle: "运行时常量" });
+      items.push({ section: "runtime", insert: k, label: k, subtitle: i18n("flow:placeholder.runtimeConst") });
     }
   }
   return items;

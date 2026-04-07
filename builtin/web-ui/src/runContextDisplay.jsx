@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import { useTranslation } from "react-i18next";
 
 /**
  * Rich display for node-exec-context API payloads (markdown / JSON / images).
@@ -45,9 +46,10 @@ function prettyJson(text) {
 }
 
 export function RunContextPromptBody({ text }) {
+  const { t } = useTranslation();
   const body = text || "";
   if (!body.trim()) {
-    return <div className="af-run-ctx-hint">(空)</div>;
+    return <div className="af-run-ctx-hint">{t("flow:runContext.empty")}</div>;
   }
   return (
     <div className="af-run-ctx-md">
@@ -57,6 +59,7 @@ export function RunContextPromptBody({ text }) {
 }
 
 export function RunContextOutputBody({ o }) {
+  const { t } = useTranslation();
   const kind = inferLegacyKind(o);
 
   if (kind === "image" || (o.encoding === "base64" && o.mimeType?.startsWith("image/"))) {
@@ -65,7 +68,7 @@ export function RunContextOutputBody({ o }) {
     return (
       <div className="af-run-ctx-media">
         <img className="af-run-ctx-img" src={src} alt={o.slot || "output"} loading="lazy" />
-        {o.truncated ? <div className="af-run-ctx-hint">图像已截断（超过大小上限）</div> : null}
+        {o.truncated ? <div className="af-run-ctx-hint">{t("flow:runContext.imageTruncated")}</div> : null}
       </div>
     );
   }
@@ -77,7 +80,7 @@ export function RunContextOutputBody({ o }) {
   if (kind === "markdown") {
     const body = o.content || "";
     if (!body.trim()) {
-      return <div className="af-run-ctx-hint">(空)</div>;
+      return <div className="af-run-ctx-hint">{t("flow:runContext.empty")}</div>;
     }
     return (
       <div className="af-run-ctx-md">
@@ -86,7 +89,7 @@ export function RunContextOutputBody({ o }) {
     );
   }
 
-  return <pre className="af-run-ctx-pre">{o.content != null && o.content !== "" ? o.content : "(空)"}</pre>;
+  return <pre className="af-run-ctx-pre">{o.content != null && o.content !== "" ? o.content : t("flow:runContext.empty")}</pre>;
 }
 
 export function runContextOutputFormatPill(o) {

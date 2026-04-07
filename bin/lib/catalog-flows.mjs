@@ -3,7 +3,7 @@ import path from "path";
 import yaml from "js-yaml";
 import chalk from "chalk";
 import { log } from "./log.mjs";
-import { t } from "./i18n.mjs";
+import { t, translateNodeDef } from "./i18n.mjs";
 import {
   ARCHIVED_PIPELINES_DIR_NAME,
   LEGACY_NODES_DIR,
@@ -200,6 +200,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(opts.archived);
   const byId = new Map();
+  const pipelineTranslations = {};
   const addFromDir = (dir, source, flowIdOpt) => {
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
@@ -215,12 +216,14 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         const strippedId =
           id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
         const label = data.displayName ?? strippedId;
+        const translatedDisplayName = translateNodeDef(id, "displayName");
+        const translatedDescription = translateNodeDef(id, "description");
         byId.set(id, {
           id,
           type,
-          label,
-          displayName: data.displayName,
-          description: data.description,
+          label: translatedDisplayName || label,
+          displayName: translatedDisplayName || data.displayName,
+          description: translatedDescription || data.description,
           inputs: data.input,
           outputs: data.output,
           source: flowIdOpt ? "flow" : "project",
@@ -235,6 +238,28 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   if (flowId && flowSource) {
     if (flowSource === "builtin") {
       addFromDir(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes"), "flow", flowId);
+      try {
+        const flowYamlPath = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "flow.yaml");
+        if (fs.existsSync(flowYamlPath)) {
+          const flowData = yaml.load(fs.readFileSync(flowYamlPath, "utf-8"));
+          if (flowData?.instances) {
+            for (const [nodeId, inst] of Object.entries(flowData.instances)) {
+              pipelineTranslations[flowId] = pipelineTranslations[flowId] || {};
+              const trans = t(`pipeline.${flowId}.${nodeId}`);
+              pipelineTranslations[flowId][nodeId] = {
+                label: trans !== `pipeline.${flowId}.${nodeId}` ? trans : inst.label,
+                body: inst.body,
+                description: inst.description || inst.userDescription,
+              };
+            }
+          }
+          if (flowData?.ui?.description) {
+            pipelineTranslations[flowId].__flowDescription = t(`pipeline.${flowId}.description`) !== `pipeline.${flowId}.description`
+              ? t(`pipeline.${flowId}.description`)
+              : flowData.ui.description;
+          }
+        }
+      } catch (_) {}
     } else if (flowSource === "user") {
       if (archived) {
         addFromDir(
@@ -257,7 +282,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       }
     }
   }
-  return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
+  return { nodes: Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id)), pipelineTranslations };
 }
 
 export function printNodesTable(list) {

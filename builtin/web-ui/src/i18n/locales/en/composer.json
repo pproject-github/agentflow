@@ -7,7 +7,9 @@
   },
   "placeholders": {
     "input": "Ask AI to help edit this node...",
-    "waiting": "Waiting for response..."
+    "waiting": "Waiting for response...",
+    "selectedEmpty": "Select a node on the canvas, or use @ in the input to select instances or node types",
+    "textarea": "Describe your workflow or ask AI to help (⌘/Ctrl+Enter to send)"
   },
   "actions": {
     "send": "Send",
@@ -15,5 +17,19 @@
     "expand": "Expand",
     "collapse": "Collapse",
     "clear": "Clear"
+  },
+  "labels": {
+    "conversation": "Chat",
+    "conversationWithNumber": "Chat {{num}}",
+    "default": "Default"
+  },
+  "tooltips": {
+    "endSession": "End chat (will stop generation)",
+    "closeSession": "Close chat",
+    "newSession": "New chat",
+    "expandComposer": "Expand chat and output"
+  },
+  "rightPanel": {
+    "hint": "Use the bottom input box for AI chat, with @node mentions, model selection, and more"
   }
 }

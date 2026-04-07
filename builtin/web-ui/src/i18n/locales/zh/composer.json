@@ -7,7 +7,9 @@
   },
   "placeholders": {
     "input": "让 AI 协助编辑此节点…",
-    "waiting": "等待响应…"
+    "waiting": "等待响应…",
+    "selectedEmpty": "在画布上选择节点，或在输入框用 @ 选择实例（Instances）或节点类型（Node）",
+    "textarea": "描述你的流程或让 AI 协助编辑（⌘/Ctrl+Enter 发送）"
   },
   "actions": {
     "send": "发送",
@@ -15,5 +17,19 @@
     "expand": "展开",
     "collapse": "收起",
     "clear": "清空"
+  },
+  "labels": {
+    "conversation": "对话",
+    "conversationWithNumber": "对话 {{num}}",
+    "default": "默认"
+  },
+  "tooltips": {
+    "endSession": "结束对话（将停止生成）",
+    "closeSession": "关闭对话",
+    "newSession": "新建对话",
+    "expandComposer": "展开对话与输出"
+  },
+  "rightPanel": {
+    "hint": "使用底部输入框进行 AI 对话，支持 @节点、选择模型等功能"
   }
 }

@@ -33,7 +33,7 @@ export function getSlotsFromNodeData(n) {
  * @param {import('@xyflow/react').Edge[]} edges
  * @returns {SlotEdgeWarningItem[]}
  */
-export function computeSlotEdgeWarnings(nodes, edges) {
+export function computeSlotEdgeWarnings(nodes, edges, t) {
   const nodeIds = new Set(nodes.map((n) => n.id));
   /** @type {Record<string, { inputNames: string[], outputNames: string[] }>} */
   const nodeIdToSlots = {};
@@ -71,7 +71,7 @@ export function computeSlotEdgeWarnings(nodes, edges) {
           const slotName = slots.inputNames[i] || h;
           warnings.push({
             nodeId: n.id,
-            suffix: ` 的 input 槽位 "${slotName}"（${h}）无对应 edge 连接`,
+            suffix: t("flow:validation.inputSlotNoEdge", { slotName, handle: h }),
             key: `${n.id}-${h}-in`,
           });
         }
@@ -87,7 +87,7 @@ export function computeSlotEdgeWarnings(nodes, edges) {
           const slotName = slots.outputNames[i] || h;
           warnings.push({
             nodeId: n.id,
-            suffix: ` 的 output 槽位 "${slotName}"（${h}）无对应 edge 连接`,
+            suffix: t("flow:validation.outputSlotNoEdge", { slotName, handle: h }),
             key: `${n.id}-${h}-out`,
           });
         }

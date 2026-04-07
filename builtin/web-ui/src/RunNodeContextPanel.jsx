@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   RunContextPromptBody,
   RunContextOutputBody,
@@ -51,15 +52,23 @@ async function fetchNodeExecContextJson(flowId, instanceId, runId, signal) {
   } catch {
     throw new Error(
       text.startsWith("<!") || text.startsWith("<html")
-        ? "无法连接 API（请使用 agentflow ui 打开页面，或为 Vite 开发配置 /api 代理）"
-        : "响应不是有效 JSON",
+        ? "apiConnectError"
+        : "invalidJson",
     );
   }
   if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
   return j;
 }
 
+/** Map error keys to i18n keys, pass through unknown messages */
+function localizeError(t, msg) {
+  const key = `flow:runContext.${msg}`;
+  const localized = t(key);
+  return localized !== key ? localized : msg;
+}
+
 export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeStatus, onClose }) {
+  const { t } = useTranslation();
   const [narrowLayout, setNarrowLayout] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches,
   );
@@ -209,7 +218,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
         applyRoundsPayload(Array.isArray(j.rounds) ? j.rounds : []);
       } catch (e) {
         if (gen !== loadGenRef.current) return;
-        const msg = e?.name === "AbortError" ? "请求超时，请稍后重试或检查 agentflow ui" : e.message || String(e);
+        const msg = e?.name === "AbortError" ? "requestTimeout" : e.message || String(e);
         setError(msg);
       } finally {
         window.clearTimeout(t);
@@ -256,14 +265,14 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
     <aside
       className="af-run-ctx-panel"
       style={panelStyle}
-      aria-label="节点执行上下文"
+      aria-label={t("flow:runContext.title")}
     >
       {!narrowLayout ? (
         <div
           className="af-run-ctx-resize"
           role="separator"
           aria-orientation="vertical"
-          aria-label="拖动调整节点上下文宽度"
+          aria-label={t("flow:runContext.resizeHandle")}
           onPointerDown={onCtxResizePointerDown}
           onPointerMove={onCtxResizePointerMove}
           onPointerUp={onCtxResizePointerUp}
@@ -274,19 +283,19 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
       <div className="af-run-ctx-panel__main">
         <div className="af-run-ctx-head">
           <h2 className="af-run-ctx-title" title={instanceId}>{instanceId}</h2>
-          <button type="button" className="af-icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="af-icon-btn" onClick={onClose} aria-label={t("common:common.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
-        {loading && <div className="af-run-ctx-placeholder">加载中…</div>}
-        {error && <div className="af-run-ctx-error">{error}</div>}
+        {loading && <div className="af-run-ctx-placeholder">{t("common:common.loading")}</div>}
+        {error && <div className="af-run-ctx-error">{localizeError(t, error)}</div>}
 
         {!loading && !error && rounds.length === 0 && (
           <div className="af-run-ctx-placeholder">
             {nodeStatus === "running"
-              ? "执行中，产物尚未写入工作区…"
-              : "暂无数据（本 run 尚未执行到该节点或未产生产物）"}
+              ? t("flow:runContext.executingNoArtifacts")
+              : t("flow:runContext.noData")}
           </div>
         )}
 
@@ -307,7 +316,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                     onClick={() => setSelectedRound(r.execId)}
                   >
                     <span className="af-run-ctx-round-id">
-                      {r.execId === "latest" ? "最新" : `#${r.execId}`}
+                      {r.execId === "latest" ? t("flow:runContext.latest") : `#${r.execId}`}
                     </span>
                     <span className={"af-run-ctx-round-status" + statusCls}>
                       {r.status || "–"}
@@ -346,7 +355,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                           <div className="af-run-ctx-slot-head">
                             <div className="af-run-ctx-slot-name">{o.slot}</div>
                             {hint ? (
-                              <span className="af-run-ctx-format-badge" title="检测到的内容类型">
+                              <span className="af-run-ctx-format-badge" title={t("flow:runContext.detectedContentType")}>
                                 {hint}
                               </span>
                             ) : null}
@@ -358,7 +367,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                   </section>
                 )}
                 {!active.prompt && (!active.outputs || active.outputs.length === 0) && (
-                  <div className="af-run-ctx-placeholder">该轮次暂无内容</div>
+                  <div className="af-run-ctx-placeholder">{t("flow:runContext.roundNoContent")}</div>
                 )}
               </div>
             )}

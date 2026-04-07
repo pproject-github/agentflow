@@ -1,16 +1,16 @@
 ---
 # 内置节点：转布尔
-description: 根据下文的执行任务内容，得到 bool 结果后，将 "true" 或 "false" 写入到 ${prediction} ，且仅仅写入 true 或者 false。
+description: Convert execution task result to boolean and write to prediction slot
 displayName: ToBool
 input:
-  - type: 节点
+  - type: node
     name: prev
     default: ""
-  - type: 文本
+  - type: text
     name: value
     default: ""
 output:
-  - type: 节点
+  - type: node
     name: next
     default: ""
   - type: bool

@@ -1,4 +1,5 @@
 import { useRoute } from "../routeContext.jsx";
+import { useTranslation } from "react-i18next";
 import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 
 /** 暂时不展示「Nodes」(/flow) 入口，流水线仅从 Projects 卡片进入 */
@@ -14,8 +15,9 @@ function isActive(path, to) {
 
 export default function Sidebar() {
   const { path, navigate } = useRoute();
+  const { t } = useTranslation();
   return (
-    <aside className="af-sidebar" aria-label="主导航">
+    <aside className="af-sidebar" aria-label={t("flow:sidebar.mainNav")}>
       <div className="af-brand">
         <div className="af-brand-mark" aria-hidden>
           <img src={agentflowIconUrl} alt="" width="36" height="36" decoding="async" />

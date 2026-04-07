@@ -13,12 +13,17 @@ import yaml from "js-yaml";
 import { getModelListsAbs, getRunDir, getUserAgentsJsonAbs } from "../lib/paths.mjs";
 
 /** 与前端 flowFormat.VALID_ROLES + 内置 id 一致：flow 中 role 可能为展示名或 id */
+const VALID_ROLE_KEYS = ["requirement", "planning", "code", "test", "normal"];
+const ROLE_ZH_TO_KEY = {
+  需求拆解: "requirement",
+  技术规划: "planning",
+  代码执行: "code",
+  测试回归: "test",
+  普通: "normal",
+};
 const VALID_ROLES = new Set([
-  "需求拆解",
-  "技术规划",
-  "代码执行",
-  "测试回归",
-  "普通",
+  ...VALID_ROLE_KEYS,
+  ...Object.keys(ROLE_ZH_TO_KEY),
   "前端/UI",
   "agentflow-node-executor-requirement",
   "agentflow-node-executor-planning",

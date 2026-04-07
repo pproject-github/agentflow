@@ -41,7 +41,12 @@ import { getRunDir } from "../lib/paths.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ROLE_TO_SUBAGENT = {
-  需求拆解: "agentflow-node-executor-requirement",
+  requirement: "agentflow-node-executor-requirement",
+  planning: "agentflow-node-executor-planning",
+  code: "agentflow-node-executor-code",
+  test: "agentflow-node-executor-test",
+  normal: "agentflow-node-executor",
+  求拆解: "agentflow-node-executor-requirement",
   技术规划: "agentflow-node-executor-planning",
   代码执行: "agentflow-node-executor-code",
   测试回归: "agentflow-node-executor-test",

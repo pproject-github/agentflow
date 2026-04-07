@@ -1,13 +1,13 @@
 ---
 # 内置节点：用户提问
-description: 利用 **Ask user question** tool 询问用户以下问题
+description: Ask user questions using Ask user question tool
 displayName: UserAsk
 input:
-  - type: 节点
+  - type: node
     name: prev
     default: ""
 output:
-  - type: 节点
+  - type: node
     name: next
     default: ""
 ---

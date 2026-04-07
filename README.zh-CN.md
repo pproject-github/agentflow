@@ -7,6 +7,15 @@
 > **长时间复杂任务的 agent 编排系统。**  
 > AgentFlow 用图描述依赖与控制流，把 Cursor、OpenCode、Claude Code（适配中）等 Coding Agent 当作**可替换的执行后端**。它已在**大型工程**里扛过长周期、多阶段任务——不是演示脚本，而是能跑完、能停、能续的运行时。
 
+![AgentFlow Projects](docs/projects.png)
+*管理你的分布式节点架构和监控流水线*
+
+![Pipeline Editor](docs/pipeline.png)
+*可视化拖拽编排，AI 驱动的 Composer*
+
+![Running Status](docs/running.png)
+*实时执行控制台，支持检查点恢复*
+
 ## 缘起：从痛点到解决方案
 
 ### 那个让我崩溃的迁移任务
@@ -37,6 +46,9 @@ AgentFlow 不是要取代 Cursor 或 OpenCode，而是**站在它们的肩膀上
 - **断点续跑**：每个节点状态落盘，失败后可精准定位问题节点，单点重试或整体恢复，不必从零开始
 - **CI/CD 就绪**：流程固定、执行可重复、支持长时间运行，天然适合持续集成场景
 
+![Pipeline Architecture](docs/pipeline.png)
+*一个复杂的模块迁移工作流，包含循环和条件分支*
+
 ## 常见场景
 
 **1. 大项目重构 / 迁移**  
@@ -52,6 +64,9 @@ AgentFlow 不是要取代 Cursor 或 OpenCode，而是**站在它们的肩膀上
 
 详细教程见 Wiki 文档：
 
+**🚀 Quickstart: [PR 流程自动化](docs/wiki/quickstart-pr-workflow.zh-CN.md)**  
+真实故事：我是如何实现代码审查 → PR 创建 → 团队通知的 100% 可靠执行。了解 AgentFlow 如何解决"AI 有时会忘记步骤"的问题。
+
 **1. [模块迁移工作流](docs/wiki/module-migration-workflow.zh-CN.md)**  
 将主模块代码迁移到子模块：扫描 → 分析依赖 → 迁移 → 编译验证 → 循环修复。演示如何用 `control_anyOne` + `control_if` 实现"检查-修复-检查"循环模式，支持断点续跑和单节点重试。
 
@@ -61,6 +76,45 @@ AgentFlow 不是要取代 Cursor 或 OpenCode，而是**站在它们的肩膀上
 ## 使用说明
 
 以下为最短路径：从安装到第一条流水线、再到验证、运行与排障续跑。
+
+### 前置条件
+
+在安装 AgentFlow 之前，请确保已安装以下任一 Coding Agent CLI 工具：
+
+**方式一：Cursor CLI（推荐）**
+```bash
+# 安装 Cursor CLI
+# 从 https://cursor.com 下载或 macOS 使用:
+brew install --cask cursor
+
+# 验证安装
+agent --version
+```
+
+**方式二：OpenCode CLI**
+```bash
+# 安装 OpenCode CLI
+npm install -g opencode
+
+# 验证安装
+opencode --version
+```
+
+**配置 settings（可选）**
+
+AgentFlow 使用环境变量配置 CLI：
+
+```bash
+# 设置默认 CLI 命令（默认：agent）
+export CURSOR_AGENT_CMD=agent
+
+# 设置默认模型
+export CURSOR_AGENT_MODEL=claude-sonnet
+
+# 或添加到 ~/.zshrc 或 ~/.bashrc:
+echo 'export CURSOR_AGENT_CMD=agent' >> ~/.zshrc
+echo 'export CURSOR_AGENT_MODEL=claude-sonnet' >> ~/.zshrc
+```
 
 ### 1. 安装
 

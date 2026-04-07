@@ -74,7 +74,7 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 1. 在 flow.yaml 中创建/调整所有 instances：\`definitionId\`、\`label\`、\`role\`；每个节点 \`body\` **仅一句**职责概要（不写长 prompt、不写可执行脚本）。
 2. **input/output**：保留各 \`definitionId\` 的**默认槽位结构**，所有 \`value\` 留空；不在此阶段纠结副槽位的精细取值。
 3. **edges**：本阶段**只连主控制/数据链**：相邻节点用 **output-0 → input-0**（prev/next 语义）。分支节点（如 control_if）可先占位，**prediction、value、多路汇合等副引脚连线留到「流程完善」阶段**；若用户只需线性主链，则 Start→…→End 用主引脚串起来即可。
-4. **ui.nodePositions**：为每个 instance 写入坐标（主链大致从左到右 x 递增，错开避免重叠）。
+4. **ui.nodePositions**：为每个 instance 写入坐标（主链从左到右 x 每节点递增 **280**，起始 x:100 y:300；分支路径 y 错开 **200**）。
 5. **必须**在与 flow.yaml **同目录**创建（或更新）文件 **${COMPOSER_NODE_SPEC_FILENAME}**，结构如下：
    - \`## 整体框架\`：叙述主链、分支、循环、并行、全局数据（SaveKey/LoadKey）等**设计意图**（可用条目列表）。
    - \`## 节点职责\`：按 **instanceId** 分小节，写清该节点**具体要做什么**；对 **tool_nodejs** 须写明**计划脚本文件名**（如 \`scripts/xxx.mjs\`）与输入输出语义，并注明「**可执行代码在「节点补充」阶段写入**」；对 **agent_subAgent** 注明阶段二要写的 body 要点（判定规则、产物路径等）。
@@ -234,7 +234,7 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
     { "type": "script", "op": "edit-label", "description": "...", "params": { ... } },
     { "type": "agent", "complexity": "simple", "description": "...", "prompt": "...",
       "instanceId": "可选，本步主要操作的实例 id",
-      "nodeRole": "可选，与画布角色一致：需求拆解|技术规划|代码执行|测试回归|普通",
+      "nodeRole": "可选，与画布角色一致：requirement|planning|code|test|normal（或中文：需求拆解|技术规划|代码执行|测试回归|普通）",
       "executorModel": "可选，本步执行模型（覆盖实例 model；不设则用实例或用户全局模型）" }
   ]
 }`;
@@ -548,7 +548,7 @@ function buildPhaseCliGuide(phaseIndex) {
 
 1. **flow.yaml**：instances 含 definitionId、label、role；body **仅一句**职责概要；IO 用默认结构、**value 全空**。
 2. **edges（主链）**：仅用 **output-0 → input-0** 串主路径（Start→…→End）。**prediction、value、分支第二输出等副引脚连线留到「流程完善」**。
-3. **ui.nodePositions**：每个 instance 有坐标，主链大致从左到右。
+3. **ui.nodePositions**：每个 instance 有坐标，主链从左到右 x 每节点递增 **280**（起始 x:100 y:300），分支 y 错开 **200**。
 4. **必须**在与 flow.yaml **同目录**写入 **${COMPOSER_NODE_SPEC_FILENAME}**：
    - \`## 整体框架\`：主链、分支、循环、并行、全局数据等设计说明。
    - \`## 节点职责\`：按 **instanceId** 写清要做什么；**tool_nodejs** 写计划脚本路径（如 \`scripts/xxx.mjs\`）并注明「**可执行代码在节点补充阶段写入**」；**agent_subAgent** 写阶段二要充实 body 的要点。

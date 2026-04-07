@@ -635,6 +635,7 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
     if (req.method === "GET" && url.pathname === "/api/nodes") {
       const flowId = url.searchParams.get("flowId");
       const flowSource = url.searchParams.get("flowSource") || "user";
+      const lang = url.searchParams.get("lang") || "en";
       if (!flowId) {
         json(res, 400, { error: "Missing flowId" });
         return;
@@ -645,6 +646,8 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
       }
       const nodesArchived = url.searchParams.get("archived") === "1";
       try {
+        const { setLanguage } = await import("./i18n.mjs");
+        setLanguage(lang);
         json(res, 200, listNodesJson(root, flowId, flowSource, { archived: nodesArchived }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

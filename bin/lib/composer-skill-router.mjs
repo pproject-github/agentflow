@@ -268,7 +268,7 @@ export function buildPlannerSkillContext(intents) {
   if (intents.includes("add-instances") || intents.includes("create-flow")) {
     parts.push(
       "- 新增节点：须从 builtin/pipelines/new/flow.yaml 拷贝同类 definitionId 的实例模板；" +
-      "不要自造 input/output 顺序和 name；每个新 instanceId 须在 ui.nodePositions 写入坐标（默认画布中心附近 x:400 y:220）；" +
+      "不要自造 input/output 顺序和 name；每个新 instanceId 须在 ui.nodePositions 写入坐标（主链从左到右 x 递增 280，起始 x:100 y:300；分支 y 错开 200）；" +
       "默认不连线，仅当用户明确要求时才在 edges 中增加边。"
     );
     parts.push(

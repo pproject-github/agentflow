@@ -1,10 +1,10 @@
 ---
 # 内置节点：直接提供文本
-description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
+description: Provide a text value directly, value will be passed to downstream as-is
 displayName: String
 input: []
 output:
-  - type: 文本
+  - type: text
     name: value
     default: ""
 ---

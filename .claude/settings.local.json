@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(git checkout:*)",
+      "Bash(grep -r \"50\\\\|90\\\\|offset.*node\\\\|position.*offset\" /Users/bigo/Documents/AIProject/AgentFlow/bin/lib/*.mjs)",
+      "Bash(grep -rn \"400\\\\|220\" /Users/bigo/Documents/AIProject/AgentFlow/bin/lib/*.mjs)",
+      "Bash(grep:*)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('builtin/web-ui/src/i18n/locales/zh/flow.json','utf8'\\)\\); console.log\\('zh OK'\\)\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('builtin/web-ui/src/i18n/locales/en/flow.json','utf8'\\)\\); console.log\\('en OK'\\)\")",
+      "Bash(ls package.json vite.config.*)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(Object.keys\\(p.scripts||{}\\).join\\(', '\\)\\)\")",
+      "Bash(npx vite:*)",
+      "Bash(python3 -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\(d.get\\('message',{}\\).get\\('content',[{}]\\)[0].get\\('text',''\\)[:200] if isinstance\\(d.get\\('message',{}\\).get\\('content',[{}]\\)[0], dict\\) else 'tool_use'\\)\")",
+      "Bash(python3 -c ':*)",
+      "Bash(node -e ':*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

@@ -4,7 +4,23 @@
 import { MarkerType } from "@xyflow/react";
 import yaml from "js-yaml";
 
-export const VALID_ROLES = ["需求拆解", "技术规划", "代码执行", "测试回归", "普通"];
+export const VALID_ROLES = ["requirement", "planning", "code", "test", "normal"];
+
+const ROLE_ZH_TO_KEY = {
+  普通: "normal",
+  技术规划: "planning",
+  代码执行: "code",
+  测试回归: "test",
+  需求拆解: "requirement",
+};
+
+const TYPE_ZH_TO_KEY = {
+  节点: "node",
+  文本: "text",
+  文件: "file",
+  bool: "bool",
+  布尔: "bool",
+};
 
 const VALID_NODE_TYPES = ["agent", "control", "provide", "condition", "jump", "condition_jump", "start", "end"];
 
@@ -62,7 +78,8 @@ export function deserializeFromFlowYaml(flowYamlContent) {
       const type = definitionIdToType(definitionId);
       const label = inst?.label != null ? String(inst.label) : id;
       const rawRole = inst?.role != null ? String(inst.role).trim() : "";
-      const role = VALID_ROLES.includes(rawRole) ? rawRole : "普通";
+      const normalizedRole = ROLE_ZH_TO_KEY[rawRole] || rawRole;
+      const role = VALID_ROLES.includes(normalizedRole) ? normalizedRole : "normal";
       const model = inst?.model != null ? String(inst.model).trim() : undefined;
       const body = inst?.body != null ? String(inst.body) : "";
       const script = inst?.script != null ? String(inst.script) : "";
@@ -108,7 +125,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
  */
 export function buildInstancesForYaml(nodes, instancesMap) {
   const toSlotValue = (s) => ({
-    type: s?.type ?? "节点",
+    type: s?.type ?? "node",
     name: s?.name ?? "",
     value: s?.value ?? s?.default ?? "",
   });
@@ -121,7 +138,13 @@ export function buildInstancesForYaml(nodes, instancesMap) {
     const dataOutputs = n.data?.outputs ?? [];
     const rawR = n.data?.role != null ? String(n.data.role).trim() : "";
     const rawBaseR = base.role != null ? String(base.role).trim() : "";
-    const role = VALID_ROLES.includes(rawR) ? rawR : VALID_ROLES.includes(rawBaseR) ? rawBaseR : "普通";
+    const normalizedR = ROLE_ZH_TO_KEY[rawR] || rawR;
+    const normalizedBaseR = ROLE_ZH_TO_KEY[rawBaseR] || rawBaseR;
+    const role = VALID_ROLES.includes(normalizedR)
+      ? normalizedR
+      : VALID_ROLES.includes(normalizedBaseR)
+        ? normalizedBaseR
+        : "normal";
 
     // Prefer current canvas/node data so NodeProperties edits persist;
     // fall back to base instance only when node data is unavailable.

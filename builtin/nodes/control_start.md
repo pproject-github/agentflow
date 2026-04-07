@@ -1,10 +1,10 @@
 ---
 # 内置节点：开始
-description: agentflow 的入口，所有流程应从这个节点开始
+description: Entry point of AgentFlow, all flows should start from this node
 displayName: Start
 input: []
 output:
-  - type: 节点
+  - type: node
     name: next
     default: ""
 ---

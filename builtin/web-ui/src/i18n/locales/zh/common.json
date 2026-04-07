@@ -48,5 +48,10 @@
     "tool": "工具节点",
     "start": "开始",
     "end": "结束"
+  },
+  "engine": {
+    "online": "引擎在线",
+    "offline": "引擎离线",
+    "connecting": "连接中…"
   }
 }

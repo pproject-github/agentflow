@@ -7,6 +7,15 @@
 > **Orchestration system for long-running complex agent tasks.**  
 > AgentFlow uses graphs to encode dependencies and control flow, treating Cursor, OpenCode, and Claude Code (in progress) as **swappable execution backends**. Battle-tested on **large engineering efforts**—not a demo script, but a runtime that can finish, pause, and resume.
 
+![AgentFlow Projects](docs/projects.png)
+*Manage your distributed node architectures and monitoring pipelines*
+
+![Pipeline Editor](docs/pipeline.png)
+*Visual drag-and-drop orchestration with AI-powered Composer*
+
+![Running Status](docs/running.png)
+*Real-time execution console with checkpoint recovery*
+
 ## The Origin: From Pain Point to Solution
 
 ### That Migration Task That Broke Me
@@ -37,6 +46,9 @@ AgentFlow doesn't aim to replace Cursor or OpenCode, but **builds upon them**:
 - **Checkpoint Resumption**: Every node state persisted, precise problem node location on failure, single-node retry or full recovery, no need to start from scratch
 - **CI/CD Ready**: Fixed workflows, repeatable execution, long-running support, naturally suited for continuous integration scenarios
 
+![Pipeline Architecture](docs/pipeline.png)
+*A complex module migration workflow with loops and conditional branches*
+
 The hard part of complex work is rarely "model quality alone"—it is **state, boundaries, and cadence**: who depends on whom, where humans must sign off, and which checkpoint to restart from after failure. AgentFlow models workflows as **nodes + directed edges**: a scheduler advances a **ready set** from dependency closure; each node binds an agent capability to a backend. Run directories persist artifacts and per-node status, yielding **observability** and **recoverability** (pause / resume / replay). Orchestration stays decoupled from your codebase: swap tools; keep the graph and execution semantics.
 
 ## Common Scenarios
@@ -54,6 +66,9 @@ Move testing from "when someone remembers" to a **slow-burn loop**: schedule or 
 
 Detailed tutorials available in Wiki docs:
 
+**🚀 Quickstart: [PR Workflow Automation](docs/wiki/quickstart-pr-workflow.en.md)**  
+Real story: How I automated code review → PR creation → team notification with 100% reliability. Learn how AgentFlow solves the "AI sometimes forgets steps" problem.
+
 **1. [Module Migration Workflow](docs/wiki/module-migration-workflow.en.md)**  
 Migrate code from main module to submodule: scan → analyze dependencies → migrate → compile → loop fix. Demonstrates how to implement "check-fix-check" cyclic pattern with `control_anyOne` + `control_if`, supporting checkpoint resumption and single-node retry.
 
@@ -63,6 +78,45 @@ One-shot implementation of complex Figma designs: parse design → extract compo
 ## Usage Guide
 
 Shortest path: install → first pipeline → validate → run → diagnose and resume.
+
+### Prerequisites
+
+Before installing AgentFlow, ensure you have one of the following Coding Agent CLI tools:
+
+**Option 1: Cursor CLI (Recommended)**
+```bash
+# Install Cursor CLI
+# Download from https://cursor.com or install via:
+brew install --cask cursor  # macOS
+
+# Verify installation
+agent --version
+```
+
+**Option 2: OpenCode CLI**
+```bash
+# Install OpenCode CLI
+npm install -g opencode
+
+# Verify installation
+opencode --version
+```
+
+**Configure settings (Optional)**
+
+AgentFlow uses environment variables for CLI configuration:
+
+```bash
+# Set default CLI command (default: agent)
+export CURSOR_AGENT_CMD=agent
+
+# Set default model
+export CURSOR_AGENT_MODEL=claude-sonnet
+
+# Or add to your ~/.zshrc or ~/.bashrc:
+echo 'export CURSOR_AGENT_CMD=agent' >> ~/.zshrc
+echo 'export CURSOR_AGENT_MODEL=claude-sonnet' >> ~/.zshrc
+```
 
 ### 1. Installation
 

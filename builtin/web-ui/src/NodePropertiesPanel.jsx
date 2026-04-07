@@ -23,7 +23,7 @@ function modelEntryId(entry) {
  */
 function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
   const { t } = useTranslation();
-  const add = () => onSlotsChange([...slots, { type: "节点", name: "", default: "" }]);
+  const add = () => onSlotsChange([...slots, { type: t("flow:types.node"), name: "", default: "" }]);
   const removeAt = (i) => onSlotsChange(slots.filter((_, j) => j !== i));
   const patch = (i, field, value) => {
     const next = slots.map((s, j) => (j === i ? { ...s, [field]: value } : s));
@@ -40,19 +40,19 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
           className="af-btn-ghost af-node-props-io-add"
           onClick={add}
           disabled={disabled}
-          aria-label={`添加${label}`}
+          aria-label={t("flow:nodeProps.addPinAriaLabel", { label })}
         >
-          添加引脚
+          {t("flow:nodeProps.addPin")}
         </button>
       </div>
       <p className="af-node-props-io-hint">
-        与画布上 Handle 序号一致（{handlePrefix}-0、{handlePrefix}-1…）。增删或调整顺序后，原有连线可能失效，保存后请留意校验提示。
+        {t("flow:nodeProps.handleHint", { prefix: handlePrefix })}
       </p>
       {slots.length === 0 ? <p className="af-node-props-io-empty">{kind === "input" ? t("flow:nodeProps.noInputPins") : t("flow:nodeProps.noOutputPins")}</p> : null}
       {slots.length > 0 ? (
         <div className="af-node-props-io-table" role="group" aria-label={label}>
           <div className="af-node-props-io-table-head" aria-hidden>
-            <span>Handle</span>
+            <span>{t("flow:nodeProps.handle")}</span>
             <span>{t("flow:nodeProps.type")}</span>
             <span>{t("flow:nodeProps.name")}</span>
             <span>{t("flow:nodeProps.defaultValue")}</span>
@@ -71,7 +71,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
-                aria-label={`${label} ${i} 类型`}
+                aria-label={t("flow:nodeProps.pinTypeAriaLabel", { label, index: i })}
               />
               <input
                 type="text"
@@ -81,7 +81,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
-                aria-label={`${label} ${i} 名称`}
+                aria-label={t("flow:nodeProps.pinNameAriaLabel", { label, index: i })}
               />
               <input
                 type="text"
@@ -91,15 +91,15 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
-                aria-label={`${label} ${i} 默认值`}
+                aria-label={t("flow:nodeProps.pinDefaultAriaLabel", { label, index: i })}
               />
               <button
                 type="button"
                 className="af-icon-btn af-node-props-io-remove"
                 onClick={() => removeAt(i)}
                 disabled={disabled}
-                aria-label={`删除 ${label} ${i}`}
-                title="删除此引脚"
+                aria-label={t("flow:nodeProps.deletePinAriaLabel", { label, index: i })}
+                title={t("flow:nodeProps.deletePin")}
               >
                 <span className="material-symbols-outlined">delete</span>
               </button>
@@ -179,10 +179,10 @@ export function NodePropertiesPanel({
         <h2 className="af-pipeline-drawer-title">{t("flow:nodeProps.title")}</h2>
         <div className="af-node-props-head-actions">
           <button type="button" className="af-btn-primary af-node-props-save" disabled={disabled} onClick={onSave}>
-            保存
+            {t("common:common.save")}
           </button>
           <button type="button" className="af-btn-ghost af-node-props-close-secondary" onClick={onClose}>
-            关闭
+            {t("common:common.close")}
           </button>
         </div>
       </div>
@@ -208,7 +208,7 @@ export function NodePropertiesPanel({
             disabled={disabled}
             spellCheck={false}
             autoComplete="off"
-            aria-label="实例 ID"
+            aria-label={t("flow:nodeProps.instanceId")}
           />
         </label>
 
@@ -252,12 +252,12 @@ export function NodePropertiesPanel({
             })()}
             onChange={(e) => update({ model: e.target.value })}
             disabled={disabled}
-            aria-label="模型"
+            aria-label={t("flow:nodeProps.modelAriaLabel")}
           >
             <option value="">{t("flow:node.defaultModel")}</option>
             {currentNotInLists ? (
               <option value={currentNotInLists}>
-                {currentNotInLists}（YAML 中的值，不在当前列表）
+                {currentNotInLists}{t("flow:nodeProps.yamlValueNotInList")}
               </option>
             ) : null}
             {cursorList.length > 0 ? (
@@ -283,14 +283,14 @@ export function NodePropertiesPanel({
 
         <IoPinsEditor
           kind="input"
-          label="输入引脚（INPUT）"
+          label={t("flow:nodeProps.inputPins")}
           slots={Array.isArray(draft.inputs) ? draft.inputs : []}
           onSlotsChange={(next) => update({ inputs: next })}
           disabled={disabled}
         />
         <IoPinsEditor
           kind="output"
-          label="输出引脚（OUTPUT）"
+          label={t("flow:nodeProps.outputPins")}
           slots={Array.isArray(draft.outputs) ? draft.outputs : []}
           onSlotsChange={(next) => update({ outputs: next })}
           disabled={disabled}
@@ -307,8 +307,8 @@ export function NodePropertiesPanel({
                 type="button"
                 className="af-icon-btn af-node-props-expand"
                 onClick={() => setScriptExpanded(true)}
-                aria-label="展开编辑 script"
-                title="展开"
+                aria-label={t("flow:nodeProps.expandEditScript")}
+                title={t("flow:nodeProps.expand")}
                 disabled={disabled}
               >
                 <span className="material-symbols-outlined">open_in_full</span>
@@ -318,7 +318,7 @@ export function NodePropertiesPanel({
               value={scriptStr}
               onChange={(next) => update({ script: next })}
               disabled={disabled}
-              placeholder="instances.*.script，完整 shell 命令；支持 ${workspaceRoot}、${flowDir}、${runDir} 与各槽位名（勿对占位符再包双引号）"
+              placeholder={t("flow:nodeProps.scriptPlaceholder")}
               rows={6}
               textareaClassName="af-pipeline-drawer-textarea af-node-props-body-textarea af-node-props-script-textarea"
               ioSlots={ioSlots}
@@ -334,8 +334,8 @@ export function NodePropertiesPanel({
               type="button"
               className="af-icon-btn af-node-props-expand"
               onClick={() => setBodyExpanded(true)}
-              aria-label="展开编辑"
-              title="展开"
+              aria-label={t("flow:nodeProps.expandEdit")}
+              title={t("flow:nodeProps.expand")}
               disabled={disabled}
             >
               <span className="material-symbols-outlined">open_in_full</span>
@@ -345,7 +345,7 @@ export function NodePropertiesPanel({
             value={draft.body}
             onChange={(next) => update({ body: next })}
             disabled={disabled}
-            placeholder="instances.*.body，支持多行与 ${变量}；输入 ${ 选择槽位"
+            placeholder={t("flow:nodeProps.bodyPlaceholder")}
             rows={8}
             textareaClassName="af-pipeline-drawer-textarea af-node-props-body-textarea"
             ioSlots={ioSlots}
@@ -359,7 +359,7 @@ export function NodePropertiesPanel({
             className="af-pipeline-drawer-textarea af-node-props-system-readonly"
             rows={4}
             readOnly
-            value={systemPromptReadonly || "（当前节点定义无 description）"}
+            value={systemPromptReadonly || t("flow:nodeProps.noDescription")}
             spellCheck={false}
           />
         </label>
@@ -370,7 +370,7 @@ export function NodePropertiesPanel({
           className="af-node-props-expand-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label="编辑 script"
+          aria-label={t("flow:nodeProps.editScript")}
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setScriptExpanded(false);
           }}
@@ -378,7 +378,7 @@ export function NodePropertiesPanel({
           <div className="af-node-props-expand-panel">
             <div className="af-node-props-expand-head">
               <span className="af-node-props-expand-title">{t("flow:node.directCommand")}</span>
-              <button type="button" className="af-icon-btn" onClick={() => setScriptExpanded(false)} aria-label="收起">
+              <button type="button" className="af-icon-btn" onClick={() => setScriptExpanded(false)} aria-label={t("flow:nodeProps.collapse")}>
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
@@ -386,7 +386,7 @@ export function NodePropertiesPanel({
               value={scriptStr}
               onChange={(next) => update({ script: next })}
               disabled={disabled}
-              placeholder="instances.*.script，完整 shell 命令；勿对 ${workspaceRoot}、${flowDir} 等占位符再包双引号"
+              placeholder={t("flow:nodeProps.scriptPlaceholderExpand")}
               rows={16}
               textareaClassName="af-node-props-expand-textarea"
               ioSlots={ioSlots}
@@ -401,7 +401,7 @@ export function NodePropertiesPanel({
           className="af-node-props-expand-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label="编辑用户提示"
+          aria-label={t("flow:nodeProps.editUserPrompt")}
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setBodyExpanded(false);
           }}
@@ -409,7 +409,7 @@ export function NodePropertiesPanel({
           <div className="af-node-props-expand-panel">
             <div className="af-node-props-expand-head">
               <span className="af-node-props-expand-title">{t("flow:node.body")}</span>
-              <button type="button" className="af-icon-btn" onClick={() => setBodyExpanded(false)} aria-label="收起">
+              <button type="button" className="af-icon-btn" onClick={() => setBodyExpanded(false)} aria-label={t("flow:nodeProps.collapse")}>
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
@@ -417,7 +417,7 @@ export function NodePropertiesPanel({
               value={draft.body}
               onChange={(next) => update({ body: next })}
               disabled={disabled}
-              placeholder="instances.*.body，支持多行与 ${变量}"
+              placeholder={t("flow:nodeProps.bodyPlaceholderExpand")}
               rows={16}
               textareaClassName="af-node-props-expand-textarea"
               ioSlots={ioSlots}

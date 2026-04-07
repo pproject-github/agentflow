@@ -2,8 +2,9 @@
  * 从 flow.yaml 解析实例的 role / model，供 Composer 多步规划与路由使用。
  */
 import yaml from "js-yaml";
+import { translateRole, normalizeRoleToKey } from "./i18n.mjs";
 
-const VALID_ROLES = ["需求拆解", "技术规划", "代码执行", "测试回归", "普通"];
+const VALID_ROLES = ["requirement", "planning", "code", "test", "normal"];
 
 /**
  * @param {string} [flowYaml]
@@ -18,7 +19,8 @@ export function parseInstanceRoleModelMap(flowYaml) {
     for (const [id, inst] of Object.entries(instances)) {
       if (!inst || typeof inst !== "object") continue;
       const rawRole = inst.role != null ? String(inst.role).trim() : "";
-      const role = VALID_ROLES.includes(rawRole) ? rawRole : "普通";
+      const normalizedRole = normalizeRoleToKey(rawRole);
+      const role = VALID_ROLES.includes(normalizedRole) ? normalizedRole : "normal";
       let model = inst.model != null ? String(inst.model).trim() : "";
       if (model === "default") model = "";
       const label = inst.label != null ? String(inst.label) : id;
@@ -48,7 +50,7 @@ export function formatInstancePlannerHint(flowYaml) {
     const defHint = v.definitionId ? ` · \`${v.definitionId}\`` : "";
     const scriptHint = v.definitionId === "tool_nodejs" && !v.hasScript ? " ⚠️ **缺 script**" : "";
     if (v.definitionId === "tool_nodejs" && !v.hasScript) nodejsMissing.push(id);
-    return `- \`${id}\`（${v.label}）：角色 **${v.role}**${defHint}${m}${scriptHint}`;
+    return `- \`${id}\`（${v.label}）：角色 **${translateRole(v.role)}**${defHint}${m}${scriptHint}`;
   });
 
   let warn = "";

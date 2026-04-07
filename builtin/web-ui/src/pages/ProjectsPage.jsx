@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  formatRelativeTimeZh,
+  formatRelativeTime,
   loadOpenedEntries,
   mergeRecentActivity,
 } from "../pipelineRecent.js";
@@ -316,7 +316,7 @@ export default function ProjectsPage() {
           <button
             type="button"
             className={"af-icon-btn" + (activityPanelOpen ? " af-icon-btn--active" : "")}
-            aria-label="展开或收起最近打开或最近运行"
+            aria-label={t("flow:palette.toggleRecentActivity")}
             aria-expanded={activityPanelOpen}
             aria-controls="af-recent-activity-panel"
             onClick={() => setActivityPanelOpen((v) => !v)}
@@ -442,12 +442,12 @@ export default function ProjectsPage() {
                     <h4 className="af-activity-name">
                       <HighlightMatch query={pipelineSearch}>{row.flowId}</HighlightMatch>
                     </h4>
-                    <span className="af-activity-time">{formatRelativeTimeZh(row.at)}</span>
+                    <span className="af-activity-time">{formatRelativeTime(row.at, t)}</span>
                   </div>
                   <div className="af-activity-meta">
                     <span className={activityIconKind(row.kind)}>{row.kind === "executed" ? "play_arrow" : "visibility"}</span>
                     <p className="af-activity-text">
-                      {row.kind === "executed" ? t("project:recentRun") : t("project:recentOpen")} · {formatRelativeTimeZh(row.at)}
+                      {row.kind === "executed" ? t("project:recentRun") : t("project:recentOpen")} · {formatRelativeTime(row.at, t)}
                     </p>
                   </div>
                 </button>

@@ -1,4 +1,5 @@
 import { Handle, Position } from "@xyflow/react";
+import { useTranslation } from "react-i18next";
 import { getHandleColor } from "./nodeSchema.js";
 
 function getNodeTypeLabel(data) {
@@ -12,6 +13,7 @@ function getNodeTypeLabel(data) {
 }
 
 export function FlowNode({ data, selected, id, deleteNode }) {
+  const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
   const schemaType = (data?.schemaType ?? "agent").toLowerCase();
@@ -51,7 +53,7 @@ export function FlowNode({ data, selected, id, deleteNode }) {
           </span>
         )}
         {nodeStatus === "running" && !isExecuting && (
-          <span className="af-flow-node__status-badge af-flow-node__status-badge--running-disk" title="磁盘记录为执行中">
+          <span className="af-flow-node__status-badge af-flow-node__status-badge--running-disk" title={t("flow:node.diskRunning")}>
             RUNNING
           </span>
         )}
@@ -70,8 +72,8 @@ export function FlowNode({ data, selected, id, deleteNode }) {
             type="button"
             className="af-flow-node__delete"
             onClick={handleDelete}
-            aria-label="删除节点"
-            title="删除节点"
+            aria-label={t("flow:node.deleteNode")}
+            title={t("flow:node.deleteNode")}
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -80,9 +82,8 @@ export function FlowNode({ data, selected, id, deleteNode }) {
       <div className="af-flow-node__body">
         <div className="af-flow-node__ports af-flow-node__ports--in">
           {inputs.map((slot, i) => {
-            const tip = `输入 ${slot.name || `#${i}`} | 类型: ${slot.type}${
-              slot.default != null && slot.default !== "" ? ` | 默认: ${slot.default}` : ""
-            }`;
+            const tip = t("flow:node.inputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
+              (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
             return (
               <div key={`in-${i}`} className="af-flow-node__port-row" title={tip}>
                 <Handle
@@ -98,13 +99,12 @@ export function FlowNode({ data, selected, id, deleteNode }) {
           })}
         </div>
         <div className="af-flow-node__title-wrap">
-          <span className="af-flow-node__title">{data?.label ?? "节点"}</span>
+          <span className="af-flow-node__title">{data?.label ?? t("flow:node.fallbackLabel")}</span>
         </div>
         <div className="af-flow-node__ports af-flow-node__ports--out">
           {outputs.map((slot, i) => {
-            const tip = `输出 ${slot.name || `#${i}`} | 类型: ${slot.type}${
-              slot.default != null && slot.default !== "" ? ` | 默认: ${slot.default}` : ""
-            }`;
+            const tip = t("flow:node.outputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
+              (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
             return (
               <div key={`out-${i}`} className="af-flow-node__port-row" title={tip}>
                 <Handle

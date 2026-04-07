@@ -63,35 +63,41 @@ export function resolveFlowSource(flowsFromApi, flowId) {
  * @param {number} atMs
  * @returns {string}
  */
-export function formatRelativeTimeZh(atMs) {
+export function formatRelativeTime(atMs, t) {
   const now = Date.now();
   const diff = Math.max(0, now - atMs);
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return "刚刚";
+  if (sec < 60) return t("flow:time.justNow");
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} 分钟前`;
+  if (min < 60) return t("flow:time.minutesAgo", { n: min });
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} 小时前`;
+  if (h < 24) return t("flow:time.hoursAgo", { n: h });
   const d = new Date(atMs);
   const today = new Date();
   const yday = new Date(today);
   yday.setDate(yday.getDate() - 1);
-  if (d.toDateString() === yday.toDateString()) return "昨天";
+  if (d.toDateString() === yday.toDateString()) return t("flow:time.yesterday");
   const days = Math.floor(h / 24);
-  if (days < 7) return `${days} 天前`;
+  if (days < 7) return t("flow:time.daysAgo", { n: days });
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
+
+/** @deprecated Use formatRelativeTime instead */
+export { formatRelativeTime as formatRelativeTimeZh };
 
 /**
  * @param {number} ms
  * @returns {string}
  */
-export function formatDurationMsZh(ms) {
+export function formatDurationMs(ms, t) {
   if (ms == null || !Number.isFinite(ms) || ms <= 0) return "--";
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))} 毫秒`;
+  if (ms < 1000) return t("flow:time.milliseconds", { n: Math.max(1, Math.round(ms)) });
   const s = ms / 1000;
-  return `${s >= 10 ? Math.round(s) : s.toFixed(1)} 秒`;
+  return t("flow:time.seconds", { n: s >= 10 ? Math.round(s) : s.toFixed(1) });
 }
+
+/** @deprecated Use formatDurationMs instead */
+export { formatDurationMs as formatDurationMsZh };
 
 /**
  * @param {Array<{ flowId: string, at: number }>} runs

@@ -48,5 +48,10 @@
     "tool": "Tool",
     "start": "Start",
     "end": "End"
+  },
+  "engine": {
+    "online": "Engine Online",
+    "offline": "Engine Offline",
+    "connecting": "Connecting…"
   }
 }

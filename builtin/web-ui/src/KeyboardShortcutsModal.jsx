@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { isMacPlatform } from "./hotkeyUtils.js";
 
 function Kbd({ children }) {
@@ -22,6 +23,7 @@ function KeyCombo({ keys }) {
  * @param {{ open: boolean, onClose: () => void }} props
  */
 export function KeyboardShortcutsModal({ open, onClose }) {
+  const { t } = useTranslation();
   const panelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
 
   useEffect(() => {
@@ -54,47 +56,47 @@ export function KeyboardShortcutsModal({ open, onClose }) {
       >
         <div className="af-shortcuts-panel__head">
           <h2 id="af-shortcuts-title" className="af-shortcuts-panel__title">
-            快捷键
+            {t("flow:shortcuts.title")}
           </h2>
-          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label={t("common:common.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <div className="af-shortcuts-panel__body">
           <section className="af-shortcuts-section">
-            <h3 className="af-shortcuts-cat">常规</h3>
+            <h3 className="af-shortcuts-cat">{t("flow:shortcuts.general")}</h3>
             <ul className="af-shortcuts-list">
               <li className="af-shortcuts-row">
                 <span className="af-shortcuts-row__label">
-                  保存；节点属性侧栏打开时先提交节点再保存 flow
+                  {t("flow:shortcuts.saveDesc")}
                 </span>
                 <KeyCombo keys={[mod, "S"]} />
               </li>
               <li className="af-shortcuts-row">
-                <span className="af-shortcuts-row__label">快捷键</span>
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.shortcutsLabel")}</span>
                 <KeyCombo keys={["?"]} />
               </li>
             </ul>
           </section>
 
           <section className="af-shortcuts-section">
-            <h3 className="af-shortcuts-cat">画布</h3>
+            <h3 className="af-shortcuts-cat">{t("flow:shortcuts.canvas")}</h3>
             <ul className="af-shortcuts-list">
               <li className="af-shortcuts-row">
-                <span className="af-shortcuts-row__label">选择工具</span>
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.selectTool")}</span>
                 <KeyCombo keys={["V"]} />
               </li>
               <li className="af-shortcuts-row">
-                <span className="af-shortcuts-row__label">平移工具</span>
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.panTool")}</span>
                 <KeyCombo keys={["H"]} />
               </li>
               <li className="af-shortcuts-row">
-                <span className="af-shortcuts-row__label">按住空格临时平移</span>
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.holdSpacePan")}</span>
                 <KeyCombo keys={["Space"]} />
               </li>
               <li className="af-shortcuts-row">
-                <span className="af-shortcuts-row__label">全选所有节点</span>
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.selectAll")}</span>
                 <KeyCombo keys={[mod, "A"]} />
               </li>
             </ul>

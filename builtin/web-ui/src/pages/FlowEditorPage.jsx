@@ -19,7 +19,7 @@ import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
 import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
-import { formatDurationMsZh, formatRelativeTimeZh, recordPipelineOpened } from "../pipelineRecent.js";
+import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
 import { useRoute } from "../routeContext.jsx";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
@@ -209,7 +209,7 @@ function maxDialogueNumFromSessionLabels(sessions) {
   if (!Array.isArray(sessions) || sessions.length === 0) return 0;
   let max = 0;
   for (const s of sessions) {
-    const m = /^对话\s*(\d+)\s*$/.exec(String(s?.label ?? "").trim());
+    const m = /^(?:对话|Conversation)\s*(\d+)\s*$/.exec(String(s?.label ?? "").trim());
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
   return max;
@@ -220,16 +220,17 @@ function maxDialogueNumFromSessionLabels(sessions) {
  * @param {{ steps: Array<{ index: number, type?: string, description?: string, status?: string, nodeRole?: string, executorModel?: string, model?: string, instanceId?: string }> }} props
  */
 function ComposerStepsTrack({ steps }) {
+  const { t } = useTranslation();
   if (!steps || steps.length === 0) return null;
   return (
-    <div className="af-composer-steps-track" role="list" aria-label="任务步骤进度">
+    <div className="af-composer-steps-track" role="list" aria-label={t("flow:composer.stepsAriaLabel")}>
       {steps.map((s) => {
         const desc = String(s.description || s.type || "").trim();
         const modelShow = s.model || s.executorModel;
         const title = [
           `${s.index + 1}. ${desc || "—"}`,
-          s.nodeRole ? `角色：${s.nodeRole}` : "",
-          s.instanceId ? `实例：${s.instanceId}` : "",
+          s.nodeRole ? t("flow:composer.stepRoleLabel", { role: s.nodeRole }) : "",
+          s.instanceId ? t("flow:composer.stepInstanceLabel", { instanceId: s.instanceId }) : "",
           modelShow ? `${t("flow:palette.model")}：${modelShow}` : "",
         ]
           .filter(Boolean)
@@ -442,6 +443,7 @@ function FlowBoard({
   /** 底部与缩略图、缩放控件同一行的 AI 输入区 */
   bottomSlot,
 }) {
+  const { t } = useTranslation();
   const isRunMode = !onNodesChange;
   const panOnDrag = isRunMode ? true : (canvasTool === "pan" ? true : [1, 2]);
   const selectionOnDrag = isRunMode ? false : (canvasTool === "select");
@@ -518,6 +520,13 @@ function FlowBoard({
         </div>
       </Panel>
       <FitViewHelper fitViewEpoch={fitViewEpoch} nodeCount={nodes.length} />
+      {!isRunMode && nodes.length === 0 ? (
+        <div className="af-flow-empty-hint">
+          <span className="af-flow-empty-hint-icon material-symbols-outlined">account_tree</span>
+          <p className="af-flow-empty-hint-text">{t("flow:emptyCanvas.composerHint")}</p>
+          <p className="af-flow-empty-hint-sub" dangerouslySetInnerHTML={{ __html: t("flow:emptyCanvas.composerSub") }} />
+        </div>
+      ) : null}
     </ReactFlow>
   );
 }
@@ -549,7 +558,7 @@ function flowSourceForWrite(source) {
 }
 
 function flowSourceLabelZh(source, t) {
-  if (source === "builtin") return "内置";
+  if (source === "builtin") return t("flow:settings.builtin");
   if (source === "workspace") return t("flow:palette.workspace");
   return t("flow:palette.userDir");
 }
@@ -596,7 +605,7 @@ export default function FlowEditorPage() {
   const slotWarningsRefreshBusyRef = useRef(false);
   const [palette, setPalette] = useState([]);
   const [paletteSearch, setPaletteSearch] = useState("");
-  const [rightPanel, setRightPanel] = useState(/** @type {null | "settings" | "history" | "node"} */ (null));
+  const [rightPanel, setRightPanel] = useState(/** @type {null | "settings" | "history" | "node" | "composer"} */ (null));
   const [recentRuns, setRecentRuns] = useState(
     /** @type {Array<{ flowId: string, runId?: string, at: number, durationMs?: number, status?: string }>} */ ([]),
   );
@@ -680,7 +689,7 @@ export default function FlowEditorPage() {
       const sessions = parsed.filter(s => s && typeof s.id === "string").map(s => ({
         ...s,
         running: false,
-        statusLine: s.running ? "页面刷新后重置" : s.statusLine,
+        statusLine: s.running ? t("flow:composer.pageRefreshReset") : s.statusLine,
         steps: [],
       }));
       let activeSessionId = null;
@@ -758,7 +767,7 @@ export default function FlowEditorPage() {
       const id = `session-1-${Date.now()}`;
       const newSession = {
         id,
-        label: "对话 1",
+        label: t("flow:composer.conversationLabel", { n: 1 }),
         thread: [],
         segments: [],
         running: false,
@@ -799,6 +808,12 @@ export default function FlowEditorPage() {
   const composerNaturalSegmentsRef = useRef(/** @type {Array<{ kind: string, text: string }>} */ ([]));
   const [composerExpanded, setComposerExpanded] = useState(false);
   const composerAbortRef = useRef(/** @type {AbortController | null} */ (null));
+  const composerSidebarThreadRef = useRef(/** @type {HTMLDivElement | null} */ (null));
+  useEffect(() => {
+    const el = composerSidebarThreadRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [composerThread, composerNaturalSegments]);
   /** 当前流式请求所属的 session（用于关闭 tab 时中止、与 active 解耦） */
   const composerStreamingSessionIdRef = useRef(/** @type {string | null} */ (null));
   const composerSubmittingRef = useRef(false);
@@ -811,7 +826,7 @@ export default function FlowEditorPage() {
     const id = `session-${currentCount}-${Date.now()}`;
     const newSession = {
       id,
-      label: label || `对话 ${currentCount}`,
+      label: label || t("flow:composer.conversationLabel", { n: currentCount }),
       thread: [],
       segments: [],
       running: false,
@@ -862,7 +877,7 @@ export default function FlowEditorPage() {
             const newId = `session-${n}-${Date.now()}`;
             const newSession = {
               id: newId,
-              label: `对话 ${n}`,
+              label: t("flow:composer.conversationLabel", { n }),
               thread: [],
               segments: [],
               running: false,
@@ -968,8 +983,8 @@ export default function FlowEditorPage() {
 
   const flowSlotEdgeWarnings = useMemo(() => {
     if (!selected) return [];
-    return computeSlotEdgeWarnings(nodes, edges);
-  }, [selected, nodes, edges]);
+    return computeSlotEdgeWarnings(nodes, edges, t);
+  }, [selected, nodes, edges, t]);
 
   const slotWarningsSignature = useMemo(
     () => flowSlotEdgeWarnings.map((w) => w.key).join("|"),
@@ -1096,15 +1111,16 @@ export default function FlowEditorPage() {
 
     const [fr, nr] = await Promise.all([fetch("/api/flow?" + q.toString()), fetch("/api/nodes?" + nodeQ.toString())]);
     const flowRes = await fr.json();
-    if (!fr.ok || flowRes.error) throw new Error(flowRes.error || "读取 flow 失败");
+    if (!fr.ok || flowRes.error) throw new Error(flowRes.error || t("flow:nodePropsError.loadFlowFailed"));
     const paletteJson = await nr.json();
-    if (!nr.ok) throw new Error("读取节点库失败");
-    const paletteList = Array.isArray(paletteJson) ? paletteJson : [];
+    if (!nr.ok) throw new Error(t("flow:nodePropsError.loadNodesFailed"));
+    const paletteList = Array.isArray(paletteJson) ? paletteJson : Array.isArray(paletteJson?.nodes) ? paletteJson.nodes : [];
+    const pipelineTranslations = (!Array.isArray(paletteJson) && paletteJson?.pipelineTranslations) || {};
 
     const result = deserializeFromFlowYaml(flowRes.flowYaml || "");
     if (result.error) throw new Error(result.error);
     const instances = { ...(result.instances || {}) };
-    const mergedNodes = result.nodes.map((n) => mergeNodeWithPalette(n, instances, paletteList));
+    const mergedNodes = result.nodes.map((n) => mergeNodeWithPalette(n, instances, paletteList, pipelineTranslations, flow.id));
     const validEdges = filterValidEdges(result.edges, mergedNodes);
     return {
       flowSource,
@@ -1525,7 +1541,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           body: JSON.stringify({ flowId: selected.id, fromSource: from, toSource }),
         });
         const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "移动失败");
+        if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : t("flow:composer.requestFailed"));
         const nextSource = j.flowSource === "workspace" || j.flowSource === "user" ? j.flowSource : toSource;
         let nextFlow = { id: selected.id, source: nextSource, archived: selected.archived };
         try {
@@ -1566,11 +1582,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const trimmedNew = nodePropDraft.newId.trim();
     setNodePropsError("");
     if (!NODE_INSTANCE_ID_RE.test(trimmedNew)) {
-      setNodePropsError("实例 ID 格式无效：仅允许英文字母、数字、下划线、短横线，且不能以数字开头。");
+      setNodePropsError(t("flow:nodePropsError.invalidInstanceId"));
       return false;
     }
     if (nodes.some((n) => n.id === trimmedNew && n.id !== oldId)) {
-      setNodePropsError("该实例 ID 已存在，请换一个。");
+      setNodePropsError(t("flow:nodePropsError.duplicateInstanceId"));
       return false;
     }
     const roleStr = nodePropDraft.role.trim();
@@ -1813,8 +1829,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         ts: new Date().toISOString(),
         type: "info",
         text: runUuid
-          ? `正在连接 /api/flow/run（恢复 run uuid=${runUuid}）…`
-          : "正在连接 /api/flow/run…",
+          ? t("flow:run.connectingApiResume", { uuid: runUuid })
+          : t("flow:run.connectingApi"),
       },
     ]);
     setExecutingNodes(new Set());
@@ -1837,21 +1853,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         signal: abort.signal,
       });
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: "请求失败" }));
-        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: err.error || "请求失败" }]);
+        const err = await resp.json().catch(() => ({ error: t("flow:composer.requestFailed") }));
+        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: err.error || t("flow:composer.requestFailed") }]);
         setRunMode("error");
         return;
       }
 
       setRunLogs((prev) => [
         ...prev,
-        { ts: new Date().toISOString(), type: "info", text: "已连接执行流，正在接收 NDJSON 输出…" },
+        { ts: new Date().toISOString(), type: "info", text: t("flow:run.connectedReceiving") },
       ]);
 
       if (!resp.body) {
         setRunLogs((prev) => [
           ...prev,
-          { ts: new Date().toISOString(), type: "error", text: "响应无 body（无法流式读取），请检查浏览器与 agentflow ui 版本" },
+          { ts: new Date().toISOString(), type: "error", text: t("flow:run.noBody") },
         ]);
         setRunMode("error");
         return;
@@ -1872,7 +1888,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             }));
             setRunLogs((prev) => [
               ...prev,
-              { ts: now, type: "node-start", text: `▶ 开始执行: ${msg.instanceId}${msg.label ? ` (${msg.label})` : ""}` },
+              { ts: now, type: "node-start", text: msg.label ? t("flow:run.nodeStartWithLabel", { instanceId: msg.instanceId, label: msg.label }) : t("flow:run.nodeStart", { instanceId: msg.instanceId }) },
             ]);
           } else if (msg.event === "node-done") {
             setExecutingNodes((s) => {
@@ -1887,7 +1903,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             }));
             setRunLogs((prev) => [
               ...prev,
-              { ts: now, type: "node-done", text: `✓ 完成: ${msg.instanceId}${elapsed ? ` (${elapsed})` : ""}` },
+              { ts: now, type: "node-done", text: elapsed ? t("flow:run.nodeDoneWithElapsed", { instanceId: msg.instanceId, elapsed }) : t("flow:run.nodeDone", { instanceId: msg.instanceId }) },
             ]);
           } else if (msg.event === "node-failed") {
             setExecutingNodes((s) => {
@@ -1901,15 +1917,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             }));
             setRunLogs((prev) => [
               ...prev,
-              { ts: now, type: "node-failed", text: `✗ 失败: ${msg.instanceId}` },
+              { ts: now, type: "node-failed", text: t("flow:run.nodeFailed", { instanceId: msg.instanceId }) },
             ]);
           } else if (msg.event === "apply-start") {
             if (msg.uuid) setCurrentRunUuid(String(msg.uuid));
-            setRunLogs((prev) => [...prev, { ts: now, type: "info", text: `流水线开始执行 (uuid=${msg.uuid || "?"})` }]);
+            setRunLogs((prev) => [...prev, { ts: now, type: "info", text: t("flow:run.pipelineStart", { uuid: msg.uuid || "?" }) }]);
           } else if (msg.event === "apply-done") {
-            setRunLogs((prev) => [...prev, { ts: now, type: "info", text: `流水线执行完成${msg.totalElapsed ? ` (${msg.totalElapsed})` : ""}` }]);
+            setRunLogs((prev) => [...prev, { ts: now, type: "info", text: msg.totalElapsed ? t("flow:run.pipelineDoneWithElapsed", { elapsed: msg.totalElapsed }) : t("flow:run.pipelineDone") }]);
           } else if (msg.event === "apply-paused") {
-            setRunLogs((prev) => [...prev, { ts: now, type: "warn", text: `流水线暂停: 等待用户输入 (${(msg.pendingNodes || []).join(", ")})` }]);
+            setRunLogs((prev) => [...prev, { ts: now, type: "warn", text: t("flow:run.pipelinePaused", { nodes: (msg.pendingNodes || []).join(", ") }) }]);
           } else {
             setRunLogs((prev) => [...prev, { ts: now, type: "event", text: `[${msg.event}] ${JSON.stringify(msg)}` }]);
           }
@@ -1919,11 +1935,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             { ts: now, type: "log", text: msg.text != null ? String(msg.text) : "" },
           ]);
         } else if (msg.type === "error") {
-          setRunLogs((prev) => [...prev, { ts: now, type: "error", text: msg.message || "未知错误" }]);
+          setRunLogs((prev) => [...prev, { ts: now, type: "error", text: msg.message || t("flow:run.unknownError") }]);
         } else if (msg.type === "done") {
           setRunLogs((prev) => [
             ...prev,
-            { ts: now, type: "done", text: `执行结束 (exit code: ${msg.exitCode ?? "?"})` },
+            { ts: now, type: "done", text: t("flow:run.executionEnd", { exitCode: msg.exitCode ?? "?" }) },
           ]);
         } else {
           setRunLogs((prev) => [...prev, { ts: now, type: "log", text: JSON.stringify(msg) }]);
@@ -1952,10 +1968,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       setRunMode("done");
     } catch (e) {
       if (e.name === "AbortError") {
-        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "warn", text: "执行已停止" }]);
+        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "warn", text: t("flow:run.executionStopped") }]);
         setRunMode("stopped");
       } else {
-        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: e.message || "未知错误" }]);
+        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: e.message || t("flow:run.unknownError") }]);
         setRunMode("error");
       }
     } finally {
@@ -2245,7 +2261,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const prevSegs = composerNaturalSegmentsRef.current;
     composerSubmittingRef.current = true;
     setComposerRunning(true);
-    setComposerStatusLine("连接中…");
+    setComposerStatusLine(t("flow:composer.connecting"));
+    setRightPanel((p) => p !== "composer" ? "composer" : p);
 
     const snapshotThread = [...composerThread];
     if (prevSegs.length > 0) {
@@ -2316,7 +2333,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         connectTimer = null;
       }
       if (!res.ok) {
-        let msg = res.statusText || "请求失败";
+        let msg = res.statusText || t("flow:composer.requestFailed");
         try {
           const j = await res.json();
           if (j && j.error) msg = String(j.error);
@@ -2329,7 +2346,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       }
       const reader = res.body?.getReader();
       if (!reader) {
-        setComposerStatusLine("无法读取响应流");
+        setComposerStatusLine(t("flow:composer.cannotReadStream"));
         return;
       }
       const dec = new TextDecoder();
@@ -2367,7 +2384,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             const stepSummary = ev.steps.map((s, i) => `${i + 1}. ${s.description || s.type}`).join("\n");
             setComposerNaturalSegments((prev) => [
               ...prev,
-              { kind: "assistant", text: `📋 任务规划（${ev.steps.length} 步）：\n${stepSummary}` },
+              { kind: "assistant", text: t("flow:composer.taskPlan", { count: ev.steps.length, summary: stepSummary }) },
             ]);
           }
           if (ev.type === "step-start") {
@@ -2375,7 +2392,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             const total = ev.total ?? 0;
             const tierLabel = ev.tier ? ` [${ev.tier}]` : "";
             const modelLabel = ev.model ? ` (${ev.model})` : "";
-            setComposerStatusLine(`步骤 ${idx + 1}/${total}: ${ev.description || ""}${tierLabel}${modelLabel}`);
+            setComposerStatusLine(t("flow:composer.step", { current: idx + 1, total, description: (ev.description || "") + tierLabel + modelLabel }));
             setComposerSteps((prev) =>
               prev.map((s) =>
                 s.index === idx
@@ -2395,7 +2412,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           if (ev.type === "step-progress") {
             const idx = ev.index ?? 0;
             const total = ev.total ?? 0;
-            setComposerStatusLine(`步骤 ${idx + 1}/${total}: ${ev.description || ""}`);
+            setComposerStatusLine(t("flow:composer.step", { current: idx + 1, total, description: ev.description || "" }));
           }
           if (ev.type === "step-done") {
             const idx = ev.index ?? 0;
@@ -2417,7 +2434,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             const phaseLabels = ev.phases.map((p, i) => `${i + 1}. ${p.label}`).join(" → ");
             setComposerNaturalSegments((prev) => [
               ...prev,
-              { kind: "assistant", text: `分阶段生成（${ev.phases.length} 阶段）：${phaseLabels}\n当前：${ev.phaseName || ""}` },
+              { kind: "assistant", text: t("flow:composer.phaseGeneration", { count: ev.phases.length, labels: phaseLabels, current: ev.phaseName || "" }) },
             ]);
           }
           if (ev.type === "phase-complete") {
@@ -2435,20 +2452,20 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               if (!ev.isLastPhase && ev.nextPhase) {
                 phaseContinueSnapshot = next;
                 phaseAutoContinueLabel =
-                  String(ev.nextPhase.label || "").trim() || "下一阶段";
+                  String(ev.nextPhase.label || "").trim() || t("flow:composer.nextPhase");
               }
               return next;
             });
             if (!ev.isLastPhase && ev.nextPhase) {
               setComposerNaturalSegments((prev) => [
                 ...prev,
-                { kind: "assistant", text: `${ev.phaseName || "当前阶段"}已完成。下一阶段：${ev.nextPhase.label}` },
+                { kind: "assistant", text: t("flow:composer.phaseComplete", { phaseName: ev.phaseName || t("flow:composer.nextPhase"), nextPhase: ev.nextPhase.label }) },
               ]);
             }
           }
           if (ev.type === "done") {
             sawDone = true;
-            setComposerStatusLine((s) => s || "完成");
+            setComposerStatusLine((s) => s || t("flow:composer.done"));
           }
         }
       }
@@ -2463,15 +2480,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         const snap = phaseContinueSnapshot;
         const label = phaseAutoContinueLabel;
         window.setTimeout(() => {
-          void submitComposerRef.current?.(`继续${label}`, { phaseContextSnapshot: snap });
+          void submitComposerRef.current?.(t("flow:composer.continuePhase", { label }), { phaseContextSnapshot: snap });
         }, 0);
       }
     } catch (e) {
       const err = /** @type {Error & { name?: string }} */ (e);
       if (err.name === "AbortError") {
         const msg = connectTimer
-          ? "连接超时（120s），请确认 UI 服务正在运行并重试。[CONNECT_TIMEOUT]"
-          : "已中止";
+          ? t("flow:composer.connectTimeout")
+          : t("flow:composer.aborted");
         setComposerStatusLine(msg);
         setComposerNaturalSegments((prev) => [...prev, { kind: "error", text: msg }]);
       } else {
@@ -2504,7 +2521,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   const skipRemainingPhases = useCallback(() => {
     if (!composerPhaseContext || composerPhaseContext.isLastPhase) return;
     setComposerPhaseContext(null);
-    void submitComposer("请一次性完成剩余所有步骤（跳过分阶段确认）");
+    void submitComposer(t("flow:composer.skipRemainingPhases"));
   }, [composerPhaseContext, submitComposer]);
 
   useEffect(() => {
@@ -2589,6 +2606,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     setRightPanel((p) => (p === "settings" ? null : "settings"));
   }, []);
 
+  const openComposerPanel = useCallback(() => {
+    setRightPanel((p) => (p === "composer" ? null : "composer"));
+  }, []);
+
   const closeRightPanel = useCallback(() => {
     setRightPanel((p) => {
       if (p === "node" && soleSelectedNodeRef.current) {
@@ -2620,8 +2641,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   navigate("/projects");
                 }
               }}
-              aria-label={runMode !== "edit" ? "返回编辑" : "返回项目"}
-              title={runMode !== "edit" ? "返回编辑" : "返回项目"}
+              aria-label={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
+              title={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
             >
               <span className="material-symbols-outlined">arrow_back</span>
             </button>
@@ -2631,7 +2652,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             </div>
             <div className="af-pipeline-flow-pick">
               <label className="af-visually-hidden" htmlFor="af-flow-select">
-                当前流水线
+                {t("flow:topbar.currentPipeline")}
               </label>
               <select
                 id="af-flow-select"
@@ -2691,8 +2712,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               <button
                 type="button"
                 className={"af-icon-btn" + (runConsoleOpen ? " af-icon-btn--active" : "")}
-                aria-label="执行日志"
-                title="执行日志"
+                aria-label={t("flow:topbar.executionLog")}
+                title={t("flow:topbar.executionLog")}
                 onClick={() => setRunConsoleOpen((v) => !v)}
               >
                 <span className="material-symbols-outlined">terminal</span>
@@ -2703,8 +2724,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <button
                   type="button"
                   className={"af-icon-btn" + (rightPanel === "history" ? " af-icon-btn--active" : "")}
-                  aria-label="历史"
-                  title="历史"
+                  aria-label={t("flow:topbar.history")}
+                  title={t("flow:topbar.history")}
                   disabled={!selected}
                   onClick={openHistoryPanel}
                 >
@@ -2714,18 +2735,28 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   type="button"
                   className={"af-icon-btn" + (rightPanel === "settings" ? " af-icon-btn--active" : "")}
                   onClick={openSettingsPanel}
-                  aria-label="流水线设置"
-                  title="流水线设置"
+                  aria-label={t("flow:topbar.pipelineSettings")}
+                  title={t("flow:topbar.pipelineSettings")}
                   disabled={!selected}
                 >
                   <span className="material-symbols-outlined">settings</span>
                 </button>
                 <button
                   type="button"
+                  className={"af-composer-topbar-btn" + (rightPanel === "composer" ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
+                  onClick={openComposerPanel}
+                  aria-label="AI Composer"
+                  title="AI Composer"
+                  disabled={!selected}
+                >
+                  AI
+                </button>
+                <button
+                  type="button"
                   className={"af-icon-btn af-shortcuts-trigger" + (shortcutsOpen ? " af-icon-btn--active" : "")}
                   onClick={toggleShortcutsPanel}
-                  aria-label="快捷键"
-                  title="快捷键 (?)"
+                  aria-label={t("flow:topbar.shortcutsLabel")}
+                  title={t("flow:topbar.shortcutsTitle")}
                   disabled={!selected}
                 >
                   <span className="af-shortcuts-trigger__mark" aria-hidden>
@@ -2735,8 +2766,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <button
                   type="button"
                   className="af-icon-btn af-icon-btn--danger"
-                  aria-label="删除流水线"
-                  title="删除流水线"
+                  aria-label={t("flow:topbar.deletePipeline")}
+                  title={t("flow:topbar.deletePipeline")}
                   disabled={
                     !selected ||
                     selected.source === "builtin" ||
@@ -2778,8 +2809,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   onClick={() => void handleRun({ runUuid: currentRunUuid })}
                   title={
                     currentRunUuid
-                      ? `在同一 run 目录继续执行（uuid=${currentRunUuid}）`
-                      : "尚未收到 apply-start，将发起新的 run"
+                      ? t("flow:topbar.resumeTitle", { uuid: currentRunUuid })
+                      : t("flow:topbar.resumeTitleNoUuid")
                   }
                 >
                   Resume
@@ -2804,7 +2835,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
         <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "")}>
           {runMode === "edit" ? (
-          <aside className="af-node-palette" id="af-node-palette" aria-label="节点调色板">
+          <aside className="af-node-palette" id="af-node-palette" aria-label={t("flow:palette2.nodePalette")}>
             {/* 工作区切换区域 - 可展开 */}
             <div className={`af-palette-workspace${workspaceExpanded ? " af-palette-workspace--expanded" : ""}`}>
               <button
@@ -2822,7 +2853,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 </span>
               </button>
               <div className="af-palette-workspace-path" title={selected?.path ? getWorkspaceFromPath(selected.path) : ""}>
-                {selected?.path ? getWorkspaceFromPath(selected.path) : "未选择流水线"}
+                {selected?.path ? getWorkspaceFromPath(selected.path) : t("flow:palette2.noPipelineSelected")}
               </div>
 
               {/* 展开后的工作区树形结构 */}
@@ -2883,21 +2914,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                     <li
                                       key={run.runId}
                                       className="af-palette-workspace-run-item"
-                                      title={`运行 ID: ${run.runId}`}
+                                      title={t("flow:palette2.runId", { id: run.runId })}
                                     >
                                       <span className="material-symbols-outlined" aria-hidden>schedule</span>
                                       <span className="af-palette-workspace-run-id">{run.runId.slice(0, 8)}…</span>
-                                      <span className="af-palette-workspace-run-time">{formatRelativeTimeZh(run.at)}</span>
+                                      <span className="af-palette-workspace-run-time">{formatRelativeTime(run.at, t)}</span>
                                     </li>
                                   ))}
                                   {flowRuns.runs.length > 3 && (
-                                    <li className="af-palette-workspace-run-more">+{flowRuns.runs.length - 3} 更多</li>
+                                    <li className="af-palette-workspace-run-more">{t("flow:palette2.moreRuns", { count: flowRuns.runs.length - 3 })}</li>
                                   )}
                                 </ul>
                               </li>
                             ))}
                             {workspaceTree.runs.length > 5 && (
-                              <li className="af-palette-workspace-more">+{workspaceTree.runs.length - 5} 更多流程</li>
+                              <li className="af-palette-workspace-more">{t("flow:palette2.moreFlows", { count: workspaceTree.runs.length - 5 })}</li>
                             )}
                           </ul>
                         ) : (
@@ -2987,7 +3018,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               <div
                 className="af-banner af-banner--warn af-flow-slot-warnings"
                 role="region"
-                aria-label="流程校验警告"
+                aria-label={t("flow:validation.flowWarningAriaLabel")}
               >
                 <div className="af-flow-slot-warnings-head">
                   <div className="af-flow-slot-warnings-title">{t("flow:palette.validationWarnings")}</div>
@@ -2996,8 +3027,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                       type="button"
                       className="af-icon-btn"
                       disabled={slotWarningsRefreshing}
-                      aria-label="从服务器重新加载流程并刷新校验"
-                      title="从服务器重新加载"
+                      aria-label={t("flow:validation.reloadFromServer")}
+                      title={t("flow:validation.reloadFromServerShort")}
                       onClick={() => void handleSlotWarningsRefresh()}
                     >
                       <span className="material-symbols-outlined" aria-hidden>
@@ -3007,8 +3038,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     <button
                       type="button"
                       className="af-icon-btn"
-                      aria-label="关闭校验警告横幅"
-                      title="关闭"
+                      aria-label={t("flow:validation.closeBanner")}
+                      title={t("common:common.close")}
                       onClick={() => setSlotWarningsBannerDismissed(true)}
                     >
                       <span className="material-symbols-outlined" aria-hidden>
@@ -3020,11 +3051,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <ul className="af-flow-slot-warnings-list">
                   {flowSlotEdgeWarnings.map((w) => (
                     <li key={w.key}>
-                      节点 &quot;
+                      {t("flow:validation.nodePrefix")} &quot;
                       <a
                         href="#"
                         className="af-flow-slot-warning-node-link"
-                        aria-label={`在画布中选中并定位节点 ${w.nodeId}`}
+                        aria-label={t("flow:validation.focusNodeAriaLabel", { nodeId: w.nodeId })}
                         onClick={(e) => {
                           e.preventDefault();
                           focusNodeFromSlotWarning(w.nodeId);
@@ -3045,15 +3076,23 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 aria-live="polite"
               >
                 <span className="af-flow-slot-warnings-collapsed-text">
-                  槽位校验 {flowSlotEdgeWarnings.length} 条（已隐藏）
+                  {t("flow:validation.slotWarningCount", { count: flowSlotEdgeWarnings.length })}
                 </span>
+                <button
+                  type="button"
+                  className="af-flow-slot-warnings-kbd-hint"
+                  onClick={toggleShortcutsPanel}
+                  title={t("flow:validation.shortcutHint")}
+                >
+                  <kbd>?</kbd> {t("flow:validation.shortcutHintLabel")}
+                </button>
                 <div className="af-flow-slot-warnings-collapsed-actions">
                   <button
                     type="button"
                     className="af-flow-slot-warnings-collapsed-btn"
                     onClick={() => setSlotWarningsBannerDismissed(false)}
                   >
-                    显示
+                    {t("flow:validation.show")}
                   </button>
                   <button
                     type="button"
@@ -3061,7 +3100,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     disabled={slotWarningsRefreshing}
                     onClick={() => void handleSlotWarningsRefresh()}
                   >
-                    刷新
+                    {t("common:common.refresh")}
                   </button>
                 </div>
               </div>
@@ -3094,160 +3133,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   bottomSlot={
                     runMode === "edit" ? (
                     <div className="af-bottom-composer-stack">
-                {/* Session Tabs */}
-                {composerSessions.length > 0 && (
-                  <div className="af-composer-session-tabs">
-                    {composerSessions.map((session) => (
-                      <button
-                        key={session.id}
-                        type="button"
-                        className={[
-                          "af-composer-session-tab",
-                          session.id === activeSessionId ? "af-composer-session-tab--active" : "",
-                          session.running ? "af-composer-session-tab--running" : "",
-                        ].filter(Boolean).join(" ")}
-                        onClick={() => activateComposerSession(session.id)}
-                        title={session.label}
-                      >
-                        <span className="af-composer-session-label">{session.label}</span>
-                        {(composerSessions.length > 1 || session.running) && (
-                          <span
-                            className="af-composer-session-close"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              closeComposerSession(session.id);
-                            }}
-                            title={session.running ? "结束对话（将停止生成）" : "关闭对话"}
-                          >
-                            <span className="material-symbols-outlined" style={{ fontSize: "0.75rem" }}>
-                              close
-                            </span>
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="af-composer-session-add"
-                      onClick={() => createComposerSession()}
-                      title="新建对话"
-                    >
-                      <span className="material-symbols-outlined">add</span>
-                    </button>
-                  </div>
-                )}
-
-                {!composerOutputDismissed &&
-                (composerThread.length > 0 ||
-                  composerNaturalSegments.length > 0 ||
-                  composerRunning) ? (
-                  <div
-                    className={
-                      "af-composer-output-panel" +
-                      (composerRunning ? " af-composer-output-panel--running" : "")
-                    }
-                    aria-label="AI 输出"
-                  >
-                    <div className="af-composer-output-head">
-                      <span className="af-composer-output-title">{t("flow:palette.output")}</span>
-                      <div
-                        className={
-                          "af-composer-output-status" +
-                          (composerRunning ? " af-composer-output-status--running" : "")
-                        }
-                        role="status"
-                        aria-live="polite"
-                        title={composerStatusLine || undefined}
-                      >
-                        {composerRunning && !composerStatusLine ? "执行中…" : composerStatusLine || "就绪"}
-                      </div>
-                      <div className="af-composer-output-head-actions">
-                        <button
-                          type="button"
-                          className="af-composer-expand-btn af-icon-btn"
-                          onClick={() => setComposerExpanded(true)}
-                          disabled={
-                            composerThread.length === 0 &&
-                            composerNaturalSegments.length === 0 &&
-                            !composerRunning
-                          }
-                          aria-label="展开自然语言输出"
-                          title="展开对话与输出"
-                        >
-                          <span className="material-symbols-outlined" aria-hidden>
-                            unfold_more
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="af-composer-output-close af-icon-btn"
-                          onClick={() => setComposerOutputDismissed(true)}
-                          aria-label="关闭输出"
-                          title="关闭"
-                        >
-                          <span className="material-symbols-outlined" aria-hidden>
-                            close
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                    {composerPhaseContext && Array.isArray(composerPhaseContext.phases) && composerPhaseContext.phases.length > 1 ? (
-                      <div className="af-composer-phase-bar" aria-label="分阶段进度">
-                        {composerPhaseContext.phases.map((p, i) => (
-                          <div
-                            key={p.name || i}
-                            className={
-                              "af-composer-phase-item" +
-                              (p.status === "done" ? " af-composer-phase-item--done" : "") +
-                              (p.status === "running" ? " af-composer-phase-item--running" : "") +
-                              (p.status === "pending" ? " af-composer-phase-item--pending" : "")
-                            }
-                            title={`${p.label}：${p.description || ""}`}
-                          >
-                            <span className="af-composer-phase-dot" aria-hidden>
-                              {p.status === "done" ? (
-                                <span className="material-symbols-outlined" style={{ fontSize: "0.7rem" }}>check</span>
-                              ) : (
-                                <span>{i + 1}</span>
-                              )}
-                            </span>
-                            <span className="af-composer-phase-label">{p.label}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {/* 分阶段：仅主阶段条。非多步（≤1 步）：不展示步骤副 tab，避免单步仍出现模型芯片 */}
-                    {composerSteps.length > 1 &&
-                    !(composerPhaseContext && Array.isArray(composerPhaseContext.phases) && composerPhaseContext.phases.length > 1) ? (
-                      <ComposerStepsTrack steps={composerSteps} />
-                    ) : null}
-                    <ComposerThreadContent
-                      thread={composerThread}
-                      liveSegments={composerNaturalSegments}
-                      running={composerRunning}
-                    />
-                    {composerPhaseContext && !composerPhaseContext.isLastPhase && composerPhaseContext.nextPhase && !composerRunning ? (
-                      <div className="af-composer-phase-review af-composer-phase-review--minimal" aria-label="分阶段选项">
-                        <span className="af-composer-phase-auto-hint">
-                          分阶段自动继续。若需合并为单次生成，可点右侧跳过。
-                        </span>
-                        <button
-                          type="button"
-                          className="af-composer-phase-btn af-composer-phase-btn--skip"
-                          onClick={() => skipRemainingPhases()}
-                        >
-                          跳过，一次性完成
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
                     <div className="af-pipeline-composer-inner">
-                <div className="af-composer-selected" aria-label="已选节点列表">
+                <div className="af-composer-selected" aria-label={t("flow:composer.selectedNodesAriaLabel")}>
                   {composerStripEntries.length === 0 ? (
                     <span className="af-composer-selected-empty">
-                      在画布上选择节点，或在输入框用 @ 选择实例（Instances）或节点类型（Node）
+                      {t("flow:composer.selectedNodesEmpty")}
                     </span>
                   ) : (
                     composerStripEntries.map((entry, idx) => {
@@ -3264,7 +3154,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               type="button"
                               className="af-composer-node-chip-dismiss"
                               onClick={() => dismissComposerStripTag(entry)}
-                              aria-label={`从输入中移除 @${d.id}`}
+                              aria-label={t("flow:composer.removeFromInput", { id: d.id })}
                             >
                               <span className="material-symbols-outlined">close</span>
                             </button>
@@ -3278,7 +3168,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                       const tip =
                         defId && defId !== label ? `${label} · ${n.id} · ${defId}` : `${label} · ${n.id}`;
                       const dismissLabel =
-                        kind === "canvas" ? `取消选中 ${n.id}` : `从输入中移除 @${n.id}`;
+                        kind === "canvas" ? t("flow:composer.deselectNode", { id: n.id }) : t("flow:composer.removeFromInput", { id: n.id });
                       return (
                         <div
                           key={n.id}
@@ -3308,7 +3198,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     <textarea
                       ref={composerInputRef}
                       className="af-composer-textarea"
-                      placeholder="在此输入问题（⌘/Ctrl+Enter 发送）"
+                      placeholder={t("flow:composer.inputPlaceholder")}
                       disabled={!selected}
                       value={composerText}
                       rows={2}
@@ -3352,12 +3242,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         const t = e.target;
                         if (t instanceof HTMLTextAreaElement) setComposerCursor(t.selectionStart ?? 0);
                       }}
-                      aria-label="问题输入"
+                      aria-label={t("flow:composer.inputAriaLabel")}
                       autoComplete="off"
                       spellCheck={false}
                     />
                     {mentionDraft && selected && mentionMenuFlat.length > 0 ? (
-                      <ul className="af-composer-mention-menu" role="listbox" aria-label="提及：实例与节点类型">
+                      <ul className="af-composer-mention-menu" role="listbox" aria-label={t("flow:composer.mentionAriaLabel")}>
                         {mentionMenuSections.instances.length > 0 ? (
                           <li className="af-composer-mention-section" role="presentation">
                             <div className="af-composer-mention-section-title">Instances</div>
@@ -3417,7 +3307,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   </div>
                   <div className="af-composer-toolbar">
                     <label className="af-composer-model-field">
-                      <span className="af-visually-hidden">模型</span>
+                      <span className="af-visually-hidden">{t("flow:composer.modelLabel")}</span>
                       <select
                         className="af-composer-model-select"
                         value={(() => {
@@ -3432,12 +3322,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         })()}
                         onChange={(e) => setComposerModel(e.target.value)}
                         disabled={!selected || composerRunning}
-                        aria-label="对话模型"
+                        aria-label={t("flow:composer.modelAriaLabel")}
                       >
-                        <option value="">默认</option>
+                        <option value="">{t("flow:composer.modelDefault")}</option>
                         {composerModelSelect.currentNotInLists ? (
                           <option value={composerModelSelect.currentNotInLists}>
-                            {composerModelSelect.currentNotInLists}（不在当前列表）
+                            {composerModelSelect.currentNotInLists}{t("flow:composer.modelNotInList")}
                           </option>
                         ) : null}
                         {composerModelSelect.cursorList.length > 0 ? (
@@ -3468,8 +3358,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         (composerRunning ? " af-composer-send--stop" : "")
                       }
                       disabled={!selected || (!composerRunning && !composerText.trim())}
-                      aria-label={composerRunning ? "停止生成" : "发送"}
-                      title={composerRunning ? "停止生成" : undefined}
+                      aria-label={composerRunning ? t("flow:composer.stopGeneration") : t("flow:composer.send")}
+                      title={composerRunning ? t("flow:composer.stopGeneration") : undefined}
                       onClick={() => {
                         if (composerRunning) {
                           composerAbortRef.current?.abort();
@@ -3490,7 +3380,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         className="af-node-props-expand-overlay af-composer-thread-dialog-overlay"
                         role="dialog"
                         aria-modal="true"
-                        aria-label="对话与输出"
+                        aria-label={t("flow:composer.conversationOutput")}
                         onMouseDown={(e) => {
                           if (e.target === e.currentTarget) setComposerExpanded(false);
                         }}
@@ -3499,46 +3389,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           <div className="af-node-props-expand-head af-composer-thread-dialog-head">
                             <div className="af-composer-thread-dialog-head-main">
                               <span className="af-node-props-expand-title">{t("flow:nodeProps.conversationOutput")}</span>
-                              {/* Session Tabs in Expanded Dialog */}
-                              <div className="af-composer-session-tabs" style={{ marginTop: "0.5rem" }}>
-                                {composerSessions.map((session) => (
-                                  <button
-                                    key={session.id}
-                                    type="button"
-                                    className={[
-                                      "af-composer-session-tab",
-                                      session.id === activeSessionId ? "af-composer-session-tab--active" : "",
-                                      session.running ? "af-composer-session-tab--running" : "",
-                                    ].filter(Boolean).join(" ")}
-                                    onClick={() => activateComposerSession(session.id)}
-                                    title={session.label}
-                                  >
-                                    <span className="af-composer-session-label">{session.label}</span>
-                                    {(composerSessions.length > 1 || session.running) && (
-                                      <span
-                                        className="af-composer-session-close"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          closeComposerSession(session.id);
-                                        }}
-                                        title={session.running ? "结束对话（将停止生成）" : "关闭对话"}
-                                      >
-                                        <span className="material-symbols-outlined" style={{ fontSize: "0.75rem" }}>
-                                          close
-                                        </span>
-                                      </span>
-                                    )}
-                                  </button>
-                                ))}
-                                <button
-                                  type="button"
-                                  className="af-composer-session-add"
-                                  onClick={() => createComposerSession()}
-                                  title="新建对话"
-                                >
-                                  <span className="material-symbols-outlined">add</span>
-                                </button>
-                              </div>
                               <div
                                 className={
                                   "af-composer-thread-dialog-status" +
@@ -3548,14 +3398,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                 aria-live="polite"
                                 title={composerStatusLine || undefined}
                               >
-                                {composerRunning && !composerStatusLine ? "执行中…" : composerStatusLine || "就绪"}
+                                {composerRunning && !composerStatusLine ? t("flow:composer.executing") : composerStatusLine || t("flow:composer.ready")}
                               </div>
                             </div>
                             <button
                               type="button"
                               className="af-icon-btn"
                               onClick={() => setComposerExpanded(false)}
-                              aria-label="收起"
+                              aria-label={t("flow:composer.collapseAriaLabel")}
                             >
                               <span className="material-symbols-outlined">close</span>
                             </button>
@@ -3588,7 +3438,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   }
                 />
               ) : (
-                <div className="af-placeholder af-pipeline-placeholder">请从顶部下拉选择一条流水线</div>
+                <div className="af-placeholder af-pipeline-placeholder">{t("flow:pipeline.selectPipeline")}</div>
               )}
             </div>
           </div>
@@ -3602,7 +3452,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               className="af-run-console__resize"
               role="separator"
               aria-orientation="horizontal"
-              aria-label="拖动调整执行日志高度"
+              aria-label={t("flow:run.resizeConsole")}
               onPointerDown={onRunConsoleResizePointerDown}
               onPointerMove={onRunConsoleResizePointerMove}
               onPointerUp={onRunConsoleResizePointerUp}
@@ -3620,7 +3470,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   type="button"
                   className="af-icon-btn af-run-console__close"
                   onClick={() => setRunConsoleOpen(false)}
-                  aria-label="关闭日志"
+                  aria-label={t("flow:run.closeLog")}
                 >
                   <span className="material-symbols-outlined">expand_more</span>
                 </button>
@@ -3664,12 +3514,87 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
           {rightPanel && selected && runMode === "edit" ? (
             <aside
-              className={"af-pipeline-drawer" + (rightPanel === "node" ? " af-pipeline-drawer--wide" : "")}
+              className={"af-pipeline-drawer" + (rightPanel === "node" ? " af-pipeline-drawer--wide" : "") + (rightPanel === "composer" ? " af-pipeline-drawer--wide" : "")}
               aria-label={
-                rightPanel === "settings" ? "流水线设置" : rightPanel === "history" ? "执行历史" : "节点属性"
+                rightPanel === "settings" ? t("flow:settings.title") : rightPanel === "history" ? t("flow:history.title") : rightPanel === "composer" ? "AI Composer" : t("flow:nodeProps.title")
               }
             >
-              {rightPanel === "node" && soleSelectedNode ? (
+              {rightPanel === "composer" ? (
+                <div className="af-composer-sidebar">
+                  <div className="af-pipeline-drawer-head">
+                    <h2 className="af-pipeline-drawer-title">AI Composer</h2>
+                    <button
+                      type="button"
+                      className="af-pipeline-drawer-close af-icon-btn"
+                      onClick={closeRightPanel}
+                      aria-label={t("flow:composer.closeSidebar")}
+                    >
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  </div>
+                  {/* Session Tabs */}
+                  {composerSessions.length > 0 && (
+                    <div className="af-composer-session-tabs">
+                      {composerSessions.map((session) => (
+                        <button
+                          key={session.id}
+                          type="button"
+                          className={[
+                            "af-composer-session-tab",
+                            session.id === activeSessionId ? "af-composer-session-tab--active" : "",
+                            session.running ? "af-composer-session-tab--running" : "",
+                          ].filter(Boolean).join(" ")}
+                          onClick={() => activateComposerSession(session.id)}
+                          title={session.label}
+                        >
+                          <span className="af-composer-session-label">{session.label}</span>
+                          {(composerSessions.length > 1 || session.running) && (
+                            <span
+                              className="af-composer-session-close"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                closeComposerSession(session.id);
+                              }}
+                              title={session.running ? t("flow:composer.endConversation") : t("flow:composer.closeConversation")}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: "0.75rem" }}>
+                                close
+                              </span>
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="af-composer-session-add"
+                        onClick={() => createComposerSession()}
+                        title={t("flow:composer.newConversation")}
+                      >
+                        <span className="material-symbols-outlined">add</span>
+                      </button>
+                    </div>
+                  )}
+                  {/* Status */}
+                  <div
+                    className={
+                      "af-composer-sidebar-status" +
+                      (composerRunning ? " af-composer-sidebar-status--running" : "")
+                    }
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {composerRunning && !composerStatusLine ? t("flow:composer.executing") : composerStatusLine || t("flow:composer.ready")}
+                  </div>
+                  {/* Thread content */}
+                  <div className="af-composer-sidebar-thread" ref={composerSidebarThreadRef}>
+                    <ComposerThreadContent
+                      thread={composerThread}
+                      liveSegments={composerNaturalSegments}
+                      running={composerRunning}
+                    />
+                  </div>
+                </div>
+              ) : rightPanel === "node" && soleSelectedNode ? (
                 nodePropDraft ? (
                   <NodePropertiesPanel
                     draft={nodePropDraft}
@@ -3695,13 +3620,13 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <>
                   <div className="af-pipeline-drawer-head">
                     <h2 className="af-pipeline-drawer-title">
-                      {rightPanel === "settings" ? "流水线设置" : "执行历史"}
+                      {rightPanel === "settings" ? t("flow:settings.title") : t("flow:history.title")}
                     </h2>
                     <button
                       type="button"
                       className="af-pipeline-drawer-close af-icon-btn"
                       onClick={closeRightPanel}
-                      aria-label="关闭侧栏"
+                      aria-label={t("flow:composer.closeSidebar")}
                     >
                       <span className="material-symbols-outlined">close</span>
                     </button>
@@ -3718,7 +3643,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               {flowSourceLabelZh(selected.source ?? "user", t)}
                             </span>
                             {selected.archived ? (
-                              <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">已归档</span>
+                              <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">{t("flow:settings.archived")}</span>
                             ) : null}
                           </div>
                         </label>
@@ -3733,7 +3658,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         {(selected.source === "user" || selected.source === "workspace") ? (
                           selected.archived ? (
                             <p className="af-pipeline-drawer-muted">
-                              此流水线位于归档目录（_archived），无法在用户目录与工作区之间移动。
+                              {t("flow:settings.archivedNote")}
                             </p>
                           ) : (
                             <div className="af-pipeline-drawer-field">
@@ -3746,7 +3671,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                     disabled={moveFlowBusy}
                                     onClick={() => handleMoveFlow("workspace")}
                                   >
-                                    {moveFlowBusy ? "移动中…" : "移动到工作区"}
+                                    {moveFlowBusy ? t("flow:settings.moveBusy") : t("flow:settings.moveToWorkspace")}
                                   </button>
                                 ) : (
                                   <button
@@ -3755,7 +3680,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                     disabled={moveFlowBusy}
                                     onClick={() => handleMoveFlow("user")}
                                   >
-                                    {moveFlowBusy ? "移动中…" : "移动到用户目录"}
+                                    {moveFlowBusy ? t("flow:settings.moveBusy") : t("flow:settings.moveToUserDir")}
                                   </button>
                                 )}
                               </div>
@@ -3764,7 +3689,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           )
                         ) : (
                           <p className="af-pipeline-drawer-muted">
-                            内置模板只读；首次保存将写入工作区 .workspace/agentflow/pipelines（流水线）、.workspace/agentflow/nodes（自定义节点）等；旧 .cursor/agentflow/ 下文件仍可读。
+                            {t("flow:settings.builtinNote")}
                           </p>
                         )}
                         <label className="af-pipeline-drawer-field">
@@ -3788,23 +3713,23 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           </dl>
                         </div>
                         <button type="button" className="af-btn-primary af-pipeline-drawer-save" onClick={handleSave}>
-                          保存更改
+                          {t("flow:settings.saveChanges")}
                         </button>
                         <button
                           type="button"
                           className="af-pipeline-drawer-link"
                           onClick={() => navigate("/settings")}
                         >
-                          全局设置
+                          {t("flow:settings.globalSettings")}
                         </button>
                       </>
                     ) : (
                       <>
                         <p className="af-pipeline-drawer-lead">
-                          当前流水线：<strong>{selected.id}</strong>
+                          {t("flow:settings.currentPipeline")}<strong>{selected.id}</strong>
                         </p>
                         {recentRunsLoading ? (
-                          <p className="af-pipeline-drawer-muted">加载中…</p>
+                          <p className="af-pipeline-drawer-muted">{t("common:common.loading")}</p>
                         ) : recentRunsError ? (
                           <p className="af-err af-pipeline-drawer-err">{recentRunsError}</p>
                         ) : runsForCurrentFlow.length === 0 ? (
@@ -3817,30 +3742,30 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               execHistoryStats.stopped +
                               execHistoryStats.interrupted >
                             0 ? (
-                              <div className="af-exec-history-summary" aria-label="执行结果汇总">
+                              <div className="af-exec-history-summary" aria-label={t("flow:history.summary")}>
                                 {execHistoryStats.success > 0 ? (
                                   <span className="af-exec-history-pill af-exec-history-pill--success">
-                                    {execHistoryStats.success} 成功
+                                    {t("flow:history.successCount", { count: execHistoryStats.success })}
                                   </span>
                                 ) : null}
                                 {execHistoryStats.failed > 0 ? (
                                   <span className="af-exec-history-pill af-exec-history-pill--failed">
-                                    {execHistoryStats.failed} 失败
+                                    {t("flow:history.failedCount", { count: execHistoryStats.failed })}
                                   </span>
                                 ) : null}
                                 {execHistoryStats.stopped > 0 ? (
                                   <span className="af-exec-history-pill af-exec-history-pill--stopped">
-                                    {execHistoryStats.stopped} 已停止
+                                    {t("flow:history.stoppedCount", { count: execHistoryStats.stopped })}
                                   </span>
                                 ) : null}
                                 {execHistoryStats.interrupted > 0 ? (
                                   <span className="af-exec-history-pill af-exec-history-pill--interrupted">
-                                    {execHistoryStats.interrupted} 已中断
+                                    {t("flow:history.interruptedCount", { count: execHistoryStats.interrupted })}
                                   </span>
                                 ) : null}
                                 {execHistoryStats.running > 0 ? (
                                   <span className="af-exec-history-pill af-exec-history-pill--running">
-                                    {execHistoryStats.running} 进行中
+                                    {t("flow:history.runningCount", { count: execHistoryStats.running })}
                                   </span>
                                 ) : null}
                               </div>
@@ -3862,16 +3787,16 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                             : "af-exec-history-card--unknown";
                                 const statusZh =
                                   st === "success"
-                                    ? "成功"
+                                    ? t("flow:history.success")
                                     : st === "failed"
-                                      ? "失败"
+                                      ? t("flow:history.failed")
                                       : st === "stopped"
-                                        ? "已停止"
+                                        ? t("flow:history.stopped")
                                         : st === "interrupted"
-                                          ? "已中断"
+                                          ? t("flow:history.interrupted")
                                           : st === "running"
-                                            ? "进行中"
-                                            : "未知";
+                                            ? t("flow:history.running")
+                                            : t("flow:history.unknown");
                                 const statusIcon =
                                   st === "success"
                                     ? "check_circle"
@@ -3888,19 +3813,19 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                 // runId 为目录名时间戳（如 20260403142712）；取前 6 位会得到同年月的相同前缀，故用后段区分
                                 const runLabel =
                                   run.runId != null && run.runId.length >= 6
-                                    ? `运行 #${run.runId.length > 8 ? run.runId.slice(-8) : run.runId}`
-                                    : `运行 #${runsForCurrentFlow.length - idx}`;
+                                    ? t("flow:history.runLabel", { id: run.runId.length > 8 ? run.runId.slice(-8) : run.runId })
+                                    : t("flow:history.runLabel", { id: runsForCurrentFlow.length - idx });
                                 return (
                                   <li key={`${selected.id}-${runKey}`} className="af-exec-history-list-item">
                                     <button
                                       type="button"
                                       className={`af-exec-history-card ${cardMod}`}
                                       onClick={() => openRunFromHistory(run)}
-                                      title="进入该次运行的画布与日志态"
+                                      title={t("flow:history.enterRunView")}
                                     >
                                       <div className="af-exec-history-card-top">
                                         <span className="af-exec-history-card-title">{runLabel}</span>
-                                        <span className="af-exec-history-card-time">{formatRelativeTimeZh(run.at)}</span>
+                                        <span className="af-exec-history-card-time">{formatRelativeTime(run.at, t)}</span>
                                       </div>
                                       <div className="af-exec-history-card-bottom">
                                         <span className="af-exec-history-card-status">
@@ -3913,7 +3838,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                           <span className="material-symbols-outlined" aria-hidden>
                                             timer
                                           </span>
-                                          {formatDurationMsZh(run.durationMs)}
+                                          {formatDurationMs(run.durationMs, t)}
                                         </span>
                                       </div>
                                     </button>

@@ -1,10 +1,10 @@
 ---
 # 内置节点：直接提供文件
-description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
+description: Provide file path or content directly, value will be passed to downstream as-is
 displayName: File
 input: []
 output:
-  - type: 文件
+  - type: file
     name: value
     default: ""
 ---

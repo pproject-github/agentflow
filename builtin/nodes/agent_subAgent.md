@@ -3,11 +3,11 @@
 description: 利用SubAgent执行任务
 displayName: SubAgent
 input:
-  - type: 节点
+  - type: node
     name: prev
     default: ""
 output:
-  - type: 节点
+  - type: node
     name: next
     default: ""
 ---

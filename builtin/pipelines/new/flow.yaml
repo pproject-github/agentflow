@@ -2,72 +2,69 @@ instances:
   control_start_new:
     definitionId: control_start
     label: Start
-    description: agentflow 的入口，所有流程应从这个节点开始
-    role: 普通
+    role: normal
     input: []
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
     body: |
       流程入口
   agent_plan:
     definitionId: agent_subAgent
-    label: 规划节点
-    description: 利用SubAgent执行任务
-    role: 技术规划
+    label: Plan Nodes
+    role: planning
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: nodes.md
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: message
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: flow.yaml
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: plan.md
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: newFlow
-        value: ''
+        value: ""
     body: |
-      用户描述的需求为：${message}。结合现有节点信息 ${nodes.md}，及流程参考 ${flow.yaml}。规划节点图并输出为 ${plan.md}，供用户先确认。
+      用户描述的Requirements为：${message}。结合现有节点信息 ${nodes.md}，及流程参考 ${flow.yaml}。Plan Nodes图并输出为 ${plan.md}，供用户先确认。
       新建的 flow 名称保存到 ${newFlow}。该名称须与 agentflow list 列出的已有 pipeline 不同（不可重复）。
       注意：内置节点的 instance 应保持和原始 node 元数据一致（尤其是 description）。
   agent_create:
     definitionId: agent_subAgent
-    label: 创建Flow
-    description: 利用SubAgent执行任务
-    role: 普通
+    label: Create Flow
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: plan.md
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: layout.md
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: newFlow
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: script.md
-        value: ''
+        value: ""
     body: |
       基于 ${plan.md} 在 ~/agentflow/pipelines/${newFlow}/ 下**必须生成并写入** flow.yaml（不存在则创建，已存在则按规划覆盖）：
       节点布局参考 ${layout.md}，避免节点排成一条线。
@@ -75,287 +72,273 @@ instances:
   control_end_new:
     definitionId: control_end
     label: End
-    description: AgentFlow的结束节点，执行完成后流程结束。
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
+        value: ""
     output: []
     body: |
       新建流程的出口。
   provide_skills_file:
     definitionId: provide_file
-    label: LayoutSkills
-    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
-    role: 普通
+    label: Layout Skills
+    role: normal
     input: []
     output:
-      - type: 文件
+      - type: file
         name: value
         value: ~/agentflow/reference/flow-layout.md
-    body: ''
+    body: ""
   provide_requirement:
     definitionId: provide_str
-    label: 需求
-    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
-    role: 普通
+    label: Requirements
+    role: normal
     input: []
     output:
-      - type: 文本
+      - type: text
         name: value
         value: 将AI_Workspace中个daily流程（几个source和一个summary）改造成agentflow流程
-    body: ''
+    body: ""
   agent_fix:
     definitionId: agent_subAgent
-    label: 修复节点
-    description: 利用SubAgent执行任务
-    role: 技术规划
+    label: Fix Nodes
+    role: planning
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: err.md
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: err2.md
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
     body: |
       修复${err.md} 及 ${err2.md} 中提到的问题
   agent_implement_script:
     definitionId: agent_subAgent
-    label: 完善代码
-    description: 利用SubAgent执行任务
-    role: 代码执行
+    label: Complete Code
+    role: code
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: code.md
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
     body: |
       实现 ${code.md} 中提到要写的代码。
   tool_user_check:
     definitionId: tool_user_check
     label: UserCheck
-    description: 等待用户确认，流程暂停。需用户回复 "继续" 才重启流程。
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: check.md
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
     body: |
       提示用户 确认 ${check.md}
   control_anyOne:
     definitionId: control_anyOne
     label: AnyOne
-    description: 当任一上游输入就绪（success）时，沿 next 继续执行。
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev1
-        value: ''
-      - type: 节点
+        value: ""
+      - type: node
         name: prev2
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
   provide_flow:
     definitionId: provide_file
-    label: FlowsSkills
-    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
-    role: 普通
+    label: Flows Skills
+    role: normal
     input: []
     output:
-      - type: 文件
+      - type: file
         name: value
         value: ~/agentflow/reference/flow-control-capabilities.md
   provide_newFlow_key_save:
     definitionId: provide_str
     label: FlowKeyName
-    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
-    role: 普通
+    role: normal
     input: []
     output:
-      - type: 文本
+      - type: text
         name: value
         value: newFlow
-    body: ''
+    body: ""
   provide_newFlow_key_load:
     definitionId: provide_str
     label: FlowKeyName
-    description: 直接提供一段文本，下文中配置的 value 会原样供下游引用。
-    role: 普通
+    role: normal
     input: []
     output:
-      - type: 文本
+      - type: text
         name: value
         value: newFlow
-    body: ''
+    body: ""
   collectNode:
     definitionId: tool_nodejs
     label: 收集Nodes
     description: "|"
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: result
-        value: ''
+        value: ""
     script: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
     body: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
   agent_ai_check_tool:
     definitionId: agent_subAgent
     label: AI检查
-    description: 利用SubAgent执行任务
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: check.md
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: newFlow
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: result.md
-        value: ''
+        value: ""
     body: |
       利用 ${check.md} 检查流水线(${newFlow})是否正常，将检查报告写入${result.md}
   AI_CHECK_FILE:
     definitionId: provide_file
     label: AICheckFile
-    description: 直接提供文件路径或内容，内容是下文中配置的 value（路径或内容），供下游引用。
-    role: 普通
+    role: normal
     input: []
     output:
-      - type: 文件
+      - type: file
         name: value
         value: ~/agentflow/reference/flow-prompt-handler-check.md
   save_flow_name:
     definitionId: tool_save_key
     label: SaveFlowName
     description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/save-key.mjs <workspaceRoot> <flowName> <uuid> <key> <value>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<写入的 value>\\\" } }（err_code 0=成功 1=失败）。"
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: key
         value: newFlow
-      - type: 文本
+      - type: text
         name: value
-        value: ''
+        value: ""
     output: []
   loadFlowKey:
     definitionId: tool_load_key
     label: LoadFlowName
     description: "由 agentflow apply 流程内部执行。命令：agentflow apply -ai run-tool-nodejs <workspaceRoot> <flowName> <uuid> <instanceId> <execId> -- node <path>/load-key.mjs <workspaceRoot> <flowName> <uuid> <key>。返回（stdout 一行 JSON）：{ \\\"err_code\\\": 0, \\\"message\\\": { \\\"result\\\": \\\"<value>\\\" } }（err_code 0=成功 1=失败）；result 写入节点的 result 槽位。"
-    role: 普通
+    role: normal
     input:
-      - type: 文本
+      - type: text
         name: key
         value: newFlow
     output:
-      - type: 文本
+      - type: text
         name: result
-        value: ''
+        value: ""
   tool_check_flow:
     definitionId: tool_nodejs
     label: Flow脚本检查
     description: "|"
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文本
+        value: ""
+      - type: text
         name: newFlow
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: result
-        value: ''
+        value: ""
     body: |-
       执行：agentflow apply -ai validate-flow ${workspaceRoot} ${newFlow}。需要检查的 flow 为：${newFlow}。
       校验不通过时，由后续节点修复；本节点状态仍为 success。
   control_if_check:
     definitionId: control_if
     label: Ifcheck
-    description: 约定有且仅有一个 type 为 bool 的 input（名称不限，如 prediction）。该值为 true 时沿 next1 继续，为 false 时沿 next2 继续
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
+        value: ""
       - type: bool
         name: prediction
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next1
-        value: ''
-      - type: 节点
+        value: ""
+      - type: node
         name: next2
-        value: ''
-    body: ''
+        value: ""
+    body: ""
   control_toBool_check:
     definitionId: control_toBool
     label: ToBoolCheck
-    description: 根据下文的执行任务内容，得到布尔结论后写入 ${prediction}。prediction 槽位类型为 bool，写入 output 文件时，文件内容必须仅为 "true" 或 "false"，不得写入说明、统计、结论等整段 markdown。
-    role: 普通
+    role: normal
     input:
-      - type: 节点
+      - type: node
         name: prev
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: err.md
-        value: ''
-      - type: 文件
+        value: ""
+      - type: file
         name: err2.md
-        value: ''
+        value: ""
     output:
-      - type: 节点
+      - type: node
         name: next
-        value: ''
+        value: ""
       - type: bool
         name: prediction
-        value: ''
+        value: ""
     body: 检查 ${err.md} 和 ${err2.md} 都无问题为true，任一有问题则为 false
 edges:
   - source: provide_skills_file
@@ -498,65 +481,65 @@ ui:
   nodePositions:
     control_start_new:
       x: -524.0221500316359
-      'y': 69.29933116119443
+      "y": 69.29933116119443
     agent_plan:
       x: -12.533299879007767
-      'y': 186.57684421816793
+      "y": 186.57684421816793
     agent_create:
       x: 308.99314801580965
-      'y': 217.2843329442596
+      "y": 217.2843329442596
     control_end_new:
       x: 1471.8052088229888
-      'y': 254.85582797003843
+      "y": 254.85582797003843
     provide_skills_file:
       x: 120
-      'y': 217.2843329442596
+      "y": 217.2843329442596
     provide_requirement:
       x: -263.595905131459
-      'y': 276.4850011544905
+      "y": 276.4850011544905
     agent_fix:
       x: 775.615715499502
-      'y': 469.0169259909583
+      "y": 469.0169259909583
     agent_implement_script:
       x: 489.43515105233405
-      'y': 216.95726539220158
+      "y": 216.95726539220158
     tool_user_check:
       x: 161.4995421112628
-      'y': 137.98256383520896
+      "y": 137.98256383520896
     control_anyOne:
       x: 661.6143763748839
-      'y': 221.22446541312343
+      "y": 221.22446541312343
     provide_flow:
       x: -258.73821498428885
-      'y': 351.00016245846024
+      "y": 351.00016245846024
     provide_newFlow_key_save:
       x: 50
-      'y': 380
+      "y": 380
     provide_newFlow_key_load:
       x: 400
-      'y': 100
+      "y": 100
     collectNode:
       x: -253.75940968202514
-      'y': 11.90795223444617
+      "y": 11.90795223444617
     agent_ai_check_tool:
       x: 885.7119294568562
-      'y': 210.76075573821723
+      "y": 210.76075573821723
     AI_CHECK_FILE:
       x: 729.4743614102706
-      'y': 306.2856185194921
+      "y": 306.2856185194921
     save_flow_name:
       x: 207.84153217267578
-      'y': 383.15812857607636
+      "y": 383.15812857607636
     loadFlowKey:
       x: 619.6461494834679
-      'y': 102.5505010541772
+      "y": 102.5505010541772
     tool_check_flow:
       x: 882.2732188144741
-      'y': 116.9437357066682
+      "y": 116.9437357066682
     control_if_check:
       x: 1280.956507038537
-      'y': 163.3111380274076
+      "y": 163.3111380274076
     control_toBool_check:
       x: 1104.357184628079
-      'y': 152.08227937703163
+      "y": 152.08227937703163
   description: 新建流程（Plan → 确认 → 创建 → 检查）

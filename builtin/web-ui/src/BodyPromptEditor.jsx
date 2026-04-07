@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
   buildPlaceholderMenuItems,
@@ -32,6 +33,7 @@ export function BodyPromptEditor({
   ioSlots,
   variant = "drawer",
 }) {
+  const { t } = useTranslation();
   const issuesId = useId();
   const taRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
   const backdropRef = useRef(/** @type {HTMLPreElement | null} */ (null));
@@ -39,7 +41,7 @@ export function BodyPromptEditor({
   const [menuHighlight, setMenuHighlight] = useState(0);
   const [menuPop, setMenuPop] = useState(/** @type {{ top: number, left: number } | null} */ (null));
 
-  const invalidRanges = useMemo(() => validateBodyPlaceholders(value, ioSlots), [value, ioSlots]);
+  const invalidRanges = useMemo(() => validateBodyPlaceholders(value, ioSlots, t), [value, ioSlots, t]);
   const hasInvalid = invalidRanges.length > 0;
 
   const segments = useMemo(() => getBodyHighlightSegments(value, ioSlots), [value, ioSlots]);
@@ -52,9 +54,9 @@ export function BodyPromptEditor({
 
   const menuItems = useMemo(() => {
     if (!openCtx) return [];
-    const all = buildPlaceholderMenuItems(ioSlots);
+    const all = buildPlaceholderMenuItems(ioSlots, t);
     return filterPlaceholderMenuItems(all, openCtx.query);
-  }, [openCtx, ioSlots]);
+  }, [openCtx, ioSlots, t]);
 
   useEffect(() => {
     setMenuHighlight((h) => {
@@ -202,7 +204,7 @@ export function BodyPromptEditor({
             <ul
               className="af-body-ph-menu af-body-ph-menu--pop af-composer-mention-menu"
               role="listbox"
-              aria-label="占位符：输入输出槽位"
+              aria-label={t("flow:nodeProps.placeholderSlots")}
               style={{
                 position: "fixed",
                 top: menuPop.top,
