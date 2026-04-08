@@ -240,8 +240,8 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
     const routed = routeModel("complex", { userPreferredModel: modelKey || null });
     const { cli, model } = resolveCliAndModel(uiRoot, (routed.model || modelKey) || null, null);
 
-    emit({ type: "status", line: `校验修复：agent 第 ${attempt}/${maxRepair} 次…` });
-    emit({ type: "natural", kind: "assistant", text: `🔧 启动校验修复（${attempt}/${maxRepair}）…` });
+    emit({ type: "status", line: t("composer.validation_repair", { attempt, max: maxRepair }) });
+    emit({ type: "natural", kind: "assistant", text: t("composer.validation_repair_start", { attempt, max: maxRepair }) });
 
     const stepEmit = (ev) => {
       emit({ ...ev, stepIndex: -1, stepTotal: 0, phase: "validation-repair" });
@@ -278,7 +278,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
 
     last = validateComposerFlowYaml(flowYamlAbs, uiRoot);
     if (last.ok) {
-      emit({ type: "status", line: t("composer.validation_passed") + "（自动修复成功）" });
+      emit({ type: "status", line: t("composer.validation_passed") + t("composer.validation_repair_auto_success") });
       emit({ type: "natural", kind: "assistant", text: "✓ 校验修复后 flow.yaml 已通过 validate-flow" });
       return { ok: true, result: last, repairAttempts: attempt };
     }
@@ -341,7 +341,7 @@ export function startComposerMultiStep(opts) {
   const finished = (async () => {
     try {
       // ── 1. 规划 ──────────────────────────────────────────────────────
-      emit({ type: "status", line: "分析任务…" });
+      emit({ type: "status", line: t("composer.analyzing_task") });
 
       let flowYaml = "";
       if (opts.flowYamlAbs) {
@@ -522,7 +522,7 @@ export function startComposerMultiStep(opts) {
           },
         });
       } else if (!aborted && opts.flowYamlAbs && isPhased) {
-        emit({ type: "status", line: "当前阶段跳过校验（将在最后阶段统一校验）" });
+        emit({ type: "status", line: t("composer.skip_validation_for_phase") });
       }
 
       // ── 4. 分阶段完成通知 ──────────────────────────────────────────
@@ -536,7 +536,7 @@ export function startComposerMultiStep(opts) {
           type: "phase-complete",
           phaseIndex: currentPhase,
           phaseTotal: phases.length,
-          phaseName: phaseDef?.label || `阶段 ${currentPhase + 1}`,
+          phaseName: phaseDef?.label || t("composer.current_phase", { index: currentPhase + 1 }),
           nextPhase: nextPhaseDef ? { index: currentPhase + 1, name: nextPhaseDef.name, label: nextPhaseDef.label } : null,
           isLastPhase,
           phases: phases.map((p, i) => ({
@@ -547,15 +547,15 @@ export function startComposerMultiStep(opts) {
         });
 
         if (isLastPhase) {
-          emit({ type: "status", line: "所有阶段完成" });
+          emit({ type: "status", line: t("composer.all_phases_complete") });
         } else {
-          emit({ type: "status", line: `${phaseDef?.label || "当前阶段"}完成，等待确认继续…` });
+          emit({ type: "status", line: t("composer.phase_complete_waiting", { label: phaseDef?.label || t("composer.current_phase", { index: currentPhase + 1 }) }) });
         }
       } else if (!aborted) {
-        emit({ type: "status", line: "所有步骤完成" });
+        emit({ type: "status", line: t("composer.all_steps_complete") });
       }
     } catch (e) {
-      emit({ type: "natural", kind: "error", text: `多步执行失败: ${e.message}` });
+      emit({ type: "natural", kind: "error", text: t("composer.multi_step_failed", { message: e.message }) });
       throw e;
     }
   })();

@@ -1,289 +1,166 @@
-# AgentFlow
+<p align="center">
+  <img src="logo-256.png" width="128" alt="AgentFlow Logo" />
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![中文](https://img.shields.io/badge/lang-中文-red.svg)](./README.zh-CN.md)
-[![English](https://img.shields.io/badge/lang-English-blue.svg)](./README.md)
+<h1 align="center">AgentFlow</h1>
 
-> **长时间复杂任务的 agent 编排系统。**  
-> AgentFlow 用图描述依赖与控制流，把 Cursor、OpenCode、Claude Code（适配中）等 Coding Agent 当作**可替换的执行后端**。它已在**大型工程**里扛过长周期、多阶段任务——不是演示脚本，而是能跑完、能停、能续的运行时。
+<p align="center">让 AI Agent 自己干 12 小时，然后悄悄惊艳所有人</p>
+
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+</p>
+
+<p align="center">
+  <b>中文</b> | <a href="./README.md">English</a>
+</p>
+
+>
+> 把 Cursor / OpenCode / Claude Code 当执行后端，串起来跑，能停，能续。
 
 ![AgentFlow Projects](docs/projects.png)
-*管理你的分布式节点架构和监控流水线*
 
 ![Pipeline Editor](docs/pipeline.png)
-*可视化拖拽编排，AI 驱动的 Composer*
 
 ![Running Status](docs/running.png)
-*实时执行控制台，支持检查点恢复*
 
-## 缘起：从痛点到解决方案
+## 解决什么问题
 
-### 那个让我崩溃的迁移任务
+Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
 
-作为一个天天用 Cursor、OpenCode 的开发者，我习惯了这样的工作模式：小改动直接让它改，稍大一点的任务用 plan 模式规划一下，大部分时候都能搞定。直到有一天，我需要把主模块的代码迁移到子模块——这个看似简单的需求，让我意识到现有工具的边界。
+**1. 上下文窗口是硬天花板。**
+跑 10 分钟的任务没问题，跑 10 小时的大型迁移？模型开始遗忘前面的步骤、重复已做过的工作、或悄悄偏离方向。上下文压缩能续命，但它是有损的——agent 看到的已经不是完整画面。
 
-迁移、编译、树型依赖、发现新依赖、再迁移、再编译……这是一个循环往复的过程。Cursor 或 OpenCode 能帮我在单个环节上做得很好，比如"把这个文件移过去"、"编译一下看看报错"。但整个流程像是一场无休止的接力赛：AI 跑一段，我发现问题，人工介入调整，AI 再跑一段，我又发现问题……**人工依然承担了大量协调和决策工作，效率提升很有限。**
+**2. 流程可靠性随时间衰减。**
+你告诉 agent："step 1 结束后让我确认，step 2 完成后跑测试。"前几次没问题。三小时后，确认步骤被上下文压缩吃掉了，agent 就直接跳过了。这和之前[AI 误删用户邮件](https://www.reddit.com/r/ChatGPTPro/comments/1kcra9d/)是同一类问题——不是恶意，只是丢了上下文。
 
-我需要的不是一个更聪明的 AI 助手，而是一个能**把这些环节串联起来、自动循环执行、出了问题知道在哪停在哪续**的系统。于是 AgentFlow 诞生了。
+**3. Markdown 清单不是控制流。**
+你可以在 prompt 里写编号计划，但你没法表达"循环直到编译通过"或"如果测试失败就回到第 3 步"。真实工作流需要真正的分支和循环——而不是一个扁平列表让模型自由发挥。
 
-### AgentFlow 的设计理念
-
-AgentFlow 不是要取代 Cursor 或 OpenCode，而是**站在它们的肩膀上**：
-
-**复用而非重建**：公司可能只买了 Cursor 的订阅，我已经积累了很多 skills 和 prompt。AgentFlow 直接调用现有 Coding Agent 作为执行后端，不需要迁移到新的 AI 平台，已有的能力可以直接编排复用。
-
-**编排而非对话**：像 ComfyUI 那样用节点和连线描述工作流。流程一旦定义，就可以反复执行，不再是"每次对话都是新的开始"。核心是 **coding 流程**而非 AI 对话，因此没有上下文长度限制，可以无限跑下去。
-
-**持久化而非易失**：每个节点的输入输出、执行状态都记录在中间文件中，参考 Gradle task 的 cache 系统。支持断点续跑——昨晚跑到一半的任务，今天可以从失败的地方继续，而不是从头开始。
-
-**CI 友好**：长时间运行、流程固定、可恢复，这些特性让 AgentFlow 特别适合集成到 CI/CD 中。不是"人工监控 AI 执行"，而是"AI 流程自动跑，出问题再人工介入"。
+**AgentFlow 的做法：把编排逻辑从上下文里拿出来。** 工作流定义为节点图，有明确的边、循环和条件分支。每个节点在独立的 agent 会话中运行，只拿到自己的输入——没有会衰减的上下文。节点之间的状态持久化到磁盘，一个 10 小时的工作流就是一连串专注的 10 分钟任务。
 
 ## 核心特性
 
-- **基于现有 Agent**：支持 Cursor、OpenCode 等 Coding Agent，复用已有 skills 和 prompt，无需迁移到新平台
-- **节点编排系统**：可视化拖拽编排，流程固定化、可复用，像搭积木一样组合复杂工作流
-- **无限上下文运行**：基于中间文件和 cache 系统持久化状态，突破对话式 AI 的上下文限制，支持小时级乃至更长任务
-- **断点续跑**：每个节点状态落盘，失败后可精准定位问题节点，单点重试或整体恢复，不必从零开始
-- **CI/CD 就绪**：流程固定、执行可重复、支持长时间运行，天然适合持续集成场景
+- **复用现有 agent** — Cursor、OpenCode、Claude Code 可互换，不用迁移平台
+- **可视化编辑器 + AI Composer** — 拖拽节点或用自然语言描述工作流
+- **状态持久化** — 每个节点的输入输出缓存到磁盘（类似 Gradle task cache），任意节点失败可续跑
+- **循环 / 分支 / 并行** — `control_if`、`control_anyOne`、`control_toBool` 实现真正的控制流
+- **CI/CD 友好** — 确定性图结构、支持长时间运行、`--machine-readable` JSON 事件流
 
-![Pipeline Architecture](docs/pipeline.png)
-*一个复杂的模块迁移工作流，包含循环和条件分支*
+## 快速开始
 
-## 常见场景
-
-**1. 大项目重构 / 迁移**  
-把「动一下就可能炸」的巨石变更，拆成可审计的链路与检查点：扫描 → 方案 → 分批改造 → 校验，任一步失败都有明确现场与回滚叙事。
-
-**2. 项目代码深度清理**  
-在规模面前，手工清单会崩。用循环与批处理节点驱动清理与规范化，让技术债偿还变成**可度量、可暂停、可续跑**的工程过程。
-
-**3. AI Test 持续自动跑**  
-把测试与回归从「偶尔跑一次」变成**可持续燃烧**的闭环：定时或循环触发、节点级报告与失败定位，让质量飞轮在后台自己转。
-
-## 实战案例
-
-详细教程见 Wiki 文档：
-
-**🚀 Quickstart: [PR 流程自动化](docs/wiki/quickstart-pr-workflow.zh-CN.md)**  
-真实故事：我是如何实现代码审查 → PR 创建 → 团队通知的 100% 可靠执行。了解 AgentFlow 如何解决"AI 有时会忘记步骤"的问题。
-
-**1. [模块迁移工作流](docs/wiki/module-migration-workflow.zh-CN.md)**  
-将主模块代码迁移到子模块：扫描 → 分析依赖 → 迁移 → 编译验证 → 循环修复。演示如何用 `control_anyOne` + `control_if` 实现"检查-修复-检查"循环模式，支持断点续跑和单节点重试。
-
-**2. [Figma UI 还原工作流](docs/wiki/figma-ui-implementation-workflow.zh-CN.md)**  
-一次性还原复杂 Figma 设计稿：解析设计稿 → 拆分组件 → 生成代码 → 截图对比 → 循环优化。演示如何分阶段生成代码、自动化 UI 验证、持续迭代直到还原准确度达标。
-
-## 使用说明
-
-以下为最短路径：从安装到第一条流水线、再到验证、运行与排障续跑。
-
-### 前置条件
-
-在安装 AgentFlow 之前，请确保已安装以下任一 Coding Agent CLI 工具：
-
-**方式一：Cursor CLI（推荐）**
-```bash
-# 安装 Cursor CLI
-# 从 https://cursor.com 下载或 macOS 使用:
-brew install --cask cursor
-
-# 验证安装
-agent --version
-```
-
-**方式二：OpenCode CLI**
-```bash
-# 安装 OpenCode CLI
-npm install -g opencode
-
-# 验证安装
-opencode --version
-```
-
-**配置 settings（可选）**
-
-AgentFlow 使用环境变量配置 CLI：
+**环境要求：** Node >= 18，以及 Cursor CLI (`agent`) / OpenCode CLI / Claude Code 任一
 
 ```bash
-# 设置默认 CLI 命令（默认：agent）
-export CURSOR_AGENT_CMD=agent
-
-# 设置默认模型
-export CURSOR_AGENT_MODEL=claude-sonnet
-
-# 或添加到 ~/.zshrc 或 ~/.bashrc:
-echo 'export CURSOR_AGENT_CMD=agent' >> ~/.zshrc
-echo 'export CURSOR_AGENT_MODEL=claude-sonnet' >> ~/.zshrc
-```
-
-### 1. 安装
-
-环境要求：Node >= 18，已安装 Cursor CLI（`agent` 命令可用）
-
-```bash
-# 从 npm 全局安装（发布后即可，无需克隆仓库）
+# 安装
 npm install -g agentflow
 
-# 验证安装
-agentflow --help
-```
-
-从源码参与开发时：`git clone` 仓库后在该目录执行 `npm install` 与 `npm link`。
-
-### 2. 新建流程
-
-```bash
-# 查看内置流水线
-agentflow list
-
-# 启动 Web UI（默认端口 8765）
+# 启动 Web UI（端口 8765）
 agentflow ui
+
+# 或直接运行流程
+agentflow apply <FlowName>
 ```
 
-#### 方式一：可视化编排（适合入门）
+从源码开发：`git clone` → `npm install` → `npm link`
 
-在 Web UI 中：
-1. 点击新建流水线，选择空白模板或复制现有模板
-2. 从左侧节点面板拖拽节点到画布
-3. 连接节点边，配置节点参数
-4. 保存得到 `flow.yaml`
+## 创建流程
 
-#### 方式二：AI 编排模式（推荐用于复杂流程）
+### 方式一：可视化编辑器
 
-在 Web UI 右侧 Composer 输入框中，直接用自然语言描述需求，AI 自动生成流程：
+Web UI 中 — 新建流水线 → 从面板拖节点到画布 → 连线 → 保存。
 
-**示例 1：简单线性流程**
+### 方式二：AI Composer（推荐）
+
+打开右侧 Composer 面板，用自然语言描述需求：
+
 ```
-创建一个流程：读取用户需求文档，生成代码实现，最后运行测试验证
-```
-
-**示例 2：带循环校验的流程**
-```
-新建一个代码检查流程：
+创建一个代码检查流程：
 1. 扫描代码库找出问题
-2. 自动修复问题
-3. 重新检查是否通过
-4. 如果未通过则继续修复，直到全部通过为止
+2. 自动修复
+3. 重新检查
+4. 没通过就继续修，直到全过
 ```
-AI 会自动识别"检查-修复-循环"模式，生成包含 `control_anyOne` + `control_toBool` + `control_if` 的环路结构。
 
-**示例 3：todolist 批量处理流程**
-```
-创建一个大文件拆解流程：
-1. 将大文件拆解为 todolist
-2. 逐个处理 todolist 中的子任务
-3. 每完成一项打勾标记
-4. 直到所有任务完成
-```
-AI 会采用 todolist 模式：拆解节点 → 循环逐项执行 → 判断是否全部完成。
+Composer 会自动识别循环模式，生成正确的控制流节点。复杂流程分三阶段构建：拓扑 → 节点详情 → 连线校验（自动修复最多 5 次）。
 
-**Composer 工作原理**：
-- **分阶段生成**：复杂流程自动拆解为三阶段
-  - 流转规划：建立整体框架、节点类型、主链拓扑
-  - 节点补充：完善每个节点的具体内容（body、script 等）
-  - 流程完善：补全连线、优化布局、校验修复
-- **智能识别循环**：检测到"检查"、"验证"、"批量"等关键词时自动生成环路
-- **自动验证修复**：生成后自动校验 flow.yaml，最多尝试 5 次修复错误
-
-### 3. 新建 Loop 及验证
-
-对需要循环/分支的复杂流程：
+## 运行与恢复
 
 ```bash
-# 校验流程结构是否正确
-agentflow validate <FlowName>
-```
-
-常用控制节点（在 UI 中添加）：
-- `control_if` — 条件分支
-- `control_toBool` — 转换为布尔值供 If 使用
-- `control_anyOne` — 多路任一完成即继续
-
-### 4. 运行
-
-```bash
-# 应用（apply）流程
+# 执行
 agentflow apply <FlowName>
 
-# 查看运行状态
+# 查看状态
 agentflow run-status <FlowName> <uuid>
-```
 
-流程会按节点依赖顺序自动执行，每个 Agent 节点调用 Cursor CLI 流式输出。
-
-### 5. 问题查询及断点续跑
-
-```bash
-# 查看运行日志
-cat .workspace/agentflow/runBuild/<FlowName>/<uuid>/logs/log.txt
-
-# 提取思考过程
-agentflow extract-thinking <FlowName> <uuid>
-
-# 从断点继续（pending 或 failed 节点被标记为已确认后继续）
+# 断点续跑
 agentflow resume <FlowName> <uuid>
 
-# 单独重试某个节点
+# 重试单个节点
 agentflow replay <FlowName> <uuid> <instanceId>
+
+# 查看 agent 推理过程
+agentflow extract-thinking <FlowName> <uuid>
 ```
 
----
+## 教程
 
-## 快速参考
+- [快速上手：PR 流程自动化](docs/wiki/quickstart-pr-workflow.zh-CN.md)
+- [模块迁移工作流](docs/wiki/module-migration-workflow.zh-CN.md)
+- [Figma UI 还原工作流](docs/wiki/figma-ui-implementation-workflow.zh-CN.md)
 
-### 命令子命令
+## CLI 参考
 
 | 命令 | 说明 |
 |------|------|
 | `list` | 列出所有流水线 |
-| `ui` | 启动 Web UI 编排工具 |
+| `ui` | 启动 Web UI |
 | `apply` | 执行流程 |
 | `validate` | 校验流程结构 |
-| `resume` | 从断点继续执行 |
-| `replay` | 单独重试某个节点 |
-| `run-status` | 查看节点执行状态 |
-| `extract-thinking` | 提取并整理 Agent 思考过程 |
+| `resume` | 断点续跑 |
+| `replay` | 重试单个节点 |
+| `run-status` | 查看执行状态 |
+| `extract-thinking` | 提取 agent 思考过程 |
 
-### 常用选项
+### 选项
 
-- `--workspace-root <path>` — 工作区根目录
-- `--dry-run` — 预览就绪节点，不执行
-- `--model <name>` — 指定 Cursor 模型
-- `--parallel` — 并行执行同轮节点
-- `--machine-readable` — JSON 事件流输出（供 UI 集成）
-- `--lang <code>` — 设置语言
+| 参数 | 说明 |
+|------|------|
+| `--workspace-root <path>` | 工作区根目录 |
+| `--dry-run` | 只预览就绪节点，不执行 |
+| `--model <name>` | 覆盖模型 |
+| `--parallel` | 并行执行无依赖节点 |
+| `--machine-readable` | JSON 事件流（供 UI/CI 集成） |
+| `--lang <code>` | 语言（`zh` / `en`） |
 
 ### 环境变量
 
-- `CURSOR_AGENT_CMD` — Cursor CLI 命令（默认 `agent`）
-- `CURSOR_AGENT_MODEL` — 默认模型
-- `AGENTFLOW_HOME` — 覆盖用户数据目录（默认 `~/agentflow`；runBuild 已改为工作区本地目录）
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CURSOR_AGENT_CMD` | `agent` | Cursor CLI 命令 |
+| `CURSOR_AGENT_MODEL` | — | 默认模型 |
+| `AGENTFLOW_HOME` | `~/agentflow` | 用户数据目录 |
 
-## 用户数据目录
+## 目录结构
 
-- 默认用户数据目录：**`~/agentflow/`** (`pipelines/`、`agents/`、`model-lists.json` 等)
-- 运行构建目录（主路径）：**`<workspaceRoot>/.workspace/agentflow/runBuild/<flowId>/<uuid>/`**
-- 旧版 runBuild 兼容读取路径：**`~/agentflow/runBuild/`**
-- 项目内流水线副本：**`<workspaceRoot>/.workspace/agentflow/pipelines/<flowId>/`**
-- 项目内自定义节点：**`<workspaceRoot>/.workspace/agentflow/nodes/`**
+```
+~/agentflow/                          # 用户数据（流水线、agent、配置）
+<workspace>/.workspace/agentflow/
+  ├── pipelines/<flowId>/             # 项目内流水线副本
+  ├── nodes/                          # 自定义节点定义
+  └── runBuild/<flowId>/<uuid>/       # 运行产物 & 节点状态
+```
 
-## 流程定义
+## 国际化
 
-查看 [reference/flow-control-capabilities.md](reference/flow-control-capabilities.md) 了解控制节点与典型连线模式。
+- CLI：`--lang` 参数或 `LANG` 环境变量
+- Web UI：自动检测浏览器语言
+- Agent 提示词：`agents/<lang>/` 目录
 
-## 国际化 (i18n)
-
-AgentFlow 在三个层面支持多语言：
-
-1. **CLI 语言**：`--lang` 参数或 `LANG` 环境变量
-2. **Web UI 语言**：自动检测浏览器语言
-3. **Agent 定义**：`agents/<lang>/` 目录下的多语言提示词
-
-支持语言：`zh` (中文), `en` (English)
+支持：`zh`（中文）、`en`（English）
 
 ## 贡献
 
-查看 [CONTRIBUTING.md](CONTRIBUTING.md) 获取详情。
+查看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 

@@ -593,18 +593,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
             const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
             if (m) subtype = m[1];
           }
-          emit({ type: "status", line: `工具调用 (${subtype})` });
+          emit({ type: "status", line: t("runner.tool_call", { subtype }) });
         } else if (isLikelyBase64(line)) {
-          emit({ type: "status", line: `[cursor-stdout] (base64 数据, ${line.length} 字符)` });
+          emit({ type: "status", line: t("runner.base64_data", { len: line.length }) });
         } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
           emit({ type: "status", line: truncateComposerLine(line) });
         } else if (lastResult == null) {
           emit({
             type: "status",
-            line: truncateComposerLine(`(非 JSON) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}`),
+            line: truncateComposerLine(t("runner.non_json_line", { preview: line.slice(0, 500) + (line.length > 500 ? "..." : "") })),
           });
         } else {
-          emit({ type: "status", line: `(未解析行, ${line.length} 字符)` });
+          emit({ type: "status", line: t("runner.unparsed_line", { len: line.length }) });
         }
       }
     }
@@ -739,11 +739,11 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
         emit({ type: "status", line: `[opencode_stderr] ${truncateComposerLine(errBuf.trim())}` });
       }
       if (code !== 0) {
-        emit({ type: "status", line: `OpenCode 退出码 ${code}` });
+        emit({ type: "status", line: t("runner.opencode_exit_code", { code }) });
         reject(new Error(`OpenCode CLI exited ${code}.`));
         return;
       }
-      emit({ type: "status", line: "完成" });
+      emit({ type: "status", line: t("runner.done") });
       resolve();
     });
   });

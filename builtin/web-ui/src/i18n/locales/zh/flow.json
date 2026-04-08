@@ -163,7 +163,7 @@
     "title": "开始构建你的流程",
     "text": "在下方 AI 输入框中描述你的流程，或从左侧面板拖拽节点到画布",
     "composerHint": "使用 AI Composer 构建 AgentFlow",
-    "composerSub": "从左侧拖入节点，或点击顶部 <strong>AI</strong> 按钮用自然语言描述工作流"
+    "composerSub": "从左侧拖入节点，或在<strong>下方输入框</strong>中用自然语言描述工作流。<br/>按 <kbd>?</kbd> 查看快捷键。"
   },
   "sidebar": {
     "mainNav": "主导航"

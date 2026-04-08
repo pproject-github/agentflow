@@ -120,7 +120,19 @@
     "fix_task_title": "## Task: Fix flow.yaml to pass validate-flow",
     "fix_errors_intro": "The following errors must be **all eliminated** (same rules as CLI `agentflow validate` / `validate-flow.mjs`):",
     "fix_constraints_title": "### Constraints",
-    "fix_constraints_body": "- **Only** edit the \"flow definition file\" `flow.yaml` in context, do not modify unrelated files.\n- Prefer minimal changes: add edges, fix sourceHandle/targetHandle, role, model, instance structure, etc."
+    "fix_constraints_body": "- **Only** edit the \"flow definition file\" `flow.yaml` in context, do not modify unrelated files.\n- Prefer minimal changes: add edges, fix sourceHandle/targetHandle, role, model, instance structure, etc.",
+    "analyzing_task": "Analyzing task…",
+    "validation_repair": "Validation repair: agent attempt {{attempt}}/{{max}}…",
+    "validation_repair_start": "🔧 Starting validation repair ({{attempt}}/{{max}})…",
+    "validation_repair_auto_success": "(auto-repair succeeded)",
+    "skip_validation_for_phase": "Skipping validation for current phase (will validate at final phase)",
+    "all_phases_complete": "All phases complete",
+    "phase_complete_waiting": "{{label}} complete, waiting for confirmation…",
+    "current_phase": "Phase {{index}}",
+    "all_steps_complete": "All steps complete",
+    "multi_step_failed": "Multi-step execution failed: {{message}}",
+    "multi_step_starting": "Multi-step mode starting…",
+    "classify_failed": "[CLASSIFY_FAIL] Task classification failed: {{message}}"
   },
   "runner": {
     "cursor_account_limit": "[agentflow] Cursor account limit: detected Auto-only support, auto-retrying once (Auto)...",
@@ -128,11 +140,27 @@
     "thinking": "Thinking...",
     "completed": "Completed",
     "execution_failed": "Execution failed",
-    "event_label": "Event"
+    "event_label": "Event",
+    "tool_call": "Tool call ({{subtype}})",
+    "base64_data": "[cursor-stdout] (base64 data, {{len}} chars)",
+    "non_json_line": "(non-JSON) {{preview}}",
+    "unparsed_line": "(unparsed line, {{len}} chars)",
+    "opencode_exit_code": "OpenCode exit code {{code}}",
+    "done": "Done"
   },
   "tool": {
     "nodejs_script_hint": "script success/failure determined by exit code (0=success), stdout directly becomes result slot content (plain text, e.g., console.log).",
     "nodejs_heal_retry": "[tool_nodejs self-heal] {{instanceId}} retry {{attempt}}/{{maxRetries}}: {{detail}}"
+  },
+  "planner": {
+    "heuristic_analysis": "Heuristic task analysis (configure OPENAI_API_KEY or ANTHROPIC_API_KEY to enable smart planning)",
+    "planning": "Planning task ({{model}})…",
+    "planner_format_error": "Planner returned unexpected format, falling back to single-step",
+    "planner_call_failed": "Planner call failed ({{message}}), falling back to heuristic analysis",
+    "phased_planning": "Phased planning: {{label}} ({{index}}/{{total}})…",
+    "phased_cli_exec": "Phased: {{label}} (CLI execution)",
+    "phased_format_error": "Phased planner returned unexpected format, using default agent step",
+    "phased_planning_failed": "Phased planning failed ({{message}}), using default agent step"
   },
   "api": {
     "node_context_marker": "## Node Context",

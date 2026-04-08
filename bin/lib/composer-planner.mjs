@@ -12,6 +12,7 @@ import { buildPlannerSkillContext } from "./composer-skill-router.mjs";
 import { formatInstancePlannerHint } from "./composer-flow-instances.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
 import { runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import { t } from "./i18n.mjs";
 
 const PLANNER_MAX_TOKENS = 2048;
 const PLANNER_TIMEOUT_MS = 15_000;
@@ -500,11 +501,11 @@ export async function planComposerTasks(opts) {
   }
 
   if (!apiProvider) {
-    emit({ type: "status", line: "启发式任务分析（配置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY 可启用智能规划）" });
+    emit({ type: "status", line: t("planner.heuristic_analysis") });
     return { steps: heuristicPlan(opts.userPrompt) };
   }
 
-  emit({ type: "status", line: `任务规划中（${apiProvider.model}）…` });
+  emit({ type: "status", line: t("planner.planning", { model: apiProvider.model }) });
 
   let flowYaml = opts.flowYaml || "";
   if (!flowYaml && opts.flowYamlAbs) {
@@ -520,9 +521,9 @@ export async function planComposerTasks(opts) {
     if (steps && steps.length > 0) {
       return { steps };
     }
-    emit({ type: "status", line: "规划器返回格式异常，回退到单步执行" });
+    emit({ type: "status", line: t("planner.planner_format_error") });
   } catch (e) {
-    emit({ type: "status", line: `规划器调用失败（${e.message}），回退到启发式分析` });
+    emit({ type: "status", line: t("planner.planner_call_failed", { message: e.message }) });
   }
 
   return { steps: heuristicPlan(opts.userPrompt) };
@@ -594,7 +595,7 @@ async function planSinglePhase(opts) {
     return { steps: heuristicPlan(opts.userPrompt), phased: true, phases: buildPhasesWithStatus(phaseIndex), currentPhase: phaseIndex };
   }
 
-  emit({ type: "status", line: `分阶段规划：${phase.label}（${phaseIndex + 1}/${PHASED_DEFINITIONS.length}）…` });
+  emit({ type: "status", line: t("planner.phased_planning", { label: phase.label, index: phaseIndex + 1, total: PHASED_DEFINITIONS.length }) });
 
   let flowYaml = opts.flowYaml || "";
   if (!flowYaml && opts.flowYamlAbs) {
@@ -618,7 +619,7 @@ async function planSinglePhase(opts) {
   }
 
   if (!apiProvider) {
-    emit({ type: "status", line: `分阶段：${phase.label}（CLI 执行）` });
+    emit({ type: "status", line: t("planner.phased_cli_exec", { label: phase.label }) });
     const complexity = phaseIndex === 0 ? "complex" : phaseIndex === 1 ? "simple" : "complex";
     const steps = [{
       type: "agent",
@@ -638,9 +639,9 @@ async function planSinglePhase(opts) {
     if (steps && steps.length > 0) {
       return { steps, phased: true, phases: buildPhasesWithStatus(phaseIndex), currentPhase: phaseIndex };
     }
-    emit({ type: "status", line: "分阶段规划器返回格式异常，使用默认 agent 步骤" });
+    emit({ type: "status", line: t("planner.phased_format_error") });
   } catch (e) {
-    emit({ type: "status", line: `分阶段规划失败（${e.message}），使用默认 agent 步骤` });
+    emit({ type: "status", line: t("planner.phased_planning_failed", { message: e.message }) });
   }
 
   const complexity = phaseIndex === 0 ? "complex" : phaseIndex === 1 ? "simple" : "complex";

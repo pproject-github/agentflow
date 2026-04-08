@@ -209,7 +209,7 @@ function maxDialogueNumFromSessionLabels(sessions) {
   if (!Array.isArray(sessions) || sessions.length === 0) return 0;
   let max = 0;
   for (const s of sessions) {
-    const m = /^(?:对话|Conversation)\s*(\d+)\s*$/.exec(String(s?.label ?? "").trim());
+    const m = /^(?:对话|Conversation|Chat)\s*(\d+)\s*$/.exec(String(s?.label ?? "").trim());
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
   return max;
@@ -438,6 +438,8 @@ function FlowBoard({
   onNodesDelete,
   onNodeClick,
   onFlowInit,
+  onDrop,
+  onDragOver,
   /** 右侧抽屉打开时隐藏小地图与缩放，避免与侧栏叠压 */
   hideMinimapAndControls,
   /** 底部与缩略图、缩放控件同一行的 AI 输入区 */
@@ -465,6 +467,8 @@ function FlowBoard({
       onNodesDelete={isRunMode ? undefined : onNodesDelete}
       onNodeClick={onNodeClick}
       onInit={onFlowInit}
+      onDrop={isRunMode ? undefined : onDrop}
+      onDragOver={isRunMode ? undefined : onDragOver}
       nodeTypes={nodeTypes}
       selectionOnDrag={selectionOnDrag}
       panOnDrag={panOnDrag}
@@ -519,6 +523,21 @@ function FlowBoard({
           ) : null}
         </div>
       </Panel>
+      {!hideMinimapAndControls && (
+        <Panel position="bottom-left" className="af-pin-legend">
+          {[
+            { type: "node", color: "#ff9800" },
+            { type: "str", color: "#2196f3" },
+            { type: "file", color: "#4caf50" },
+            { type: "bool", color: "#9c27b0" },
+          ].map(({ type, color }) => (
+            <span key={type} className="af-pin-legend__item">
+              <span className="af-pin-legend__dot" style={{ background: color }} />
+              <span className="af-pin-legend__label">{type}</span>
+            </span>
+          ))}
+        </Panel>
+      )}
       <FitViewHelper fitViewEpoch={fitViewEpoch} nodeCount={nodes.length} />
       {!isRunMode && nodes.length === 0 ? (
         <div className="af-flow-empty-hint">
@@ -621,6 +640,20 @@ export default function FlowEditorPage() {
     }),
   );
   const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false);
+
+  // ── Engine online detection ──
+  const [engineOnline, setEngineOnline] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetch("/api/flows", { method: "HEAD" })
+        .then((r) => { if (!cancelled) setEngineOnline(r.ok); })
+        .catch(() => { if (!cancelled) setEngineOnline(false); });
+    };
+    check();
+    const id = window.setInterval(check, 5000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
 
   // ── Run mode state ──
   const [runMode, setRunMode] = useState(/** @type {"edit" | "running" | "stopped" | "done" | "error"} */ ("edit"));
@@ -782,10 +815,27 @@ export default function FlowEditorPage() {
       setComposerSessions([newSession]);
       setActiveSessionId(id);
     } else {
-      ref.sessions = sessions;
-      ref.activeSessionId = activeSessionId || sessions[0]?.id || null;
-      setComposerSessions(sessions);
-      setActiveSessionId(ref.activeSessionId);
+      // 每次进入流水线时创建一个新的空对话 tab 并激活
+      const nextNum = maxDialogueNumFromSessionLabels(sessions) + 1;
+      composerSessionIdRef.current = nextNum;
+      const newId = `session-${nextNum}-${Date.now()}`;
+      const newSession = {
+        id: newId,
+        label: t("flow:composer.conversationLabel", { n: nextNum }),
+        thread: [],
+        segments: [],
+        running: false,
+        statusLine: "",
+        steps: [],
+        outputDismissed: false,
+        createdAt: Date.now(),
+        phaseContext: null,
+      };
+      const allSessions = [...sessions, newSession];
+      ref.sessions = allSessions;
+      ref.activeSessionId = newId;
+      setComposerSessions(allSessions);
+      setActiveSessionId(newId);
     }
 
     initialDataLoadedRef.current = true;
@@ -1469,6 +1519,42 @@ export default function FlowEditorPage() {
           y: rect.top + rect.height * 0.38,
         });
       }
+      const id = `node-${Date.now()}`;
+      const schemaType = schemaTypeForPalette(def);
+      const raw = {
+        id,
+        type: FLOW_NODE_TYPE,
+        position,
+        data: {
+          label: def.label ?? def.id,
+          definitionId: def.id,
+          schemaType,
+          inputs: Array.isArray(def.inputs) ? def.inputs.map((x) => ({ ...x })) : [],
+          outputs: Array.isArray(def.outputs) ? def.outputs.map((x) => ({ ...x })) : [],
+        },
+      };
+      const merged = mergeNodeWithPalette(raw, instancesRef.current, palette);
+      setNodes((nds) => [...nds, merged]);
+    },
+    [selected, palette, setNodes],
+  );
+
+  const handlePaletteDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const handlePaletteDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      if (!selected) return;
+      const defId = e.dataTransfer.getData("application/agentflow-node");
+      if (!defId) return;
+      const def = palette.find((p) => p.id === defId);
+      if (!def) return;
+      const rfi = reactFlowInstanceRef.current;
+      if (!rfi) return;
+      const position = rfi.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       const id = `node-${Date.now()}`;
       const schemaType = schemaTypeForPalette(def);
       const raw = {
@@ -2970,6 +3056,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         type="button"
                         className="af-palette-card"
                         onClick={() => addNodeFromPalette(n)}
+                        draggable={!!selected}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("application/agentflow-node", n.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
                         disabled={!selected}
                         title={n.description || n.id}
                       >
@@ -2995,8 +3086,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
             <footer className="af-palette-engine">
               <div className="af-palette-engine-head">
-                <span className="af-palette-engine-dot" aria-hidden />
-                <span className="af-palette-engine-label">ENGINE ONLINE</span>
+                <span className={"af-palette-engine-dot" + (engineOnline ? "" : " af-palette-engine-dot--offline")} aria-hidden />
+                <span className="af-palette-engine-label">{engineOnline ? t("common:engine.online") : t("common:engine.offline")}</span>
               </div>
               {saveStatus ? (
                 <div
@@ -3129,6 +3220,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   onNodesDelete={runMode !== "edit" ? undefined : onNodesDelete}
                   onNodeClick={onNodeClick}
                   onFlowInit={onFlowInit}
+                  onDrop={handlePaletteDrop}
+                  onDragOver={handlePaletteDragOver}
                   hideMinimapAndControls={Boolean(selected && rightPanel)}
                   bottomSlot={
                     runMode === "edit" ? (

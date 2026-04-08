@@ -2528,6 +2528,7 @@ button.af-project-card {
   gap: 0.5rem;
   width: 100%;
   padding: 0.45rem 0.5rem;
+  cursor: grab;
   border: none;
   border-radius: 0.65rem;
   background: var(--af-surface-high);
@@ -2544,6 +2545,7 @@ button.af-project-card {
 
 .af-palette-card:active:not(:disabled) {
   transform: scale(0.99);
+  cursor: grabbing;
 }
 
 .af-palette-card:disabled {
@@ -2630,7 +2632,8 @@ button.af-project-card {
   animation: af-pulse-engine 1.5s ease-in-out infinite;
 }
 
-.af-palette-engine-dot--off {
+.af-palette-engine-dot--off,
+.af-palette-engine-dot--offline {
   background: rgba(202, 195, 216, 0.2);
   box-shadow: none;
 }
@@ -2838,6 +2841,36 @@ button.af-project-card {
 .af-flow-bottom-unified__side--zoom > .react-flow__controls.react-flow__panel {
   right: 0 !important;
   left: auto !important;
+}
+
+/* Pin type legend */
+.af-pin-legend.react-flow__panel {
+  display: flex;
+  gap: 10px;
+  padding: 4px 10px;
+  background: rgba(28, 27, 27, 0.75);
+  backdrop-filter: blur(6px);
+  border-radius: 8px;
+  pointer-events: none;
+  margin: 0 0 8px 8px !important;
+}
+.af-pin-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.af-pin-legend__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.af-pin-legend__label {
+  font-size: 0.6875rem;
+  font-family: monospace;
+  color: var(--md-sys-color-on-surface, #e5e2e1);
+  opacity: 0.55;
+  line-height: 1;
 }
 
 .af-pipeline-placeholder {
@@ -4407,6 +4440,22 @@ button.af-project-card {
 .af-flow-empty-hint-sub strong {
   color: var(--af-primary-container, #7c4dff);
   font-weight: 700;
+}
+
+.af-flow-empty-hint-sub kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  height: 1.4em;
+  font-size: 0.75rem;
+  font-family: var(--af-mono, ui-monospace, monospace);
+  border: 1px solid rgba(229, 226, 225, 0.3);
+  border-radius: 3px;
+  background: rgba(229, 226, 225, 0.08);
+  color: rgba(229, 226, 225, 0.7);
+  padding: 0 0.2em;
+  vertical-align: baseline;
 }
 
 /* Composer topbar AI button */

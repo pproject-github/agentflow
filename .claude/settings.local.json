@@ -14,7 +14,13 @@
       "Bash(python3 -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\(d.get\\('message',{}\\).get\\('content',[{}]\\)[0].get\\('text',''\\)[:200] if isinstance\\(d.get\\('message',{}\\).get\\('content',[{}]\\)[0], dict\\) else 'tool_use'\\)\")",
       "Bash(python3 -c ':*)",
       "Bash(node -e ':*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api:*)",
+      "Bash(ls:*)"
     ]
   }
 }

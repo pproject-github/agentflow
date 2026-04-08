@@ -120,7 +120,19 @@
     "fix_task_title": "## 任务：修复 flow.yaml 使 validate-flow 通过",
     "fix_errors_intro": "以下错误必须**全部消除**（与 CLI `agentflow validate` / `validate-flow.mjs` 使用同一套规则）：",
     "fix_constraints_title": "### 约束",
-    "fix_constraints_body": "- **只**编辑上下文中的「图定义文件」`flow.yaml`，不要改无关文件。\n- 优先最小修改：补边、修正 sourceHandle/targetHandle、role、model、实例结构等。"
+    "fix_constraints_body": "- **只**编辑上下文中的「图定义文件」`flow.yaml`，不要改无关文件。\n- 优先最小修改：补边、修正 sourceHandle/targetHandle、role、model、实例结构等。",
+    "analyzing_task": "分析任务…",
+    "validation_repair": "校验修复：agent 第 {{attempt}}/{{max}} 次…",
+    "validation_repair_start": "🔧 启动校验修复（{{attempt}}/{{max}}）…",
+    "validation_repair_auto_success": "（自动修复成功）",
+    "skip_validation_for_phase": "当前阶段跳过校验（将在最后阶段统一校验）",
+    "all_phases_complete": "所有阶段完成",
+    "phase_complete_waiting": "{{label}}完成，等待确认继续…",
+    "current_phase": "阶段 {{index}}",
+    "all_steps_complete": "所有步骤完成",
+    "multi_step_failed": "多步执行失败: {{message}}",
+    "multi_step_starting": "多步模式启动…",
+    "classify_failed": "[CLASSIFY_FAIL] 任务分类失败: {{message}}"
   },
   "runner": {
     "cursor_account_limit": "[agentflow] Cursor 账户限制：检测到仅支持 Auto，自动重试一次（Auto）…",
@@ -128,11 +140,27 @@
     "thinking": "思考中…",
     "completed": "完成",
     "execution_failed": "执行失败",
-    "event_label": "事件"
+    "event_label": "事件",
+    "tool_call": "工具调用 ({{subtype}})",
+    "base64_data": "[cursor-stdout] (base64 数据, {{len}} 字符)",
+    "non_json_line": "(非 JSON) {{preview}}",
+    "unparsed_line": "(未解析行, {{len}} 字符)",
+    "opencode_exit_code": "OpenCode 退出码 {{code}}",
+    "done": "完成"
   },
   "tool": {
     "nodejs_script_hint": "script 成败以 exit code 为准（0=success），stdout 直接作为 result 槽位内容（纯文本即可，如 console.log）。",
     "nodejs_heal_retry": "[tool_nodejs 自愈] {{instanceId}} 第 {{attempt}}/{{maxRetries}} 次重试：{{detail}}"
+  },
+  "planner": {
+    "heuristic_analysis": "启发式任务分析（配置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY 可启用智能规划）",
+    "planning": "任务规划中（{{model}}）…",
+    "planner_format_error": "规划器返回格式异常，回退到单步执行",
+    "planner_call_failed": "规划器调用失败（{{message}}），回退到启发式分析",
+    "phased_planning": "分阶段规划：{{label}}（{{index}}/{{total}}）…",
+    "phased_cli_exec": "分阶段：{{label}}（CLI 执行）",
+    "phased_format_error": "分阶段规划器返回格式异常，使用默认 agent 步骤",
+    "phased_planning_failed": "分阶段规划失败（{{message}}），使用默认 agent 步骤"
   },
   "api": {
     "node_context_marker": "## 节点上下文",

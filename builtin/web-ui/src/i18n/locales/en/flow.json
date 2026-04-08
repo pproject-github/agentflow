@@ -163,7 +163,7 @@
     "title": "Start Building Your Flow",
     "text": "Describe your workflow in the AI input box below, or drag nodes from the left panel to the canvas",
     "composerHint": "Build AgentFlow with AI Composer",
-    "composerSub": "Drag nodes from the left panel, or click the <strong>AI</strong> button to describe your workflow"
+    "composerSub": "Drag nodes from the left panel, or describe your workflow in the <strong>input box below</strong>.<br/>Press <kbd>?</kbd> to view shortcuts."
   },
   "sidebar": {
     "mainNav": "Main Navigation"

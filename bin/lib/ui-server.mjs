@@ -29,6 +29,7 @@ import {
   shouldUseMultiStep,
   runComposerPostFlowValidationAndRepair,
 } from "./composer-agent.mjs";
+import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
   getAgentflowUserConfigAbs,
@@ -1208,7 +1209,7 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         if (!responseEnded) killChild();
       });
 
-      onStreamEvent({ type: "status", line: "正在分析任务…" });
+      onStreamEvent({ type: "status", line: t("composer.analyzing_task") });
       log.debug(`[ui] composer-agent: flowId=${flowId || "(none)"} model=${model || "default"} promptLen=${finalPrompt.length}`);
 
       const hasPhaseContext = payload.phaseContext && typeof payload.phaseContext === "object" && typeof payload.phaseContext.phaseIndex === "number";
@@ -1217,7 +1218,7 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         useMultiStep = hasPhaseContext || ((await shouldUseMultiStep({ flowYamlAbs, userPrompt: prompt.trim(), cliWorkspace })) && !payload.singleStep);
       } catch (classifyErr) {
         log.debug(`[ui] composer classify error: ${classifyErr.message}`);
-        onStreamEvent({ type: "error", message: `[CLASSIFY_FAIL] 任务分类失败: ${classifyErr.message}`, code: "CLASSIFY_FAIL" });
+        onStreamEvent({ type: "error", message: t("composer.classify_failed", { message: classifyErr.message }), code: "CLASSIFY_FAIL" });
         endSafe();
         return;
       }
@@ -1226,7 +1227,7 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
 
       if (useMultiStep) {
         try {
-          onStreamEvent({ type: "status", line: "多步模式启动…" });
+          onStreamEvent({ type: "status", line: t("composer.multi_step_starting") });
           const phaseContext = payload.phaseContext && typeof payload.phaseContext === "object" ? payload.phaseContext : undefined;
           const handle = startComposerMultiStep({
             uiWorkspaceRoot: root,

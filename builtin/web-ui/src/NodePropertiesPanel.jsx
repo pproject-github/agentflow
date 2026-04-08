@@ -63,16 +63,17 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
               <span className="af-node-props-io-handle" title={`${handlePrefix}-${i}`}>
                 {handlePrefix}-{i}
               </span>
-              <input
-                type="text"
+              <select
                 className="af-node-props-input af-node-props-io-cell"
                 value={s.type}
                 onChange={(e) => patch(i, "type", e.target.value)}
                 disabled={disabled}
-                spellCheck={false}
-                autoComplete="off"
                 aria-label={t("flow:nodeProps.pinTypeAriaLabel", { label, index: i })}
-              />
+              >
+                {["node", "file", "str", "bool"].map((typ) => (
+                  <option key={typ} value={typ}>{typ}</option>
+                ))}
+              </select>
               <input
                 type="text"
                 className="af-node-props-input af-node-props-io-cell"
