@@ -40,7 +40,7 @@ You can write a numbered plan in a prompt, but you can't express "loop until com
 
 ## Features
 
-- **Reuse existing agents** — Cursor, OpenCode, Claude Code as swappable backends; no platform migration
+- **Reuse your AI subscriptions** — Cursor Pro, OpenCode (Alibaba Cloud, etc.), Claude Code; no need to purchase LLM API keys
 - **Visual editor + AI Composer** — drag-and-drop nodes or describe workflows in natural language
 - **Persistent state** — every node's I/O cached to disk (like Gradle task caching); resume from any failure point
 - **Loop / branch / parallel** — `control_if`, `control_anyOne`, `control_toBool` for real control flow

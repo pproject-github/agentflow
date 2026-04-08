@@ -40,7 +40,7 @@ Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
 
 ## 核心特性
 
-- **复用现有 agent** — Cursor、OpenCode、Claude Code 可互换，不用迁移平台
+- **复用你的 AI 订阅** — Cursor Pro、OpenCode（阿里云等）、Claude Code；无需购买 LLM API key
 - **可视化编辑器 + AI Composer** — 拖拽节点或用自然语言描述工作流
 - **状态持久化** — 每个节点的输入输出缓存到磁盘（类似 Gradle task cache），任意节点失败可续跑
 - **循环 / 分支 / 并行** — `control_if`、`control_anyOne`、`control_toBool` 实现真正的控制流
