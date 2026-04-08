@@ -25,11 +25,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bigo-sg/agentflow.git"
+    "url": "git+https://github.com/pproject-github/agentflow.git"
   },
-  "homepage": "https://github.com/bigo-sg/agentflow#readme",
+  "homepage": "https://github.com/pproject-github/agentflow#readme",
   "bugs": {
-    "url": "https://github.com/bigo-sg/agentflow/issues"
+    "url": "https://github.com/pproject-github/agentflow/issues"
   },
   "publishConfig": {
     "access": "public",
@@ -44,6 +44,9 @@
   "scripts": {
     "postinstall": "node bin/ensure-workspace-reference.mjs",
     "build:web-ui": "cd builtin/web-ui && npm install && npm run build",
+    "build:website": "cd website && npm install && npm run build",
+    "dev:website": "cd website && npm run dev",
+    "preview:website": "cd website && npm run preview",
     "prepack": "npm run build:web-ui"
   },
   "dependencies": {

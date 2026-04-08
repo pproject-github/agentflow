@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface font-body;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::selection {
+    @apply bg-primary/30 text-primary;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-container-low;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-outline-variant/50 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-outline-variant;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: rgba(208, 188, 255, 0.05);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(208, 188, 255, 0.15);
+    border-left: 1px solid rgba(208, 188, 255, 0.15);
+  }
+
+  .text-gradient {
+    @apply bg-gradient-text bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply bg-gradient-primary text-on-primary font-headline font-bold py-4 px-8 rounded-xl;
+    @apply hover:brightness-110 active:scale-95 transition-all;
+    @apply shadow-lg shadow-primary-container/20;
+  }
+
+  .btn-ghost {
+    @apply border border-outline-variant/30 text-on-surface px-8 py-3 rounded-xl;
+    @apply hover:bg-surface-container-high active:scale-95 transition-all;
+    @apply font-headline font-bold;
+  }
+
+  .card-glass {
+    @apply glass-panel p-8 rounded-3xl relative overflow-hidden;
+    @apply hover:border-primary/30 transition-colors duration-300;
+  }
+
+  .card-solid {
+    @apply bg-surface-container-high p-8 rounded-3xl border border-outline-variant/10;
+    @apply hover:border-primary/30 transition-colors duration-300;
+  }
+
+  .badge {
+    @apply px-3 py-1 bg-surface-container-highest text-xs uppercase tracking-widest;
+    @apply text-primary rounded-xl font-bold;
+  }
+
+  .nav-link {
+    @apply text-on-surface-variant hover:text-on-surface transition-colors duration-300;
+    @apply font-headline font-medium;
+  }
+
+  .markdown-body {
+    @apply text-on-surface leading-relaxed;
+  }
+
+  .markdown-body h1 {
+    @apply font-headline text-4xl font-bold mb-6 mt-8;
+  }
+
+  .markdown-body h2 {
+    @apply font-headline text-3xl font-bold mb-4 mt-6;
+  }
+
+  .markdown-body h3 {
+    @apply font-headline text-2xl font-bold mb-3 mt-4;
+  }
+
+  .markdown-body p {
+    @apply mb-4 text-lg;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply mb-4 pl-6;
+  }
+
+  .markdown-body li {
+    @apply mb-2;
+  }
+
+  .markdown-body code {
+    @apply bg-surface-container-lowest px-2 py-1 rounded-lg;
+    @apply font-mono text-sm text-primary-fixed;
+  }
+
+  .markdown-body pre {
+    @apply bg-surface-container-lowest p-6 rounded-2xl mb-6;
+    @apply overflow-x-auto border border-outline-variant/20;
+  }
+
+  .markdown-body pre code {
+    @apply bg-transparent p-0;
+  }
+
+  .markdown-body a {
+    @apply text-primary hover:text-primary-container transition-colors underline;
+  }
+
+  .markdown-body blockquote {
+    @apply border-l-4 border-primary-container pl-4 py-2;
+    @apply bg-surface-container-low rounded-lg mb-4 italic;
+  }
+
+  .markdown-body table {
+    @apply w-full border-collapse mb-6;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-outline-variant/20 px-4 py-2;
+  }
+
+  .markdown-body th {
+    @apply bg-surface-container-high font-headline font-bold text-left;
+  }
+
+  .flow-node-demo {
+    @apply rounded-2xl shadow-2xl;
+    @apply transition-all duration-300;
+  }
+
+  .flow-node-demo:hover {
+    @apply shadow-primary-container/20;
+  }
+}
+
+@layer utilities {
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .animate-bounce-subtle {
+    animation: bounce-subtle 2s ease-in-out infinite;
+  }
+
+  @keyframes bounce-subtle {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+
+  .pulse-running {
+    animation: pulse-running 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-running {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 20px rgba(208, 188, 255, 0.3);
+    }
+    50% {
+      opacity: 0.9;
+      box-shadow: 0 0 30px rgba(208, 188, 255, 0.5);
+    }
+  }
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
