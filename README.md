@@ -15,7 +15,7 @@
 </p>
 
 >
-> Wire up Cursor / OpenCode / Claude Code as execution backends — run, pause, resume.
+> Orchestrate complex, long-running tasks — module migrations, AI automation, deep code cleanup — using Cursor / OpenCode / Claude Code as swappable backends.
 
 ![AgentFlow Projects](docs/projects.png)
 
@@ -101,6 +101,19 @@ agentflow replay <FlowName> <uuid> <instanceId>
 # View agent reasoning
 agentflow extract-thinking <FlowName> <uuid>
 ```
+
+## Skills
+
+AgentFlow provides specialized skills for common operations:
+
+| Skill | Description |
+|-------|-------------|
+| `agentflow-flow-add-instances` | Add new nodes to flow.yaml with proper YAML structure, connection design, and positioning |
+| `agentflow-flow-edit-node-fields` | Edit allowed fields in existing nodes (label, body, role, input/output values) without breaking topology |
+| `agentflow-flow-sync-ui` | Sync flow.yaml changes to Web UI canvas after saving to disk |
+| `nestjs-route-order-debug` | Debug NestJS route conflicts between parameter routes (`:id`) and concrete routes |
+
+Skills are automatically loaded when relevant tasks are detected, providing domain-specific instructions and workflows.
 
 ## Tutorials
 
