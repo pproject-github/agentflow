@@ -29,7 +29,6 @@ jobs:
   publish-npm:
     needs: build-and-test
     runs-on: ubuntu-latest
-    if: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +45,20 @@ jobs:
       - name: Build Web UI
         run: npm run build:web-ui
 
+      - name: Check NPM_TOKEN
+        id: check_token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "has_token=false" >> $GITHUB_OUTPUT
+            echo "::warning::NPM_TOKEN not configured, skipping npm publish"
+          else
+            echo "has_token=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish to npm
+        if: steps.check_token.outputs.has_token == 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
