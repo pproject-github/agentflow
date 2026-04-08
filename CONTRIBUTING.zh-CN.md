@@ -1,5 +1,7 @@
 # Contributing to AgentFlow
 
+**中文** | [English](./CONTRIBUTING.en.md)
+
 感谢你对 AgentFlow 的兴趣！以下是参与贡献的指南。
 
 ## 开发环境 setup

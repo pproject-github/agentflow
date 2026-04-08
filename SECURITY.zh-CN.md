@@ -1,5 +1,7 @@
 # Security Policy
 
+**中文** | [English](./SECURITY.en.md)
+
 ## 支持的版本
 
 | 版本 | 支持状态 |
