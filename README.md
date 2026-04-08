@@ -173,7 +173,7 @@ Supported: `zh` (中文), `en` (English)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
 
 ## License
 

@@ -173,7 +173,7 @@ AgentFlow 提供专用技能用于常见操作：
 
 ## 贡献
 
-查看 [CONTRIBUTING.md](CONTRIBUTING.md)。
+查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ## 许可证
 
