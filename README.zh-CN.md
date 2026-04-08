@@ -15,7 +15,7 @@
 </p>
 
 >
-> 把 Cursor / OpenCode / Claude Code 当执行后端，串起来跑，能停，能续。
+> 编排复杂、长时间运行的任务——模块迁移、AI 自动化、代码深度清理——以 Cursor / OpenCode / Claude Code 为可切换后端。
 
 ![AgentFlow Projects](docs/projects.png)
 
@@ -101,6 +101,19 @@ agentflow replay <FlowName> <uuid> <instanceId>
 # 查看 agent 推理过程
 agentflow extract-thinking <FlowName> <uuid>
 ```
+
+## 技能
+
+AgentFlow 提供专用技能用于常见操作：
+
+| 技能 | 说明 |
+|------|------|
+| `agentflow-flow-add-instances` | 向 flow.yaml 添加新节点，包括正确的 YAML 结构、连线设计和位置定位 |
+| `agentflow-flow-edit-node-fields` | 编辑已有节点的允许字段（label、body、role、input/output 值）而不破坏拓扑 |
+| `agentflow-flow-sync-ui` | 保存 flow.yaml 到磁盘后同步变更到 Web UI 画布 |
+| `nestjs-route-order-debug` | 调试 NestJS 路由冲突（参数路由 `:id` 与具体路由之间） |
+
+技能在检测到相关任务时自动加载，提供领域特定的指令和工作流。
 
 ## 教程
 
