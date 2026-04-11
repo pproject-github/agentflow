@@ -534,6 +534,28 @@ function resolvePlaceholders(workspaceRoot, flowName, order, edges, uuid, flowDa
   return { resolvedInputs, resolvedOutputs, outputSlotTypes, inputSlotTypes };
 }
 
+function applyCliInputs(order, edges, instances, cliInputs, resolvedInputs) {
+  if (!instances || typeof instances !== "object") return;
+  for (const instanceId of order) {
+    const inst = instances[instanceId];
+    if (!inst?.input) continue;
+    const inputSlots = inst.input;
+    for (let i = 0; i < inputSlots.length; i++) {
+      const slotName = inputSlots[i]?.name;
+      if (!slotName || !cliInputs[slotName]) continue;
+      const edge = edges.find(e => e.target === instanceId && e.targetHandle === `input-${i}`);
+      if (!edge?.source) continue;
+      const sourceInst = instances[edge.source];
+      if (sourceInst?.definitionId?.startsWith("provide_")) {
+        const cliVal = cliInputs[slotName];
+        const value = cliVal.type === "file" ? cliVal.path : cliVal.value;
+        if (!resolvedInputs[instanceId]) resolvedInputs[instanceId] = {};
+        resolvedInputs[instanceId][slotName] = value;
+      }
+    }
+  }
+}
+
 /** 读取 uuid 对应 run 目录下 intermediate/ 中各 instance 的状态（按 _execId 最新一轮 result 读） */
 function readInstanceStatus(workspaceRoot, flowName, uuid, order) {
   const intermediateDir = path.join(getRunDir(workspaceRoot, flowName, uuid), "intermediate");
@@ -557,6 +579,14 @@ function main() {
   let flowDir;
   let workspaceRoot = null;
   let uuid = null;
+  let cliInputs = {};
+  const cliInputsIdx = args.indexOf("--cli-inputs");
+  if (cliInputsIdx >= 0 && args[cliInputsIdx + 1]) {
+    try {
+      cliInputs = JSON.parse(args[cliInputsIdx + 1]);
+      args.splice(cliInputsIdx, 2);
+    } catch (_) {}
+  }
   if (args.length === 1) {
     const p = path.resolve(args[0]);
     flowDir = path.dirname(p);
@@ -574,7 +604,7 @@ function main() {
     }
     if (args.length >= 3) uuid = args[2];
   } else {
-    console.error(JSON.stringify({ ok: false, error: "Usage: node parse-flow.mjs <flowYamlPath> | node parse-flow.mjs <workspaceRoot> <flowName> [uuid] [flowDir]" }));
+    console.error(JSON.stringify({ ok: false, error: "Usage: node parse-flow.mjs <flowYamlPath> | node parse-flow.mjs <workspaceRoot> <flowName> [uuid] [flowDir] [--cli-inputs <json>]" }));
     process.exit(1);
   }
   const flowData = loadFlowDefinition(flowDir);
@@ -585,11 +615,9 @@ function main() {
   try {
     const { nodes, edges } = readFlowFromYaml(flowDir);
     const { order: topoOrder, hasCycle } = topoSort(nodes, edges);
-    /** 有环时拓扑序不包含所有节点，改用包含全部节点的顺序 */
     const order = hasCycle ? nodes.map((n) => n.id) : topoOrder;
     const cycleNodes = hasCycle ? Array.from(findCycleNodes(nodes, edges)) : [];
 
-    /** 由 edges 构建 predecessors：{ "nodeId": ["pred1","pred2"], ... } */
     const predecessors = {};
     for (const e of edges) {
       if (!e.target) continue;
@@ -610,10 +638,14 @@ function main() {
       const flowName = args[1];
       out.flowName = flowName;
       const { resolvedInputs, resolvedOutputs, outputSlotTypes, inputSlotTypes } = resolvePlaceholders(workspaceRoot, flowName, order, edges, uuid || null, flowData, flowDir);
+      if (Object.keys(cliInputs).length > 0) {
+        applyCliInputs(order, edges, flowData.instances, cliInputs, resolvedInputs);
+      }
       out.resolvedInputs = resolvedInputs;
       out.resolvedOutputs = resolvedOutputs;
       out.outputSlotTypes = outputSlotTypes;
       out.inputSlotTypes = inputSlotTypes;
+      out.cliInputsApplied = Object.keys(cliInputs).length > 0 ? cliInputs : null;
     }
     // 传入 uuid 时自动写入 intermediate/flow.json（仅结构 + slotTypes，不含 resolvedInputs/resolvedOutputs）
     if (uuid && workspaceRoot && flowNameArg) {
@@ -659,6 +691,7 @@ export {
   parseInstanceSlots,
   readInstanceContent,
   extractPlaceholders,
+  applyCliInputs,
 };
 
 const isMain = typeof process !== "undefined" && process.argv[1] && process.argv[1].endsWith("parse-flow.mjs");

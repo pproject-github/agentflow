@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
+import { useOnboarding } from "../onboarding/hooks/useOnboarding.js";
 
 const ENV_STORAGE_KEY = "agentflow-settings-env-v1";
 /** 与服务器 config.json 同步的本地缓存（离线时回退） */
@@ -90,6 +91,8 @@ function formatFetchedAt(iso, lang = "zh") {
 export default function SettingsPage() {
   const { t, i18n } = useTranslation(["common", "settings"]);
   const currentLang = i18n.language || "zh";
+  const { resetTour } = useOnboarding();
+  const [showResetToast, setShowResetToast] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [contextErr, setContextErr] = useState("");
   const [modelLists, setModelLists] = useState(
@@ -257,6 +260,12 @@ export default function SettingsPage() {
     const newLang = e.target.value;
     changeLanguage(newLang);
   }, []);
+
+  const handleResetOnboarding = useCallback(() => {
+    resetTour();
+    setShowResetToast(true);
+    setTimeout(() => setShowResetToast(false), 2000);
+  }, [resetTour]);
 
   const getFetchedAtText = (iso) => {
     const formatted = formatFetchedAt(iso, currentLang);
@@ -566,6 +575,24 @@ export default function SettingsPage() {
                   </select>
                   <p className="af-set-hint">{t("settings:language.description")}</p>
                 </div>
+              </div>
+
+              <div className="af-set-rail-card">
+                <h3 className="af-set-rail-h3 af-set-rail-h3--sm">{t("settings:onboarding.title")}</h3>
+                <p className="af-set-hint">{t("settings:onboarding.description")}</p>
+                <button
+                  type="button"
+                  className="af-set-btn-outline"
+                  onClick={handleResetOnboarding}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '1rem', marginRight: '0.25rem' }}>restart_alt</span>
+                  {t("settings:onboarding.reset")}
+                </button>
+                {showResetToast ? (
+                  <p className="af-set-hint af-set-hint--success" role="status" aria-live="polite">
+                    {t("settings:onboarding.resetSuccess")}
+                  </p>
+                ) : null}
               </div>
             </aside>
           </div>

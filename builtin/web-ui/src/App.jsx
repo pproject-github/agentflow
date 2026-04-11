@@ -3,6 +3,7 @@ import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 
 function RoutedContent() {
   const { path } = useRoute();
@@ -17,6 +18,7 @@ function AppShell() {
   const pipelineFullBleed = path === "/flow";
   return (
     <div className="af-app">
+      {path !== "/settings" ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
       {!pipelineFullBleed ? <Sidebar /> : null}
       <div className={pipelineFullBleed ? "af-main af-main--pipeline" : "af-main"}>
         <RoutedContent />

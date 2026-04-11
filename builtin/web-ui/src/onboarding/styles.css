@@ -1,0 +1,150 @@
+/* AgentFlow Onboarding Tour Styles */
+
+/* Hide beacon completely */
+.react-joyride__beacon,
+.react-joyride__beacon__beacon__inner,
+.react-joyride__beacon__outer {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Main tooltip container */
+.react-joyride__tooltip {
+  background-color: #1a1a1a !important;
+  border-radius: 1.5rem !important;
+  padding: 1.5rem !important;
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.6), 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+  color: #ffffff !important;
+}
+
+/* All text inside tooltip should be white */
+.react-joyride__tooltip * {
+  color: #ffffff !important;
+}
+
+.react-joyride__tooltip__container {
+  text-align: left !important;
+}
+
+/* Content text */
+.react-joyride__tooltip__content {
+  color: #ffffff !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 1rem !important;
+  line-height: 1.6 !important;
+  margin-bottom: 1.25rem !important;
+}
+
+/* Footer buttons */
+.react-joyride__tooltip__footer {
+  display: flex !important;
+  gap: 0.75rem !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+
+.react-joyride__tooltip__footer-secondary {
+  flex: 1 !important;
+}
+
+/* All buttons */
+.react-joyride__button {
+  font-family: 'Space Grotesk', system-ui, sans-serif !important;
+  font-weight: 500 !important;
+  border-radius: 9999px !important;
+  transition: all 0.15s ease !important;
+}
+
+/* Primary button (下一步/完成) */
+.react-joyride__button--primary {
+  background-color: #7c4dff !important;
+  color: #ffffff !important;
+  padding: 0.625rem 1.5rem !important;
+  border: none !important;
+  font-size: 0.9375rem !important;
+}
+
+.react-joyride__button--primary:hover {
+  background-color: #9d6aff !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Back button */
+.react-joyride__button--back {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+  padding: 0.5rem 1rem !important;
+  border: none !important;
+}
+
+.react-joyride__button--back:hover {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Skip button */
+.react-joyride__button--skip {
+  background-color: transparent !important;
+  color: #9ecaff !important;
+  padding: 0.5rem 0.75rem !important;
+  border: none !important;
+  font-size: 0.875rem !important;
+}
+
+.react-joyride__button--skip:hover {
+  color: #b8d4ff !important;
+}
+
+/* Header */
+.react-joyride__tooltip__header {
+  display: block !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.react-joyride__tooltip__title {
+  color: #7c4dff !important;
+  font-family: 'Space Grotesk', system-ui, sans-serif !important;
+  font-weight: 600 !important;
+  font-size: 1.125rem !important;
+}
+
+/* Progress indicator */
+.react-joyride__tooltip__progress {
+  color: #9ecaff !important;
+  font-size: 0.75rem !important;
+  font-family: 'Inter', monospace, system-ui !important;
+  margin-top: 0.5rem !important;
+}
+
+/* Hide beacon */
+.react-joyride__beacon {
+  display: none !important;
+}
+
+/* Overlay */
+.react-joyride__overlay {
+  background-color: transparent !important;
+}
+
+/* SVG spotlight - target element cutout */
+.react-joyride__spotlight {
+  position: absolute !important;
+}
+
+/* Purple border on target element */
+.react-joyride__spotlight path:nth-child(3) {
+  stroke: #7c4dff !important;
+  stroke-width: 1 !important;
+  fill: transparent !important;
+}
+
+/* Overlay background */
+.react-joyride__spotlight path:nth-child(1) {
+  fill: rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Success hint in settings */
+.af-set-hint--success {
+  color: var(--af-tertiary, #00e475) !important;
+  margin-top: 0.5rem !important;
+}

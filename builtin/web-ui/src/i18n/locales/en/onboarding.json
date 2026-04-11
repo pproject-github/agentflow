@@ -1,0 +1,22 @@
+{
+  "back": "Back",
+  "next": "Next",
+  "skip": "Skip",
+  "done": "Done",
+  "projects": {
+    "intro": "Welcome to AgentFlow! This is a visual workflow orchestration tool for building and running AI Agent task flows. Let's quickly explore the core features.",
+    "create": "Click here to create your first pipeline. AgentFlow uses visual flow graphs to orchestrate AI agent tasks.",
+    "search": "Search existing pipelines by name, description, or path.",
+    "cards": "Pipeline cards show name, description, and source location. Click a card to open the editor.",
+    "activity": "The right panel shows recently opened and executed pipelines for quick access."
+  },
+  "flow": {
+    "palette": "Left panel provides node types: Agent (AI execution), Tool (utilities), Control (flow logic), Provide (data input).",
+    "agentNodes": "Agent nodes: AI subtasks executed by Cursor/OpenCode, supporting requirement analysis, code implementation, testing, etc.",
+    "toolNodes": "Tool nodes: Execute shell commands, load/save data, print output, and other utility operations.",
+    "controlNodes": "Control nodes: Control flow direction, including start/end, conditional branches, merge points.",
+    "emptyHint": "When canvas is empty, drag nodes onto it, or use the Composer below to describe requirements and let AI generate the flow.",
+    "composer": "Describe your requirements in natural language here, and AI will generate a complete flow graph for you.",
+    "toolbar": "Top toolbar: Run the flow, view execution history, edit settings, view keyboard shortcuts help."
+  }
+}

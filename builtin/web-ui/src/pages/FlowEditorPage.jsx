@@ -2774,7 +2774,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               </select>
             </div>
           </div>
-          <div className="af-pipeline-top-right">
+          <div className="af-pipeline-top-right af-flow-toolbar-actions">
             {runMode === "running" && (
               <div className="af-run-timer">
                 <span className="af-run-timer__dot" />
@@ -2921,7 +2921,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
         <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "")}>
           {runMode === "edit" ? (
-          <aside className="af-node-palette" id="af-node-palette" aria-label={t("flow:palette2.nodePalette")}>
+          <aside className="af-node-palette af-flow-left-panel" id="af-node-palette" aria-label={t("flow:palette2.nodePalette")}>
             {/* 工作区切换区域 - 可展开 */}
             <div className={`af-palette-workspace${workspaceExpanded ? " af-palette-workspace--expanded" : ""}`}>
               <button
@@ -3047,7 +3047,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             {listError ? <p className="af-err af-palette-list-err">{listError}</p> : null}
             <div className="af-node-palette-scroll">
               {PALETTE_ORDER.filter((cat) => filteredGroupedPalette[cat].length > 0).map((cat) => (
-                <section key={cat} className="af-palette-section">
+                <section key={cat} className={`af-palette-section af-flow-palette-section--${cat}`}>
                   <h3 className="af-palette-cat">{cat}</h3>
                   <div className="af-palette-cards">
                     {filteredGroupedPalette[cat].map((n) => (
@@ -3225,7 +3225,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   hideMinimapAndControls={Boolean(selected && rightPanel)}
                   bottomSlot={
                     runMode === "edit" ? (
-                    <div className="af-bottom-composer-stack">
+                    <div className="af-bottom-composer-stack af-flow-bottom-composer">
                     <div className="af-pipeline-composer-inner">
                 <div className="af-composer-selected" aria-label={t("flow:composer.selectedNodesAriaLabel")}>
                   {composerStripEntries.length === 0 ? (

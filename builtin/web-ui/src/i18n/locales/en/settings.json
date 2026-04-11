@@ -70,5 +70,11 @@
       "en": "English",
       "ja": "日本語"
     }
+  },
+  "onboarding": {
+    "title": "Onboarding Tour",
+    "description": "Restart the product tour to learn about AgentFlow's core features.",
+    "reset": "Reset Tour",
+    "resetSuccess": "Reset complete. Tour will start automatically on next visit."
   }
 }

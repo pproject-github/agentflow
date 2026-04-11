@@ -30,7 +30,7 @@ const PARALLEL_PREFIX_COLORS = [
 ];
 
 /** parallel 默认 false */
-export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false) {
+export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false, cliInputs = {}) {
   ensureReference(workspaceRoot);
   const flowDir = getFlowDir(workspaceRoot, flowName);
   if (!flowDir) {
@@ -43,9 +43,11 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
   const ensureResult = runNodeScript(workspaceRoot, "ensure-run-dir.mjs", ensureArgs, { captureStdout: true });
   const { uuid } = parseJsonStdout(ensureResult);
 
-  const parseResult = runNodeScript(workspaceRoot, "parse-flow.mjs", [workspaceRoot, flowName, uuid, flowDir], {
-    captureStdout: true,
-  });
+  const parseArgs = [workspaceRoot, flowName, uuid, flowDir];
+  if (Object.keys(cliInputs).length > 0) {
+    parseArgs.push("--cli-inputs", JSON.stringify(cliInputs));
+  }
+  const parseResult = runNodeScript(workspaceRoot, "parse-flow.mjs", parseArgs, { captureStdout: true });
   const parseOut = parseJsonStdout(parseResult);
   if (!parseOut.ok) throw new Error(parseOut.error || "parse-flow failed");
 
@@ -373,7 +375,7 @@ export async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, 
     }
     log.info(chalk.dim(`Resumed node: ${instanceId}`));
   }
-  await apply(workspaceRoot, flowName, uuid, false, agentModel, force, parallel);
+  await apply(workspaceRoot, flowName, uuid, false, agentModel, force, parallel, {});
 }
 
 export async function replay(workspaceRoot, flowNameOrUuid, uuidOrInstanceId, instanceIdArg, agentModel = null, force = true) {

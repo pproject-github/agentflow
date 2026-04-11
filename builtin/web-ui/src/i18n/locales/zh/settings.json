@@ -70,5 +70,11 @@
       "en": "English",
       "ja": "日本語"
     }
+  },
+  "onboarding": {
+    "title": "新手引导",
+    "description": "重新启动产品引导流程，了解 AgentFlow 的核心功能。",
+    "reset": "重置引导",
+    "resetSuccess": "已重置，下次访问将自动启动引导"
   }
 }

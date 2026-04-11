@@ -7,12 +7,14 @@ import enFlow from './locales/en/flow.json';
 import enSettings from './locales/en/settings.json';
 import enComposer from './locales/en/composer.json';
 import enProject from './locales/en/project.json';
+import enOnboarding from './locales/en/onboarding.json';
 
 import zhCommon from './locales/zh/common.json';
 import zhFlow from './locales/zh/flow.json';
 import zhSettings from './locales/zh/settings.json';
 import zhComposer from './locales/zh/composer.json';
 import zhProject from './locales/zh/project.json';
+import zhOnboarding from './locales/zh/onboarding.json';
 
 const resources = {
   en: {
@@ -21,6 +23,7 @@ const resources = {
     settings: enSettings,
     composer: enComposer,
     project: enProject,
+    onboarding: enOnboarding,
   },
   zh: {
     common: zhCommon,
@@ -28,6 +31,7 @@ const resources = {
     settings: zhSettings,
     composer: zhComposer,
     project: zhProject,
+    onboarding: zhOnboarding,
   },
 };
 
@@ -38,7 +42,7 @@ i18n
     resources,
     fallbackLng: 'en',
     debug: false,
-    ns: ['common', 'flow', 'settings', 'composer', 'project'],
+    ns: ['common', 'flow', 'settings', 'composer', 'project', 'onboarding'],
     defaultNS: 'common',
     interpolation: {
       escapeValue: false,
