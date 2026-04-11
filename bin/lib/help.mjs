@@ -28,6 +28,7 @@ AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay
   --workspace-root <path>  工作区根目录（默认：当前目录）
   --dry-run                （仅 apply）打印就绪节点后退出，不执行 Cursor agent
   --model <name>           Cursor CLI 模型（如 claude-sonnet）。覆盖 CURSOR_AGENT_MODEL。运行 'agent models' 查看列表。
+  --input <name>=<value>   （仅 apply）覆盖 flow 中 provide 节点的值。value 前缀 file: 表示文件路径。可多次使用。
   --debug                  显示调试日志（灰色，低优先级）
   --force                  传递 --force/--trust 给 Cursor；设置 OPENCODE_PERMISSION 允许 OpenCode 的 external_directory（默认开启）。使用 --no-force 禁用。
   --parallel               并行运行同轮就绪节点（默认关闭）。多个 Cursor CLI 进程可能竞争 ~/.cursor/cli-config.json。
@@ -81,6 +82,7 @@ Options:
   --workspace-root <path>  Workspace root (default: cwd)
   --dry-run                (apply only) Print ready nodes and exit without running Cursor agent
   --model <name>           Cursor CLI model (e.g. claude-sonnet). Overrides CURSOR_AGENT_MODEL. Run 'agent models' to list.
+  --input <name>=<value>   (apply only) Override provide node values in flow. Prefix value with file: for file paths. Can be used multiple times.
   --debug                  Show debug logs (gray, low priority)
   --force                  Pass --force/--trust to Cursor; set OPENCODE_PERMISSION to allow external_directory for OpenCode (default: on). Use --no-force to disable.
   --parallel               Run same-round ready nodes in parallel (default: off). Multiple Cursor CLI processes may race on ~/.cursor/cli-config.json.

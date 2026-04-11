@@ -84,6 +84,23 @@ export async function main() {
     argv.splice(argv.indexOf("--machine-readable"), 1);
   }
   const jsonMode = argv.includes("--json");
+  const cliInputs = {};
+  while (argv.includes("--input")) {
+    const idx = argv.indexOf("--input");
+    const pair = argv[idx + 1];
+    if (!pair || !pair.includes("=")) {
+      throw new Error("Invalid --input format. Use: --input name=value");
+    }
+    const eqIdx = pair.indexOf("=");
+    const name = pair.slice(0, eqIdx);
+    const value = pair.slice(eqIdx + 1);
+    if (value.startsWith("file:")) {
+      cliInputs[name] = { type: "file", path: value.slice(5) };
+    } else {
+      cliInputs[name] = { type: "str", value };
+    }
+    argv.splice(idx, 2);
+  }
   const sub = shift();
   if (!sub) {
     printHelp();
@@ -343,7 +360,7 @@ export async function main() {
       flowName = first;
       uuidArg = isValidUuid(argv[0]) ? shift() : undefined;
     }
-    await apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel, force, parallel);
+    await apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel, force, parallel, cliInputs);
   } else if (sub === "resume") {
     const flowName = shift();
     const uuidArg = shift();
