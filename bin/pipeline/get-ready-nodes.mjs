@@ -140,7 +140,7 @@ function main() {
       const iidx = parseInt(String(e.targetHandle || "input-0").replace("input-", ""), 10) || 0;
       const outType = outNames[oidx] != null ? outTypes[outNames[oidx]] : null;
       const inType = inNames[iidx] != null ? inTypes[inNames[iidx]] : null;
-      return outType === "节点" && inType === "节点";
+      return (outType === "节点" || outType === "node") && (inType === "节点" || inType === "node");
     };
 
     /** 后继：仅「节点」边（执行顺序由节点边决定）；用于从 control_start 的可达集与 execId 同步 */
@@ -154,7 +154,7 @@ function main() {
 
     const starts = order.filter((id) => nodeDefinitions[id] === "control_start");
     /** 游标：当前执行前沿；缺省为 starts，并写回 flow.json */
-    const hadPendingFromFile = Array.isArray(flow.pendingInstances);
+    const hadPendingFromFile = Array.isArray(flow.pendingInstances) && flow.pendingInstances.length > 0;
     let pendingInstances = hadPendingFromFile ? flow.pendingInstances : starts;
     if (!hadPendingFromFile) {
       flow.pendingInstances = pendingInstances;

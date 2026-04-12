@@ -1,5 +1,5 @@
 /**
- * 本地 HTTP：静态 UI + /api/flows（GET/POST）、/api/flows/import（POST multipart 导入 .yaml/.zip）、/api/flow/archive（POST）、/api/flow/delete（POST 永久删除）、/api/model-lists、/api/ui-context、/api/pipeline-recent-runs、/api/run-node-statuses（GET 某次 run 各节点磁盘状态）、/api/workspace-tree（GET 工作区目录树）、/api/nodes、/api/flow（GET/POST）、
+ * 本地 HTTP：静态 UI + /api/flows（GET/POST/HEAD）、/api/flows/import（POST multipart 导入 .yaml/.zip）、/api/flow/archive（POST）、/api/flow/delete（POST 永久删除）、/api/model-lists、/api/ui-context、/api/pipeline-recent-runs、/api/run-node-statuses（GET 某次 run 各节点磁盘状态）、/api/workspace-tree（GET 工作区目录树）、/api/nodes、/api/flow（GET/POST）、
  * /api/flow-editor-sync（POST 通知画布刷新）、/api/flow-editor-sync-events（GET SSE）、/api/flow/run（POST NDJSON 流式执行 agentflow apply --machine-readable）、/api/flow/run/stop（POST 终止运行）、
  * /api/composer-agent（POST NDJSON；有 flow 时结束后 validate-flow，失败则自动 agent 修复至多 5 次）、
  * /api/agentflow-config（GET/POST 读写 ~/agentflow/config.json 的 opencodeProvider；POST 后执行 update-model-lists）、/api/update-model-lists（POST 可选 JSON body.opencodeProvider 覆盖本次拉取用的 Provider，未保存 config 也可用）；
@@ -50,6 +50,12 @@ import {
   writePipelineTree,
 } from "./flow-import.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
+import {
+  createComposerSession,
+  logComposerEvent,
+  truncateForLog,
+} from "./composer-log.mjs";
+import { runNodeScript } from "./pipeline-scripts.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -382,6 +388,11 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         }
         return;
       }
+      if (req.method === "HEAD") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end();
+        return;
+      }
       if (req.method === "POST") {
         let payload;
         try {
@@ -426,7 +437,7 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
       const body405 = JSON.stringify({ error: "Method not allowed" });
       res.writeHead(405, {
         "Content-Type": "application/json; charset=utf-8",
-        Allow: "GET, POST",
+        Allow: "GET, POST, HEAD",
         "Content-Length": Buffer.byteLength(body405),
       });
       res.end(body405);
@@ -685,6 +696,110 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         json(res, 400, { error: "Invalid JSON body" });
         return;
       }
+
+      if (payload.action === "save-user-check-content") {
+        const runUuid = payload.runUuid;
+        const instanceId = payload.instanceId;
+        const content = payload.content;
+        if (!runUuid || !instanceId || typeof content !== "string") {
+          json(res, 400, { error: "Missing runUuid, instanceId, or content" });
+          return;
+        }
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const outputPath = path.join(runDir, `output/${instanceId}/node_${instanceId}_content.md`);
+        try {
+          fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+          fs.writeFileSync(outputPath, content, "utf-8");
+          json(res, 200, { ok: true, savedPath: outputPath });
+        } catch (e) {
+          json(res, 500, { ok: false, error: e.message });
+        }
+        return;
+      }
+
+      if (payload.action === "ai-edit-user-check-content") {
+        const runUuid = payload.runUuid;
+        const instanceId = payload.instanceId;
+        const content = payload.content;
+        const aiPrompt = payload.prompt;
+        if (!runUuid || !instanceId || typeof content !== "string" || typeof aiPrompt !== "string") {
+          json(res, 400, { error: "Missing runUuid, instanceId, content, or prompt" });
+          return;
+        }
+
+        const fullPrompt = `请根据以下指令修改内容。直接输出修改后的完整内容，不要解释。
+
+原始内容：
+---
+${content}
+---
+
+修改指令：${aiPrompt}
+
+请直接输出修改后的完整内容（保持原有格式）：`;
+
+        const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+        const tmpPromptFile = path.join(root, `.workspace/agentflow/runBuild/${payload.flowId || "unknown"}/${runUuid}/intermediate/${instanceId}_ai_edit_prompt.txt`);
+        try {
+          fs.mkdirSync(path.dirname(tmpPromptFile), { recursive: true });
+          fs.writeFileSync(tmpPromptFile, fullPrompt, "utf-8");
+        } catch (e) {
+          json(res, 500, { ok: false, error: `Failed to write prompt file: ${e.message}` });
+          return;
+        }
+
+        const child = spawn(opencodeCmd, ["--prompt-file", tmpPromptFile, "--print"], {
+          cwd: root,
+          env: { ...process.env, OPENCODE_NON_INTERACTIVE: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (d) => { stdout += String(d); });
+        child.stderr.on("data", (d) => { stderr += String(d); });
+        child.on("close", (code) => {
+          try { fs.unlinkSync(tmpPromptFile); } catch (_) {}
+          if (code === 0 && stdout.trim()) {
+            json(res, 200, { ok: true, content: stdout.trim() });
+          } else {
+            json(res, 500, { ok: false, error: stderr.trim() || `OpenCode exited with code ${code}` });
+          }
+        });
+        child.on("error", (err) => {
+          try { fs.unlinkSync(tmpPromptFile); } catch (_) {}
+          json(res, 500, { ok: false, error: `Failed to run OpenCode: ${err.message}` });
+        });
+        return;
+      }
+
+      if (payload.action === "confirm-user-check") {
+        const runUuid = payload.runUuid;
+        const instanceId = payload.instanceId;
+        const execId = payload.execId ?? 1;
+        if (!runUuid || !instanceId) {
+          json(res, 400, { error: "Missing runUuid or instanceId" });
+          return;
+        }
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}_${execId}.result.md`);
+        try {
+          fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+          const resultContent = `---
+status: "success"
+execId: "${execId}"
+message: "用户确认通过"
+finishedAt: "${new Date().toISOString()}"
+---
+`;
+          fs.writeFileSync(resultPath, resultContent, "utf-8");
+          json(res, 200, { ok: true, resultPath });
+        } catch (e) {
+          json(res, 500, { ok: false, error: e.message });
+        }
+        return;
+      }
+
       const flowId = payload.flowId;
       const flowSource = payload.flowSource || "user";
       const flowYaml = payload.flowYaml;
@@ -1168,6 +1283,10 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
       let multiStepAbort = null;
       let responseEnded = false;
       let clientDisconnected = false;
+      
+      const composerSession = createComposerSession(root);
+      const composerLogPath = composerSession.logPath;
+      
       const endSafe = () => {
         if (responseEnded) return;
         responseEnded = true;
@@ -1197,6 +1316,15 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
 
       const onStreamEvent = (ev) => {
         if (responseEnded) return;
+        
+        logComposerEvent(composerLogPath, ev.type || "event", {
+          ...ev,
+          text: ev.text ? truncateForLog(ev.text, 2000) : undefined,
+          line: ev.line ? truncateForLog(ev.line, 500) : undefined,
+          message: ev.message ? truncateForLog(ev.message, 500) : undefined,
+          prompt: ev.prompt ? truncateForLog(ev.prompt, 1000) : undefined,
+        });
+        
         try {
           res.write(JSON.stringify(ev) + "\n");
         } catch (_) {
@@ -1209,6 +1337,17 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         if (!responseEnded) killChild();
       });
 
+      logComposerEvent(composerLogPath, "composer-start", {
+        sessionId: composerSession.sessionId,
+        flowId: flowId || null,
+        flowSource: flowSource || null,
+        model: model || null,
+        prompt: truncateForLog(prompt.trim(), 1000),
+        hasFlowId,
+        threadLength: thread.length,
+        instanceIds: instanceIds.slice(0, 10),
+      });
+
       onStreamEvent({ type: "status", line: t("composer.analyzing_task") });
       log.debug(`[ui] composer-agent: flowId=${flowId || "(none)"} model=${model || "default"} promptLen=${finalPrompt.length}`);
 
@@ -1218,12 +1357,22 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         useMultiStep = hasPhaseContext || ((await shouldUseMultiStep({ flowYamlAbs, userPrompt: prompt.trim(), cliWorkspace })) && !payload.singleStep);
       } catch (classifyErr) {
         log.debug(`[ui] composer classify error: ${classifyErr.message}`);
+        logComposerEvent(composerLogPath, "composer-done", {
+          status: "failed",
+          error: truncateForLog(classifyErr?.message || String(classifyErr), 500),
+          code: "CLASSIFY_FAIL",
+        });
         onStreamEvent({ type: "error", message: t("composer.classify_failed", { message: classifyErr.message }), code: "CLASSIFY_FAIL" });
         endSafe();
         return;
       }
 
       log.debug(`[ui] composer mode: ${useMultiStep ? "multi-step" : "single-step"}`);
+
+      logComposerEvent(composerLogPath, "classify", {
+        mode: useMultiStep ? "multi-step" : "single-step",
+        hasPhaseContext,
+      });
 
       if (useMultiStep) {
         try {
@@ -1250,6 +1399,11 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
           handle.finished
             .then(() => {
               if (!responseEnded) {
+                logComposerEvent(composerLogPath, "composer-done", {
+                  status: "success",
+                  flowId: flowId || null,
+                  flowSource: flowSource || null,
+                });
                 if (flowId && flowSource) {
                   broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived));
                 }
@@ -1259,6 +1413,11 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
             })
             .catch((e) => {
               if (!responseEnded) {
+                logComposerEvent(composerLogPath, "composer-done", {
+                  status: "failed",
+                  error: truncateForLog(e?.message || String(e), 500),
+                  code: "MULTI_STEP_FAIL",
+                });
                 try {
                   res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "MULTI_STEP_FAIL" }) + "\n");
                 } catch (_) {}
@@ -1266,6 +1425,11 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
               endSafe();
             });
         } catch (e) {
+          logComposerEvent(composerLogPath, "composer-done", {
+            status: "failed",
+            error: truncateForLog(e?.message || String(e), 500),
+            code: "MULTI_STEP_INIT_FAIL",
+          });
           try {
             res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "MULTI_STEP_INIT_FAIL" }) + "\n");
           } catch (_) {}
@@ -1311,6 +1475,11 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
                 }
               }
               if (!responseEnded) {
+                logComposerEvent(composerLogPath, "composer-done", {
+                  status: "success",
+                  flowId: flowId || null,
+                  flowSource: flowSource || null,
+                });
                 if (flowId && flowSource) {
                   broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived));
                 }
@@ -1320,13 +1489,23 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
             })
             .catch((e) => {
               if (!responseEnded) {
+                logComposerEvent(composerLogPath, "composer-done", {
+                  status: "failed",
+                  error: truncateForLog(e?.message || String(e), 500),
+                  code: "SINGLE_STEP_FAIL",
+                });
                 try {
                   res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "SINGLE_STEP_FAIL" }) + "\n");
                 } catch (_) {}
               }
               endSafe();
             });
-        } catch (e) {
+} catch (e) {
+          logComposerEvent(composerLogPath, "composer-done", {
+            status: "failed",
+            error: truncateForLog(e?.message || String(e), 500),
+            code: "SINGLE_STEP_INIT_FAIL",
+          });
           try {
             res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "SINGLE_STEP_INIT_FAIL" }) + "\n");
           } catch (_) {}

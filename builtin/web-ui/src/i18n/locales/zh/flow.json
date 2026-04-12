@@ -228,6 +228,8 @@
     "continuePhase": "继续{{label}}",
     "skipRemainingPhases": "请一次性完成剩余所有步骤（跳过分阶段确认）",
     "stepsAriaLabel": "任务步骤进度",
+    "phasesAriaLabel": "生成阶段进度",
+    "phaseNumber": "第 {{index}} 阶段",
     "stepRoleLabel": "角色：{{role}}",
     "stepInstanceLabel": "实例：{{instanceId}}",
     "pageRefreshReset": "页面刷新后重置",
@@ -271,7 +273,8 @@
     "executionEnd": "执行结束 (exit code: {{exitCode}})",
     "executionStopped": "执行已停止",
     "resizeConsole": "拖动调整执行日志高度",
-    "closeLog": "关闭日志"
+    "closeLog": "关闭日志",
+    "userCheckContent": "等待用户确认节点 {{instanceId}} 的内容"
   },
   "settings": {
     "title": "流水线设置",
@@ -326,5 +329,21 @@
     "daysAgo": "{{n}} 天前",
     "milliseconds": "{{n}} 毫秒",
     "seconds": "{{n}} 秒"
+  },
+  "userCheck": {
+    "title": "用户确认 ({{instanceId}})",
+    "edit": "编辑",
+    "save": "保存",
+    "cancel": "取消",
+    "aiEditPlaceholder": "输入 AI 修改指令，如：删除第二项、合并前两项…",
+    "aiEditBtn": "AI 修改",
+    "aiEditStarted": "AI 正在修改内容…",
+    "aiEditDone": "AI 修改完成",
+    "aiEditFailed": "AI 修改失败",
+    "contentSaved": "内容已保存",
+    "saveFailed": "保存失败",
+    "close": "关闭",
+    "continue": "继续执行",
+    "hint": "编辑或使用 AI 修改后点击保存，然后点击「继续执行」恢复流程"
   }
 }

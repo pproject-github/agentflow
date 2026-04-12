@@ -17,10 +17,11 @@ import { fileURLToPath } from "url";
 
 import { writeResult } from "./write-result.mjs";
 import { loadExecId, intermediateResultBasename, intermediateDirForNode } from "./get-exec-id.mjs";
-import { getResolvedValues } from "./get-resolved-values.mjs";
+import { getResolvedValues, getOutputPathForSlot } from "./get-resolved-values.mjs";
 import { loadFlowDefinition } from "./parse-flow.mjs";
 import { parseBool, getFirstBoolInputValue } from "./parse-bool.mjs";
 import { logToRunTag } from "./run-log.mjs";
+import { emitEvent } from "../lib/run-events.mjs";
 import { getRunDir, PIPELINES_DIR } from "../lib/paths.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
 
@@ -225,6 +226,7 @@ function applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definiti
 /**
  * 若为「待用户确认」节点：将 result 的 status 覆写为 pending，流程暂停，等用户再次 apply 时续跑。
  * 识别方式：definitionId === "tool_user_check" 或 flow.yaml instances[instanceId].waitForUser 为 true。
+ * 同时读取 content 输入槽位内容，发送 user-check-content 事件供 UI/CLI 展示。
  */
 function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId, inst) {
   const e = execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
@@ -244,6 +246,51 @@ function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runD
     status: "pending",
     message: "等待用户确认",
   }, { preserveBody: true, execId: e });
+
+  if (definitionId === "tool_user_check") {
+    emitUserCheckContent(workspaceRoot, flowName, uuid, instanceId, runDir, e);
+  }
+}
+
+/**
+ * 发送 user-check-content 事件：读取 content 输入槽位内容，并告知 output 槽位路径（供编辑保存）。
+ */
+function emitUserCheckContent(workspaceRoot, flowName, uuid, instanceId, runDir, execId) {
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  if (!data.ok || !data.resolvedInputs) return;
+
+  const contentInputPath = data.resolvedInputs["content"];
+  let content = "";
+  let inputPath = null;
+
+  if (contentInputPath && typeof contentInputPath === "string") {
+    inputPath = contentInputPath;
+    if (fs.existsSync(contentInputPath)) {
+      try {
+        content = fs.readFileSync(contentInputPath, "utf-8");
+      } catch (_) {}
+    }
+  }
+
+  const outputPath = getOutputPathForSlot(instanceId, execId, "content");
+  const outputAbsPath = outputPath ? path.join(runDir, outputPath) : null;
+
+  if (outputAbsPath) {
+    try {
+      fs.mkdirSync(path.dirname(outputAbsPath), { recursive: true });
+      fs.writeFileSync(outputAbsPath, content, "utf-8");
+    } catch (_) {}
+  }
+
+  emitEvent(workspaceRoot, flowName, uuid, {
+    type: "user-check-content",
+    event: "user-check-content",
+    instanceId,
+    execId,
+    inputPath,
+    outputPath,
+    content,
+  });
 }
 
 /**

@@ -3057,6 +3057,93 @@ button.af-project-card {
   box-sizing: border-box;
 }
 
+.af-new-pipeline-guide {
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, rgba(124, 77, 255, 0.15), rgba(124, 77, 255, 0.05));
+  border-radius: 1rem;
+  border: 1px solid rgba(124, 77, 255, 0.3);
+}
+
+.af-new-pipeline-guide-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.af-new-pipeline-guide-icon {
+  color: #7c4dff;
+  font-size: 1.5rem;
+}
+
+.af-new-pipeline-guide-text {
+  flex: 1;
+}
+
+.af-new-pipeline-guide-text p {
+  margin: 0;
+  color: var(--af-on-surface);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.af-new-pipeline-guide-text p + p {
+  margin-top: 0.5rem;
+}
+
+.af-new-pipeline-guide-text strong {
+  color: #7c4dff;
+}
+
+.af-new-pipeline-guide-close {
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--af-on-surface-variant);
+  cursor: pointer;
+  border-radius: 0.5rem;
+}
+
+.af-new-pipeline-guide-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.af-new-pipeline-guide-close .material-symbols-outlined {
+  font-size: 1.25rem;
+}
+
+.af-new-pipeline-guide-hint {
+  color: #7c4dff;
+  font-size: 0.8125rem;
+}
+
+.af-new-pipeline-types {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.af-new-pipeline-type {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-family: var(--af-mono);
+}
+
+.af-new-pipeline-type-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+.af-new-pipeline-type-label {
+  color: var(--af-on-surface-variant);
+}
+
 .af-shortcuts-panel__head {
   display: flex;
   align-items: center;
@@ -3746,6 +3833,103 @@ button.af-project-card {
 @keyframes af-step-pulse {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
+}
+
+.af-composer-phases-track-wrap {
+  padding: 0.35rem 0.75rem 0.25rem;
+  flex-shrink: 0;
+  background: rgba(12, 12, 12, 0.48);
+  border-bottom: 1px solid rgba(202, 195, 216, 0.08);
+}
+
+.af-composer-phases-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0.4rem 0.6rem 0.45rem;
+  background: transparent;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  flex-shrink: 0;
+}
+
+.af-composer-phase-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 6rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.6rem;
+  background: rgba(42, 42, 42, 0.55);
+  cursor: default;
+  transition: background 0.2s, box-shadow 0.2s;
+  box-shadow: inset 0 0 0 1px rgba(202, 195, 216, 0.08);
+}
+
+.af-composer-phase-chip--pending {
+  opacity: 0.6;
+}
+
+.af-composer-phase-chip--running {
+  box-shadow: inset 0 0 0 1.5px rgba(124, 77, 255, 0.5);
+  background: rgba(124, 77, 255, 0.12);
+  animation: af-phase-pulse 2s ease-in-out infinite;
+}
+
+.af-composer-phase-chip--done {
+  box-shadow: inset 0 0 0 1.5px rgba(0, 228, 117, 0.35);
+  background: rgba(0, 228, 117, 0.08);
+}
+
+.af-composer-phase-chip-idx {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.35rem;
+  font-family: var(--af-headline);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(229, 226, 225, 0.7);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.af-composer-phase-chip--running .af-composer-phase-chip-idx {
+  color: rgba(232, 222, 255, 0.95);
+  background: rgba(124, 77, 255, 0.35);
+}
+
+.af-composer-phase-chip--done .af-composer-phase-chip-idx {
+  color: rgba(0, 228, 117, 0.95);
+  background: rgba(0, 228, 117, 0.18);
+}
+
+.af-composer-phase-chip-label {
+  font-family: var(--af-headline);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(229, 226, 225, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.af-composer-phase-chip--running .af-composer-phase-chip-label {
+  color: rgba(232, 222, 255, 0.95);
+}
+
+.af-composer-phase-chip--done .af-composer-phase-chip-label {
+  color: rgba(0, 228, 117, 0.85);
+}
+
+@keyframes af-phase-pulse {
+  0%, 100% { opacity: 0.75; box-shadow: inset 0 0 0 1.5px rgba(124, 77, 255, 0.35); }
+  50% { opacity: 1; box-shadow: inset 0 0 0 1.5px rgba(124, 77, 255, 0.55); }
 }
 
 /* ─── Phase Bar (分阶段进度条) ───────────────────────────────── */
@@ -6273,4 +6457,227 @@ button.af-exec-history-card {
     width: 100%;
     max-height: 38vh;
   }
+}
+
+.af-user-check-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.af-user-check-modal {
+  background: var(--af-surface-low);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 1rem;
+  width: min(90vw, 720px);
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: scaleIn 0.2s ease-out;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.af-user-check-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--af-outline-variant);
+}
+
+.af-user-check-modal__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--af-headline);
+  font-size: 1.1rem;
+  color: var(--af-primary);
+}
+
+.af-user-check-modal__title .material-symbols-outlined {
+  font-size: 1.5rem;
+}
+
+.af-user-check-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.af-user-check-modal__btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-family: var(--af-body);
+  color: var(--af-on-surface);
+  background: var(--af-surface-container-high);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.af-user-check-modal__btn:hover {
+  background: var(--af-surface-bright);
+  border-color: var(--af-primary);
+}
+
+.af-user-check-modal__btn--save {
+  color: var(--af-tertiary);
+  border-color: var(--af-tertiary);
+}
+
+.af-user-check-modal__btn--save:hover {
+  background: rgba(0, 228, 117, 0.15);
+}
+
+.af-user-check-modal__btn--ai {
+  color: var(--af-secondary);
+  border-color: var(--af-secondary);
+}
+
+.af-user-check-modal__btn--ai:hover {
+  background: rgba(158, 202, 255, 0.15);
+}
+
+.af-user-check-modal__body {
+  padding: 1.25rem;
+  background: var(--af-surface);
+}
+
+.af-user-check-modal__textarea {
+  width: 100%;
+  height: 300px;
+  font-family: var(--af-body);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--af-on-surface);
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  resize: none;
+  outline: none;
+}
+
+.af-user-check-modal__textarea:focus {
+  border-color: var(--af-primary);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.2);
+}
+
+.af-user-check-modal__preview {
+  height: 300px;
+  overflow: auto;
+  font-family: var(--af-body);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--af-on-surface);
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.af-user-check-modal__preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.af-user-check-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--af-outline-variant);
+  background: var(--af-surface-high);
+}
+
+.af-user-check-modal__ai-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--af-surface);
+  border-top: 1px solid var(--af-outline-variant);
+}
+
+.af-user-check-modal__ai-input {
+  flex: 1;
+  font-family: var(--af-body);
+  font-size: 0.9rem;
+  color: var(--af-on-surface);
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  outline: none;
+}
+
+.af-user-check-modal__ai-input:focus {
+  border-color: var(--af-secondary);
+  box-shadow: 0 0 0 2px rgba(158, 202, 255, 0.2);
+}
+
+.af-user-check-modal__ai-input:disabled {
+  opacity: 0.5;
+}
+
+.af-user-check-modal__btn--ai {
+  color: var(--af-secondary);
+  border-color: var(--af-secondary);
+}
+
+.af-user-check-modal__btn--ai:hover:not(:disabled) {
+  background: rgba(158, 202, 255, 0.15);
+}
+
+.af-user-check-modal__btn--ai:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.af-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.af-user-check-modal__hint {
+  font-size: 0.8rem;
+  color: var(--af-on-surface-variant);
+}
+
+.af-user-check-modal__btn--continue {
+  color: var(--af-on-primary-container);
+  background: var(--af-primary-container);
+  border-color: var(--af-primary-container);
+  font-weight: 500;
+  padding: 0.6rem 1.25rem;
+}
+
+.af-user-check-modal__btn--continue:hover {
+  background: var(--af-primary);
+  color: var(--af-on-primary);
 }

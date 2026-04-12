@@ -3,20 +3,24 @@
   "next": "下一步",
   "skip": "跳过",
   "done": "完成",
+  "startCreate": "开始创建",
   "projects": {
-    "intro": "欢迎使用 AgentFlow！这是一个可视化流程编排工具，用于构建和运行 AI Agent 任务流程。让我们快速了解核心功能。",
-    "create": "点击这里创建你的第一个流水线。AgentFlow 使用可视化流程图编排 AI Agent 任务。",
-    "search": "搜索已有的流水线，支持按名称、描述或路径筛选。",
-    "cards": "流水线卡片显示名称、描述和来源位置。点击卡片进入编辑器。",
-    "activity": "右侧面板显示最近打开和执行的流水线，方便快速访问。"
+    "intro": "欢迎使用 AgentFlow！这是一个可视化流程编排工具。\n\n点击下方按钮开始创建你的第一个流水线。"
   },
   "flow": {
-    "palette": "左侧节点面板提供各类节点：Agent（AI 执行）、Tool（工具）、Control（控制流）、Provide（数据提供）。",
-    "agentNodes": "Agent 节点：由 Cursor/OpenCode 执行的 AI 子任务，支持需求分析、代码实现、测试等。",
-    "toolNodes": "Tool 节点：执行 Shell 命令、加载/保存数据、打印输出等工具操作。",
-    "controlNodes": "Control 节点：控制流程走向，包括开始/结束、条件分支、汇合等。",
-    "emptyHint": "画布空白时，可以拖拽节点到画布，或使用下方 Composer 输入需求让 AI 自动生成流程。",
-    "composer": "在这里用自然语言描述需求，AI 会帮你生成完整的流程图。",
-    "toolbar": "顶部工具栏：运行流程、查看历史执行、编辑设置、查看快捷键帮助。"
+    "intro": "现在进入流程编辑器。\n\n在下方输入框用自然语言描述你的需求，AI 会自动生成流程图。\n\n左侧节点面板可以自由拖拽、删除和调整连接。",
+    "introEmpty": "画布为空，开始创建你的流程吧！\n\n在下方输入框用自然语言描述需求，AI 会自动生成流程图。\n\n左侧节点面板可以自由拖拽、删除和调整连接。"
+  },
+  "newPipeline": {
+    "guideTitle": "首次创建提示",
+    "guideDesc": "输入名称和描述后，AI 会自动生成流程图。你可以在编辑器中自由调整节点和连接。",
+    "nameHintGuide": "例如：MyFirstFlow（字母开头，支持数字和下划线）",
+    "descPlaceholderGuide": "例如：实现用户登录功能，包含注册、验证、授权",
+    "descHintGuide": "描述越详细，AI 生成的流程越准确",
+    "createGuide": "创建并开始编辑",
+    "typeNode": "节点引用类型",
+    "typeStr": "字符串类型",
+    "typeFile": "文件路径类型",
+    "typeBool": "布尔值类型"
   }
 }
