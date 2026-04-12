@@ -224,19 +224,26 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
     }
 
     // 注入运行时常量，供 tool_nodejs 等节点在 instance body / script 中用 ${workspaceRoot} ${flowName} ${runDir} ${flowDir} 引用
-    resolvedInputs = {
+    // 运行时常量放在后面，确保不会被 input 槽位的空值覆盖
+    const runtimeConstants = {
       workspaceRoot: path.resolve(workspaceRoot),
       flowName,
       runDir: runDirRel,
       flowDir: path.resolve(flowDir),
-      ...resolvedInputs,
     };
+    for (const [key, value] of Object.entries(runtimeConstants)) {
+      // 仅在 input 槽位的值为空或占位符时才使用运行时常量
+      const existing = resolvedInputs[key];
+      if (!existing || existing === "${" + key + "}" || existing.trim() === "") {
+        resolvedInputs[key] = value;
+      }
+    }
 
     // 对上游 output 路径：若文件已存在且该槽位类型不是「文件」，用文件内容替换路径（便于 cache 一致）。
     // 类型为「文件」的 input 槽：保留路径（文件名/引用），不替换为内容，供 prompt 中「引用文件」使用。
     const inputSlotTypes = (flow.inputSlotTypes && flow.inputSlotTypes[instanceId]) || {};
     for (const slotName of Object.keys(resolvedInputs)) {
-      if (inputSlotTypes[slotName] === "文件") continue;
+      if (inputSlotTypes[slotName] === "文件" || inputSlotTypes[slotName] === "file") continue;
       const v = resolvedInputs[slotName];
       if (typeof v !== "string" || !v) continue;
       if (!v.startsWith("output/")) continue;

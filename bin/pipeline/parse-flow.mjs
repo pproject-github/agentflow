@@ -658,7 +658,7 @@ function main() {
       if (fs.existsSync(flowJsonPath)) {
         try {
           const old = JSON.parse(fs.readFileSync(flowJsonPath, "utf-8"));
-          if (Array.isArray(old.pendingInstances)) {
+          if (Array.isArray(old.pendingInstances) && old.pendingInstances.length > 0) {
             pendingInstances = old.pendingInstances;
             preserved = true;
           }

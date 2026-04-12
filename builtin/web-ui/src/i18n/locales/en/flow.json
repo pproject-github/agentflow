@@ -228,6 +228,8 @@
     "continuePhase": "Continue {{label}}",
     "skipRemainingPhases": "Please complete all remaining steps at once (skip phased confirmation)",
     "stepsAriaLabel": "Task steps progress",
+    "phasesAriaLabel": "Generation phases progress",
+    "phaseNumber": "Phase {{index}}",
     "stepRoleLabel": "Role: {{role}}",
     "stepInstanceLabel": "Instance: {{instanceId}}",
     "pageRefreshReset": "Reset after page refresh",
@@ -271,7 +273,8 @@
     "executionEnd": "Execution ended (exit code: {{exitCode}})",
     "executionStopped": "Execution stopped",
     "resizeConsole": "Drag to resize execution log height",
-    "closeLog": "Close log"
+    "closeLog": "Close log",
+    "userCheckContent": "Waiting for user to confirm content for node {{instanceId}}"
   },
   "settings": {
     "title": "Pipeline Settings",
@@ -326,5 +329,21 @@
     "daysAgo": "{{n}} days ago",
     "milliseconds": "{{n}} ms",
     "seconds": "{{n}} s"
+  },
+  "userCheck": {
+    "title": "User Confirmation ({{instanceId}})",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "aiEditPlaceholder": "Enter AI edit instruction, e.g., remove item 2, merge first two items…",
+    "aiEditBtn": "AI Edit",
+    "aiEditStarted": "AI is modifying content…",
+    "aiEditDone": "AI modification complete",
+    "aiEditFailed": "AI modification failed",
+    "contentSaved": "Content saved",
+    "saveFailed": "Save failed",
+    "close": "Close",
+    "continue": "Continue Execution",
+    "hint": "Edit or use AI to modify, then save. Click 'Continue Execution' to resume the flow"
   }
 }

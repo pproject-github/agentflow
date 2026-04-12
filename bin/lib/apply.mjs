@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import chalk from "chalk";
 import ora from "ora";
+import readline from "readline";
+import { spawn, spawnSync } from "child_process";
 import { executeNode, ensureLocalNodeTerminalSuccess, runPostProcess } from "./node-execute.mjs";
 import { log } from "./log.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
@@ -105,6 +107,167 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
           resumeExample,
         });
         log.info(`\n${t("apply.paused")}: uuid=${uuid} pendingNodes=${pendingNodes.join(", ")}  ${chalk.dim(t("common.total") + " " + totalElapsed)}`);
+
+        let userConfirmed = false;
+        for (const pendId of pendingNodes) {
+          const pendNode = parseOut.nodes?.find((n) => n.id === pendId);
+          if (pendNode?.definitionId === "tool_user_check") {
+            const pendExecId = execIdMap[pendId] ?? 1;
+            const contentPath = path.join(getRunDir(workspaceRoot, flowName, uuid), `output/${pendId}/node_${pendId}_content.md`);
+            if (fs.existsSync(contentPath)) {
+              const checkContent = fs.readFileSync(contentPath, "utf-8");
+              
+              // CLI 交互式确认
+              if (!process.stdin.isTTY) {
+                log.info(chalk.bold.cyan(`\n━━━ 用户确认内容 (${pendId}) ━━━`));
+                const contentLines = checkContent.split("\n").slice(0, 50);
+                for (const line of contentLines) {
+                  process.stderr.write("  " + line + "\n");
+                }
+                process.stderr.write(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+                log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+                return;
+              }
+
+              // 显示内容和交互菜单
+              console.log("");
+              console.log(chalk.bold.cyan(`╔════════════════════════════════════════════════════════════╗`));
+              console.log(chalk.bold.cyan(`║  用户确认节点: ${pendId}`) + " ".repeat(40 - pendId.length) + "║");
+              console.log(chalk.bold.cyan(`╠════════════════════════════════════════════════════════════╣`));
+              console.log(chalk.bold.cyan(`║  文件路径: ${chalk.dim(contentPath)}`));
+              console.log(chalk.bold.cyan(`╚════════════════════════════════════════════════════════════╝`));
+              console.log("");
+
+              // 显示内容预览
+              const contentLines = checkContent.split("\n");
+              const previewLines = contentLines.slice(0, 30);
+              console.log(chalk.dim("─".repeat(60)));
+              for (const line of previewLines) {
+                console.log("  " + line);
+              }
+              if (contentLines.length > 30) {
+                console.log(chalk.dim(`  ... (${contentLines.length - 30} 行已截断)`));
+              }
+              console.log(chalk.dim("─".repeat(60)));
+              console.log("");
+
+              // 交互菜单
+              const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+              
+              while (true) {
+                console.log(chalk.bold("操作选项:"));
+                console.log("  " + chalk.green("c") + " - 确认并继续");
+                console.log("  " + chalk.blue("e") + " - 编辑内容（使用外部编辑器）");
+                console.log("  " + chalk.magenta("a") + " - AI 修改（输入指令）");
+                console.log("  " + chalk.yellow("v") + " - 查看完整内容");
+                console.log("  " + chalk.red("q") + " - 取消并退出");
+                console.log("");
+
+                const answer = await new Promise((resolve) => {
+                  rl.question(chalk.bold("请选择操作 [c/e/a/v/q]: "), resolve);
+                });
+
+                if (answer.trim().toLowerCase() === "c" || answer.trim() === "") {
+                  // 确认继续
+                  log.info(chalk.dim("用户确认，继续执行..."));
+                  const resultPayload = { status: "success", message: "用户确认通过", execId: pendExecId };
+                  runNodeScript(workspaceRoot, "write-result.mjs", [workspaceRoot, flowName, uuid, pendId, "--json", JSON.stringify(resultPayload)], { captureStdout: true });
+                  userConfirmed = true;
+                  rl.close();
+                  break;
+                } else if (answer.trim().toLowerCase() === "e") {
+                  // 使用外部编辑器
+                  const editor = process.env.EDITOR || process.env.VISUAL || "vim";
+                  console.log(chalk.dim(`正在打开编辑器: ${editor} ${contentPath}`));
+                  rl.pause();
+                  const { status } = spawnSync(editor, [contentPath], { stdio: "inherit" });
+                  rl.resume();
+                  if (status === 0) {
+                    console.log(chalk.green("编辑完成，内容已保存"));
+                    // 重新读取内容
+                    const editedContent = fs.readFileSync(contentPath, "utf-8");
+                    console.log(chalk.dim("─".repeat(60)));
+                    const newLines = editedContent.split("\n").slice(0, 10);
+                    for (const line of newLines) {
+                      console.log("  " + line);
+                    }
+                    console.log(chalk.dim("─".repeat(60)));
+                  } else {
+                    console.log(chalk.yellow("编辑器退出异常"));
+                  }
+                } else if (answer.trim().toLowerCase() === "a") {
+                  // AI 修改
+                  const aiPrompt = await new Promise((resolve) => {
+                    rl.question(chalk.magenta("输入 AI 修改指令: "), resolve);
+                  });
+                  if (aiPrompt.trim()) {
+                    console.log(chalk.dim("AI 正在修改..."));
+                    const currentContent = fs.readFileSync(contentPath, "utf-8");
+                    
+                    // 调用 OpenCode
+                    const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
+                    const tmpPromptFile = path.join(getRunDir(workspaceRoot, flowName, uuid), `intermediate/${pendId}_ai_prompt.txt`);
+                    const fullPrompt = `请根据以下指令修改内容。直接输出修改后的完整内容，不要解释。
+
+原始内容：
+---
+${currentContent}
+---
+
+修改指令：${aiPrompt}
+
+请直接输出修改后的完整内容（保持原有格式）：`;
+                    
+                    fs.mkdirSync(path.dirname(tmpPromptFile), { recursive: true });
+                    fs.writeFileSync(tmpPromptFile, fullPrompt, "utf-8");
+                    
+                    const result = spawnSync(opencodeCmd, ["--prompt-file", tmpPromptFile, "--print"], {
+                      cwd: workspaceRoot,
+                      env: { ...process.env, OPENCODE_NON_INTERACTIVE: "1" },
+                      stdio: ["ignore", "pipe", "pipe"],
+                    });
+                    
+                    try { fs.unlinkSync(tmpPromptFile); } catch (_) {}
+                    
+                    if (result.status === 0 && result.stdout) {
+                      const editedContent = result.stdout.toString().trim();
+                      fs.writeFileSync(contentPath, editedContent, "utf-8");
+                      console.log(chalk.green("AI 修改完成"));
+                      console.log(chalk.dim("─".repeat(60)));
+                      const newLines = editedContent.split("\n").slice(0, 10);
+                      for (const line of newLines) {
+                        console.log("  " + line);
+                      }
+                      console.log(chalk.dim("─".repeat(60)));
+                    } else {
+                      console.log(chalk.red("AI 修改失败: " + (result.stderr?.toString() || "未知错误")));
+                    }
+                  }
+                } else if (answer.trim().toLowerCase() === "v") {
+                  // 查看完整内容
+                  console.log("");
+                  console.log(chalk.dim("─".repeat(60)));
+                  const fullContent = fs.readFileSync(contentPath, "utf-8");
+                  for (const line of fullContent.split("\n")) {
+                    console.log("  " + line);
+                  }
+                  console.log(chalk.dim("─".repeat(60)));
+                  console.log("");
+                } else if (answer.trim().toLowerCase() === "q") {
+                  rl.close();
+                  log.info(chalk.yellow("用户取消，流程暂停。") + chalk.dim(` 恢复命令: ${resumeExample}`));
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        if (userConfirmed) {
+          // 用户确认后继续循环
+          continue;
+        }
+
         log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
         return;
       }
@@ -283,6 +446,46 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
       }
       runPostProcess(workspaceRoot, flowName, uuid, instanceId, preOutput.execId, { elapsedMs: elapsedMsForPost });
       ensureLocalNodeTerminalSuccess(workspaceRoot, flowName, uuid, instanceId, preOutput);
+
+      // user_check 节点：在主流程中发送事件，因为 post-process 的 emitEvent 被子进程捕获
+      if (preOutput.definitionId === "tool_user_check") {
+        const runDir = getRunDir(workspaceRoot, flowName, uuid);
+        const execId = preOutput.execId ?? 1;
+        const outputPath = path.join(runDir, `output/${instanceId}/node_${instanceId}_content.md`);
+
+        // 获取 resolvedInputs
+        const resolvedResult = runNodeScript(workspaceRoot, "get-resolved-values.mjs", [workspaceRoot, flowName, uuid, instanceId], { captureStdout: true });
+        const resolvedData = parseJsonStdout(resolvedResult);
+
+        // 读取 content 输入槽位的内容
+        let content = "";
+        let contentInputPath = null;
+        if (resolvedData.ok && resolvedData.resolvedInputs?.content) {
+          contentInputPath = resolvedData.resolvedInputs.content;
+          if (contentInputPath && fs.existsSync(contentInputPath)) {
+            try {
+              content = fs.readFileSync(contentInputPath, "utf-8");
+            } catch (_) {}
+          }
+        }
+
+        // 确保 output 文件存在
+        try {
+          fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+          fs.writeFileSync(outputPath, content, "utf-8");
+        } catch (_) {}
+
+        emitEvent(workspaceRoot, flowName, uuid, {
+          type: "user-check-content",
+          event: "user-check-content",
+          instanceId,
+          execId,
+          inputPath: contentInputPath,
+          outputPath: `output/${instanceId}/node_${instanceId}_content.md`,
+          content,
+        });
+      }
+
       log.debug(`[agentflow] 退出节点 instanceId=${instanceId} execId=${preOutput.execId}`);
     };
 

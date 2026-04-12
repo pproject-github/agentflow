@@ -677,6 +677,14 @@ export default function FlowEditorPage() {
   const [runContextNodeId, setRunContextNodeId] = useState(/** @type {string | null} */ (null));
   const runAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const runLogEndRef = useRef(/** @type {HTMLDivElement | null} */ (null));
+  const [userCheckContent, setUserCheckContent] = useState(
+    /** @type {null | { instanceId: string, execId: number, inputPath: string, outputPath: string, content: string }} */ (null),
+  );
+  const [userCheckEditedContent, setUserCheckEditedContent] = useState(/** @type {string | null} */ (null));
+  const [userCheckEditing, setUserCheckEditing] = useState(false);
+  const [userCheckAiPrompt, setUserCheckAiPrompt] = useState("");
+  const [userCheckAiRunning, setUserCheckAiRunning] = useState(false);
+  const userCheckEditRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
 
   const [composerText, setComposerText] = useState("");
   const [composerCursor, setComposerCursor] = useState(0);
@@ -2015,6 +2023,22 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           } else {
             setRunLogs((prev) => [...prev, { ts: now, type: "event", text: `[${msg.event}] ${JSON.stringify(msg)}` }]);
           }
+        } else if (msg.type === "user-check-content") {
+          setUserCheckContent({
+            instanceId: msg.instanceId,
+            execId: msg.execId ?? 1,
+            inputPath: msg.inputPath,
+            outputPath: msg.outputPath,
+            content: msg.content || "",
+          });
+          setUserCheckEditedContent(msg.content || "");
+          setUserCheckEditing(false);
+          setUserCheckAiPrompt("");
+          setUserCheckAiRunning(false);
+          setRunLogs((prev) => [
+            ...prev,
+            { ts: now, type: "user-check", text: t("flow:run.userCheckContent", { instanceId: msg.instanceId }) },
+          ]);
         } else if (msg.type === "log") {
           setRunLogs((prev) => [
             ...prev,
@@ -3977,8 +4001,146 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             await loadFlowList();
             navigate("/projects");
           }}
-        />
+/>
       </div>
+
+      {userCheckContent && runMode !== "edit" && createPortal(
+        <div className="af-user-check-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setUserCheckContent(null); }}>
+          <div className="af-user-check-modal" role="dialog" aria-modal="true">
+            <div className="af-user-check-modal__head">
+              <span className="af-user-check-modal__title">
+                <span className="material-symbols-outlined" aria-hidden>fact_check</span>
+                {t("flow:userCheck.title", { instanceId: userCheckContent.instanceId })}
+              </span>
+              <div className="af-user-check-modal__actions">
+                {userCheckEditing ? (
+                  <>
+                    <button type="button" className="af-user-check-modal__btn af-user-check-modal__btn--save" onClick={async () => {
+                      if (!userCheckContent || !selected || !currentRunUuid) return;
+                      const editedContent = userCheckEditedContent || userCheckContent.content;
+                      try {
+                        const res = await fetch("/api/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ flowId: selected.id, flowSource: selected.source ?? "user", action: "save-user-check-content", runUuid: currentRunUuid, instanceId: userCheckContent.instanceId, content: editedContent }) });
+                        if (res.ok) {
+                          setUserCheckContent((prev) => prev ? { ...prev, content: editedContent } : prev);
+                          setUserCheckEditing(false);
+                          setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "info", text: t("flow:userCheck.contentSaved") }]);
+                        } else { setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userCheck.saveFailed") }]); }
+                      } catch { setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userCheck.saveFailed") }]); }
+                    }}>
+                      <span className="material-symbols-outlined">save</span>
+                      {t("flow:userCheck.save")}
+                    </button>
+                    <button type="button" className="af-user-check-modal__btn" onClick={() => { setUserCheckEditedContent(userCheckContent.content); setUserCheckEditing(false); }}>
+                      <span className="material-symbols-outlined">close</span>
+                      {t("flow:userCheck.cancel")}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="af-user-check-modal__btn" onClick={() => setUserCheckEditing(true)}>
+                      <span className="material-symbols-outlined">edit</span>
+                      {t("flow:userCheck.edit")}
+                    </button>
+                    <button type="button" className="af-user-check-modal__btn" onClick={() => setUserCheckContent(null)}>
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="af-user-check-modal__body">
+              {userCheckEditing ? (
+                <textarea ref={userCheckEditRef} className="af-user-check-modal__textarea" value={userCheckEditedContent || userCheckContent.content} onChange={(e) => setUserCheckEditedContent(e.target.value)} />
+              ) : (
+                <div className="af-user-check-modal__preview"><pre>{userCheckEditedContent || userCheckContent.content}</pre></div>
+              )}
+            </div>
+            <div className="af-user-check-modal__ai-bar">
+              <input
+                type="text"
+                className="af-user-check-modal__ai-input"
+                placeholder={t("flow:userCheck.aiEditPlaceholder")}
+                value={userCheckAiPrompt}
+                onChange={(e) => setUserCheckAiPrompt(e.target.value)}
+                disabled={userCheckAiRunning}
+              />
+              <button
+                type="button"
+                className="af-user-check-modal__btn af-user-check-modal__btn--ai"
+                disabled={userCheckAiRunning || !userCheckAiPrompt.trim()}
+                onClick={() => {
+                  if (!userCheckContent || !selected || !currentRunUuid || !userCheckAiPrompt.trim()) return;
+                  setUserCheckAiRunning(true);
+                  setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "info", text: t("flow:userCheck.aiEditStarted") }]);
+                  fetch("/api/flow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ flowId: selected.id, flowSource: selected.source ?? "user", action: "ai-edit-user-check-content", runUuid: currentRunUuid, instanceId: userCheckContent.instanceId, content: userCheckEditedContent || userCheckContent.content, prompt: userCheckAiPrompt }) })
+                    .then((res) => res.json())
+                    .then((data) => {
+                      setUserCheckAiRunning(false);
+                      if (data.ok && data.content) {
+                        setUserCheckEditedContent(data.content);
+                        setUserCheckEditing(true);
+                        setUserCheckAiPrompt("");
+                        setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "info", text: t("flow:userCheck.aiEditDone") }]);
+                      } else { setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: data.error || t("flow:userCheck.aiEditFailed") }]); }
+                    })
+                    .catch(() => { setUserCheckAiRunning(false); setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userCheck.aiEditFailed") }]); });
+                }}
+              >
+                {userCheckAiRunning ? <span className="material-symbols-outlined af-spin">sync</span> : <span className="material-symbols-outlined">auto_fix_high</span>}
+                {t("flow:userCheck.aiEditBtn")}
+              </button>
+            </div>
+            <div className="af-user-check-modal__foot">
+              <span className="af-user-check-modal__hint">{t("flow:userCheck.hint")}</span>
+              <button type="button" className="af-user-check-modal__btn af-user-check-modal__btn--continue" onClick={async () => {
+                if (!userCheckContent || !selected || !currentRunUuid) return;
+                // 先保存内容并更新节点状态为 success
+                const contentToSave = userCheckEditedContent || userCheckContent.content;
+                try {
+                  const res = await fetch("/api/flow", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      flowId: selected.id,
+                      flowSource: selected.source ?? "user",
+                      action: "save-user-check-content",
+                      runUuid: currentRunUuid,
+                      instanceId: userCheckContent.instanceId,
+                      content: contentToSave,
+                    }),
+                  });
+                  if (res.ok) {
+                    // 再调用 confirm-user-check 更新节点状态为 success
+                    await fetch("/api/flow", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        flowId: selected.id,
+                        flowSource: selected.source ?? "user",
+                        action: "confirm-user-check",
+                        runUuid: currentRunUuid,
+                        instanceId: userCheckContent.instanceId,
+                        execId: userCheckContent.execId,
+                      }),
+                    });
+                    setUserCheckContent(null);
+                    setUserCheckAiPrompt("");
+                    void handleRun({ runUuid: currentRunUuid });
+                  } else {
+                    setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userCheck.saveFailed") }]);
+                  }
+                } catch {
+                  setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userCheck.saveFailed") }]);
+                }
+              }}>
+                <span className="material-symbols-outlined">play_arrow</span>
+                {t("flow:userCheck.continue")}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </ReactFlowProvider>
   );
 }
