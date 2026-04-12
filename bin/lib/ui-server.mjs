@@ -782,7 +782,7 @@ ${content}
           return;
         }
         const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
-        const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}_${execId}.result.md`);
+        const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}.result.md`);
         try {
           fs.mkdirSync(path.dirname(resultPath), { recursive: true });
           const resultContent = `---
@@ -1019,7 +1019,7 @@ finishedAt: "${new Date().toISOString()}"
       }
 
       const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
-      const args = [agentflowBin, "apply", flowId];
+      const args = [agentflowBin, runUuid ? "resume" : "apply", flowId];
       if (runUuid) args.push(runUuid);
       args.push("--machine-readable", "--workspace-root", root);
       if (payload.force !== false) args.push("--force");
