@@ -28,6 +28,7 @@ import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import RunNodeContextPanel from "../RunNodeContextPanel.jsx";
+import RunConfigPanel from "../components/RunConfigPanel.jsx";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -53,13 +54,23 @@ function formatToolbarRunTimer(ms, mode) {
 
 /** @typedef {{ type: string, name: string, default: string }} IoDraftSlot */
 
-/** 包装 FlowNode 以注入 deleteNode 功能 */
+/** 包装 FlowNode 以注入 deleteNode 与 onProvideExpand 功能 */
 function FlowNodeWrapper(props) {
-  const { setNodes } = useReactFlow();
+  const { setNodes, nodes } = useReactFlow();
   const deleteNode = useCallback((nodeId) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
   }, [setNodes]);
-  return <FlowNode {...props} deleteNode={deleteNode} />;
+  const onProvideExpand = useCallback((nodeId) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const definitionId = node.data?.definitionId || "";
+      const label = node.data?.label || nodeId;
+      const content = node.data?.outputs?.[0]?.default || "";
+      window.__provideEditContent = { instanceId: nodeId, label, definitionId, content };
+      window.dispatchEvent(new CustomEvent("provide-expand"));
+    }
+  }, [nodes]);
+  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} />;
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: FlowNodeWrapper };
@@ -675,6 +686,11 @@ export default function FlowEditorPage() {
   /** 当前一次 apply 的 run 目录 uuid（来自 apply-start），用于侧栏拉取 intermediate/output */
   const [currentRunUuid, setCurrentRunUuid] = useState(/** @type {string | null} */ (null));
   const [runContextNodeId, setRunContextNodeId] = useState(/** @type {string | null} */ (null));
+  const [cliInputs, setCliInputs] = useState(/** @type {Record<string, { type: "str" | "file", value?: string, path?: string }>} */ ({}));
+  const [runDropdownOpen, setRunDropdownOpen] = useState(false);
+  const [runWithParamsOpen, setRunWithParamsOpen] = useState(false);
+  const [runParamsDraft, setRunParamsDraft] = useState(/** @type {Record<string, string>} */ ({}));
+  const [runPresets, setRunPresets] = useState(/** @type {Record<string, Record<string, string>>} */ ({}));
   const runAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const runLogEndRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const [userCheckContent, setUserCheckContent] = useState(
@@ -685,6 +701,15 @@ export default function FlowEditorPage() {
   const [userCheckAiPrompt, setUserCheckAiPrompt] = useState("");
   const [userCheckAiRunning, setUserCheckAiRunning] = useState(false);
   const userCheckEditRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
+
+  const [toolPrintContent, setToolPrintContent] = useState(
+    /** @type {null | { instanceId: string, execId: number, content: string, createdAt: number }} */ (null),
+  );
+
+  const [provideEditContent, setProvideEditContent] = useState(
+    /** @type {null | { instanceId: string, label: string, definitionId: string, content: string }} */ (null),
+  );
+  const provideEditRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
 
   const [composerText, setComposerText] = useState("");
   const [composerCursor, setComposerCursor] = useState(0);
@@ -1033,6 +1058,68 @@ export default function FlowEditorPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
+
+  const provideNodes = useMemo(
+    () => nodes.filter((n) => (n.data?.definitionId || "").startsWith("provide_")),
+    [nodes]
+  );
+
+  const cliInputSlotNames = useMemo(() => {
+    const mapping = {};
+    for (const node of nodes) {
+      if (!node.data?.inputs) continue;
+      const inputSlots = node.data.inputs;
+      for (let i = 0; i < inputSlots.length; i++) {
+        const slot = inputSlots[i];
+        if (!slot?.name) continue;
+        const edge = edges.find(
+          (e) => e.target === node.id && e.targetHandle === `input-${i}`
+        );
+        if (!edge?.source) continue;
+        const sourceNode = provideNodes.find((p) => p.id === edge.source);
+        if (sourceNode) {
+          mapping[edge.source] = slot.name;
+        }
+      }
+    }
+    return mapping;
+  }, [nodes, edges, provideNodes]);
+
+  useEffect(() => {
+    if (!selected) {
+      setRunPresets({});
+      return;
+    }
+    const params = new URLSearchParams({
+      flowId: selected.id,
+      flowSource: selected.source || "user",
+    });
+    if (selected.archived) params.set("archived", "1");
+    fetch(`/api/flow/run-config?${params.toString()}`)
+      .then((r) => r.json())
+      .then((data) => setRunPresets(data.presets || {}))
+      .catch(() => setRunPresets({}));
+  }, [selected?.id, selected?.source, selected?.archived]);
+
+  const handleProvideEditSave = useCallback(() => {
+    if (!provideEditContent || !provideEditRef.current) return;
+    const newContent = provideEditRef.current.value;
+    setNodes((nds) =>
+      nds.map((n) => {
+        if (n.id !== provideEditContent.instanceId) return n;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            outputs: n.data?.outputs?.map((o, i) =>
+              i === 0 ? { ...o, default: newContent } : o
+            ) || [{ type: "text", name: "value", default: newContent }],
+          },
+        };
+      })
+    );
+    setProvideEditContent(null);
+  }, [provideEditContent, setNodes]);
 
   const soleSelectedNode = useMemo(() => {
     const sel = nodes.filter((n) => n.selected);
@@ -1417,6 +1504,17 @@ export default function FlowEditorPage() {
   useEffect(() => {
     setMoveFlowError("");
   }, [selected?.id, selected?.source]);
+
+  useEffect(() => {
+    const onProvideExpand = () => {
+      if (window.__provideEditContent) {
+        setProvideEditContent(window.__provideEditContent);
+        window.__provideEditContent = null;
+      }
+    };
+    window.addEventListener("provide-expand", onProvideExpand);
+    return () => window.removeEventListener("provide-expand", onProvideExpand);
+  }, []);
 
   useEffect(() => {
     if (!soleSelectedNode) {
@@ -1912,10 +2010,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const handleRun = useCallback(async (/** @type {{ runUuid?: string | null }} */ opts = {}) => {
+  const handleRun = useCallback(async (/** @type {{ runUuid?: string | null, cliInputsOverride?: Record<string, { type: "str" | "file", value?: string, path?: string }> }} */ opts = {}) => {
     if (!selected) return;
     const runUuid =
       opts.runUuid != null && String(opts.runUuid).trim() ? String(opts.runUuid).trim() : null;
+    const inputsToUse = opts.cliInputsOverride ?? cliInputs;
     setRunMode("running");
     /* 勿在 fetch 完成前清空：否则在连接建立前控制台会一直空白（计时器已启动） */
     setRunLogs([
@@ -1943,7 +2042,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       const resp = await fetch("/api/flow/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flowId: selected.id, ...(runUuid ? { uuid: runUuid } : {}) }),
+        body: JSON.stringify({ flowId: selected.id, ...(runUuid ? { uuid: runUuid } : {}), cliInputs: inputsToUse }),
         signal: abort.signal,
       });
       if (!resp.ok) {
@@ -2039,6 +2138,13 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             ...prev,
             { ts: now, type: "user-check", text: t("flow:run.userCheckContent", { instanceId: msg.instanceId }) },
           ]);
+        } else if (msg.type === "tool-print-content") {
+          setToolPrintContent({
+            instanceId: msg.instanceId,
+            execId: msg.execId ?? 1,
+            content: msg.content || "",
+            createdAt: Date.now(),
+          });
         } else if (msg.type === "log") {
           setRunLogs((prev) => [
             ...prev,
@@ -2931,14 +3037,103 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 </button>
               </>
             ) : runMode === "done" || runMode === "error" ? (
-              <button type="button" className="af-btn-pipeline-save" onClick={handleBackToEdit}>
-                <span className="material-symbols-outlined">edit</span>
-                Edit
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="af-btn-primary af-btn-primary--lg"
+                  disabled={!selected}
+                  onClick={() => void handleRun()}
+                  title={t("flow:topbar.rerunTitle")}
+                >
+                  Run
+                </button>
+                <button type="button" className="af-btn-pipeline-save" onClick={handleBackToEdit}>
+                  <span className="material-symbols-outlined">edit</span>
+                  Edit
+                </button>
+              </>
             ) : (
-              <button type="button" className="af-btn-primary af-btn-primary--lg" disabled={!selected} onClick={() => void handleRun()}>
-                Run
-              </button>
+              <div className="af-run-btn-group">
+                <button type="button" className="af-btn-primary af-btn-primary--lg af-run-btn-main" disabled={!selected} onClick={() => void handleRun()}>
+                  Run
+                </button>
+                <button
+                  type="button"
+                  className="af-run-btn-dropdown"
+                  disabled={!selected}
+                  onClick={() => setRunDropdownOpen((v) => !v)}
+                  aria-label={t("flow:topbar.runOptions")}
+                  aria-expanded={runDropdownOpen}
+                >
+                  <span className="material-symbols-outlined">arrow_drop_down</span>
+                </button>
+                {runDropdownOpen && selected && (
+                  <div className="af-run-dropdown-menu">
+                    <button
+                      type="button"
+                      className="af-run-dropdown-item"
+                      onClick={() => {
+                        setRunDropdownOpen(false);
+                        // 从 provideNodes 提取当前值作为 draft
+                        const draft = {};
+                        for (const node of provideNodes) {
+                          const slotName = cliInputSlotNames[node.id];
+                          if (slotName) {
+                            draft[slotName] = cliInputs[slotName]?.value ?? cliInputs[slotName]?.path ?? node.data?.outputs?.[0]?.default ?? "";
+                          }
+                        }
+                        setRunParamsDraft(draft);
+                        setRunWithParamsOpen(true);
+                      }}
+                    >
+                      <span className="material-symbols-outlined">edit_note</span>
+                      {t("flow:topbar.runWithParams")}
+                    </button>
+                    <div className="af-run-dropdown-divider" />
+                    <div className="af-run-dropdown-section">
+                      <span className="af-run-dropdown-section-label">{t("flow:topbar.runWithPreset")}</span>
+                      <button
+                        type="button"
+                        className="af-run-dropdown-item"
+                        onClick={() => {
+                          setRunDropdownOpen(false);
+                          void handleRun();
+                        }}
+                      >
+                        <span className="material-symbols-outlined">play_arrow</span>
+                        {t("flow:runPreset.default")}
+                      </button>
+                      {Object.keys(runPresets).map((presetName) => (
+                        <button
+                          key={presetName}
+                          type="button"
+                          className="af-run-dropdown-item"
+                          onClick={() => {
+                            setRunDropdownOpen(false);
+                            const presetValues = runPresets[presetName] || {};
+                            const cliInputsOverride = {};
+                            for (const node of provideNodes) {
+                              const slotName = cliInputSlotNames[node.id];
+                              if (!slotName) continue;
+                              const definitionId = node.data?.definitionId || "";
+                              const value = presetValues[node.id] ?? "";
+                              if (definitionId.startsWith("provide_file")) {
+                                cliInputsOverride[slotName] = { type: "file", path: value };
+                              } else {
+                                cliInputsOverride[slotName] = { type: "str", value };
+                              }
+                            }
+                            void handleRun({ cliInputsOverride });
+                          }}
+                        >
+                          <span className="material-symbols-outlined">bookmark</span>
+                          {presetName}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </header>
@@ -3124,6 +3319,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               ) : null}
             </footer>
           </aside>
+          ) : selected ? (
+            <RunConfigPanel
+              flowId={selected.id}
+              flowSource={selected.source || "user"}
+              flowArchived={selected.archived}
+              provideNodes={provideNodes}
+              edges={edges}
+              nodes={nodes}
+              onCliInputsChange={setCliInputs}
+              onBackToEdit={handleBackToEdit}
+            />
           ) : null}
 
           <div className="af-pipeline-main-stack">
@@ -4005,7 +4211,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       </div>
 
       {userCheckContent && runMode !== "edit" && createPortal(
-        <div className="af-user-check-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setUserCheckContent(null); }}>
+        <div className="af-user-check-modal-overlay">
           <div className="af-user-check-modal" role="dialog" aria-modal="true">
             <div className="af-user-check-modal__head">
               <span className="af-user-check-modal__title">
@@ -4140,6 +4346,135 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           </div>
         </div>,
         document.body,
+      )}
+
+      {toolPrintContent && runMode !== "edit" && (
+        <div className="af-tool-print-toast" role="status" aria-live="polite">
+          <div className="af-tool-print-toast__head">
+            <span className="material-symbols-outlined">print</span>
+            <span className="af-tool-print-toast__title">{t("flow:toolPrint.title", { instanceId: toolPrintContent.instanceId })}</span>
+            <button type="button" className="af-tool-print-toast__close" onClick={() => setToolPrintContent(null)} aria-label={t("common:close")}>
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+          <div className="af-tool-print-toast__body">
+            <pre>{toolPrintContent.content.length > 500 ? toolPrintContent.content.slice(0, 500) : toolPrintContent.content}</pre>
+            {toolPrintContent.content.length > 500 && (
+              <span className="af-tool-print-toast__more">{t("flow:toolPrint.truncated")}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {provideEditContent && (
+        <div className="af-provide-edit-overlay">
+          <div className="af-provide-edit-modal" role="dialog" aria-modal="true">
+            <div className="af-provide-edit-modal__head">
+              <span className="material-symbols-outlined">edit_document</span>
+              <span className="af-provide-edit-modal__title">{provideEditContent.label}</span>
+              <button type="button" className="af-provide-edit-modal__close" onClick={() => setProvideEditContent(null)} aria-label={t("common:close")}>
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="af-provide-edit-modal__body">
+              <textarea
+                ref={provideEditRef}
+                className="af-provide-edit-modal__textarea"
+                defaultValue={provideEditContent.content}
+                autoFocus
+              />
+            </div>
+            <div className="af-provide-edit-modal__foot">
+              <button type="button" className="af-provide-edit-modal__btn af-provide-edit-modal__btn--save" onClick={handleProvideEditSave}>
+                <span className="material-symbols-outlined">save</span>
+                {t("flow:provideEdit.save")}
+              </button>
+              <button type="button" className="af-provide-edit-modal__btn" onClick={() => setProvideEditContent(null)}>
+                <span className="material-symbols-outlined">close</span>
+                {t("flow:provideEdit.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {runWithParamsOpen && (
+        <div className="af-run-params-overlay">
+          <div className="af-run-params-modal" role="dialog" aria-modal="true">
+            <div className="af-run-params-modal__head">
+              <span className="material-symbols-outlined">edit_note</span>
+              <span className="af-run-params-modal__title">{t("flow:runParams.title")}</span>
+              <button type="button" className="af-run-params-modal__close" onClick={() => setRunWithParamsOpen(false)} aria-label={t("common:close")}>
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="af-run-params-modal__body">
+              {provideNodes.length === 0 ? (
+                <div className="af-run-params-empty">{t("flow:runParams.noParams")}</div>
+              ) : (
+                <div className="af-run-params-list">
+                  {provideNodes.map((node) => {
+                    const slotName = cliInputSlotNames[node.id];
+                    if (!slotName) return null;
+                    const definitionId = node.data?.definitionId || "";
+                    const isFile = definitionId.startsWith("provide_file");
+                    const label = node.data?.label || node.id;
+                    const currentValue = runParamsDraft[slotName] ?? "";
+                    return (
+                      <div key={node.id} className="af-run-params-item">
+                        <div className="af-run-params-item__head">
+                          <span className={"af-run-params-item__icon material-symbols-outlined" + (isFile ? " af-run-params-item__icon--file" : "")}>
+                            {isFile ? "description" : "text_fields"}
+                          </span>
+                          <span className="af-run-params-item__label">{label}</span>
+                          <span className="af-run-params-item__slot">{slotName}</span>
+                        </div>
+                        <input
+                          type="text"
+                          className="af-run-params-item__input"
+                          value={currentValue}
+                          onChange={(e) => setRunParamsDraft((d) => ({ ...d, [slotName]: e.target.value }))}
+                          placeholder={isFile ? t("flow:runConfig.filePathPlaceholder") : t("flow:runConfig.stringValuePlaceholder")}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="af-run-params-modal__foot">
+              <button
+                type="button"
+                className="af-run-params-modal__btn af-run-params-modal__btn--run"
+                onClick={() => {
+                  // 将 runParamsDraft 转换为 cliInputs 格式
+                  const cliInputsOverride = {};
+                  for (const node of provideNodes) {
+                    const slotName = cliInputSlotNames[node.id];
+                    if (!slotName) continue;
+                    const definitionId = node.data?.definitionId || "";
+                    const value = runParamsDraft[slotName] ?? "";
+                    if (definitionId.startsWith("provide_file")) {
+                      cliInputsOverride[slotName] = { type: "file", path: value };
+                    } else {
+                      cliInputsOverride[slotName] = { type: "str", value };
+                    }
+                  }
+                  setRunWithParamsOpen(false);
+                  setRunDropdownOpen(false);
+                  void handleRun({ cliInputsOverride });
+                }}
+              >
+                <span className="material-symbols-outlined">play_arrow</span>
+                {t("flow:runParams.run")}
+              </button>
+              <button type="button" className="af-run-params-modal__btn" onClick={() => setRunWithParamsOpen(false)}>
+                <span className="material-symbols-outlined">close</span>
+                {t("flow:runParams.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </ReactFlowProvider>
   );

@@ -29,7 +29,8 @@
     "inputTooltip": "输入 {{name}} | 类型: {{type}}",
     "outputTooltip": "输出 {{name}} | 类型: {{type}}",
     "defaultSuffix": " | 默认: {{value}}",
-    "fallbackLabel": "节点"
+    "fallbackLabel": "节点",
+    "expandProvide": "编辑内容"
   },
   "nodeProps": {
     "title": "节点属性",
@@ -246,7 +247,11 @@
     "shortcutsTitle": "快捷键 (?)",
     "deletePipeline": "删除流水线",
     "resumeTitle": "在同一 run 目录继续执行（uuid={{uuid}}）",
-    "resumeTitleNoUuid": "尚未收到 apply-start，将发起新的 run"
+    "resumeTitleNoUuid": "尚未收到 apply-start，将发起新的 run",
+    "rerunTitle": "从头开始新的运行",
+    "runOptions": "运行选项",
+    "runWithParams": "带参数运行",
+    "runWithPreset": "指定预设运行"
   },
   "palette2": {
     "nodePalette": "节点调色板",
@@ -345,5 +350,41 @@
     "close": "关闭",
     "continue": "继续执行",
     "hint": "编辑或使用 AI 修改后点击保存，然后点击「继续执行」恢复流程"
+  },
+  "toolPrint": {
+    "title": "Print 输出: {{instanceId}}",
+    "truncated": "...内容已截断"
+  },
+  "provideEdit": {
+    "save": "保存",
+    "cancel": "取消"
+  },
+  "runParams": {
+    "title": "带参数运行",
+    "noParams": "此流程无输入参数",
+    "run": "运行",
+    "cancel": "取消"
+  },
+  "runPreset": {
+    "title": "指定预设运行",
+    "noPresets": "无可用预设",
+    "default": "默认运行",
+    "run": "运行",
+    "cancel": "取消"
+  },
+  "runConfig": {
+    "preset": "预设",
+    "default": "默认",
+    "newPreset": "新建预设",
+    "deletePreset": "删除预设",
+    "presetNamePlaceholder": "预设名称",
+    "inputParams": "输入参数",
+    "noProvideNodes": "此流程无 provide 节点",
+    "filePathPlaceholder": "文件路径…",
+    "stringValuePlaceholder": "值…",
+    "presetSaved": "预设已保存",
+    "presetDeleted": "预设已删除",
+    "savePreset": "保存当前预设",
+    "expandInput": "编辑内容"
   }
 }

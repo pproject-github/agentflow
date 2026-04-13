@@ -29,7 +29,8 @@
     "inputTooltip": "Input {{name}} | Type: {{type}}",
     "outputTooltip": "Output {{name}} | Type: {{type}}",
     "defaultSuffix": " | Default: {{value}}",
-    "fallbackLabel": "Node"
+    "fallbackLabel": "Node",
+    "expandProvide": "Edit content"
   },
   "nodeProps": {
     "title": "Node Properties",
@@ -246,7 +247,11 @@
     "shortcutsTitle": "Shortcuts (?)",
     "deletePipeline": "Delete pipeline",
     "resumeTitle": "Resume in same run directory (uuid={{uuid}})",
-    "resumeTitleNoUuid": "No apply-start received, will start a new run"
+    "resumeTitleNoUuid": "No apply-start received, will start a new run",
+    "rerunTitle": "Start a new run from scratch",
+    "runOptions": "Run options",
+    "runWithParams": "Run with params",
+    "runWithPreset": "Run with preset"
   },
   "palette2": {
     "nodePalette": "Node Palette",
@@ -345,5 +350,41 @@
     "close": "Close",
     "continue": "Continue Execution",
     "hint": "Edit or use AI to modify, then save. Click 'Continue Execution' to resume the flow"
+  },
+  "toolPrint": {
+    "title": "Print Output: {{instanceId}}",
+    "truncated": "...content truncated"
+  },
+  "provideEdit": {
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "runParams": {
+    "title": "Run with Params",
+    "noParams": "No input params in this flow",
+    "run": "Run",
+    "cancel": "Cancel"
+  },
+  "runPreset": {
+    "title": "Run with Preset",
+    "noPresets": "No presets available",
+    "default": "Default run",
+    "run": "Run",
+    "cancel": "Cancel"
+  },
+  "runConfig": {
+    "preset": "Preset",
+    "default": "Default",
+    "newPreset": "New preset",
+    "deletePreset": "Delete preset",
+    "presetNamePlaceholder": "Preset name",
+    "inputParams": "Input Parameters",
+    "noProvideNodes": "No provide nodes in this flow",
+    "filePathPlaceholder": "File path…",
+    "stringValuePlaceholder": "Value…",
+"presetSaved": "Preset saved",
+    "presetDeleted": "Preset Deleted",
+    "savePreset": "Save current preset",
+    "expandInput": "Edit content"
   }
 }

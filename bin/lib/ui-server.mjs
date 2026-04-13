@@ -66,6 +66,8 @@ const MIME = {
   ".svg": "image/svg+xml",
 };
 
+const RUN_CONFIG_FILENAME = "run-config.json";
+
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
@@ -999,6 +1001,77 @@ finishedAt: "${new Date().toISOString()}"
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/flow/run-config") {
+      const flowId = url.searchParams.get("flowId");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const flowArchived = url.searchParams.get("archived") === "1";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (!isValidFlowSourceRead(flowSource)) {
+        json(res, 400, { error: "Invalid flowSource" });
+        return;
+      }
+      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived });
+      if (yamlRes.error) {
+        json(res, 404, { error: yamlRes.error });
+        return;
+      }
+      const configPath = path.join(path.dirname(yamlRes.path), RUN_CONFIG_FILENAME);
+      try {
+        if (!fs.existsSync(configPath)) {
+          json(res, 200, { presets: {}, activePreset: null });
+          return;
+        }
+        const data = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        json(res, 200, {
+          presets: data.presets && typeof data.presets === "object" ? data.presets : {},
+          activePreset: typeof data.activePreset === "string" ? data.activePreset : null,
+        });
+      } catch (e) {
+        json(res, 500, { error: e.message });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/flow/run-config") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = payload.flowId;
+      const flowSource = payload.flowSource || "user";
+      const flowArchived = payload.archived === true;
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (!isValidFlowSourceWrite(flowSource)) {
+        json(res, 400, { error: "Cannot save config to builtin or archived flow" });
+        return;
+      }
+      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived });
+      if (yamlRes.error) {
+        json(res, 404, { error: yamlRes.error });
+        return;
+      }
+      const configPath = path.join(path.dirname(yamlRes.path), RUN_CONFIG_FILENAME);
+      try {
+        const presets = payload.presets && typeof payload.presets === "object" ? payload.presets : {};
+        const activePreset = typeof payload.activePreset === "string" ? payload.activePreset : null;
+        const data = { presets, activePreset };
+        fs.writeFileSync(configPath, JSON.stringify(data, null, 2), "utf-8");
+        json(res, 200, { success: true });
+      } catch (e) {
+        json(res, 500, { error: e.message });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/flow/run") {
       let payload;
       try {
@@ -1023,6 +1096,19 @@ finishedAt: "${new Date().toISOString()}"
       if (runUuid) args.push(runUuid);
       args.push("--machine-readable", "--workspace-root", root);
       if (payload.force !== false) args.push("--force");
+
+      if (payload.cliInputs && typeof payload.cliInputs === "object") {
+        for (const [name, val] of Object.entries(payload.cliInputs)) {
+          if (!name || typeof name !== "string") continue;
+          if (!val || typeof val !== "object") continue;
+          const type = val.type;
+          if (type === "file" && typeof val.path === "string") {
+            args.push("--input", `${name}=file:${val.path}`);
+          } else if (type === "str" && typeof val.value === "string") {
+            args.push("--input", `${name}=${val.value}`);
+          }
+        }
+      }
 
       res.writeHead(200, {
         "Content-Type": "application/x-ndjson; charset=utf-8",

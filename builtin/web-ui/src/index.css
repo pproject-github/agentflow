@@ -469,7 +469,6 @@ body {
   margin: 0;
   font-size: 0.875rem;
   color: var(--af-on-surface-variant);
-  max-width: 32rem;
 }
 
 .af-projects-api-hint {
@@ -2016,6 +2015,8 @@ button.af-project-card {
   background: rgba(19, 19, 19, 0.92);
   backdrop-filter: blur(20px);
   flex-shrink: 0;
+  position: relative;
+  z-index: 50;
 }
 
 .af-pipeline-top-left {
@@ -5686,6 +5687,38 @@ button.af-exec-history-card {
   min-width: 0;
 }
 
+.af-flow-node__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: rgba(232, 222, 255, 0.5);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.af-flow-node:hover .af-flow-node__expand,
+.af-flow-node--selected .af-flow-node__expand {
+  opacity: 1;
+}
+
+.af-flow-node__expand:hover {
+  background: rgba(232, 222, 255, 0.15);
+  color: rgba(232, 222, 255, 0.9);
+}
+
+.af-flow-node__expand .material-symbols-outlined {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
 .af-flow-node__delete {
   display: flex;
   align-items: center;
@@ -5962,6 +5995,338 @@ button.af-exec-history-card {
 
 .af-btn-run-stop .material-symbols-outlined {
   font-size: 1rem;
+}
+
+/* ── Run Button Group (main + dropdown) ── */
+.af-run-btn-group {
+  display: inline-flex;
+  align-items: stretch;
+  position: relative;
+}
+
+.af-run-btn-main {
+  border-radius: 999px 0 0 999px;
+  border-right: none;
+}
+
+.af-run-btn-dropdown {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.5rem;
+  border: none;
+  border-radius: 0 999px 999px 0;
+  background: rgba(124, 77, 255, 0.85);
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.15s, background 0.15s;
+}
+
+.af-run-btn-dropdown:hover {
+  background: rgba(124, 77, 255, 0.95);
+}
+
+.af-run-btn-dropdown:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.af-run-btn-dropdown .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-run-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 180px;
+  background: var(--af-surface-low);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  animation: af-dropdown-enter 0.15s ease-out;
+}
+
+.af-run-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--af-on-surface);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.af-run-dropdown-item:hover {
+  background: rgba(232, 222, 255, 0.08);
+}
+
+.af-run-dropdown-item .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--af-primary-fixed);
+}
+
+.af-run-dropdown-divider {
+  height: 1px;
+  background: rgba(73, 68, 85, 0.25);
+  margin: 4px 8px;
+}
+
+.af-run-dropdown-section {
+  padding: 4px 0;
+}
+
+.af-run-dropdown-section-label {
+  display: block;
+  padding: 6px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(202, 195, 216, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+@keyframes af-dropdown-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Run With Params Modal ── */
+.af-run-params-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.af-run-params-modal {
+  background: var(--af-surface-low);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 1rem;
+  width: min(90vw, 480px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  animation: af-provide-edit-enter 0.2s ease-out;
+}
+
+.af-run-params-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  background: rgba(42, 42, 42, 0.6);
+  border-radius: 1rem 1rem 0 0;
+}
+
+.af-run-params-modal__head .material-symbols-outlined {
+  font-size: 18px;
+  color: rgba(232, 222, 255, 0.85);
+}
+
+.af-run-params-modal__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--af-on-surface);
+  flex: 1;
+}
+
+.af-run-params-modal__close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: rgba(202, 195, 216, 0.7);
+  border-radius: 6px;
+}
+
+.af-run-params-modal__close:hover {
+  color: var(--af-on-surface);
+  background: rgba(42, 42, 42, 0.5);
+}
+
+.af-run-params-modal__close .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-run-params-modal__body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.af-run-params-empty {
+  color: var(--af-on-surface-variant);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+
+.af-run-params-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.af-run-params-item {
+  background: rgba(14, 14, 14, 0.4);
+  border: 1px solid rgba(73, 68, 85, 0.25);
+  border-radius: 0.75rem;
+  padding: 12px;
+}
+
+.af-run-params-item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.af-run-params-item__icon {
+  font-size: 18px;
+  color: var(--af-secondary);
+}
+
+.af-run-params-item__icon--file {
+  color: var(--af-tertiary);
+}
+
+.af-run-params-item__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--af-on-surface);
+  flex: 1;
+}
+
+.af-run-params-item__slot {
+  font-size: 11px;
+  font-family: var(--af-mono);
+  color: var(--af-on-surface-variant);
+  background: rgba(42, 42, 42, 0.5);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.af-run-params-item__input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 6px;
+  color: var(--af-on-surface);
+  font-size: 12px;
+  font-family: var(--af-mono);
+}
+
+.af-run-params-item__input:focus {
+  outline: none;
+  border-color: var(--af-primary);
+}
+
+.af-run-params-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(73, 68, 85, 0.25);
+}
+
+.af-run-params-modal__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 0.65rem;
+  background: rgba(42, 42, 42, 0.6);
+  color: rgba(202, 195, 216, 0.85);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.af-run-params-modal__btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-run-params-modal__btn:hover {
+  background: rgba(53, 53, 53, 0.7);
+  color: var(--af-on-surface);
+}
+
+.af-run-params-modal__btn--run {
+  background: rgba(124, 77, 255, 0.85);
+  color: #fff;
+}
+
+.af-run-params-modal__btn--run:hover {
+  background: rgba(124, 77, 255, 0.95);
+}
+
+.af-run-params-modal__btn--run:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Preset Selection List ── */
+.af-run-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.af-run-preset-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(73, 68, 85, 0.25);
+  border-radius: 0.65rem;
+  background: rgba(14, 14, 14, 0.4);
+  color: var(--af-on-surface);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.af-run-preset-item:hover {
+  background: rgba(42, 42, 42, 0.5);
+  border-color: rgba(73, 68, 85, 0.35);
+}
+
+.af-run-preset-item--selected {
+  background: rgba(124, 77, 255, 0.15);
+  border-color: rgba(124, 77, 255, 0.4);
+}
+
+.af-run-preset-item__icon {
+  font-size: 18px;
+  color: var(--af-primary-fixed);
+}
+
+.af-run-preset-item__name {
+  flex: 1;
 }
 
 /* ── Execution Console（位于主列底部，侧栏打开时不侵占右侧） ── */
@@ -6459,6 +6824,232 @@ button.af-exec-history-card {
   }
 }
 
+.af-tool-print-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  max-width: 420px;
+  z-index: 1000;
+  background: rgba(26, 25, 25, 0.96);
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(73, 68, 85, 0.28);
+  font-family: var(--af-body);
+  animation: af-tool-print-toast-enter 0.25s ease-out;
+}
+
+.af-tool-print-toast__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgba(42, 42, 42, 0.8);
+  border-radius: 1rem 1rem 0 0;
+}
+
+.af-tool-print-toast__head .material-symbols-outlined {
+  font-size: 18px;
+  color: rgba(232, 222, 255, 0.9);
+}
+
+.af-tool-print-toast__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e8deff;
+  flex: 1;
+}
+
+.af-tool-print-toast__close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: rgba(202, 195, 216, 0.7);
+  border-radius: 6px;
+}
+
+.af-tool-print-toast__close:hover {
+  color: #e5e2e1;
+  background: rgba(42, 42, 42, 0.5);
+}
+
+.af-tool-print-toast__close .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-tool-print-toast__body {
+  padding: 12px 14px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.af-tool-print-toast__body pre {
+  font-family: var(--af-mono);
+  font-size: 12px;
+  color: rgba(202, 195, 216, 0.88);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.af-tool-print-toast__more {
+  color: rgba(202, 195, 216, 0.5);
+  font-size: 12px;
+  font-family: var(--af-body);
+  display: block;
+  margin-top: 8px;
+}
+
+@keyframes af-tool-print-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.af-provide-edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.af-provide-edit-modal {
+  background: var(--af-surface-low);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 1rem;
+  width: min(90vw, 560px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  animation: af-provide-edit-enter 0.2s ease-out;
+}
+
+.af-provide-edit-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  background: rgba(42, 42, 42, 0.6);
+  border-radius: 1rem 1rem 0 0;
+}
+
+.af-provide-edit-modal__head .material-symbols-outlined {
+  font-size: 18px;
+  color: rgba(0, 228, 117, 0.85);
+}
+
+.af-provide-edit-modal__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #e5e2e1;
+  flex: 1;
+}
+
+.af-provide-edit-modal__close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: rgba(202, 195, 216, 0.7);
+  border-radius: 6px;
+}
+
+.af-provide-edit-modal__close:hover {
+  color: #e5e2e1;
+  background: rgba(42, 42, 42, 0.5);
+}
+
+.af-provide-edit-modal__close .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-provide-edit-modal__body {
+  padding: 16px;
+}
+
+.af-provide-edit-modal__textarea {
+  width: 100%;
+  min-height: 240px;
+  max-height: 60vh;
+  padding: 12px;
+  border: 1px solid rgba(73, 68, 85, 0.35);
+  border-radius: 0.75rem;
+  background: rgba(14, 14, 14, 0.6);
+  color: #e5e2e1;
+  font-family: var(--af-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.af-provide-edit-modal__textarea:focus {
+  border-color: rgba(0, 228, 117, 0.4);
+  box-shadow: 0 0 0 2px rgba(0, 228, 117, 0.12);
+}
+
+.af-provide-edit-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(73, 68, 85, 0.25);
+}
+
+.af-provide-edit-modal__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 0.65rem;
+  background: rgba(42, 42, 42, 0.6);
+  color: rgba(202, 195, 216, 0.85);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.af-provide-edit-modal__btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-provide-edit-modal__btn:hover {
+  background: rgba(53, 53, 53, 0.7);
+  color: #e5e2e1;
+}
+
+.af-provide-edit-modal__btn--save {
+  background: rgba(0, 228, 117, 0.18);
+  color: rgba(196, 245, 220, 0.92);
+}
+
+.af-provide-edit-modal__btn--save:hover {
+  background: rgba(0, 228, 117, 0.28);
+  color: rgba(196, 245, 220, 1);
+}
+
+@keyframes af-provide-edit-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .af-user-check-modal-overlay {
   position: fixed;
   inset: 0;
@@ -6680,4 +7271,280 @@ button.af-exec-history-card {
 .af-user-check-modal__btn--continue:hover {
   background: var(--af-primary);
   color: var(--af-on-primary);
+}
+
+/* Run Config Panel */
+.af-run-config-panel {
+  width: 280px;
+  min-width: 280px;
+  max-width: 280px;
+  height: 100%;
+  background: var(--af-surface-low);
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.af-run-config-panel > * {
+  flex-shrink: 0;
+}
+
+.af-run-config-loading {
+  color: var(--af-on-surface-variant);
+  padding: 24px;
+  text-align: center;
+}
+
+.af-run-config-preset {
+  background: var(--af-surface-highest);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.af-run-config-preset-label {
+  font-size: 12px;
+  color: var(--af-on-surface-variant);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.af-run-config-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.af-run-config-preset-select {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.af-run-config-preset-select:focus {
+  outline: none;
+  border-color: var(--af-primary);
+}
+
+.af-run-config-preset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface-variant);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.af-run-config-preset-btn:hover {
+  background: var(--af-surface-high);
+  border-color: var(--af-primary);
+  color: var(--af-primary);
+}
+
+.af-run-config-preset-btn--new:hover {
+  color: var(--af-tertiary);
+  border-color: var(--af-tertiary);
+}
+
+.af-run-config-preset-btn--delete:hover {
+  color: var(--af-error);
+  border-color: var(--af-error);
+}
+
+.af-run-config-preset-btn--save:hover {
+  color: var(--af-tertiary);
+  border-color: var(--af-tertiary);
+}
+
+.af-run-config-preset-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.af-run-config-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.af-run-config-save-dialog {
+  background: var(--af-surface-highest);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.af-run-config-save-input {
+  padding: 8px 12px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface);
+  font-size: 13px;
+}
+
+.af-run-config-save-input:focus {
+  outline: none;
+  border-color: var(--af-primary);
+}
+
+.af-run-config-save-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.af-run-config-save-actions .af-btn-primary {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--af-primary-container);
+  border: none;
+  border-radius: 8px;
+  color: var(--af-on-primary-container);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.af-run-config-save-actions .af-btn-primary:hover {
+  background: var(--af-primary);
+  color: var(--af-on-primary);
+}
+
+.af-run-config-save-actions .af-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.af-run-config-save-actions .af-btn-outline {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.af-run-config-save-actions .af-btn-outline:hover {
+  background: var(--af-surface-high);
+}
+
+.af-run-config-inputs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.af-run-config-inputs-header {
+  font-size: 12px;
+  color: var(--af-on-surface-variant);
+  padding: 8px 0;
+}
+
+.af-run-config-empty {
+  color: var(--af-on-surface-variant);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.af-run-config-input-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.af-run-config-input-item {
+  background: var(--af-surface-high);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.af-run-config-input-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.af-run-config-input-icon {
+  font-size: 18px;
+  color: var(--af-secondary);
+}
+
+.af-run-config-input-icon--file {
+  color: var(--af-tertiary);
+}
+
+.af-run-config-input-label {
+  font-size: 13px;
+  color: var(--af-on-surface);
+  font-weight: 500;
+  flex: 1;
+}
+
+.af-run-config-input-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(202, 195, 216, 0.5);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.af-run-config-input-expand:hover {
+  background: rgba(232, 222, 255, 0.12);
+  color: rgba(232, 222, 255, 0.85);
+}
+
+.af-run-config-input-expand .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-run-config-input-id {
+  font-size: 11px;
+  color: var(--af-on-surface-variant);
+  margin-bottom: 8px;
+  font-family: monospace;
+}
+
+.af-run-config-input-field {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface);
+  font-size: 12px;
+  font-family: monospace;
+}
+
+.af-run-config-input-field:focus {
+  outline: none;
+  border-color: var(--af-primary);
 }
