@@ -5806,6 +5806,56 @@ button.af-exec-history-card {
   color: var(--af-on-surface);
 }
 
+.af-flow-node__model-wrap {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+}
+
+.af-flow-node__model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.55rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(158, 202, 255, 0.5);
+  background: transparent;
+  border: none;
+  border-radius: 0.2rem;
+  padding: 0.12rem 0.25rem;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.af-flow-node__model:hover {
+  color: var(--af-secondary);
+  background: rgba(158, 202, 255, 0.08);
+}
+
+.af-flow-node__model:focus {
+  outline: none;
+  color: var(--af-secondary);
+  background: rgba(158, 202, 255, 0.12);
+}
+
+.af-flow-node__model-arrow {
+  font-family: "Material Symbols Outlined";
+  font-size: 0.6rem;
+  color: rgba(158, 202, 255, 0.35);
+  margin-left: 0.1rem;
+  pointer-events: none;
+}
+
+.af-flow-node__model-wrap:hover .af-flow-node__model-arrow {
+  color: rgba(158, 202, 255, 0.6);
+}
+
 .af-flow-node--control .af-flow-node__chrome {
   box-shadow: inset 0 -1px 0 rgba(237, 108, 2, 0.2);
 }

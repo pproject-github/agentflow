@@ -2,6 +2,11 @@ import { Handle, Position } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
 import { getHandleColor } from "./nodeSchema.js";
 
+function modelEntryId(entry) {
+  const idx = entry.indexOf(" - ");
+  return idx >= 0 ? entry.slice(0, idx).trim() : entry.trim();
+}
+
 function getNodeTypeLabel(data) {
   const id = data?.definitionId?.trim();
   // 如果 definitionId 存在且不是默认值"普通"，则显示它
@@ -12,7 +17,7 @@ function getNodeTypeLabel(data) {
   return "agent";
 }
 
-export function FlowNode({ data, selected, id, deleteNode, onProvideExpand }) {
+export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, modelLists, onModelChange }) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
@@ -24,6 +29,33 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand }) {
   const nodeElapsed = data?.nodeElapsed ?? null;
   const definitionId = data?.definitionId || "";
   const isProvideNode = definitionId.startsWith("provide_");
+
+  const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
+  const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
+  const rawModel = (data?.model ?? "").trim();
+  const needsModel = schemaType === "agent" && !definitionId.startsWith("tool_nodejs");
+
+  const cursorIds = new Set(cursorList.map(modelEntryId));
+  const opencodeIds = new Set(opencodeList.map(modelEntryId));
+
+  const normalizedModelForSelect = (() => {
+    if (!rawModel) return "";
+    if (rawModel.startsWith("cursor:") || rawModel.startsWith("opencode:")) return rawModel;
+    if (opencodeIds.has(rawModel)) return `opencode:${rawModel}`;
+    if (cursorIds.has(rawModel)) return `cursor:${rawModel}`;
+    return rawModel;
+  })();
+
+  const modelNotInLists = rawModel && !normalizedModelForSelect.startsWith("cursor:") && !normalizedModelForSelect.startsWith("opencode:") && !cursorIds.has(rawModel) && !opencodeIds.has(rawModel);
+
+  const displayModel = rawModel.startsWith("cursor:") ? rawModel.slice(7) : rawModel.startsWith("opencode:") ? rawModel.slice(9) : rawModel;
+
+  const handleModelChange = (e) => {
+    const newModel = e.target.value;
+    if (onModelChange) {
+      onModelChange(id, newModel);
+    }
+  };
 
   const handleDelete = (e) => {
     e.stopPropagation();
@@ -56,6 +88,43 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand }) {
         <span className="af-flow-node__type" title={typeLabel}>
           {typeLabel}
         </span>
+        {!isRunMode && needsModel && (
+          <div className="af-flow-node__model-wrap">
+            <select
+              className="af-flow-node__model"
+              value={normalizedModelForSelect}
+              onChange={handleModelChange}
+              aria-label={t("flow:node.model")}
+              title={displayModel || t("flow:node.defaultModel")}
+            >
+              <option value="">{t("flow:node.defaultModel")}</option>
+              {modelNotInLists && (
+                <option value={rawModel}>
+                  {rawModel}
+                </option>
+              )}
+              {cursorList.length > 0 && (
+                <optgroup label="Cursor">
+                  {cursorList.map((m) => (
+                    <option key={`c-${m}`} value={`cursor:${modelEntryId(m)}`}>
+                      {modelEntryId(m)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {opencodeList.length > 0 && (
+                <optgroup label="OpenCode">
+                  {opencodeList.map((m) => (
+                    <option key={`o-${m}`} value={`opencode:${modelEntryId(m)}`}>
+                      {modelEntryId(m)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <span className="af-flow-node__model-arrow material-symbols-outlined">expand_more</span>
+          </div>
+        )}
         {isExecuting && (
           <span className="af-flow-node__status-badge af-flow-node__status-badge--executing">
             EXECUTING
