@@ -95,24 +95,6 @@ export function NewPipelineModal({ open, onClose, onCreated }) {
           <h2 id={titleId} className="af-shortcuts-panel__title">
             {t("project:newPipelineModal.title")}
           </h2>
-          <div className="af-new-pipeline-types">
-            <div className="af-new-pipeline-type" title={t("onboarding:newPipeline.typeNode")}>
-              <span className="af-new-pipeline-type-dot" style={{ background: "#ff9800" }} />
-              <span className="af-new-pipeline-type-label">node</span>
-            </div>
-            <div className="af-new-pipeline-type" title={t("onboarding:newPipeline.typeStr")}>
-              <span className="af-new-pipeline-type-dot" style={{ background: "#2196f3" }} />
-              <span className="af-new-pipeline-type-label">str</span>
-            </div>
-            <div className="af-new-pipeline-type" title={t("onboarding:newPipeline.typeFile")}>
-              <span className="af-new-pipeline-type-dot" style={{ background: "#4caf50" }} />
-              <span className="af-new-pipeline-type-label">file</span>
-            </div>
-            <div className="af-new-pipeline-type" title={t("onboarding:newPipeline.typeBool")}>
-              <span className="af-new-pipeline-type-dot" style={{ background: "#9c27b0" }} />
-              <span className="af-new-pipeline-type-label">bool</span>
-            </div>
-          </div>
           <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={() => { hideGuide(); onClose(); }} aria-label={t("project:newPipelineModal.close")}>
             <span className="material-symbols-outlined">close</span>
           </button>

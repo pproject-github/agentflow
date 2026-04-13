@@ -486,6 +486,51 @@ ${currentContent}
         });
       }
 
+      // tool_print 节点：CLI 框框展示 + 发送事件供 Web UI 显示
+      if (preOutput.definitionId === "tool_print") {
+        const runDir = getRunDir(workspaceRoot, flowName, uuid);
+        const execId = preOutput.execId ?? 1;
+        const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}.result.md`);
+
+        if (fs.existsSync(resultPath)) {
+          const raw = fs.readFileSync(resultPath, "utf-8");
+          const bodyMatch = raw.match(/---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n([\s\S]*)$/);
+          const content = bodyMatch ? bodyMatch[1].trim() : raw.trim();
+
+          if (content) {
+            // CLI 框框样式展示（参考 user_check）
+            console.log("");
+            console.log(chalk.bold.cyan(`╔════════════════════════════════════════════════════════════╗`));
+            const titleLine = `║  Print 输出: ${instanceId}`;
+            const padding = 58 - titleLine.length;
+            console.log(chalk.bold.cyan(titleLine + " ".repeat(Math.max(0, padding)) + "║"));
+            console.log(chalk.bold.cyan(`╚════════════════════════════════════════════════════════════╝`));
+            console.log("");
+
+            const contentLines = content.split("\n");
+            const previewLines = contentLines.slice(0, 30);
+            console.log(chalk.dim("─".repeat(60)));
+            for (const line of previewLines) {
+              console.log("  " + line);
+            }
+            if (contentLines.length > 30) {
+              console.log(chalk.dim(`  ... (${contentLines.length - 30} 行已截断)`));
+            }
+            console.log(chalk.dim("─".repeat(60)));
+            console.log("");
+
+            // 发送事件供 Web UI 显示右下角通知卡片
+            emitEvent(workspaceRoot, flowName, uuid, {
+              type: "tool-print-content",
+              event: "tool-print-content",
+              instanceId,
+              execId,
+              content,
+            });
+          }
+        }
+      }
+
       log.debug(`[agentflow] 退出节点 instanceId=${instanceId} execId=${preOutput.execId}`);
     };
 

@@ -12,7 +12,7 @@ function getNodeTypeLabel(data) {
   return "agent";
 }
 
-export function FlowNode({ data, selected, id, deleteNode }) {
+export function FlowNode({ data, selected, id, deleteNode, onProvideExpand }) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
@@ -22,11 +22,20 @@ export function FlowNode({ data, selected, id, deleteNode }) {
   const isExecuting = data?.isExecuting ?? false;
   const nodeStatus = data?.nodeStatus ?? null;
   const nodeElapsed = data?.nodeElapsed ?? null;
+  const definitionId = data?.definitionId || "";
+  const isProvideNode = definitionId.startsWith("provide_");
 
   const handleDelete = (e) => {
     e.stopPropagation();
     if (deleteNode) {
       deleteNode(id);
+    }
+  };
+
+  const handleExpand = (e) => {
+    e.stopPropagation();
+    if (onProvideExpand) {
+      onProvideExpand(id);
     }
   };
 
@@ -66,6 +75,17 @@ export function FlowNode({ data, selected, id, deleteNode }) {
           <span className="af-flow-node__status-badge af-flow-node__status-badge--failed">
             FAILED
           </span>
+        )}
+        {!isRunMode && isProvideNode && (
+          <button
+            type="button"
+            className="af-flow-node__expand"
+            onClick={handleExpand}
+            aria-label={t("flow:node.expandProvide")}
+            title={t("flow:node.expandProvide")}
+          >
+            <span className="material-symbols-outlined">open_in_full</span>
+          </button>
         )}
         {!isRunMode && (
           <button
