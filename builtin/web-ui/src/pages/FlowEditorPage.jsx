@@ -12,7 +12,7 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
@@ -54,9 +54,13 @@ function formatToolbarRunTimer(ms, mode) {
 
 /** @typedef {{ type: string, name: string, default: string }} IoDraftSlot */
 
+/** @type {React.Context<{ modelLists: { cursor: string[], opencode: string[] }, onModelChange: (nodeId: string, newModel: string) => void }>} */
+const FlowNodeContext = createContext({ modelLists: { cursor: [], opencode: [] }, onModelChange: () => {} });
+
 /** 包装 FlowNode 以注入 deleteNode 与 onProvideExpand 功能 */
 function FlowNodeWrapper(props) {
   const { setNodes, nodes } = useReactFlow();
+  const { modelLists, onModelChange } = useContext(FlowNodeContext);
   const deleteNode = useCallback((nodeId) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
   }, [setNodes]);
@@ -70,7 +74,7 @@ function FlowNodeWrapper(props) {
       window.dispatchEvent(new CustomEvent("provide-expand"));
     }
   }, [nodes]);
-  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} />;
+  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} modelLists={modelLists} onModelChange={onModelChange} />;
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: FlowNodeWrapper };
@@ -1768,6 +1772,18 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     persistFlowToServer(nodes, edges);
   }, [persistFlowToServer, nodes, edges]);
 
+  const handleNodeModelChange = useCallback(
+    (nodeId, newModel) => {
+      const normalizedModel = newModel.trim() === "" || newModel === "default" ? undefined : newModel.trim();
+      const nextNodes = nodes.map((n) =>
+        n.id === nodeId ? { ...n, data: { ...n.data, model: normalizedModel } } : n,
+      );
+      setNodes(nextNodes);
+      persistFlowToServer(nextNodes, edges);
+    },
+    [nodes, edges, setNodes, persistFlowToServer],
+  );
+
   const applyNodeProperties = useCallback(() => {
     if (!nodePropDraft || !selected || !soleSelectedNode) return false;
     const oldId = soleSelectedNode.id;
@@ -2843,22 +2859,23 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   return (
     <ReactFlowProvider>
-      <div className={"af-pipeline-page" + (runMode !== "edit" ? " af-pipeline-page--run-mode" : "")}>
-        <header className="af-pipeline-top">
-          <div className="af-pipeline-top-left">
-            <button
-              type="button"
-              className="af-icon-btn af-pipeline-back"
-              onClick={() => {
-                if (runMode !== "edit") {
-                  if (runMode === "running") void handleStop();
-                  else handleBackToEdit();
-                } else {
-                  navigate("/projects");
-                }
-              }}
-              aria-label={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
-              title={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
+      <FlowNodeContext.Provider value={{ modelLists, onModelChange: handleNodeModelChange }}>
+        <div className={"af-pipeline-page" + (runMode !== "edit" ? " af-pipeline-page--run-mode" : "")}>
+          <header className="af-pipeline-top">
+            <div className="af-pipeline-top-left">
+              <button
+                type="button"
+                className="af-icon-btn af-pipeline-back"
+                onClick={() => {
+                  if (runMode !== "edit") {
+                    if (runMode === "running") void handleStop();
+                    else handleBackToEdit();
+                  } else {
+                    navigate("/projects");
+                  }
+                }}
+                aria-label={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
+                title={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
             >
               <span className="material-symbols-outlined">arrow_back</span>
             </button>
@@ -4476,6 +4493,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           </div>
         </div>
       )}
+      </FlowNodeContext.Provider>
     </ReactFlowProvider>
   );
 }
