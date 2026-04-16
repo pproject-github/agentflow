@@ -4,7 +4,7 @@
 
 function toIOSlot(s) {
   return {
-    type: s.type || "节点",
+    type: s.type || "node",
     name: s.name || "",
     default: s.value !== undefined && s.value !== null ? String(s.value) : s.default !== undefined ? String(s.default) : "",
   };
@@ -21,7 +21,7 @@ export function cloneNodeIoDraftSlots(node) {
   const norm = (arr) =>
     arr.map((s) => {
       const sl = toIOSlot(s);
-      return { type: String(sl.type || "节点"), name: String(sl.name ?? ""), default: String(sl.default ?? "") };
+      return { type: String(sl.type || "node"), name: String(sl.name ?? ""), default: String(sl.default ?? "") };
     });
   return { inputs: norm(ins), outputs: norm(outs) };
 }

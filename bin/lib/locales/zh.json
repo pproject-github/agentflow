@@ -111,7 +111,7 @@
   "composer": {
     "edit_context": "## AgentFlow 编辑上下文",
     "tool_nodejs_rules_title": "## tool_nodejs 节点编写规则（必须遵守）",
-    "tool_nodejs_rules_body": "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、runDir 等），值自动 shell-quote\n- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行\n- 如果逻辑太复杂无法写出完整 `script`，应改用 `agent_subAgent`（需同时改 definitionId）",
+    "tool_nodejs_rules_body": "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n- **类型选择自检**（写 script 前先问自己）：这事**确定性**吗？相同输入永远产出相同输出、可用普通代码完整描述？是 → 继续写 script；否（需要语义理解/代码翻译/LLM 推理）→ **该节点选错了类型**，应改 `definitionId: agent_subAgent`，删 `script` 字段，任务描述写到 `body`。反例：『Android→RN 页面转换』『代码 review』『生成测试用例』必须 agent。\n- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、runDir 等），值自动 shell-quote\n- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行",
     "task_title": "## 任务",
     "task_instruction": "请只完成上述单一任务，不要做额外修改。完成后按上下文中的指引同步 UI。",
     "validation_passed": "flow 校验已通过",
@@ -222,8 +222,8 @@
       "description": "利用 SubAgent 执行任务"
     },
     "tool_user_ask": {
-      "displayName": "用户提问",
-      "description": "利用 Ask user question tool 询问用户问题"
+      "displayName": "用户选择",
+      "description": "等待用户从多个选项中选择一个，流程暂停；按用户选择沿对应出边分支继续（人类驱动的 switch）"
     },
     "tool_user_check": {
       "displayName": "用户确认",

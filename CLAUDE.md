@@ -135,6 +135,8 @@ When adding **new nodes** to a flow:
 | Behavior fully determined by input, no AI reasoning | `tool_nodejs` + `script` |
 | Display prominent output to user | `tool_print` |
 | Requires AI understanding, judgment, content generation | `agent_subAgent` |
+| Pause and wait for the user to confirm/edit content | `tool_user_check` |
+| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` |
 
 **YAML structure:**
 ```yaml
@@ -168,6 +170,8 @@ ui:
 | control_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
 | control_anyOne | next → output-0 | prev1 → input-0, prev2 → input-1 |
 | tool_nodejs | next → output-0, result → output-1 | prev → input-0, [dynamic inputs] |
+| tool_user_check | next → output-0, content → output-1 | prev → input-0, content → input-1 |
+| tool_user_ask | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
 
 **Default node position:** Place new nodes starting at `x: 100, y: 300`. For linear/main-chain flows, increment `x` by **280** per node (e.g. `x: 100 + i * 280, y: 300`). For branches, offset `y` by **200** between paths. For parallel nodes, keep same `x` and offset `y` by **200**.
 

@@ -58,6 +58,21 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
         setError(typeof j.error === "string" ? j.error : t("project:deleteModal.deleteFailed"));
         return;
       }
+      // 清理浏览器侧的 AI Composer 对话记录（key 形如 af:composer-sessions:<flowId>:<flowSource>[:archived]）
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (!k) continue;
+          if (
+            k.startsWith(`af:composer-sessions:${flowId}:${flowSource}`) ||
+            k.startsWith(`af:composer-active-session:${flowId}:${flowSource}`)
+          ) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch {
+        // 忽略 localStorage 异常
+      }
       await onDeleted();
     } catch (err) {
       if (err?.name === "AbortError") {

@@ -151,7 +151,7 @@ export function computeResolvedInputsForInstance(workspaceRoot, flowName, uuid, 
 
     if (value != null) {
       const slotType = (slots.inputTypes && slots.inputTypes[slotName]) || null;
-      if (slotType === "节点") {
+      if (slotType === "节点" || slotType === "node") {
         value = pred.source;
       }
       resolvedInputs[slotName] = value;
@@ -174,7 +174,7 @@ export function computeResolvedInputsForInstance(workspaceRoot, flowName, uuid, 
     if (v != null) {
       const firstSlotName = inputSlotNames[0];
       const firstType = (slots.inputTypes && slots.inputTypes[firstSlotName]) || null;
-      if (firstType === "节点") v = pred.source;
+      if (firstType === "节点" || firstType === "node") v = pred.source;
       return { ok: true, resolvedInputs: { _: v } };
     }
   }

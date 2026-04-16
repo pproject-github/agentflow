@@ -9,6 +9,8 @@ import {
   ARCHIVED_PIPELINES_DIR_NAME,
   getWorkspaceRunBuildRoot,
   getLegacyUserRunBuildRoot,
+  getUserPipelinesRoot,
+  PACKAGE_BUILTIN_PIPELINES_DIR,
 } from "./paths.mjs";
 
 /**
@@ -164,4 +166,126 @@ export function getWorkspaceTree(workspaceRoot) {
   });
 
   return { pipelines, runs };
+}
+
+const FILE_ICON_MAP = {
+  ".yaml": "description",
+  ".yml": "description",
+  ".mjs": "code",
+  ".js": "code",
+  ".ts": "code",
+  ".json": "data_object",
+  ".md": "article",
+  ".txt": "note",
+};
+
+function getFileIcon(fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  return FILE_ICON_MAP[ext] || "draft";
+}
+
+function getDirectoryIcon(dirName) {
+  if (dirName === "scripts") return "terminal";
+  if (dirName === "nodes") return "hub";
+  return "folder";
+}
+
+function readFileSize(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    return stats.size;
+  } catch {
+    return 0;
+  }
+}
+
+function readFilesRecursive(dir, baseDir, maxDepth = 2, currentDepth = 0) {
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    return [];
+  }
+  if (currentDepth >= maxDepth) {
+    return [];
+  }
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const result = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const entryPath = path.join(dir, entry.name);
+      const relativePath = path.relative(baseDir, entryPath);
+      if (entry.isDirectory()) {
+        const children = readFilesRecursive(entryPath, baseDir, maxDepth, currentDepth + 1);
+        result.push({
+          name: entry.name,
+          type: "directory",
+          icon: getDirectoryIcon(entry.name),
+          path: relativePath,
+          children,
+        });
+      } else if (entry.isFile()) {
+        result.push({
+          name: entry.name,
+          type: "file",
+          icon: getFileIcon(entry.name),
+          path: relativePath,
+          size: readFileSize(entryPath),
+        });
+      }
+    }
+    result.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      if (a.name === "flow.yaml") return -1;
+      if (b.name === "flow.yaml") return 1;
+      if (a.name === "scripts") return -1;
+      if (b.name === "scripts") return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = false) {
+  const root = path.resolve(workspaceRoot);
+  let pipelineDir = null;
+
+  if (archived) {
+    if (flowSource === "user") {
+      pipelineDir = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId);
+    } else if (flowSource === "workspace") {
+      pipelineDir = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId);
+      if (!fs.existsSync(pipelineDir)) {
+        const alt = path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId);
+        if (fs.existsSync(alt)) pipelineDir = alt;
+      }
+    }
+  } else {
+    if (flowSource === "builtin") {
+      pipelineDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
+    } else if (flowSource === "user") {
+      pipelineDir = path.join(getUserPipelinesRoot(), flowId);
+      if (!fs.existsSync(pipelineDir)) {
+        const alt = path.join(root, PIPELINES_DIR, flowId);
+        if (fs.existsSync(alt)) pipelineDir = alt;
+      }
+      if (!fs.existsSync(pipelineDir)) {
+        const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId);
+        if (fs.existsSync(altLeg)) pipelineDir = altLeg;
+      }
+    } else if (flowSource === "workspace") {
+      pipelineDir = path.join(root, PIPELINES_DIR, flowId);
+      if (!fs.existsSync(pipelineDir)) {
+        const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId);
+        if (fs.existsSync(altLeg)) pipelineDir = altLeg;
+      }
+    }
+  }
+
+  if (!pipelineDir || !fs.existsSync(pipelineDir) || !fs.statSync(pipelineDir).isDirectory()) {
+    return { files: [], error: "Pipeline directory not found" };
+  }
+
+  const files = readFilesRecursive(pipelineDir, pipelineDir, 2, 0);
+  return { files, path: pipelineDir };
 }

@@ -224,9 +224,10 @@ function applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definiti
 }
 
 /**
- * 若为「待用户确认」节点：将 result 的 status 覆写为 pending，流程暂停，等用户再次 apply 时续跑。
- * 识别方式：definitionId === "tool_user_check" 或 flow.yaml instances[instanceId].waitForUser 为 true。
- * 同时读取 content 输入槽位内容，发送 user-check-content 事件供 UI/CLI 展示。
+ * 若为「待用户确认/选择」节点：将 result 的 status 覆写为 pending，流程暂停，等用户再次 apply 时续跑。
+ * 识别方式：definitionId === "tool_user_check" / "tool_user_ask" 或 flow.yaml instances[instanceId].waitForUser 为 true。
+ * user_check：读取 content 输入槽位内容，发送 user-check-content 事件。
+ * user_ask：读取 question 输入槽与 instance output 槽位（作为选项），发送 user-ask-prompt 事件。
  */
 function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runDir, definitionId, execId, inst) {
   const e = execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
@@ -234,7 +235,7 @@ function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runD
   if (!fs.existsSync(resultPath)) return;
 
   let waitForUser = false;
-  if (definitionId === "tool_user_check") {
+  if (definitionId === "tool_user_check" || definitionId === "tool_user_ask") {
     waitForUser = true;
   } else if (inst != null && (inst.waitForUser === true || inst.waitForUser === "true" || inst.waitForUser === 1 || String(inst.waitForUser).toLowerCase() === "yes")) {
     waitForUser = true;
@@ -242,13 +243,16 @@ function applyWaitForUserPending(workspaceRoot, flowName, uuid, instanceId, runD
 
   if (!waitForUser) return;
 
+  const message = definitionId === "tool_user_ask" ? "等待用户选择" : "等待用户确认";
   writeResult(workspaceRoot, flowName, uuid, instanceId, {
     status: "pending",
-    message: "等待用户确认",
+    message,
   }, { preserveBody: true, execId: e });
 
   if (definitionId === "tool_user_check") {
     emitUserCheckContent(workspaceRoot, flowName, uuid, instanceId, runDir, e);
+  } else if (definitionId === "tool_user_ask") {
+    emitUserAskPrompt(workspaceRoot, flowName, uuid, instanceId, runDir, e, inst);
   }
 }
 
@@ -290,6 +294,51 @@ function emitUserCheckContent(workspaceRoot, flowName, uuid, instanceId, runDir,
     inputPath,
     outputPath,
     content,
+  });
+}
+
+/**
+ * 发送 user-ask-prompt 事件：读取 question 输入槽位内容，枚举 instance 的 output 槽位作为选项。
+ * 选项 label 取 output[i].description，兜底 output[i].value 或 name。
+ */
+function emitUserAskPrompt(workspaceRoot, flowName, uuid, instanceId, runDir, execId, inst) {
+  // 读取 question 输入内容
+  let question = "";
+  let questionPath = null;
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  if (data.ok && data.resolvedInputs) {
+    const questionInput = data.resolvedInputs["question"];
+    if (questionInput && typeof questionInput === "string") {
+      questionPath = questionInput;
+      if (fs.existsSync(questionInput)) {
+        try {
+          question = fs.readFileSync(questionInput, "utf-8");
+        } catch (_) {}
+      } else {
+        // 若不是路径，视作内联文本
+        question = questionInput;
+      }
+    }
+  }
+
+  // 枚举 instance output 槽位 → options
+  const options = [];
+  const outputs = Array.isArray(inst?.output) ? inst.output : [];
+  outputs.forEach((slot, idx) => {
+    const name = slot?.name != null ? String(slot.name) : `option_${idx}`;
+    const rawLabel = slot?.description || slot?.value || name;
+    const label = String(rawLabel || "").trim() || name;
+    options.push({ index: idx, name, label });
+  });
+
+  emitEvent(workspaceRoot, flowName, uuid, {
+    type: "user-ask-prompt",
+    event: "user-ask-prompt",
+    instanceId,
+    execId,
+    questionPath,
+    question,
+    options,
   });
 }
 
