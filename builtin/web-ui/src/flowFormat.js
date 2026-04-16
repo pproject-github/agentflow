@@ -113,7 +113,25 @@ export function deserializeFromFlowYaml(flowYamlContent) {
     return { nodes, edges, instances, description };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { error: `flow.yaml 解析失败：${message}` };
+    let hint = "";
+    // 最常见根因：script / body / value 字段裸写含 `:` 或引号的命令字符串，YAML 把 `: ` 当成新 mapping
+    if (/bad indentation of a mapping entry|expected.*scalar|mapping values are not allowed/i.test(message)) {
+      const lineMatch = message.match(/\((\d+):/);
+      const lineHint = lineMatch ? `第 ${lineMatch[1]} 行附近` : "";
+      hint =
+        `\n\n💡 提示：通常由 ${lineHint}的 \`script\` / \`body\` / \`value\` 字段裸写命令字符串引起。` +
+        `\nYAML 中含 \`: \`、\`"\`、\`'\` 等特殊字符的多行字符串必须使用 \`|\` 块标量。` +
+        `\n\n✅ 正确写法：` +
+        `\n\`\`\`yaml` +
+        `\nscript: |` +
+        `\n  node -e "console.log('TODO: scripts/x.mjs')"` +
+        `\n\`\`\`` +
+        `\n❌ 错误写法（当前文件）：` +
+        `\n\`\`\`yaml` +
+        `\nscript: node -e "console.log('TODO: scripts/x.mjs')"` +
+        `\n\`\`\``;
+    }
+    return { error: `flow.yaml 解析失败：${message}${hint}` };
   }
 }
 

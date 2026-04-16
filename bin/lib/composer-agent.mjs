@@ -14,6 +14,9 @@ import { executeScriptOp, isSupportedScriptOp } from "./composer-script-ops.mjs"
 import { routeModel } from "./composer-model-router.mjs";
 import { validateComposerFlowYaml, formatValidationErrorsBlock } from "./composer-flow-validate.mjs";
 import { parseInstanceRoleModelMap } from "./composer-flow-instances.mjs";
+import { buildNodeSchemaPromptSection, buildNodeSchemaCompactSection, getBuiltinNodeSchemas, EXTENSIBLE_DEFINITIONS } from "./composer-node-schema.mjs";
+import { ensurePhase1Skeletons, applyPlannedSlotsFromSpec } from "./composer-flow-skeleton.mjs";
+import yaml from "js-yaml";
 import { t } from "./i18n.mjs";
 
 const MAX_PROMPT_CHARS = 500_000;
@@ -64,6 +67,26 @@ export function startComposerAgent(opts) {
 
 // ─── 为单个 agent 步骤构建 prompt ──────────────────────────────────────────
 
+/**
+ * 从 flow.yaml 中提取指定 instance 的 YAML 片段，供子 agent 上下文使用，
+ * 避免子 agent 重新 Read 整份 flow.yaml 仅为定位一个节点。
+ * @param {string} flowYamlAbs
+ * @param {string} instanceId
+ * @returns {string} 该 instance 的 YAML 文本（缩进保留），找不到返回空串
+ */
+function extractInstanceYamlExcerpt(flowYamlAbs, instanceId) {
+  if (!flowYamlAbs || !instanceId) return "";
+  try {
+    const raw = fs.readFileSync(flowYamlAbs, "utf-8");
+    const data = yaml.load(raw);
+    const inst = data?.instances?.[instanceId];
+    if (!inst || typeof inst !== "object") return "";
+    return yaml.dump({ [instanceId]: inst }, { lineWidth: 120, noRefs: true });
+  } catch {
+    return "";
+  }
+}
+
 function buildAgentStepPrompt(step, flowContext) {
   const parts = [];
   const nodeRole = step.nodeRole != null ? String(step.nodeRole).trim() : "";
@@ -112,6 +135,46 @@ function buildAgentStepPrompt(step, flowContext) {
   parts.push(t("composer.task_title"));
   parts.push(step.prompt || step.description || "");
   parts.push("");
+
+  // 节点 schema 与目标 instance 上下文：避免子 agent forage（Glob/Read builtin/nodes、扒 runBuild）
+  // 注入策略（按 step 选最小够用版本）：
+  //   - full（5KB）：step 改 ★ 扩展节点结构，需要 YAML 正反对照防 type:node 误用
+  //   - compact（2KB）：其他所有 step 默认
+  //   - 若已知 step.instanceId，附该 instance 当前 YAML 片段，省一次 flow.yaml 读取
+  //   - 显式禁止 forage 行为
+  try {
+    const targetIsExtensible = targetInst && EXTENSIBLE_DEFINITIONS.has(targetInst.definitionId);
+    const promptText = String(step.prompt || step.description || "");
+    const promptMentionsSlots = /input\s*:|output\s*:|追加|扩展槽|business\s*slot|业务槽/i.test(promptText);
+    const useFullSchema = Boolean(targetIsExtensible || promptMentionsSlots);
+    const schemaSection = useFullSchema
+      ? buildNodeSchemaPromptSection()
+      : buildNodeSchemaCompactSection();
+    if (schemaSection) {
+      parts.push(schemaSection);
+      parts.push("");
+    }
+    if (sid && flowContext?.flowYamlAbs) {
+      const excerpt = extractInstanceYamlExcerpt(flowContext.flowYamlAbs, sid);
+      if (excerpt) {
+        const defId = (targetInst && targetInst.definitionId) || "";
+        parts.push(`## 目标 instance（${sid}${defId ? ` · ${defId}` : ""}）当前 YAML`);
+        parts.push("```yaml");
+        parts.push(excerpt.trimEnd());
+        parts.push("```");
+        parts.push("");
+      }
+    }
+    parts.push(
+      "## 上下文已就绪（禁止 forage）\n" +
+      "- 节点定义见上方 schema 表，**禁止** Glob/Read `builtin/nodes/`、`.workspace/agentflow/nodes/`、历史 `runBuild/` 来推断节点结构。\n" +
+      "- 目标 instance 的当前 YAML 已附上（若 instanceId 已知）；如需查看整份 flow，仅在确实需要时读取一次。"
+    );
+    parts.push("");
+  } catch {
+    /* schema 注入失败不影响主流程 */
+  }
+
   parts.push(t("composer.task_instruction"));
   return parts.join("\n");
 }
@@ -240,6 +303,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
     const routed = routeModel("complex", { userPreferredModel: modelKey || null });
     const { cli, model } = resolveCliAndModel(uiRoot, (routed.model || modelKey) || null, null);
 
+    emit({ type: "ai-log", tag: "repair-prompt", text: agentPrompt, meta: { attempt, max: maxRepair, cli, model: model || null, errorCount: (last?.errors || []).length } });
     emit({ type: "status", line: t("composer.validation_repair", { attempt, max: maxRepair }) });
     emit({ type: "natural", kind: "assistant", text: t("composer.validation_repair_start", { attempt, max: maxRepair }) });
 
@@ -392,6 +456,41 @@ export function startComposerMultiStep(opts) {
         total: totalSteps,
       });
 
+      // ── 1.5 多步前置：脚本预生成 flow.yaml 与 spec.md skeleton ──────
+      // 让 AI 只做"插入节点 + 填充 section"，省下重复 YAML 与样板模板字符串。
+      // 触发条件（任一）：
+      //   - 分阶段模式的第 0 阶段（流转规划），始终尝试
+      //   - 非分阶段多步：只要 flow.yaml 还空，也尝试（用户 prompt 没命中 phased
+      //     正则，但实质是「新建」场景）
+      // skeleton 内部幂等：已有 instances 或 spec.md 已存在则自动跳过。
+      const shouldTrySkeleton = opts.flowYamlAbs && (
+        (isPhased && currentPhase === 0) ||
+        (!isPhased)
+      );
+      if (shouldTrySkeleton) {
+        // composerSpecAbs 兜底：flowContext 没传时按 flow.yaml 同目录推
+        let specAbs = opts.flowContext?.composerSpecAbs || "";
+        if (!specAbs && opts.flowYamlAbs) {
+          specAbs = path.join(path.dirname(opts.flowYamlAbs), "composer-node-spec.md");
+        }
+        try {
+          const skel = ensurePhase1Skeletons({
+            flowYamlAbs: opts.flowYamlAbs,
+            composerSpecAbs: specAbs,
+            flowId: opts.flowId,
+            userRequest: opts.phaseContext?.userPromptOriginal || opts.userPrompt,
+          });
+          if (skel.flow.created) {
+            emit({ type: "natural", kind: "assistant", text: `✓ 预生成 flow.yaml skeleton (start + end + 主链 edge)` });
+          }
+          if (skel.spec.created) {
+            emit({ type: "natural", kind: "assistant", text: `✓ 预生成 composer-node-spec.md 模板：${specAbs}` });
+          }
+        } catch (e) {
+          emit({ type: "natural", kind: "error", text: `skeleton 预生成失败: ${e.message}` });
+        }
+      }
+
       // ── 2. 执行步骤 ────────────────────────────────────────────────
       let stepIndex = 0;
       while (stepIndex < steps.length && !aborted) {
@@ -467,6 +566,8 @@ export function startComposerMultiStep(opts) {
           const modelKey = routed.model || preferredModel || opts.modelKey || "";
           const { cli, model } = resolveCliAndModel(uiRoot, modelKey || null, null);
 
+          emit({ type: "ai-log", tag: "agent-step-prompt", text: agentPrompt, meta: { stepIndex, total: totalSteps, instanceId: sid || null, nodeRole: nodeRole || null, complexity, cli, model: model || null, description: step.description } });
+
           const stepEmit = (ev) => {
             emit({ ...ev, stepIndex, stepTotal: totalSteps });
           };
@@ -503,6 +604,43 @@ export function startComposerMultiStep(opts) {
 
         emit({ type: "step-done", index: stepIndex, total: totalSteps, success: false, error: `未知步骤类型: ${step.type}` });
         stepIndex++;
+      }
+
+      // ── 2.5 阶段一/非分阶段后置：把 spec.md 计划数据槽合并到 flow.yaml ──
+      // 幂等：同 name 槽位跳过；非 ★ 节点跳过。AI 已在 yaml 写过的不动。
+      const shouldApplyPlannedSlots = !aborted && opts.flowYamlAbs && (
+        (isPhased && currentPhase === 0) ||
+        (!isPhased)
+      );
+      if (shouldApplyPlannedSlots) {
+        let specAbs = opts.flowContext?.composerSpecAbs || "";
+        if (!specAbs && opts.flowYamlAbs) {
+          specAbs = path.join(path.dirname(opts.flowYamlAbs), "composer-node-spec.md");
+        }
+        if (specAbs && fs.existsSync(specAbs)) {
+          try {
+            const r = applyPlannedSlotsFromSpec(opts.flowYamlAbs, specAbs);
+            if (r.ok && r.applied.length > 0) {
+              const summary = r.applied.map((a) => {
+                const parts = [];
+                if (a.addedInputs.length) parts.push(`input += [${a.addedInputs.join(", ")}]`);
+                if (a.addedOutputs.length) parts.push(`output += [${a.addedOutputs.join(", ")}]`);
+                return `  ${a.instanceId}: ${parts.join(" / ")}`;
+              }).join("\n");
+              emit({
+                type: "natural",
+                kind: "assistant",
+                text: `✓ 脚本合并 spec.md 计划数据槽到 flow.yaml（已存在的跳过）：\n${summary}`,
+              });
+            } else if (r.ok && r.applied.length === 0) {
+              emit({ type: "status", line: "spec.md 计划数据槽已全部落到 flow.yaml" });
+            } else if (!r.ok) {
+              emit({ type: "natural", kind: "error", text: `合并计划数据槽失败：${r.error}` });
+            }
+          } catch (e) {
+            emit({ type: "natural", kind: "error", text: `合并计划数据槽异常：${e.message}` });
+          }
+        }
       }
 
       // ── 3. 校验（分阶段仅在最后阶段统一校验；非分阶段每次都校验） ──

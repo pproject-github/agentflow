@@ -17,6 +17,7 @@ import {
   USER_AGENTFLOW_PIPELINES_LABEL,
 } from "./paths.mjs";
 import { parseJsonStdout, runNodeScript } from "./pipeline-scripts.mjs";
+import { loadFlowDefinition } from "../pipeline/parse-flow.mjs";
 import { appendRunLogLine, emitEvent, ensureRunStartTime, readTotalExecutedMs, saveTotalExecutedMs } from "./run-events.mjs";
 import { formatDuration } from "./terminal.mjs";
 import { printEntryAndFlowFiles, printNodeStatusTable, runValidateFlowAndExitIfInvalid } from "./ui-print.mjs";
@@ -111,6 +112,110 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
         let userConfirmed = false;
         for (const pendId of pendingNodes) {
           const pendNode = parseOut.nodes?.find((n) => n.id === pendId);
+          if (pendNode?.definitionId === "tool_user_ask") {
+            const pendExecId = execIdMap[pendId] ?? 1;
+            // 读取问题内容与选项
+            let question = "";
+            try {
+              const resolvedResult = runNodeScript(workspaceRoot, "get-resolved-values.mjs", [workspaceRoot, flowName, uuid, pendId], { captureStdout: true });
+              const resolvedData = parseJsonStdout(resolvedResult);
+              const qInput = resolvedData?.resolvedInputs?.question;
+              if (qInput && typeof qInput === "string") {
+                if (fs.existsSync(qInput)) {
+                  try { question = fs.readFileSync(qInput, "utf-8"); } catch (_) {}
+                } else {
+                  question = qInput;
+                }
+              }
+            } catch (_) {}
+            let pendInst = null;
+            try {
+              const flowDef = loadFlowDefinition(flowDir);
+              pendInst = flowDef?.instances?.[pendId] || null;
+            } catch (_) {}
+            const outputSlots = Array.isArray(pendInst?.output) ? pendInst.output : [];
+            const options = outputSlots.map((slot, idx) => {
+              const name = slot?.name != null ? String(slot.name) : `option_${idx}`;
+              const rawLabel = slot?.description || slot?.value || name;
+              const label = String(rawLabel || "").trim() || name;
+              return { index: idx, name, label };
+            });
+
+            if (options.length === 0) {
+              log.info(chalk.yellow(`节点 ${pendId} 未配置任何选项（output 槽位），无法选择。请先在编辑器中添加 output 槽位。`));
+              log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+              return;
+            }
+
+            if (!process.stdin.isTTY) {
+              log.info(chalk.bold.cyan(`\n━━━ 用户选择 (${pendId}) ━━━`));
+              if (question.trim()) {
+                for (const line of question.split("\n").slice(0, 30)) process.stderr.write("  " + line + "\n");
+                process.stderr.write("\n");
+              }
+              for (const opt of options) {
+                process.stderr.write("  " + chalk.green(`[${opt.index}]`) + " " + opt.label + "\n");
+              }
+              process.stderr.write(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+              log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+              return;
+            }
+
+            console.log("");
+            console.log(chalk.bold.cyan(`╔════════════════════════════════════════════════════════════╗`));
+            console.log(chalk.bold.cyan(`║  用户选择节点: ${pendId}`) + " ".repeat(Math.max(0, 40 - pendId.length)) + "║");
+            console.log(chalk.bold.cyan(`╚════════════════════════════════════════════════════════════╝`));
+            console.log("");
+            if (question.trim()) {
+              console.log(chalk.dim("─".repeat(60)));
+              const qLines = question.split("\n").slice(0, 30);
+              for (const line of qLines) console.log("  " + line);
+              console.log(chalk.dim("─".repeat(60)));
+              console.log("");
+            }
+
+            const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+            try {
+              while (true) {
+                console.log(chalk.bold("请选择选项："));
+                for (const opt of options) {
+                  console.log("  " + chalk.green(`[${opt.index}]`) + " " + opt.label);
+                }
+                console.log("  " + chalk.red("q") + " - 取消并退出");
+                console.log("");
+                const answer = await new Promise((resolve) => {
+                  rl.question(chalk.bold(`请输入编号 [0-${options.length - 1}]: `), resolve);
+                });
+                const trimmed = answer.trim().toLowerCase();
+                if (trimmed === "q") {
+                  rl.close();
+                  log.info(chalk.yellow("用户取消，流程暂停。") + chalk.dim(` 恢复命令: ${resumeExample}`));
+                  return;
+                }
+                const idx = parseInt(trimmed, 10);
+                if (!Number.isFinite(idx) || idx < 0 || idx >= options.length) {
+                  console.log(chalk.red(`无效编号：${answer}`));
+                  continue;
+                }
+                const picked = options[idx];
+                const resultPayload = {
+                  status: "success",
+                  message: `用户选择 ${picked.name}`,
+                  branch: picked.name,
+                  execId: pendExecId,
+                };
+                runNodeScript(workspaceRoot, "write-result.mjs", [workspaceRoot, flowName, uuid, pendId, "--json", JSON.stringify(resultPayload)], { captureStdout: true });
+                log.info(chalk.dim(`用户选择 [${picked.index}] ${picked.label}，继续执行...`));
+                userConfirmed = true;
+                rl.close();
+                break;
+              }
+            } catch (err) {
+              try { rl.close(); } catch (_) {}
+              throw err;
+            }
+            continue;
+          }
           if (pendNode?.definitionId === "tool_user_check") {
             const pendExecId = execIdMap[pendId] ?? 1;
             const contentPath = path.join(getRunDir(workspaceRoot, flowName, uuid), `output/${pendId}/node_${pendId}_content.md`);
@@ -483,6 +588,47 @@ ${currentContent}
           inputPath: contentInputPath,
           outputPath: `output/${instanceId}/node_${instanceId}_content.md`,
           content,
+        });
+      }
+
+      // user_ask 节点：在主流程中发送事件（post-process 的 emitEvent 在子进程中不会到 SSE 流）
+      if (preOutput.definitionId === "tool_user_ask") {
+        const execId = preOutput.execId ?? 1;
+
+        let question = "";
+        try {
+          const resolvedResult = runNodeScript(workspaceRoot, "get-resolved-values.mjs", [workspaceRoot, flowName, uuid, instanceId], { captureStdout: true });
+          const resolvedData = parseJsonStdout(resolvedResult);
+          const qInput = resolvedData?.resolvedInputs?.question;
+          if (qInput && typeof qInput === "string") {
+            if (fs.existsSync(qInput)) {
+              try { question = fs.readFileSync(qInput, "utf-8"); } catch (_) {}
+            } else {
+              question = qInput;
+            }
+          }
+        } catch (_) {}
+
+        let inst = null;
+        try {
+          const flowDef = loadFlowDefinition(flowDir);
+          inst = flowDef?.instances?.[instanceId] || null;
+        } catch (_) {}
+        const outputSlots = Array.isArray(inst?.output) ? inst.output : [];
+        const options = outputSlots.map((slot, idx) => {
+          const name = slot?.name != null ? String(slot.name) : `option_${idx}`;
+          const rawLabel = slot?.description || slot?.value || name;
+          const label = String(rawLabel || "").trim() || name;
+          return { index: idx, name, label };
+        });
+
+        emitEvent(workspaceRoot, flowName, uuid, {
+          type: "user-ask-prompt",
+          event: "user-ask-prompt",
+          instanceId,
+          execId,
+          question,
+          options,
         });
       }
 

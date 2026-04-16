@@ -228,6 +228,11 @@
     "nextPhase": "Next phase",
     "continuePhase": "Continue {{label}}",
     "skipRemainingPhases": "Please complete all remaining steps at once (skip phased confirmation)",
+    "phaseProgress": "Phase progress",
+    "phaseReviewLabel": "Phase options",
+    "phaseReviewHint": "This phase is complete. Review the canvas, then continue to \"{{nextPhase}}\".",
+    "phaseReviewContinue": "Continue: {{label}}",
+    "phaseReviewSkip": "Skip — finish remaining in one pass",
     "stepsAriaLabel": "Task steps progress",
     "phasesAriaLabel": "Generation phases progress",
     "phaseNumber": "Phase {{index}}",
@@ -279,7 +284,20 @@
     "executionStopped": "Execution stopped",
     "resizeConsole": "Drag to resize execution log height",
     "closeLog": "Close log",
-    "userCheckContent": "Waiting for user to confirm content for node {{instanceId}}"
+    "userCheckContent": "Waiting for user to confirm content for node {{instanceId}}",
+    "userAskPrompt": "Waiting for user to choose branch for node {{instanceId}}"
+  },
+  "fileEdit": {
+    "close": "Close",
+    "loading": "Loading…",
+    "placeholder": "File content",
+    "largeFileWarning": "Large file, editor performance may be affected",
+    "reset": "Reset",
+    "aiEdit": "AI Edit",
+    "aiRunning": "AI processing…",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved"
   },
   "settings": {
     "title": "Pipeline Settings",
@@ -350,6 +368,14 @@
     "close": "Close",
     "continue": "Continue Execution",
     "hint": "Edit or use AI to modify, then save. Click 'Continue Execution' to resume the flow"
+  },
+  "userAsk": {
+    "title": "User Choice ({{instanceId}})",
+    "hint": "Pick an option below to continue the flow",
+    "submitting": "Submitting…",
+    "submitFailed": "Submit failed",
+    "close": "Close",
+    "noOptions": "No options configured on this node. Add items to the output slots in the editor first."
   },
   "toolPrint": {
     "title": "Print Output: {{instanceId}}",

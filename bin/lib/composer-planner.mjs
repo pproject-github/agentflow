@@ -9,6 +9,7 @@
 import fs from "fs";
 import { parseApiModel } from "./api-runner.mjs";
 import { buildPlannerSkillContext } from "./composer-skill-router.mjs";
+import { buildNodeSchemaPromptSection } from "./composer-node-schema.mjs";
 import { formatInstancePlannerHint } from "./composer-flow-instances.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
 import { runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
@@ -66,19 +67,23 @@ function shouldUsePhased(userPrompt, phaseContext) {
 function buildPhasedSystemPrompt(phaseName, intents) {
   const skillContext = buildPlannerSkillContext(intents || []);
   const skillSection = skillContext ? "\n\n" + skillContext : "";
+  const schemaSection = "\n\n" + buildNodeSchemaPromptSection();
 
   const phaseInstructions = {
     flow_plan: `当前阶段：**流转规划**（框架与类型优先）。
 目标：建立**清晰、合理**的整体流转图（含分支 if、循环/回流、provide、getenv、并行汇合等），**节点类型选对、框架选对、单一权责**。
 
+**前置已就位**（脚本已写盘）：\`flow.yaml\` 含 control_start + control_end + 主链 edge + nodePositions；\`${COMPOSER_NODE_SPEC_FILENAME}\` 含三段 section 占位符。规划 step 时按"插入节点 / 调整 edge / 填充 section"组织，**不要**让 AI 重建 start/end 或重写 spec.md 标题。
+
 你需要生成 agent/script 步骤，指示 AI 完成：
-1. 在 flow.yaml 中创建/调整所有 instances：\`definitionId\`、\`label\`、\`role\`；每个节点 \`body\` **仅一句**职责概要（不写长 prompt、不写可执行脚本）。
-2. **input/output**：保留各 \`definitionId\` 的**默认槽位结构**，所有 \`value\` 留空；不在此阶段纠结副槽位的精细取值。
-3. **edges**：本阶段**只连主控制/数据链**：相邻节点用 **output-0 → input-0**（prev/next 语义）。分支节点（如 control_if）可先占位，**prediction、value、多路汇合等副引脚连线留到「流程完善」阶段**；若用户只需线性主链，则 Start→…→End 用主引脚串起来即可。
+1. 在 flow.yaml 中**新增** instances（保留 start/end）：\`definitionId\`、\`label\`、\`role\`；每个节点 \`body\` **一句**职责概要即可（也允许直接写得更详细，阶段二还能补强）。
+2. **input/output（不强制锁死）**：基础控制槽（\`prev\`/\`next\` 等）必须保留 schema 默认结构。**业务数据槽（text/file）能想清楚就一次写到 flow.yaml**，阶段二会跳过已存在的槽（按 name 去重）；想不清的留到阶段二。type 必须 \`text\` 或 \`file\`，**禁止 node**。务必在节点规格书的「计划数据槽」section 也同步登记一份（作为完整设计文档与阶段二补漏依据）。
+3. **edges（不强制锁死）**：主链 \`output-0 → input-0\` 必连；副边（control_if 的 prediction、control_toBool 的 value、回流、并行汇合的 prev2、tool/agent 业务数据边）**能确定就连**，连后阶段三只补漏；不确定就留到阶段三。
 4. **ui.nodePositions**：为每个 instance 写入坐标（主链从左到右 x 每节点递增 **280**，起始 x:100 y:300；分支路径 y 错开 **200**）。
 5. **必须**在与 flow.yaml **同目录**创建（或更新）文件 **${COMPOSER_NODE_SPEC_FILENAME}**，结构如下：
    - \`## 整体框架\`：叙述主链、分支、循环、并行、全局数据（SaveKey/LoadKey）等**设计意图**（可用条目列表）。
    - \`## 节点职责\`：按 **instanceId** 分小节，写清该节点**具体要做什么**；对 **tool_nodejs** 须写明**计划脚本文件名**（如 \`scripts/xxx.mjs\`）与输入输出语义，并注明「**可执行代码在「节点补充」阶段写入**」；对 **agent_subAgent** 注明阶段二要写的 body 要点（判定规则、产物路径等）。
+   - \`## 计划数据槽\`：仅对**可扩展节点 ★**（agent_subAgent / tool_nodejs / tool_user_check）逐项列出阶段二要追加的数据槽：\`<instanceId>: input += [name:type, ...], output += [name:type, ...]\`，type 用 \`text\` 或 \`file\`；命名应与上下游一致便于连线（例如 \`agent_check: input += [toapp:text]; output += [result:text]\`）。**固定槽位节点**不在此列出。
 6. 保留且仅保留一个 control_start、一个 control_end（除非用户明确要求改造已有图）。
 7. **复杂任务循环拆解原则（关键）**
    AgentFlow 的核心优势是通过**循环**分解复杂问题（普通 CLI 因上下文限制无法解决）。规划时须主动判断是否需要环路：
@@ -108,28 +113,46 @@ function buildPhasedSystemPrompt(phaseName, intents) {
    **大任务拆解时**，优先使用 todolist 模式：先用一个节点将大任务拆解为 todolist，再用循环逐项执行。`,
 
     node_enrich: `当前阶段：**节点补充**（按节点迭代，可多步）。
-执行前须阅读 **${COMPOSER_NODE_SPEC_FILENAME}**（整体框架 + 各节点职责）与当前 **flow.yaml**。
+执行前须阅读 **${COMPOSER_NODE_SPEC_FILENAME}**（整体框架 + 各节点职责 + 计划数据槽）与当前 **flow.yaml**。
+
+**幂等原则**：阶段一可能已经把部分业务槽 / body / script 写到 flow.yaml 了。本阶段是**补漏**而非重写——逐节点对照「spec.md 计划数据槽」与「flow.yaml 现状」：
+- 槽位**已存在**（同 name）→ 跳过，不修改 type / 顺序
+- 槽位**未追加** → 在 input/output 末尾补齐
+- body / script 已经完整可执行 → 不动；为空或只有占位 → 写齐
 
 为**每个**需要完善的 instance 生成独立 agent 步骤（或确定性 script 步骤）：
-- **agent_subAgent**：编写**准确、可执行**的 \`body\`（提示词/规则/输入输出占位 \`\${...}\`）；**复杂度用 "simple"**（普通/较快模型即可）。
-- **tool_nodejs**：在流水线目录下的 **scripts/** 子目录创建 **Node 可运行脚本**（如 \`scripts/<instanceId>.mjs\`），符合项目 Node 规范（shebang/ESM 与仓库惯例一致）；在实例的 \`script\` 字段写入**完整可执行命令**（通常 \`node ...\` 调用该文件，并正确使用 \`\${}\` 占位符引用槽位）。**不要**再给 \`\${workspaceRoot}\`、\`\${runDir}\` 等占位符外包一层双引号（流水线会对每个 \`\${}\` 单独做 shell 转义）；误写如 \`node "\${workspaceRoot}/..."\` 会导致路径错误。**禁止**仅写自然语言于 body 而无 script。
-- **control_toBool / provide_str / provide_file** 等：按规格书填写 \`body\` 或 output \`value\`。
-- **引脚**：按 \`reference/flow-control-capabilities.md\` 与节点定义，**核对并修正 input/output 列表顺序与索引**，确保与后续连线使用的 input-N/output-N 一致。
+- **agent_subAgent**：若 body 已是可执行 prompt 则跳过；否则编写**准确、可执行**的 \`body\`（提示词/规则/输入输出占位 \`\${...}\`）。**复杂度用 "simple"**。
+- **tool_nodejs**：若 \`script\` 字段已是完整命令且 scripts/ 下脚本已存在 → 跳过；否则在 **scripts/** 子目录创建 Node 脚本（\`scripts/<instanceId>.mjs\`），\`script\` 写入完整 \`node ...\` 调用并用 \`\${}\` 引用槽位。**不要**给 \`\${workspaceRoot}\`、\`\${runDir}\` 等外包双引号（已自动 shell-quote）。**禁止**仅 body 自然语言无 script。
+- **control_toBool / provide_str / provide_file** 等：按规格书补齐空的 \`body\` 或 output \`value\`。
+- **引脚补漏**：核对 body/script 中每个 \`\${X}\` 是否对应实际槽位 name；缺槽就在末尾追加（type 必为 \`text\` 或 \`file\`，**绝不写 node**），多余的不要动（可能是阶段三连线用）。
+- **不得删改基础控制槽**（\`prev\`/\`next\` 的 type/name 与顺序）；**固定槽位节点**（control_* / provide_* / tool_load_key/save_key/get_env / tool_print / tool_user_ask）的 input/output 结构永不修改。
 
 **引脚路径约束（tool_nodejs 必读）：** 脚本的输入输出文件路径**必须通过引脚传入**，禁止在脚本内部自行拼接。
 - \`script\` 字段中用 \`\${槽位名}\` 引用 input/output 的文件路径（如 \`--figma-tree \${figma_tree} --output \${restore_todolist}\`），流水线会将其解析为绝对路径并自动 shell-quote。
 - 脚本通过命令行参数接收这些路径后直接读写，**禁止**在脚本中用 \`outDirForNode\`、手写 \`node_<instance>_xxx.json/md\` 等方式自行构造路径——否则产物路径与流水线解析器约定不一致，下游节点将找不到文件。
 - output 类型为「文件」的槽位路径由流水线按约定生成（\`output/<instanceId>/node_<instanceId>_<slot>.md\`），脚本只需 \`ensureDir(path.dirname(outPath))\` 后写入即可。
 
-规则：**不要**在此阶段大改拓扑（尽量不增删 instance、不改 definitionId）；**不要**添加完整的分支副引脚连线（留待流程完善）。可适当微调 \`nodePositions\` 仅当妨碍阅读。`,
+规则：**不要**在此阶段大改拓扑（尽量不增删 instance、不改 definitionId）。**已存在的边不要重复添加**；阶段一可能已连了部分副边，本阶段聚焦节点内容补漏。可适当微调 \`nodePositions\` 仅当妨碍阅读。`,
 
     flow_finish: `当前阶段：**流程完善**。
 依据 **${COMPOSER_NODE_SPEC_FILENAME}** 与 flow.yaml 中已有实例与内容：
-1. **补全 edges**：所有数据流、control_if 的 prediction、多输入汇合（control_anyOne）、tool 槽位等，**sourceHandle/targetHandle 必须与槽位索引一致**（如 output-1 → input-1）。
-2. **ui.nodePositions**：按 \`reference/flow-layout.md\` 优化布局（主链 x 递增、分支 y 错开、避免一条线）。
-3. 完成后应能通过 validate-flow；若规划器拆步，可用 add-edge、update-position 等 script 步骤，必要时用 agent 步骤处理复杂拓扑。
 
-**不要**在此阶段重写 tool_nodejs 脚本正文（除非为修复连线/占位符所必需的小改）。`,
+**幂等原则**：阶段一/二可能已经连了主链和部分副边。本阶段是**补漏 + 审计**而非重连：
+- 边**已存在**（同 source/target/sourceHandle/targetHandle）→ 跳过，不重复添加
+- 边**缺失**（spec.md「节点职责」的「输入 ← 来自 X」「输出 → 给 Y」描述了但 flow.yaml 没连）→ 补连
+
+具体：
+1. **补齐 edges**：数据流（text/file 槽对槽）、control_if 的 prediction（toBool.output-1 → if.input-1）、多输入汇合（anyOne.input-1 接修复回流）、tool 业务数据边等。**sourceHandle/targetHandle 必须与槽位索引一致**（如 output-1 → input-1）。
+2. **引脚语义审查 checklist**（每节点过一遍，发现问题修正）：
+   a. **同 output 多消费者冲突**：一个 output 槽被两条边消费且消费方语义矛盾（如同时供 \`control_toBool.value\`（要 true/false 单行）和 \`agent.input\`（要详细内容）→ 必须**拆成两个 output 槽**（如 \`result:text\` + \`report:file\`）
+   b. **text vs file 错配**：内容超过 ~1KB 或为多行报告/日志/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
+   c. **bool 误用**：\`bool\` 槽只允许出现在 \`control_toBool.prediction\`(out) 与 \`control_if.prediction\`(in) 这一对位置，其它任何节点禁用
+   d. **节点类型错配**：发现 \`tool_nodejs\` 实际做的是非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 把要求写到 body
+   e. **provide_* 类型对齐**：\`provide_str\` 必须 \`output[0].type=text\`；\`provide_file\` 必须 \`output[0].type=file\`
+3. **ui.nodePositions**：按 \`reference/flow-layout.md\` 优化布局（主链 x 递增、分支 y 错开、避免一条线）。
+4. 完成后应能通过 validate-flow；可用 add-edge、update-position 等 script 步骤，必要时用 agent 步骤处理复杂拓扑。
+
+**不要**在此阶段重写 tool_nodejs 脚本正文（除非为审查 d 类型错配或修复占位符所必需）。`,
   };
 
   return `你是 AgentFlow Composer 的分阶段任务规划器。当前正在执行分阶段 flow 生成的特定阶段。
@@ -162,7 +185,8 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
    - 若需 AI 生成 → 用 agent 步骤，prompt 中**必须**写明：「把可执行脚本写入 \`script\` 字段（YAML \`|\` 块），body 只写一句说明。script 为空或为自然语言将导致节点失败。」
    - \`script\` 中**禁止**写成 \`node "\${workspaceRoot}/..."\`：\`\${}\` 已会被单独转义，外包双引号会破坏路径；应写成 \`node \${workspaceRoot}/...\`。
 3. 只做当前阶段的工作，不要超出范围
-4. agent 步骤 prompt 里要包含 flow.yaml 路径和上下文${skillSection}
+4. agent 步骤 prompt 里要包含 flow.yaml 路径和上下文
+5. 生成的 agent 步骤 prompt 必须**复述**或**引用**下方「内置节点 schema」中相关 definitionId 的槽位（type/name/顺序），让子 agent 不必再去读 builtin/nodes/${schemaSection}${skillSection}
 
 输出严格 JSON：
 {
@@ -194,6 +218,7 @@ function buildPhasedUserMessage(userPrompt, flowYaml, flowYamlAbs, phaseName, ph
 function buildPlannerSystemPrompt(intents) {
   const skillContext = buildPlannerSkillContext(intents || []);
   const skillSection = skillContext ? "\n\n" + skillContext : "";
+  const schemaSection = "\n\n" + buildNodeSchemaPromptSection();
 
   return `你是 AgentFlow Composer 的任务规划器。将用户的 flow.yaml 编辑请求分解为独立子任务。
 
@@ -227,7 +252,7 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
 4. 不同节点的内容生成拆为独立 agent 步骤；涉及已有实例时填写 **instanceId**，**nodeRole** 与该实例在 YAML 中的 role 一致；需要指定本步 CLI 模型时可填 **executorModel**
 5. 先改内容再连线，先加节点再连线
 6. agent 步骤 prompt 里要包含 flow.yaml 路径和上下文
-7. **循环拆解**：涉及校验/检查/迭代/批量/遍历的流程，agent 步骤的 prompt 中须指导 AI 用 control_anyOne + control_toBool + control_if 设计环路（check → fix → re-check），禁止线性链。批量/大任务推荐 todolist 模式（拆解产出 \`- [ ]\` 清单 → 循环执行打勾 → ToBool 判定全部完成 → If 出环/继续）${skillSection}
+7. **循环拆解**：涉及校验/检查/迭代/批量/遍历的流程，agent 步骤的 prompt 中须指导 AI 用 control_anyOne + control_toBool + control_if 设计环路（check → fix → re-check），禁止线性链。批量/大任务推荐 todolist 模式（拆解产出 \`- [ ]\` 清单 → 循环执行打勾 → ToBool 判定全部完成 → If 出环/继续）${schemaSection}${skillSection}
 
 输出严格 JSON：
 {
@@ -515,8 +540,12 @@ export async function planComposerTasks(opts) {
   const systemPrompt = buildPlannerSystemPrompt(opts.intents);
   const userMessage = buildPlannerUserMessage(opts.userPrompt, flowYaml, opts.instanceIds, opts.flowYamlAbs, opts.thread);
 
+  emit({ type: "ai-log", tag: "planner-system", text: systemPrompt, meta: { provider: apiProvider.provider, model: apiProvider.model, mode: "regular" } });
+  emit({ type: "ai-log", tag: "planner-user", text: userMessage, meta: { flowYamlAbs: opts.flowYamlAbs || null, instanceIds: opts.instanceIds || [] } });
+
   try {
     const raw = await callPlannerApi(systemPrompt, userMessage, apiProvider);
+    emit({ type: "ai-log", tag: "planner-response", text: String(raw || ""), meta: { provider: apiProvider.provider, model: apiProvider.model } });
     const steps = parseStepsJson(raw);
     if (steps && steps.length > 0) {
       return { steps };
@@ -530,14 +559,7 @@ export async function planComposerTasks(opts) {
 }
 
 // ─── 分阶段 CLI 快捷路径：追加到 agent prompt 的固定指引 ───────────────────
-
-const NODE_TYPE_CHEATSHEET = `
-### 节点类型速查（definitionId）
-- **control_start / control_end**：唯一入口、唯一出口
-- **control_if / control_toBool / control_anyOne**：二分支、文本转 bool、多路汇合
-- **provide_str**、**provide_file**、**tool_save_key**、**tool_load_key**、**tool_get_env**：固定输入、run 内存储、环境配置
-- **tool_nodejs** / **tool_print** / **agent_subAgent**：确定性脚本、醒目输出、需 LLM 推理
-**原则**：单一权责；能 tool 不用 agent；分支用 toBool+if；固定文本用 provide；密钥用 get_env。`;
+// 节点类型速查已并入 buildNodeSchemaCompactSection，不在此处重复
 
 /** 与 API 规划器 flow_plan 阶段对齐的 CLI 指引 */
 function buildPhaseCliGuide(phaseIndex) {
@@ -547,15 +569,32 @@ function buildPhaseCliGuide(phaseIndex) {
 ## 阶段：流转规划（必读）
 目标：**框架合理、类型正确、职责清晰**。建立可读的流转图（含 if/循环/并行等时选对节点）。
 
-1. **flow.yaml**：instances 含 definitionId、label、role；body **仅一句**职责概要；IO 用默认结构、**value 全空**。
-2. **edges（主链）**：仅用 **output-0 → input-0** 串主路径（Start→…→End）。**prediction、value、分支第二输出等副引脚连线留到「流程完善」**。
-3. **ui.nodePositions**：每个 instance 有坐标，主链从左到右 x 每节点递增 **280**（起始 x:100 y:300），分支 y 错开 **200**。
-4. **必须**在与 flow.yaml **同目录**写入 **${COMPOSER_NODE_SPEC_FILENAME}**：
+**前置已就位**（脚本已写盘，**无需重建**）：
+- \`flow.yaml\` 已含 \`control_start\` + \`control_end\` + 一条主链 edge（output-0 → input-0）+ \`ui.nodePositions\`
+- \`${COMPOSER_NODE_SPEC_FILENAME}\` 已含三段 section 占位符（整体框架 / 节点职责 / 计划数据槽）
+
+你的工作（**鼓励一次写到位，不强行拆阶段**）：
+1. **向 flow.yaml 的 instances 中插入新节点**（保留 start/end，不要删改现有两节点）：definitionId、label。body 写一句职责概要即可；如果你已经清楚要做什么，**也允许直接写得详细**——阶段二会按 name 去重不会重复。
+2. **input/output（不强制锁死）**：基础控制槽（\`prev\`/\`next\` 等）保留 schema 默认结构。**业务数据槽（text/file）想清楚的就直接追加到 flow.yaml** 末尾，阶段二会跳过已存在的 name；想不清的留到阶段二。type 必为 \`text\` 或 \`file\`，**禁止 node**。务必**同时**在 spec.md「计划数据槽」section 登记一份完整设计（即使你已落到 yaml）——让 spec.md 始终是完整设计文档，阶段二/三的补漏依据。
+3. **edges（不强制锁死）**：
+   - 删除 skeleton 的 start→end 占位 edge，改为 Start→N1→N2→…→End 的主路径，均用 **output-0 → input-0**
+   - 副边（control_if 的 prediction、control_toBool 的 value、回流到 anyOne.prev2、tool/agent 业务数据边）**能确定就连**——连后阶段三只补漏；不确定就留到阶段三，spec.md 节点职责里写清「输入 ← 来自 X」「输出 → 给 Y」即可
+4. **ui.nodePositions**：为每个新 instance 加坐标，主链从左到右 x 每节点递增 **280**（起始 x:100 y:300），分支 y 错开 **200**。不要动 start/end 现有坐标。
+5. **填充 ${COMPOSER_NODE_SPEC_FILENAME} 三段 section**（保留文件结构与标题；删除 HTML 注释占位 \`<!-- ... -->\` 后写入具体内容）：
    - \`## 整体框架\`：主链、分支、循环、并行、全局数据等设计说明。
-   - \`## 节点职责\`：按 **instanceId** 写清要做什么；**tool_nodejs** 写计划脚本路径（如 \`scripts/xxx.mjs\`）并注明「**可执行代码在节点补充阶段写入**」；**agent_subAgent** 写阶段二要充实 body 的要点。
-5. 保留一个 control_start、一个 control_end。
+   - \`## 节点职责\`：**每个 instanceId 必须写齐 4 项**：
+     - **职责**：一句话
+     - **输入**：列出每个 input 槽 → 语义 + 来源（\`<上游id>.<slot>\`）
+     - **输出**：列出每个 output 槽 → 语义 + 去向（\`<下游id>.<slot>\`）
+     - **实现要点**：tool_nodejs 写脚本路径（\`scripts/<id>.mjs\`）、agent_subAgent 写 body 关键点、control_* 写判定/汇合规则、provide_* 写固定值
+     用途：输入/输出的来源/去向就是阶段三连线 \`sourceHandle/targetHandle\` 的依据，写清此处可避免阶段三反复猜
+   - \`## 计划数据槽\`：仍然要写（即使阶段一已落到 yaml）——是阶段二/三的设计权威与对账依据
 6. **循环拆解原则**：AgentFlow 通过循环分解复杂问题。涉及校验/检查/迭代/批量/遍历的任务，**必须**用 control_anyOne + control_toBool + control_if 构建环路（check → fix → re-check），**禁止**设计成线性链。批量/大任务优先使用 **todolist 模式**：拆解节点产出 \`- [ ]\` 清单 → 循环执行并打勾 → ToBool 判定全部完成 → If 出环/继续。
-${NODE_TYPE_CHEATSHEET}`;
+**节点类型选型判据**：**确定性任务 → \`tool_nodejs\`；非确定性任务 → \`agent_subAgent\`**。
+- **确定性** = 相同输入永远产出相同输出，可用普通代码完整描述（跑 CLI、npm、读写文件、JSON/路径转换、调现成 API 解析固定格式）→ tool_nodejs
+- **非确定性** = 需语义理解或创造（**代码翻译/生成**如 Android→RN、Vue→React；**理解源码/文本**如解析、改写、review；**多步推理决策**；**创意写作**）→ agent_subAgent
+- 醒目输出 → \`tool_print\`；分支 → \`toBool+if\`；固定文本 → \`provide\`；密钥 → \`get_env\`
+**反例**：『Android 页面转 RN/TS』『代码 review』必然非确定性，必须 agent_subAgent，做成 tool_nodejs 必然失败。`;
   }
   if (phaseIndex === 1) {
     return `
@@ -573,8 +612,14 @@ ${NODE_TYPE_CHEATSHEET}`;
 
 ## 阶段：流程完善（必读）
 1. 依据 **${COMPOSER_NODE_SPEC_FILENAME}** 与当前 **flow.yaml**，**补全所有 edges**（含 if 的 prediction、多路 handle 等），handle 与槽位索引严格对应。
-2. **优化 ui.nodePositions**（参考 flow-layout.md：主链 x 递增、分支 y 错开）。
-3. 完成后须能通过 **validate-flow**；本轮结束后系统会自动校验并尝试修复。`;
+2. **引脚语义审查 checklist**（每节点过一遍）：
+   a. **同 output 多消费者冲突**：一个 output 同时供给两个语义矛盾的下游（如 \`toBool.value\` 要单行 true/false 与 \`agent.input\` 要详细内容）→ 拆成两个 output 槽
+   b. **text/file 错配**：内容超 ~1KB 或多行报告/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
+   c. **bool 误用**：\`bool\` 槽只允许 \`control_toBool.prediction\`(out) → \`control_if.prediction\`(in)，其它禁用
+   d. **节点类型错配**：\`tool_nodejs\` 实际做非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 写 body
+   e. **provide_* 类型对齐**：\`provide_str.output[0].type\` 必为 \`text\`；\`provide_file.output[0].type\` 必为 \`file\`
+3. **优化 ui.nodePositions**（参考 flow-layout.md：主链 x 递增、分支 y 错开）。
+4. 完成后须能通过 **validate-flow**；本轮结束后系统会自动校验并尝试修复。`;
   }
   return "";
 }
@@ -633,8 +678,12 @@ async function planSinglePhase(opts) {
   const systemPrompt = buildPhasedSystemPrompt(phase.name, opts.intents);
   const userMessage = buildPhasedUserMessage(userPromptForPlan, flowYaml, opts.flowYamlAbs, phase.name, phaseIndex, opts.thread);
 
+  emit({ type: "ai-log", tag: "planner-system", text: systemPrompt, meta: { provider: apiProvider.provider, model: apiProvider.model, mode: "phased", phaseName: phase.name, phaseIndex } });
+  emit({ type: "ai-log", tag: "planner-user", text: userMessage, meta: { flowYamlAbs: opts.flowYamlAbs || null, phaseName: phase.name, phaseIndex } });
+
   try {
     const raw = await callPlannerApi(systemPrompt, userMessage, apiProvider);
+    emit({ type: "ai-log", tag: "planner-response", text: String(raw || ""), meta: { provider: apiProvider.provider, model: apiProvider.model, phaseName: phase.name, phaseIndex } });
     const steps = parseStepsJson(raw);
     if (steps && steps.length > 0) {
       return { steps, phased: true, phases: buildPhasesWithStatus(phaseIndex), currentPhase: phaseIndex };

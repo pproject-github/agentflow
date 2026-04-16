@@ -20,7 +20,30 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:github.com)",
       "Bash(gh api:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(node --check bin/lib/apply.mjs)",
+      "Bash(node --check bin/pipeline/post-process-node.mjs)",
+      "Bash(node --check bin/pipeline/get-ready-nodes.mjs)",
+      "Bash(node --check bin/lib/ui-server.mjs)",
+      "Bash(node --check bin/lib/paths.mjs)",
+      "Bash(python3 -c \"import json; json.load\\(open\\('builtin/web-ui/src/i18n/locales/zh/flow.json'\\)\\)\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('builtin/web-ui/src/i18n/locales/en/flow.json'\\)\\)\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('bin/lib/locales/zh.json'\\)\\)\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('bin/lib/locales/en.json'\\)\\)\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('builtin/web-ui/src/i18n/locales/zh/flow.json'\\)\\); json.load\\(open\\('builtin/web-ui/src/i18n/locales/en/flow.json'\\)\\)\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const c=fs.readFileSync\\('src/pages/FlowEditorPage.jsx','utf-8'\\);console.log\\('size:',c.length,'lines:',c.split\\('\\\\n'\\).length\\);\")",
+      "Bash(npx --no-install esbuild --loader=jsx --bundle=false src/pages/FlowEditorPage.jsx --outfile=/tmp/flow-editor-check.js)",
+      "Bash(npx --no-install esbuild --loader=jsx src/pages/FlowEditorPage.jsx --outfile=/tmp/flow-editor-check.js)",
+      "Bash(npx --no-install esbuild --loader:.jsx=jsx src/pages/FlowEditorPage.jsx --outfile=/tmp/fec.js --bundle=false)",
+      "Bash(node --check bin/lib/agent-runners.mjs)",
+      "Bash(find /Users/bigo/Documents/AIProject/AgentFlow -name \"*.md\" -type f -exec grep -l \"provide_str\\\\|provide_file\\\\|provide_fromapp\" {} \\\\;)",
+      "Bash(node *)",
+      "Bash(mkdir -p /tmp/agentflow-vtest/.workspace/agentflow/pipelines/BadFlow)",
+      "Read(//tmp/agentflow-vtest/.workspace/agentflow/pipelines/**)",
+      "Bash(mkdir -p ~/agentflow/pipelines/Bad)",
+      "Bash(cp /tmp/af-validate-test/pipelines/Bad/flow.yaml ~/agentflow/pipelines/Bad/flow.yaml)",
+      "Bash(awk *)",
+      "Bash(curl *)"
     ]
   }
 }

@@ -388,8 +388,18 @@ export function runOpenCodeAgentForNode(
 
 const COMPOSER_STATUS_MAX = 200;
 
+/**
+ * 去除 ANSI escape（颜色/光标控制 / OSC / 私有序列）。OpenCode `run` 模式 stdout 走 TUI 渲染，
+ * 含大量 \x1b[...m / \x1b]...BEL 类序列。Cursor/OpenCode 的 stderr 也常带这些。
+ */
+const ANSI_ESCAPE_RE = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PRZcf-ntqry=><~]))/g;
+
+function stripAnsi(s) {
+  return String(s || "").replace(ANSI_ESCAPE_RE, "");
+}
+
 function truncateComposerLine(s) {
-  const t = String(s || "").replace(/\s+/g, " ").trim();
+  const t = stripAnsi(s).replace(/\s+/g, " ").trim();
   if (t.length <= COMPOSER_STATUS_MAX) return t;
   return t.slice(0, COMPOSER_STATUS_MAX - 1) + "…";
 }
@@ -433,10 +443,11 @@ function extractCursorResultNl(event) {
 
 function tryEmitOpenCodeLineAsNatural(line, emit) {
   const raw = String(line || "");
-  const t = raw.trim();
-  if (!t) return;
+  // OpenCode run 模式输出 TUI 渲染（CR 覆盖 + ANSI 颜色），先清掉再判断
+  const cleaned = stripAnsi(raw).replace(/\r/g, "").trim();
+  if (!cleaned) return;
   try {
-    const ev = JSON.parse(t);
+    const ev = JSON.parse(cleaned);
     if (ev && typeof ev === "object") {
       const ty = ev.type;
       if (ty === "thinking" || ty === "assistant") {
@@ -453,8 +464,8 @@ function tryEmitOpenCodeLineAsNatural(line, emit) {
   } catch {
     /* 非 JSON，按正文行处理 */
   }
-  if (t.startsWith("{") || t.startsWith("[")) return;
-  emit({ type: "natural", kind: "assistant", text: t });
+  if (cleaned.startsWith("{") || cleaned.startsWith("[")) return;
+  emit({ type: "natural", kind: "assistant", text: cleaned });
 }
 
 /**

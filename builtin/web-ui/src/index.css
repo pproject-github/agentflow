@@ -2322,8 +2322,130 @@ button.af-project-card {
   margin-bottom: 0.15rem;
 }
 
-.af-palette-workspace-item:hover {
+.af-palette-workspace-item--directory {
+  cursor: default;
+  font-weight: 500;
+}
+
+.af-palette-workspace-item--directory:hover {
+  background: transparent;
+}
+
+.af-palette-workspace-item-size {
+  font-family: var(--af-mono);
+  font-size: 0.55rem;
+  color: rgba(202, 195, 216, 0.4);
+  margin-left: auto;
+}
+
+.af-palette-workspace-item-count {
+  font-size: 0.55rem;
+  color: rgba(202, 195, 216, 0.4);
+  margin-left: auto;
+}
+
+.af-palette-workspace-group--sub {
+  margin-left: 0.5rem;
+  border-left: 1px solid rgba(73, 68, 85, 0.15);
+  padding-left: 0.5rem;
+}
+
+.af-palette-workspace-group--sub .af-palette-workspace-group-head {
+  font-size: 0.55rem;
+}
+
+.af-palette-workspace-item--clickable {
+  cursor: pointer;
+}
+
+.af-palette-workspace-item--clickable:hover {
   background: rgba(124, 77, 255, 0.1);
+}
+
+/* File Edit Modal */
+.af-shortcuts-panel.af-file-edit-panel {
+  width: min(56rem, calc(100vw - 3rem));
+  max-height: min(92vh, 60rem);
+  min-height: 600px;
+  height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.af-file-edit-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.af-file-edit-loading,
+.af-file-edit-error {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: rgba(202, 195, 216, 0.6);
+  font-size: 0.75rem;
+}
+
+.af-file-edit-error {
+  color: #f87171;
+}
+
+.af-file-edit-warning {
+  font-size: 0.65rem;
+  color: #fbbf24;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0.3rem;
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.af-file-edit-textarea {
+  width: 100%;
+  flex: 1;
+  min-height: 400px;
+  resize: vertical;
+  background: var(--af-surface-container-lowest);
+  border: 1px solid rgba(73, 68, 85, 0.2);
+  border-radius: 0.5rem;
+  color: var(--af-on-surface);
+  font-family: var(--af-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  padding: 0.75rem;
+  outline: none;
+}
+
+.af-file-edit-textarea:focus {
+  border-color: var(--af-primary);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.2);
+}
+
+.af-file-edit-status {
+  font-size: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  color: #f87171;
+  border-top: 1px solid rgba(73, 68, 85, 0.1);
+}
+
+.af-file-edit-status--success {
+  color: #4ade80;
+}
+
+.af-file-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid rgba(73, 68, 85, 0.1);
+}
+
+.af-btn-ai {
+  background: rgba(124, 77, 255, 0.1);
+  border-color: rgba(124, 77, 255, 0.3);
 }
 
 .af-palette-workspace-item--active {
@@ -4087,6 +4209,15 @@ button.af-project-card {
   display: flex;
   gap: 6px;
   margin-bottom: 6px;
+}
+
+/* 两按钮分组：窄屏 wrap 时整组靠右换行，避免「跳过」单独贴左 */
+.af-composer-phase-review-buttons {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  align-items: center;
 }
 
 .af-composer-phase-btn {
@@ -7321,6 +7452,177 @@ button.af-exec-history-card {
 .af-user-check-modal__btn--continue:hover {
   background: var(--af-primary);
   color: var(--af-on-primary);
+}
+
+/* user_ask modal: 选项式分支确认，复用 user_check 的遮罩与动画 */
+.af-user-ask-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.af-user-ask-modal {
+  background: var(--af-surface-low);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 1rem;
+  width: min(90vw, 640px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: scaleIn 0.2s ease-out;
+}
+
+.af-user-ask-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--af-outline-variant);
+}
+
+.af-user-ask-modal__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--af-headline);
+  font-size: 1.1rem;
+  color: var(--af-primary);
+}
+
+.af-user-ask-modal__title .material-symbols-outlined {
+  font-size: 1.5rem;
+}
+
+.af-user-ask-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.af-user-ask-modal__btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  font-family: var(--af-body);
+  color: var(--af-on-surface);
+  background: var(--af-surface-container-high);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.af-user-ask-modal__btn:hover {
+  background: var(--af-surface-bright);
+  border-color: var(--af-primary);
+}
+
+.af-user-ask-modal__body {
+  padding: 1.25rem;
+  background: var(--af-surface);
+  overflow: auto;
+}
+
+.af-user-ask-modal__question {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.75rem;
+  color: var(--af-on-surface);
+  font-family: var(--af-body);
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.af-user-ask-modal__question pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.af-user-ask-modal__options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.af-user-ask-modal__empty {
+  padding: 1rem;
+  color: var(--af-on-surface-variant);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.af-user-ask-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--af-surface-container-high);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  color: var(--af-on-surface);
+  font-family: var(--af-body);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.af-user-ask-option:hover:not(:disabled) {
+  background: var(--af-surface-bright);
+  border-color: var(--af-primary);
+}
+
+.af-user-ask-option:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.af-user-ask-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.af-user-ask-option__index {
+  font-family: var(--af-mono, monospace);
+  font-size: 0.8rem;
+  color: var(--af-primary);
+  flex: 0 0 auto;
+  padding: 0.15rem 0.5rem;
+  background: var(--af-surface-lowest);
+  border-radius: 0.4rem;
+}
+
+.af-user-ask-option__label {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.af-user-ask-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--af-outline-variant);
+  background: var(--af-surface-high);
+}
+
+.af-user-ask-modal__hint {
+  font-size: 0.8rem;
+  color: var(--af-on-surface-variant);
 }
 
 /* Run Config Panel */

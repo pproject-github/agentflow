@@ -26,9 +26,11 @@ import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
 import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
+import { FileEditModal } from "../FileEditModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import RunNodeContextPanel from "../RunNodeContextPanel.jsx";
 import RunConfigPanel from "../components/RunConfigPanel.jsx";
+import LogViewer from "../components/LogViewer.jsx";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -59,21 +61,18 @@ const FlowNodeContext = createContext({ modelLists: { cursor: [], opencode: [] }
 
 /** 包装 FlowNode 以注入 deleteNode 与 onProvideExpand 功能 */
 function FlowNodeWrapper(props) {
-  const { setNodes, nodes } = useReactFlow();
+  const { setNodes } = useReactFlow();
   const { modelLists, onModelChange } = useContext(FlowNodeContext);
   const deleteNode = useCallback((nodeId) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
   }, [setNodes]);
-  const onProvideExpand = useCallback((nodeId) => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (node) {
-      const definitionId = node.data?.definitionId || "";
-      const label = node.data?.label || nodeId;
-      const content = node.data?.outputs?.[0]?.default || "";
-      window.__provideEditContent = { instanceId: nodeId, label, definitionId, content };
-      window.dispatchEvent(new CustomEvent("provide-expand"));
-    }
-  }, [nodes]);
+  const onProvideExpand = useCallback(() => {
+    const definitionId = props.data?.definitionId || "";
+    const label = props.data?.label || props.id;
+    const content = props.data?.outputs?.[0]?.value || props.data?.outputs?.[0]?.default || "";
+    window.__provideEditContent = { instanceId: props.id, label, definitionId, content };
+    window.dispatchEvent(new CustomEvent("provide-expand"));
+  }, [props.id, props.data]);
   return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} modelLists={modelLists} onModelChange={onModelChange} />;
 }
 
@@ -431,14 +430,16 @@ function AssistantStreamBlocks({ segments, running = false }) {
   );
 }
 
-function FitViewHelper({ fitViewEpoch, nodeCount }) {
+function FitViewHelper({ fitViewEpoch }) {
   const { fitView } = useReactFlow();
+  const fitViewRef = useRef(fitView);
+  fitViewRef.current = fitView;
   useEffect(() => {
-    if (fitViewEpoch > 0 && nodeCount > 0) {
-      const t = requestAnimationFrame(() => fitView({ padding: 0.2, duration: 200 }));
+    if (fitViewEpoch > 0) {
+      const t = requestAnimationFrame(() => fitViewRef.current({ padding: 0.2, duration: 200 }));
       return () => cancelAnimationFrame(t);
     }
-  }, [fitViewEpoch, nodeCount, fitView]);
+  }, [fitViewEpoch]);
   return null;
 }
 
@@ -492,6 +493,7 @@ function FlowBoard({
       elementsSelectable={!isRunMode}
       panActivationKeyCode="Space"
       proOptions={{ hideAttribution: true }}
+      fitView={false}
       defaultEdgeOptions={{
         style: { stroke: "rgba(205, 189, 255, 0.45)", strokeWidth: 2 },
       }}
@@ -542,7 +544,7 @@ function FlowBoard({
         <Panel position="bottom-left" className="af-pin-legend">
           {[
             { type: "node", color: "#ff9800" },
-            { type: "str", color: "#2196f3" },
+            { type: "text", color: "#2196f3" },
             { type: "file", color: "#4caf50" },
             { type: "bool", color: "#9c27b0" },
           ].map(({ type, color }) => (
@@ -553,7 +555,7 @@ function FlowBoard({
           ))}
         </Panel>
       )}
-      <FitViewHelper fitViewEpoch={fitViewEpoch} nodeCount={nodes.length} />
+      <FitViewHelper fitViewEpoch={fitViewEpoch} />
       {!isRunMode && nodes.length === 0 ? (
         <div className="af-flow-empty-hint">
           <span className="af-flow-empty-hint-icon material-symbols-outlined">account_tree</span>
@@ -633,6 +635,9 @@ export default function FlowEditorPage() {
   const [moveFlowBusy, setMoveFlowBusy] = useState(false);
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [fileEditModal, setFileEditModal] = useState(
+    /** @type {null | { filePath: string, fileName: string }} */ (null),
+  );
   /** 槽位校验横幅：关闭后隐藏，直至刷新、切换流水线或警告集合变化 */
   const [slotWarningsBannerDismissed, setSlotWarningsBannerDismissed] = useState(false);
   const [slotWarningsRefreshing, setSlotWarningsRefreshing] = useState(false);
@@ -646,15 +651,15 @@ export default function FlowEditorPage() {
   const [recentRunsError, setRecentRunsError] = useState("");
   const [recentRunsLoading, setRecentRunsLoading] = useState(false);
 
-  // 工作区树形结构
+  // 工作区展开状态
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
-  const [workspaceTree, setWorkspaceTree] = useState(
-    /** @type {{ pipelines: Array<{id: string, source: string, archived?: boolean}>, runs: Array<{flowId: string, runs: Array<{runId: string, at: number}>}> }} */ ({
-      pipelines: [],
-      runs: [],
+  // 当前 pipeline 目录下的文件列表
+  const [pipelineFiles, setPipelineFiles] = useState(
+    /** @type {{ files: Array<{name: string, type: 'file'|'directory', icon: string, path: string, size?: number, children?: Array}>, path?: string, error?: string }} */ ({
+      files: [],
     }),
   );
-  const [workspaceTreeLoading, setWorkspaceTreeLoading] = useState(false);
+  const [pipelineFilesLoading, setPipelineFilesLoading] = useState(false);
 
   // ── Engine online detection ──
   const [engineOnline, setEngineOnline] = useState(true);
@@ -670,6 +675,15 @@ export default function FlowEditorPage() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dev-info")
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setIsDevMode(Boolean(data?.isDev)); })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, []);
+
   // ── Run mode state ──
   const [runMode, setRunMode] = useState(/** @type {"edit" | "running" | "stopped" | "done" | "error"} */ ("edit"));
   const [runLogs, setRunLogs] = useState(/** @type {Array<{ ts: string, type: string, text: string }>} */ ([]));
@@ -678,6 +692,8 @@ export default function FlowEditorPage() {
   const [runStartTime, setRunStartTime] = useState(/** @type {number | null} */ (null));
   const [runElapsedMs, setRunElapsedMs] = useState(0);
   const [runConsoleOpen, setRunConsoleOpen] = useState(false);
+  const [isDevMode, setIsDevMode] = useState(false);
+  const [logViewerOpen, setLogViewerOpen] = useState(false);
   const [runConsoleHeightPx, setRunConsoleHeightPx] = useState(readRunConsoleHeightPx);
   const runConsoleResizeDragRef = useRef(
     /** @type {{ active: boolean, pointerId: number, startY: number, startH: number }} */ ({
@@ -705,6 +721,11 @@ export default function FlowEditorPage() {
   const [userCheckAiPrompt, setUserCheckAiPrompt] = useState("");
   const [userCheckAiRunning, setUserCheckAiRunning] = useState(false);
   const userCheckEditRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
+
+  const [userAskPrompt, setUserAskPrompt] = useState(
+    /** @type {null | { instanceId: string, execId: number, question: string, options: Array<{ index: number, name: string, label: string }> }} */ (null),
+  );
+  const [userAskSubmitting, setUserAskSubmitting] = useState(false);
 
   const [toolPrintContent, setToolPrintContent] = useState(
     /** @type {null | { instanceId: string, execId: number, content: string, createdAt: number }} */ (null),
@@ -1145,7 +1166,7 @@ export default function FlowEditorPage() {
     [flowSlotEdgeWarnings],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     // 默认行为：仅 warning 时收起；存在 error 时展开。
     setSlotWarningsBannerDismissed(flowSlotEdgeWarnings.length > 0 && !hasSlotValidationError);
   }, [slotWarningsSignature, selected?.id, selected?.source, flowSlotEdgeWarnings.length, hasSlotValidationError]);
@@ -2154,6 +2175,18 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             ...prev,
             { ts: now, type: "user-check", text: t("flow:run.userCheckContent", { instanceId: msg.instanceId }) },
           ]);
+        } else if (msg.type === "user-ask-prompt") {
+          setUserAskPrompt({
+            instanceId: msg.instanceId,
+            execId: msg.execId ?? 1,
+            question: msg.question || "",
+            options: Array.isArray(msg.options) ? msg.options : [],
+          });
+          setUserAskSubmitting(false);
+          setRunLogs((prev) => [
+            ...prev,
+            { ts: now, type: "user-ask", text: t("flow:run.userAskPrompt", { instanceId: msg.instanceId, defaultValue: `等待用户选择 (${msg.instanceId})` }) },
+          ]);
         } else if (msg.type === "tool-print-content") {
           setToolPrintContent({
             instanceId: msg.instanceId,
@@ -2313,33 +2346,39 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     };
   }, [rightPanel, selected]);
 
-  // 加载工作区树形结构
+  // 加载当前 pipeline 目录下的文件列表
   useEffect(() => {
+    if (!selected) {
+      setPipelineFiles({ files: [] });
+      return;
+    }
     let cancelled = false;
     (async () => {
-      setWorkspaceTreeLoading(true);
+      setPipelineFilesLoading(true);
       try {
-        const r = await fetch("/api/workspace-tree");
+        const params = new URLSearchParams({
+          flowId: selected.id,
+          flowSource: selected.source || "user",
+          archived: selected.archived ? "1" : "0",
+        });
+        const r = await fetch(`/api/pipeline-files?${params}`);
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
         if (!cancelled) {
-          setWorkspaceTree({
-            pipelines: Array.isArray(j.pipelines) ? j.pipelines : [],
-            runs: Array.isArray(j.runs) ? j.runs : [],
-          });
+          setPipelineFiles({ files: Array.isArray(j.files) ? j.files : [], path: j.path, error: j.error });
         }
       } catch (e) {
         if (!cancelled) {
-          setWorkspaceTree({ pipelines: [], runs: [] });
+          setPipelineFiles({ files: [], error: e.message || String(e) });
         }
       } finally {
-        if (!cancelled) setWorkspaceTreeLoading(false);
+        if (!cancelled) setPipelineFilesLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selected]);
 
   const runsForCurrentFlow = useMemo(() => {
     if (!selected) return [];
@@ -2528,9 +2567,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       .map((e) => e.node.id);
     const flowForReload = selected;
     let sawDone = false;
-    /** 分阶段：本段流结束后自动进入下一阶段（不点「继续」） */
-    let phaseContinueSnapshot = null;
-    let phaseAutoContinueLabel = /** @type {string | null} */ (null);
     let phaseStreamError = false;
     try {
       // 连接阶段超时保护：若一直拿不到响应（如 UI 服务未启动/卡死），避免永远停在“连接中…”
@@ -2681,11 +2717,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 nextPhase: ev.nextPhase || null,
                 userPromptOriginal: ev.userPromptOriginal || prev?.userPromptOriginal || q,
               };
-              if (!ev.isLastPhase && ev.nextPhase) {
-                phaseContinueSnapshot = next;
-                phaseAutoContinueLabel =
-                  String(ev.nextPhase.label || "").trim() || t("flow:composer.nextPhase");
-              }
               return next;
             });
             if (!ev.isLastPhase && ev.nextPhase) {
@@ -2700,20 +2731,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             setComposerStatusLine((s) => s || t("flow:composer.done"));
           }
         }
-      }
-      if (
-        phaseContinueSnapshot &&
-        phaseAutoContinueLabel &&
-        !ac.signal.aborted &&
-        !phaseStreamError &&
-        phaseContinueSnapshot.nextPhase &&
-        !phaseContinueSnapshot.isLastPhase
-      ) {
-        const snap = phaseContinueSnapshot;
-        const label = phaseAutoContinueLabel;
-        window.setTimeout(() => {
-          void submitComposerRef.current?.(t("flow:composer.continuePhase", { label }), { phaseContextSnapshot: snap });
-        }, 0);
       }
     } catch (e) {
       const err = /** @type {Error & { name?: string }} */ (e);
@@ -2754,6 +2771,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     if (!composerPhaseContext || composerPhaseContext.isLastPhase) return;
     setComposerPhaseContext(null);
     void submitComposer(t("flow:composer.skipRemainingPhases"));
+  }, [composerPhaseContext, submitComposer]);
+
+  const continueNextPhase = useCallback(() => {
+    if (!composerPhaseContext || composerPhaseContext.isLastPhase || !composerPhaseContext.nextPhase) return;
+    const label = String(composerPhaseContext.nextPhase.label || "").trim() || t("flow:composer.nextPhase");
+    void submitComposer(t("flow:composer.continuePhase", { label }), { phaseContextSnapshot: composerPhaseContext });
   }, [composerPhaseContext, submitComposer]);
 
   useEffect(() => {
@@ -2922,6 +2945,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             </div>
           </div>
           <div className="af-pipeline-top-right af-flow-toolbar-actions">
+            {isDevMode && (
+              <button
+                type="button"
+                className={"af-icon-btn" + (logViewerOpen ? " af-icon-btn--active" : "")}
+                aria-label="Composer Logs (dev)"
+                title="Composer Logs (dev)"
+                onClick={() => setLogViewerOpen((v) => !v)}
+              >
+                <span className="material-symbols-outlined">description</span>
+              </button>
+            )}
             {runMode === "running" && (
               <div className="af-run-timer">
                 <span className="af-run-timer__dot" />
@@ -3181,82 +3215,77 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               {/* 展开后的工作区树形结构 */}
               {workspaceExpanded && (
                 <div className="af-palette-workspace-tree">
-                  {workspaceTreeLoading ? (
+                  {pipelineFilesLoading ? (
                     <div className="af-palette-workspace-loading">{t("flow:palette.loading")}</div>
+                  ) : pipelineFiles.error ? (
+                    <div className="af-palette-workspace-empty">{pipelineFiles.error}</div>
+                  ) : !selected ? (
+                    <div className="af-palette-workspace-empty">{t("flow:palette2.noPipelineSelected")}</div>
                   ) : (
                     <>
-                      {/* Pipelines 分组 */}
+                      {/* 当前 pipeline 文件列表 */}
                       <div className="af-palette-workspace-group">
                         <div className="af-palette-workspace-group-head">
-                          <span className="material-symbols-outlined" aria-hidden>account_tree</span>
-                          <span>Pipelines</span>
-                          <span className="af-palette-workspace-count">({workspaceTree.pipelines.length})</span>
+                          <span className="material-symbols-outlined" aria-hidden>folder</span>
+                          <span>{selected.id}</span>
+                          <span className="af-palette-workspace-count">({pipelineFiles.files.length})</span>
                         </div>
-                        {workspaceTree.pipelines.length > 0 ? (
+                        {pipelineFiles.files.length > 0 ? (
                           <ul className="af-palette-workspace-list">
-                            {workspaceTree.pipelines.map((p) => (
+                            {pipelineFiles.files.filter((f) => f.type === "file").map((file) => (
                               <li
-                                key={p.id}
-                                className={`af-palette-workspace-item${p.archived ? " af-palette-workspace-item--archived" : ""}${selected?.id === p.id ? " af-palette-workspace-item--active" : ""}`}
-                                onClick={() => {
-                                  // 切换到该 pipeline
-                                  const flow = flows.find((f) => f.id === p.id && (f.source ?? "user") === p.source);
-                                  if (flow) loadFlow(flow);
-                                }}
+                                key={file.path}
+                                className="af-palette-workspace-item af-palette-workspace-item--clickable"
+                                title={file.path}
+                                onClick={() => setFileEditModal({ filePath: file.path, fileName: file.name })}
                               >
                                 <span className="material-symbols-outlined af-palette-workspace-item-icon" aria-hidden>
-                                  {p.archived ? "archive" : "description"}
+                                  {file.icon}
                                 </span>
-                                <span className="af-palette-workspace-item-label" title={p.id}>
-                                  {p.id}
-                                </span>
-                                {p.archived && <span className="af-palette-workspace-item-badge">{t("flow:palette.archived")}</span>}
+                                <span className="af-palette-workspace-item-label">{file.name}</span>
+                                {file.size != null && (
+                                  <span className="af-palette-workspace-item-size">
+                                    {file.size < 1024 ? `${file.size}B` : file.size < 1024 * 1024 ? `${(file.size / 1024).toFixed(1)}KB` : `${(file.size / 1024 / 1024).toFixed(1)}MB`}
+                                  </span>
+                                )}
                               </li>
                             ))}
                           </ul>
-                        ) : (
-                          <div className="af-palette-workspace-empty">{t("flow:palette.noPipelines")}</div>
-                        )}
+                        ) : pipelineFiles.files.filter((f) => f.type === "directory").length === 0 ? (
+                          <div className="af-palette-workspace-empty">暂无文件</div>
+                        ) : null}
                       </div>
 
-                      {/* Runs 分组 */}
-                      <div className="af-palette-workspace-group">
-                        <div className="af-palette-workspace-group-head">
-                          <span className="material-symbols-outlined" aria-hidden>play_circle</span>
-                          <span>Runs</span>
-                          <span className="af-palette-workspace-count">({workspaceTree.runs.reduce((sum, r) => sum + r.runs.length, 0)})</span>
-                        </div>
-                        {workspaceTree.runs.length > 0 ? (
+                      {/* 子目录展开 */}
+                      {pipelineFiles.files.filter((f) => f.type === "directory" && f.children?.length > 0).map((dir) => (
+                        <div key={dir.path} className="af-palette-workspace-group af-palette-workspace-group--sub">
+                          <div className="af-palette-workspace-group-head">
+                            <span className="material-symbols-outlined" aria-hidden>{dir.icon}</span>
+                            <span>{dir.name}/</span>
+                            <span className="af-palette-workspace-count">({dir.children.length})</span>
+                          </div>
                           <ul className="af-palette-workspace-list">
-                            {workspaceTree.runs.slice(0, 5).map((flowRuns) => (
-                              <li key={flowRuns.flowId} className="af-palette-workspace-run-group">
-                                <div className="af-palette-workspace-run-flow">{flowRuns.flowId}</div>
-                                <ul className="af-palette-workspace-run-list">
-                                  {flowRuns.runs.slice(0, 3).map((run) => (
-                                    <li
-                                      key={run.runId}
-                                      className="af-palette-workspace-run-item"
-                                      title={t("flow:palette2.runId", { id: run.runId })}
-                                    >
-                                      <span className="material-symbols-outlined" aria-hidden>schedule</span>
-                                      <span className="af-palette-workspace-run-id">{run.runId.slice(0, 8)}…</span>
-                                      <span className="af-palette-workspace-run-time">{formatRelativeTime(run.at, t)}</span>
-                                    </li>
-                                  ))}
-                                  {flowRuns.runs.length > 3 && (
-                                    <li className="af-palette-workspace-run-more">{t("flow:palette2.moreRuns", { count: flowRuns.runs.length - 3 })}</li>
-                                  )}
-                                </ul>
+                            {dir.children.map((child) => (
+                              <li
+                                key={child.path}
+                                className={`af-palette-workspace-item${child.type === "file" ? " af-palette-workspace-item--clickable" : ""}`}
+                                title={child.path}
+                                onClick={child.type === "file" ? () => setFileEditModal({ filePath: child.path, fileName: child.name }) : undefined}
+                              >
+                                <span className="material-symbols-outlined af-palette-workspace-item-icon" aria-hidden>
+                                  {child.icon}
+                                </span>
+                                <span className="af-palette-workspace-item-label">{child.name}</span>
+                                {child.type === "file" && child.size != null && (
+                                  <span className="af-palette-workspace-item-size">
+                                    {child.size < 1024 ? `${child.size}B` : child.size < 1024 * 1024 ? `${(child.size / 1024).toFixed(1)}KB` : `${(child.size / 1024 / 1024).toFixed(1)}MB`}
+                                  </span>
+                                )}
                               </li>
                             ))}
-                            {workspaceTree.runs.length > 5 && (
-                              <li className="af-palette-workspace-more">{t("flow:palette2.moreFlows", { count: workspaceTree.runs.length - 5 })}</li>
-                            )}
                           </ul>
-                        ) : (
-                          <div className="af-palette-workspace-empty">{t("flow:palette.noRuns")}</div>
-                        )}
-                      </div>
+                        </div>
+                      ))}
                     </>
                   )}
                 </div>
@@ -3760,6 +3789,37 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               <ComposerStepsTrack steps={composerSteps} />
                             </div>
                           ) : null}
+                          {composerPhaseContext && Array.isArray(composerPhaseContext.phases) && composerPhaseContext.phases.length > 1 ? (
+                            <div className="af-composer-phase-bar" aria-label={t("flow:composer.phaseProgress")}>
+                              {composerPhaseContext.phases.map((p, i) => {
+                                const status = p.status
+                                  || (i < (composerPhaseContext.currentPhase ?? 0) ? "done"
+                                    : i === (composerPhaseContext.currentPhase ?? 0) ? (composerRunning ? "running" : (composerPhaseContext.nextPhase ? "done" : (composerPhaseContext.isLastPhase ? "done" : "running")))
+                                    : "pending");
+                                return (
+                                  <div
+                                    key={p.name || i}
+                                    className={
+                                      "af-composer-phase-item"
+                                      + (status === "done" ? " af-composer-phase-item--done" : "")
+                                      + (status === "running" ? " af-composer-phase-item--running" : "")
+                                      + (status === "pending" ? " af-composer-phase-item--pending" : "")
+                                    }
+                                    title={`${p.label}${p.description ? "：" + p.description : ""}`}
+                                  >
+                                    <span className="af-composer-phase-dot" aria-hidden>
+                                      {status === "done" ? (
+                                        <span className="material-symbols-outlined" style={{ fontSize: "0.85rem" }}>check</span>
+                                      ) : (
+                                        <span>{i + 1}</span>
+                                      )}
+                                    </span>
+                                    <span className="af-composer-phase-label">{p.label}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                           <div className="af-composer-thread-dialog-scroll">
                             <ComposerThreadContent
                               thread={composerThread}
@@ -3767,6 +3827,29 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               running={composerRunning}
                             />
                           </div>
+                          {composerPhaseContext && !composerPhaseContext.isLastPhase && composerPhaseContext.nextPhase && !composerRunning ? (
+                            <div className="af-composer-phase-review af-composer-phase-review--minimal" aria-label={t("flow:composer.phaseReviewLabel")}>
+                              <span className="af-composer-phase-auto-hint">
+                                {t("flow:composer.phaseReviewHint", { nextPhase: composerPhaseContext.nextPhase.label })}
+                              </span>
+                              <div className="af-composer-phase-review-buttons">
+                                <button
+                                  type="button"
+                                  className="af-composer-phase-btn af-composer-phase-btn--continue"
+                                  onClick={continueNextPhase}
+                                >
+                                  {t("flow:composer.phaseReviewContinue", { label: composerPhaseContext.nextPhase.label })}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="af-composer-phase-btn af-composer-phase-btn--skip"
+                                  onClick={skipRemainingPhases}
+                                >
+                                  {t("flow:composer.phaseReviewSkip")}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       </div>,
                       document.body,
@@ -3925,6 +4008,38 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   >
                     {composerRunning && !composerStatusLine ? t("flow:composer.executing") : composerStatusLine || t("flow:composer.ready")}
                   </div>
+                  {/* Phase progress bar */}
+                  {composerPhaseContext && Array.isArray(composerPhaseContext.phases) && composerPhaseContext.phases.length > 1 ? (
+                    <div className="af-composer-phase-bar" aria-label={t("flow:composer.phaseProgress")}>
+                      {composerPhaseContext.phases.map((p, i) => {
+                        const status = p.status
+                          || (i < (composerPhaseContext.currentPhase ?? 0) ? "done"
+                            : i === (composerPhaseContext.currentPhase ?? 0) ? (composerRunning ? "running" : (composerPhaseContext.isLastPhase && i === composerPhaseContext.phases.length - 1 ? "done" : (composerPhaseContext.nextPhase ? "done" : "running")))
+                            : "pending");
+                        return (
+                          <div
+                            key={p.name || i}
+                            className={
+                              "af-composer-phase-item"
+                              + (status === "done" ? " af-composer-phase-item--done" : "")
+                              + (status === "running" ? " af-composer-phase-item--running" : "")
+                              + (status === "pending" ? " af-composer-phase-item--pending" : "")
+                            }
+                            title={`${p.label}${p.description ? "：" + p.description : ""}`}
+                          >
+                            <span className="af-composer-phase-dot" aria-hidden>
+                              {status === "done" ? (
+                                <span className="material-symbols-outlined" style={{ fontSize: "0.85rem" }}>check</span>
+                              ) : (
+                                <span>{i + 1}</span>
+                              )}
+                            </span>
+                            <span className="af-composer-phase-label">{p.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   {/* Thread content */}
                   <div className="af-composer-sidebar-thread" ref={composerSidebarThreadRef}>
                     <ComposerThreadContent
@@ -3933,6 +4048,30 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                       running={composerRunning}
                     />
                   </div>
+                  {/* Phase continue/skip review controls */}
+                  {composerPhaseContext && !composerPhaseContext.isLastPhase && composerPhaseContext.nextPhase && !composerRunning ? (
+                    <div className="af-composer-phase-review af-composer-phase-review--minimal" aria-label={t("flow:composer.phaseReviewLabel")}>
+                      <span className="af-composer-phase-auto-hint">
+                        {t("flow:composer.phaseReviewHint", { nextPhase: composerPhaseContext.nextPhase.label })}
+                      </span>
+                      <div className="af-composer-phase-review-buttons">
+                        <button
+                          type="button"
+                          className="af-composer-phase-btn af-composer-phase-btn--continue"
+                          onClick={continueNextPhase}
+                        >
+                          {t("flow:composer.phaseReviewContinue", { label: composerPhaseContext.nextPhase.label })}
+                        </button>
+                        <button
+                          type="button"
+                          className="af-composer-phase-btn af-composer-phase-btn--skip"
+                          onClick={skipRemainingPhases}
+                        >
+                          {t("flow:composer.phaseReviewSkip")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : rightPanel === "node" && soleSelectedNode ? (
                 nodePropDraft ? (
@@ -4198,6 +4337,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         </div>
 
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <LogViewer
+          open={logViewerOpen}
+          onClose={() => setLogViewerOpen(false)}
+          flowId={selected?.id ?? ""}
+        />
         <ArchivePipelineModal
           open={archiveModalOpen}
           onClose={() => setArchiveModalOpen(false)}
@@ -4224,7 +4368,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             await loadFlowList();
             navigate("/projects");
           }}
-/>
+        />
+
+        <FileEditModal
+          open={Boolean(fileEditModal)}
+          onClose={() => setFileEditModal(null)}
+          flowId={selected?.id ?? ""}
+          flowSource={selected?.source ?? "user"}
+          flowArchived={Boolean(selected?.archived)}
+          filePath={fileEditModal?.filePath ?? ""}
+          fileName={fileEditModal?.fileName ?? ""}
+          onSaved={() => {
+            // 刷新文件列表
+            setPipelineFiles((prev) => ({ ...prev }));
+          }}
+        />
       </div>
 
       {userCheckContent && runMode !== "edit" && createPortal(
@@ -4359,6 +4517,82 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <span className="material-symbols-outlined">play_arrow</span>
                 {t("flow:userCheck.continue")}
               </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {userAskPrompt && runMode !== "edit" && createPortal(
+        <div className="af-user-ask-modal-overlay">
+          <div className="af-user-ask-modal" role="dialog" aria-modal="true">
+            <div className="af-user-ask-modal__head">
+              <span className="af-user-ask-modal__title">
+                <span className="material-symbols-outlined" aria-hidden>help</span>
+                {t("flow:userAsk.title", { instanceId: userAskPrompt.instanceId })}
+              </span>
+              <div className="af-user-ask-modal__actions">
+                <button type="button" className="af-user-ask-modal__btn" onClick={() => setUserAskPrompt(null)} aria-label={t("flow:userAsk.close")}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            </div>
+            <div className="af-user-ask-modal__body">
+              {userAskPrompt.question.trim() ? (
+                <div className="af-user-ask-modal__question"><pre>{userAskPrompt.question}</pre></div>
+              ) : null}
+              {userAskPrompt.options.length === 0 ? (
+                <div className="af-user-ask-modal__empty">{t("flow:userAsk.noOptions")}</div>
+              ) : (
+                <div className="af-user-ask-modal__options">
+                  {userAskPrompt.options.map((opt) => (
+                    <button
+                      key={opt.name}
+                      type="button"
+                      className="af-user-ask-option"
+                      disabled={userAskSubmitting}
+                      onClick={async () => {
+                        if (!userAskPrompt || !selected || !currentRunUuid) return;
+                        setUserAskSubmitting(true);
+                        try {
+                          const res = await fetch("/api/flow", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              flowId: selected.id,
+                              flowSource: selected.source ?? "user",
+                              action: "confirm-user-ask",
+                              runUuid: currentRunUuid,
+                              instanceId: userAskPrompt.instanceId,
+                              execId: userAskPrompt.execId,
+                              branch: opt.name,
+                              selectedIndex: opt.index,
+                              selectedLabel: opt.label,
+                            }),
+                          });
+                          if (res.ok) {
+                            setUserAskPrompt(null);
+                            setUserAskSubmitting(false);
+                            void handleRun({ runUuid: currentRunUuid });
+                          } else {
+                            setUserAskSubmitting(false);
+                            setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userAsk.submitFailed") }]);
+                          }
+                        } catch {
+                          setUserAskSubmitting(false);
+                          setRunLogs((prev) => [...prev, { ts: new Date().toISOString(), type: "error", text: t("flow:userAsk.submitFailed") }]);
+                        }
+                      }}
+                    >
+                      <span className="af-user-ask-option__index">[{opt.index}]</span>
+                      <span className="af-user-ask-option__label">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="af-user-ask-modal__foot">
+              <span className="af-user-ask-modal__hint">{userAskSubmitting ? t("flow:userAsk.submitting") : t("flow:userAsk.hint")}</span>
             </div>
           </div>
         </div>,

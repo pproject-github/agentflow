@@ -49,6 +49,25 @@ function controlIfBranchToSourceHandle(branch) {
   return null;
 }
 
+/** tool_user_ask：将 branch 值映射为出边 sourceHandle。
+ * branch 可为：槽位名（如 "option_1"）、纯数字字符串（"1"）或 "output-1" 形式。
+ * 槽位名映射依赖 instance 的 output 顺序（与 outputSlotTypes 的 key 顺序一致）。 */
+function userAskBranchToSourceHandle(branch, outputSlotTypesForNode) {
+  if (!branch) return null;
+  const s = String(branch).trim();
+  if (/^output-\d+$/.test(s)) return s;
+  if (/^\d+$/.test(s)) return `output-${parseInt(s, 10)}`;
+  if (outputSlotTypesForNode && typeof outputSlotTypesForNode === "object") {
+    const names = Object.keys(outputSlotTypesForNode);
+    const idx = names.indexOf(s);
+    if (idx >= 0) return `output-${idx}`;
+  }
+  // 兜底：option_N 形式
+  const m = s.match(/^option_(\d+)$/i);
+  if (m) return `output-${parseInt(m[1], 10)}`;
+  return null;
+}
+
 function main() {
   const args = process.argv.slice(2);
   if (args.length < 3) {
@@ -229,13 +248,15 @@ function main() {
     for (const id of pendingInstances) {
       if (instanceStatus[id] !== "success") continue;
       nextPending.delete(id);
-      if (nodeDefinitions[id] === "control_if") {
+      if (nodeDefinitions[id] === "control_if" || nodeDefinitions[id] === "tool_user_ask") {
         const predLatestE = latestResultExecId(execIdMap[id] ?? 1);
         const resultPath = predLatestE
           ? path.join(intermediateDir, id, intermediateResultBasename(id, predLatestE))
           : null;
         const branch = resultPath && fs.existsSync(resultPath) ? parseResultBranch(resultPath) : null;
-        const expectedHandle = controlIfBranchToSourceHandle(branch);
+        const expectedHandle = nodeDefinitions[id] === "control_if"
+          ? controlIfBranchToSourceHandle(branch)
+          : userAskBranchToSourceHandle(branch, outputSlotTypes[id]);
         /** 同一 branch 可连多条节点边（如 true 同时到 save_key 与 anyOne），须全部加入游标，不可只用 find 取第一条 */
         const outEdges = edges.filter(
           (e) => e.source === id && isNodeEdge(e) && (e.sourceHandle || "output-0") === expectedHandle,
@@ -285,10 +306,10 @@ function main() {
       candidateSet: [...candidateSet],
     });
 
-    /** 判断 predecessor P 对 target N 是否算「就绪」：普通节点看 status；control_if 看 branch（槽位名 next1/next2 或 true/false）与出边 sourceHandle */
+    /** 判断 predecessor P 对 target N 是否算「就绪」：普通节点看 status；control_if / tool_user_ask 看 branch 与出边 sourceHandle */
     const isPredecessorReadyFor = (predSource, predDefId, targetId) => {
       if (instanceStatus[predSource] !== "success") return false;
-      if (predDefId !== "control_if") return true;
+      if (predDefId !== "control_if" && predDefId !== "tool_user_ask") return true;
       const inEdges = inEdgesByTarget[targetId] || [];
       const edge = inEdges.find((ie) => ie.source === predSource);
       if (!edge) return true;
@@ -297,7 +318,9 @@ function main() {
         ? path.join(intermediateDir, predSource, intermediateResultBasename(predSource, predLatestE))
         : null;
       const branch = resultPath && fs.existsSync(resultPath) ? parseResultBranch(resultPath) : null;
-      const expectedHandle = controlIfBranchToSourceHandle(branch);
+      const expectedHandle = predDefId === "control_if"
+        ? controlIfBranchToSourceHandle(branch)
+        : userAskBranchToSourceHandle(branch, outputSlotTypes[predSource]);
       return expectedHandle != null && (edge.sourceHandle || "output-0") === expectedHandle;
     };
 

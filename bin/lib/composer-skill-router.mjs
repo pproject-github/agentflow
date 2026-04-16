@@ -159,7 +159,7 @@ export function loadResourcesForIntents(intents, packageRoot) {
     const content = readFileCached(absPath);
     if (content) {
       const body = stripFrontmatter(content);
-      skills.push({ id, content: body });
+      skills.push({ id, content: body, absPath });
     }
   }
 
@@ -168,7 +168,7 @@ export function loadResourcesForIntents(intents, packageRoot) {
     const absPath = path.join(packageRoot, "reference", name);
     const content = readFileCached(absPath);
     if (content) {
-      references.push({ name, content });
+      references.push({ name, content, absPath });
     }
   }
 
@@ -183,6 +183,43 @@ export function loadResourcesForIntents(intents, packageRoot) {
 }
 
 // ─── 构建注入到 prompt 的文本块 ───────────────────────────────────────────
+
+// 已知 reference / skill 的一行摘要（compact 模式注入）
+const RESOURCE_SUMMARIES = {
+  "agentflow-flow-add-instances": "新增 instance 与边的规则、handle 速查、布局原则、节点类型选择",
+  "agentflow-flow-edit-node-fields": "编辑已有 instance 字段白名单、tool_nodejs script 规则",
+  "flow-control-capabilities.md": "控制节点语义、handle 索引、循环模式（check→fix→re-check）",
+  "flow-layout.md": "ui.nodePositions 布局原则（主链 x+=280、分支 y±200）",
+  "flow-prompt-handler-check.md": "USER_PROMPT 中读写描述与节点 input/output edge 一致性",
+};
+
+/**
+ * Compact 注入：仅给绝对路径 + 一行摘要，agent 按需 Read。
+ * 比 buildSkillInjectionBlock 省 ~20-30KB/step。
+ * @param {Array<{id: string, content: string, absPath: string}>} skills
+ * @param {Array<{name: string, content: string, absPath: string}>} references
+ * @returns {string}
+ */
+export function buildSkillCompactInjectionBlock(skills, references) {
+  const parts = [];
+  if (skills.length === 0 && references.length === 0) return "";
+
+  parts.push("### 编辑技能与参考文档（按需 Read 绝对路径）");
+  parts.push("");
+  for (const s of skills) {
+    const summary = RESOURCE_SUMMARIES[s.id] || "";
+    parts.push(`- **skill** \`${s.id}\` — ${summary}`);
+    parts.push(`  路径：${s.absPath}`);
+  }
+  for (const r of references) {
+    const summary = RESOURCE_SUMMARIES[r.name] || "";
+    parts.push(`- **reference** \`${r.name}\` — ${summary}`);
+    parts.push(`  路径：${r.absPath}`);
+  }
+  parts.push("");
+  parts.push("**默认不需要 Read** — 节点 schema 表与阶段规则已覆盖 90% 场景。仅当遇到上述摘要明确涉及的特殊情况时再 Read 对应文件。");
+  return parts.join("\n");
+}
 
 /**
  * 为单步 prompt 构建完整的 skill + reference 注入块。
@@ -235,9 +272,11 @@ function buildSkillsHint(intents, skills, references) {
   }
 
   lines.push(
-    "- **节点类型选择（必须遵守）**：能用 tool 节点确定性执行的，不要用 agent_subAgent。" +
-    "打印文本/执行已知脚本/文件操作 → tool_nodejs + script 字段（exit code 决定成败，stdout 直接作为 result）；" +
-    "醒目输出 → tool_print；仅当需要 AI 推理时才用 agent_subAgent。"
+    "- **节点类型选择（必须遵守）**：**确定性任务 → tool_nodejs；非确定性任务 → agent_subAgent**。" +
+    "确定性 = 相同输入必出相同输出、可用普通代码完整描述（CLI/npm、读写文件、转换格式、调 API）。" +
+    "非确定性 = 需语义理解或创造（代码翻译/生成、源码/文本理解、多步决策、创意写作）。" +
+    "醒目输出 → tool_print。" +
+    "反例：『Android 转 RN』『代码 review』必须 agent。"
   );
   lines.push(
     "- **tool_nodejs 必须写 script 字段**：script 是实际执行的命令代码，body 仅为文档注释（有 script 时不执行）。" +
@@ -272,8 +311,10 @@ export function buildPlannerSkillContext(intents) {
       "默认不连线，仅当用户明确要求时才在 edges 中增加边。"
     );
     parts.push(
-      "- 节点类型选择：能确定性执行的用 tool_nodejs + script，不要用 agent_subAgent；" +
-      "醒目输出用 tool_print；仅需 AI 推理时才用 agent_subAgent。"
+      "- 节点类型选择：**确定性任务 → tool_nodejs；非确定性任务 → agent_subAgent**。" +
+      "确定性 = 相同输入永远相同输出（CLI/npm/读写文件/转换/调 API）；" +
+      "非确定性 = 需语义理解或创造（代码翻译/生成、理解源码、多步决策、创意写作）；" +
+      "醒目输出 → tool_print。反例：『Android 转 RN』『代码 review』必须 agent。"
     );
     parts.push(
       "- tool_nodejs 的 script 与 body 区分：script 是实际执行的命令（必填），body 仅为文档注释（有 script 时不执行）；" +

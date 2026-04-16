@@ -41,6 +41,7 @@ import {
   detectIntents,
   loadResourcesForIntents,
   buildSkillInjectionBlock,
+  buildSkillCompactInjectionBlock,
 } from "./composer-skill-router.mjs";
 import { COMPOSER_NODE_SPEC_FILENAME } from "./composer-planner.mjs";
 import { listRecentRunsFromDisk } from "./recent-runs.mjs";
@@ -49,11 +50,14 @@ import {
   validateImportedFlowYaml,
   writePipelineTree,
 } from "./flow-import.mjs";
-import { getWorkspaceTree } from "./workspace-tree.mjs";
+import { getWorkspaceTree, getPipelineFiles } from "./workspace-tree.mjs";
 import {
   createComposerSession,
   logComposerEvent,
   truncateForLog,
+  listRecentComposerSessions,
+  parseComposerLogFile,
+  readComposerSessionMeta,
 } from "./composer-log.mjs";
 import { runNodeScript } from "./pipeline-scripts.mjs";
 
@@ -298,12 +302,15 @@ function buildComposerPromptWithFlowContext(p) {
     ...skillPathHints,
     "",
     "### 节点类型选择（必须遵守）",
-    "**核心原则：能用 tool 节点确定性执行的，不要用 agent_subAgent。**",
+    "**判据**：**确定性任务 → `tool_nodejs`；非确定性任务 → `agent_subAgent`**。",
+    "- **确定性**：相同输入永远产出相同输出，可用普通代码完整描述（CLI/npm 调用、读写文件、JSON/路径转换、调现成 API 解析固定格式、跑脚手架等）",
+    "- **非确定性**：需要语义理解或创造（代码翻译/生成、源码/文本解析改写、多步推理决策、创意写作）",
     "| 场景 | 推荐节点 |",
     "|------|----------|",
-    "| 执行已知命令/脚本、打印文本、文件操作、数据处理 | **tool_nodejs** + `script` 字段（零 LLM 调用，毫秒级） |",
-    "| 向用户输出醒目信息 | **tool_print** |",
-    "| 需要 AI 理解上下文、做判断、生成内容 | **agent_subAgent** |",
+    "| 确定性逻辑（跑命令、读写文件、转换格式、调 API） | **tool_nodejs** + `script` |",
+    "| 醒目输出 | **tool_print** |",
+    "| 代码翻译/生成、源码/文本理解、多步决策、创意写作 | **agent_subAgent** |",
+    "**反例**：「Android 转 RN/TS」「分析代码生成测试」「代码 review」必须 agent——做成 tool_nodejs 必然失败。",
     "",
     "tool_nodejs + script 示例（打印文本）：",
     "```yaml",
@@ -566,6 +573,101 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/pipeline-files") {
+      const flowId = url.searchParams.get("flowId");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const archived = url.searchParams.get("archived") === "1";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      try {
+        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        json(res, 200, result);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/pipeline-file-content") {
+      const flowId = url.searchParams.get("flowId");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const archived = url.searchParams.get("archived") === "1";
+      const filePath = url.searchParams.get("path");
+      if (!flowId || !filePath) {
+        json(res, 400, { error: "Missing flowId or path" });
+        return;
+      }
+      try {
+        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        if (result.error) {
+          json(res, 404, { error: result.error });
+          return;
+        }
+        const absPath = path.join(result.path, filePath);
+        if (!absPath.startsWith(result.path)) {
+          json(res, 403, { error: "Path traversal not allowed" });
+          return;
+        }
+        if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+          json(res, 404, { error: "File not found" });
+          return;
+        }
+        const content = fs.readFileSync(absPath, "utf-8");
+        json(res, 200, { content, path: absPath });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/pipeline-file-save") {
+      const flowId = url.searchParams.get("flowId");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const archived = url.searchParams.get("archived") === "1";
+      const filePath = url.searchParams.get("path");
+      if (!flowId || !filePath) {
+        json(res, 400, { error: "Missing flowId or path" });
+        return;
+      }
+      let body;
+      try {
+        body = await readBody(req);
+      } catch {
+        json(res, 400, { error: "Invalid request body" });
+        return;
+      }
+      let content;
+      try {
+        const parsed = JSON.parse(body);
+        content = typeof parsed.content === "string" ? parsed.content : "";
+      } catch {
+        content = String(body);
+      }
+      try {
+        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        if (result.error) {
+          json(res, 404, { error: result.error });
+          return;
+        }
+        const absPath = path.join(result.path, filePath);
+        if (!absPath.startsWith(result.path)) {
+          json(res, 403, { error: "Path traversal not allowed" });
+          return;
+        }
+        if (!fs.existsSync(absPath)) {
+          json(res, 404, { error: "File not found" });
+          return;
+        }
+        fs.writeFileSync(absPath, content, "utf-8");
+        json(res, 200, { success: true, path: absPath, size: content.length });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/model-lists") {
       try {
         json(res, 200, readModelListsFromDisk(root));
@@ -578,6 +680,68 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
     if (req.method === "GET" && url.pathname === "/api/ui-context") {
       try {
         json(res, 200, { workspaceRoot: root });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dev-info") {
+      const isDev = process.env.AGENTFLOW_DEV === "1";
+      json(res, 200, { isDev });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/composer-logs") {
+      try {
+        const flowIdFilter = url.searchParams.get("flowId") || "";
+        const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit")) || 50));
+        const sessions = listRecentComposerSessions(root, 200);
+        const enriched = sessions.map((s) => {
+          const meta = readComposerSessionMeta(s.logPath);
+          return {
+            sessionId: s.sessionId,
+            monthDir: s.monthDir,
+            size: s.size,
+            mtime: s.mtime,
+            flowId: meta.flowId,
+            flowSource: meta.flowSource,
+            model: meta.model,
+            promptPreview: meta.prompt ? meta.prompt.slice(0, 200) : null,
+          };
+        });
+        const filtered = flowIdFilter ? enriched.filter((e) => e.flowId === flowIdFilter) : enriched;
+        json(res, 200, { sessions: filtered.slice(0, limit) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/composer-logs/")) {
+      try {
+        const sessionId = decodeURIComponent(url.pathname.slice("/api/composer-logs/".length));
+        if (!sessionId || sessionId.includes("..") || sessionId.includes("/")) {
+          json(res, 400, { error: "Invalid sessionId" });
+          return;
+        }
+        const all = listRecentComposerSessions(root, 1000);
+        const found = all.find((s) => s.sessionId === sessionId);
+        if (!found) {
+          json(res, 404, { error: "Session not found" });
+          return;
+        }
+        const events = parseComposerLogFile(found.logPath);
+        const meta = readComposerSessionMeta(found.logPath);
+        json(res, 200, {
+          sessionId: found.sessionId,
+          logPath: found.logPath,
+          monthDir: found.monthDir,
+          size: found.size,
+          mtime: found.mtime,
+          meta,
+          events,
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -795,6 +959,49 @@ finishedAt: "${new Date().toISOString()}"
 ---
 `;
           fs.writeFileSync(resultPath, resultContent, "utf-8");
+          json(res, 200, { ok: true, resultPath });
+        } catch (e) {
+          json(res, 500, { ok: false, error: e.message });
+        }
+        return;
+      }
+
+      if (payload.action === "confirm-user-ask") {
+        const runUuid = payload.runUuid;
+        const instanceId = payload.instanceId;
+        const execId = payload.execId ?? 1;
+        const branch = payload.branch;
+        const selectedIndex = payload.selectedIndex;
+        const selectedLabel = payload.selectedLabel;
+        if (!runUuid || !instanceId || !branch) {
+          json(res, 400, { error: "Missing runUuid, instanceId, or branch" });
+          return;
+        }
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}.result.md`);
+        try {
+          fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+          const escapeYaml = (v) => {
+            const s = String(v ?? "");
+            if (/[\n"\\:]/.test(s)) return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+            return '"' + s + '"';
+          };
+          const lines = [
+            "---",
+            `status: "success"`,
+            `execId: "${execId}"`,
+            `branch: ${escapeYaml(branch)}`,
+            `message: ${escapeYaml(selectedLabel ? `用户选择 ${branch} (${selectedLabel})` : `用户选择 ${branch}`)}`,
+            `finishedAt: "${new Date().toISOString()}"`,
+          ];
+          if (selectedIndex != null && Number.isFinite(Number(selectedIndex))) {
+            lines.push(`selectedIndex: ${Number(selectedIndex)}`);
+          }
+          if (selectedLabel != null && String(selectedLabel).trim() !== "") {
+            lines.push(`selectedLabel: ${escapeYaml(selectedLabel)}`);
+          }
+          lines.push("---", "");
+          fs.writeFileSync(resultPath, lines.join("\n"), "utf-8");
           json(res, 200, { ok: true, resultPath });
         } catch (e) {
           json(res, 500, { ok: false, error: e.message });
@@ -1339,7 +1546,7 @@ finishedAt: "${new Date().toISOString()}"
           intents: multiStepIntents,
           skillsHint: multiStepResources.skillsHint,
           skillInjectionBlock: multiStepResources.hasContext
-            ? buildSkillInjectionBlock(multiStepResources.skills, multiStepResources.references)
+            ? buildSkillCompactInjectionBlock(multiStepResources.skills, multiStepResources.references)
             : "",
           syncCurlHint: `curl -sS -X POST http://127.0.0.1:${uiPort}/api/flow-editor-sync -H 'Content-Type: application/json' -d ${syncJsonArg}`,
           composerSpecAbs: flowPipelineDir ? path.join(flowPipelineDir, COMPOSER_NODE_SPEC_FILENAME) : "",
@@ -1402,15 +1609,26 @@ finishedAt: "${new Date().toISOString()}"
 
       const onStreamEvent = (ev) => {
         if (responseEnded) return;
-        
-        logComposerEvent(composerLogPath, ev.type || "event", {
-          ...ev,
-          text: ev.text ? truncateForLog(ev.text, 2000) : undefined,
-          line: ev.line ? truncateForLog(ev.line, 500) : undefined,
-          message: ev.message ? truncateForLog(ev.message, 500) : undefined,
-          prompt: ev.prompt ? truncateForLog(ev.prompt, 1000) : undefined,
-        });
-        
+
+        // ai-log：full prompt/response 全文落盘，不写入 NDJSON 流（前端通过 /api/composer-logs 拉）
+        if (ev && ev.type === "ai-log") {
+          logComposerEvent(composerLogPath, ev.tag || "ai-log", {
+            text: typeof ev.text === "string" ? ev.text : "",
+            meta: ev.meta || {},
+          });
+          return;
+        }
+
+        // CLI natural 事件按 kind 拆 tag，便于日志按 AI 类别过滤；error kind 单独成 error tag
+        let logTag = ev.type || "event";
+        if (ev && ev.type === "natural" && ev.kind) {
+          if (ev.kind === "error") logTag = "error";
+          else logTag = `ai-${ev.kind}`; // ai-thinking | ai-assistant | ai-result | ai-tool
+        }
+
+        // 其他事件：全文落盘（不再截断），同时写入 NDJSON 流
+        logComposerEvent(composerLogPath, logTag, ev);
+
         try {
           res.write(JSON.stringify(ev) + "\n");
         } catch (_) {

@@ -500,7 +500,7 @@ function resolvePlaceholders(workspaceRoot, flowName, order, edges, uuid, flowDa
       if (value != null) {
         // 类型为「节点」的 input 槽：填上游节点 id，不填文件路径，避免多 output 槽解析歧义与 cache 漂移
         const slotType = slots.inputTypes && slots.inputTypes[slotName];
-        if (slotType === "节点") {
+        if (slotType === "节点" || slotType === "node") {
           value = pred.source;
         }
         if (!resolvedInputs[instanceId]) resolvedInputs[instanceId] = {};
@@ -526,7 +526,7 @@ function resolvePlaceholders(workspaceRoot, flowName, order, edges, uuid, flowDa
         // 占位符 _ 若对应节点类型，用上游节点 id
         const firstSlotName = inputSlotNames[0];
         const firstType = slots.inputTypes && slots.inputTypes[firstSlotName];
-        if (firstType === "节点") v = pred.source;
+        if (firstType === "节点" || firstType === "node") v = pred.source;
         resolvedInputs[instanceId] = { _: v };
       }
     }

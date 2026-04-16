@@ -222,8 +222,8 @@
       "description": "Execute tasks using SubAgent"
     },
     "tool_user_ask": {
-      "displayName": "Ask User",
-      "description": "Ask user questions using Ask user question tool"
+      "displayName": "UserAsk",
+      "description": "Pause and wait for the user to pick one of N branches. Each output slot is an option; the slot description is the option label (human-driven switch)."
     },
     "tool_user_check": {
       "displayName": "User Confirm",

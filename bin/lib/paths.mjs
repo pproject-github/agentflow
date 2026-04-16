@@ -143,6 +143,7 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_end",
   "tool_print",
   "tool_user_check",
+  "tool_user_ask",
   "provide_str",
   "provide_file",
 ]);

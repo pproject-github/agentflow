@@ -23,7 +23,7 @@ function modelEntryId(entry) {
  */
 function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
   const { t } = useTranslation();
-  const add = () => onSlotsChange([...slots, { type: t("flow:types.node"), name: "", default: "" }]);
+  const add = () => onSlotsChange([...slots, { type: "node", name: "", default: "" }]);
   const removeAt = (i) => onSlotsChange(slots.filter((_, j) => j !== i));
   const patch = (i, field, value) => {
     const next = slots.map((s, j) => (j === i ? { ...s, [field]: value } : s));
@@ -70,7 +70,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
                 disabled={disabled}
                 aria-label={t("flow:nodeProps.pinTypeAriaLabel", { label, index: i })}
               >
-                {["node", "file", "str", "bool"].map((typ) => (
+                {["node", "text", "file", "bool"].map((typ) => (
                   <option key={typ} value={typ}>{typ}</option>
                 ))}
               </select>

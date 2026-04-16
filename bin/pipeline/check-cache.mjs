@@ -117,7 +117,7 @@ function main() {
     const iidx = parseInt(String(e.targetHandle || "input-0").replace("input-", ""), 10) || 0;
     const outType = outNames[oidx] != null ? outTypes[outNames[oidx]] : null;
     const inType = inNames[iidx] != null ? inTypes[inNames[iidx]] : null;
-    return outType === "节点" && inType === "节点";
+    return (outType === "节点" || outType === "node") && (inType === "节点" || inType === "node");
   };
   const successors = {};
   for (const e of edges) {

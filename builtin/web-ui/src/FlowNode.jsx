@@ -67,7 +67,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
   const handleExpand = (e) => {
     e.stopPropagation();
     if (onProvideExpand) {
-      onProvideExpand(id);
+      onProvideExpand();
     }
   };
 

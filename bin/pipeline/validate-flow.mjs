@@ -14,6 +14,10 @@ import yaml from "js-yaml";
 import { getModelListsAbs, getRunDir, getUserAgentsJsonAbs, getUserPipelinesRoot } from "../lib/paths.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
 
+/** 槽位合法 type 集合（英文为 builtin/nodes 标准；中文为遗留兼容，新写代码统一英文） */
+const VALID_SLOT_TYPES = new Set(["node", "text", "file", "bool", "节点", "文本", "文件", "布尔"]);
+const CANONICAL_SLOT_TYPES = "node|text|file|bool";
+
 /** 与前端 flowFormat.VALID_ROLES + 内置 id 一致 */
 const VALID_ROLE_KEYS = ["requirement", "planning", "code", "test", "normal"];
 const ROLE_ZH_TO_KEY = {
@@ -333,7 +337,40 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
         }
       }
     }
-    // 边类型一致不在此处检查，由 computeValidation 统一产出 edgeTypeMismatch
+    // 边类型一致检查（同 type 才能连）
+    if (
+      e.source && e.target &&
+      nodeIds.has(e.source) && nodeIds.has(e.target) &&
+      e.sourceHandle && e.targetHandle
+    ) {
+      const outMatch = e.sourceHandle.match(/^output-(\d+)$/);
+      const inMatch = e.targetHandle.match(/^input-(\d+)$/);
+      if (outMatch && inMatch) {
+        const outIdx = parseInt(outMatch[1], 10);
+        const inIdx = parseInt(inMatch[1], 10);
+        const srcSlots = nodeIdToSlots[e.source];
+        const tgtSlots = nodeIdToSlots[e.target];
+        const srcType = (srcSlots?.outputTypes?.[outIdx] ?? "").trim();
+        const tgtType = (tgtSlots?.inputTypes?.[inIdx] ?? "").trim();
+        // 中文别名归一化（兼容旧画布）
+        const norm = (t) => {
+          if (t === "节点") return "node";
+          if (t === "文本") return "text";
+          if (t === "文件") return "file";
+          if (t === "布尔") return "bool";
+          return t;
+        };
+        const sNorm = norm(srcType);
+        const tNorm = norm(tgtType);
+        if (sNorm && tNorm && sNorm !== tNorm) {
+          const srcSlotName = srcSlots?.outputNames?.[outIdx] ?? `output-${outIdx}`;
+          const tgtSlotName = tgtSlots?.inputNames?.[inIdx] ?? `input-${inIdx}`;
+          errors.push(
+            `edge ${i + 1}: 边类型不匹配 — ${e.source}.${srcSlotName}:${sNorm} → ${e.target}.${tgtSlotName}:${tNorm}（不允许跨类型连线，type 必须一致）`
+          );
+        }
+      }
+    }
   }
 
   /* 槽位与 edge 对应：Web UI 同步逻辑见 builtin/web-ui/src/flowSlotEdgeWarnings.js（computeSlotEdgeWarnings） */
@@ -399,17 +436,51 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
       const inst = instances[n.id];
       if (!inst) continue;
       const defId = inst.definitionId || n.definitionId || "";
-      if (defId !== "tool_nodejs") continue;
-      const script = inst.script != null ? String(inst.script).trim() : "";
-      const body = inst.body != null ? String(inst.body).trim() : "";
-      if (!script && body) {
-        errors.push(
-          `节点 "${n.id}"（tool_nodejs）缺少 script 字段：body 中的自然语言不会被执行，必须添加可执行的 script，或改用 agent_subAgent`
-        );
-      } else if (!script && !body) {
-        errors.push(
-          `节点 "${n.id}"（tool_nodejs）既无 script 也无 body，节点无法执行，必须添加 script 字段`
-        );
+
+      // tool_nodejs 必须有 script
+      if (defId === "tool_nodejs") {
+        const script = inst.script != null ? String(inst.script).trim() : "";
+        const body = inst.body != null ? String(inst.body).trim() : "";
+        if (!script && body) {
+          errors.push(
+            `节点 "${n.id}"（tool_nodejs）缺少 script 字段：body 中的自然语言不会被执行，必须添加可执行的 script，或改用 agent_subAgent`
+          );
+        } else if (!script && !body) {
+          errors.push(
+            `节点 "${n.id}"（tool_nodejs）既无 script 也无 body，节点无法执行，必须添加 script 字段`
+          );
+        }
+      }
+
+      // provide_str / provide_file output 类型校验
+      const normType = (t) => {
+        if (t === "节点") return "node";
+        if (t === "文本") return "text";
+        if (t === "文件") return "file";
+        if (t === "布尔") return "bool";
+        return (t || "").trim();
+      };
+      if (defId === "provide_str") {
+        const out = Array.isArray(inst.output) ? inst.output : [];
+        if (out.length !== 1) {
+          errors.push(`节点 "${n.id}"（provide_str）output 必须仅有 1 个槽位（value:text），当前 ${out.length} 个`);
+        } else {
+          const t0 = normType(out[0] && out[0].type);
+          if (t0 !== "text") {
+            errors.push(`节点 "${n.id}"（provide_str）output[0].type 必须为 \`text\`，当前为 \`${t0 || "(空)"}\``);
+          }
+        }
+      }
+      if (defId === "provide_file") {
+        const out = Array.isArray(inst.output) ? inst.output : [];
+        if (out.length !== 1) {
+          errors.push(`节点 "${n.id}"（provide_file）output 必须仅有 1 个槽位（value:file），当前 ${out.length} 个`);
+        } else {
+          const t0 = normType(out[0] && out[0].type);
+          if (t0 !== "file") {
+            errors.push(`节点 "${n.id}"（provide_file）output[0].type 必须为 \`file\`，当前为 \`${t0 || "(空)"}\``);
+          }
+        }
       }
     }
   }
@@ -536,6 +607,42 @@ function computeValidation(loaded, workspaceRoot) {
       const edgeId = toEdgeId({ ...e, sourceHandle: sh, targetHandle: th });
       edgeTypeMismatch.push(edgeId);
       validationErrors.push(`边类型不一致: ${e.source} ${sh} -> ${e.target} ${th}`);
+    }
+  }
+
+  // 槽位 type 白名单：拒绝 "string"/"str"/"文字" 等非法值，避免下游 type 比较静默失配
+  for (const n of nodes) {
+    const slots = nodeIdToSlots[n.id];
+    if (!slots) continue;
+    const checkSlot = (kind, idx, type) => {
+      const t = (type || "").trim();
+      if (t === "" || VALID_SLOT_TYPES.has(t)) return;
+      validationErrors.push(
+        `节点 "${n.id}" ${kind}-${idx} 的 type "${t}" 非法（合法值：${CANONICAL_SLOT_TYPES}）`
+      );
+    };
+    (slots.outputTypes || []).forEach((t, i) => checkSlot("output", i, t));
+    (slots.inputTypes || []).forEach((t, i) => checkSlot("input", i, t));
+  }
+
+  // provide_* 仅作数据源，不得连入控制链（node→node 边）
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    const sh = e.sourceHandle ?? "output-0";
+    const th = e.targetHandle ?? "input-0";
+    const outIdx = parseInt((sh.match(/^output-(\d+)$/) || [])[1] ?? "-1", 10);
+    const inIdx = parseInt((th.match(/^input-(\d+)$/) || [])[1] ?? "-1", 10);
+    if (outIdx < 0 || inIdx < 0) continue;
+    const srcDef = (instances[e.source]?.definitionId || "").trim();
+    const tgtDef = (instances[e.target]?.definitionId || "").trim();
+    const srcType = (nodeIdToSlots[e.source]?.outputTypes?.[outIdx] ?? "").trim();
+    const tgtType = (nodeIdToSlots[e.target]?.inputTypes?.[inIdx] ?? "").trim();
+    const isNodeEdge = (srcType === "node" || srcType === "节点") && (tgtType === "node" || tgtType === "节点");
+    if (!isNodeEdge) continue;
+    if (srcDef.startsWith("provide_") || tgtDef.startsWith("provide_")) {
+      validationErrors.push(
+        `provide_* 节点不得出现在控制链上（node→node 边）：${e.source} ${sh} -> ${e.target} ${th}；provide 仅作数据源，请改连下游 text/file 数据槽`
+      );
     }
   }
 

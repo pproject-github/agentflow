@@ -396,7 +396,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody) {
     const inIdx = parseInt(inMatch[1], 10);
     const srcType = (nodeIdToSlots[e.source]?.outputTypes?.[outIdx] ?? "").trim();
     const tgtType = (nodeIdToSlots[e.target]?.inputTypes?.[inIdx] ?? "").trim();
-    if (srcType === "节点" && tgtType === "节点") {
+    if ((srcType === "节点" || srcType === "node") && (tgtType === "节点" || tgtType === "node")) {
       nodeOnlyEdges.push({ source: e.source, target: e.target });
     }
   }

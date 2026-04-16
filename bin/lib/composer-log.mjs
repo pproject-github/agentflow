@@ -134,3 +134,64 @@ export function listRecentComposerSessions(workspaceRoot, limit = 20) {
   sessions.sort((a, b) => b.mtime - a.mtime);
   return sessions.slice(0, limit);
 }
+
+/**
+ * 解析日志文件为事件数组。每行格式：[ISO8601] [tag] {json} 或 string。
+ * 多行字段（含换行的 prompt/response）通过 JSON 序列化保留为 \n，所以每行始终是单条事件。
+ * @param {string} logPath
+ * @returns {Array<{ ts: string, tag: string, payload: any }>}
+ */
+export function parseComposerLogFile(logPath) {
+  if (!logPath || !fs.existsSync(logPath)) return [];
+  const raw = fs.readFileSync(logPath, "utf-8");
+  const events = [];
+  const lines = raw.split("\n");
+  for (const line of lines) {
+    if (!line) continue;
+    const m = line.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.*)$/);
+    if (!m) continue;
+    const ts = m[1];
+    const tag = m[2];
+    const rest = m[3];
+    let payload;
+    try {
+      payload = JSON.parse(rest);
+    } catch {
+      payload = rest;
+    }
+    events.push({ ts, tag, payload });
+  }
+  return events;
+}
+
+/**
+ * 从日志文件首行尝试提取 composer-start 中的元数据（flowId, model, prompt 等）。
+ * @param {string} logPath
+ * @returns {{ flowId: string|null, flowSource: string|null, model: string|null, prompt: string|null, sessionId: string|null }}
+ */
+export function readComposerSessionMeta(logPath) {
+  const empty = { flowId: null, flowSource: null, model: null, prompt: null, sessionId: null };
+  try {
+    if (!fs.existsSync(logPath)) return empty;
+    const raw = fs.readFileSync(logPath, "utf-8");
+    const lines = raw.split("\n");
+    for (const line of lines) {
+      const m = line.match(/^\[([^\]]+)\]\s+\[composer-start\]\s+(.*)$/);
+      if (m) {
+        try {
+          const obj = JSON.parse(m[2]);
+          return {
+            flowId: obj.flowId || null,
+            flowSource: obj.flowSource || null,
+            model: obj.model || null,
+            prompt: obj.prompt || null,
+            sessionId: obj.sessionId || null,
+          };
+        } catch {
+          return empty;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return empty;
+}
