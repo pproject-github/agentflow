@@ -1,6 +1,6 @@
 ---
-# 内置节点：转布尔
-description: Convert execution task result to boolean and write to prediction slot
+# 内置节点：转布尔（本地脚本执行，★ 可扩展输入）
+description: "Script-based boolean conversion: executes script to produce true/false prediction. Like tool_nodejs but enforces bool output. Must have script field."
 displayName: ToBool
 input:
   - type: node
@@ -16,5 +16,6 @@ output:
   - type: bool
     name: prediction
     default: ""
+extensible: true
 ---
 ${USER_PROMPT}

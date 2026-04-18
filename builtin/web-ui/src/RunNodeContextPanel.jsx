@@ -86,6 +86,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
   const [error, setError] = useState("");
   const [rounds, setRounds] = useState([]);
   const [selectedRound, setSelectedRound] = useState(null);
+  const [expandedSection, setExpandedSection] = useState(/** @type {null | "prompt" | "output"} */ (null));
   const bodyRef = useRef(null);
   const pollRef = useRef(null);
   const refreshSeqRef = useRef(0);
@@ -333,11 +334,35 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
 
             {active && (
               <div className="af-run-ctx-body" ref={bodyRef}>
+                {active.inputs && active.inputs.length > 0 && (
+                  <section className="af-run-ctx-section">
+                    <h3 className="af-run-ctx-section-title">
+                      <span className="material-symbols-outlined af-run-ctx-section-icon" aria-hidden>input</span>
+                      Inputs
+                    </h3>
+                    {active.inputs.map((inp, i) => (
+                      <div key={`${inp.slot}-${i}`} className="af-run-ctx-output-slot">
+                        <div className="af-run-ctx-slot-head">
+                          <div className="af-run-ctx-slot-name">{inp.slot}</div>
+                        </div>
+                        <pre className="af-run-ctx-slot-text">{inp.value}</pre>
+                      </div>
+                    ))}
+                  </section>
+                )}
                 {active.prompt != null && (
                   <section className="af-run-ctx-section">
                     <h3 className="af-run-ctx-section-title">
                       <span className="material-symbols-outlined af-run-ctx-section-icon" aria-hidden>description</span>
                       Prompt
+                      <button
+                        type="button"
+                        className="af-icon-btn af-run-ctx-section-expand"
+                        onClick={() => setExpandedSection("prompt")}
+                        title={t("flow:nodeProps.expand")}
+                      >
+                        <span className="material-symbols-outlined">open_in_full</span>
+                      </button>
                     </h3>
                     <RunContextPromptBody text={active.prompt} />
                   </section>
@@ -347,6 +372,14 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                     <h3 className="af-run-ctx-section-title">
                       <span className="material-symbols-outlined af-run-ctx-section-icon" aria-hidden>output</span>
                       Outputs
+                      <button
+                        type="button"
+                        className="af-icon-btn af-run-ctx-section-expand"
+                        onClick={() => setExpandedSection("output")}
+                        title={t("flow:nodeProps.expand")}
+                      >
+                        <span className="material-symbols-outlined">open_in_full</span>
+                      </button>
                     </h3>
                     {active.outputs.map((o, i) => {
                       const hint = runContextOutputFormatPill(o);
@@ -374,6 +407,44 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
           </>
         )}
       </div>
+      {expandedSection && active && (
+        <div
+          className="af-node-props-expand-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => { if (e.target === e.currentTarget) setExpandedSection(null); }}
+        >
+          <div className="af-node-props-expand-panel">
+            <div className="af-node-props-expand-head">
+              <span className="af-node-props-expand-title">
+                {expandedSection === "prompt" ? "Prompt" : "Outputs"}
+              </span>
+              <button type="button" className="af-icon-btn" onClick={() => setExpandedSection(null)} aria-label={t("common:common.close")}>
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="af-node-props-expand-body af-run-ctx-expand-body">
+              {expandedSection === "prompt" && active.prompt != null && (
+                <RunContextPromptBody text={active.prompt} />
+              )}
+              {expandedSection === "output" && active.outputs && active.outputs.map((o, i) => {
+                const hint = runContextOutputFormatPill(o);
+                return (
+                  <div key={`${o.slot}-${i}`} className="af-run-ctx-output-slot" style={{ marginBottom: "1rem" }}>
+                    <div className="af-run-ctx-slot-head">
+                      <div className="af-run-ctx-slot-name">{o.slot}</div>
+                      {hint ? (
+                        <span className="af-run-ctx-format-badge">{hint}</span>
+                      ) : null}
+                    </div>
+                    <RunContextOutputBody o={o} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

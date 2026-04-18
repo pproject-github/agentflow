@@ -9,6 +9,7 @@ import {
   getReferenceRootAbs,
   getWorkspaceRunBuildRoot,
   getUserPipelinesRoot,
+  ARCHIVED_PIPELINES_DIR_NAME,
 } from "./paths.mjs";
 
 export { getRunDir } from "./paths.mjs";
@@ -95,14 +96,31 @@ export function listRunsWithLogs(workspaceRoot) {
 /** 解析 flow 目录：~/agentflow/pipelines → .workspace/agentflow/pipelines → .cursor/agentflow/pipelines（旧）→ builtin/pipelines */
 export function getFlowDir(workspaceRoot, flowName) {
   const root = path.resolve(workspaceRoot);
-  const userFlowDir = path.join(getUserPipelinesRoot(), flowName);
-  if (fs.existsSync(userFlowDir) && fs.existsSync(path.join(userFlowDir, "flow.yaml"))) return userFlowDir;
+  const hasFlow = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
+
+  // user pipelines
+  const userRoot = getUserPipelinesRoot();
+  const userFlowDir = path.join(userRoot, flowName);
+  if (hasFlow(userFlowDir)) return userFlowDir;
+  // user archived
+  const userArchivedDir = path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME, flowName);
+  if (hasFlow(userArchivedDir)) return userArchivedDir;
+
+  // workspace pipelines
   const wsFlowDir = path.join(root, PIPELINES_DIR, flowName);
-  if (fs.existsSync(wsFlowDir) && fs.existsSync(path.join(wsFlowDir, "flow.yaml"))) return wsFlowDir;
+  if (hasFlow(wsFlowDir)) return wsFlowDir;
+  // workspace archived
+  const wsArchivedDir = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowName);
+  if (hasFlow(wsArchivedDir)) return wsArchivedDir;
+
+  // legacy
   const legacyFlowDir = path.join(root, LEGACY_PIPELINES_DIR, flowName);
-  if (fs.existsSync(legacyFlowDir) && fs.existsSync(path.join(legacyFlowDir, "flow.yaml"))) return legacyFlowDir;
+  if (hasFlow(legacyFlowDir)) return legacyFlowDir;
+
+  // builtin
   const builtinFlowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowName);
-  if (fs.existsSync(builtinFlowDir) && fs.existsSync(path.join(builtinFlowDir, "flow.yaml"))) return builtinFlowDir;
+  if (hasFlow(builtinFlowDir)) return builtinFlowDir;
+
   return null;
 }
 

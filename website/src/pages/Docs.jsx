@@ -40,7 +40,7 @@ export default function Docs() {
   useEffect(() => {
     if (selectedDoc) {
       setLoading(true);
-      fetch(`/agentflow/docs/${selectedDoc.slug}.md`)
+      fetch(`/docs/${selectedDoc.slug}.md`)
         .then((res) => res.text())
         .then((text) => {
           setDocContent(text);

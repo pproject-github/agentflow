@@ -27,6 +27,9 @@ import { isValidUuid, runNodeScript } from "./pipeline-scripts.mjs";
 import { Table } from "./table.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, listRunsWithLogs } from "./workspace.mjs";
 import { startUiServer } from "./ui-server.mjs";
+import { hubLogin, hubLogout } from "./hub-login.mjs";
+import { hubPublish } from "./hub-publish.mjs";
+import { hubListRemote, hubDownload } from "./hub-remote.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -328,6 +331,28 @@ export async function main() {
     }
     await new Promise(() => {});
   }
+  // ──── Hub commands ────
+  if (sub === "login") {
+    await hubLogin(argv);
+    process.exit(0);
+  }
+  if (sub === "logout") {
+    hubLogout();
+    process.exit(0);
+  }
+  if (sub === "publish") {
+    await hubPublish(workspaceRoot, argv);
+    process.exit(0);
+  }
+  if (sub === "list-remote") {
+    await hubListRemote(argv);
+    process.exit(0);
+  }
+  if (sub === "download") {
+    await hubDownload(argv);
+    process.exit(0);
+  }
+  // ──── Local commands ────
   if (sub === "list") {
     listPipelines(workspaceRoot);
   } else if (sub === "apply") {
@@ -510,7 +535,7 @@ export async function main() {
     throw new Error(
       "Unknown command: " +
         sub +
-        ". Use list, ui, list-flows --json, list-nodes --json, read-flow --json, write-flow --json, read-node --json, copy-builtin --json, list-agents --json, copy-builtin-agent --json, read-agent --json, add-role --json, update-model-lists, apply, validate, resume, replay, run-status, extract-thinking, extract-thinking -list.",
+        ". Use login, logout, publish, list-remote, download, list, ui, apply, validate, resume, replay, run-status, extract-thinking.",
     );
   }
 }

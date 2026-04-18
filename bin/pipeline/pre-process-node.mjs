@@ -14,7 +14,7 @@
  *    - writeResult(success, branch)；
  *    - buildNodePrompt → writeCacheJsonForNode（统一写 .cache.json）→ 写 noop prompt，设 optionalPromptPath，return。
  *
- * 3) 分支 B（普通节点）：
+ * 3) 分支 B（普通节点，含 control_toBool 走 tool_nodejs 同路径）：
  *    - buildNodePrompt → writeResult("running") → writeCacheJsonForNode（统一写 .cache.json）；
  *    - 若有 tool_load_key/tool_save_key/tool_get_env/control_anyOne 再设 optionalPromptPath，并视情况输出 directCommand 供 CLI 执行；
  *    - 返回 promptPath、resultPath、execId、subagent 等。
@@ -34,7 +34,7 @@ import { computeCacheMd5 } from "./compute-cache-md5.mjs";
 import { getResolvedValues } from "./get-resolved-values.mjs";
 import { parseBool, getFirstBoolInputValue } from "./parse-bool.mjs";
 import { writeResult } from "./write-result.mjs";
-import { intermediateResultBasename, intermediateCacheBasename, intermediateDirForNode } from "./get-exec-id.mjs";
+import { intermediateResultBasename, intermediateCacheBasename, intermediateDirForNode, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
 import { logToRunTag } from "./run-log.mjs";
 import { getRunDir } from "../lib/paths.mjs";
 
@@ -311,13 +311,43 @@ function main() {
       process.exit(1);
     }
     let boolValue;
-    if (rawVal.startsWith("output/")) {
-      const filePath = path.join(runDir, rawVal);
-      if (!fs.existsSync(filePath)) {
-        console.error(JSON.stringify({ ok: false, error: `control_if: bool input file not found: ${rawVal}` }));
-        process.exit(1);
+    let filePath = null;
+    if (rawVal.startsWith("output/") || rawVal.startsWith("intermediate/")) {
+      filePath = path.join(runDir, rawVal);
+    } else if (path.isAbsolute(rawVal)) {
+      filePath = rawVal;
+    }
+    if (filePath) {
+      if (fs.existsSync(filePath)) {
+        boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
+      } else {
+        // 查找 backupResolvedOutputsIfExist 创建的 _N 备份文件
+        const dir = path.dirname(filePath);
+        const ext = path.extname(filePath);
+        const base = path.basename(filePath, ext);
+        let found = false;
+        try {
+          if (fs.existsSync(dir)) {
+            const candidates = fs.readdirSync(dir).filter(f =>
+              f.startsWith(base + "_") && f.endsWith(ext) &&
+              /^\d+$/.test(f.slice(base.length + 1, -ext.length))
+            );
+            if (candidates.length > 0) {
+              candidates.sort((a, b) => {
+                const na = parseInt(a.slice(base.length + 1, -ext.length), 10);
+                const nb = parseInt(b.slice(base.length + 1, -ext.length), 10);
+                return nb - na;
+              });
+              boolValue = parseBool(fs.readFileSync(path.join(dir, candidates[0]), "utf-8").trim());
+              found = true;
+            }
+          }
+        } catch (_) {}
+        if (!found) {
+          console.error(JSON.stringify({ ok: false, error: `control_if: bool input file not found: ${rawVal}` }));
+          process.exit(1);
+        }
       }
-      boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
     } else {
       boolValue = parseBool(rawVal);
     }
@@ -394,7 +424,7 @@ function main() {
       output.optionalPromptPath = anyOneResult.optionalPromptPath;
       output.directCommand = anyOneResult.directCommand;
     }
-  } else if (definitionId === "tool_nodejs" && data.script) {
+  } else if ((definitionId === "tool_nodejs" || definitionId === "control_toBool") && data.script) {
     const toolNodejsResult = emitToolNodejsDirectCommand(workspaceRoot, flowName, uuid, instanceId, data.script, execId);
     if (toolNodejsResult) {
       output.optionalPromptPath = toolNodejsResult.optionalPromptPath;

@@ -11,6 +11,11 @@ export function printHelp() {
 AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay。
 
 用法：
+  agentflow login [--provider github|google]   登录 AgentFlow Hub（默认 GitHub）
+  agentflow logout                             退出 Hub 登录
+  agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  发布流程到 Hub
+  agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  浏览 Hub 上的流程
+  agentflow download <slug> [--output <dir>]   从 Hub 下载流程
   agentflow list                              列出所有流水线
   agentflow ui [--port <n>] [--no-open]       本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认端口 8765）
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
@@ -65,6 +70,11 @@ Apply/replay 脚本已打包在 agentflow 包中（bin/pipeline/）。
 AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming.
 
 Usage:
+  agentflow login [--provider github|google]   Login to AgentFlow Hub (default: GitHub)
+  agentflow logout                             Sign out of Hub
+  agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  Publish flow to Hub
+  agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  Browse flows on Hub
+  agentflow download <slug> [--output <dir>]   Download flow from Hub
   agentflow list                              List all pipelines
   agentflow ui [--port <n>] [--no-open]       Local HTTP: pipeline list + React Flow node diagram editor (default port 8765)
   agentflow apply <FlowName> [uuid]            Or agentflow apply <uuid> (resolve pipeline from uuid)

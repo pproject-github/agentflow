@@ -2904,7 +2904,8 @@ button.af-project-card {
   box-sizing: border-box;
 }
 
-.af-flow-bottom-unified-panel .af-flow-bottom-unified-row {
+.af-flow-bottom-unified-panel .af-flow-bottom-unified__side,
+.af-flow-bottom-unified-panel .af-flow-bottom-unified__center {
   pointer-events: auto;
 }
 
@@ -3504,6 +3505,10 @@ button.af-project-card {
   transition: background 0.15s, color 0.15s;
   white-space: nowrap;
   position: relative;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .af-composer-session-tab:hover {
@@ -4591,6 +4596,45 @@ button.af-project-card {
   padding: 0.35rem 0.65rem 0.75rem;
 }
 
+.af-composer-session-field {
+  margin: 0;
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.af-composer-session-select {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 12rem;
+  padding: 0.38rem 2rem 0.38rem 0.85rem;
+  border: none;
+  border-radius: 999px;
+  font-family: var(--af-body);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(229, 226, 225, 0.92);
+  background: rgba(55, 55, 55, 0.95)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23cac3d4' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 0.65rem center;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(229, 226, 225, 0.12);
+  transition: background 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-composer-session-select:hover:not(:disabled) {
+  background-color: rgba(62, 62, 62, 0.98);
+}
+
+.af-composer-session-select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .af-composer-model-field {
   margin: 0;
   display: inline-flex;
@@ -5402,6 +5446,53 @@ button.af-project-card {
   white-space: pre-wrap;
 }
 
+.af-pipeline-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.af-pipeline-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--af-outline-variant);
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  font-family: var(--af-body);
+  font-size: 13px;
+}
+.af-pipeline-rename-input:focus {
+  outline: none;
+  border-color: var(--af-primary);
+  box-shadow: 0 0 0 1px var(--af-primary);
+}
+.af-pipeline-rename-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.af-pipeline-path-row {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 0.35rem;
+  white-space: normal;
+}
+.af-pipeline-path-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-all;
+  line-height: 1.4;
+}
+.af-pipeline-copy-btn {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+  opacity: 0.5;
+}
+.af-pipeline-copy-btn .material-symbols-outlined { font-size: 15px; }
+.af-pipeline-copy-btn:hover { opacity: 1; }
+
 .af-pipeline-move-actions {
   display: flex;
   flex-wrap: wrap;
@@ -5785,6 +5876,15 @@ button.af-exec-history-card {
   filter: drop-shadow(0 0 8px rgba(124, 77, 255, 0.45));
 }
 
+/* Edge 选中高亮 — 必须 !important 覆盖 defaultEdgeOptions 注入的 inline style */
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge.selectable:focus .react-flow__edge-path,
+.react-flow__edge.selectable:focus-visible .react-flow__edge-path {
+  stroke: rgba(205, 189, 255, 0.9) !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 6px rgba(124, 77, 255, 0.5));
+}
+
 .af-flow-node--selected {
   background: var(--af-surface-high);
   box-shadow:
@@ -6004,14 +6104,14 @@ button.af-exec-history-card {
   0%, 100% {
     background: var(--af-surface-high);
     box-shadow:
-      0 0 0 1.5px rgba(0, 228, 117, 0.35),
-      0 0 18px rgba(0, 228, 117, 0.12);
+      0 0 0 2px rgba(0, 228, 117, 0.5),
+      0 0 24px rgba(0, 228, 117, 0.2);
   }
   50% {
     background: var(--af-surface-bright);
     box-shadow:
-      0 0 0 1.5px rgba(0, 228, 117, 0.6),
-      0 0 32px rgba(0, 228, 117, 0.25);
+      0 0 0 2px rgba(0, 228, 117, 0.8),
+      0 0 40px rgba(0, 228, 117, 0.35);
   }
 }
 
@@ -6821,6 +6921,24 @@ button.af-exec-history-card {
   margin: 0;
 }
 
+.af-run-ctx-section-expand {
+  margin-left: auto;
+  font-size: 0.75rem;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.af-run-ctx-section-expand:hover {
+  opacity: 0.85;
+}
+.af-run-ctx-section-expand .material-symbols-outlined {
+  font-size: 0.85rem;
+}
+
+.af-run-ctx-expand-body {
+  overflow-y: auto;
+  padding: 1rem;
+}
+
 .af-run-ctx-section-icon {
   font-size: 0.85rem;
   color: rgba(205, 189, 255, 0.6);
@@ -6866,6 +6984,21 @@ button.af-exec-history-card {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.af-run-ctx-slot-text {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--af-on-surface);
+  background: var(--af-surface-lowest);
+  border-radius: 0.45rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 8rem;
+  overflow-y: auto;
 }
 
 .af-run-ctx-format-badge {

@@ -195,11 +195,17 @@ function main() {
   }
 
   const content = out.join("");
-  const payload = {
-    err_code: 0,
-    message: { result: content },
-  };
-  console.log(JSON.stringify(payload));
+
+  // 优先写入 output 引脚文件（直接写文件模式）
+  const resultOutPath = args[2] ? String(args[2]).trim() : "";
+  if (resultOutPath) {
+    fs.mkdirSync(path.dirname(resultOutPath), { recursive: true });
+    fs.writeFileSync(resultOutPath, content, "utf-8");
+  } else {
+    // 兼容旧模式：通过 JSON stdout 输出
+    const payload = { err_code: 0, message: { result: content } };
+    console.log(JSON.stringify(payload));
+  }
 }
 
 main();

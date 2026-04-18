@@ -103,9 +103,13 @@ print_haha:
 **关键约束**：
 1. **`tool_nodejs` 必须写 `script` 字段**，内容为完整可执行的命令或脚本，禁止用自然语言描述
 2. `script` 中可通过 `${}` 引用 input 槽位和系统变量，值自动 shell-quote
-3. `body` 仅用于给人类阅读的注释说明，**不会被执行**
-4. 如果无法写出完整可执行的 `script`（如需要 AI 理解/判断），**必须改用 `agent_subAgent`**
-5. **禁止**在 `script` 中写自然语言，**禁止**在 `body` 中写期望被执行的代码逻辑
+3. **`script` 必须引用所有非 node 类型的 input 和 output 引脚**（硬性校验，validate-flow 会报错）：
+   - 所有 input 引脚（type ≠ node）必须在 script 中出现 `${slotName}`，用于接收上游数据
+   - 所有 output 引脚（type ≠ node）必须在 script 中出现 `${slotName}`，系统将解析为 output 文件路径，脚本应直接 `fs.writeFileSync(path, value)` 写入
+   - **禁止使用 JSON stdout 封装**（`{"err_code":0,"message":{...}}`），直接写文件、用 exit code 决定成败
+4. `body` 仅用于给人类阅读的注释说明，**不会被执行**
+5. 如果无法写出完整可执行的 `script`（如需要 AI 理解/判断），**必须改用 `agent_subAgent`**
+6. **禁止**在 `script` 中写自然语言，**禁止**在 `body` 中写期望被执行的代码逻辑
 
 ### tool_nodejs 复杂脚本示例
 
@@ -183,7 +187,7 @@ bad_node:
 5. 在 **`ui.nodePositions`** 中为该 instanceId 写入坐标（见下一节「屏幕中间」）。  
 6. 每个 flow 仍只能有一个 **`control_start`**、一个 **`control_end`** 实例（勿重复新增入口/出口）。
 
-**`control_toBool`** 的 prediction 输出文件内容必须仅为 **`true`** 或 **`false`**。
+**`control_toBool`**（本地确定性：parseBool 解析 true/1/yes/on → true，其余 → false，不调用 AI）和 **`control_agent_toBool`**（AI agent 语义判断，适用于不确定场景）的 prediction 输出文件内容必须仅为 **`true`** 或 **`false`**。
 
 ---
 
@@ -193,8 +197,9 @@ bad_node:
 |--------------|-------------|------------|
 | control_start | next → output-0 | — |
 | control_end | — | prev → input-0 |
-| control_if | next1 → output-0, next2 → output-1 | prev → input-0, prediction → input-1 |
+| control_if | next1(**TRUE**) → output-0, next2(**FALSE**) → output-1 | prev → input-0, prediction → input-1 |
 | control_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
+| control_agent_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
 | control_anyOne | next → output-0 | prev1 → input-0, prev2 → input-1 |
 | tool_load_key | next → output-0, result → output-1 | prev → input-0, key → input-1 |
 | tool_save_key | next → output-0 | prev → input-0, key → input-1, value → input-2 |
@@ -221,9 +226,13 @@ bad_node:
 
 ## 连线（仅用户明确要求时）
 
+**Fan-out / Fan-in 规则**：  
+- **一个 output 可连多个 input**（fan-out 允许）。  
+- **一个 input 只能有一条入边**（fan-in 禁止）。同一个 `target + targetHandle` 不得出现在多条 edge 中；若需替换连线，先删旧边再加新边。违反此规则会导致运行时只有一条边生效，其余静默丢失。
+
 **中间插入**：删 `A → B`，改为 `A → N`（N 的 `input-0`）、`N → B`（保持原 handle 语义）。  
 **追加到 End**：删 `X → control_end`，改为 `X → Y → control_end`（常见 `output-0` / `input-0`）。  
-**If 分支**：增加 `control_toBool` + `control_if`，prediction 边与两条分支出边按上表连接。
+**If 分支**：增加 `control_toBool`（确定性）或 `control_agent_toBool`（AI 判断）+ `control_if`，prediction 边与两条分支出边按上表连接。
 
 完整图示例：`builtin/pipelines/new/flow.yaml`。
 

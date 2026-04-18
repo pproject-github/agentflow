@@ -17,7 +17,7 @@ export default function Navbar() {
       <div className="max-w-7xl mx-auto px-6 md:px-12 py-4 md:py-6 flex justify-between items-center">
         <Link to="/" className="flex items-center gap-3 group">
           <img 
-            src="/agentflow/logo-64.png" 
+            src="/logo-64.png" 
             alt="AgentFlow" 
             className="w-10 h-10 md:w-12 md:h-12 rounded-xl group-hover:scale-105 transition-transform"
           />

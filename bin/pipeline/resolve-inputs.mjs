@@ -166,6 +166,24 @@ export function computeResolvedInputsForInstance(workspaceRoot, flowName, uuid, 
     }
   }
 
+  // --input 覆盖：仅当对应上游是 provide_ 节点，且用户传了该 slotName 的值时生效。
+  // parse-flow 初始阶段也会写入 flow.json 的 cliInputsApplied，但此处在运行时重算 resolvedInputs，
+  // 必须在同一处再打一次 patch，否则 override 会丢失（provide 节点原 default 值会覆盖用户输入）。
+  if (flow.cliInputsApplied && typeof flow.cliInputsApplied === "object") {
+    for (let i = 0; i < inputSlotNames.length; i++) {
+      const slotName = inputSlotNames[i];
+      const cliVal = flow.cliInputsApplied[slotName];
+      if (!cliVal || typeof cliVal !== "object") continue;
+      const pred = preds.find((p) => p.targetHandle === `input-${i}`);
+      if (!pred?.source) continue;
+      const sourceInst = instances[pred.source];
+      if (!sourceInst?.definitionId?.startsWith?.("provide_")) continue;
+      const overrideValue = cliVal.type === "file" ? cliVal.path : cliVal.value;
+      if (overrideValue == null) continue;
+      resolvedInputs[slotName] = overrideValue;
+    }
+  }
+
   if (inputRefs.length > 0 && preds.length > 0 && !Object.keys(resolvedInputs).length) {
     const pred = preds[0];
     const fromResult = getNodeOutputFromResult(pred.source);

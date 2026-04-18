@@ -2,6 +2,7 @@
  * Composer Skill Router：基于用户输入意图动态加载 SKILL.md 和 reference 文档。
  *
  * 意图分类：
+ *   query-explain  — 纯问答/解释（不修改文件）
  *   add-instances  — 新增节点/实例
  *   edit-fields    — 改已有节点内容
  *   optimize-flow  — 优化/重构整体流程
@@ -17,6 +18,21 @@ import path from "path";
 
 const INTENT_PATTERNS = [
   {
+    id: "query-explain",
+    patterns: [
+      // 纯问答：问什么/怎么/为什么/是否/有没有
+      /^(?:这个|该|当前|选中)?.*(?:是什么|是啥|啥意思|怎么(?:工作|运行|执行|回事)|为什么|为啥|哪些|有没有|有多少|能不能|是否|如何|有什么)/i,
+      // 动词主导：解释/说明/介绍/查看/展示/分析
+      /(?:解释|说明|介绍|描述|分析|查看|看看|展示|显示|告诉|帮我看|帮我理解)/i,
+      // 名词主导：逻辑/作用/功能/原理
+      /(?:逻辑|作用|功能|用途|含义|意义|目的|原理|机制|区别|流程图|概览|概述).*(?:是|呢|吗|？|\?)/i,
+      // 英文
+      /(?:explain|describe|what\s+(?:does|is|are)|how\s+does|why\s+(?:does|is)|show\s+me|tell\s+me|walk.*through)/i,
+      // "X的逻辑/功能/作用"
+      /(?:脚本|script|body|prompt|代码|内容|节点|node).{0,15}(?:是什么|什么意思|做什么|干什么|逻辑|功能|作用|怎么样)/i,
+    ],
+  },
+  {
     id: "create-flow",
     patterns: [
       /(?:新建|创建|新增|生成|搭建|设计).*(?:流程|流水线|pipeline|flow|agentflow)/i,
@@ -28,7 +44,7 @@ const INTENT_PATTERNS = [
     id: "add-instances",
     patterns: [
       /(?:新增|添加|加入|插入|增加|加个|加一个|补充|补一个).*(?:节点|实例|node|instance|步骤|环节)/i,
-      /(?:加|添|增|补).*(?:分支|条件|判断|循环|环|if|toBool|anyOne)/i,
+      /(?:加|添|增|补).*(?:分支|条件|判断|循环|环|if|toBool|agent_toBool|anyOne)/i,
       /add\s+(?:a\s+)?(?:new\s+)?(?:node|instance|step)/i,
     ],
   },
@@ -64,6 +80,10 @@ const INTENT_PATTERNS = [
 
 // 意图 → 需要加载的 skills 和 references
 const INTENT_RESOURCES = {
+  "query-explain": {
+    skills: [],
+    references: [],
+  },
   "create-flow": {
     skills: ["agentflow-flow-add-instances"],
     references: ["flow-control-capabilities.md", "flow-layout.md"],
@@ -127,6 +147,24 @@ export function detectIntents(userPrompt) {
     }
   }
   return [...new Set(matched)];
+}
+
+/**
+ * 将意图列表归类为注入策略类别。
+ * @param {string[]} intents
+ * @returns {"query" | "edit-node" | "add-node" | "add-flow" | "edit-flow" | "generic"}
+ */
+export function classifyIntentCategory(intents) {
+  if (!intents || intents.length === 0) return "generic";
+  // 纯 query（无任何编辑意图混入）
+  const editIntents = intents.filter(i => i !== "query-explain");
+  if (editIntents.length === 0) return "query";
+  // 混合 query + 编辑 → 按编辑侧分类
+  if (editIntents.includes("create-flow")) return "add-flow";
+  if (editIntents.includes("optimize-flow")) return "edit-flow";
+  if (editIntents.includes("add-instances")) return "add-node";
+  if (editIntents.includes("edit-fields") || editIntents.includes("optimize-nodes")) return "edit-node";
+  return "generic";
 }
 
 // ─── 加载 skill 和 reference 内容 ─────────────────────────────────────────

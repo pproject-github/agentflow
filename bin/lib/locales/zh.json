@@ -239,7 +239,11 @@
     },
     "control_toBool": {
       "displayName": "转布尔",
-      "description": "根据执行任务内容，得到布尔结论后写入 prediction 槽位"
+      "description": "执行 script 脚本输出 true/false 到 prediction，类似 tool_nodejs 但强制 bool 输出，可扩展输入"
+    },
+    "control_agent_toBool": {
+      "displayName": "AI 转布尔",
+      "description": "由 AI 判断输入内容的布尔含义，适用于不确定性场景"
     },
     "tool_nodejs": {
       "displayName": "Node.js 脚本",
