@@ -46,7 +46,7 @@ ui:
 ```
 
 - **`instances`**：键为 **instanceId**（全图唯一），值为该次运行的节点实例；**不要**写 **`description`**（系统说明由 `definitionId` 对应节点 `.md` 的 frontmatter 提供）。  
-- **`script`**（仅 `tool_nodejs`）：指定直接执行的命令，流水线将跳过 AI 直接运行 `run-tool-nodejs` 执行。支持 `${workspaceRoot}`、`${flowName}`、`${runDir}` 及所有 input 槽位占位符，值自动 shell-quote。脚本 stdout 须输出 `{"err_code":0,"message":{"result":"..."}}`。无 `script` 时回退到 AI 执行。  
+- **`script`**（仅 `tool_nodejs`）：指定直接执行的命令，流水线将跳过 AI 直接运行 `run-tool-nodejs` 执行。支持 `${workspaceRoot}`、`${flowName}`、`${runDir}`、`${flowDir}` 及所有 input 槽位占位符，值自动 shell-quote。**引用 flow 自带脚本必须用 `${flowDir}/scripts/xxx.mjs`**（`${flowDir}` 指向 flow 当前所在目录，兼容 user/workspace/builtin 三种安装位置），**禁止**硬编码 `${workspaceRoot}/.workspace/agentflow/pipelines/${flowName}/scripts/...`（flow 安装到 `~/agentflow/pipelines/` 或 builtin 时会 Cannot find module）。脚本 stdout 须输出 `{"err_code":0,"message":{"result":"..."}}`。无 `script` 时回退到 AI 执行。  
 - **`edges`**：有向边；多输入/多输出必须写对 **`targetHandle` / `sourceHandle`**（见下表）。  
 - **`ui.nodePositions`**：编辑器坐标；**每个新 instanceId 必须新增一项**，否则画布会堆叠。
 

@@ -13,16 +13,20 @@ function normalizeModelListsPayload(ml) {
     return {
       cursor: [],
       opencode: [],
+      claudeCode: [],
       cursorFetchedAt: null,
       opencodeFetchedAt: null,
+      claudeCodeFetchedAt: null,
     };
   }
-  const o = /** @type {{ cursor?: unknown, opencode?: unknown, cursorFetchedAt?: unknown, opencodeFetchedAt?: unknown }} */ (ml);
+  const o = /** @type {{ cursor?: unknown, opencode?: unknown, claudeCode?: unknown, cursorFetchedAt?: unknown, opencodeFetchedAt?: unknown, claudeCodeFetchedAt?: unknown }} */ (ml);
   return {
     cursor: Array.isArray(o.cursor) ? o.cursor.map(String) : [],
     opencode: Array.isArray(o.opencode) ? o.opencode.map(String) : [],
+    claudeCode: Array.isArray(o.claudeCode) ? o.claudeCode.map(String) : [],
     cursorFetchedAt: o.cursorFetchedAt ?? null,
     opencodeFetchedAt: o.opencodeFetchedAt ?? null,
+    claudeCodeFetchedAt: o.claudeCodeFetchedAt ?? null,
   };
 }
 
@@ -95,11 +99,13 @@ export default function SettingsPage() {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [contextErr, setContextErr] = useState("");
   const [modelLists, setModelLists] = useState(
-    /** @type {{ cursor: string[], opencode: string[], cursorFetchedAt: string | null, opencodeFetchedAt: string | null }} */ ({
+    /** @type {{ cursor: string[], opencode: string[], claudeCode: string[], cursorFetchedAt: string | null, opencodeFetchedAt: string | null, claudeCodeFetchedAt: string | null }} */ ({
       cursor: [],
       opencode: [],
+      claudeCode: [],
       cursorFetchedAt: null,
       opencodeFetchedAt: null,
+      claudeCodeFetchedAt: null,
     }),
   );
   const [listsErr, setListsErr] = useState("");
@@ -236,6 +242,7 @@ export default function SettingsPage() {
 
   const cursorReady = modelLists.cursor.length > 0;
   const opencodeReady = modelLists.opencode.length > 0;
+  const claudeCodeReady = modelLists.claudeCode.length > 0;
 
   const copyWorkspace = useCallback(() => {
     if (!workspaceRoot) return;
@@ -293,7 +300,7 @@ export default function SettingsPage() {
 
           <div className="af-settings-layout">
             <div className="af-settings-bento">
-              <section className="af-set-card af-set-card--wide af-set-card--low af-set-workspace">
+              <section className="af-set-card af-set-card--narrow af-set-card--low af-set-workspace">
                 <div className="af-set-card-inner">
                   <div className="af-set-card-head">
                     <span className="material-symbols-outlined af-set-icon af-set-icon--secondary">folder_managed</span>
@@ -438,6 +445,59 @@ export default function SettingsPage() {
                 </button>
               </section>
 
+              <section className="af-set-card af-set-card--narrow af-set-card--high">
+                <div className="af-set-card-head af-set-card-head--spread">
+                  <h2 className="af-set-h2 af-set-h2--caps">{t("settings:claudeCode.title")}</h2>
+                  <span
+                    className={
+                      "af-set-badge" + (claudeCodeReady ? " af-set-badge--ok" : " af-set-badge--err")
+                    }
+                  >
+                    {claudeCodeReady
+                      ? t("settings:claudeCode.status.ready")
+                      : t("settings:claudeCode.status.notFound")}
+                  </span>
+                </div>
+                <div className="af-set-cli-block">
+                  <div className="af-set-cli-icon">
+                    <span className="material-symbols-outlined af-set-icon--tertiary">
+                      {claudeCodeReady ? "check_circle" : "hourglass_empty"}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="af-set-cli-title">
+                      {claudeCodeReady
+                        ? t("settings:cursor.modelList.cached")
+                        : t("settings:cursor.modelList.empty")}
+                    </p>
+                    <p className="af-set-cli-mono">
+                      {claudeCodeReady
+                        ? t("settings:cursor.modelList.count", { count: modelLists.claudeCode.length }) +
+                          " · " +
+                          getFetchedAtText(modelLists.claudeCodeFetchedAt)
+                        : t("settings:cursor.modelList.refresh")}
+                    </p>
+                  </div>
+                </div>
+                <p className="af-set-p">{t("settings:claudeCode.description")}</p>
+                {claudeCodeReady ? (
+                  <pre
+                    className="af-set-model-preview"
+                    aria-label={t("settings:claudeCode.modelPreviewLabel")}
+                  >
+                    {modelLists.claudeCode.join("\n")}
+                  </pre>
+                ) : null}
+                <button
+                  type="button"
+                  className="af-set-btn-outline"
+                  onClick={() => refreshModelLists()}
+                  disabled={listsLoading}
+                >
+                  {listsLoading ? t("settings:cursor.modelList.fetching") : t("settings:cursor.modelList.refresh")}
+                </button>
+              </section>
+
               <section className="af-set-card af-set-card--wide af-set-card--low af-set-env">
                 <div className="af-set-env-head">
                   <div className="af-set-card-head">
@@ -543,6 +603,20 @@ export default function SettingsPage() {
                         className="af-set-meter-fill"
                         style={{
                           width: `${Math.min(100, modelLists.opencode.length > 0 ? 12 + modelLists.opencode.length * 3 : 4)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="af-set-meter">
+                    <div className="af-set-meter-row">
+                      <span>{t("settings:system.claudeCodeModels")}</span>
+                      <span>{modelLists.claudeCode.length}</span>
+                    </div>
+                    <div className="af-set-meter-bar">
+                      <div
+                        className="af-set-meter-fill"
+                        style={{
+                          width: `${Math.min(100, modelLists.claudeCode.length > 0 ? 12 + modelLists.claudeCode.length * 3 : 4)}%`,
                         }}
                       />
                     </div>

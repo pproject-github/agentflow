@@ -200,14 +200,17 @@ function modelEntryId(entry) {
   return idx >= 0 ? entry.slice(0, idx).trim() : String(entry || "").trim();
 }
 
-function normalizeComposerModelValue(model, cursorList, opencodeList) {
+function normalizeComposerModelValue(model, cursorList, opencodeList, claudeCodeList) {
   const m = (model || "").trim();
   if (!m) return "";
-  if (m.startsWith("opencode:")) return m;
+  if (m.startsWith("opencode:") || m.startsWith("claude-code:")) return m;
   const c = Array.isArray(cursorList) ? cursorList : [];
   const o = Array.isArray(opencodeList) ? opencodeList : [];
+  const cc = Array.isArray(claudeCodeList) ? claudeCodeList : [];
   const cIds = c.map(modelEntryId);
   const oIds = o.map(modelEntryId);
+  const ccIds = cc.map(modelEntryId);
+  if (ccIds.includes(m) && !cIds.includes(m) && !oIds.includes(m)) return `claude-code:${m}`;
   if (oIds.includes(m) && !cIds.includes(m)) return `opencode:${m}`;
   return m;
 }
@@ -517,6 +520,8 @@ function FlowBoard({
 
   const coloredEdges = useMemo(() => {
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    const selectedNodeIds = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
+    const hasNodeSelection = selectedNodeIds.size > 0;
     const hexToRgba = (hex, a) => {
       const m = /^#([0-9a-f]{6})$/i.exec(hex);
       if (!m) return hex;
@@ -534,17 +539,19 @@ function FlowBoard({
       const srcHue = srcSlot?.type ? getHandleColor(srcSlot.type) : null;
       const tgtHue = tgtSlot?.type ? getHandleColor(tgtSlot.type) : null;
       const mismatch = srcHue && tgtHue && srcHue !== tgtHue;
+      const adjacentToSelected = hasNodeSelection && (selectedNodeIds.has(e.source) || selectedNodeIds.has(e.target));
 
       const prevStyle = e.style || {};
       if (mismatch) {
-        const stroke = hexToRgba(MISMATCH_COLOR, e.selected ? 0.95 : 0.78);
+        const mismatchAlpha = e.selected ? 0.95 : adjacentToSelected ? 0.85 : 0.78;
+        const stroke = hexToRgba(MISMATCH_COLOR, mismatchAlpha);
         return {
           ...e,
-          className: ((e.className || "") + " af-flow-edge--type-mismatch").trim(),
+          className: ((e.className || "") + " af-flow-edge--type-mismatch" + (adjacentToSelected ? " af-flow-edge--adjacent" : "")).trim(),
           style: {
             ...prevStyle,
             stroke,
-            strokeWidth: 2.5,
+            strokeWidth: adjacentToSelected ? 2.75 : 2.5,
             strokeDasharray: "6 4",
           },
           markerEnd:
@@ -555,11 +562,23 @@ function FlowBoard({
       }
 
       const hue = srcHue || tgtHue;
-      if (!hue) return e;
-      const stroke = hexToRgba(hue, e.selected ? 0.7 : 0.38);
+      if (!hue) {
+        if (adjacentToSelected) {
+          return {
+            ...e,
+            className: ((e.className || "") + " af-flow-edge--adjacent").trim(),
+            style: { ...prevStyle, strokeWidth: 2.5 },
+          };
+        }
+        return e;
+      }
+      const alpha = adjacentToSelected ? 0.7 : e.selected ? 0.7 : 0.38;
+      const stroke = hexToRgba(hue, alpha);
+      const strokeWidth = adjacentToSelected ? 2.5 : prevStyle.strokeWidth ?? 2;
       return {
         ...e,
-        style: { ...prevStyle, stroke, strokeWidth: prevStyle.strokeWidth ?? 2 },
+        className: ((e.className || "") + (adjacentToSelected ? " af-flow-edge--adjacent" : "")).trim(),
+        style: { ...prevStyle, stroke, strokeWidth },
         markerEnd:
           e.markerEnd && typeof e.markerEnd === "object"
             ? { ...e.markerEnd, color: stroke }
@@ -861,7 +880,7 @@ export default function FlowEditorPage() {
     /** @type {null | { id: string, newId: string, label: string, role: string, model: string, body: string, script?: string, inputs: IoDraftSlot[], outputs: IoDraftSlot[] }} */ (null),
   );
   const [nodePropsError, setNodePropsError] = useState("");
-  const [modelLists, setModelLists] = useState(/** @type {{ cursor: string[], opencode: string[] }} */ ({ cursor: [], opencode: [] }));
+  const [modelLists, setModelLists] = useState(/** @type {{ cursor: string[], opencode: string[], claudeCode: string[] }} */ ({ cursor: [], opencode: [], claudeCode: [] }));
   const [composerModel, setComposerModel] = useState("");
   const [composerPhaseRole, setComposerPhaseRole] = useState("");
 
@@ -1416,6 +1435,7 @@ export default function FlowEditorPage() {
             setModelLists({
               cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
               opencode: Array.isArray(j.opencode) ? j.opencode.map(String) : [],
+              claudeCode: Array.isArray(j.claudeCode) ? j.claudeCode.map(String) : [],
             });
           }
         })
@@ -3015,22 +3035,30 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   const composerModelSelect = useMemo(() => {
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
+    const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
     const opencodeIdValues = opencode.map((m) => `opencode:${modelEntryId(m)}`);
-    const idSet = new Set([...cursor, ...opencode].map(modelEntryId).concat(opencodeIdValues));
+    const claudeCodeIdValues = claudeCode.map((m) => `claude-code:${modelEntryId(m)}`);
+    const idSet = new Set(
+      [...cursor, ...opencode, ...claudeCode]
+        .map(modelEntryId)
+        .concat(opencodeIdValues)
+        .concat(claudeCodeIdValues),
+    );
     const raw = (composerModel || "").trim();
-    const normalized = normalizeComposerModelValue(composerModel, cursor, opencode);
+    const normalized = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode);
     const extra = normalized && !idSet.has(normalized) && !idSet.has(raw) ? raw : "";
-    return { cursorList: cursor, opencodeList: opencode, currentNotInLists: extra };
+    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, currentNotInLists: extra };
   }, [modelLists, composerModel]);
 
   useEffect(() => {
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
+    const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
     setComposerModel((prev) => {
-      const next = normalizeComposerModelValue(prev, cursor, opencode);
+      const next = normalizeComposerModelValue(prev, cursor, opencode, claudeCode);
       return next === prev ? prev : next;
     });
-  }, [modelLists.cursor, modelLists.opencode]);
+  }, [modelLists.cursor, modelLists.opencode, modelLists.claudeCode]);
 
   const submitComposer = useCallback(async (overridePrompt, options = {}) => {
     if (!selected || composerSubmittingRef.current) return;
@@ -3077,7 +3105,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     let connectTimer = null;
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
-    const modelKey = normalizeComposerModelValue(composerModel, cursor, opencode);
+    const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
+    const modelKey = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode);
     const contextInstanceIds = composerStripEntries
       .filter((e) => e.kind !== "definition" && e.node)
       .map((e) => e.node.id);
@@ -4270,6 +4299,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                             composerModel,
                             composerModelSelect.cursorList,
                             composerModelSelect.opencodeList,
+                            composerModelSelect.claudeCodeList,
                           );
                         })()}
                         onChange={(e) => setComposerModel(e.target.value)}
@@ -4295,6 +4325,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           <optgroup label="OpenCode">
                             {composerModelSelect.opencodeList.map((m) => (
                               <option key={`composer-o-${m}`} value={`opencode:${modelEntryId(m)}`}>
+                                {m}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                        {composerModelSelect.claudeCodeList.length > 0 ? (
+                          <optgroup label="Claude Code">
+                            {composerModelSelect.claudeCodeList.map((m) => (
+                              <option key={`composer-cc-${m}`} value={`claude-code:${modelEntryId(m)}`}>
                                 {m}
                               </option>
                             ))}

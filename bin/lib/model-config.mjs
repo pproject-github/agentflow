@@ -45,6 +45,22 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
     if (raw.startsWith("api:")) {
       return { cli: "api", model: raw, label: raw };
     }
+    if (raw.startsWith("claude-code:")) {
+      const m = raw.slice("claude-code:".length).trim();
+      return {
+        cli: "claude-code",
+        model: m || null,
+        label: m ? `claude-code: ${m}` : "claude-code (default)",
+      };
+    }
+    if (raw.startsWith("opencode:")) {
+      const m = raw.slice("opencode:".length).trim();
+      return {
+        cli: "opencode",
+        model: m || null,
+        label: m ? `opencode: ${m}` : "opencode (default)",
+      };
+    }
     const model = normalizeCursorModelForCli(raw);
     return { cli: "cursor", model, label: `cursor: ${model}` };
   }
@@ -54,7 +70,14 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
     const { models } = loadModelConfig(workspaceRoot);
     const cfg = models[key];
     if (cfg && typeof cfg === "object" && cfg.cli && cfg.model) {
-      const cli = cfg.cli === "opencode" ? "opencode" : cfg.cli === "api" ? "api" : "cursor";
+      const cli =
+        cfg.cli === "opencode"
+          ? "opencode"
+          : cfg.cli === "api"
+            ? "api"
+            : cfg.cli === "claude-code"
+              ? "claude-code"
+              : "cursor";
       const model = String(cfg.model).trim();
       return { cli, model, label: `${cli}: ${model}` };
     }
@@ -62,6 +85,15 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
 
   if (key && key.startsWith("api:")) {
     return { cli: "api", model: key, label: key };
+  }
+
+  if (key && key.startsWith("claude-code:")) {
+    const model = key.slice("claude-code:".length) || "";
+    return {
+      cli: "claude-code",
+      model: model || null,
+      label: model ? `claude-code: ${model}` : "claude-code (default)",
+    };
   }
 
   if (key && key.startsWith("opencode:")) {

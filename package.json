@@ -1,6 +1,6 @@
 {
   "name": "agentflow",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Orchestration system for long-running complex agent tasks using Cursor, OpenCode, or Claude Code as execution backends",
   "type": "module",
   "main": "bin/agentflow.mjs",

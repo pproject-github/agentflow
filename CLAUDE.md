@@ -128,6 +128,7 @@ When modifying **existing** `instances` in `flow.yaml` without changing topology
   - Input pins: `${slotName}` resolves to upstream data value/path
   - Output pins: `${slotName}` resolves to output file path — script writes directly via `fs.writeFileSync(path, value)`
   - Use exit code for success/failure (0 = success, non-0 = failed). Do NOT use JSON stdout wrapping
+- **Scripts under `scripts/` MUST be referenced via `${flowDir}/scripts/xxx.mjs`.** `${flowDir}` resolves to the flow's actual install location (user `~/agentflow/pipelines/`, workspace `.workspace/agentflow/pipelines/`, or package builtin). **Never hardcode `${workspaceRoot}/.workspace/agentflow/pipelines/${flowName}/scripts/...`** — that path only works for workspace-scope installs and breaks for Hub downloads / user-scope / builtin flows. `flow-write` and Hub import normalize known bad prefixes to `${flowDir}` automatically, but handwritten flows should still follow this rule.
 
 ### Adding New Instances (`agentflow-flow-add-instances`)
 

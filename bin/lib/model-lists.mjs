@@ -59,6 +59,47 @@ export function runCursorModels(workspaceRoot) {
   });
 }
 
+/**
+ * Claude Code CLI 不暴露模型列表子命令 — 使用内置列表。
+ * 新模型发布时更新此常量即可。
+ */
+export const BUILTIN_CLAUDE_CODE_MODELS = [
+  "claude-opus-4-7",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+];
+
+export function getBuiltinClaudeCodeModels() {
+  return BUILTIN_CLAUDE_CODE_MODELS.slice();
+}
+
+/**
+ * 探测 Claude Code CLI 是否可用（仅判定能否启动，不拉取模型）。
+ */
+export function probeClaudeCodeAvailable() {
+  return new Promise((resolve) => {
+    const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
+    const child = spawn(claudeCmd, ["--version"], {
+      shell: false,
+      env: envWithCommonBinPaths(),
+    });
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    child.on("close", (code) => finish(code === 0));
+    child.on("error", () => finish(false));
+    setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+      finish(false);
+    }, 5000);
+  });
+}
+
 export function runOpencodeModels(workspaceRoot, provider) {
   if (!provider || !String(provider).trim()) return Promise.resolve([]);
   return new Promise((resolve) => {
@@ -105,7 +146,14 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
   }
 
   const cachePath = getModelListsAbs();
-  let prev = { cursor: [], opencode: [], cursorFetchedAt: null, opencodeFetchedAt: null };
+  let prev = {
+    cursor: [],
+    opencode: [],
+    claudeCode: [],
+    cursorFetchedAt: null,
+    opencodeFetchedAt: null,
+    claudeCodeFetchedAt: null,
+  };
   try {
     if (fs.existsSync(cachePath)) {
       const raw = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
@@ -113,18 +161,22 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     }
   } catch (_) {}
 
-  const [cursorRaw, opencode] = await Promise.all([
+  const [cursorRaw, opencode, claudeCodeAvailable] = await Promise.all([
     runCursorModels(root),
     runOpencodeModels(root, opencodeProvider),
+    probeClaudeCodeAvailable(),
   ]);
   const cursor = cursorRaw.filter(isCursorModelLine);
+  const claudeCode = claudeCodeAvailable ? getBuiltinClaudeCodeModels() : [];
   const now = Date.now();
 
   const data = {
     cursor: cursor.length > 0 ? cursor : prev.cursor ?? [],
     opencode: opencode.length > 0 ? opencode : prev.opencode ?? [],
+    claudeCode: claudeCode.length > 0 ? claudeCode : prev.claudeCode ?? [],
     cursorFetchedAt: cursor.length > 0 ? now : prev.cursorFetchedAt ?? null,
     opencodeFetchedAt: opencode.length > 0 ? now : prev.opencodeFetchedAt ?? null,
+    claudeCodeFetchedAt: claudeCode.length > 0 ? now : prev.claudeCodeFetchedAt ?? null,
   };
 
   try {
@@ -132,5 +184,5 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (_) {}
 
-  return { cursor: data.cursor, opencode: data.opencode };
+  return { cursor: data.cursor, opencode: data.opencode, claudeCode: data.claudeCode };
 }

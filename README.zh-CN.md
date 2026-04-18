@@ -168,6 +168,10 @@ AgentFlow 提供专用技能用于常见操作：
 |------|--------|------|
 | `CURSOR_AGENT_CMD` | `agent` | Cursor CLI 命令 |
 | `CURSOR_AGENT_MODEL` | — | 默认模型 |
+| `OPENCODE_CMD` | `opencode` | OpenCode CLI 命令 |
+| `CLAUDE_CODE_CMD` | `claude` | Claude Code CLI 命令 |
+| `AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS` | `1` | 向 Claude Code 传递 `--dangerously-skip-permissions`；设置 `0` 走交互式审批 |
+| `AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT` | `0` | Claude Code stderr 直接转发到终端用于调试 |
 | `AGENTFLOW_HOME` | `~/agentflow` | 用户数据目录 |
 
 ## 目录结构

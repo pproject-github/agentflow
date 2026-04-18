@@ -33,23 +33,43 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
 
   const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
   const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
+  const claudeCodeList = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
   const rawModel = (data?.model ?? "").trim();
   const needsModel = schemaType === "agent" && !definitionId.startsWith("tool_nodejs");
 
   const cursorIds = new Set(cursorList.map(modelEntryId));
   const opencodeIds = new Set(opencodeList.map(modelEntryId));
+  const claudeCodeIds = new Set(claudeCodeList.map(modelEntryId));
 
   const normalizedModelForSelect = (() => {
     if (!rawModel) return "";
-    if (rawModel.startsWith("cursor:") || rawModel.startsWith("opencode:")) return rawModel;
+    if (
+      rawModel.startsWith("cursor:") ||
+      rawModel.startsWith("opencode:") ||
+      rawModel.startsWith("claude-code:")
+    ) return rawModel;
+    if (claudeCodeIds.has(rawModel)) return `claude-code:${rawModel}`;
     if (opencodeIds.has(rawModel)) return `opencode:${rawModel}`;
     if (cursorIds.has(rawModel)) return `cursor:${rawModel}`;
     return rawModel;
   })();
 
-  const modelNotInLists = rawModel && !normalizedModelForSelect.startsWith("cursor:") && !normalizedModelForSelect.startsWith("opencode:") && !cursorIds.has(rawModel) && !opencodeIds.has(rawModel);
+  const modelNotInLists =
+    rawModel &&
+    !normalizedModelForSelect.startsWith("cursor:") &&
+    !normalizedModelForSelect.startsWith("opencode:") &&
+    !normalizedModelForSelect.startsWith("claude-code:") &&
+    !cursorIds.has(rawModel) &&
+    !opencodeIds.has(rawModel) &&
+    !claudeCodeIds.has(rawModel);
 
-  const displayModel = rawModel.startsWith("cursor:") ? rawModel.slice(7) : rawModel.startsWith("opencode:") ? rawModel.slice(9) : rawModel;
+  const displayModel = rawModel.startsWith("cursor:")
+    ? rawModel.slice(7)
+    : rawModel.startsWith("opencode:")
+      ? rawModel.slice(9)
+      : rawModel.startsWith("claude-code:")
+        ? rawModel.slice(12)
+        : rawModel;
 
   const handleModelChange = (e) => {
     const newModel = e.target.value;
@@ -123,6 +143,15 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
                 <optgroup label="OpenCode">
                   {opencodeList.map((m) => (
                     <option key={`o-${m}`} value={`opencode:${modelEntryId(m)}`}>
+                      {modelEntryId(m)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {claudeCodeList.length > 0 && (
+                <optgroup label="Claude Code">
+                  {claudeCodeList.map((m) => (
+                    <option key={`cc-${m}`} value={`claude-code:${modelEntryId(m)}`}>
                       {modelEntryId(m)}
                     </option>
                   ))}

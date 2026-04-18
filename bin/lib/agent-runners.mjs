@@ -409,6 +409,244 @@ export function runOpenCodeAgentForNode(
   });
 }
 
+/**
+ * Run Claude Code CLI (`claude`) in non-interactive stream-json mode for a node.
+ * NDJSON event schema: system(init) / assistant(message.content[]) / user(tool_result) / result.
+ * Thinking and text both live as content blocks inside assistant events (not as top-level events).
+ */
+export function runClaudeCodeAgentForNode(
+  workspaceRoot,
+  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
+  options = {},
+) {
+  const absPromptPath = path.resolve(workspaceRoot, promptPath);
+  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
+  const absResultPath = path.join(absRunDir, resultPathRel);
+  const nodeIntermediateDir = path.dirname(absPromptPath);
+  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
+  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
+  const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const replacements = {
+    workspaceRoot: absWorkspaceRoot,
+    promptPath: absPromptPath,
+    nodeContext: nodeContext ?? "",
+    taskBody: taskBody ?? "",
+    resultPath: absResultPath,
+    intermediatePath: path.join(absRunDir, "intermediate"),
+    outputDir,
+    flowName: options.flowName ?? "",
+    uuid: options.uuid ?? "",
+    instanceId: instanceId ?? "",
+  };
+  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
+  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
+  if (agentContent) {
+    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
+    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
+    agentPathForPrompt = resolvedAgentPath;
+  }
+  const rawAgentContent =
+    agentContent != null
+      ? agentContent
+      : fs.existsSync(agentPathForPrompt)
+        ? fs.readFileSync(agentPathForPrompt, "utf8")
+        : "";
+  const promptText = stripYamlFrontmatter(rawAgentContent);
+
+  const model = options.model && String(options.model).trim();
+  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
+  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
+  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
+
+  return new Promise((resolve, reject) => {
+    const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
+    const bypassPermissions =
+      process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
+      process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", workspaceRoot];
+    if (bypassPermissions) args.push("--dangerously-skip-permissions");
+    if (model) args.push("--model", model);
+    args.push(promptText);
+    if (options.flowName && options.uuid) {
+      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
+      appendRunLogLine(
+        workspaceRoot,
+        options.flowName,
+        options.uuid,
+        "cli-raw",
+        `Claude Code CLI 完整参数: ${claudeCmd} ${JSON.stringify(argvLog)}`,
+      );
+      appendRunLogLine(
+        workspaceRoot,
+        options.flowName,
+        options.uuid,
+        "cli-raw",
+        `Claude Code CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`,
+      );
+      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Claude Code CLI prompt 完整:\n${promptText}`);
+    }
+    const useStderrInherit =
+      process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "1" ||
+      process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "true";
+    const child = spawn(claudeCmd, args, {
+      cwd: workspaceRoot,
+      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
+      shell: false,
+    });
+
+    let lastResult = null;
+    let hadError = false;
+    let sessionId = null;
+    const STDERR_CAP_BYTES = 1024 * 1024;
+    const stderrChunks = [];
+    let stderrTotalBytes = 0;
+    const stderrBuffer = options.stderrBuffer || null;
+    let stderrLineBuffer = "";
+    const flowName = options.flowName ?? null;
+    const uuid = options.uuid ?? null;
+
+    const outStream = machineReadable ? process.stderr : process.stdout;
+    function writeStdout(text) {
+      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
+      else if (text) outStream.write(agentContentColor(text));
+      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout", text);
+    }
+
+    function flushStderrLines() {
+      if (!coloredPrefix) return;
+      let idx;
+      while ((idx = stderrLineBuffer.indexOf("\n")) !== -1) {
+        const line = stderrLineBuffer.slice(0, idx + 1);
+        stderrLineBuffer = stderrLineBuffer.slice(idx + 1);
+        writeWithPrefix(process.stderr, line, coloredPrefix, agentContentColor);
+      }
+    }
+
+    if (!useStderrInherit) {
+      child.stderr.on("data", (chunk) => {
+        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
+        const len = buf.length;
+        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
+          const drop = stderrChunks.shift();
+          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
+        }
+        stderrChunks.push(buf);
+        stderrTotalBytes += len;
+        if (stderrBuffer) {
+          stderrBuffer.push(chunk);
+        } else if (coloredPrefix) {
+          stderrLineBuffer += s;
+          flushStderrLines();
+        } else {
+          process.stderr.write(chunk);
+        }
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stderr", s);
+      });
+    }
+
+    const stdoutWidth = process.stdout.columns ?? 80;
+    const mdStreamer = createMarkdownStreamer({
+      render: (md) => renderMarkdown(md, { width: stdoutWidth }),
+      spacing: "single",
+    });
+
+    child.stdout.setEncoding("utf-8");
+    let stdoutLineBuffer = "";
+    child.stdout.on("data", (chunk) => {
+      stdoutLineBuffer += chunk;
+      const idx = stdoutLineBuffer.lastIndexOf("\n");
+      const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
+      if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
+      const lines = complete.split("\n").filter(Boolean);
+      for (const line of lines) {
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout-raw", line);
+        try {
+          const event = JSON.parse(line);
+          if (event && typeof event === "object" && event.session_id && !sessionId) {
+            sessionId = event.session_id;
+          }
+          if (event.type === "system") {
+            // init 等元事件，仅记录
+          } else if (event.type === "assistant" && event.message && Array.isArray(event.message.content)) {
+            for (const block of event.message.content) {
+              if (!block || typeof block !== "object") continue;
+              if (block.type === "text" && block.text) {
+                const text = normalizeStreamTextChunk(block.text);
+                const out = mdStreamer.push(text);
+                if (out) writeStdout(out);
+              } else if (block.type === "thinking") {
+                if (options.onToolCall) options.onToolCall("thinking", "");
+              } else if (block.type === "tool_use") {
+                const toolName = block.name || "?";
+                if (options.onToolCall) options.onToolCall("tool_use", toolName);
+                writeStdout(`[claude-code] tool ${toolName}\n`);
+              }
+            }
+          } else if (event.type === "user" && event.message && Array.isArray(event.message.content)) {
+            // tool_result 回传；不向用户 stdout 渲染，只记录
+          } else if (event.type === "result") {
+            lastResult = event;
+            const isSuccess = event.subtype === "success" && !event.is_error;
+            hadError = !isSuccess;
+          } else {
+            writeStdout(`[claude-code-stdout] event: ${event.type ?? "unknown"}\n`);
+          }
+        } catch (_) {
+          writeStdout(`[claude-code-stdout] (非 JSON) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`);
+        }
+      }
+    });
+
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(
+        new Error(
+          `Claude Code CLI failed to start: ${err.message}. Install via 'npm i -g @anthropic-ai/claude-code' and run 'claude /login', or set CLAUDE_CODE_CMD.`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      if (stdoutLineBuffer.trim() && flowName && uuid) {
+        appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout-raw", stdoutLineBuffer.trim());
+      }
+      child.stdout.removeAllListeners();
+      if (!useStderrInherit) child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      const tail = mdStreamer.finish();
+      if (tail) writeStdout(tail);
+      if (coloredPrefix && stderrLineBuffer) {
+        writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
+      }
+      if (code !== 0 && lastResult == null) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        const logHint =
+          flowName && uuid
+            ? ` 检查 run 目录 logs/log.txt 查看完整 Claude Code stderr；常见原因：未登录 claude /login、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT=1 后重跑。`
+            : "";
+        const err = new Error(`Claude Code CLI exited ${code}. ${stderrTail || "No result event received."}${logHint}`);
+        err.claudeCodeStderrTail = stderrTail;
+        reject(err);
+        return;
+      }
+      if (hadError || (lastResult && lastResult.is_error)) {
+        const msg =
+          (lastResult && typeof lastResult.result === "string" && lastResult.result) ||
+          (lastResult && lastResult.subtype) ||
+          "Agent reported error.";
+        reject(new Error(String(msg)));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 const COMPOSER_STATUS_MAX = 200;
 
 /**
@@ -778,6 +1016,181 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
         return;
       }
       emit({ type: "status", line: t("runner.done") });
+      resolve();
+    });
+  });
+
+  return { child, finished };
+}
+
+/**
+ * Claude Code CLI：纯文本 prompt，供 Composer / UI 流式使用；不写 process stdout/stderr。
+ * @returns {{ child: import('child_process').ChildProcess, finished: Promise<void> }}
+ */
+export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options = {}) {
+  const onStreamEvent = typeof options.onStreamEvent === "function" ? options.onStreamEvent : null;
+  const ws = path.resolve(cliWorkspace);
+  const model = options.model && String(options.model).trim();
+  const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
+  const bypassPermissions =
+    process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
+    process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", ws];
+  if (bypassPermissions) args.push("--dangerously-skip-permissions");
+  if (model) args.push("--model", model);
+  args.push(promptText);
+
+  const useStderrInherit =
+    process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "1" ||
+    process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "true";
+  const child = spawn(claudeCmd, args, {
+    cwd: ws,
+    stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
+    shell: false,
+  });
+
+  let lastResult = null;
+  let hadError = false;
+  const STDERR_CAP_BYTES = 1024 * 1024;
+  const stderrChunks = [];
+  let stderrTotalBytes = 0;
+  let stderrComposerBuffer = "";
+
+  const emit = (payload) => {
+    try {
+      onStreamEvent?.(payload);
+    } catch (_) {}
+  };
+
+  if (!useStderrInherit) {
+    child.stderr.on("data", (chunk) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
+      const len = buf.length;
+      while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
+        const drop = stderrChunks.shift();
+        stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
+      }
+      stderrChunks.push(buf);
+      stderrTotalBytes += len;
+      stderrComposerBuffer += s;
+      let idx;
+      while ((idx = stderrComposerBuffer.indexOf("\n")) !== -1) {
+        const line = stderrComposerBuffer.slice(0, idx);
+        stderrComposerBuffer = stderrComposerBuffer.slice(idx + 1);
+        if (line.trim()) {
+          emit({ type: "status", line: `[stderr] ${truncateComposerLine(line)}` });
+        }
+      }
+    });
+  }
+
+  const stdoutWidth = 80;
+  const mdStreamer = createMarkdownStreamer({
+    render: (md) => renderMarkdown(md, { width: stdoutWidth }),
+    spacing: "single",
+  });
+
+  child.stdout.setEncoding("utf-8");
+  let stdoutLineBuffer = "";
+  child.stdout.on("data", (chunk) => {
+    stdoutLineBuffer += chunk;
+    const idx = stdoutLineBuffer.lastIndexOf("\n");
+    const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
+    if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
+    const lines = complete.split("\n").filter(Boolean);
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "assistant" && event.message && Array.isArray(event.message.content)) {
+          for (const block of event.message.content) {
+            if (!block || typeof block !== "object") continue;
+            if (block.type === "text" && block.text) {
+              const text = normalizeStreamTextChunk(block.text);
+              emit({ type: "natural", kind: "assistant", text });
+              mdStreamer.push(text);
+              emit({ type: "status", line: t("runner.generating_reply") });
+            } else if (block.type === "thinking" && block.thinking) {
+              const text = normalizeStreamTextChunk(block.thinking);
+              emit({ type: "natural", kind: "thinking", text });
+              emit({ type: "status", line: t("runner.thinking") });
+              if (options.onToolCall) options.onToolCall("thinking", "");
+            } else if (block.type === "tool_use") {
+              const toolName = block.name || "?";
+              emit({ type: "status", line: `工具 ${toolName}` });
+              if (options.onToolCall) options.onToolCall("tool_use", toolName);
+            }
+          }
+        } else if (event.type === "result") {
+          lastResult = event;
+          const isSuccess = event.subtype === "success" && !event.is_error;
+          if (isSuccess) {
+            hadError = false;
+            if (typeof event.result === "string" && event.result.trim()) {
+              emit({ type: "natural", kind: "result", text: normalizeStreamTextChunk(event.result) });
+            }
+            emit({ type: "status", line: t("runner.completed") });
+          } else {
+            hadError = true;
+            const errText =
+              (typeof event.result === "string" && event.result) ||
+              event.subtype ||
+              t("runner.execution_failed");
+            emit({ type: "natural", kind: "error", text: String(errText) });
+            emit({ type: "status", line: truncateComposerLine(String(errText)) });
+          }
+        } else if (event.type === "system") {
+          // init 元事件
+        } else if (event.type === "user") {
+          // tool_result 回传
+        } else {
+          emit({ type: "status", line: `${t("runner.event_label")}: ${event.type ?? "unknown"}` });
+        }
+      } catch (_) {
+        emit({ type: "status", line: truncateComposerLine(line) });
+      }
+    }
+  });
+
+  const finished = new Promise((resolve, reject) => {
+    child.on("error", (err) => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.removeAllListeners();
+      reject(
+        new Error(
+          `Claude Code CLI failed to start: ${err.message}. Install via 'npm i -g @anthropic-ai/claude-code' and run 'claude /login', or set CLAUDE_CODE_CMD.`,
+        ),
+      );
+    });
+
+    child.on("close", (code) => {
+      child.stdout.removeAllListeners();
+      if (!useStderrInherit) child.stderr.removeAllListeners();
+      child.removeAllListeners();
+      mdStreamer.finish();
+      if (!useStderrInherit && stderrComposerBuffer.trim()) {
+        const rest = stderrComposerBuffer.trim();
+        emit({ type: "status", line: `[stderr] ${truncateComposerLine(rest)}` });
+      }
+      if (code !== 0 && lastResult == null) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        const err = new Error(`Claude Code CLI exited ${code}. ${stderrTail || "No result event received."}`);
+        err.claudeCodeStderrTail = stderrTail;
+        emit({ type: "status", line: truncateComposerLine(err.message) });
+        reject(err);
+        return;
+      }
+      if (hadError || (lastResult && lastResult.is_error)) {
+        const msg =
+          (lastResult && typeof lastResult.result === "string" && lastResult.result) ||
+          (lastResult && lastResult.subtype) ||
+          "Agent reported error.";
+        emit({ type: "status", line: truncateComposerLine(String(msg)) });
+        reject(new Error(String(msg)));
+        return;
+      }
       resolve();
     });
   });

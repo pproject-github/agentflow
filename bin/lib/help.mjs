@@ -8,7 +8,7 @@ export function printHelp() {
   // 根据语言输出不同的帮助文本
   if (isZh) {
     log.info(`
-AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay。
+AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 apply/replay。
 
 用法：
   agentflow login [--provider github|google]   登录 AgentFlow Hub（默认 GitHub）
@@ -32,7 +32,7 @@ AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay
 选项：
   --workspace-root <path>  工作区根目录（默认：当前目录）
   --dry-run                （仅 apply）打印就绪节点后退出，不执行 Cursor agent
-  --model <name>           Cursor CLI 模型（如 claude-sonnet）。覆盖 CURSOR_AGENT_MODEL。运行 'agent models' 查看列表。
+  --model <name>           后端模型。默认走 Cursor；前缀 opencode:<model>、claude-code:<model>、api:<provider>/<model> 可切换后端。覆盖 CURSOR_AGENT_MODEL。
   --input <name>=<value>   （仅 apply）覆盖 flow 中 provide 节点的值。value 前缀 file: 表示文件路径。可多次使用。
   --debug                  显示调试日志（灰色，低优先级）
   --force                  传递 --force/--trust 给 Cursor；设置 OPENCODE_PERMISSION 允许 OpenCode 的 external_directory（默认开启）。使用 --no-force 禁用。
@@ -61,13 +61,13 @@ Apply：构建运行目录，解析流程，循环运行就绪节点。
 Resume：将 pending 和 failed 节点标记为成功（例如 UserCheck 确认后或重试失败后），然后继续 apply。
 Replay：运行单个节点（pre-process → execute → post-process）。
 
-需要：Node >=18，Cursor CLI（'agent'）在 PATH 中用于节点执行。
+需要：Node >=18，以下任一 CLI 在 PATH 中用于节点执行：Cursor CLI（'agent'，默认）、OpenCode CLI（'opencode'，env 覆盖 OPENCODE_CMD）、Claude Code CLI（'claude'，env 覆盖 CLAUDE_CODE_CMD，需先 'claude /login'）。
 Apply/replay 脚本已打包在 agentflow 包中（bin/pipeline/）。
 `);
   } else {
     // 英文版本
     log.info(`
-AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming.
+AgentFlow CLI — drive apply/replay with Cursor / OpenCode / Claude Code CLI streaming.
 
 Usage:
   agentflow login [--provider github|google]   Login to AgentFlow Hub (default: GitHub)
@@ -91,7 +91,7 @@ Usage:
 Options:
   --workspace-root <path>  Workspace root (default: cwd)
   --dry-run                (apply only) Print ready nodes and exit without running Cursor agent
-  --model <name>           Cursor CLI model (e.g. claude-sonnet). Overrides CURSOR_AGENT_MODEL. Run 'agent models' to list.
+  --model <name>           Backend model. Default routes to Cursor; prefixes opencode:<model>, claude-code:<model>, api:<provider>/<model> switch backend. Overrides CURSOR_AGENT_MODEL.
   --input <name>=<value>   (apply only) Override provide node values in flow. Prefix value with file: for file paths. Can be used multiple times.
   --debug                  Show debug logs (gray, low priority)
   --force                  Pass --force/--trust to Cursor; set OPENCODE_PERMISSION to allow external_directory for OpenCode (default: on). Use --no-force to disable.
@@ -120,7 +120,7 @@ Apply: builds run dir, parses flow, runs ready nodes in a loop.
 Resume: marks pending and failed node(s) as success (e.g. after UserCheck confirm or retry failed), then continues apply.
 Replay: runs a single node (pre-process → execute → post-process).
 
-Requires: Node >=18, Cursor CLI ('agent') in PATH for node execution.
+Requires: Node >=18, any of Cursor CLI ('agent', default), OpenCode CLI ('opencode', env OPENCODE_CMD), or Claude Code CLI ('claude', env CLAUDE_CODE_CMD, run 'claude /login' first) in PATH for node execution.
 Apply/replay scripts are bundled in the agentflow package (bin/pipeline/).
 `);
   }

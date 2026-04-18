@@ -6,6 +6,7 @@ import path from "path";
 import yaml from "js-yaml";
 import { unzipSync } from "fflate";
 import { resolveFlowDirForWrite, validateUserPipelineId } from "./flow-write.mjs";
+import { normalizeFlowYamlText } from "./flow-normalize.mjs";
 
 export const IMPORT_MAX_UNCOMPRESSED_BYTES = 8 * 1024 * 1024;
 export const IMPORT_MAX_FILE_ENTRIES = 500;
@@ -274,6 +275,7 @@ export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelati
   const text = yamlBuf.toString("utf8");
   const v = validateImportedFlowYaml(text);
   if (!v.ok) return { success: false, error: v.error };
+  const normalizedYaml = normalizeFlowYamlText(text).text;
 
   try {
     fs.mkdirSync(flowDir, { recursive: true });
@@ -288,7 +290,8 @@ export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelati
       }
       const parent = path.dirname(abs);
       fs.mkdirSync(parent, { recursive: true });
-      fs.writeFileSync(abs, buf);
+      const payload = safe === "flow.yaml" ? Buffer.from(normalizedYaml, "utf8") : buf;
+      fs.writeFileSync(abs, payload);
     }
     return { success: true };
   } catch (e) {
