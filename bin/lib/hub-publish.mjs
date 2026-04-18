@@ -10,7 +10,15 @@ import { execSync } from "child_process";
 import chalk from "chalk";
 import yaml from "js-yaml";
 import { log } from "./log.mjs";
-import { getStoredSession, getUserProfile, uploadToStorage, insertFlow } from "./hub.mjs";
+import {
+  getStoredSession,
+  getUserProfile,
+  uploadToStorage,
+  insertFlow,
+  findFlowByAuthorAndTitle,
+  updateFlow,
+  deleteStorageObject,
+} from "./hub.mjs";
 import { getFlowDir } from "./workspace.mjs";
 
 function slugify(text) {
@@ -86,45 +94,61 @@ export async function hubPublish(workspaceRoot, argv) {
   const entries = fs.readdirSync(flowDir);
   const hasExtras = entries.some((e) => e !== "flow.yaml" && e !== ".DS_Store");
 
+  // Check if this author already published a flow with this title — update instead of insert.
+  const existing = await findFlowByAuthorAndTitle(session.access_token, user.id, title);
+
   let fileBuffer, fileKey, contentType;
-  const slug = slugify(title) + "-" + Date.now().toString(36);
+  const ext = hasExtras ? ".zip" : ".yaml";
+  const slug = existing?.slug || slugify(title) + "-" + Date.now().toString(36);
+  fileKey = `${user.id}/${slug}${ext}`;
 
   if (hasExtras) {
-    // Zip the entire flow directory
     log.info("Flow has scripts/extras — creating zip...");
     const zipPath = path.join(flowDir, ".hub-upload.zip");
     try {
       execSync(`cd "${flowDir}" && zip -r "${zipPath}" . -x ".*"`, { stdio: "pipe" });
       fileBuffer = fs.readFileSync(zipPath);
-      fileKey = `${user.id}/${slug}.zip`;
       contentType = "application/zip";
     } finally {
       try { fs.unlinkSync(zipPath); } catch {}
     }
   } else {
-    // Just upload flow.yaml
     fileBuffer = Buffer.from(yamlContent, "utf8");
-    fileKey = `${user.id}/${slug}.yaml`;
     contentType = "text/yaml";
   }
 
-  // Upload to storage
+  // If updating and the file extension changed (yaml ↔ zip), delete the old artifact.
+  if (existing && existing.yaml_key && existing.yaml_key !== fileKey) {
+    log.info("Removing old artifact: " + existing.yaml_key);
+    await deleteStorageObject(session.access_token, existing.yaml_key);
+  }
+
   log.info("Uploading " + (hasExtras ? "zip" : "flow.yaml") + " (" + (fileBuffer.length / 1024).toFixed(1) + " KB)...");
   await uploadToStorage(session.access_token, fileKey, fileBuffer, contentType);
 
-  // Insert flow record
-  log.info("Publishing flow record...");
-  const result = await insertFlow(session.access_token, {
-    slug,
-    author_id: user.id,
-    title,
-    description,
-    tags,
-    yaml_key: fileKey,
-    node_count: nodeCount,
-  });
+  if (existing) {
+    log.info("Updating existing flow record...");
+    await updateFlow(session.access_token, existing.id, {
+      description,
+      tags,
+      yaml_key: fileKey,
+      node_count: nodeCount,
+    });
+    log.info(chalk.green("✓") + " Updated: " + chalk.bold(title));
+  } else {
+    log.info("Publishing flow record...");
+    await insertFlow(session.access_token, {
+      slug,
+      author_id: user.id,
+      title,
+      description,
+      tags,
+      yaml_key: fileKey,
+      node_count: nodeCount,
+    });
+    log.info(chalk.green("✓") + " Published: " + chalk.bold(title));
+  }
 
-  log.info(chalk.green("✓") + " Published: " + chalk.bold(title));
   log.info("  slug: " + slug);
   log.info("  nodes: " + nodeCount);
   if (hasExtras) log.info("  type: zip (includes scripts)");

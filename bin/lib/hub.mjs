@@ -253,6 +253,40 @@ export async function insertFlow(accessToken, flowData) {
   return res.json();
 }
 
+export async function findFlowByAuthorAndTitle(accessToken, authorId, title) {
+  const url = `${HUB_URL}/rest/v1/flows?select=*&author_id=eq.${encodeURIComponent(authorId)}&title=eq.${encodeURIComponent(title)}&limit=1`;
+  const res = await fetch(url, { headers: supabaseHeaders(accessToken) });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data[0] || null;
+}
+
+export async function updateFlow(accessToken, flowId, patch) {
+  const url = `${HUB_URL}/rest/v1/flows?id=eq.${encodeURIComponent(flowId)}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { ...supabaseHeaders(accessToken), Prefer: "return=representation" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error("Update failed: " + res.status + " " + text);
+  }
+  return res.json();
+}
+
+export async function deleteStorageObject(accessToken, fileKey) {
+  const url = `${HUB_URL}/storage/v1/object/flows/${fileKey}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      apikey: HUB_ANON_KEY,
+      Authorization: "Bearer " + accessToken,
+    },
+  });
+  return res.ok;
+}
+
 export async function getUserProfile(accessToken) {
   const url = `${HUB_URL}/auth/v1/user`;
   const res = await fetch(url, {
