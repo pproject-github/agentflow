@@ -214,8 +214,8 @@ instances:
       - type: file
         name: result
         value: ""
-    script: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
-    body: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${runDir}
+    script: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${result}
+    body: agentflow apply -ai collect-nodes ${workspaceRoot} ${flowName} ${result}
   agent_ai_check_tool:
     definitionId: agent_subAgent
     label: AI检查

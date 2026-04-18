@@ -431,35 +431,67 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
     warnings.push(...placeWarnings);
   }
 
+  const normType = (t) => {
+    if (t === "节点") return "node";
+    if (t === "文本") return "text";
+    if (t === "文件") return "file";
+    if (t === "布尔") return "bool";
+    return (t || "").trim();
+  };
+
   if (instances && typeof instances === "object") {
     for (const n of nodes) {
       const inst = instances[n.id];
       if (!inst) continue;
       const defId = inst.definitionId || n.definitionId || "";
 
-      // tool_nodejs 必须有 script
-      if (defId === "tool_nodejs") {
+      // tool_nodejs / control_toBool 必须有 script
+      if (defId === "tool_nodejs" || defId === "control_toBool") {
         const script = inst.script != null ? String(inst.script).trim() : "";
         const body = inst.body != null ? String(inst.body).trim() : "";
         if (!script && body) {
           errors.push(
-            `节点 "${n.id}"（tool_nodejs）缺少 script 字段：body 中的自然语言不会被执行，必须添加可执行的 script，或改用 agent_subAgent`
+            `节点 "${n.id}"（${defId}）缺少 script 字段：body 中的自然语言不会被执行，必须添加可执行的 script` +
+            (defId === "tool_nodejs" ? "，或改用 agent_subAgent" : "，或改用 control_agent_toBool")
           );
         } else if (!script && !body) {
           errors.push(
-            `节点 "${n.id}"（tool_nodejs）既无 script 也无 body，节点无法执行，必须添加 script 字段`
+            `节点 "${n.id}"（${defId}）既无 script 也无 body，节点无法执行，必须添加 script 字段`
           );
+        }
+
+        // script 必须引用所有非 node/bool 类型的 input 和 output 引脚
+        if (script) {
+          const inp = Array.isArray(inst.input) ? inst.input : [];
+          const out = Array.isArray(inst.output) ? inst.output : [];
+          const placeholders = extractPlaceholders(script);
+          const phSet = new Set(placeholders);
+          for (const slot of inp) {
+            const slotName = (slot && slot.name != null ? String(slot.name).trim() : "");
+            const slotType = normType((slot && slot.type != null ? String(slot.type).trim() : ""));
+            if (!slotName || slotType === "node") continue;
+            if (!phSet.has(slotName) && !phSet.has(`input.${slotName}`)) {
+              errors.push(
+                `节点 "${n.id}"（${defId}）script 未引用 input 引脚 "${slotName}"（type: ${slotType}），` +
+                `应在 script 中添加 \${${slotName}} 传入数据`
+              );
+            }
+          }
+          for (const slot of out) {
+            const slotName = (slot && slot.name != null ? String(slot.name).trim() : "");
+            const slotType = normType((slot && slot.type != null ? String(slot.type).trim() : ""));
+            if (!slotName || slotType === "node") continue;
+            if (!phSet.has(slotName) && !phSet.has(`output.${slotName}`)) {
+              errors.push(
+                `节点 "${n.id}"（${defId}）script 未引用 output 引脚 "${slotName}"（type: ${slotType}），` +
+                `应在 script 中添加 \${${slotName}} 接收输出文件路径并直接写入`
+              );
+            }
+          }
         }
       }
 
       // provide_str / provide_file output 类型校验
-      const normType = (t) => {
-        if (t === "节点") return "node";
-        if (t === "文本") return "text";
-        if (t === "文件") return "file";
-        if (t === "布尔") return "bool";
-        return (t || "").trim();
-      };
       if (defId === "provide_str") {
         const out = Array.isArray(inst.output) ? inst.output : [];
         if (out.length !== 1) {

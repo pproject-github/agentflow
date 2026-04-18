@@ -91,7 +91,7 @@ AgentFlow/
 ## Workflow Tips
 
 1. **For complex flows**: Use AI Composer mode in Web UI with natural language descriptions
-2. **Loop patterns**: Use `control_anyOne` + `control_toBool` + `control_if` for check-fix-loop patterns
+2. **Loop patterns**: Use `control_anyOne` + `control_toBool` (deterministic) or `control_agent_toBool` (AI judgment) + `control_if` for check-fix-loop patterns
 3. **Checkpoint recovery**: Every node state is persisted—failures can resume from the exact failure point
 4. **Parallel execution**: Use `--parallel` flag to execute same-round nodes concurrently
 
@@ -124,6 +124,10 @@ When modifying **existing** `instances` in `flow.yaml` without changing topology
 - `script` field contains the actual command to execute
 - `body` is documentation only — **ignored when `script` exists**
 - Always write complete, executable commands in `script`, never natural language
+- **`script` must reference ALL non-node input and output pins as `${slotName}`** (hard validation error):
+  - Input pins: `${slotName}` resolves to upstream data value/path
+  - Output pins: `${slotName}` resolves to output file path — script writes directly via `fs.writeFileSync(path, value)`
+  - Use exit code for success/failure (0 = success, non-0 = failed). Do NOT use JSON stdout wrapping
 
 ### Adding New Instances (`agentflow-flow-add-instances`)
 
@@ -166,12 +170,15 @@ ui:
 |--------------|----------------|---------------|
 | control_start | next → output-0 | — |
 | control_end | — | prev → input-0 |
-| control_if | next1 → output-0, next2 → output-1 | prev → input-0, prediction → input-1 |
+| control_if | next1(TRUE) → output-0, next2(FALSE) → output-1 | prev → input-0, prediction → input-1 |
 | control_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
+| control_agent_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
 | control_anyOne | next → output-0 | prev1 → input-0, prev2 → input-1 |
 | tool_nodejs | next → output-0, result → output-1 | prev → input-0, [dynamic inputs] |
 | tool_user_check | next → output-0, content → output-1 | prev → input-0, content → input-1 |
 | tool_user_ask | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+
+**Edge fan-out / fan-in rule:** One output can connect to multiple inputs (fan-out OK). One input can only have one incoming edge (fan-in forbidden). Never write two edges with the same `target + targetHandle` — runtime only uses the first match, the rest are silently ignored.
 
 **Default node position:** Place new nodes starting at `x: 100, y: 300`. For linear/main-chain flows, increment `x` by **280** per node (e.g. `x: 100 + i * 280, y: 300`). For branches, offset `y` by **200** between paths. For parallel nodes, keep same `x` and offset `y` by **200**.
 

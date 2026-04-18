@@ -23,7 +23,7 @@
 
 - **control_if**：单节点双分支。根据 **prediction**（bool）：为 true 时沿 **next1**（output-0）继续，为 false 时沿 **next2**（output-1）继续。适用于「二选一」分支。
 
-**典型用法**：上游接一个能输出布尔值的节点（如 **control_toBool** 或 agent 输出 bool），把布尔槽位连到 If 的 **input-1**（prediction），再根据需要连到不同分支。
+**典型用法**：上游接一个能输出布尔值的节点（如 **control_toBool**（确定性）或 **control_agent_toBool**（AI 判断）），把布尔槽位连到 If 的 **input-1**（prediction），再根据需要连到不同分支。
 
 **control_if Handle**：
 - input: prev → input-0, prediction → input-1  
@@ -33,16 +33,27 @@
 
 ## 3. 转布尔（ToBool）
 
+### 3a. control_toBool（本地确定性执行）
+
 - **definitionId**: control_toBool  
-- **作用**：将上游的 **value**（文本等）转为布尔结果，写入 **prediction**，供 If 使用。
+- **作用**：**本地代码**将上游 **value** 文本用 parseBool 解析为布尔（true/1/yes/on → true，其余 → false），写入 **prediction**。**不调用 AI agent**。
+- **适用场景**：上游输出已是明确的 "true"/"false"、"1"/"0"、"yes"/"no" 等确定性文本。
 
 **Handle**：
 - input: prev → input-0, value → input-1  
 - output: next → output-0, prediction → output-1  
 
-常见：上游为 agent 或 tool 输出一段文本，ToBool 解析后得到 true/false，再连到 If 的 prediction。
+### 3b. control_agent_toBool（AI agent 执行）
 
-**约定**：写入 **prediction**（output-1）的**文件内容必须仅为 true 或 false**，供下游 control_if 等解析；不得写入长文本或 markdown 报告。
+- **definitionId**: control_agent_toBool  
+- **作用**：由 **AI agent** 理解上游 **value** 内容的语义，判断布尔含义后写入 **prediction**。
+- **适用场景**：上游输出是自然语言描述、代码分析结果、复杂报告等需要语义理解才能判定真假的内容。
+
+**Handle**：
+- input: prev → input-0, value → input-1  
+- output: next → output-0, prediction → output-1  
+
+**共同约定**：写入 **prediction**（output-1）的**文件内容必须仅为 true 或 false**，供下游 control_if 等解析；不得写入长文本或 markdown 报告。
 
 ---
 
@@ -150,10 +161,14 @@ print_hello:
 
 **约束规则**：
 1. `tool_nodejs` **必须写 `script` 字段**，内容为完整可执行的命令
-2. `script` 中的 `${}` 占位符自动 shell-quote，引用 input 槽位或系统变量
-3. `body` 可选，仅用于文档说明，**禁止写期望被执行的逻辑**
-4. 如果无法写出完整可执行的 `script`（需要 AI 理解/判断），**必须改用 `agent_subAgent`**
-5. `script` 支持多行（YAML `|` 语法）和管道组合
+2. `script` 中的 `${}` 占位符自动 shell-quote，引用 input/output 槽位或系统变量
+3. **`script` 必须引用所有非 node 类型的 input 和 output 引脚**（validate-flow 硬性校验）：
+   - input 引脚 `${slotName}` → 解析为上游数据值或文件路径
+   - output 引脚 `${slotName}` → 解析为 output 文件的绝对路径，脚本应 `fs.writeFileSync(path, value)` 直接写入
+   - **禁止使用 JSON stdout 封装**（`{"err_code":0,"message":{...}}`），用 exit code 0/非 0 决定成败
+4. `body` 可选，仅用于文档说明，**禁止写期望被执行的逻辑**
+5. 如果无法写出完整可执行的 `script`（需要 AI 理解/判断），**必须改用 `agent_subAgent`**
+6. `script` 支持多行（YAML `|` 语法）和管道组合
 
 **复杂脚本示例（API 调用 + JSON 处理）**：
 
@@ -235,7 +250,7 @@ bad_example:
 该流程可概括为：**入环 → 检查 → 修复 → 检查 → 修复 → … → 检查通过 → 出环**。参考 **builtin/pipelines/module-migrate** 的连线方式。
 
 - **入环**：用 **control_anyOne** 汇合两条路——「首次进入」与「上一轮修复完成后再检查」。prev1 / prev2 任一路就绪即从 next 继续，进入**检查**。
-- **检查**：执行检查节点（可并行、可汇总），结果经 **control_toBool** 转为布尔，再接到 **control_if**。
+- **检查**：执行检查节点（可并行、可汇总），结果经 **control_toBool**（确定性）或 **control_agent_toBool**（AI 判断）转为布尔，再接到 **control_if**。
 - **分支**：**control_if** 的 next1（true，通过）→ 出环到后续或 End；next2（false，未通过）→ 进入**修复**。
 - **修复**：修复节点消费检查结果，修改后通过边回到「检查」上游或回到 **AnyOne** 的 prev2，形成环；可再套一层 ToBool + If 判断「是否修完」，未修完再修复、修完再回检查。
 - **出环**：当 **control_if** 为 true 时，从 next1 连到环外节点，不再回到 AnyOne。
@@ -246,6 +261,7 @@ bad_example:
 
 ## 9. Edge 与 Handle 注意点
 
+- **Fan-out 允许，Fan-in 禁止**：一个 output handle 可连多个 input（扇出），但**一个 input handle 只允许一条入边**（禁止扇入）。同一 `target + targetHandle` 不得出现在多条 edge 中——运行时 `resolve-inputs` 仅取 `find()` 首条匹配，其余静默丢失。若需替换连线，先删旧边再加新边。
 - 条件/分支节点有多输入时，必须在 edge 上写清 **targetHandle**（如 prediction 用 input-1）。  
 - 从 ToBool 的 prediction 连到 If（control_if）时：sourceHandle 用 **output-1**，targetHandle 用 **input-1**。  
 - 多输出节点连到不同下游时，用不同 **sourceHandle**（output-0, output-1, …）区分槽位。

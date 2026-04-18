@@ -217,6 +217,7 @@
     "endConversation": "结束对话（将停止生成）",
     "closeConversation": "关闭对话",
     "newConversation": "新建对话",
+    "switchConversation": "切换对话",
     "selectedNodesAriaLabel": "已选节点列表",
     "selectedNodesEmpty": "在画布上选择节点，或在输入框用 @ 选择实例（Instances）或节点类型（Node）",
     "removeFromInput": "从输入中移除 @{{id}}",
@@ -256,7 +257,10 @@
     "rerunTitle": "从头开始新的运行",
     "runOptions": "运行选项",
     "runWithParams": "带参数运行",
-    "runWithPreset": "指定预设运行"
+    "runWithPreset": "指定预设运行",
+    "editRun": "编辑运行参数",
+    "startRun": "开始执行",
+    "stopRun": "停止后台运行"
   },
   "palette2": {
     "nodePalette": "节点调色板",
@@ -307,10 +311,14 @@
     "moveBusy": "移动中…",
     "moveToWorkspace": "移动到工作区",
     "moveToUserDir": "移动到用户目录",
-    "saveChanges": "保存更改",
     "globalSettings": "全局设置",
     "currentPipeline": "当前流水线：",
-    "builtin": "内置"
+    "builtin": "内置",
+    "rename": "重命名",
+    "renameBusy": "重命名中…",
+    "renameSuccess": "已重命名",
+    "copyPath": "复制路径",
+    "pathCopied": "已复制"
   },
   "history": {
     "title": "执行历史",

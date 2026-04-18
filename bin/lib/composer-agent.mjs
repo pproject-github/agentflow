@@ -21,6 +21,116 @@ import { t } from "./i18n.mjs";
 
 const MAX_PROMPT_CHARS = 500_000;
 const MAX_COMPOSER_VALIDATION_REPAIR = 5;
+const MAX_SCRIPT_INJECT_BYTES = 30_000;
+
+// ─── script 内容注入辅助 ─────────────────────────────────────────────────
+
+/**
+ * 从文本中提取 .mjs 脚本文件名（去重）。
+ */
+function extractScriptFilenames(text) {
+  if (!text) return [];
+  const matches = text.match(/[\w\-.]+\.mjs/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
+/**
+ * 读取 scripts/ 目录下指定 .mjs 文件内容，拼为 prompt 注入块。
+ */
+function readPipelineScriptContents(scriptsDirAbs, filenames, nodeHint) {
+  if (!scriptsDirAbs || !filenames.length) return "";
+  const blocks = [];
+  let totalBytes = 0;
+  for (const fn of filenames) {
+    try {
+      const content = fs.readFileSync(path.join(scriptsDirAbs, fn), "utf-8");
+      if (totalBytes + content.length > MAX_SCRIPT_INJECT_BYTES) break;
+      totalBytes += content.length;
+      const header = nodeHint ? `### ${fn}（节点 \`${nodeHint}\`）` : `### ${fn}`;
+      blocks.push(`${header}\n\`\`\`javascript\n${content.trimEnd()}\n\`\`\``);
+    } catch { /* file not found — skip */ }
+  }
+  return blocks.length
+    ? `## 关联脚本文件内容（scripts/ 目录）\n\n${blocks.join("\n\n")}`
+    : "";
+}
+
+/**
+ * 为选中的 tool_nodejs 实例构建脚本内容注入块（供单步 Composer 使用）。
+ */
+export function buildScriptContentBlockForInstances(flowYamlAbs, instanceIds) {
+  if (!flowYamlAbs || !instanceIds?.length) return "";
+  try {
+    const flowDir = path.dirname(flowYamlAbs);
+    const scriptsDirAbs = path.join(flowDir, "scripts");
+    if (!fs.existsSync(scriptsDirAbs)) return "";
+    const flowRaw = fs.readFileSync(flowYamlAbs, "utf-8");
+    const flowDoc = yaml.load(flowRaw);
+    const instances = flowDoc?.instances || {};
+    const blocks = [];
+    let totalBytes = 0;
+    for (const id of instanceIds) {
+      const inst = instances[id];
+      if (!inst || inst.definitionId !== "tool_nodejs" || !inst.script) continue;
+      const filenames = extractScriptFilenames(String(inst.script));
+      for (const fn of filenames) {
+        try {
+          const content = fs.readFileSync(path.join(scriptsDirAbs, fn), "utf-8");
+          if (totalBytes + content.length > MAX_SCRIPT_INJECT_BYTES) break;
+          totalBytes += content.length;
+          blocks.push(`### ${fn}（节点 \`${id}\`）\n\`\`\`javascript\n${content.trimEnd()}\n\`\`\``);
+        } catch { /* skip */ }
+      }
+    }
+    if (!blocks.length) return "";
+    return `## 关联脚本文件内容（scripts/ 目录）\n\n已选中节点引用的脚本实际代码：\n\n${blocks.join("\n\n")}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 为 query 意图构建选中节点的完整上下文块（YAML excerpt + 脚本内容）。
+ * 供单步轻量 prompt 使用，不注入编辑规则。
+ */
+export function buildQueryContextBlock(flowYamlAbs, instanceIds) {
+  if (!flowYamlAbs || !instanceIds?.length) return "";
+  try {
+    const flowDir = path.dirname(flowYamlAbs);
+    const scriptsDirAbs = path.join(flowDir, "scripts");
+    const flowRaw = fs.readFileSync(flowYamlAbs, "utf-8");
+    const flowDoc = yaml.load(flowRaw);
+    const instances = flowDoc?.instances || {};
+    const parts = [];
+    let totalBytes = 0;
+    for (const id of instanceIds) {
+      const inst = instances[id];
+      if (!inst) continue;
+      // YAML excerpt
+      const instYaml = yaml.dump({ [id]: inst }, { lineWidth: -1 });
+      if (totalBytes + instYaml.length > MAX_SCRIPT_INJECT_BYTES) break;
+      totalBytes += instYaml.length;
+      parts.push(`### 节点 \`${id}\`（${inst.definitionId || "unknown"}）\n\`\`\`yaml\n${instYaml.trimEnd()}\n\`\`\``);
+
+      // Script content for tool_nodejs
+      if (inst.definitionId === "tool_nodejs" && inst.script && fs.existsSync(scriptsDirAbs)) {
+        const filenames = extractScriptFilenames(String(inst.script));
+        for (const fn of filenames) {
+          try {
+            const content = fs.readFileSync(path.join(scriptsDirAbs, fn), "utf-8");
+            if (totalBytes + content.length > MAX_SCRIPT_INJECT_BYTES) break;
+            totalBytes += content.length;
+            parts.push(`### 脚本 \`${fn}\`\n\`\`\`javascript\n${content.trimEnd()}\n\`\`\``);
+          } catch { /* skip */ }
+        }
+      }
+    }
+    if (!parts.length) return "";
+    return `## 选中节点上下文\n\n${parts.join("\n\n")}`;
+  } catch {
+    return "";
+  }
+}
 
 // ─── 单步模式（向后兼容） ──────────────────────────────────────────────────
 
@@ -89,12 +199,17 @@ function extractInstanceYamlExcerpt(flowYamlAbs, instanceId) {
 
 function buildAgentStepPrompt(step, flowContext) {
   const parts = [];
+  const intentCategory = flowContext?.intentCategory || "generic";
+  const isQuery = intentCategory === "query";
+
   const nodeRole = step.nodeRole != null ? String(step.nodeRole).trim() : "";
   if (nodeRole) {
     parts.push(`## ${t("composer.task_title").replace("## ", "")}\n${nodeRole}`);
     parts.push("");
   }
-  if (flowContext) {
+
+  // 编辑上下文（query 模式跳过编辑规则/skill/sync）
+  if (flowContext && !isQuery) {
     parts.push(t("composer.edit_context"));
     if (flowContext.flowYamlAbs) {
       parts.push(`- 图定义文件：${flowContext.flowYamlAbs}`);
@@ -121,12 +236,16 @@ function buildAgentStepPrompt(step, flowContext) {
       parts.push(flowContext.skillInjectionBlock);
       parts.push("");
     }
+  } else if (flowContext && isQuery) {
+    parts.push("## AgentFlow 问答上下文");
+    if (flowContext.flowYamlAbs) parts.push(`- 图定义文件：${flowContext.flowYamlAbs}`);
+    parts.push("");
   }
 
   const sid = step.instanceId != null ? String(step.instanceId).trim() : "";
   const instMap = flowContext?._instanceMap;
   const targetInst = sid && instMap && instMap[sid];
-  if (targetInst && targetInst.definitionId === "tool_nodejs") {
+  if (!isQuery && targetInst && targetInst.definitionId === "tool_nodejs") {
     parts.push(t("composer.tool_nodejs_rules_title"));
     parts.push(t("composer.tool_nodejs_rules_body"));
     parts.push("");
@@ -136,46 +255,72 @@ function buildAgentStepPrompt(step, flowContext) {
   parts.push(step.prompt || step.description || "");
   parts.push("");
 
-  // 节点 schema 与目标 instance 上下文：避免子 agent forage（Glob/Read builtin/nodes、扒 runBuild）
-  // 注入策略（按 step 选最小够用版本）：
-  //   - full（5KB）：step 改 ★ 扩展节点结构，需要 YAML 正反对照防 type:node 误用
-  //   - compact（2KB）：其他所有 step 默认
-  //   - 若已知 step.instanceId，附该 instance 当前 YAML 片段，省一次 flow.yaml 读取
-  //   - 显式禁止 forage 行为
+  // 节点 schema 与目标 instance 上下文
+  // query 模式：只注入 instance excerpt + script，跳过 schema
   try {
-    const targetIsExtensible = targetInst && EXTENSIBLE_DEFINITIONS.has(targetInst.definitionId);
-    const promptText = String(step.prompt || step.description || "");
-    const promptMentionsSlots = /input\s*:|output\s*:|追加|扩展槽|business\s*slot|业务槽/i.test(promptText);
-    const useFullSchema = Boolean(targetIsExtensible || promptMentionsSlots);
-    const schemaSection = useFullSchema
-      ? buildNodeSchemaPromptSection()
-      : buildNodeSchemaCompactSection();
-    if (schemaSection) {
-      parts.push(schemaSection);
-      parts.push("");
+    if (!isQuery) {
+      const targetIsExtensible = targetInst && EXTENSIBLE_DEFINITIONS.has(targetInst.definitionId);
+      const promptText = String(step.prompt || step.description || "");
+      const promptMentionsSlots = /input\s*:|output\s*:|追加|扩展槽|business\s*slot|业务槽/i.test(promptText);
+      const useFullSchema = Boolean(targetIsExtensible || promptMentionsSlots);
+      const schemaSection = useFullSchema
+        ? buildNodeSchemaPromptSection()
+        : buildNodeSchemaCompactSection();
+      if (schemaSection) {
+        parts.push(schemaSection);
+        parts.push("");
+      }
     }
-    if (sid && flowContext?.flowYamlAbs) {
-      const excerpt = extractInstanceYamlExcerpt(flowContext.flowYamlAbs, sid);
-      if (excerpt) {
-        const defId = (targetInst && targetInst.definitionId) || "";
-        parts.push(`## 目标 instance（${sid}${defId ? ` · ${defId}` : ""}）当前 YAML`);
+    // Inject YAML excerpt + script content for target instance (or canvas fallback)
+    const idsToInject = sid ? [sid] : (flowContext?.canvasInstanceIds || []);
+    if (idsToInject.length > 0 && flowContext?.flowYamlAbs) {
+      for (const iid of idsToInject) {
+        const excerpt = extractInstanceYamlExcerpt(flowContext.flowYamlAbs, iid);
+        if (!excerpt) continue;
+        const iInst = iid === sid ? targetInst : (instMap && instMap[iid]);
+        const defId = (iInst && iInst.definitionId) || "";
+        const headerLabel = sid ? "目标 instance" : "关联 instance（画布选中）";
+        parts.push(`## ${headerLabel}（${iid}${defId ? ` · ${defId}` : ""}）当前 YAML`);
         parts.push("```yaml");
         parts.push(excerpt.trimEnd());
         parts.push("```");
         parts.push("");
+
+        // tool_nodejs: inject referenced .mjs script file contents
+        if (defId === "tool_nodejs" && flowContext?.pipelineScriptsDirAbs) {
+          const scriptFns = extractScriptFilenames(excerpt);
+          const scriptBlock = readPipelineScriptContents(flowContext.pipelineScriptsDirAbs, scriptFns, iid);
+          if (scriptBlock) {
+            parts.push(scriptBlock);
+            parts.push("");
+          }
+        }
       }
     }
-    parts.push(
-      "## 上下文已就绪（禁止 forage）\n" +
-      "- 节点定义见上方 schema 表，**禁止** Glob/Read `builtin/nodes/`、`.workspace/agentflow/nodes/`、历史 `runBuild/` 来推断节点结构。\n" +
-      "- 目标 instance 的当前 YAML 已附上（若 instanceId 已知）；如需查看整份 flow，仅在确实需要时读取一次。"
-    );
+    if (isQuery) {
+      parts.push(
+        "## 上下文已就绪\n" +
+        "- 节点 YAML 与脚本内容已附上。请基于上方信息回答用户的问题，**不要修改任何文件**。\n" +
+        "- 如需查看整份 flow.yaml 可读取一次。"
+      );
+    } else {
+      parts.push(
+        "## 上下文已就绪（禁止 forage）\n" +
+        "- 节点定义见上方 schema 表，**禁止** Glob/Read `builtin/nodes/`、`.workspace/agentflow/nodes/`、历史 `runBuild/` 来推断节点结构。\n" +
+        "- 目标 instance 的当前 YAML 已附上（若 instanceId 已知）；tool_nodejs 节点引用的 .mjs 脚本内容也已附上（若存在）。\n" +
+        "- 如需查看整份 flow，仅在确实需要时读取一次。"
+      );
+    }
     parts.push("");
   } catch {
     /* schema 注入失败不影响主流程 */
   }
 
-  parts.push(t("composer.task_instruction"));
+  if (isQuery) {
+    parts.push("请基于上方注入的节点 YAML 与脚本内容回答用户的问题。**不要修改任何文件。**");
+  } else {
+    parts.push(t("composer.task_instruction"));
+  }
   return parts.join("\n");
 }
 

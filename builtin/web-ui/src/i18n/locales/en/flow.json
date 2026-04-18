@@ -217,6 +217,7 @@
     "endConversation": "End conversation (will stop generation)",
     "closeConversation": "Close conversation",
     "newConversation": "New conversation",
+    "switchConversation": "Switch conversation",
     "selectedNodesAriaLabel": "Selected nodes list",
     "selectedNodesEmpty": "Select nodes on canvas, or use @ in the input to pick Instances or Node types",
     "removeFromInput": "Remove @{{id}} from input",
@@ -256,7 +257,10 @@
     "rerunTitle": "Start a new run from scratch",
     "runOptions": "Run options",
     "runWithParams": "Run with params",
-    "runWithPreset": "Run with preset"
+    "runWithPreset": "Run with preset",
+    "editRun": "Edit run parameters",
+    "startRun": "Start run",
+    "stopRun": "Stop background run"
   },
   "palette2": {
     "nodePalette": "Node Palette",
@@ -307,10 +311,14 @@
     "moveBusy": "Moving…",
     "moveToWorkspace": "Move to workspace",
     "moveToUserDir": "Move to user directory",
-    "saveChanges": "Save changes",
     "globalSettings": "Global settings",
     "currentPipeline": "Current pipeline:",
-    "builtin": "Built-in"
+    "builtin": "Built-in",
+    "rename": "Rename",
+    "renameBusy": "Renaming…",
+    "renameSuccess": "Renamed",
+    "copyPath": "Copy path",
+    "pathCopied": "Copied"
   },
   "history": {
     "title": "Execution History",

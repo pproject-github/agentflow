@@ -130,6 +130,25 @@ function collectRounds(interDir, outDir, instanceId) {
       round.message = fm.message || null;
     }
 
+    if (data.cacheFile) {
+      try {
+        const cacheRaw = safeRead(data.cacheFile, 200000);
+        const cacheJson = JSON.parse(cacheRaw);
+        if (cacheJson.cacheInputInfo) {
+          const inputInfo = typeof cacheJson.cacheInputInfo === "string"
+            ? JSON.parse(cacheJson.cacheInputInfo)
+            : cacheJson.cacheInputInfo;
+          if (Array.isArray(inputInfo.inputPaths)) {
+            round.inputs = inputInfo.inputPaths
+              .filter((p) => p.slot !== "upstreamMd5")
+              .map((p) => ({ slot: p.slot, value: p.value ?? "" }));
+          }
+        }
+      } catch {
+        /* ignore parse errors */
+      }
+    }
+
     if (data.promptFile) {
       round.prompt = safeRead(data.promptFile, 50000);
     }

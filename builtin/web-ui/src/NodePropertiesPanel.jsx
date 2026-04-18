@@ -130,7 +130,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
  *   systemPromptReadonly: string,
  *   modelLists: { cursor: string[], opencode: string[] },
  *   disabled: boolean,
- *   onSave: () => void,
+ *   onIdBlur: () => void,
  *   onClose: () => void,
  *   error: string,
  *   ioSlots: { inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] },
@@ -143,7 +143,7 @@ export function NodePropertiesPanel({
   systemPromptReadonly,
   modelLists,
   disabled,
-  onSave,
+  onIdBlur,
   onClose,
   error,
   ioSlots,
@@ -179,9 +179,6 @@ export function NodePropertiesPanel({
       <div className="af-pipeline-drawer-head af-node-props-head">
         <h2 className="af-pipeline-drawer-title">{t("flow:nodeProps.title")}</h2>
         <div className="af-node-props-head-actions">
-          <button type="button" className="af-btn-primary af-node-props-save" disabled={disabled} onClick={onSave}>
-            {t("common:common.save")}
-          </button>
           <button type="button" className="af-btn-ghost af-node-props-close-secondary" onClick={onClose}>
             {t("common:common.close")}
           </button>
@@ -206,6 +203,7 @@ export function NodePropertiesPanel({
             className="af-node-props-input"
             value={draft.newId}
             onChange={(e) => update({ newId: e.target.value })}
+            onBlur={onIdBlur}
             disabled={disabled}
             spellCheck={false}
             autoComplete="off"

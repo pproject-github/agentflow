@@ -13,6 +13,7 @@ import { parseJsonStdout, runNodeScript } from "./pipeline-scripts.mjs";
 import { emitEvent } from "./run-events.mjs";
 import { getRunDir } from "./workspace.mjs";
 import { nodeToolCommandToArgv } from "./normalize-node-tool-command.mjs";
+import { validateAndParse } from "../pipeline/validate-script-output.mjs";
 
 const TOOL_NODEJS_MAX_RETRIES = 3;
 const TOOL_NODEJS_RETRY_DELAY_MS = 1000;
@@ -50,7 +51,7 @@ function buildHealPrompt(scriptPath, command, errorInfo, scriptContent) {
     "",
     "## 修复要求",
     `1. 直接编辑脚本文件 \`${scriptPath}\` 修复错误`,
-    "2. 保持脚本的输入输出格式不变（stdout 须输出 JSON `{\"err_code\":0,\"message\":{\"result\":\"...\"}}` 或纯文本）",
+    "2. 保持脚本的输入输出格式不变（stdout：JSON `{\"err_code\":0,\"message\":{...}}` 中 message 的键对应各输出槽位，或纯文本→写入 result）",
     "3. 只修复导致失败的问题，不做无关改动",
     "4. 不要创建新文件、不要修改其他文件",
   ].join("\n");
@@ -122,8 +123,8 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
  * 最多重试 TOOL_NODEJS_MAX_RETRIES 次。
  * 设置 AGENTFLOW_TOOL_NODEJS_AI_HEAL=0 可关闭 AI 自愈回退为简单重试。
  *
- * 协议：exit code 0=success 非0=failed；stdout → result 槽位。
- * 若 stdout 为 JSON {err_code, message:{result}} 则 err_code 覆盖 exit code（向后兼容）。
+ * 协议：与 run-tool-nodejs.mjs 一致——validate-script-output 解析 stdout；
+ * JSON 时 message 的每个键写入同名 output 槽位（含 result）；纯文本则等价于 message.result。
  */
 async function executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, healOptions) {
   let lastError;
@@ -165,6 +166,14 @@ async function executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId
   throw lastError;
 }
 
+function persistToolNodejsStderr(outputDir, instanceId, execId, stderr) {
+  if (!stderr) return;
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, outputNodeBasename(instanceId, execId, "stderr")), stderr, "utf-8");
+  } catch (_) {}
+}
+
 function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId) {
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
   const outputDir = path.join(runDir, outputDirForNode(instanceId));
@@ -189,35 +198,73 @@ function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolv
   const stderr = child.stderr?.toString("utf-8") ?? "";
   const exitCode = child.status ?? 1;
 
-  let success = exitCode === 0;
-  let resultText = stdout.trim();
-
-  const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (typeof parsed.err_code === "number" && parsed.message && typeof parsed.message === "object") {
-        success = parsed.err_code === 0;
-        resultText = parsed.message.result != null ? String(parsed.message.result) : "";
-      }
-    } catch (_) {}
-  }
-
   fs.mkdirSync(outputDir, { recursive: true });
-  backupResolvedOutputsIfExist(runDir, instanceId, execId, ["result", "stderr"]);
-  if (resultText) {
-    fs.writeFileSync(path.join(outputDir, outputNodeBasename(instanceId, execId, "result")), resultText, "utf-8");
-  }
-  if (stderr) {
-    try { fs.writeFileSync(path.join(outputDir, outputNodeBasename(instanceId, execId, "stderr")), stderr, "utf-8"); } catch (_) {}
+
+  // 直接写文件模式：stdout 为空 + exit 0 → 脚本已自行写入 output 文件，无需解析
+  if (!stdout.trim() && exitCode === 0) {
+    persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
+    writeResult(workspaceRoot, flowName, uuid, instanceId,
+      { status: "success", message: "执行完成" },
+      { preserveBody: true, execId });
+    return;
   }
 
-  writeResult(workspaceRoot, flowName, uuid, instanceId, {
-    status: success ? "success" : "failed",
-    message: success
-      ? "执行完成"
-      : `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : ""),
-  }, { preserveBody: true, execId });
+  // 非零退出码 + 无 stdout → 直接失败
+  if (!stdout.trim() && exitCode !== 0) {
+    const detail = `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "");
+    persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
+    writeResult(workspaceRoot, flowName, uuid, instanceId,
+      { status: "failed", message: detail },
+      { preserveBody: true, execId });
+    const err = new Error(`Script failed: ${detail}`);
+    err.scriptStdout = stdout;
+    err.scriptStderr = stderr;
+    err.scriptExitCode = exitCode;
+    throw err;
+  }
+
+  // JSON stdout 模式（兼容旧脚本）
+  const { ok, errors, payload } = validateAndParse(stdout);
+
+  if (!ok) {
+    const detail =
+      exitCode !== 0
+        ? `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "")
+        : errors.length
+          ? errors.join("; ")
+          : "脚本无输出";
+    persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
+    writeResult(workspaceRoot, flowName, uuid, instanceId,
+      { status: "failed", message: detail },
+      { preserveBody: true, execId });
+    const err = new Error(`Script failed: ${detail}`);
+    err.scriptStdout = stdout;
+    err.scriptStderr = stderr;
+    err.scriptExitCode = exitCode;
+    throw err;
+  }
+
+  const isSynthetic = Boolean(payload._synthetic);
+  const success = isSynthetic ? exitCode === 0 : payload.err_code === 0;
+  const message = payload.message;
+  const slotsToWrite = [...new Set([...Object.keys(message), "stderr"])];
+  backupResolvedOutputsIfExist(runDir, instanceId, execId, slotsToWrite);
+  for (const slot of Object.keys(message)) {
+    if (slot === "_synthetic") continue;
+    const content = message[slot];
+    if (content == null) continue;
+    fs.writeFileSync(
+      path.join(outputDir, outputNodeBasename(instanceId, execId, slot)),
+      String(content),
+      "utf-8",
+    );
+  }
+  persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
+
+  writeResult(workspaceRoot, flowName, uuid, instanceId,
+    { status: success ? "success" : "failed",
+      message: success ? "执行完成" : "执行未通过" },
+    { preserveBody: true, execId });
 
   if (!success) {
     const hint = stderr.trim() ? ` ${stderr.trim().slice(0, 280)}` : "";

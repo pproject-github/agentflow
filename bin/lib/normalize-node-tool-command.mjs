@@ -5,11 +5,16 @@
 
 /**
  * 合并 bash 风格「'片段'/后续路径」拼接，得到真实文件系统路径。
+ * 同时处理中间嵌入的 `/'T'/` 形态（脚本模板里对变量加单引号，
+ * 但这些单引号对 spawn/非 shell 调用是字面量，需剥掉）。
  */
 export function normalizeConcatenatedSingleQuotedPath(s) {
   let out = String(s).trim();
   for (let n = 0; n < 64; n++) {
-    const next = out.replace(/^'([^']*)'(\/|\.)/, "$1$2");
+    // 开头：'x'/y 或 'x'.y → xy
+    let next = out.replace(/^'([^']*)'(\/|\.)/, "$1$2");
+    // 中间：/'x'/ 或 /'x'. → /x/ 或 /x.  （保留前后分隔符，避免误吃尾随空格后的独立 '…' 参数）
+    next = next.replace(/(\/)'([^'\s]*)'(\/|\.)/g, "$1$2$3");
     if (next === out) break;
     out = next;
   }

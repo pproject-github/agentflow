@@ -41,7 +41,7 @@ const EXEC_ID_KEY_PREFIX = "execId_";
  */
 export function incrementExecIdInMemory(workspaceRoot, flowName, uuid, instanceId, currentExecId) {
   const current = currentExecId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
-  const toSave = String(current);
+  const toSave = String(current + 1);
   const save = spawnSync(
     process.execPath,
     [SAVE_KEY, path.resolve(workspaceRoot), flowName, uuid, EXEC_ID_KEY_PREFIX + instanceId, toSave],
@@ -206,10 +206,40 @@ function applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definiti
     const rawVal = getFirstBoolInputValue(data.resolvedInputs, inputSlotTypes);
     if (rawVal == null) return;
     let boolValue;
-    if (rawVal.startsWith("output/")) {
-      const filePath = path.join(runDir, rawVal);
-      if (!fs.existsSync(filePath)) return;
-      boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
+    let filePath = null;
+    if (rawVal.startsWith("output/") || rawVal.startsWith("intermediate/")) {
+      filePath = path.join(runDir, rawVal);
+    } else if (path.isAbsolute(rawVal)) {
+      filePath = rawVal;
+    }
+    if (filePath) {
+      if (fs.existsSync(filePath)) {
+        boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
+      } else {
+        // 查找 backupResolvedOutputsIfExist 创建的 _N 备份文件
+        const dir = path.dirname(filePath);
+        const ext = path.extname(filePath);
+        const base = path.basename(filePath, ext);
+        let found = false;
+        try {
+          if (fs.existsSync(dir)) {
+            const candidates = fs.readdirSync(dir).filter(f =>
+              f.startsWith(base + "_") && f.endsWith(ext) &&
+              /^\d+$/.test(f.slice(base.length + 1, -ext.length))
+            );
+            if (candidates.length > 0) {
+              candidates.sort((a, b) => {
+                const na = parseInt(a.slice(base.length + 1, -ext.length), 10);
+                const nb = parseInt(b.slice(base.length + 1, -ext.length), 10);
+                return nb - na;
+              });
+              boolValue = parseBool(fs.readFileSync(path.join(dir, candidates[0]), "utf-8").trim());
+              found = true;
+            }
+          }
+        } catch (_) {}
+        if (!found) return;
+      }
     } else {
       boolValue = parseBool(rawVal);
     }

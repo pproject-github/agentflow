@@ -42,8 +42,8 @@ function RunConfigPanel({
   const cliInputSlotNames = useMemo(() => {
     const mapping = {};
     for (const node of nodes) {
-      if (!node.data?.input) continue;
-      const inputSlots = node.data.input;
+      if (!node.data?.inputs) continue;
+      const inputSlots = node.data.inputs;
       for (let i = 0; i < inputSlots.length; i++) {
         const slot = inputSlots[i];
         if (!slot?.name) continue;

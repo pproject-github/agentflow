@@ -38,9 +38,10 @@ const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "
 /** 顶栏 MM:SS.cc；ms 为从 0 起的经过毫秒数 */
 function formatStopwatchMs(ms) {
   const n = Math.max(0, Number(ms) || 0);
-  return `${String(Math.floor(n / 60000)).padStart(2, "0")}:${String(Math.floor((n % 60000) / 1000)).padStart(2, "0")}.${String(
-    Math.floor((n % 1000) / 10),
-  ).padStart(2, "0")}`;
+  const h = Math.floor(n / 3600000);
+  const m = Math.floor((n % 3600000) / 60000);
+  const s = Math.floor((n % 60000) / 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 /**
@@ -310,7 +311,7 @@ function coalesceComposerSegmentsInOrder(segments) {
     const kind = typeof s.kind === "string" && s.kind ? s.kind : "assistant";
     const last = out[out.length - 1];
     if (last && last.kind === kind) {
-      last.text += kind === "error" ? `\n${s.text}` : s.text;
+      last.text += (kind === "error" || kind === "result") ? `\n${s.text}` : s.text;
     } else {
       out.push({ kind, text: s.text });
     }
@@ -453,6 +454,7 @@ function FlowBoard({
   onConnect,
   onNodesDelete,
   onNodeClick,
+  onEdgeClick,
   onFlowInit,
   onDrop,
   onDragOver,
@@ -482,6 +484,7 @@ function FlowBoard({
       onConnect={isRunMode ? undefined : onConnect}
       onNodesDelete={isRunMode ? undefined : onNodesDelete}
       onNodeClick={onNodeClick}
+      onEdgeClick={isRunMode ? undefined : onEdgeClick}
       onInit={onFlowInit}
       onDrop={isRunMode ? undefined : onDrop}
       onDragOver={isRunMode ? undefined : onDragOver}
@@ -491,6 +494,7 @@ function FlowBoard({
       nodesDraggable={!isRunMode}
       nodesConnectable={!isRunMode}
       elementsSelectable={!isRunMode}
+      edgesFocusable={!isRunMode}
       panActivationKeyCode="Space"
       proOptions={{ hideAttribution: true }}
       fitView={false}
@@ -633,6 +637,10 @@ export default function FlowEditorPage() {
   const [saveStatus, setSaveStatus] = useState("");
   const [moveFlowError, setMoveFlowError] = useState("");
   const [moveFlowBusy, setMoveFlowBusy] = useState(false);
+  const [renameFlowId, setRenameFlowId] = useState("");
+  const [renameFlowBusy, setRenameFlowBusy] = useState(false);
+  const [renameFlowError, setRenameFlowError] = useState("");
+  const [pathCopied, setPathCopied] = useState(false);
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [fileEditModal, setFileEditModal] = useState(
@@ -685,7 +693,7 @@ export default function FlowEditorPage() {
   }, []);
 
   // ── Run mode state ──
-  const [runMode, setRunMode] = useState(/** @type {"edit" | "running" | "stopped" | "done" | "error"} */ ("edit"));
+  const [runMode, setRunMode] = useState(/** @type {"edit" | "ready" | "running" | "stopped" | "done" | "error"} */ ("edit"));
   const [runLogs, setRunLogs] = useState(/** @type {Array<{ ts: string, type: string, text: string }>} */ ([]));
   const [executingNodes, setExecutingNodes] = useState(/** @type {Set<string>} */ (new Set()));
   const [nodeRunStatus, setNodeRunStatus] = useState(/** @type {Record<string, { status: string, elapsed?: string }>} */ ({}));
@@ -707,10 +715,15 @@ export default function FlowEditorPage() {
   const [currentRunUuid, setCurrentRunUuid] = useState(/** @type {string | null} */ (null));
   const [runContextNodeId, setRunContextNodeId] = useState(/** @type {string | null} */ (null));
   const [cliInputs, setCliInputs] = useState(/** @type {Record<string, { type: "str" | "file", value?: string, path?: string }>} */ ({}));
+  // handleRun 的 useCallback deps 只有 [selected]，闭包里的 cliInputs 会过期；
+  // ready 模式下用户在 RunConfigPanel 编辑参数后点"开始执行"，需要读最新值 → 走 ref
+  const cliInputsRef = useRef(cliInputs);
+  useEffect(() => { cliInputsRef.current = cliInputs; }, [cliInputs]);
   const [runDropdownOpen, setRunDropdownOpen] = useState(false);
   const [runWithParamsOpen, setRunWithParamsOpen] = useState(false);
   const [runParamsDraft, setRunParamsDraft] = useState(/** @type {Record<string, string>} */ ({}));
   const [runPresets, setRunPresets] = useState(/** @type {Record<string, Record<string, string>>} */ ({}));
+  const [activePresetName, setActivePresetName] = useState(/** @type {string | null} */ (null));
   const runAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const runLogEndRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const [userCheckContent, setUserCheckContent] = useState(
@@ -873,27 +886,38 @@ export default function FlowEditorPage() {
       setComposerSessions([newSession]);
       setActiveSessionId(id);
     } else {
-      // 每次进入流水线时创建一个新的空对话 tab 并激活
-      const nextNum = maxDialogueNumFromSessionLabels(sessions) + 1;
-      composerSessionIdRef.current = nextNum;
-      const newId = `session-${nextNum}-${Date.now()}`;
-      const newSession = {
-        id: newId,
-        label: t("flow:composer.conversationLabel", { n: nextNum }),
-        thread: [],
-        segments: [],
-        running: false,
-        statusLine: "",
-        steps: [],
-        outputDismissed: false,
-        createdAt: Date.now(),
-        phaseContext: null,
-      };
-      const allSessions = [...sessions, newSession];
-      ref.sessions = allSessions;
-      ref.activeSessionId = newId;
-      setComposerSessions(allSessions);
-      setActiveSessionId(newId);
+      // 复用已有的空对话 tab，避免每次进入流水线都创建新空 tab
+      const lastSession = sessions[sessions.length - 1];
+      const lastIsEmpty = lastSession && (!lastSession.thread || lastSession.thread.length === 0);
+
+      if (lastIsEmpty) {
+        composerSessionIdRef.current = maxDialogueNumFromSessionLabels(sessions);
+        ref.sessions = sessions;
+        ref.activeSessionId = lastSession.id;
+        setComposerSessions(sessions);
+        setActiveSessionId(lastSession.id);
+      } else {
+        const nextNum = maxDialogueNumFromSessionLabels(sessions) + 1;
+        composerSessionIdRef.current = nextNum;
+        const newId = `session-${nextNum}-${Date.now()}`;
+        const newSession = {
+          id: newId,
+          label: t("flow:composer.conversationLabel", { n: nextNum }),
+          thread: [],
+          segments: [],
+          running: false,
+          statusLine: "",
+          steps: [],
+          outputDismissed: false,
+          createdAt: Date.now(),
+          phaseContext: null,
+        };
+        const allSessions = [...sessions, newSession];
+        ref.sessions = allSessions;
+        ref.activeSessionId = newId;
+        setComposerSessions(allSessions);
+        setActiveSessionId(newId);
+      }
     }
 
     initialDataLoadedRef.current = true;
@@ -1079,6 +1103,13 @@ export default function FlowEditorPage() {
   const urlLoadedRef = useRef(false);
   const reactFlowInstanceRef = useRef(null);
   const syncHighlightTimerRef = useRef(/** @type {ReturnType<typeof setTimeout> | null} */ (null));
+  // 自动保存用：hasLoadedRef 在 loadFlow 成功尾部置 true，期间禁止写盘防覆盖；
+  // loadEpochRef 每次进入 loadFlow 自增，in-flight debounce 定时器捕获旧 epoch 时主动放弃，
+  // 避免切换流水线后把旧画布状态写到新 flow 里；
+  // lastPersistedYamlRef 记录最近一次成功写入的 YAML，后续相同内容的自动保存直接 short-circuit
+  const hasLoadedRef = useRef(false);
+  const loadEpochRef = useRef(0);
+  const lastPersistedYamlRef = useRef("");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef(nodes);
@@ -1113,6 +1144,7 @@ export default function FlowEditorPage() {
   useEffect(() => {
     if (!selected) {
       setRunPresets({});
+      setActivePresetName(null);
       return;
     }
     const params = new URLSearchParams({
@@ -1122,9 +1154,37 @@ export default function FlowEditorPage() {
     if (selected.archived) params.set("archived", "1");
     fetch(`/api/flow/run-config?${params.toString()}`)
       .then((r) => r.json())
-      .then((data) => setRunPresets(data.presets || {}))
-      .catch(() => setRunPresets({}));
+      .then((data) => {
+        setRunPresets(data.presets || {});
+        setActivePresetName(data.activePreset || null);
+      })
+      .catch(() => {
+        setRunPresets({});
+        setActivePresetName(null);
+      });
   }, [selected?.id, selected?.source, selected?.archived]);
+
+  // 将活跃预设值同步到 cliInputs，确保主 RUN 按钮使用正确的预设
+  useEffect(() => {
+    if (!activePresetName || !runPresets[activePresetName]) return;
+    if (provideNodes.length === 0) return;
+    const presetValues = runPresets[activePresetName];
+    const newCliInputs = {};
+    for (const node of provideNodes) {
+      const slotName = cliInputSlotNames[node.id];
+      if (!slotName) continue;
+      const definitionId = node.data?.definitionId || "";
+      const value = presetValues[node.id] ?? node.data?.outputs?.[0]?.default ?? "";
+      if (definitionId.startsWith("provide_file")) {
+        newCliInputs[slotName] = { type: "file", path: value };
+      } else {
+        newCliInputs[slotName] = { type: "str", value };
+      }
+    }
+    if (Object.keys(newCliInputs).length > 0) {
+      setCliInputs(newCliInputs);
+    }
+  }, [activePresetName, runPresets, provideNodes, cliInputSlotNames]);
 
   const handleProvideEditSave = useCallback(() => {
     if (!provideEditContent || !provideEditRef.current) return;
@@ -1310,6 +1370,9 @@ export default function FlowEditorPage() {
     async (flow, opts = {}) => {
       const preserveComposer = Boolean(opts.preserveComposer);
       const incrementalSync = preserveComposer && Boolean(opts.incrementalSync);
+      // 加载入口：冻结自动保存，epoch 自增让 in-flight 定时器放弃写入
+      hasLoadedRef.current = false;
+      loadEpochRef.current += 1;
       setSelected(flow);
       setLoadError("");
       if (!preserveComposer) {
@@ -1317,6 +1380,8 @@ export default function FlowEditorPage() {
         setPaletteSearch("");
         setRightPanel(null);
         setFlowDescription("");
+        setRenameFlowId("");
+        setRenameFlowError("");
         setComposerText("");
         setComposerThread([]);
         setComposerNaturalSegments([]);
@@ -1336,6 +1401,7 @@ export default function FlowEditorPage() {
         setPalette(nextGraph.paletteList);
         instancesRef.current = nextGraph.instances;
         setFlowDescription(nextGraph.flowDescriptionText);
+        setRenameFlowId(flow.id || "");
 
         if (incrementalSync) {
           const prevNodes = nodesRef.current;
@@ -1411,6 +1477,19 @@ export default function FlowEditorPage() {
 
         recordPipelineOpened(flow.id, nextGraph.flowSource);
         setNodePropsFlowEpoch((x) => x + 1);
+        // 以加载快照作为 lastPersistedYaml 基线，开启自动保存；
+        // 若无用户改动，首次自动保存 debounce 结束时的 serialize 结果与基线一致 → 跳过 POST
+        try {
+          lastPersistedYamlRef.current = serializeToFlowYaml(
+            nextGraph.nodes,
+            nextGraph.edges,
+            nextGraph.instances,
+            { description: nextGraph.flowDescriptionText },
+          );
+        } catch {
+          lastPersistedYamlRef.current = "";
+        }
+        hasLoadedRef.current = true;
       } catch (e) {
         setLoadError(String(e.message || e));
       }
@@ -1598,8 +1677,32 @@ export default function FlowEditorPage() {
     [openNodePanelFromCanvasClick, runMode],
   );
 
+  const handleEdgeClick = useCallback(
+    (/** @type {import("react").MouseEvent} */ e, /** @type {import("@xyflow/react").Edge} */ edge) => {
+      if (runMode !== "edit") return;
+      const multi = e.metaKey || e.ctrlKey || e.shiftKey;
+      setEdges((eds) =>
+        eds.map((ed) =>
+          ed.id === edge.id
+            ? { ...ed, selected: !ed.selected || !multi }
+            : multi ? ed : { ...ed, selected: false }
+        )
+      );
+      if (!multi) {
+        setNodes((ns) => ns.map((n) => ({ ...n, selected: false })));
+      }
+    },
+    [runMode, setEdges, setNodes],
+  );
+
   const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, eds)),
+    (params) => setEdges((eds) => {
+      // 同一个 input handle 只允许一条入边 — 替换旧连接
+      const filtered = eds.filter(
+        (e) => !(e.target === params.target && e.targetHandle === params.targetHandle)
+      );
+      return addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+    }),
     [setEdges],
   );
 
@@ -1709,11 +1812,13 @@ export default function FlowEditorPage() {
   const persistFlowToServer = useCallback(
     async (nodelist, edgelist) => {
       if (!selected) return;
+      const yaml = serializeToFlowYaml(nodelist, edgelist, instancesRef.current, {
+        description: flowDescription,
+      });
+      // 与上次成功写入完全一致时跳过，避免 loadFlow 后首次自动保存的冗余 POST
+      if (yaml === lastPersistedYamlRef.current) return;
       setSaveStatus(t("flow:status.saving"));
       try {
-        const yaml = serializeToFlowYaml(nodelist, edgelist, instancesRef.current, {
-          description: flowDescription,
-        });
         const writeSource = flowSourceForWrite(selected.source);
         const r = await fetch("/api/flow", {
           method: "POST",
@@ -1727,6 +1832,7 @@ export default function FlowEditorPage() {
         });
         const data = await r.json();
 if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFailed"));
+        lastPersistedYamlRef.current = yaml;
         setFlowDescription(data.description || "");
         setSaveStatus(t("flow:status.saved"));
         if (selected.source === "builtin" && writeSource === "workspace") {
@@ -1741,6 +1847,22 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     },
     [selected, flowDescription],
   );
+
+  // 自动保存：nodes/edges/flowDescription 任一变化 → 400ms debounce 落盘。
+  // 加载期、非 edit 模式（ready/running 等）、archived 流水线下不触发。
+  // loadEpoch 快照避免切流水线后旧 timer 把旧状态写入新 flow。
+  useEffect(() => {
+    if (!selected || !hasLoadedRef.current) return;
+    if (runMode !== "edit") return;
+    if (selected.archived) return;
+    const epoch = loadEpochRef.current;
+    const timer = setTimeout(() => {
+      if (epoch !== loadEpochRef.current) return;
+      if (!hasLoadedRef.current) return;
+      persistFlowToServer(nodesRef.current, edgesRef.current);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [nodes, edges, flowDescription, runMode, selected, persistFlowToServer]);
 
   const handleMoveFlow = useCallback(
     async (toSource) => {
@@ -1788,6 +1910,45 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     },
     [selected, loadFlow],
   );
+
+  const handleRenameFlow = useCallback(async () => {
+    if (!selected || !renameFlowId.trim()) return;
+    const newId = renameFlowId.trim();
+    if (newId === selected.id) { setRenameFlowError(""); return; }
+    setRenameFlowBusy(true);
+    setRenameFlowError("");
+    try {
+      const r = await fetch("/api/flow/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flowId: selected.id, flowSource: selected.source ?? "user", newFlowId: newId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : t("flow:composer.requestFailed"));
+      let nextFlow = { id: j.flowId, source: j.flowSource ?? selected.source, archived: selected.archived };
+      try {
+        const rList = await fetch("/api/flows");
+        if (rList.ok) {
+          const list = await rList.json();
+          const found = Array.isArray(list) ? list.find((x) => x.id === j.flowId && (x.source ?? "user") === (j.flowSource ?? selected.source)) : null;
+          if (found) nextFlow = found;
+        }
+      } catch { /* keep nextFlow */ }
+      await loadFlow(nextFlow, { preserveComposer: true });
+      recordPipelineOpened(j.flowId, j.flowSource ?? selected.source);
+    } catch (e) {
+      setRenameFlowError(String(e.message || e));
+    } finally {
+      setRenameFlowBusy(false);
+    }
+  }, [selected, renameFlowId, loadFlow]);
+
+  const handleCopyPath = useCallback((pathStr) => {
+    navigator.clipboard.writeText(pathStr).then(() => {
+      setPathCopied(true);
+      setTimeout(() => setPathCopied(false), 2000);
+    }).catch(() => {});
+  }, []);
 
   const handleSave = useCallback(() => {
     persistFlowToServer(nodes, edges);
@@ -1889,6 +2050,82 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     setEdges,
     persistFlowToServer,
   ]);
+
+  // 自动提交 draft（除 newId 外的所有字段）。不做 id 校验，总用 oldId；
+  // 无差异时早返回，避免无谓的 setNodes 触发父层保存。
+  const applyNodePropertiesNoRename = useCallback(() => {
+    if (!nodePropDraft || !selected || !soleSelectedNode) return false;
+    const oldId = soleSelectedNode.id;
+    const roleStr = nodePropDraft.role.trim();
+    const role = VALID_ROLES.includes(roleStr) ? roleStr : "普通";
+    const modelTrim = nodePropDraft.model.trim();
+    const normIo = (arr) =>
+      (Array.isArray(arr) ? arr : []).map((s) => ({
+        type: String(s?.type ?? "节点").trim() || "节点",
+        name: String(s?.name ?? ""),
+        default: String(s?.default ?? ""),
+      }));
+    const nextInputs = normIo(nodePropDraft.inputs);
+    const nextOutputs = normIo(nodePropDraft.outputs);
+    const defIdForScript = String(soleSelectedNode.data?.definitionId ?? oldId);
+    const labelVal = nodePropDraft.label.trim() || oldId;
+    const modelVal = modelTrim === "" || modelTrim === "default" ? undefined : modelTrim;
+    const nextData = {
+      ...soleSelectedNode.data,
+      label: labelVal,
+      role,
+      model: modelVal,
+      body: nodePropDraft.body,
+      inputs: nextInputs,
+      outputs: nextOutputs,
+    };
+    const scriptTrim = String(nodePropDraft.script ?? "").trim();
+    if (defIdForScript === "tool_nodejs" || scriptTrim !== "") {
+      nextData.script = String(nodePropDraft.script ?? "");
+    } else {
+      delete nextData.script;
+    }
+    const prev = soleSelectedNode.data || {};
+    const changed =
+      prev.label !== nextData.label ||
+      prev.role !== nextData.role ||
+      prev.model !== nextData.model ||
+      prev.body !== nextData.body ||
+      (prev.script ?? undefined) !== (nextData.script ?? undefined) ||
+      JSON.stringify(prev.inputs || []) !== JSON.stringify(nextInputs) ||
+      JSON.stringify(prev.outputs || []) !== JSON.stringify(nextOutputs);
+    if (!changed) return true;
+    setNodes((nds) => nds.map((n) => (n.id === oldId ? { ...n, data: nextData } : n)));
+    return true;
+  }, [nodePropDraft, selected, soleSelectedNode, setNodes]);
+
+  // ref 转发避免依赖变化触发 effect 循环
+  const applyNodePropertiesNoRenameRef = useRef(applyNodePropertiesNoRename);
+  useEffect(() => {
+    applyNodePropertiesNoRenameRef.current = applyNodePropertiesNoRename;
+  }, [applyNodePropertiesNoRename]);
+
+  // 节点属性 draft 变化 → 400ms debounce 自动提交（newId 除外，由 blur 处理）
+  useEffect(() => {
+    if (!nodePropDraft) return;
+    if (!selected || !hasLoadedRef.current) return;
+    if (runMode !== "edit") return;
+    const timer = setTimeout(() => {
+      applyNodePropertiesNoRenameRef.current();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [nodePropDraft, selected, runMode]);
+
+  // newId 输入框 blur 时提交重命名：复用 applyNodeProperties 的完整校验路径。
+  // 校验失败会在 nodePropsError banner 显示，draft 保留用户输入。
+  const commitIdRename = useCallback(() => {
+    if (!nodePropDraft || !soleSelectedNode) return;
+    if (nodePropDraft.newId.trim() === soleSelectedNode.id) {
+      setNodePropsError("");
+      return;
+    }
+    applyNodeProperties();
+  }, [nodePropDraft, soleSelectedNode, applyNodeProperties]);
 
   useEffect(() => {
     const onKeyDown = (/** @type {KeyboardEvent} */ e) => {
@@ -2047,27 +2284,34 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const handleRun = useCallback(async (/** @type {{ runUuid?: string | null, cliInputsOverride?: Record<string, { type: "str" | "file", value?: string, path?: string }> }} */ opts = {}) => {
+  const handleRun = useCallback(async (/** @type {{ runUuid?: string | null, cliInputsOverride?: Record<string, { type: "str" | "file", value?: string, path?: string }>, prepareOnly?: boolean }} */ opts = {}) => {
     if (!selected) return;
     const runUuid =
       opts.runUuid != null && String(opts.runUuid).trim() ? String(opts.runUuid).trim() : null;
-    const inputsToUse = opts.cliInputsOverride ?? cliInputs;
-    setRunMode("running");
+    const inputsToUse = opts.cliInputsOverride ?? cliInputsRef.current;
+    const prepareOnly = Boolean(opts.prepareOnly);
+    // prepareOnly：进入 run 布局但不启动 CLI，等用户点"开始执行"再真正 fetch
+    setRunMode(prepareOnly ? "ready" : "running");
     /* 勿在 fetch 完成前清空：否则在连接建立前控制台会一直空白（计时器已启动） */
-    setRunLogs([
-      {
-        ts: new Date().toISOString(),
-        type: "info",
-        text: runUuid
-          ? t("flow:run.connectingApiResume", { uuid: runUuid })
-          : t("flow:run.connectingApi"),
-      },
-    ]);
+    setRunLogs(
+      prepareOnly
+        ? []
+        : [
+            {
+              ts: new Date().toISOString(),
+              type: "info",
+              text: runUuid
+                ? t("flow:run.connectingApiResume", { uuid: runUuid })
+                : t("flow:run.connectingApi"),
+            },
+          ],
+    );
     setExecutingNodes(new Set());
     setNodeRunStatus({});
-    setRunConsoleOpen(true);
+    setRunConsoleOpen(!prepareOnly);
     setRightPanel(null);
     if (!runUuid) setCurrentRunUuid(null);
+    if (prepareOnly) return;
     const start = Date.now();
     setRunStartTime(start);
     setRunElapsedMs(0);
@@ -2076,6 +2320,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     runAbortRef.current = abort;
 
     try {
+      console.log("[handleRun] POST /api/flow/run cliInputs =", inputsToUse);
       const resp = await fetch("/api/flow/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2321,6 +2566,50 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     [selected?.id],
   );
 
+  // ── 页面加载 / 刷新后检测活跃 run，恢复 run 模式 ──
+  useEffect(() => {
+    if (!selected?.id) return;
+    if (runMode !== "edit") return; // 已在 run 模式则跳过
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/pipeline-recent-runs");
+        const j = await r.json();
+        if (cancelled || !r.ok) return;
+        const runs = Array.isArray(j.runs) ? j.runs : [];
+        const activeRun = runs.find(
+          (x) => x.flowId === selected.id && x.status === "running",
+        );
+        if (!activeRun || cancelled) return;
+        const rid = activeRun.runId || null;
+        setCurrentRunUuid(rid);
+        setRunMode("running");
+        setRunConsoleOpen(true);
+        setRunStartTime(activeRun.at || Date.now());
+        setRunLogs([{ ts: new Date().toISOString(), type: "info", text: `[resume] 检测到活跃 run ${rid}，已恢复运行视图` }]);
+        // 拉取节点状态
+        if (rid) {
+          const q = new URLSearchParams({ flowId: selected.id, runId: rid });
+          const sr = await fetch(`/api/run-node-statuses?${q}`);
+          const sj = await sr.json();
+          if (cancelled) return;
+          const raw = sj.statuses && typeof sj.statuses === "object" ? sj.statuses : {};
+          const next = {};
+          const exec = new Set();
+          for (const [id, v] of Object.entries(raw)) {
+            if (v && typeof v === "object" && typeof v.status === "string") {
+              next[id] = { status: v.status, ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}) };
+              if (v.status === "running") exec.add(id);
+            }
+          }
+          setNodeRunStatus(next);
+          setExecutingNodes(exec);
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (rightPanel !== "history" || !selected) return;
     let cancelled = false;
@@ -2540,6 +2829,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       snapshotThread.push({ type: "assistant", segments: [...prevSegs] });
     }
     setComposerThread([...snapshotThread, { type: "user", text: q }]);
+
+    // 首条消息时自动更新 session label 为消息摘要
+    if (snapshotThread.filter((m) => m.type === "user").length === 0) {
+      const summary = q.replace(/\s+/g, " ").slice(0, 30) + (q.length > 30 ? "…" : "");
+      setComposerSessions((prev) =>
+        prev.map((s) => s.id === activeSessionId ? { ...s, label: summary } : s)
+      );
+    }
 
     const threadForApi = snapshotThread.map((item) => {
       if (item.type === "user") return { role: "user", text: item.text };
@@ -3044,9 +3341,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 >
                   <span className="material-symbols-outlined">delete_forever</span>
                 </button>
-                <button type="button" className="af-btn-pipeline-save" disabled={!selected} onClick={handleSave}>
-                  Save
-                </button>
                 <button
                   type="button"
                   className="af-btn-pipeline-archive"
@@ -3067,6 +3361,22 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <span className="material-symbols-outlined">stop</span>
                 Stop
               </button>
+            ) : runMode === "ready" ? (
+              <>
+                <button
+                  type="button"
+                  className="af-btn-primary af-btn-primary--lg"
+                  disabled={!selected}
+                  onClick={() => void handleRun()}
+                  title={t("flow:topbar.startRun")}
+                >
+                  {t("flow:topbar.startRun")}
+                </button>
+                <button type="button" className="af-btn-pipeline-save" onClick={handleBackToEdit}>
+                  <span className="material-symbols-outlined">edit</span>
+                  Edit
+                </button>
+              </>
             ) : runMode === "stopped" ? (
               <>
                 <button
@@ -3139,6 +3449,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     >
                       <span className="material-symbols-outlined">edit_note</span>
                       {t("flow:topbar.runWithParams")}
+                    </button>
+                    <button
+                      type="button"
+                      className="af-run-dropdown-item"
+                      onClick={() => {
+                        setRunDropdownOpen(false);
+                        void handleRun({ prepareOnly: true });
+                      }}
+                    >
+                      <span className="material-symbols-outlined">tune</span>
+                      {t("flow:topbar.editRun")}
                     </button>
                     <div className="af-run-dropdown-divider" />
                     <div className="af-run-dropdown-section">
@@ -3495,6 +3816,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   onConnect={runMode !== "edit" ? undefined : onConnect}
                   onNodesDelete={runMode !== "edit" ? undefined : onNodesDelete}
                   onNodeClick={onNodeClick}
+                  onEdgeClick={handleEdgeClick}
                   onFlowInit={onFlowInit}
                   onDrop={handlePaletteDrop}
                   onDragOver={handlePaletteDragOver}
@@ -3675,6 +3997,30 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     ) : null}
                   </div>
                   <div className="af-composer-toolbar">
+                    {composerSessions.length > 0 && (
+                      <label className="af-composer-session-field">
+                        <select
+                          className="af-composer-session-select"
+                          value={activeSessionId || ""}
+                          onChange={(e) => {
+                            if (e.target.value === "__new__") {
+                              createComposerSession();
+                            } else {
+                              activateComposerSession(e.target.value);
+                            }
+                          }}
+                          disabled={composerRunning}
+                          aria-label={t("flow:composer.switchConversation")}
+                        >
+                          {composerSessions.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.label}{s.running ? " ⏳" : ""}
+                            </option>
+                          ))}
+                          <option value="__new__">＋ {t("flow:composer.newConversation")}</option>
+                        </select>
+                      </label>
+                    )}
                     <label className="af-composer-model-field">
                       <span className="af-visually-hidden">{t("flow:composer.modelLabel")}</span>
                       <select
@@ -3962,6 +4308,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         <button
                           key={session.id}
                           type="button"
+                          ref={(el) => {
+                            if (el && session.id === activeSessionId) {
+                              el.scrollIntoView({ block: "nearest", inline: "nearest" });
+                            }
+                          }}
                           className={[
                             "af-composer-session-tab",
                             session.id === activeSessionId ? "af-composer-session-tab--active" : "",
@@ -4082,7 +4433,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     systemPromptReadonly={String(paletteDefForSoleNode?.description ?? "")}
                     modelLists={modelLists}
                     disabled={!selected}
-                    onSave={applyNodeProperties}
+                    onIdBlur={commitIdRename}
                     onClose={closeRightPanel}
                     error={nodePropsError}
                     ioSlots={{
@@ -4114,25 +4465,53 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   <div className="af-pipeline-drawer-body">
                     {rightPanel === "settings" ? (
                       <>
-                        <label className="af-pipeline-drawer-field">
+                        <div className="af-pipeline-drawer-field">
                           <span className="af-pipeline-drawer-label">{t("flow:pipeline.pipelineId")}</span>
-                          <div className="af-pipeline-drawer-readonly">
-                            {selected.id}
-                            <span className="af-pipeline-drawer-badge">
-                              {flowSourceLabelZh(selected.source ?? "user", t)}
-                            </span>
-                            {selected.archived ? (
-                              <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">{t("flow:settings.archived")}</span>
-                            ) : null}
-                          </div>
-                        </label>
-                        {typeof selected.path === "string" && selected.path ? (
-                          <label className="af-pipeline-drawer-field">
-                            <span className="af-pipeline-drawer-label">{t("flow:pipeline.diskPath")}</span>
-                            <div className="af-pipeline-drawer-readonly af-pipeline-drawer-readonly--mono">
-                              {selected.path}
+                          {(selected.source === "user" || selected.source === "workspace") && !selected.archived ? (
+                            <div className="af-pipeline-rename-row">
+                              <input
+                                type="text"
+                                className="af-pipeline-rename-input"
+                                value={renameFlowId}
+                                onChange={(e) => { setRenameFlowId(e.target.value); setRenameFlowError(""); }}
+                                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleRenameFlow(); } }}
+                                onBlur={() => { if (renameFlowId.trim() && renameFlowId.trim() !== selected.id) handleRenameFlow(); }}
+                                placeholder={selected.id}
+                                disabled={renameFlowBusy}
+                                spellCheck={false}
+                              />
+                              <span className="af-pipeline-drawer-badge">
+                                {flowSourceLabelZh(selected.source ?? "user", t)}
+                              </span>
                             </div>
-                          </label>
+                          ) : (
+                            <div className="af-pipeline-drawer-readonly">
+                              {selected.id}
+                              <span className="af-pipeline-drawer-badge">
+                                {flowSourceLabelZh(selected.source ?? "user", t)}
+                              </span>
+                              {selected.archived ? (
+                                <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">{t("flow:settings.archived")}</span>
+                              ) : null}
+                            </div>
+                          )}
+                          {renameFlowError ? <p className="af-err af-pipeline-drawer-err">{renameFlowError}</p> : null}
+                        </div>
+                        {typeof selected.path === "string" && selected.path ? (
+                          <div className="af-pipeline-drawer-field">
+                            <span className="af-pipeline-drawer-label">{t("flow:pipeline.diskPath")}</span>
+                            <div className="af-pipeline-drawer-readonly af-pipeline-drawer-readonly--mono af-pipeline-path-row">
+                              <span className="af-pipeline-path-text">{selected.path}</span>
+                              <button
+                                type="button"
+                                className="af-icon-btn af-pipeline-copy-btn"
+                                onClick={() => handleCopyPath(selected.path)}
+                                title={t("flow:settings.copyPath")}
+                              >
+                                <span className="material-symbols-outlined">{pathCopied ? "check" : "content_copy"}</span>
+                              </button>
+                            </div>
+                          </div>
                         ) : null}
                         {(selected.source === "user" || selected.source === "workspace") ? (
                           selected.archived ? (
@@ -4191,9 +4570,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                             </div>
                           </dl>
                         </div>
-                        <button type="button" className="af-btn-primary af-pipeline-drawer-save" onClick={handleSave}>
-                          {t("flow:settings.saveChanges")}
-                        </button>
                         <button
                           type="button"
                           className="af-pipeline-drawer-link"

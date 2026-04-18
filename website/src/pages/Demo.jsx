@@ -23,7 +23,7 @@ export default function Demo() {
 
   useEffect(() => {
     setLoading(true);
-    fetch('/agentflow/demo-flow.yaml')
+    fetch('/demo-flow.yaml')
       .then((res) => {
         if (!res.ok) throw new Error('Failed to load flow');
         return res.text();

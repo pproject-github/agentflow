@@ -43,7 +43,11 @@
       "Bash(mkdir -p ~/agentflow/pipelines/Bad)",
       "Bash(cp /tmp/af-validate-test/pipelines/Bad/flow.yaml ~/agentflow/pipelines/Bad/flow.yaml)",
       "Bash(awk *)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(lsof -iTCP:8765 -sTCP:LISTEN)",
+      "Bash(lsof -iTCP:5173 -sTCP:LISTEN)",
+      "Bash(sed -n '2911,2930p' builtin/web-ui/src/index.css)",
+      "Bash(sed -n '2896,2950p' builtin/web-ui/src/index.css)"
     ]
   }
 }

@@ -88,7 +88,7 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 7. **复杂任务循环拆解原则（关键）**
    AgentFlow 的核心优势是通过**循环**分解复杂问题（普通 CLI 因上下文限制无法解决）。规划时须主动判断是否需要环路：
 
-   **必须使用循环的场景**（用 control_anyOne + control_toBool + control_if 构建环路）：
+   **必须使用循环的场景**（用 control_anyOne + control_toBool（确定性）/ control_agent_toBool（AI 判断）+ control_if 构建环路）：
    - 校验/检查类：代码检查、编译构建、测试运行、格式校验——不可能一次通过，必须 check → fix → re-check
    - 迭代改进类：UI 还原、文档生成、翻译校对——需反复校对直至质量达标
    - 批量处理类：逐文件/逐组件操作，结果需逐项确认
@@ -146,7 +146,7 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 2. **引脚语义审查 checklist**（每节点过一遍，发现问题修正）：
    a. **同 output 多消费者冲突**：一个 output 槽被两条边消费且消费方语义矛盾（如同时供 \`control_toBool.value\`（要 true/false 单行）和 \`agent.input\`（要详细内容）→ 必须**拆成两个 output 槽**（如 \`result:text\` + \`report:file\`）
    b. **text vs file 错配**：内容超过 ~1KB 或为多行报告/日志/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
-   c. **bool 误用**：\`bool\` 槽只允许出现在 \`control_toBool.prediction\`(out) 与 \`control_if.prediction\`(in) 这一对位置，其它任何节点禁用
+   c. **bool 误用**：\`bool\` 槽只允许出现在 \`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) 与 \`control_if.prediction\`(in) 这一对位置，其它任何节点禁用
    d. **节点类型错配**：发现 \`tool_nodejs\` 实际做的是非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 把要求写到 body
    e. **provide_* 类型对齐**：\`provide_str\` 必须 \`output[0].type=text\`；\`provide_file\` 必须 \`output[0].type=file\`
 3. **ui.nodePositions**：按 \`reference/flow-layout.md\` 优化布局（主链 x 递增、分支 y 错开、避免一条线）。
@@ -193,7 +193,7 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
   "steps": [
     { "type": "script", "op": "add-edge", "description": "...", "params": { ... } },
     { "type": "agent", "complexity": "medium", "description": "...", "prompt": "...",
-      "instanceId": "可选", "nodeRole": "可选", "executorModel": "可选" }
+      "instanceId": "操作已有实例时必填", "nodeRole": "可选", "executorModel": "可选" }
   ]
 }`;
 }
@@ -252,14 +252,14 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
 4. 不同节点的内容生成拆为独立 agent 步骤；涉及已有实例时填写 **instanceId**，**nodeRole** 与该实例在 YAML 中的 role 一致；需要指定本步 CLI 模型时可填 **executorModel**
 5. 先改内容再连线，先加节点再连线
 6. agent 步骤 prompt 里要包含 flow.yaml 路径和上下文
-7. **循环拆解**：涉及校验/检查/迭代/批量/遍历的流程，agent 步骤的 prompt 中须指导 AI 用 control_anyOne + control_toBool + control_if 设计环路（check → fix → re-check），禁止线性链。批量/大任务推荐 todolist 模式（拆解产出 \`- [ ]\` 清单 → 循环执行打勾 → ToBool 判定全部完成 → If 出环/继续）${schemaSection}${skillSection}
+7. **循环拆解**：涉及校验/检查/迭代/批量/遍历的流程，agent 步骤的 prompt 中须指导 AI 用 control_anyOne + control_toBool（确定性）/ control_agent_toBool（AI 判断）+ control_if 设计环路（check → fix → re-check），禁止线性链。批量/大任务推荐 todolist 模式（拆解产出 \`- [ ]\` 清单 → 循环执行打勾 → ToBool 判定全部完成 → If 出环/继续）${schemaSection}${skillSection}
 
 输出严格 JSON：
 {
   "steps": [
     { "type": "script", "op": "edit-label", "description": "...", "params": { ... } },
     { "type": "agent", "complexity": "simple", "description": "...", "prompt": "...",
-      "instanceId": "可选，本步主要操作的实例 id",
+      "instanceId": "操作已有实例时**必填**：本步主要操作的实例 id。若「关联节点 ID」列出了画布选中的 id，必须填入对应步骤",
       "nodeRole": "可选，与画布角色一致：requirement|planning|code|test|normal（或中文：需求拆解|技术规划|代码执行|测试回归|普通）",
       "executorModel": "可选，本步执行模型（覆盖实例 model；不设则用实例或用户全局模型）" }
   ]
@@ -296,7 +296,7 @@ function buildPlannerUserMessage(userPrompt, flowYaml, instanceIds, flowYamlAbs,
     parts.push(formatInstancePlannerHint(flowYaml));
   }
   if (instanceIds?.length) {
-    parts.push(`\n## 关联节点 ID（优先操作这些实例）\n${instanceIds.join(", ")}`);
+    parts.push(`\n## 关联节点 ID（画布选中，agent 步骤必须填入 instanceId）\n${instanceIds.join(", ")}`);
   }
   parts.push("\n请输出 JSON 任务分解。");
   return parts.join("\n");
@@ -494,6 +494,32 @@ function resolvePlannerApiProvider(plannerModel) {
 // ─── 公开接口 ──────────────────────────────────────────────────────────────
 
 /**
+ * Post-planner: patch agent steps missing instanceId using canvas selection.
+ * Heuristic: if step prompt mentions a canvas-selected id, fill it.
+ * If only one node selected and no match found, assign to all unassigned steps.
+ */
+function patchMissingInstanceIds(steps, instanceIds) {
+  if (!steps?.length || !instanceIds?.length) return;
+  for (const step of steps) {
+    if (step.type !== "agent") continue;
+    const sid = step.instanceId != null ? String(step.instanceId).trim() : "";
+    if (sid) continue;
+    // Heuristic: check if step text mentions any canvas-selected id
+    const text = (step.prompt || "") + " " + (step.description || "");
+    for (const cid of instanceIds) {
+      if (text.includes(cid)) {
+        step.instanceId = cid;
+        break;
+      }
+    }
+    // Single node selected + no match → assign directly
+    if (!step.instanceId && instanceIds.length === 1) {
+      step.instanceId = instanceIds[0];
+    }
+  }
+}
+
+/**
  * @param {object} opts
  * @param {string} opts.userPrompt
  * @param {string} [opts.flowYaml] 当前 flow.yaml 内容
@@ -548,6 +574,7 @@ export async function planComposerTasks(opts) {
     emit({ type: "ai-log", tag: "planner-response", text: String(raw || ""), meta: { provider: apiProvider.provider, model: apiProvider.model } });
     const steps = parseStepsJson(raw);
     if (steps && steps.length > 0) {
+      patchMissingInstanceIds(steps, opts.instanceIds);
       return { steps };
     }
     emit({ type: "status", line: t("planner.planner_format_error") });
@@ -555,7 +582,9 @@ export async function planComposerTasks(opts) {
     emit({ type: "status", line: t("planner.planner_call_failed", { message: e.message }) });
   }
 
-  return { steps: heuristicPlan(opts.userPrompt) };
+  const fallbackSteps = heuristicPlan(opts.userPrompt);
+  patchMissingInstanceIds(fallbackSteps, opts.instanceIds);
+  return { steps: fallbackSteps };
 }
 
 // ─── 分阶段 CLI 快捷路径：追加到 agent prompt 的固定指引 ───────────────────
@@ -589,7 +618,7 @@ function buildPhaseCliGuide(phaseIndex) {
      - **实现要点**：tool_nodejs 写脚本路径（\`scripts/<id>.mjs\`）、agent_subAgent 写 body 关键点、control_* 写判定/汇合规则、provide_* 写固定值
      用途：输入/输出的来源/去向就是阶段三连线 \`sourceHandle/targetHandle\` 的依据，写清此处可避免阶段三反复猜
    - \`## 计划数据槽\`：仍然要写（即使阶段一已落到 yaml）——是阶段二/三的设计权威与对账依据
-6. **循环拆解原则**：AgentFlow 通过循环分解复杂问题。涉及校验/检查/迭代/批量/遍历的任务，**必须**用 control_anyOne + control_toBool + control_if 构建环路（check → fix → re-check），**禁止**设计成线性链。批量/大任务优先使用 **todolist 模式**：拆解节点产出 \`- [ ]\` 清单 → 循环执行并打勾 → ToBool 判定全部完成 → If 出环/继续。
+6. **循环拆解原则**：AgentFlow 通过循环分解复杂问题。涉及校验/检查/迭代/批量/遍历的任务，**必须**用 control_anyOne + control_toBool（确定性）/ control_agent_toBool（AI 判断）+ control_if 构建环路（check → fix → re-check），**禁止**设计成线性链。批量/大任务优先使用 **todolist 模式**：拆解节点产出 \`- [ ]\` 清单 → 循环执行并打勾 → ToBool 判定全部完成 → If 出环/继续。
 **节点类型选型判据**：**确定性任务 → \`tool_nodejs\`；非确定性任务 → \`agent_subAgent\`**。
 - **确定性** = 相同输入永远产出相同输出，可用普通代码完整描述（跑 CLI、npm、读写文件、JSON/路径转换、调现成 API 解析固定格式）→ tool_nodejs
 - **非确定性** = 需语义理解或创造（**代码翻译/生成**如 Android→RN、Vue→React；**理解源码/文本**如解析、改写、review；**多步推理决策**；**创意写作**）→ agent_subAgent
@@ -615,7 +644,7 @@ function buildPhaseCliGuide(phaseIndex) {
 2. **引脚语义审查 checklist**（每节点过一遍）：
    a. **同 output 多消费者冲突**：一个 output 同时供给两个语义矛盾的下游（如 \`toBool.value\` 要单行 true/false 与 \`agent.input\` 要详细内容）→ 拆成两个 output 槽
    b. **text/file 错配**：内容超 ~1KB 或多行报告/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
-   c. **bool 误用**：\`bool\` 槽只允许 \`control_toBool.prediction\`(out) → \`control_if.prediction\`(in)，其它禁用
+   c. **bool 误用**：\`bool\` 槽只允许 \`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) → \`control_if.prediction\`(in)，其它禁用
    d. **节点类型错配**：\`tool_nodejs\` 实际做非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 写 body
    e. **provide_* 类型对齐**：\`provide_str.output[0].type\` 必为 \`text\`；\`provide_file.output[0].type\` 必为 \`file\`
 3. **优化 ui.nodePositions**（参考 flow-layout.md：主链 x 递增、分支 y 错开）。

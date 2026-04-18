@@ -239,7 +239,11 @@
     },
     "control_toBool": {
       "displayName": "To Bool",
-      "description": "Convert execution task result to boolean and write to prediction slot"
+      "description": "Execute script to produce true/false prediction. Like tool_nodejs but enforces bool output. Extensible inputs."
+    },
+    "control_agent_toBool": {
+      "displayName": "Agent ToBool",
+      "description": "AI-powered boolean judgment for non-deterministic scenarios"
     },
     "tool_nodejs": {
       "displayName": "Node.js Script",

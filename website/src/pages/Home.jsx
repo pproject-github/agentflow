@@ -108,7 +108,7 @@ export default function Home() {
             <div className="absolute inset-0 bg-gradient-to-tr from-primary/10 to-transparent blur-3xl rounded-full" />
             <div className="relative w-3/4 aspect-square glass-panel rounded-full flex items-center justify-center p-8 overflow-hidden mx-auto">
               <img 
-                src="/agentflow/logo-512.png" 
+                src="/logo-512.png" 
                 alt="AgentFlow Logo" 
                 className="w-3/4 h-3/4 object-contain rounded-full opacity-80 animate-pulse-slow"
               />

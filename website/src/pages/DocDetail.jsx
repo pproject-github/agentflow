@@ -17,7 +17,7 @@ export default function DocDetail() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetch(`/agentflow/docs/${slug}.md`)
+    fetch(`/docs/${slug}.md`)
       .then((res) => {
         if (!res.ok) throw new Error('Document not found');
         return res.text();
