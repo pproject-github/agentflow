@@ -15,7 +15,7 @@ AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay
   agentflow logout                             退出 Hub 登录
   agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  发布流程到 Hub
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  浏览 Hub 上的流程
-  agentflow download <slug> [--output <dir>]   从 Hub 下载流程
+  agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
   agentflow ui [--port <n>] [--no-open]       本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认端口 8765）
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
@@ -74,7 +74,7 @@ Usage:
   agentflow logout                             Sign out of Hub
   agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  Publish flow to Hub
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  Browse flows on Hub
-  agentflow download <slug> [--output <dir>]   Download flow from Hub
+  agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
   agentflow ui [--port <n>] [--no-open]       Local HTTP: pipeline list + React Flow node diagram editor (default port 8765)
   agentflow apply <FlowName> [uuid]            Or agentflow apply <uuid> (resolve pipeline from uuid)

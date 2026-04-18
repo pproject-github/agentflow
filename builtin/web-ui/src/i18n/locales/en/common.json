@@ -53,5 +53,10 @@
     "online": "Engine Online",
     "offline": "Engine Offline",
     "connecting": "Connecting…"
+  },
+  "links": {
+    "hub": "AgentFlow Hub",
+    "docs": "Documentation",
+    "github": "GitHub Repository"
   }
 }

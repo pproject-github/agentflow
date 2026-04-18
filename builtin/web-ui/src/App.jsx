@@ -4,6 +4,7 @@ import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
+import RunningIndicator from "./RunningIndicator.jsx";
 
 function RoutedContent() {
   const { path } = useRoute();
@@ -23,6 +24,7 @@ function AppShell() {
       <div className={pipelineFullBleed ? "af-main af-main--pipeline" : "af-main"}>
         <RoutedContent />
       </div>
+      <RunningIndicator />
     </div>
   );
 }

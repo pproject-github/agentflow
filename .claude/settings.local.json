@@ -47,7 +47,12 @@
       "Bash(lsof -iTCP:8765 -sTCP:LISTEN)",
       "Bash(lsof -iTCP:5173 -sTCP:LISTEN)",
       "Bash(sed -n '2911,2930p' builtin/web-ui/src/index.css)",
-      "Bash(sed -n '2896,2950p' builtin/web-ui/src/index.css)"
+      "Bash(sed -n '2896,2950p' builtin/web-ui/src/index.css)",
+      "Bash(git log *)",
+      "Bash(lsof -iTCP:8765 -sTCP:LISTEN -n -P)",
+      "Bash(~/.pyenv/versions/3.11.0/bin/python3 *)",
+      "Bash(AGENTFLOW_NO_OPEN=1 node bin/agentflow.mjs ui --no-open)",
+      "Bash(kill 26859)"
     ]
   }
 }

@@ -61,11 +61,21 @@ export async function queryFlows({ sort = "popular", search = "", limit = 50 } =
 }
 
 export async function queryFlowBySlug(slug) {
-  const url = `${HUB_URL}/rest/v1/flows?select=*,profiles!flows_author_id_fkey(username)&slug=eq.${encodeURIComponent(slug)}&limit=1`;
-  const res = await fetch(url, { headers: supabaseHeaders() });
-  if (!res.ok) throw new Error("Hub query failed: " + res.status);
-  const data = await res.json();
-  return data[0] || null;
+  const baseSelect = `select=*,profiles!flows_author_id_fkey(username)`;
+  const bySlug = `${HUB_URL}/rest/v1/flows?${baseSelect}&slug=eq.${encodeURIComponent(slug)}&limit=1`;
+  const slugRes = await fetch(bySlug, { headers: supabaseHeaders() });
+  if (!slugRes.ok) throw new Error("Hub query failed: " + slugRes.status);
+  const slugData = await slugRes.json();
+  if (slugData[0]) return slugData[0];
+
+  // Fallback: exact title match (case-insensitive) among published flows.
+  // If multiple share the same title, pick the most downloaded.
+  const titleEsc = encodeURIComponent(slug.replace(/[,%*()]/g, ""));
+  const byTitle = `${HUB_URL}/rest/v1/flows?${baseSelect}&published=eq.true&title=ilike.${titleEsc}&order=downloads.desc&limit=1`;
+  const titleRes = await fetch(byTitle, { headers: supabaseHeaders() });
+  if (!titleRes.ok) throw new Error("Hub query failed: " + titleRes.status);
+  const titleData = await titleRes.json();
+  return titleData[0] || null;
 }
 
 export async function downloadFlowFile(yamlKey) {

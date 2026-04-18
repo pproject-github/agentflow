@@ -599,6 +599,44 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/run-log") {
+      try {
+        const flowId = url.searchParams.get("flowId") || "";
+        const runId = url.searchParams.get("runId") || "";
+        const sinceBytes = Math.max(0, parseInt(url.searchParams.get("sinceBytes") || "0", 10) || 0);
+        if (!flowId || !runId) {
+          json(res, 400, { error: "Missing flowId or runId" });
+          return;
+        }
+        const { getRunDir } = await import("./workspace.mjs");
+        const { RUN_LOG_REL } = await import("./paths.mjs");
+        const { default: fsMod } = await import("node:fs");
+        const logPath = path.join(getRunDir(root, flowId, runId), RUN_LOG_REL);
+        if (!fsMod.existsSync(logPath)) {
+          json(res, 200, { bytes: 0, text: "" });
+          return;
+        }
+        const stat = fsMod.statSync(logPath);
+        const size = stat.size;
+        if (sinceBytes >= size) {
+          json(res, 200, { bytes: size, text: "" });
+          return;
+        }
+        const fd = fsMod.openSync(logPath, "r");
+        try {
+          const len = size - sinceBytes;
+          const buf = Buffer.alloc(len);
+          fsMod.readSync(fd, buf, 0, len, sinceBytes);
+          json(res, 200, { bytes: size, text: buf.toString("utf-8") });
+        } finally {
+          fsMod.closeSync(fd);
+        }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace-tree") {
       try {
         json(res, 200, getWorkspaceTree(root));
@@ -1411,6 +1449,7 @@ finishedAt: "${new Date().toISOString()}"
       } catch (_) {}
 
       let responseEnded = false;
+      let clientDisconnected = false;
       const endSafe = () => {
         if (responseEnded) return;
         responseEnded = true;
@@ -1420,8 +1459,8 @@ finishedAt: "${new Date().toISOString()}"
         } catch (_) {}
       };
       const writeLine = (obj) => {
-        if (responseEnded) return;
-        try { res.write(JSON.stringify(obj) + "\n"); } catch (_) {}
+        if (responseEnded || clientDisconnected) return;
+        try { res.write(JSON.stringify(obj) + "\n"); } catch (_) { clientDisconnected = true; }
       };
 
       let child;
@@ -1430,6 +1469,9 @@ finishedAt: "${new Date().toISOString()}"
           cwd: root,
           stdio: ["ignore", "pipe", "pipe"],
           env: { ...process.env, FORCE_COLOR: "0" },
+          // detached: true 使 child 成为新进程组 leader，/api/flow/run/stop 时
+          // 用 process.kill(-pid) 可以一次性 SIGTERM 整棵进程树（含 cursor-agent 等孙进程）
+          detached: true,
         });
       } catch (e) {
         writeLine({ type: "error", message: `启动失败: ${e.message}` });
@@ -1492,11 +1534,9 @@ finishedAt: "${new Date().toISOString()}"
       });
 
       req.on("close", () => {
-        if (!responseEnded && runEntry.child && !runEntry.child.killed) {
-          try {
-            runEntry.child.kill("SIGTERM");
-          } catch (_) {}
-        }
+        // 浏览器断开（刷新/关闭 tab）时不再杀子进程，让 flow 自然跑完。
+        // 用户需显式停止请走 /api/flow/run/stop。
+        clientDisconnected = true;
       });
       return;
     }
@@ -1519,9 +1559,18 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 404, { error: "该流水线未在运行" });
         return;
       }
-      try {
-        entry.child.kill("SIGTERM");
-      } catch (_) {}
+      // 先尝试杀整个进程组（涵盖 cursor-agent / opencode 等孙进程）
+      const pid = entry.child.pid;
+      let killedGroup = false;
+      if (pid && pid > 0) {
+        try {
+          process.kill(-pid, "SIGTERM");
+          killedGroup = true;
+        } catch (_) { /* 组不存在则降级 */ }
+      }
+      if (!killedGroup) {
+        try { entry.child.kill("SIGTERM"); } catch (_) {}
+      }
       const uuid = entry.runUuid;
       activeFlowRuns.delete(flowId);
       if (uuid) {

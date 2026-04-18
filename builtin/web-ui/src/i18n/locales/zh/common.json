@@ -53,5 +53,10 @@
     "online": "引擎在线",
     "offline": "引擎离线",
     "connecting": "连接中…"
+  },
+  "links": {
+    "hub": "AgentFlow Hub",
+    "docs": "文档",
+    "github": "GitHub 仓库"
   }
 }

@@ -8,6 +8,16 @@ const ITEMS = [
   { to: "/settings", label: "Settings", icon: "settings" },
 ];
 
+const EXTERNAL_LINKS = [
+  { href: "https://agentflow-hub.com", icon: "hub", labelKey: "common:links.hub" },
+  { href: "https://docs.agentflow-hub.com", icon: "menu_book", labelKey: "common:links.docs" },
+  {
+    href: "https://github.com/pproject-github/agentflow",
+    icon: "code",
+    labelKey: "common:links.github",
+  },
+];
+
 function isActive(path, to) {
   if (to === "/projects") return path === "/projects" || path === "/";
   return path === to || path.startsWith(to + "/");
@@ -43,6 +53,24 @@ export default function Sidebar() {
           </button>
         ))}
       </nav>
+      <div className="af-sidebar-footer">
+        {EXTERNAL_LINKS.map((link) => {
+          const label = t(link.labelKey);
+          return (
+            <a
+              key={link.href}
+              className="af-sidebar-ext"
+              href={link.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={label}
+              title={label}
+            >
+              <span className="material-symbols-outlined">{link.icon}</span>
+            </a>
+          );
+        })}
+      </div>
     </aside>
   );
 }

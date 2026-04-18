@@ -8,5 +8,11 @@ export function getProjectsSteps(t) {
       disableBeacon: true,
       placement: 'center',
     },
+    {
+      target: '.af-hub-card',
+      content: t('onboarding:projects.hubIntro'),
+      disableBeacon: true,
+      placement: 'left',
+    },
   ];
 }

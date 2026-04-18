@@ -77,6 +77,10 @@ export function KeyboardShortcutsModal({ open, onClose }) {
                 <span className="af-shortcuts-row__label">{t("flow:shortcuts.shortcutsLabel")}</span>
                 <KeyCombo keys={["?"]} />
               </li>
+              <li className="af-shortcuts-row">
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.jumpToNode")}</span>
+                <KeyCombo keys={[mod, "K"]} />
+              </li>
             </ul>
           </section>
 

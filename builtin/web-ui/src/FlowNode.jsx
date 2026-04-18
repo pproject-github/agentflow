@@ -25,6 +25,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
   const typeLabel = getNodeTypeLabel(data);
   const isRunMode = data?.isRunMode ?? false;
   const isExecuting = data?.isExecuting ?? false;
+  const isDim = data?.isDim ?? false;
   const nodeStatus = data?.nodeStatus ?? null;
   const nodeElapsed = data?.nodeElapsed ?? null;
   const definitionId = data?.definitionId || "";
@@ -80,6 +81,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
         (nodeStatus === "success" ? " af-flow-node--done" : "") +
         (nodeStatus === "failed" ? " af-flow-node--failed" : "") +
         (nodeStatus === "running" && !isExecuting ? " af-flow-node--running-disk" : "") +
+        (isDim ? " af-flow-node--dim" : "") +
         " af-flow-node--" + schemaType.replace(/[^a-z0-9_-]/g, "")
       }
       data-schema={schemaType}
@@ -88,6 +90,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
         <span className="af-flow-node__type" title={typeLabel}>
           {typeLabel}
         </span>
+        {id && (
+          <span className="af-flow-node__id" title={id}>
+            {id}
+          </span>
+        )}
         {!isRunMode && needsModel && (
           <div className="af-flow-node__model-wrap">
             <select
