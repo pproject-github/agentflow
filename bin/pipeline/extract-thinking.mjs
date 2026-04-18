@@ -67,32 +67,38 @@ function extractThinking(logContent) {
 
     const tag = line.includes("[cursor-stdout-raw]")
       ? "cursor-stdout-raw"
-      : line.includes("[cli]")
-        ? "cli"
-        : line.includes("[result]")
-          ? "result"
-          : line.includes("[cli-raw]")
-            ? "cli-raw"
-            : null;
+      : line.includes("[claude-code-stdout-raw]")
+        ? "claude-code-stdout-raw"
+        : line.includes("[cli]")
+          ? "cli"
+          : line.includes("[result]")
+            ? "result"
+            : line.includes("[cli-raw]")
+              ? "cli-raw"
+              : null;
 
     if (tag === "cli-raw") {
       const msg = getMessageAfterTag(line, "cli-raw");
       if (msg && msg.startsWith("Prompt: ")) {
         currentPromptPath = msg.slice(8).trim();
-      } else if (msg && (msg.startsWith("Cursor CLI prompt 完整") || msg.startsWith("Cursor CLI prompt 前 800 字"))) {
-        const isFull = msg.startsWith("Cursor CLI prompt 完整");
-        const afterPrefix = msg.startsWith("Cursor CLI prompt 完整")
-          ? msg.slice("Cursor CLI prompt 完整".length).replace(/^[:\s]*\n?/, "")
-          : msg.slice("Cursor CLI prompt 前 800 字".length).replace(/^[:\s]*\n?/, "");
-        const rest = [afterPrefix];
-        for (let j = i + 1; j < lines.length; j++) {
-          const next = lines[j];
-          if (isNewLogLine(next)) break;
-          rest.push(next);
+      } else {
+        const fullPrefixes = ["Cursor CLI prompt 完整", "Claude Code CLI prompt 完整"];
+        const previewPrefixes = ["Cursor CLI prompt 前 800 字", "Claude Code CLI prompt 前 800 字"];
+        const fullHit = msg ? fullPrefixes.find((p) => msg.startsWith(p)) : null;
+        const previewHit = msg && !fullHit ? previewPrefixes.find((p) => msg.startsWith(p)) : null;
+        if (fullHit || previewHit) {
+          const prefix = fullHit || previewHit;
+          const afterPrefix = msg.slice(prefix.length).replace(/^[:\s]*\n?/, "");
+          const rest = [afterPrefix];
+          for (let j = i + 1; j < lines.length; j++) {
+            const next = lines[j];
+            if (isNewLogLine(next)) break;
+            rest.push(next);
+          }
+          const content = rest.join("\n").trim();
+          if (fullHit) currentPromptFull = content;
+          else currentPromptPreview = content;
         }
-        const content = rest.join("\n").trim();
-        if (isFull) currentPromptFull = content;
-        else currentPromptPreview = content;
       }
       continue;
     }
@@ -130,6 +136,41 @@ function extractThinking(logContent) {
             }
           }
           thinkingBySession[sid].texts.push(text);
+        }
+        continue;
+      }
+
+      if (tag === "claude-code-stdout-raw") {
+        cursorRawLines += 1;
+        const obj = JSON.parse(raw);
+        if (obj.type === "assistant" && obj.session_id && obj.message && Array.isArray(obj.message.content)) {
+          const sid = obj.session_id;
+          const thinkingBlocks = obj.message.content.filter(
+            (b) => b && b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 0,
+          );
+          if (thinkingBlocks.length === 0) continue;
+          if (!thinkingBySession[sid]) {
+            thinkingBySession[sid] = {
+              texts: [],
+              instanceId: currentInstanceId ?? undefined,
+              label: currentLabel ?? undefined,
+              promptPath: currentPromptPath ?? undefined,
+              promptPreview: currentPromptPreview ?? undefined,
+              promptFull: currentPromptFull ?? undefined,
+            };
+            if (currentInstanceId) {
+              for (let r = nodeRuns.length - 1; r >= 0; r--) {
+                if (nodeRuns[r].instanceId === currentInstanceId && nodeRuns[r].session_id == null) {
+                  nodeRuns[r].session_id = sid;
+                  break;
+                }
+              }
+            }
+          }
+          for (const block of thinkingBlocks) {
+            thinkingDeltaCount += 1;
+            thinkingBySession[sid].texts.push(block.thinking);
+          }
         }
         continue;
       }
@@ -195,7 +236,7 @@ function toMarkdown(thinkingBySession, nodeRuns, stats = {}) {
   if (stats.totalLogLines != null || stats.cursorRawLines != null || stats.thinkingDeltaCount != null) {
     parts.push("本文件由 extract-thinking 从 log.txt 提取。\n");
     parts.push(`Log 总行数: ${stats.totalLogLines ?? "-"}，[cursor-stdout-raw] 行数: ${stats.cursorRawLines ?? "-"}，thinking delta 数: ${stats.thinkingDeltaCount ?? "-"}，session 数: ${Object.keys(thinkingBySession).length}。\n`);
-    parts.push("（log 中大量为 check-cache / get-ready-nodes / cli 等；仅 Cursor 流式输出的 thinking 会按 session 聚合。）\n\n");
+    parts.push("（log 中大量为 check-cache / get-ready-nodes / cli 等；Cursor 与 Claude Code 流式输出的 thinking 会按 session 聚合。）\n\n");
   }
 
   parts.push("# 节点执行情况\n");

@@ -4,7 +4,14 @@ import path from "path";
 import { backupResolvedOutputsIfExist } from "../pipeline/backup-resolved-output.mjs";
 import { outputNodeBasename, outputDirForNode } from "../pipeline/get-exec-id.mjs";
 import { writeResult } from "../pipeline/write-result.mjs";
-import { runCursorAgentForNode, runCursorAgentWithPrompt, runOpenCodeAgentForNode, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import {
+  runClaudeCodeAgentForNode,
+  runClaudeCodeAgentWithPrompt,
+  runCursorAgentForNode,
+  runCursorAgentWithPrompt,
+  runOpenCodeAgentForNode,
+  runOpenCodeAgentWithPrompt,
+} from "./agent-runners.mjs";
 import { runApiAgentForNode } from "./api-runner.mjs";
 import { log } from "./log.mjs";
 import { LOCAL_ONLY_DEFINITION_IDS, LOCAL_ONLY_TERMINAL_SUCCESS_IDS } from "./paths.mjs";
@@ -13,6 +20,7 @@ import { parseJsonStdout, runNodeScript } from "./pipeline-scripts.mjs";
 import { emitEvent } from "./run-events.mjs";
 import { getRunDir } from "./workspace.mjs";
 import { nodeToolCommandToArgv } from "./normalize-node-tool-command.mjs";
+import { buildPipelineScriptPathHint } from "./flow-normalize.mjs";
 import { validateAndParse } from "../pipeline/validate-script-output.mjs";
 
 const TOOL_NODEJS_MAX_RETRIES = 3;
@@ -24,14 +32,19 @@ const AI_HEAL_ENABLED = !(
 
 // ─── AI 自愈：失败后调用 Cursor/OpenCode CLI 修复脚本再重试 ──────────────────
 
+/**
+ * @returns {{ path: string | null, parsed: string | null, reason: "none" | "unparsable" | "not-found" }}
+ */
 function extractScriptPath(resolvedScript) {
   const { argv } = nodeToolCommandToArgv(resolvedScript);
-  if (argv.length === 0) return null;
+  if (argv.length === 0) return { path: null, parsed: null, reason: "unparsable" };
   const candidate = argv[0];
-  if (!candidate) return null;
+  if (!candidate) return { path: null, parsed: null, reason: "unparsable" };
   const abs = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
-  return fs.existsSync(abs) ? abs : null;
+  if (fs.existsSync(abs)) return { path: abs, parsed: abs, reason: "none" };
+  return { path: null, parsed: abs, reason: "not-found" };
 }
+
 
 function buildHealPrompt(scriptPath, command, errorInfo, scriptContent) {
   const stderrSlice = (errorInfo.stderr || "").trim().slice(0, 4000) || "(无)";
@@ -62,11 +75,21 @@ function buildHealPrompt(scriptPath, command, errorInfo, scriptContent) {
  * @returns {Promise<boolean>} 是否成功完成修复（AI 调用无报错即视为成功，实际修复效果由重试验证）
  */
 async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, resolvedScript, errorInfo, cli, model) {
-  const scriptPath = extractScriptPath(resolvedScript);
-  if (!scriptPath) {
-    log.warn(`[tool_nodejs AI 自愈] 无法从命令提取脚本路径，跳过: ${resolvedScript.slice(0, 120)}`);
+  const ext = extractScriptPath(resolvedScript);
+  if (!ext.path) {
+    if (ext.reason === "not-found") {
+      log.warn(
+        `[tool_nodejs AI 自愈] 脚本文件不存在，跳过（这是 flow.yaml 模板路径错，非脚本内容错）：` +
+          `${ext.parsed}。建议把 flow.yaml 里 tool_nodejs.script 的 ` +
+          `\`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\` ` +
+          `改为 \`\${flowDir}/scripts/xxx.mjs\`（兼容 user/workspace/builtin 安装）`,
+      );
+    } else {
+      log.warn(`[tool_nodejs AI 自愈] 无法从命令提取脚本路径，跳过: ${resolvedScript.slice(0, 120)}`);
+    }
     return false;
   }
+  const scriptPath = ext.path;
 
   let scriptContent;
   try {
@@ -77,7 +100,8 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
   }
 
   const prompt = buildHealPrompt(scriptPath, resolvedScript, errorInfo, scriptContent);
-  const healCli = cli === "opencode" ? "opencode" : "cursor";
+  const healCli =
+    cli === "opencode" ? "opencode" : cli === "claude-code" ? "claude-code" : "cursor";
 
   log.info(`[tool_nodejs AI 自愈] ${instanceId} 调用 ${healCli}${model ? ` (${model})` : ""} 修复 ${path.basename(scriptPath)}`);
   emitEvent(workspaceRoot, flowName, uuid, {
@@ -91,6 +115,9 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
   try {
     if (healCli === "opencode") {
       const { finished } = runOpenCodeAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined, force: true });
+      await finished;
+    } else if (healCli === "claude-code") {
+      const { finished } = runClaudeCodeAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined });
       await finished;
     } else {
       const { finished } = runCursorAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined });
@@ -211,7 +238,8 @@ function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolv
 
   // 非零退出码 + 无 stdout → 直接失败
   if (!stdout.trim() && exitCode !== 0) {
-    const detail = `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "");
+    const baseDetail = `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "");
+    const detail = baseDetail + buildPipelineScriptPathHint(stderr);
     persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
     writeResult(workspaceRoot, flowName, uuid, instanceId,
       { status: "failed", message: detail },
@@ -227,12 +255,13 @@ function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolv
   const { ok, errors, payload } = validateAndParse(stdout);
 
   if (!ok) {
-    const detail =
+    const baseDetail =
       exitCode !== 0
         ? `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "")
         : errors.length
           ? errors.join("; ")
           : "脚本无输出";
+    const detail = baseDetail + buildPipelineScriptPathHint(stderr);
     persistToolNodejsStderr(outputDir, instanceId, execId, stderr);
     writeResult(workspaceRoot, flowName, uuid, instanceId,
       { status: "failed", message: detail },
@@ -293,7 +322,10 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
     let healOptions = null;
     if (AI_HEAL_ENABLED) {
       const { cli, model } = resolveCliAndModel(workspaceRoot, preOutput.model ?? null, options.model ?? null);
-      healOptions = { cli: cli === "api" ? "cursor" : cli, model };
+      healOptions = {
+        cli: cli === "api" ? "cursor" : cli,
+        model,
+      };
     }
     emitEvent(workspaceRoot, flowName, uuid, {
       event: "direct-command-start",
@@ -398,6 +430,21 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
       );
     } else if (cli === "opencode") {
       await runOpenCodeAgentForNode(
+        workspaceRoot,
+        { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", intermediatePath, resultPathRel: resultPath, subagent, instanceId },
+        {
+          model,
+          stderrBuffer: options.stderrBuffer,
+          force: options.force,
+          outputPrefix: options.outputPrefix,
+          prefixColor: options.prefixColor,
+          onToolCall: options.onToolCall,
+          flowName,
+          uuid,
+        },
+      );
+    } else if (cli === "claude-code") {
+      await runClaudeCodeAgentForNode(
         workspaceRoot,
         { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", intermediatePath, resultPathRel: resultPath, subagent, instanceId },
         {

@@ -168,6 +168,10 @@ Skills are automatically loaded when relevant tasks are detected, providing doma
 |----------|---------|-------------|
 | `CURSOR_AGENT_CMD` | `agent` | Cursor CLI command |
 | `CURSOR_AGENT_MODEL` | — | Default model |
+| `OPENCODE_CMD` | `opencode` | OpenCode CLI command |
+| `CLAUDE_CODE_CMD` | `claude` | Claude Code CLI command |
+| `AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS` | `1` | Pass `--dangerously-skip-permissions` to Claude Code; set `0` for interactive approval |
+| `AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT` | `0` | Forward Claude Code stderr directly to terminal for debugging |
 | `AGENTFLOW_HOME` | `~/agentflow` | User data directory |
 
 ## Directory Layout

@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { getAgentflowDataRoot } from "./paths.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
-import { runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { planComposerTasks, hasPlannerApiAvailable, shouldUsePhased, classifyComplexity, classifyTaskComplexity, PHASED_DEFINITIONS } from "./composer-planner.mjs";
 import { executeScriptOp, isSupportedScriptOp } from "./composer-script-ops.mjs";
 import { routeModel } from "./composer-model-router.mjs";
@@ -164,6 +164,13 @@ export function startComposerAgent(opts) {
 
   if (cli === "opencode") {
     return runOpenCodeAgentWithPrompt(cliWs, prompt, {
+      ...common,
+      model: model || undefined,
+    });
+  }
+
+  if (cli === "claude-code") {
+    return runClaudeCodeAgentWithPrompt(cliWs, prompt, {
       ...common,
       model: model || undefined,
     });
@@ -465,6 +472,14 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
         });
         setChild(handle.child);
         await handle.finished;
+      } else if (cli === "claude-code") {
+        const handle = runClaudeCodeAgentWithPrompt(cliWs, agentPrompt, {
+          onStreamEvent: stepEmit,
+          model: model || undefined,
+          force: Boolean(opts.force),
+        });
+        setChild(handle.child);
+        await handle.finished;
       } else {
         const handle = runCursorAgentWithPrompt(cliWs, agentPrompt, {
           onStreamEvent: stepEmit,
@@ -720,6 +735,14 @@ export function startComposerMultiStep(opts) {
           try {
             if (cli === "opencode") {
               const handle = runOpenCodeAgentWithPrompt(cliWs, agentPrompt, {
+                onStreamEvent: stepEmit,
+                model: model || undefined,
+                force: Boolean(opts.force),
+              });
+              currentChild = handle.child;
+              await handle.finished;
+            } else if (cli === "claude-code") {
+              const handle = runClaudeCodeAgentWithPrompt(cliWs, agentPrompt, {
                 onStreamEvent: stepEmit,
                 model: model || undefined,
                 force: Boolean(opts.force),

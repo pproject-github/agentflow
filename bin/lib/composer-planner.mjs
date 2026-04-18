@@ -12,7 +12,7 @@ import { buildPlannerSkillContext } from "./composer-skill-router.mjs";
 import { buildNodeSchemaPromptSection } from "./composer-node-schema.mjs";
 import { formatInstancePlannerHint } from "./composer-flow-instances.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
-import { runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { t } from "./i18n.mjs";
 
 const PLANNER_MAX_TOKENS = 2048;
@@ -122,7 +122,7 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 
 为**每个**需要完善的 instance 生成独立 agent 步骤（或确定性 script 步骤）：
 - **agent_subAgent**：若 body 已是可执行 prompt 则跳过；否则编写**准确、可执行**的 \`body\`（提示词/规则/输入输出占位 \`\${...}\`）。**复杂度用 "simple"**。
-- **tool_nodejs**：若 \`script\` 字段已是完整命令且 scripts/ 下脚本已存在 → 跳过；否则在 **scripts/** 子目录创建 Node 脚本（\`scripts/<instanceId>.mjs\`），\`script\` 写入完整 \`node ...\` 调用并用 \`\${}\` 引用槽位。**不要**给 \`\${workspaceRoot}\`、\`\${runDir}\` 等外包双引号（已自动 shell-quote）。**禁止**仅 body 自然语言无 script。
+- **tool_nodejs**：若 \`script\` 字段已是完整命令且 scripts/ 下脚本已存在 → 跳过；否则在 **scripts/** 子目录创建 Node 脚本（\`scripts/<instanceId>.mjs\`），\`script\` 写入完整 \`node ...\` 调用并用 \`\${}\` 引用槽位。**引用 scripts/ 必须用 \`\${flowDir}/scripts/xxx.mjs\`**，不要写 \`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\`（flow 可能安装到 \`~/agentflow/pipelines\` 或 builtin，硬编码 workspace 路径会找不到脚本）。**不要**给 \`\${workspaceRoot}\`、\`\${runDir}\` 等外包双引号（已自动 shell-quote）。**禁止**仅 body 自然语言无 script。
 - **control_toBool / provide_str / provide_file** 等：按规格书补齐空的 \`body\` 或 output \`value\`。
 - **引脚补漏**：核对 body/script 中每个 \`\${X}\` 是否对应实际槽位 name；缺槽就在末尾追加（type 必为 \`text\` 或 \`file\`，**绝不写 node**），多余的不要动（可能是阶段三连线用）。
 - **不得删改基础控制槽**（\`prev\`/\`next\` 的 type/name 与顺序）；**固定槽位节点**（control_* / provide_* / tool_load_key/save_key/get_env / tool_print / tool_user_ask）的 input/output 结构永不修改。
@@ -184,6 +184,7 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
    - 若能确定脚本内容 → 用 edit-script 直接写入完整可执行脚本
    - 若需 AI 生成 → 用 agent 步骤，prompt 中**必须**写明：「把可执行脚本写入 \`script\` 字段（YAML \`|\` 块），body 只写一句说明。script 为空或为自然语言将导致节点失败。」
    - \`script\` 中**禁止**写成 \`node "\${workspaceRoot}/..."\`：\`\${}\` 已会被单独转义，外包双引号会破坏路径；应写成 \`node \${workspaceRoot}/...\`。
+   - **引用 scripts/ 下文件**必须用 \`\${flowDir}/scripts/xxx.mjs\`（\`\${flowDir}\` 指向 flow 当前所在目录，兼容 user / workspace / builtin 三种安装位置）；**禁止**写 \`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\`（flow 非 workspace 安装时会 Cannot find module）。
 3. 只做当前阶段的工作，不要超出范围
 4. agent 步骤 prompt 里要包含 flow.yaml 路径和上下文
 5. 生成的 agent 步骤 prompt 必须**复述**或**引用**下方「内置节点 schema」中相关 definitionId 的槽位（type/name/顺序），让子 agent 不必再去读 builtin/nodes/${schemaSection}${skillSection}
@@ -247,6 +248,7 @@ agent 步骤的 prompt 必须是独立可执行的精确指令，包含必要上
    - 若能确定脚本内容 → 用 edit-script 直接写入
    - 若需 AI 生成 → 用 agent 步骤，prompt 中**必须**写明：「把可执行脚本写入 instance 的 \`script\` 字段（YAML \`|\` 块），body 只写一句说明。script 为空或为自然语言将导致节点运行失败。」
    - \`script\` 中**禁止** \`node "\${workspaceRoot}/..."\`：应 \`node \${workspaceRoot}/...\`（\`\${}\` 已单独 shell 转义，勿再包双引号）。
+   - **引用 scripts/ 下文件**必须用 \`\${flowDir}/scripts/xxx.mjs\`（\`\${flowDir}\` 解析到 flow 真实目录，兼容 user / workspace / builtin 安装位置）；**禁止**硬编码 \`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\`。
    - **引脚路径约束**：脚本读写文件的路径**必须通过引脚传入**。\`script\` 中用 \`\${槽位名}\` 引用 input/output 路径（如 \`--input \${figma_tree} --output \${todolist}\`），脚本通过命令行参数接收后直接读写。**禁止**在脚本内自行拼 \`node_<instance>_xxx\` 或用 \`outDirForNode\` 构造路径——产物路径与流水线解析器约定不一致会导致下游节点找不到文件。
 3. 拆小不合大：每步只做一件事
 4. 不同节点的内容生成拆为独立 agent 步骤；涉及已有实例时填写 **instanceId**，**nodeRole** 与该实例在 YAML 中的 role 一致；需要指定本步 CLI 模型时可填 **executorModel**
@@ -426,7 +428,9 @@ async function classifyViaCli(userPrompt, cliWorkspace) {
 
   const runner = cli === "opencode"
     ? runOpenCodeAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined })
-    : runCursorAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined, force: true });
+    : cli === "claude-code"
+      ? runClaudeCodeAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined })
+      : runCursorAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined, force: true });
 
   const timeout = new Promise((_, reject) =>
     setTimeout(() => {
@@ -631,7 +635,7 @@ function buildPhaseCliGuide(phaseIndex) {
 ## 阶段：节点补充（必读）
 1. 阅读 **${COMPOSER_NODE_SPEC_FILENAME}**（路径见上下文）与 **flow.yaml**。
 2. **agent_subAgent**：写准确、完整的 **body**（规则、\`\${...}\` 路径）；本阶段宜用**较快/普通模型**完成即可。
-3. **tool_nodejs**：在流水线 **scripts/** 下创建 **Node 可执行脚本**（路径见上下文），\`script\` 字段写完整 shell/node 调用命令；遵守仓库 Node 与 tool_nodejs 规范。**不要**写成 \`node "\${workspaceRoot}/..."\`，应 \`node \${workspaceRoot}/...\`（占位符已单独转义，外包双引号会坏路径）。
+3. **tool_nodejs**：在流水线 **scripts/** 下创建 **Node 可执行脚本**（路径见上下文），\`script\` 字段写完整 shell/node 调用命令；遵守仓库 Node 与 tool_nodejs 规范。**不要**写成 \`node "\${workspaceRoot}/..."\`，应 \`node \${workspaceRoot}/...\`（占位符已单独转义，外包双引号会坏路径）。**引用 scripts/ 下文件必须用 \`\${flowDir}/scripts/xxx.mjs\`**（\`\${flowDir}\` 兼容 user / workspace / builtin 安装），**禁止** \`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\`。
 4. **引脚路径约束**：脚本读写文件的路径**必须从引脚传入**，\`script\` 中用 \`\${槽位名}\` 引用 input/output 路径（如 \`--input \${figma_tree} --output \${todolist}\`）。**禁止**在脚本内自行拼 \`node_<instance>_xxx\` 或调用 \`outDirForNode\` 构造路径——否则产物路径与流水线解析器约定不一致，下游节点找不到文件。
 5. **引脚**：按节点定义与 reference 核对 **input/output 顺序与索引**（input-0、output-1 等），与规格书一致。
 6. **不要**大改实例拓扑或补全复杂副引脚连线（留待流程完善）。`;

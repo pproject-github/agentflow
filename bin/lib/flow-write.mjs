@@ -15,6 +15,7 @@ import {
   PIPELINES_DIR,
 } from "./paths.mjs";
 import { getFlowYamlAbs } from "./catalog-flows.mjs";
+import { normalizeFlowYamlText } from "./flow-normalize.mjs";
 
 export const FLOW_YAML_FILENAME = "flow.yaml";
 
@@ -201,7 +202,8 @@ export function writeFlowYaml(workspaceRoot, flowId, flowSource, flowYaml, opts 
   if (error) return { success: false, error };
   try {
     fs.mkdirSync(flowDir, { recursive: true });
-    fs.writeFileSync(path.join(flowDir, FLOW_YAML_FILENAME), flowYaml ?? "", "utf-8");
+    const normalized = normalizeFlowYamlText(flowYaml ?? "").text;
+    fs.writeFileSync(path.join(flowDir, FLOW_YAML_FILENAME), normalized, "utf-8");
     return { success: true };
   } catch (e) {
     return { success: false, error: (e && e.message) || String(e) };

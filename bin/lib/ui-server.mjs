@@ -97,19 +97,27 @@ function readAgentflowUserConfigObject() {
 
 function readModelListsFromDisk(workspaceRoot) {
   const p = getModelListsAbs();
+  const empty = {
+    cursor: [],
+    opencode: [],
+    claudeCode: [],
+    cursorFetchedAt: null,
+    opencodeFetchedAt: null,
+    claudeCodeFetchedAt: null,
+  };
   try {
-    if (!fs.existsSync(p)) {
-      return { cursor: [], opencode: [], cursorFetchedAt: null, opencodeFetchedAt: null };
-    }
+    if (!fs.existsSync(p)) return empty;
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
     return {
       cursor: Array.isArray(data.cursor) ? data.cursor.map(String) : [],
       opencode: Array.isArray(data.opencode) ? data.opencode.map(String) : [],
+      claudeCode: Array.isArray(data.claudeCode) ? data.claudeCode.map(String) : [],
       cursorFetchedAt: data.cursorFetchedAt ?? null,
       opencodeFetchedAt: data.opencodeFetchedAt ?? null,
+      claudeCodeFetchedAt: data.claudeCodeFetchedAt ?? null,
     };
   } catch {
-    return { cursor: [], opencode: [], cursorFetchedAt: null, opencodeFetchedAt: null };
+    return empty;
   }
 }
 

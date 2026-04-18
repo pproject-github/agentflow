@@ -159,13 +159,21 @@ export function NodePropertiesPanel({
     [setDraft],
   );
 
-  const { cursorList, opencodeList, currentNotInLists } = useMemo(() => {
+  const { cursorList, opencodeList, claudeCodeList, currentNotInLists } = useMemo(() => {
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
-    const idSet = new Set([...cursor, ...opencode].map(modelEntryId));
+    const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
+    const idSet = new Set([...cursor, ...opencode, ...claudeCode].map(modelEntryId));
     const m = (draft?.model ?? "").trim();
-    const extra = m && !idSet.has(m) ? m : "";
-    return { cursorList: cursor, opencodeList: opencode, currentNotInLists: extra };
+    const mBare = m.startsWith("cursor:")
+      ? m.slice(7)
+      : m.startsWith("opencode:")
+        ? m.slice(9)
+        : m.startsWith("claude-code:")
+          ? m.slice(12)
+          : m;
+    const extra = m && !idSet.has(mBare) ? m : "";
+    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, currentNotInLists: extra };
   }, [modelLists, draft?.model]);
 
   if (!draft) return null;
@@ -272,6 +280,15 @@ export function NodePropertiesPanel({
               <optgroup label="OpenCode">
                 {opencodeList.map((m) => (
                   <option key={`o-${m}`} value={modelEntryId(m)}>
+                    {m}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {claudeCodeList.length > 0 ? (
+              <optgroup label="Claude Code">
+                {claudeCodeList.map((m) => (
+                  <option key={`cc-${m}`} value={`claude-code:${modelEntryId(m)}`}>
                     {m}
                   </option>
                 ))}

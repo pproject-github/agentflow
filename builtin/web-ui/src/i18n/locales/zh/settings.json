@@ -40,6 +40,15 @@
     "saving": "正在保存并更新清单…",
     "description": "对应 CLI opencode models <provider> 的参数；停止输入后会写入用户目录 config 并刷新 model-lists.json。"
   },
+  "claudeCode": {
+    "title": "Claude Code CLI",
+    "status": {
+      "ready": "就绪",
+      "notFound": "未找到"
+    },
+    "modelPreviewLabel": "Claude Code 模型名称列表",
+    "description": "内置模型列表（Claude Code CLI 无 models 子命令）；刷新将探测 claude 二进制是否在 PATH 中。首次使用请先执行 claude /login。"
+  },
   "env": {
     "title": "环境变量",
     "note": "仅本机、本浏览器",
@@ -55,7 +64,8 @@
     "normal": "服务正常",
     "abnormal": "部分接口异常",
     "cursorModels": "Cursor 模型",
-    "opencodeModels": "OpenCode 模型"
+    "opencodeModels": "OpenCode 模型",
+    "claudeCodeModels": "Claude Code 模型"
   },
   "shortcuts": {
     "title": "快捷入口",

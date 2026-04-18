@@ -40,6 +40,15 @@
     "saving": "Saving and updating list...",
     "description": "Corresponds to CLI opencode models <provider> parameter; written to user directory config and triggers model-lists.json refresh after typing stops."
   },
+  "claudeCode": {
+    "title": "Claude Code CLI",
+    "status": {
+      "ready": "Ready",
+      "notFound": "Not found"
+    },
+    "modelPreviewLabel": "Claude Code model id list",
+    "description": "Built-in model list (Claude Code CLI has no models subcommand); refresh probes the claude binary in PATH. Run 'claude /login' first."
+  },
   "env": {
     "title": "Environment Variables",
     "note": "Local machine, this browser only",
@@ -55,7 +64,8 @@
     "normal": "Service normal",
     "abnormal": "Some interfaces abnormal",
     "cursorModels": "Cursor Models",
-    "opencodeModels": "OpenCode Models"
+    "opencodeModels": "OpenCode Models",
+    "claudeCodeModels": "Claude Code Models"
   },
   "shortcuts": {
     "title": "Shortcuts",

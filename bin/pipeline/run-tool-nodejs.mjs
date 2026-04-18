@@ -24,6 +24,7 @@ import { writeResult } from "./write-result.mjs";
 import { backupResolvedOutputsIfExist } from "./backup-resolved-output.mjs";
 import { loadExecId, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
 import { nodeToolCommandToArgv } from "../lib/normalize-node-tool-command.mjs";
+import { buildPipelineScriptPathHint } from "../lib/flow-normalize.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAX_RETRIES = 3;
@@ -60,9 +61,10 @@ function runOnce(workspaceRoot, flowName, uuid, instanceId, execId, scriptArgs) 
   const { ok, errors, payload } = validateAndParse(stdout);
 
   if (!ok) {
-    const detail = exitCode !== 0
+    const baseDetail = exitCode !== 0
       ? `脚本退出码 ${exitCode}` + (stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "")
       : (errors.length ? errors.join("; ") : "脚本无输出");
+    const detail = baseDetail + buildPipelineScriptPathHint(stderr);
     writeResult(workspaceRoot, flowName, uuid, instanceId, {
       status: "failed",
       message: detail,
