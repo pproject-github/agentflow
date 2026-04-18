@@ -120,6 +120,10 @@ function collectRounds(interDir, outDir, instanceId) {
 
   const result = [];
   for (const [key, data] of roundMap) {
+    // Skip phantom rounds that only have a prompt backup but no result/cache/output
+    // (caused by prior buildNodePrompt double-call bug creating spurious _N backups)
+    if (key !== "current" && !data.resultFile && !data.cacheFile && !data.outputFiles) continue;
+
     const round = { execId: key === "current" ? "latest" : key };
 
     if (data.resultFile) {

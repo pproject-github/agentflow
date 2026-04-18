@@ -412,6 +412,26 @@ export default function ProjectsPage() {
               <span className="material-symbols-outlined af-project-add-icon">add_circle</span>
               <span className="af-project-add-label">{t("project:newPipeline")}</span>
             </button>
+
+            <a
+              className="af-hub-card"
+              href="https://agentflow-hub.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <div className="af-hub-card__glow" aria-hidden />
+              <span className="af-hub-card__eyebrow">
+                <span className="material-symbols-outlined af-hub-card__eyebrow-icon">hub</span>
+                {t("project:hubCard.eyebrow")}
+              </span>
+              <h3 className="af-hub-card__title">{t("project:hubCard.title")}</h3>
+              <p className="af-hub-card__desc">{t("project:hubCard.desc")}</p>
+              <span className="af-hub-card__cta">
+                {t("project:hubCard.cta")}
+                <span className="material-symbols-outlined af-hub-card__cta-icon">arrow_outward</span>
+              </span>
+              <code className="af-hub-card__cli">{t("project:hubCard.cliHint")}</code>
+            </a>
           </div>
         </section>
 

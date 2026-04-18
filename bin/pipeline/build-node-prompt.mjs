@@ -139,8 +139,20 @@ ${taskBody || "(无)"}
 
   try {
     fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    backupIntermediateFileIfExists(promptPath, e);
-    fs.writeFileSync(promptPath, content, "utf-8");
+    // Skip backup + rewrite when file already exists with identical content.
+    // computeCacheMd5 calls buildNodePrompt again after pre-process already wrote it;
+    // without this guard the second call creates a spurious _N backup that the UI
+    // displays as a phantom history round.
+    let needWrite = true;
+    if (fs.existsSync(promptPath)) {
+      try {
+        if (fs.readFileSync(promptPath, "utf-8") === content) needWrite = false;
+      } catch { /* fall through to write */ }
+    }
+    if (needWrite) {
+      backupIntermediateFileIfExists(promptPath, e);
+      fs.writeFileSync(promptPath, content, "utf-8");
+    }
   } catch (e) {
     return { ok: false, error: e.message || "Failed to write prompt file" };
   }

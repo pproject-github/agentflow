@@ -100,26 +100,29 @@ function readKeyFromMemory(runDir, key) {
 }
 
 function getRunBuildRoots(workspaceRoot) {
-  const roots = [getWorkspaceRunBuildRoot(workspaceRoot), getLegacyUserRunBuildRoot()];
+  const roots = [
+    { dir: getWorkspaceRunBuildRoot(workspaceRoot), source: "workspace" },
+    { dir: getLegacyUserRunBuildRoot(), source: "user" },
+  ];
   const out = [];
   const seen = new Set();
-  for (const dir of roots) {
+  for (const { dir, source } of roots) {
     const resolved = path.resolve(dir);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
-    out.push(resolved);
+    out.push({ dir: resolved, source });
   }
   return out;
 }
 
 /**
  * @param {string} workspaceRoot
- * @returns {Array<{ flowId: string, runId: string, at: number, durationMs: number, status: 'success'|'failed'|'running'|'stopped'|'interrupted'|'unknown' }>}
+ * @returns {Array<{ flowId: string, flowSource: 'workspace'|'user', runId: string, at: number, durationMs: number, status: 'success'|'failed'|'running'|'stopped'|'interrupted'|'unknown' }>}
  */
 export function listRecentRunsFromDisk(workspaceRoot) {
   const out = [];
   const seenRuns = new Set();
-  for (const runBuildDir of getRunBuildRoots(workspaceRoot)) {
+  for (const { dir: runBuildDir, source: flowSource } of getRunBuildRoots(workspaceRoot)) {
     if (!fs.existsSync(runBuildDir) || !fs.statSync(runBuildDir).isDirectory()) continue;
     const flowNames = fs.readdirSync(runBuildDir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
@@ -149,7 +152,7 @@ export function listRecentRunsFromDisk(workspaceRoot) {
         }
         const durationMs = readKeyFromMemory(runDir, "totalExecutedMs") ?? 0;
         const status = inferRunStatusFromRunDir(runDir);
-        out.push({ flowId, runId: uuid, at, durationMs, status });
+        out.push({ flowId, flowSource, runId: uuid, at, durationMs, status });
         seenRuns.add(runKey);
       }
     }

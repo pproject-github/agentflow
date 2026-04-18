@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://agentflow-hub.com"><img src="https://img.shields.io/badge/Hub-Browse%20Flows-8252ec" alt="AgentFlow Hub" /></a>
 </p>
 
 <p align="center">
@@ -62,6 +63,22 @@ agentflow apply <FlowName>
 ```
 
 From source: `git clone` → `npm install` → `npm link`.
+
+## AgentFlow Hub
+
+Browse, download and share community-built workflows at **[agentflow-hub.com](https://agentflow-hub.com)**.
+
+```bash
+# Browse flows from the command line
+agentflow list-remote
+
+# Download a flow
+agentflow download <slug>
+
+# Publish your flow to the Hub
+agentflow login
+agentflow publish <FlowName> --tags "migration,review"
+```
 
 ## Creating Flows
 

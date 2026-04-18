@@ -22,10 +22,12 @@ import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from ".
 import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
 import { useRoute } from "../routeContext.jsx";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
+import { getHandleColor } from "../nodeSchema.js";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
 import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
+import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import { FileEditModal } from "../FileEditModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import RunNodeContextPanel from "../RunNodeContextPanel.jsx";
@@ -444,6 +446,45 @@ function FitViewHelper({ fitViewEpoch }) {
   return null;
 }
 
+/** 解析 runs/{uuid}/logs/log.txt 的一行 `[ISO] [tag] body` */
+function parseRunLogLine(line) {
+  const m = line.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+([\s\S]*)$/);
+  if (!m) return null;
+  const [, ts, tag, body] = m;
+  if (tag === "cli") {
+    try {
+      const evt = JSON.parse(body);
+      if (evt && evt.event === "node-start") {
+        return { ts, type: "node-start", text: `节点 ${evt.instanceId || ""}${evt.label ? ` · ${evt.label}` : ""} 开始` };
+      }
+      if (evt && evt.event === "node-done") {
+        return { ts, type: "node-done", text: `节点 ${evt.instanceId || ""} 完成${evt.elapsed ? ` (${evt.elapsed})` : ""}` };
+      }
+      if (evt && evt.event === "node-failed") {
+        return { ts, type: "node-failed", text: `节点 ${evt.instanceId || ""} 失败${evt.error ? `: ${evt.error}` : ""}` };
+      }
+      if (evt && evt.event === "apply-start") {
+        return { ts, type: "info", text: `[apply-start] uuid=${evt.uuid || ""}` };
+      }
+      return { ts, type: "info", text: body };
+    } catch {
+      return { ts, type: "info", text: body };
+    }
+  }
+  return { ts, type: "log", text: `[${tag}] ${body}` };
+}
+
+function parseRunLogText(text) {
+  if (!text) return [];
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const e = parseRunLogLine(line);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
 function FlowBoard({
   fitViewEpoch,
   canvasTool,
@@ -474,11 +515,64 @@ function FlowBoard({
 
   const noop = useCallback(() => {}, []);
 
+  const coloredEdges = useMemo(() => {
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    const hexToRgba = (hex, a) => {
+      const m = /^#([0-9a-f]{6})$/i.exec(hex);
+      if (!m) return hex;
+      const n = parseInt(m[1], 16);
+      return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+    };
+    const MISMATCH_COLOR = "#ff5169";
+    return edges.map((e) => {
+      const src = nodeById.get(e.source);
+      const tgt = nodeById.get(e.target);
+      const sm = /^output-(\d+)$/.exec(e.sourceHandle || "");
+      const tm = /^input-(\d+)$/.exec(e.targetHandle || "");
+      const srcSlot = src && sm ? src.data?.outputs?.[parseInt(sm[1], 10)] : null;
+      const tgtSlot = tgt && tm ? tgt.data?.inputs?.[parseInt(tm[1], 10)] : null;
+      const srcHue = srcSlot?.type ? getHandleColor(srcSlot.type) : null;
+      const tgtHue = tgtSlot?.type ? getHandleColor(tgtSlot.type) : null;
+      const mismatch = srcHue && tgtHue && srcHue !== tgtHue;
+
+      const prevStyle = e.style || {};
+      if (mismatch) {
+        const stroke = hexToRgba(MISMATCH_COLOR, e.selected ? 0.95 : 0.78);
+        return {
+          ...e,
+          className: ((e.className || "") + " af-flow-edge--type-mismatch").trim(),
+          style: {
+            ...prevStyle,
+            stroke,
+            strokeWidth: 2.5,
+            strokeDasharray: "6 4",
+          },
+          markerEnd:
+            e.markerEnd && typeof e.markerEnd === "object"
+              ? { ...e.markerEnd, color: stroke }
+              : { type: MarkerType.ArrowClosed, color: stroke },
+        };
+      }
+
+      const hue = srcHue || tgtHue;
+      if (!hue) return e;
+      const stroke = hexToRgba(hue, e.selected ? 0.7 : 0.38);
+      return {
+        ...e,
+        style: { ...prevStyle, stroke, strokeWidth: prevStyle.strokeWidth ?? 2 },
+        markerEnd:
+          e.markerEnd && typeof e.markerEnd === "object"
+            ? { ...e.markerEnd, color: stroke }
+            : { type: MarkerType.ArrowClosed, color: stroke },
+      };
+    });
+  }, [nodes, edges]);
+
   return (
     <ReactFlow
       className={flowClassName}
       nodes={nodes}
-      edges={edges}
+      edges={coloredEdges}
       onNodesChange={onNodesChange || noop}
       onEdgesChange={onEdgesChange || noop}
       onConnect={isRunMode ? undefined : onConnect}
@@ -498,6 +592,8 @@ function FlowBoard({
       panActivationKeyCode="Space"
       proOptions={{ hideAttribution: true }}
       fitView={false}
+      minZoom={0.1}
+      maxZoom={4}
       defaultEdgeOptions={{
         style: { stroke: "rgba(205, 189, 255, 0.45)", strokeWidth: 2 },
       }}
@@ -695,6 +791,7 @@ export default function FlowEditorPage() {
   // ── Run mode state ──
   const [runMode, setRunMode] = useState(/** @type {"edit" | "ready" | "running" | "stopped" | "done" | "error"} */ ("edit"));
   const [runLogs, setRunLogs] = useState(/** @type {Array<{ ts: string, type: string, text: string }>} */ ([]));
+  const runLogBytesRef = useRef(0);
   const [executingNodes, setExecutingNodes] = useState(/** @type {Set<string>} */ (new Set()));
   const [nodeRunStatus, setNodeRunStatus] = useState(/** @type {Record<string, { status: string, elapsed?: string }>} */ ({}));
   const [runStartTime, setRunStartTime] = useState(/** @type {number | null} */ (null));
@@ -754,6 +851,7 @@ export default function FlowEditorPage() {
   const [mentionHighlight, setMentionHighlight] = useState(0);
   const [canvasTool, setCanvasTool] = useState(/** @type {"select" | "pan"} */ ("pan"));
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [jumpPaletteOpen, setJumpPaletteOpen] = useState(false);
   const composerInputRef = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
   const nodePanelSuppressedRef = useRef(/** @type {string | null} */ (null));
   const soleSelectedNodeRef = useRef(/** @type {import("@xyflow/react").Node | null} */ (null));
@@ -1740,6 +1838,30 @@ export default function FlowEditorPage() {
     [setNodes, setEdges, openNodePanelFromCanvasClick],
   );
 
+  const jumpToNodeById = useCallback(
+    (/** @type {string} */ nodeId) => {
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
+      setEdges((es) => es.map((e) => ({ ...e, selected: false })));
+      const center = () => {
+        const rfi = reactFlowInstanceRef.current;
+        if (!rfi?.getNode) return;
+        const userNode = rfi.getNode(nodeId);
+        if (!userNode) return;
+        const internal = rfi.getInternalNode?.(nodeId);
+        const w = internal?.measured?.width ?? internal?.width ?? userNode.width ?? 200;
+        const h = internal?.measured?.height ?? internal?.height ?? userNode.height ?? 88;
+        const { zoom } = rfi.getViewport();
+        const targetZoom = Math.max(zoom, 1);
+        void rfi.setCenter(userNode.position.x + w / 2, userNode.position.y + h / 2, {
+          zoom: targetZoom,
+          duration: 260,
+        });
+      };
+      requestAnimationFrame(() => requestAnimationFrame(center));
+    },
+    [setNodes, setEdges],
+  );
+
   const addNodeFromPalette = useCallback(
     (def) => {
       if (!selected || !def) return;
@@ -1833,7 +1955,6 @@ export default function FlowEditorPage() {
         const data = await r.json();
 if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFailed"));
         lastPersistedYamlRef.current = yaml;
-        setFlowDescription(data.description || "");
         setSaveStatus(t("flow:status.saved"));
         if (selected.source === "builtin" && writeSource === "workspace") {
           const next = { id: selected.id, source: "workspace", path: undefined };
@@ -2147,6 +2268,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         return;
       }
 
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        e.stopPropagation();
+        setJumpPaletteOpen((o) => !o);
+        return;
+      }
+
+      if (jumpPaletteOpen) {
+        return;
+      }
+
       if (shortcutsOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -2203,6 +2335,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   }, [
     handleSave,
     shortcutsOpen,
+    jumpPaletteOpen,
     rightPanel,
     soleSelectedNode,
     nodePropDraft,
@@ -2491,6 +2624,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   }, [selected]);
 
   const handleStop = useCallback(async () => {
+    const ok = window.confirm(t("flow:run.pauseConfirm"));
+    if (!ok) return;
     if (runAbortRef.current) {
       runAbortRef.current.abort();
       runAbortRef.current = null;
@@ -2506,7 +2641,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     }
     setRunMode("stopped");
     setExecutingNodes(new Set());
-  }, [selected]);
+  }, [selected, t]);
 
   const handleBackToEdit = useCallback(() => {
     setRunMode("edit");
@@ -2586,7 +2721,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         setRunMode("running");
         setRunConsoleOpen(true);
         setRunStartTime(activeRun.at || Date.now());
-        setRunLogs([{ ts: new Date().toISOString(), type: "info", text: `[resume] 检测到活跃 run ${rid}，已恢复运行视图` }]);
+        runLogBytesRef.current = 0;
+        const seedLogs = [{ ts: new Date().toISOString(), type: "info", text: `[resume] 检测到活跃 run ${rid}，已恢复运行视图` }];
         // 拉取节点状态
         if (rid) {
           const q = new URLSearchParams({ flowId: selected.id, runId: rid });
@@ -2604,11 +2740,94 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           }
           setNodeRunStatus(next);
           setExecutingNodes(exec);
+
+          // 拉取历史日志
+          try {
+            const lq = new URLSearchParams({ flowId: selected.id, runId: rid, sinceBytes: "0" });
+            const lr = await fetch(`/api/run-log?${lq}`);
+            if (lr.ok) {
+              const lj = await lr.json();
+              if (!cancelled) {
+                runLogBytesRef.current = Number(lj.bytes || 0);
+                const entries = parseRunLogText(typeof lj.text === "string" ? lj.text : "");
+                setRunLogs([...entries, ...seedLogs]);
+                return;
+              }
+            }
+          } catch { /* ignore */ }
         }
+        setRunLogs(seedLogs);
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
   }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── run 模式下轮询节点状态（刷新后继续看到推进、完成自动翻转） ──
+  useEffect(() => {
+    if (runMode === "edit") return;
+    if (!selected?.id || !currentRunUuid) return;
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const q = new URLSearchParams({ flowId: selected.id, runId: currentRunUuid });
+        const sr = await fetch(`/api/run-node-statuses?${q}`);
+        if (!sr.ok) return;
+        const sj = await sr.json();
+        if (cancelled) return;
+        const raw = sj.statuses && typeof sj.statuses === "object" ? sj.statuses : {};
+        const next = {};
+        const exec = new Set();
+        let anyRunning = false;
+        for (const [id, v] of Object.entries(raw)) {
+          if (v && typeof v === "object" && typeof v.status === "string") {
+            next[id] = { status: v.status, ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}) };
+            if (v.status === "running") { exec.add(id); anyRunning = true; }
+          }
+        }
+        setNodeRunStatus(next);
+        setExecutingNodes(exec);
+
+        // 增量拉取日志
+        try {
+          const lq = new URLSearchParams({ flowId: selected.id, runId: currentRunUuid, sinceBytes: String(runLogBytesRef.current || 0) });
+          const lr = await fetch(`/api/run-log?${lq}`);
+          if (lr.ok) {
+            const lj = await lr.json();
+            if (cancelled) return;
+            const newBytes = Number(lj.bytes || 0);
+            const delta = typeof lj.text === "string" ? lj.text : "";
+            if (delta) {
+              const entries = parseRunLogText(delta);
+              if (entries.length > 0) setRunLogs((prev) => [...prev, ...entries]);
+            }
+            runLogBytesRef.current = newBytes;
+          }
+        } catch { /* ignore */ }
+
+        // 若 disk 已无 running 节点，再确认整体 run 状态以退出 run 模式
+        if (!anyRunning) {
+          try {
+            const rr = await fetch("/api/pipeline-recent-runs");
+            if (!rr.ok) return;
+            const rj = await rr.json();
+            if (cancelled) return;
+            const runs = Array.isArray(rj.runs) ? rj.runs : [];
+            const me = runs.find((x) => x.flowId === selected.id && x.runId === currentRunUuid);
+            if (me && me.status && me.status !== "running") {
+              const st = me.status;
+              if (st === "success") setRunMode("done");
+              else if (st === "failed") setRunMode("error");
+              else if (st === "stopped" || st === "interrupted") setRunMode("stopped");
+            }
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    };
+    tick();
+    timer = window.setInterval(tick, 2500);
+    return () => { cancelled = true; if (timer) window.clearInterval(timer); };
+  }, [runMode, selected?.id, currentRunUuid]);
 
   useEffect(() => {
     if (rightPanel !== "history" || !selected) return;
@@ -3188,8 +3407,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 className="af-icon-btn af-pipeline-back"
                 onClick={() => {
                   if (runMode !== "edit") {
-                    if (runMode === "running") void handleStop();
-                    else handleBackToEdit();
+                    handleBackToEdit();
                   } else {
                     navigate("/projects");
                   }
@@ -3262,7 +3480,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             )}
             {runMode === "stopped" && (
               <div className="af-run-timer af-run-timer--stopped">
-                <span className="af-run-timer__label">STOPPED</span>
+                <span className="af-run-timer__label">PAUSED</span>
                 <span className="af-run-timer__value">{formatToolbarRunTimer(runElapsedMs, "stopped")}</span>
               </div>
             )}
@@ -3357,9 +3575,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               </>
             )}
             {runMode === "running" ? (
-              <button type="button" className="af-btn-run-stop" onClick={handleStop}>
-                <span className="material-symbols-outlined">stop</span>
-                Stop
+              <button type="button" className="af-btn-run-stop" onClick={handleStop} title={t("flow:run.pauseRun")}>
+                <span className="material-symbols-outlined">pause</span>
+                Pause
               </button>
             ) : runMode === "ready" ? (
               <>
@@ -3795,10 +4013,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             ) : null}
             <div className="af-react-flow-wrap af-pipeline-flow">
               {selected ? (
-                <FlowBoard
-                  fitViewEpoch={fitViewEpoch}
-                  canvasTool={canvasTool}
-                  nodes={runMode !== "edit" ? nodes.map((n) => ({
+                (() => {
+                  const shouldFocus = runMode !== "edit" && executingNodes.size > 0;
+                  const focusIds = shouldFocus ? (() => {
+                    const s = new Set(executingNodes);
+                    for (const e of edges) {
+                      if (executingNodes.has(e.source)) s.add(e.target);
+                      if (executingNodes.has(e.target)) s.add(e.source);
+                    }
+                    return s;
+                  })() : null;
+                  const runNodes = runMode !== "edit" ? nodes.map((n) => ({
                     ...n,
                     draggable: false,
                     connectable: false,
@@ -3808,9 +4033,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                       isExecuting: executingNodes.has(n.id),
                       nodeStatus: nodeRunStatus[n.id]?.status ?? null,
                       nodeElapsed: nodeRunStatus[n.id]?.elapsed ?? null,
+                      isDim: focusIds ? !focusIds.has(n.id) : false,
                     },
-                  })) : nodes}
-                  edges={edges}
+                  })) : nodes;
+                  const runEdges = shouldFocus ? edges.map((e) => {
+                    const touchesExec = executingNodes.has(e.source) || executingNodes.has(e.target);
+                    const base = e.className ? e.className.replace(/\s?af-flow-edge--(dim|focus)\b/g, "") : "";
+                    const cls = touchesExec ? "af-flow-edge--focus" : "af-flow-edge--dim";
+                    return { ...e, className: (base ? base + " " : "") + cls };
+                  }) : edges;
+                  return (
+                <FlowBoard
+                  fitViewEpoch={fitViewEpoch}
+                  canvasTool={canvasTool}
+                  nodes={runNodes}
+                  edges={runEdges}
                   onNodesChange={runMode !== "edit" ? undefined : onNodesChange}
                   onEdgesChange={runMode !== "edit" ? undefined : onEdgesChange}
                   onConnect={runMode !== "edit" ? undefined : onConnect}
@@ -4206,6 +4443,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     ) : null
                   }
                 />
+                  );
+                })()
               ) : (
                 <div className="af-placeholder af-pipeline-placeholder">{t("flow:pipeline.selectPipeline")}</div>
               )}
@@ -4556,7 +4795,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                             className="af-pipeline-drawer-textarea"
                             value={flowDescription}
                             onChange={(e) => setFlowDescription(e.target.value)}
-                            placeholder="flow.yaml ui.description"
+                            placeholder={t("flow:pipeline.introductionPlaceholder")}
                             rows={5}
                             spellCheck={false}
                           />
@@ -4713,6 +4952,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         </div>
 
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <NodeJumpPalette
+          open={jumpPaletteOpen}
+          onClose={() => setJumpPaletteOpen(false)}
+          onJump={jumpToNodeById}
+          nodes={nodes}
+        />
         <LogViewer
           open={logViewerOpen}
           onClose={() => setLogViewerOpen(false)}

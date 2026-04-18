@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://agentflow-hub.com"><img src="https://img.shields.io/badge/Hub-浏览工作流-8252ec" alt="AgentFlow Hub" /></a>
 </p>
 
 <p align="center">
@@ -62,6 +63,22 @@ agentflow apply <FlowName>
 ```
 
 从源码开发：`git clone` → `npm install` → `npm link`
+
+## AgentFlow Hub
+
+在 **[agentflow-hub.com](https://agentflow-hub.com)** 浏览、下载和分享社区工作流。
+
+```bash
+# 浏览社区工作流
+agentflow list-remote
+
+# 下载工作流
+agentflow download <slug>
+
+# 发布你的工作流
+agentflow login
+agentflow publish <FlowName> --tags "migration,review"
+```
 
 ## 创建流程
 

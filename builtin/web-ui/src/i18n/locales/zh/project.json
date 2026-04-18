@@ -28,6 +28,13 @@
     "user": "用户"
   },
   "defaultCardDesc": "打开以在节点画布中编辑此流水线。",
+  "hubCard": {
+    "eyebrow": "AgentFlow Hub",
+    "title": "浏览社区流程",
+    "desc": "发现并一键安装社区分享的现成流水线。",
+    "cta": "前往 Hub",
+    "cliHint": "或通过 CLI 安装：agentflow download <slug>"
+  },
   "newPipelineModal": {
     "title": "新建空流水线",
     "lead": "请先填写流水线名称（英文标识）；介绍可选，将保存在 flow 的 ui.description。",

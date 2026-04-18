@@ -5,7 +5,8 @@
   "done": "Done",
   "startCreate": "Start Creating",
   "projects": {
-    "intro": "Welcome to AgentFlow! This is a visual workflow orchestration tool.\n\nClick the button below to create your first pipeline."
+    "intro": "Welcome to AgentFlow! This is a visual workflow orchestration tool.\n\nClick the button below to create your first pipeline.",
+    "hubIntro": "Don't want to start from scratch?\n\nBrowse ready-made pipelines on AgentFlow Hub — community-shared flows you can install and run in one click."
   },
   "flow": {
     "intro": "Now you're in the flow editor.\n\nDescribe your requirements in natural language in the input box below, and AI will generate the flow graph.\n\nThe left node panel allows you to freely drag, delete, and adjust connections.",

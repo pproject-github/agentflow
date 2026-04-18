@@ -344,26 +344,47 @@ export function runOpenCodeAgentForNode(
     const flowName = options.flowName ?? null;
     const uuid = options.uuid ?? null;
 
-    function writeStdout(text) {
-      if (!text) return;
-      if (coloredPrefix) writeWithPrefix(process.stdout, text, coloredPrefix, agentContentColor);
-      else process.stdout.write(agentContentColor(text));
-      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stdout", text);
+    let stdoutLogBuf = "";
+    let stderrLogBuf = "";
+
+    function drainLogBuf(buf, tag) {
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        const line = stripAnsi(raw).trimEnd();
+        if (line.trim() && flowName && uuid) {
+          appendRunLogLine(workspaceRoot, flowName, uuid, tag, line);
+        }
+      }
+      return buf;
+    }
+
+    function flushLogBuf(buf, tag) {
+      if (!buf) return;
+      const line = stripAnsi(buf).trimEnd();
+      if (line.trim() && flowName && uuid) {
+        appendRunLogLine(workspaceRoot, flowName, uuid, tag, line);
+      }
     }
 
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => {
-      writeStdout(chunk);
+      if (coloredPrefix) writeWithPrefix(process.stdout, chunk, coloredPrefix, agentContentColor);
+      else process.stdout.write(agentContentColor(chunk));
+      stdoutLogBuf += String(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      stdoutLogBuf = drainLogBuf(stdoutLogBuf, "opencode-stdout");
     });
 
     child.stderr.on("data", (chunk) => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-      if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "opencode-stderr", s);
       if (coloredPrefix) {
         writeWithPrefix(process.stderr, s, coloredPrefix, agentContentColor);
       } else {
         process.stderr.write(chunk);
       }
+      stderrLogBuf += s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      stderrLogBuf = drainLogBuf(stderrLogBuf, "opencode-stderr");
     });
 
     child.on("error", (err) => {
@@ -377,6 +398,8 @@ export function runOpenCodeAgentForNode(
       child.stdout.removeAllListeners();
       child.stderr.removeAllListeners();
       child.removeAllListeners();
+      flushLogBuf(stdoutLogBuf, "opencode-stdout");
+      flushLogBuf(stderrLogBuf, "opencode-stderr");
       if (code !== 0) {
         reject(new Error(`OpenCode CLI exited ${code}.`));
         return;

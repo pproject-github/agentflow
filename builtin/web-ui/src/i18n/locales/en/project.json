@@ -28,6 +28,13 @@
     "user": "User"
   },
   "defaultCardDesc": "Open to edit this pipeline in the node canvas.",
+  "hubCard": {
+    "eyebrow": "AgentFlow Hub",
+    "title": "Browse community flows",
+    "desc": "Discover and install ready-made pipelines shared by the community.",
+    "cta": "Explore Hub",
+    "cliHint": "Or install via CLI: agentflow download <slug>"
+  },
   "newPipelineModal": {
     "title": "Create New Pipeline",
     "lead": "Enter a pipeline name (English identifier); description is optional and will be saved in flow's ui.description.",
