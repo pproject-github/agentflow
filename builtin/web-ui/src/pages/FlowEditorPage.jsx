@@ -25,6 +25,7 @@ import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { getHandleColor } from "../nodeSchema.js";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
+import { ConfirmModal } from "../ConfirmModal.jsx";
 import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
@@ -449,6 +450,29 @@ function FitViewHelper({ fitViewEpoch }) {
   return null;
 }
 
+// 长时间运行的 flow 会累积数万条 cli-raw / agent-stdout 日志。
+// 不限制数量会让 DOM 节点膨胀 + 每次 append 触发全量重渲 + smoothScroll 动画 → 页面肉眼可见卡顿。
+const MAX_RUN_LOGS = 1500;
+const RUN_LOGS_TRIM_BUFFER = 500;
+// 轮询日志时单次增量字节上限：防止 log 突增导致一次性解析/渲染几十 MB。
+const RUN_LOG_POLL_TAIL_BYTES = 262144;
+// 单行日志渲染上限：agent stdout / JSON blob 可能数十 KB，整行塞进 DOM
+// 会把 RunConsole 卡成 PPT。截断不影响历史文件，仅压缩 UI 呈现。
+// 重要：V8 的 String.prototype.slice 会产生 SlicedString，共享父串底层 buffer；
+// 直接返回 slice + 拼接不会释放原始 20KB/200KB 父串（初次 tail 256KB 里 500+ 条，
+// 每条各自 slice，这一整块内存被拽着不放）。
+// 用短占位字符串（全字面量）替代，保证父串可以被 GC。
+const MAX_LOG_LINE_CHARS = 2000;
+function capLogText(text) {
+  if (typeof text !== "string") return "";
+  if (text.length <= MAX_LOG_LINE_CHARS) return text;
+  return `[log line truncated, ${text.length} chars]`;
+}
+
+// 解析单次 log 文本时最多产出的条目数。tail=256KB 若是细碎行可能几千条，
+// 全塞到 setRunLogs 会让 React 做一轮无谓的大 diff（后面马上又被 trim 掉）。
+const MAX_LOG_ENTRIES_PER_PARSE = MAX_RUN_LOGS;
+
 /** 解析 runs/{uuid}/logs/log.txt 的一行 `[ISO] [tag] body` */
 function parseRunLogLine(line) {
   const m = line.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+([\s\S]*)$/);
@@ -469,23 +493,52 @@ function parseRunLogLine(line) {
       if (evt && evt.event === "apply-start") {
         return { ts, type: "info", text: `[apply-start] uuid=${evt.uuid || ""}` };
       }
-      return { ts, type: "info", text: body };
+      return { ts, type: "info", text: capLogText(body) };
     } catch {
-      return { ts, type: "info", text: body };
+      return { ts, type: "info", text: capLogText(body) };
     }
   }
-  return { ts, type: "log", text: `[${tag}] ${body}` };
+  return { ts, type: "log", text: capLogText(`[${tag}] ${body}`) };
 }
 
 function parseRunLogText(text) {
   if (!text) return [];
   const out = [];
-  for (const line of text.split("\n")) {
+  // 从后往前取：只需要最新的 MAX_LOG_ENTRIES_PER_PARSE 条就够渲染。
+  // 前端有 MAX_RUN_LOGS 的硬上限，再往前的历史行解析完也会被立即 trim。
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0 && out.length < MAX_LOG_ENTRIES_PER_PARSE; i--) {
+    const line = lines[i];
     if (!line) continue;
     const e = parseRunLogLine(line);
     if (e) out.push(e);
   }
+  out.reverse();
   return out;
+}
+
+function shallowEqualStatusMap(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    const va = a[k];
+    const vb = b[k];
+    if (!vb) return false;
+    if (va === vb) continue;
+    if (va.status !== vb.status) return false;
+    if ((va.elapsed ?? null) !== (vb.elapsed ?? null)) return false;
+  }
+  return true;
+}
+
+function setsEqual(a, b) {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
 }
 
 function FlowBoard({
@@ -721,6 +774,16 @@ function flowSourceLabelZh(source, t) {
 const RUN_CONSOLE_HEIGHT_STORAGE_KEY = "af:run-console-height";
 /** 约 14rem + 顶部分隔条高度，与原先仅 head+body 时的可视区域接近 */
 const RUN_CONSOLE_HEIGHT_DEFAULT_PX = 230;
+const DEFAULT_SCHEDULE = {
+  enabled: false,
+  cron: "",
+  timezone: "Asia/Shanghai",
+  preset: "",
+  overlapPolicy: "skip",
+  misfirePolicy: "skip",
+  nextRunAt: null,
+};
+const DEFAULT_SCHEDULE_STATE = {};
 
 function clampRunConsoleHeightPx(h) {
   if (!Number.isFinite(h)) return RUN_CONSOLE_HEIGHT_DEFAULT_PX;
@@ -840,8 +903,19 @@ export default function FlowEditorPage() {
   const [runParamsDraft, setRunParamsDraft] = useState(/** @type {Record<string, string>} */ ({}));
   const [runPresets, setRunPresets] = useState(/** @type {Record<string, Record<string, string>>} */ ({}));
   const [activePresetName, setActivePresetName] = useState(/** @type {string | null} */ (null));
+  const [scheduleDraft, setScheduleDraft] = useState(DEFAULT_SCHEDULE);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
+  const [scheduleStatus, setScheduleStatus] = useState("");
+  const [scheduleState, setScheduleState] = useState(DEFAULT_SCHEDULE_STATE);
+  const [scheduleRuntimeStatus, setScheduleRuntimeStatus] = useState(null);
   const runAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const runLogEndRef = useRef(/** @type {HTMLDivElement | null} */ (null));
+  // 终端式粘底：用户在底部时自动跟随；用户手动上滑后暂停；重新回到底部自动恢复。
+  const runLogStickRef = useRef(true);
+  // 忽略 scrollIntoView 自身触发的 scroll 事件，避免把粘底误判成「用户上滑」。
+  const runLogProgrammaticScrollRef = useRef(false);
   const [userCheckContent, setUserCheckContent] = useState(
     /** @type {null | { instanceId: string, execId: number, inputPath: string, outputPath: string, content: string }} */ (null),
   );
@@ -1258,10 +1332,53 @@ export default function FlowEditorPage() {
     return mapping;
   }, [nodes, edges, provideNodes]);
 
+  // run 模式下的 nodes/edges 派生视图：用 useMemo 避免每次父组件重渲（如计时器 setState）都重建整份数组。
+  const runFocusIds = useMemo(() => {
+    if (runMode === "edit" || executingNodes.size === 0) return null;
+    const s = new Set(executingNodes);
+    for (const e of edges) {
+      if (executingNodes.has(e.source)) s.add(e.target);
+      if (executingNodes.has(e.target)) s.add(e.source);
+    }
+    return s;
+  }, [runMode, executingNodes, edges]);
+
+  const runNodes = useMemo(() => {
+    if (runMode === "edit") return nodes;
+    return nodes.map((n) => ({
+      ...n,
+      draggable: false,
+      connectable: false,
+      data: {
+        ...n.data,
+        isRunMode: true,
+        isExecuting: executingNodes.has(n.id),
+        nodeStatus: nodeRunStatus[n.id]?.status ?? null,
+        nodeElapsed: nodeRunStatus[n.id]?.elapsed ?? null,
+        isDim: runFocusIds ? !runFocusIds.has(n.id) : false,
+      },
+    }));
+  }, [runMode, nodes, executingNodes, nodeRunStatus, runFocusIds]);
+
+  const runEdges = useMemo(() => {
+    if (!runFocusIds) return edges;
+    return edges.map((e) => {
+      const touchesExec = executingNodes.has(e.source) || executingNodes.has(e.target);
+      const base = e.className ? e.className.replace(/\s?af-flow-edge--(dim|focus)\b/g, "") : "";
+      const cls = touchesExec ? "af-flow-edge--focus" : "af-flow-edge--dim";
+      return { ...e, className: (base ? base + " " : "") + cls };
+    });
+  }, [edges, executingNodes, runFocusIds]);
+
   useEffect(() => {
     if (!selected) {
       setRunPresets({});
       setActivePresetName(null);
+      setScheduleDraft(DEFAULT_SCHEDULE);
+      setScheduleState(DEFAULT_SCHEDULE_STATE);
+      setScheduleRuntimeStatus(null);
+      setScheduleError("");
+      setScheduleStatus("");
       return;
     }
     const params = new URLSearchParams({
@@ -1280,6 +1397,49 @@ export default function FlowEditorPage() {
         setActivePresetName(null);
       });
   }, [selected?.id, selected?.source, selected?.archived]);
+
+  const loadSchedule = useCallback(async (flow, opts = {}) => {
+    if (!flow) return;
+    const quiet = Boolean(opts.quiet);
+    if (!quiet) {
+      setScheduleLoading(true);
+      setScheduleError("");
+      setScheduleStatus("");
+    }
+    const params = new URLSearchParams({
+      flowId: flow.id,
+      flowSource: flow.source || "user",
+    });
+    if (flow.archived) params.set("archived", "1");
+    try {
+      const r = await fetch(`/api/flow/schedule?${params.toString()}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      setScheduleDraft({ ...DEFAULT_SCHEDULE, ...(data.schedule || {}) });
+      setScheduleState(data.state && typeof data.state === "object" ? data.state : DEFAULT_SCHEDULE_STATE);
+      setScheduleRuntimeStatus(data.status || null);
+    } catch (e) {
+      setScheduleDraft(DEFAULT_SCHEDULE);
+      setScheduleState(DEFAULT_SCHEDULE_STATE);
+      setScheduleRuntimeStatus(null);
+      setScheduleError(String(e.message || e));
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    const run = async () => {
+      await loadSchedule(selected);
+      if (cancelled) return;
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, selected?.source, selected?.archived, loadSchedule]);
 
   // 将活跃预设值同步到 cliInputs，确保主 RUN 按钮使用正确的预设
   useEffect(() => {
@@ -2052,6 +2212,34 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     [selected, loadFlow],
   );
 
+  const handleSaveSchedule = useCallback(async () => {
+    if (!selected) return;
+    setScheduleSaving(true);
+    setScheduleError("");
+    setScheduleStatus("");
+    try {
+      const r = await fetch("/api/flow/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: selected.id,
+          flowSource: selected.source || "user",
+          archived: Boolean(selected.archived),
+          schedule: scheduleDraft,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.success) throw new Error(data.error || "Failed to save schedule");
+      setScheduleDraft({ ...DEFAULT_SCHEDULE, ...(data.schedule || {}) });
+      setScheduleStatus(t("flow:schedule.saved"));
+      await loadSchedule(selected, { quiet: true });
+    } catch (e) {
+      setScheduleError(String(e.message || e));
+    } finally {
+      setScheduleSaving(false);
+    }
+  }, [selected, scheduleDraft, loadSchedule, t]);
+
   const handleRenameFlow = useCallback(async () => {
     if (!selected || !renameFlowId.trim()) return;
     const newId = renameFlowId.trim();
@@ -2364,15 +2552,66 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   ]);
 
   // ── Run timer tick ──
+  // 顶栏只显示秒，5Hz 更新毫无意义却让整个 FlowEditorPage 重渲。500ms 间隔 + 仅当整秒变化时才 setState。
   useEffect(() => {
     if (runMode !== "running" || runStartTime == null) return;
-    const id = setInterval(() => setRunElapsedMs(Date.now() - runStartTime), 200);
+    let lastSec = Math.floor((Date.now() - runStartTime) / 1000);
+    const id = setInterval(() => {
+      const ms = Date.now() - runStartTime;
+      const sec = Math.floor(ms / 1000);
+      if (sec !== lastSec) {
+        lastSec = sec;
+        setRunElapsedMs(ms);
+      }
+    }, 500);
     return () => clearInterval(id);
   }, [runMode, runStartTime]);
 
-  // ── Auto-scroll run log ──
+  // ── Auto-scroll run log（终端式粘底） ──
+  // 默认粘底；用户主动上滑则暂停跟随，重新接近底部时自动恢复。ring buffer 由 MAX_RUN_LOGS 裁剪保证。
   useEffect(() => {
-    if (runLogEndRef.current) runLogEndRef.current.scrollIntoView({ behavior: "smooth" });
+    const end = runLogEndRef.current;
+    if (!end) return;
+    const scroller = end.parentElement;
+    if (!scroller) return;
+    if (!runLogStickRef.current) return;
+    runLogProgrammaticScrollRef.current = true;
+    end.scrollIntoView({ behavior: "auto", block: "end" });
+    // 下一帧解除忽略：scrollIntoView 产生的 scroll 事件会在本轮事件循环里派发。
+    requestAnimationFrame(() => { runLogProgrammaticScrollRef.current = false; });
+  }, [runLogs]);
+
+  // 订阅 console 滚动事件，实时更新 stick 状态。
+  useEffect(() => {
+    const end = runLogEndRef.current;
+    if (!end) return;
+    const scroller = end.parentElement;
+    if (!scroller) return;
+    const onScroll = () => {
+      if (runLogProgrammaticScrollRef.current) return;
+      const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      runLogStickRef.current = distance < 40;
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [runConsoleOpen, runMode]);
+
+  // 进入 run 模式 / console 重新打开时，强制回到底部并恢复粘底。
+  useEffect(() => {
+    if (runMode === "edit" || !runConsoleOpen) return;
+    runLogStickRef.current = true;
+    const end = runLogEndRef.current;
+    if (!end) return;
+    runLogProgrammaticScrollRef.current = true;
+    end.scrollIntoView({ behavior: "auto", block: "end" });
+    requestAnimationFrame(() => { runLogProgrammaticScrollRef.current = false; });
+  }, [runMode, runConsoleOpen]);
+
+  // ── Run log 数量上限：超阈值时裁剪到 MAX，避免 DOM 爆炸与全量重渲 ──
+  useEffect(() => {
+    if (runLogs.length > MAX_RUN_LOGS + RUN_LOGS_TRIM_BUFFER) {
+      setRunLogs((prev) => (prev.length > MAX_RUN_LOGS + RUN_LOGS_TRIM_BUFFER ? prev.slice(-MAX_RUN_LOGS) : prev));
+    }
   }, [runLogs]);
 
   const onRunConsoleResizePointerDown = useCallback((e) => {
@@ -2465,15 +2704,18 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     setRightPanel(null);
     if (!runUuid) setCurrentRunUuid(null);
     if (prepareOnly) return;
-    const start = Date.now();
-    setRunStartTime(start);
-    setRunElapsedMs(0);
+    // resume (runUuid != null)：保留当前 runElapsedMs（上屏显示累计值），等 apply-start 事件把 startTime 精确对齐到 CLI 记录的 totalExecutedMs。
+    // 新 run：常规从 0 起。
+    if (!runUuid) {
+      const start = Date.now();
+      setRunStartTime(start);
+      setRunElapsedMs(0);
+    }
 
     const abort = new AbortController();
     runAbortRef.current = abort;
 
     try {
-      console.log("[handleRun] POST /api/flow/run cliInputs =", inputsToUse);
       const resp = await fetch("/api/flow/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2549,6 +2791,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             ]);
           } else if (msg.event === "apply-start") {
             if (msg.uuid) setCurrentRunUuid(String(msg.uuid));
+            // 优先用 CLI 携带的原始 runStartTime：resume 场景显示「这个 uuid 从首次启动到现在的墙钟总时长」，
+            // 而不是只算 totalExecutedMs + 本次 resume 进入后的时长。
+            if (typeof msg.runStartTime === "number" && msg.runStartTime > 0) {
+              setRunStartTime(msg.runStartTime);
+              setRunElapsedMs(Math.max(0, Date.now() - msg.runStartTime));
+            } else if (typeof msg.totalExecutedMs === "number" && msg.totalExecutedMs > 0) {
+              // 旧版 CLI 兜底：把 startTime 往回偏移 totalExecutedMs
+              const offsetStart = Date.now() - msg.totalExecutedMs;
+              setRunStartTime(offsetStart);
+              setRunElapsedMs(msg.totalExecutedMs);
+            }
             setRunLogs((prev) => [...prev, { ts: now, type: "info", text: t("flow:run.pipelineStart", { uuid: msg.uuid || "?" }) }]);
           } else if (msg.event === "apply-done") {
             setRunLogs((prev) => [...prev, { ts: now, type: "info", text: msg.totalElapsed ? t("flow:run.pipelineDoneWithElapsed", { elapsed: msg.totalElapsed }) : t("flow:run.pipelineDone") }]);
@@ -2643,9 +2896,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     }
   }, [selected]);
 
-  const handleStop = useCallback(async () => {
-    const ok = window.confirm(t("flow:run.pauseConfirm"));
-    if (!ok) return;
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const handleStop = useCallback(() => {
+    setStopConfirmOpen(true);
+  }, []);
+  const confirmStop = useCallback(async () => {
+    setStopConfirmOpen(false);
     if (runAbortRef.current) {
       runAbortRef.current.abort();
       runAbortRef.current = null;
@@ -2661,7 +2917,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     }
     setRunMode("stopped");
     setExecutingNodes(new Set());
-  }, [selected, t]);
+  }, [selected]);
 
   const handleBackToEdit = useCallback(() => {
     setRunMode("edit");
@@ -2671,26 +2927,59 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     setCurrentRunUuid(null);
   }, []);
 
+  // running 态下点击返回需先询问：停止并进入编辑 / 后台运行并退出 / 取消
+  const [backPromptOpen, setBackPromptOpen] = useState(false);
+  const stopAndEdit = useCallback(async () => {
+    setBackPromptOpen(false);
+    if (runAbortRef.current) {
+      runAbortRef.current.abort();
+      runAbortRef.current = null;
+    }
+    if (selected) {
+      try {
+        await fetch("/api/flow/run/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId: selected.id }),
+        });
+      } catch (_) {}
+    }
+    handleBackToEdit();
+  }, [selected, handleBackToEdit]);
+  const backgroundAndExit = useCallback(() => {
+    setBackPromptOpen(false);
+    navigate("/projects");
+  }, [navigate]);
+
   /** 从执行历史进入该次 run 的画布态（列表状态可能与实际目录不一致，如仍显示进行中但实际可恢复） */
   const openRunFromHistory = useCallback(
     (
-      /** @type {{ flowId: string, runId?: string, at: number, durationMs?: number, status?: string }} */ run,
+      /** @type {{ flowId: string, runId?: string, at: number, durationMs?: number, endedAt?: number|null, status?: string }} */ run,
     ) => {
       const rid = run.runId != null && String(run.runId).trim() ? String(run.runId).trim() : null;
       const fid =
         run.flowId != null && String(run.flowId).trim() ? String(run.flowId).trim() : selected?.id != null ? String(selected.id) : null;
       setCurrentRunUuid(rid);
       const st = run.status || "unknown";
-      /** @type {"stopped" | "done" | "error"} */
+      /** @type {"running" | "stopped" | "done" | "error"} */
       let mode = "stopped";
       if (st === "success") mode = "done";
       else if (st === "failed") mode = "error";
-      else if (st === "stopped" || st === "interrupted") mode = "stopped";
-      else if (st === "running") mode = "stopped";
+      else if (st === "running") mode = "running";
       else mode = "stopped";
       setRunMode(mode);
-      setRunElapsedMs(Math.max(0, run.durationMs ?? 0));
-      setRunStartTime(null);
+      /** 墙钟时长：running 用 Date.now()-at 由 timer 自动推进；其余用 endedAt-at（若无则回退 durationMs）。 */
+      const startAt = typeof run.at === "number" ? run.at : null;
+      if (mode === "running" && startAt != null) {
+        setRunStartTime(startAt);
+        setRunElapsedMs(Math.max(0, Date.now() - startAt));
+      } else if (startAt != null && typeof run.endedAt === "number" && run.endedAt > startAt) {
+        setRunStartTime(null);
+        setRunElapsedMs(run.endedAt - startAt);
+      } else {
+        setRunStartTime(null);
+        setRunElapsedMs(Math.max(0, run.durationMs ?? 0));
+      }
       setRunLogs([]);
       setExecutingNodes(new Set());
       setNodeRunStatus({});
@@ -2761,9 +3050,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           setNodeRunStatus(next);
           setExecutingNodes(exec);
 
-          // 拉取历史日志
+          // 拉取历史日志：初次加载用 tailBytes 仅取末尾段，避免长跑 run 拉取整份 run.log 卡住浏览器。
           try {
-            const lq = new URLSearchParams({ flowId: selected.id, runId: rid, sinceBytes: "0" });
+            const lq = new URLSearchParams({ flowId: selected.id, runId: rid, sinceBytes: "0", tailBytes: "262144" });
             const lr = await fetch(`/api/run-log?${lq}`);
             if (lr.ok) {
               const lj = await lr.json();
@@ -2798,19 +3087,24 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         const raw = sj.statuses && typeof sj.statuses === "object" ? sj.statuses : {};
         const next = {};
         const exec = new Set();
-        let anyRunning = false;
         for (const [id, v] of Object.entries(raw)) {
           if (v && typeof v === "object" && typeof v.status === "string") {
             next[id] = { status: v.status, ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}) };
-            if (v.status === "running") { exec.add(id); anyRunning = true; }
+            if (v.status === "running") exec.add(id);
           }
         }
-        setNodeRunStatus(next);
-        setExecutingNodes(exec);
+        // 跳过无变化的 setState，避免每 2.5s 触发 runNodes/runEdges 全量 memo 重算 + 21 个 ReactFlow 节点重渲。
+        setNodeRunStatus((prev) => (shallowEqualStatusMap(prev, next) ? prev : next));
+        setExecutingNodes((prev) => (setsEqual(prev, exec) ? prev : exec));
 
-        // 增量拉取日志
+        // 增量拉取日志：带 tailBytes 上限，防止 log 突增导致单次几十 MB delta。
         try {
-          const lq = new URLSearchParams({ flowId: selected.id, runId: currentRunUuid, sinceBytes: String(runLogBytesRef.current || 0) });
+          const lq = new URLSearchParams({
+            flowId: selected.id,
+            runId: currentRunUuid,
+            sinceBytes: String(runLogBytesRef.current || 0),
+            tailBytes: String(RUN_LOG_POLL_TAIL_BYTES),
+          });
           const lr = await fetch(`/api/run-log?${lq}`);
           if (lr.ok) {
             const lj = await lr.json();
@@ -2825,23 +3119,24 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           }
         } catch { /* ignore */ }
 
-        // 若 disk 已无 running 节点，再确认整体 run 状态以退出 run 模式
-        if (!anyRunning) {
-          try {
-            const rr = await fetch("/api/pipeline-recent-runs");
-            if (!rr.ok) return;
-            const rj = await rr.json();
-            if (cancelled) return;
-            const runs = Array.isArray(rj.runs) ? rj.runs : [];
-            const me = runs.find((x) => x.flowId === selected.id && x.runId === currentRunUuid);
-            if (me && me.status && me.status !== "running") {
-              const st = me.status;
-              if (st === "success") setRunMode("done");
-              else if (st === "failed") setRunMode("error");
-              else if (st === "stopped" || st === "interrupted") setRunMode("stopped");
-            }
-          } catch { /* ignore */ }
-        }
+        // 每拍直接查 API：后端 isApplyProcessAlive 用 PID + kill(pid,0) 做进程探活，
+        // 是唯一可信的「run 还在跑」判断。不再用节点 result.md 扫描做前置短路，
+        // 否则会在 result.md 人工修改 / pre-process 时序缝隙里误判。
+        try {
+          const rr = await fetch("/api/pipeline-recent-runs");
+          if (!rr.ok) return;
+          const rj = await rr.json();
+          if (cancelled) return;
+          const runs = Array.isArray(rj.runs) ? rj.runs : [];
+          const me = runs.find((x) => x.flowId === selected.id && x.runId === currentRunUuid);
+          if (me && me.status) {
+            const st = me.status;
+            if (st === "running") setRunMode((prev) => (prev === "running" ? prev : "running"));
+            else if (st === "success") setRunMode("done");
+            else if (st === "failed") setRunMode("error");
+            else if (st === "stopped" || st === "interrupted") setRunMode("stopped");
+          }
+        } catch { /* ignore */ }
       } catch { /* ignore */ }
     };
     tick();
@@ -3435,7 +3730,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 type="button"
                 className="af-icon-btn af-pipeline-back"
                 onClick={() => {
-                  if (runMode !== "edit") {
+                  if (runMode === "running") {
+                    setBackPromptOpen(true);
+                  } else if (runMode !== "edit") {
                     handleBackToEdit();
                   } else {
                     navigate("/projects");
@@ -4042,36 +4339,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             ) : null}
             <div className="af-react-flow-wrap af-pipeline-flow">
               {selected ? (
-                (() => {
-                  const shouldFocus = runMode !== "edit" && executingNodes.size > 0;
-                  const focusIds = shouldFocus ? (() => {
-                    const s = new Set(executingNodes);
-                    for (const e of edges) {
-                      if (executingNodes.has(e.source)) s.add(e.target);
-                      if (executingNodes.has(e.target)) s.add(e.source);
-                    }
-                    return s;
-                  })() : null;
-                  const runNodes = runMode !== "edit" ? nodes.map((n) => ({
-                    ...n,
-                    draggable: false,
-                    connectable: false,
-                    data: {
-                      ...n.data,
-                      isRunMode: true,
-                      isExecuting: executingNodes.has(n.id),
-                      nodeStatus: nodeRunStatus[n.id]?.status ?? null,
-                      nodeElapsed: nodeRunStatus[n.id]?.elapsed ?? null,
-                      isDim: focusIds ? !focusIds.has(n.id) : false,
-                    },
-                  })) : nodes;
-                  const runEdges = shouldFocus ? edges.map((e) => {
-                    const touchesExec = executingNodes.has(e.source) || executingNodes.has(e.target);
-                    const base = e.className ? e.className.replace(/\s?af-flow-edge--(dim|focus)\b/g, "") : "";
-                    const cls = touchesExec ? "af-flow-edge--focus" : "af-flow-edge--dim";
-                    return { ...e, className: (base ? base + " " : "") + cls };
-                  }) : edges;
-                  return (
                 <FlowBoard
                   fitViewEpoch={fitViewEpoch}
                   canvasTool={canvasTool}
@@ -4482,8 +4749,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     ) : null
                   }
                 />
-                  );
-                })()
               ) : (
                 <div className="af-placeholder af-pipeline-placeholder">{t("flow:pipeline.selectPipeline")}</div>
               )}
@@ -4840,6 +5105,145 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           />
                         </label>
                         <div className="af-pipeline-meta-card">
+                          <h3 className="af-pipeline-meta-title">{t("flow:schedule.title")}</h3>
+                          {scheduleLoading ? (
+                            <p className="af-pipeline-drawer-muted">{t("common:common.loading")}</p>
+                          ) : (
+                            <>
+                              <label className="af-new-pipeline-radio">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(scheduleDraft.enabled)}
+                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  onChange={(e) =>
+                                    setScheduleDraft((prev) => ({ ...prev, enabled: e.target.checked }))
+                                  }
+                                />
+                                <span>{t("flow:schedule.enabled")}</span>
+                              </label>
+                              <label className="af-pipeline-drawer-field">
+                                <span className="af-pipeline-drawer-label">{t("flow:schedule.cron")}</span>
+                                <input
+                                  type="text"
+                                  className="af-pipeline-rename-input"
+                                  value={scheduleDraft.cron || ""}
+                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  onChange={(e) =>
+                                    setScheduleDraft((prev) => ({ ...prev, cron: e.target.value }))
+                                  }
+                                  placeholder="0 9 * * *"
+                                  spellCheck={false}
+                                />
+                              </label>
+                              <label className="af-pipeline-drawer-field">
+                                <span className="af-pipeline-drawer-label">{t("flow:schedule.timezone")}</span>
+                                <input
+                                  type="text"
+                                  className="af-pipeline-rename-input"
+                                  value={scheduleDraft.timezone || ""}
+                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  onChange={(e) =>
+                                    setScheduleDraft((prev) => ({ ...prev, timezone: e.target.value }))
+                                  }
+                                  placeholder="Asia/Shanghai"
+                                  spellCheck={false}
+                                />
+                              </label>
+                              <label className="af-pipeline-drawer-field">
+                                <span className="af-pipeline-drawer-label">{t("flow:schedule.preset")}</span>
+                                <select
+                                  className="af-pipeline-flow-select"
+                                  value={scheduleDraft.preset || ""}
+                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  onChange={(e) =>
+                                    setScheduleDraft((prev) => ({ ...prev, preset: e.target.value }))
+                                  }
+                                >
+                                  <option value="">{t("flow:schedule.defaultPreset")}</option>
+                                  {Object.keys(runPresets).map((name) => (
+                                    <option key={name} value={name}>{name}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="af-pipeline-drawer-readonly">
+                                <span>{t("flow:schedule.overlapSkip")}</span>
+                              </div>
+                              {scheduleDraft.nextRunAt ? (
+                                <p className="af-pipeline-drawer-muted">
+                                  {t("flow:schedule.nextRun", {
+                                    time: new Date(scheduleDraft.nextRunAt).toLocaleString(),
+                                  })}
+                                </p>
+                              ) : (
+                                <p className="af-pipeline-drawer-muted">{t("flow:schedule.noNextRun")}</p>
+                              )}
+                              <dl className="af-pipeline-meta-dl">
+                                <div className="af-pipeline-meta-row">
+                                  <dt>{t("flow:schedule.runtime")}</dt>
+                                  <dd>
+                                    {scheduleRuntimeStatus?.running
+                                      ? t("flow:schedule.running")
+                                      : scheduleDraft.enabled
+                                        ? t("flow:schedule.waiting")
+                                        : t("flow:schedule.disabled")}
+                                  </dd>
+                                </div>
+                                {scheduleState.lastTriggeredAt ? (
+                                  <div className="af-pipeline-meta-row">
+                                    <dt>{t("flow:schedule.lastTriggeredAt")}</dt>
+                                    <dd>{new Date(scheduleState.lastTriggeredAt).toLocaleString()}</dd>
+                                  </div>
+                                ) : null}
+                                {scheduleState.lastSkippedAt ? (
+                                  <div className="af-pipeline-meta-row">
+                                    <dt>{t("flow:schedule.lastSkippedAt")}</dt>
+                                    <dd>
+                                      {new Date(scheduleState.lastSkippedAt).toLocaleString()}
+                                      {scheduleState.lastSkipReason ? ` · ${scheduleState.lastSkipReason}` : ""}
+                                    </dd>
+                                  </div>
+                                ) : null}
+                                {scheduleState.lastRunUuid ? (
+                                  <div className="af-pipeline-meta-row">
+                                    <dt>{t("flow:schedule.lastRun")}</dt>
+                                    <dd>{scheduleState.lastRunUuid}</dd>
+                                  </div>
+                                ) : null}
+                                {scheduleState.lastExitCode != null ? (
+                                  <div className="af-pipeline-meta-row">
+                                    <dt>{t("flow:schedule.lastExit")}</dt>
+                                    <dd>{String(scheduleState.lastExitCode)}</dd>
+                                  </div>
+                                ) : null}
+                                {scheduleState.lastFinishedAt ? (
+                                  <div className="af-pipeline-meta-row">
+                                    <dt>{t("flow:schedule.lastFinishedAt")}</dt>
+                                    <dd>{new Date(scheduleState.lastFinishedAt).toLocaleString()}</dd>
+                                  </div>
+                                ) : null}
+                              </dl>
+                              {(scheduleRuntimeStatus?.lastError || scheduleState.lastError) ? (
+                                <p className="af-err af-pipeline-drawer-err">
+                                  {scheduleRuntimeStatus?.lastError || scheduleState.lastError}
+                                </p>
+                              ) : null}
+                              {selected.archived || selected.source === "builtin" ? (
+                                <p className="af-pipeline-drawer-muted">{t("flow:schedule.readonlyNote")}</p>
+                              ) : null}
+                              {scheduleError ? <p className="af-err af-pipeline-drawer-err">{scheduleError}</p> : null}
+                              {scheduleStatus ? <p className="af-pipeline-drawer-muted">{scheduleStatus}</p> : null}
+                              <button
+                                type="button"
+                                className="af-btn-secondary"
+                                disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                onClick={handleSaveSchedule}
+                              >
+                                {scheduleSaving ? t("flow:schedule.saving") : t("flow:schedule.save")}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        <div className="af-pipeline-meta-card">
                           <h3 className="af-pipeline-meta-title">{t("flow:pipeline.metadata")}</h3>
                           <dl className="af-pipeline-meta-dl">
                             <div className="af-pipeline-meta-row">
@@ -4990,6 +5394,27 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           ) : null}
         </div>
 
+        <ConfirmModal
+          open={stopConfirmOpen}
+          title={t("flow:run.pauseTitle", { defaultValue: "暂停运行" })}
+          message={t("flow:run.pauseConfirm")}
+          confirmLabel={t("flow:run.pauseConfirmOk", { defaultValue: "暂停" })}
+          onConfirm={confirmStop}
+          onCancel={() => setStopConfirmOpen(false)}
+        />
+        <ConfirmModal
+          open={backPromptOpen}
+          title={t("flow:run.backPromptTitle", { defaultValue: "返回项目列表" })}
+          message={t("flow:run.backPromptMessage", {
+            defaultValue: "流水线仍在运行，请选择处理方式：后台继续运行并退出，或停止后返回编辑。",
+          })}
+          confirmLabel={t("flow:run.backBackground", { defaultValue: "后台运行并退出" })}
+          secondaryLabel={t("flow:run.backStopEdit", { defaultValue: "停止并进入编辑" })}
+          secondaryDestructive
+          onConfirm={backgroundAndExit}
+          onSecondary={stopAndEdit}
+          onCancel={() => setBackPromptOpen(false)}
+        />
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
         <NodeJumpPalette
           open={jumpPaletteOpen}

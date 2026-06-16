@@ -63,6 +63,8 @@ import {
   readComposerSessionMeta,
 } from "./composer-log.mjs";
 import { runNodeScript } from "./pipeline-scripts.mjs";
+import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
+import { listScheduleStatuses } from "./scheduler.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -416,7 +418,12 @@ function normalizeContextInstanceIds(raw) {
  * @param {string} [opts.staticDir] 默认 PACKAGE_ROOT/builtin/web-ui/dist（npm run build 产出）
  * @returns {Promise<import('http').Server>}
  */
-export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKAGE_ROOT, "builtin", "web-ui", "dist") }) {
+export function startUiServer({
+  workspaceRoot,
+  port,
+  host = "127.0.0.1",
+  staticDir = path.join(PACKAGE_ROOT, "builtin", "web-ui", "dist"),
+}) {
   const root = path.resolve(workspaceRoot);
   const uiPort = port;
 
@@ -612,6 +619,9 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         const flowId = url.searchParams.get("flowId") || "";
         const runId = url.searchParams.get("runId") || "";
         const sinceBytes = Math.max(0, parseInt(url.searchParams.get("sinceBytes") || "0", 10) || 0);
+        // tailBytes: 仅返回文件末尾 N 字节。用于初次打开长跑 run 时避免拉取整份日志。
+        const tailBytesRaw = url.searchParams.get("tailBytes");
+        const tailBytes = tailBytesRaw != null ? Math.max(0, parseInt(tailBytesRaw, 10) || 0) : 0;
         if (!flowId || !runId) {
           json(res, 400, { error: "Missing flowId or runId" });
           return;
@@ -626,16 +636,23 @@ export function startUiServer({ workspaceRoot, port, staticDir = path.join(PACKA
         }
         const stat = fsMod.statSync(logPath);
         const size = stat.size;
-        if (sinceBytes >= size) {
+        const startOffset = tailBytes > 0 ? Math.max(sinceBytes, size - tailBytes) : sinceBytes;
+        if (startOffset >= size) {
           json(res, 200, { bytes: size, text: "" });
           return;
         }
         const fd = fsMod.openSync(logPath, "r");
         try {
-          const len = size - sinceBytes;
+          const len = size - startOffset;
           const buf = Buffer.alloc(len);
-          fsMod.readSync(fd, buf, 0, len, sinceBytes);
-          json(res, 200, { bytes: size, text: buf.toString("utf-8") });
+          fsMod.readSync(fd, buf, 0, len, startOffset);
+          let text = buf.toString("utf-8");
+          // 截断点可能落在一行中间，扔掉残行的前缀，保证解析端按行起步。
+          if (tailBytes > 0 && startOffset > 0) {
+            const nl = text.indexOf("\n");
+            if (nl >= 0) text = text.slice(nl + 1);
+          }
+          json(res, 200, { bytes: size, text });
         } finally {
           fsMod.closeSync(fd);
         }
@@ -986,7 +1003,11 @@ ${content}
 请直接输出修改后的完整内容（保持原有格式）：`;
 
         const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
-        const tmpPromptFile = path.join(root, `.workspace/agentflow/runBuild/${payload.flowId || "unknown"}/${runUuid}/intermediate/${instanceId}_ai_edit_prompt.txt`);
+        const tmpPromptFile = path.join(
+          getRunDir(root, payload.flowId || "unknown", runUuid),
+          "intermediate",
+          `${instanceId}_ai_edit_prompt.txt`,
+        );
         try {
           fs.mkdirSync(path.dirname(tmpPromptFile), { recursive: true });
           fs.writeFileSync(tmpPromptFile, fullPrompt, "utf-8");
@@ -1408,6 +1429,58 @@ finishedAt: "${new Date().toISOString()}"
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/flow/schedule") {
+      const flowId = url.searchParams.get("flowId");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const flowArchived = url.searchParams.get("archived") === "1";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (!isValidFlowSourceRead(flowSource)) {
+        json(res, 400, { error: "Invalid flowSource" });
+        return;
+      }
+      const result = readFlowSchedule(root, flowId, flowSource, { archived: flowArchived });
+      if (!result.success) {
+        json(res, 400, { error: result.error || "Could not read schedule" });
+        return;
+      }
+      const status = listScheduleStatuses(root).find(
+        (s) => s.flowId === flowId && (s.flowSource || "user") === (flowSource || "user"),
+      );
+      json(res, 200, { schedule: result.schedule, state: result.state || {}, status: status || null });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/flow/schedule") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = payload.flowId;
+      const flowSource = payload.flowSource || "user";
+      const flowArchived = payload.archived === true;
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (flowArchived || !isValidFlowSourceWrite(flowSource)) {
+        json(res, 400, { error: "Cannot save schedule to builtin or archived flow" });
+        return;
+      }
+      const result = writeFlowSchedule(root, flowId, flowSource, payload.schedule || {});
+      if (!result.success) {
+        json(res, 400, { error: result.error || "Could not save schedule" });
+        return;
+      }
+      json(res, 200, { success: true, schedule: result.schedule });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/flow/run") {
       let payload;
       try {
@@ -1425,6 +1498,18 @@ finishedAt: "${new Date().toISOString()}"
       if (activeFlowRuns.has(flowId)) {
         json(res, 409, { error: "该流水线已在运行中" });
         return;
+      }
+
+      // resume: 清除上次 Pause 写入的中断标记，否则 inferRunStatusFromRunDir 仍返回 "stopped"，
+      // UI 轮询会把 runMode 翻回 stopped，即便 CLI 正在运行也显示 PAUSED。
+      if (runUuid) {
+        try {
+          const runDir = getRunDir(root, flowId, runUuid);
+          const interruptedPath = path.join(runDir, RUN_INTERRUPTED_FILENAME);
+          if (fs.existsSync(interruptedPath)) fs.unlinkSync(interruptedPath);
+        } catch (e) {
+          log.debug(`[ui] flow/run: could not clear ${RUN_INTERRUPTED_FILENAME}: ${e && e.message}`);
+        }
       }
 
       const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
@@ -2019,8 +2104,8 @@ finishedAt: "${new Date().toISOString()}"
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => {
-      log.debug(`[ui] server listening on 127.0.0.1:${port}, workspace=${root}, static=${staticDir}`);
+    server.listen(port, host, () => {
+      log.debug(`[ui] server listening on ${host}:${port}, workspace=${root}, static=${staticDir}`);
       updateModelLists(root).catch(() => {});
       resolve(server);
     });

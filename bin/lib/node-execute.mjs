@@ -1,7 +1,6 @@
 import { spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { backupResolvedOutputsIfExist } from "../pipeline/backup-resolved-output.mjs";
 import { outputNodeBasename, outputDirForNode } from "../pipeline/get-exec-id.mjs";
 import { writeResult } from "../pipeline/write-result.mjs";
 import {
@@ -276,8 +275,7 @@ function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolv
   const isSynthetic = Boolean(payload._synthetic);
   const success = isSynthetic ? exitCode === 0 : payload.err_code === 0;
   const message = payload.message;
-  const slotsToWrite = [...new Set([...Object.keys(message), "stderr"])];
-  backupResolvedOutputsIfExist(runDir, instanceId, execId, slotsToWrite);
+  // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理，此处只写新 output。
   for (const slot of Object.keys(message)) {
     if (slot === "_synthetic") continue;
     const content = message[slot];
@@ -390,22 +388,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
   const { cli, model } = resolveCliAndModel(workspaceRoot, preOutput.model ?? null, options.model ?? null);
 
   const execId = preOutput.execId ?? 1;
-  const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
-  let outSlotNames = [];
-  if (fs.existsSync(flowJsonPath)) {
-    try {
-      const flow = JSON.parse(fs.readFileSync(flowJsonPath, "utf-8"));
-      if (flow.ok && flow.outputSlotTypes && flow.outputSlotTypes[instanceId]) {
-        outSlotNames = Object.keys(flow.outputSlotTypes[instanceId]);
-      }
-      if (outSlotNames.length === 0 && flow.order && flow.order.includes(instanceId)) {
-        const node = flow.nodes?.find((n) => n.id === instanceId);
-        const outSlots = node?.output || flow.outputSlotTypes?.[instanceId];
-        if (outSlots && typeof outSlots === "object") outSlotNames = Object.keys(outSlots);
-      }
-    } catch (_) {}
-  }
-  backupResolvedOutputsIfExist(runDir, instanceId, execId, outSlotNames);
+  // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理，此处直接进入 agent 执行。
 
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "agent-invoke-start",

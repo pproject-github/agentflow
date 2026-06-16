@@ -13,8 +13,9 @@ import path from "path";
 import { getRunDir } from "../lib/paths.mjs";
 import { computeCacheMd5 } from "./compute-cache-md5.mjs";
 import { writeResult } from "./write-result.mjs";
-import { intermediateResultBasename, intermediateCacheBasename } from "./get-exec-id.mjs";
+import { intermediateResultBasename, intermediateCacheBasename, loadExecId } from "./get-exec-id.mjs";
 import { logToRunTag } from "./run-log.mjs";
+import { snapshotPriorRoundIfNeeded } from "./snapshot-prior-round.mjs";
 
 function parseResultStatus(filePath) {
   try {
@@ -166,6 +167,10 @@ function main() {
         currentMd5: current.cacheMd5,
         reason,
       });
+      // 覆写 result.md 为 cache_not_met 之前，先把上一轮的真实结果（success/failed）snapshot 到 _<priorExecId>
+      // 否则下一轮 pre-process 的 snapshot 备份下来的只是 cache_not_met 占位，UI 永远看不到实际执行产物。
+      const priorExecId = loadExecId(workspaceRoot, flowName, uuid, instanceId);
+      snapshotPriorRoundIfNeeded(runDir, instanceId, priorExecId);
       try {
         writeResult(workspaceRoot, flowName, uuid, instanceId, {
           status: "cache_not_met",

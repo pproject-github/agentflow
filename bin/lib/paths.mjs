@@ -1,6 +1,7 @@
 /**
  * 包路径与 CLI 常量（供 bin/agentflow 与各 lib 模块使用）。
  */
+import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -33,7 +34,7 @@ export function getAgentflowDataRoot() {
   return path.join(os.homedir(), "agentflow");
 }
 
-/** 项目内 runBuild 根目录：`<workspaceRoot>/.workspace/agentflow/runBuild` */
+/** 项目内 runBuild 根目录：`<workspaceRoot>/.workspace/agentflow/runBuild`（legacy：写入路径已迁至 `<flowDir>/runBuild`，仅用于兼容读取） */
 export function getWorkspaceRunBuildRoot(workspaceRoot) {
   const root =
     workspaceRoot != null && String(workspaceRoot).trim() !== ""
@@ -42,14 +43,71 @@ export function getWorkspaceRunBuildRoot(workspaceRoot) {
   return path.join(root, ".workspace/agentflow/runBuild");
 }
 
-/** 旧版用户目录 runBuild 根目录：`~/agentflow/runBuild`（仅用于历史兼容读取） */
+/** 旧版用户目录 runBuild 根目录：`~/agentflow/runBuild`（legacy：仅用于历史兼容读取） */
 export function getLegacyUserRunBuildRoot() {
   return path.join(getAgentflowDataRoot(), "runBuild");
 }
 
-/** 单次 run 目录：`<workspaceRoot>/.workspace/agentflow/runBuild/<flowName>/<uuid>` */
+/**
+ * 统一 runtime root：每个 flow 的 pipeline 源、scripts、runBuild 共用一个根目录。
+ * - 若 `~/agentflow/pipelines/<name>/flow.yaml` 存在 → user-scope：`~/agentflow/pipelines/<name>`
+ * - 若 `<ws>/.workspace/agentflow/pipelines/<name>/flow.yaml` 存在 → workspace-scope：`<ws>/.workspace/agentflow/pipelines/<name>`
+ * - archived（`_archived/<name>`）按对应 scope 返回
+ * - 其他（builtin 只读 / 不存在）→ 默认 user-scope 路径（首次 run 时自动创建，builtin 源仍从包内读取但 runBuild 落到用户目录）
+ */
+export function getFlowRuntimeRoot(workspaceRoot, flowName) {
+  const root =
+    workspaceRoot != null && String(workspaceRoot).trim() !== ""
+      ? path.resolve(String(workspaceRoot))
+      : process.cwd();
+  const userRoot = getUserPipelinesRoot();
+  const userDir = path.join(userRoot, flowName);
+  if (fs.existsSync(path.join(userDir, "flow.yaml"))) return userDir;
+  const userArchived = path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME, flowName);
+  if (fs.existsSync(path.join(userArchived, "flow.yaml"))) return userArchived;
+  const wsDir = path.join(root, PIPELINES_DIR, flowName);
+  if (fs.existsSync(path.join(wsDir, "flow.yaml"))) return wsDir;
+  const wsArchived = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowName);
+  if (fs.existsSync(path.join(wsArchived, "flow.yaml"))) return wsArchived;
+  // builtin / legacy / 尚未落盘 → 默认 user 目录，runBuild 首次写入时创建
+  return userDir;
+}
+
+/**
+ * 单次 run 目录。
+ * 新运行走 `<flowRuntimeRoot>/runBuild/<uuid>`；
+ * 若该 uuid 在旧位置（legacy workspace/user runBuild 根）已存在，则返回旧位置，保留 resume 兼容。
+ */
 export function getRunDir(workspaceRoot, flowName, uuid) {
-  return path.join(getWorkspaceRunBuildRoot(workspaceRoot), flowName, uuid);
+  const candidates = getRunDirCandidates(workspaceRoot, flowName, uuid);
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[0];
+}
+
+/**
+ * 枚举候选 run 目录（新/旧位置）供 UI 读取历史 run。
+ * 返回数组按"最优先 → 最兜底"排序：
+ *   1. 新 per-flow：<flowRuntimeRoot>/runBuild/<uuid>
+ *   2. 旧 workspace：<ws>/.workspace/agentflow/runBuild/<flow>/<uuid>
+ *   3. 旧 user：~/agentflow/runBuild/<flow>/<uuid>
+ */
+export function getRunDirCandidates(workspaceRoot, flowName, uuid) {
+  const candidates = [
+    path.join(getFlowRuntimeRoot(workspaceRoot, flowName), "runBuild", uuid),
+    path.join(getWorkspaceRunBuildRoot(workspaceRoot), flowName, uuid),
+    path.join(getLegacyUserRunBuildRoot(), flowName, uuid),
+  ];
+  const seen = new Set();
+  const out = [];
+  for (const c of candidates) {
+    const r = path.resolve(c);
+    if (seen.has(r)) continue;
+    seen.add(r);
+    out.push(r);
+  }
+  return out;
 }
 
 export function getUserPipelinesRoot() {

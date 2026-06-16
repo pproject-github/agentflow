@@ -30,9 +30,10 @@ const SAVE_KEY = path.join(__dirname, "save-key.mjs");
 const EXEC_ID_KEY_PREFIX = "execId_";
 
 /**
- * 将本 run 内指定节点「本轮已使用的 execId」写入 memory.md。
+ * 将本 run 内指定节点「本轮已完成的 execId」写入 memory.md。
  * 语义：memory 存「上一轮已完成的 execId」，pre-process 用 execId = (memory || 0) + 1。
- * 环不做额外 execId 处理，每轮仍按普通节点一样由 post-process 写入当前 execId。
+ * 因此 post 只需把当前 execId 原样写回，不再 +1（历史上此处错误地 +1 会让 execId 跳号 1,3,5…，
+ * 导致 snapshotPriorRoundIfNeeded 生成的 backup 文件稀疏、sidebar 历史也跟着错乱）。
  * @param {string} workspaceRoot
  * @param {string} uuid
  * @param {string} instanceId
@@ -41,7 +42,7 @@ const EXEC_ID_KEY_PREFIX = "execId_";
  */
 export function incrementExecIdInMemory(workspaceRoot, flowName, uuid, instanceId, currentExecId) {
   const current = currentExecId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
-  const toSave = String(current + 1);
+  const toSave = String(current);
   const save = spawnSync(
     process.execPath,
     [SAVE_KEY, path.resolve(workspaceRoot), flowName, uuid, EXEC_ID_KEY_PREFIX + instanceId, toSave],
@@ -216,7 +217,7 @@ function applyControlIfLogic(workspaceRoot, flowName, uuid, instanceId, definiti
       if (fs.existsSync(filePath)) {
         boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
       } else {
-        // 查找 backupResolvedOutputsIfExist 创建的 _N 备份文件
+        // 查找 snapshotPriorRoundIfNeeded 创建的 _N 备份文件
         const dir = path.dirname(filePath);
         const ext = path.extname(filePath);
         const base = path.basename(filePath, ext);
@@ -381,7 +382,7 @@ function maybeEmitToolPrintPrompt(workspaceRoot, flowName, uuid, instanceId, run
 
   const e = execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
   const resultPathRel = `${intermediateDirForNode(instanceId)}/${intermediateResultBasename(instanceId, e)}`;
-  const promptContent = `请检查并必要时修正 result 文件：\`${resultPathRel}\`（相对 run 目录 \`.workspace/agentflow/runBuild/${flowName}/${uuid}/\`）。
+  const promptContent = `请检查并必要时修正 result 文件：\`${resultPathRel}\`（相对 run 目录 \`${runDir}\`）。
 
 该节点为 **tool_print**。约定：输出内容必须写在 result 文档的**正文部分**（frontmatter 下方），正文直接写节点输出，不要加「醒目提醒」「内容：」等包装。若当前正文缺失或不符合，请从 output 移入或根据节点意图补充正文。
 `;

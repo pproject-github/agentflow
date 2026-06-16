@@ -11,7 +11,7 @@
 import fs from "fs";
 import path from "path";
 
-import { getWorkspaceRunBuildRoot } from "../lib/paths.mjs";
+import { listAllRunDirs } from "../lib/workspace.mjs";
 
 const UUID_DIR_PATTERN = /^\d{14}$/;
 
@@ -34,26 +34,14 @@ function parseArgs(args) {
   return { workspaceRoot, opts };
 }
 
-/** 收集 runBuild 下所有 flowName/uuid 目录，每项 { flowName, uuid, path, mtime }，按 mtime 倒序 */
+/** 收集所有 run 目录（新 per-flow + legacy 两种位置），按 mtime 倒序 */
 function getAllRunDirs(workspaceRoot) {
-  const runBuildDir = getWorkspaceRunBuildRoot(workspaceRoot);
-  if (!fs.existsSync(runBuildDir) || !fs.statSync(runBuildDir).isDirectory()) {
-    return [];
-  }
   const dirs = [];
-  const flowEntries = fs.readdirSync(runBuildDir, { withFileTypes: true });
-  for (const fe of flowEntries) {
-    if (!fe.isDirectory()) continue;
-    const flowName = fe.name;
-    const flowPath = path.join(runBuildDir, flowName);
+  for (const { flowName, uuid, runDir } of listAllRunDirs(workspaceRoot)) {
+    if (!UUID_DIR_PATTERN.test(uuid)) continue;
     try {
-      const uuidEntries = fs.readdirSync(flowPath, { withFileTypes: true });
-      for (const ue of uuidEntries) {
-        if (!ue.isDirectory() || !UUID_DIR_PATTERN.test(ue.name)) continue;
-        const full = path.join(flowPath, ue.name);
-        const stat = fs.statSync(full);
-        dirs.push({ flowName, uuid: ue.name, path: full, mtime: stat.mtimeMs });
-      }
+      const stat = fs.statSync(runDir);
+      dirs.push({ flowName, uuid, path: runDir, mtime: stat.mtimeMs });
     } catch (_) {}
   }
   dirs.sort((a, b) => b.mtime - a.mtime);

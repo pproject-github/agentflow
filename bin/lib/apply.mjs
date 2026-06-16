@@ -55,6 +55,10 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
   if (!parseOut.ok) throw new Error(parseOut.error || "parse-flow failed");
 
   printEntryAndFlowFiles(workspaceRoot, flowName, uuid);
+  const priorTotalExecutedMs = readTotalExecutedMs(workspaceRoot, flowName, uuid) ?? 0;
+  // 提前 ensure：apply-start 携带原始 run 起始时间，UI 计时器可按「这个 uuid 从头到现在的总时长」显示，
+  // 避免每次 resume 仅从 totalExecutedMs 累加看起来像从 resume 才开始计时。
+  const priorRunStartTime = ensureRunStartTime(workspaceRoot, flowName, uuid);
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "apply-start",
     flowName,
@@ -62,12 +66,14 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
     runDir: getRunDir(workspaceRoot, flowName, uuid),
     dryRun: Boolean(dryRun),
     parallel: Boolean(parallel),
+    totalExecutedMs: priorTotalExecutedMs,
+    runStartTime: priorRunStartTime,
   });
   writeApplyActiveLock(workspaceRoot, flowName, uuid);
 
   try {
-  let runStartTime = null;
-  let totalExecutedMs = 0;
+  let runStartTime = priorRunStartTime;
+  let totalExecutedMs = priorTotalExecutedMs;
   let round = 0;
   while (round < MAX_LOOP_ROUNDS) {
     round++;
@@ -492,6 +498,7 @@ ${currentContent}
           const nodeMs = Date.now() - startTime;
           elapsedMsForPost = nodeMs;
           totalExecutedMs += nodeMs;
+          saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
           elapsedStr = formatDuration(nodeMs);
           const totalStr = formatDuration(totalExecutedMs);
           spinner.succeed(
@@ -508,6 +515,7 @@ ${currentContent}
           clearInterval(timeTick);
           const nodeMs = Date.now() - startTime;
           totalExecutedMs += nodeMs;
+          saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
           elapsedStr = formatDuration(nodeMs);
           const totalStr = formatDuration(totalExecutedMs);
           spinner.fail(
@@ -722,6 +730,7 @@ ${currentContent}
       const parallelBatchStart = Date.now();
       await Promise.all(preOutputs.map((item) => runOne(item, true)));
       totalExecutedMs += Date.now() - parallelBatchStart;
+      saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
       const totalStrPar = formatDuration(totalExecutedMs);
       process.stderr.write("\n" + NODE_SEP + "\n");
       process.stderr.write(chalk.bold.cyan(t("node.end_parallel") + "  ") + chalk.dim(t("common.total") + " " + totalStrPar) + "\n");

@@ -15,6 +15,87 @@ import {
 export { getRunDir } from "./paths.mjs";
 
 /**
+ * 枚举所有 run 目录（新 per-flow 位置 + 旧 runBuild root 位置）。
+ * 返回扁平列表：{ flowName, uuid, runDir, source }，source ∈ { user, workspace, legacyWorkspaceRoot, legacyUserRoot }
+ * - user: ~/agentflow/pipelines/<name>/runBuild/<uuid>
+ * - workspace: <ws>/.workspace/agentflow/pipelines/<name>/runBuild/<uuid>
+ * - legacyWorkspaceRoot: <ws>/.workspace/agentflow/runBuild/<name>/<uuid>
+ * - legacyUserRoot: ~/agentflow/runBuild/<name>/<uuid>
+ * 后两者仅作为向下兼容读取；新写入只走 user/workspace。
+ */
+export function listAllRunDirs(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  const out = [];
+  const seen = new Set();
+  const add = (flowName, uuid, runDir, source) => {
+    const key = `${flowName}\t${uuid}`;
+    if (seen.has(key)) return;
+    if (!fs.existsSync(runDir)) return;
+    seen.add(key);
+    out.push({ flowName, uuid, runDir, source });
+  };
+
+  const scanPipelinesDir = (pipelinesDir, source) => {
+    if (!fs.existsSync(pipelinesDir)) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(pipelinesDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name === ARCHIVED_PIPELINES_DIR_NAME) continue;
+      const runBuildDir = path.join(pipelinesDir, e.name, "runBuild");
+      if (!fs.existsSync(runBuildDir)) continue;
+      let uuids;
+      try {
+        uuids = fs.readdirSync(runBuildDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const u of uuids) {
+        if (!u.isDirectory()) continue;
+        add(e.name, u.name, path.join(runBuildDir, u.name), source);
+      }
+    }
+  };
+
+  // 新位置（优先）
+  scanPipelinesDir(getUserPipelinesRoot(), "user");
+  scanPipelinesDir(path.join(root, PIPELINES_DIR), "workspace");
+
+  // 旧位置（兼容读）
+  const scanLegacyRoot = (runBuildDir, source) => {
+    if (!fs.existsSync(runBuildDir)) return;
+    let flowEntries;
+    try {
+      flowEntries = fs.readdirSync(runBuildDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const fe of flowEntries) {
+      if (!fe.isDirectory()) continue;
+      const flowRunDir = path.join(runBuildDir, fe.name);
+      let uuids;
+      try {
+        uuids = fs.readdirSync(flowRunDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const u of uuids) {
+        if (!u.isDirectory()) continue;
+        add(fe.name, u.name, path.join(flowRunDir, u.name), source);
+      }
+    }
+  };
+  scanLegacyRoot(getWorkspaceRunBuildRoot(root), "legacyWorkspaceRoot");
+  scanLegacyRoot(getLegacyUserRunBuildRoot(), "legacyUserRoot");
+
+  return out;
+}
+
+/**
  * 确保用户数据目录下 reference 存在且含包内 reference 文件。
  */
 export function ensureReference(_workspaceRoot) {
@@ -34,56 +115,20 @@ export function ensureReference(_workspaceRoot) {
 }
 
 /** 列出所有存在 logs/log.txt 的 run，供 extract-thinking -list 使用。 */
-function getRunBuildRoots(workspaceRoot) {
-  const roots = [getWorkspaceRunBuildRoot(workspaceRoot), getLegacyUserRunBuildRoot()];
-  const out = [];
-  const seen = new Set();
-  for (const dir of roots) {
-    const resolved = path.resolve(dir);
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    out.push(resolved);
-  }
-  return out;
-}
-
-/** 列出所有存在 logs/log.txt 的 run，供 extract-thinking -list 使用。 */
 export function listRunsWithLogs(workspaceRoot) {
   const list = [];
-  const seenRuns = new Set();
-  for (const runBuildDir of getRunBuildRoots(workspaceRoot)) {
-    if (!fs.existsSync(runBuildDir) || !fs.statSync(runBuildDir).isDirectory()) continue;
-    const flowNames = fs.readdirSync(runBuildDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    for (const flowName of flowNames) {
-      const flowDir = path.join(runBuildDir, flowName);
-      let uuids;
-      try {
-        uuids = fs.readdirSync(flowDir, { withFileTypes: true })
-          .filter((e) => e.isDirectory())
-          .map((e) => e.name);
-      } catch (_) {
-        continue;
-      }
-      for (const uuid of uuids) {
-        const runKey = `${flowName}\t${uuid}`;
-        if (seenRuns.has(runKey)) continue;
-        const logPath = path.join(flowDir, uuid, "logs", "log.txt");
-        if (fs.existsSync(logPath)) {
-          let size = 0;
-          let lines = 0;
-          try {
-            const stat = fs.statSync(logPath);
-            size = stat.size;
-            const c = fs.readFileSync(logPath, "utf8");
-            lines = c.split(/\r?\n/).length;
-          } catch (_) {}
-          list.push({ flowName, uuid, logPath, size, lines });
-          seenRuns.add(runKey);
-        }
-      }
-    }
+  for (const { flowName, uuid, runDir } of listAllRunDirs(workspaceRoot)) {
+    const logPath = path.join(runDir, "logs", "log.txt");
+    if (!fs.existsSync(logPath)) continue;
+    let size = 0;
+    let lines = 0;
+    try {
+      const stat = fs.statSync(logPath);
+      size = stat.size;
+      const c = fs.readFileSync(logPath, "utf8");
+      lines = c.split(/\r?\n/).length;
+    } catch (_) {}
+    list.push({ flowName, uuid, logPath, size, lines });
   }
   list.sort((a, b) => {
     const fc = a.flowName.localeCompare(b.flowName);
@@ -126,15 +171,10 @@ export function getFlowDir(workspaceRoot, flowName) {
 
 /** 两参 replay 时根据 uuid 查找 run 目录，返回 flowName 或 null。 */
 export function findFlowNameByUuid(workspaceRoot, uuid) {
-  for (const runBuildDir of getRunBuildRoots(workspaceRoot)) {
-    if (!fs.existsSync(runBuildDir) || !fs.statSync(runBuildDir).isDirectory()) continue;
-    const flowNames = fs.readdirSync(runBuildDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    for (const fn of flowNames) {
-      const flowJsonPath = path.join(runBuildDir, fn, uuid, "intermediate", "flow.json");
-      if (fs.existsSync(flowJsonPath)) return fn;
-    }
+  for (const entry of listAllRunDirs(workspaceRoot)) {
+    if (entry.uuid !== uuid) continue;
+    const flowJsonPath = path.join(entry.runDir, "intermediate", "flow.json");
+    if (fs.existsSync(flowJsonPath)) return entry.flowName;
   }
   return null;
 }

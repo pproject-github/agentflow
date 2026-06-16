@@ -29,7 +29,7 @@ import { fileURLToPath } from "url";
 
 import { loadFlowDefinition } from "./parse-flow.mjs";
 import { buildNodePrompt } from "./build-node-prompt.mjs";
-import { backupIntermediateFileIfExists } from "./backup-intermediate-file.mjs";
+import { snapshotPriorRoundIfNeeded } from "./snapshot-prior-round.mjs";
 import { computeCacheMd5 } from "./compute-cache-md5.mjs";
 import { getResolvedValues } from "./get-resolved-values.mjs";
 import { parseBool, getFirstBoolInputValue } from "./parse-bool.mjs";
@@ -105,17 +105,7 @@ function writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId
     cacheObj.inputHandlerExecIds = cache.inputHandlerExecIds;
   }
   if (cache.payload !== undefined) cacheObj.payload = cache.payload;
-  if (fs.existsSync(cachePath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
-      const existingExecId = Number(existing?.execId);
-      if (!Number.isFinite(existingExecId) || existingExecId !== Number(execId)) {
-        backupIntermediateFileIfExists(cachePath, execId);
-      }
-    } catch {
-      backupIntermediateFileIfExists(cachePath, execId);
-    }
-  }
+  // 备份由 snapshotPriorRoundIfNeeded 统一在 pre-process 入口完成；此处只管写新 cache。
   fs.writeFileSync(cachePath, JSON.stringify(cacheObj, null, 0), "utf-8");
   logToRunTag(workspaceRoot, flowName, uuid, "pre-process", {
     event: "cache-written",
@@ -183,7 +173,7 @@ ${directCommand}
 
   try {
     fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    backupIntermediateFileIfExists(promptPath, execId);
+    // 备份由 snapshotPriorRoundIfNeeded 统一处理
     fs.writeFileSync(promptPath, content, "utf-8");
   } catch (e) {
     return null;
@@ -215,7 +205,7 @@ ${directCommand}
 
   try {
     fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    backupIntermediateFileIfExists(promptPath, execId);
+    // 备份由 snapshotPriorRoundIfNeeded 统一处理
     fs.writeFileSync(promptPath, content, "utf-8");
   } catch (e) {
     return null;
@@ -249,7 +239,7 @@ ${directCommand}
 
   try {
     fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    backupIntermediateFileIfExists(promptPath, execId);
+    // 备份由 snapshotPriorRoundIfNeeded 统一处理
     fs.writeFileSync(promptPath, content, "utf-8");
   } catch (e) {
     return null;
@@ -275,9 +265,13 @@ function main() {
   const workspaceRoot = path.resolve(root);
 
   let execId = 1;
+  let priorExecId = 0;
   const loadKeyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "load-key.mjs");
   const execIdKey = "execId_" + instanceId;
-  const loadResult = spawnSync(process.execPath, [loadKeyPath, workspaceRoot, uuid, execIdKey], {
+  // load-key.mjs 参数约定：<workspaceRoot> <flowName> <uuid> <key>。
+  // 缺 flowName 会导致 getRunDir 拼成错误路径，memory 永远读不到 → execId 每轮都回到 1，
+  // snapshotPriorRoundIfNeeded 也永远 no-op，loop 跑多少轮 sidebar 都只有 #1/#2。
+  const loadResult = spawnSync(process.execPath, [loadKeyPath, workspaceRoot, flowName, uuid, execIdKey], {
     cwd: workspaceRoot,
     encoding: "utf-8",
   });
@@ -287,12 +281,19 @@ function main() {
       const result = out?.message?.result;
       if (result !== undefined && result !== "") {
         const current = parseInt(String(result), 10) || 0;
+        priorExecId = current;
         execId = current + 1;
       }
     } catch (_) {}
   }
 
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
+
+  // 唯一备份入口：把上一轮的 intermediate/output 文件统一 rename 为 _<priorExecId>。
+  // 之后任何 writer（write-result / build-node-prompt / run-tool-nodejs / get-env 等）
+  // 都不再负责备份，只管对 current 路径写入新内容。
+  snapshotPriorRoundIfNeeded(runDir, instanceId, priorExecId);
+
   const resultPathRel = `${intermediateDirForNode(instanceId)}/${intermediateResultBasename(instanceId, execId)}`;
 
   /** control_if：不执行 subagent，根据第一个 bool 类型输入直接写 result 并返回 optionalPromptPath */
@@ -321,7 +322,7 @@ function main() {
       if (fs.existsSync(filePath)) {
         boolValue = parseBool(fs.readFileSync(filePath, "utf-8").trim());
       } else {
-        // 查找 backupResolvedOutputsIfExist 创建的 _N 备份文件
+        // 查找 snapshotPriorRoundIfNeeded 创建的 _N 备份文件
         const dir = path.dirname(filePath);
         const ext = path.extname(filePath);
         const base = path.basename(filePath, ext);
@@ -358,7 +359,7 @@ function main() {
     const build = buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId);
     if (build.ok) writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
     const noopPromptPath = path.join(nodeIntermediateDir, `${instanceId}.control_if_noop.prompt.md`);
-    backupIntermediateFileIfExists(noopPromptPath, execId);
+    // 备份由 snapshotPriorRoundIfNeeded 统一处理
     fs.writeFileSync(
       noopPromptPath,
       "此节点为 **control_if**，已由预处理根据 bool 输入直接写入 result，无需执行任何操作。",

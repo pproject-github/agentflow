@@ -17,7 +17,9 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  浏览 Hub 上的流程
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
-  agentflow ui [--port <n>] [--no-open]       本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认端口 8765）
+  agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
+  agentflow scheduler start [--poll-ms <ms>]  启动定时执行调度器（读取各流水线 schedule.json）
+  agentflow scheduler status [--json]         查看定时执行配置与状态
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
   agentflow validate <FlowName> [uuid]        校验流程；终端下输出易读结果，--json 或管道时输出 JSON；传 uuid 时写入 runDir/intermediate/validation.json
   agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
@@ -41,8 +43,12 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 
   --lang <code>            设置语言：en、zh（默认：zh，或从 LANG 环境变量检测）
 
 路径说明：
-  runBuild 主目录：<workspaceRoot>/.workspace/agentflow/runBuild
-  旧 runBuild 目录：~/agentflow/runBuild（仅历史兼容读取）
+  runBuild 目录：<flowRuntimeRoot>/runBuild（每个 flow 与其 pipeline 源同 root）
+    user-scope：~/agentflow/pipelines/<flow>/runBuild
+    workspace-scope：<workspaceRoot>/.workspace/agentflow/pipelines/<flow>/runBuild
+  旧位置（仅历史兼容读取）：
+    <workspaceRoot>/.workspace/agentflow/runBuild
+    ~/agentflow/runBuild
 
 Apply：构建运行目录，解析流程，循环运行就绪节点。
   使用 -ai / --ai：运行单步供外部（AI）多轮控制：
@@ -76,7 +82,9 @@ Usage:
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  Browse flows on Hub
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
-  agentflow ui [--port <n>] [--no-open]       Local HTTP: pipeline list + React Flow node diagram editor (default port 8765)
+  agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
+  agentflow scheduler start [--poll-ms <ms>]  Start the scheduled-run scheduler (reads each pipeline schedule.json)
+  agentflow scheduler status [--json]         Show scheduled-run configuration and state
   agentflow apply <FlowName> [uuid]            Or agentflow apply <uuid> (resolve pipeline from uuid)
   agentflow validate <FlowName> [uuid]        Validate flow; readable output in terminal, JSON with --json or pipe; writes to runDir/intermediate/validation.json when uuid provided
   agentflow resume <FlowName> <uuid> [instanceId]  Mark pending and failed nodes as acknowledged and continue apply
@@ -100,8 +108,12 @@ Options:
   --lang <code>            Set language: en, zh (default: en, or auto-detect from LANG env)
 
 Path notes:
-  Primary runBuild dir: <workspaceRoot>/.workspace/agentflow/runBuild
-  Legacy runBuild dir: ~/agentflow/runBuild (read-only compatibility)
+  runBuild dir: <flowRuntimeRoot>/runBuild (per-flow, co-located with pipeline source)
+    user-scope: ~/agentflow/pipelines/<flow>/runBuild
+    workspace-scope: <workspaceRoot>/.workspace/agentflow/pipelines/<flow>/runBuild
+  Legacy dirs (read-only compatibility):
+    <workspaceRoot>/.workspace/agentflow/runBuild
+    ~/agentflow/runBuild
 
 Apply: builds run dir, parses flow, runs ready nodes in a loop.
   With -ai / --ai: run a single step for external (AI) multi-round control:

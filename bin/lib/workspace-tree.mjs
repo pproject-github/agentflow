@@ -7,11 +7,10 @@ import {
   PIPELINES_DIR,
   LEGACY_PIPELINES_DIR,
   ARCHIVED_PIPELINES_DIR_NAME,
-  getWorkspaceRunBuildRoot,
-  getLegacyUserRunBuildRoot,
   getUserPipelinesRoot,
   PACKAGE_BUILTIN_PIPELINES_DIR,
 } from "./paths.mjs";
+import { listAllRunDirs } from "./workspace.mjs";
 
 /**
  * 获取目录下的子目录列表
@@ -91,66 +90,42 @@ export function getWorkspaceTree(workspaceRoot) {
     }
   }
 
-  // 2. 获取 runs 列表 (按 flowId 分组)
+  // 2. 获取 runs 列表 (按 flowId 分组) —— 走统一的 listAllRunDirs，新旧位置都覆盖
   const runsMap = new Map();
-  const seenRuns = new Set();
 
-  const runBuildRoots = [
-    getWorkspaceRunBuildRoot(root),
-    getLegacyUserRunBuildRoot(),
-  ];
-  const seenRoots = new Set();
-
-  for (const runBuildDir of runBuildRoots) {
-    const resolved = path.resolve(runBuildDir);
-    if (seenRoots.has(resolved)) continue;
-    seenRoots.add(resolved);
-
-    const flowDirs = getSubdirectories(runBuildDir);
-    for (const flowDir of flowDirs) {
-      const flowId = flowDir.name;
-      const runUuids = getSubdirectories(flowDir.path);
-
-      for (const runDir of runUuids) {
-        const runKey = `${flowId}\t${runDir.name}`;
-        if (seenRuns.has(runKey)) continue;
-        seenRuns.add(runKey);
-
-        // 获取运行时间
-        let at = 0;
-        try {
-          const memoryPath = path.join(runDir.path, "memory.md");
-          if (fs.existsSync(memoryPath)) {
-            const content = fs.readFileSync(memoryPath, "utf-8");
-            for (const line of content.split(/\r?\n/)) {
-              const idx = line.indexOf(": ");
-              if (idx > 0 && line.slice(0, idx).trim() === "runStartTime") {
-                const v = line.slice(idx + 2).trim();
-                const n = parseInt(v, 10);
-                if (Number.isFinite(n) && n >= 0) {
-                  at = n;
-                  break;
-                }
-              }
+  for (const { flowName: flowId, uuid, runDir } of listAllRunDirs(root)) {
+    let at = 0;
+    try {
+      const memoryPath = path.join(runDir, "memory.md");
+      if (fs.existsSync(memoryPath)) {
+        const content = fs.readFileSync(memoryPath, "utf-8");
+        for (const line of content.split(/\r?\n/)) {
+          const idx = line.indexOf(": ");
+          if (idx > 0 && line.slice(0, idx).trim() === "runStartTime") {
+            const v = line.slice(idx + 2).trim();
+            const n = parseInt(v, 10);
+            if (Number.isFinite(n) && n >= 0) {
+              at = n;
+              break;
             }
           }
-          if (at === 0) {
-            at = fs.statSync(runDir.path).mtimeMs;
-          }
-        } catch {
-          try {
-            at = fs.statSync(runDir.path).mtimeMs;
-          } catch {
-            at = 0;
-          }
         }
-
-        if (!runsMap.has(flowId)) {
-          runsMap.set(flowId, []);
-        }
-        runsMap.get(flowId).push({ runId: runDir.name, at });
+      }
+      if (at === 0) {
+        at = fs.statSync(runDir).mtimeMs;
+      }
+    } catch {
+      try {
+        at = fs.statSync(runDir).mtimeMs;
+      } catch {
+        at = 0;
       }
     }
+
+    if (!runsMap.has(flowId)) {
+      runsMap.set(flowId, []);
+    }
+    runsMap.get(flowId).push({ runId: uuid, at });
   }
 
   // 转换 runsMap 为数组，并排序

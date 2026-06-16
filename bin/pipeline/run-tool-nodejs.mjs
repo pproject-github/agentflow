@@ -21,7 +21,6 @@ import { fileURLToPath } from "url";
 import { getRunDir } from "../lib/paths.mjs";
 import { validateAndParse } from "./validate-script-output.mjs";
 import { writeResult } from "./write-result.mjs";
-import { backupResolvedOutputsIfExist } from "./backup-resolved-output.mjs";
 import { loadExecId, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
 import { nodeToolCommandToArgv } from "../lib/normalize-node-tool-command.mjs";
 import { buildPipelineScriptPathHint } from "../lib/flow-normalize.mjs";
@@ -79,8 +78,7 @@ function runOnce(workspaceRoot, flowName, uuid, instanceId, execId, scriptArgs) 
 
   try {
     fs.mkdirSync(outputDir, { recursive: true });
-    const slotsToWrite = [...new Set([...Object.keys(message), "stderr"])];
-    backupResolvedOutputsIfExist(runDir, instanceId, execId, slotsToWrite);
+    // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理。
     for (const slot of Object.keys(message)) {
       if (slot === "_synthetic") continue;
       const content = message[slot];

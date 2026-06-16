@@ -25,7 +25,7 @@ import { getResolvedValues } from "./get-resolved-values.mjs";
 import { loadAllExecIds, latestResultExecId, intermediatePromptBasename, intermediateCacheBasename } from "./get-exec-id.mjs";
 import { loadFlowDefinition, instanceEntryToSlots, parseInstanceSlots } from "./parse-flow.mjs";
 
-/** 从 intermediate/<instanceId>/<instanceId>_<execId>.cache.json 读取 cacheMd5，无则返回 "" */
+/** 从 intermediate/<instanceId>/<instanceId>.cache.json 读取 cacheMd5，无则返回 "" */
 function readUpstreamCacheMd5(intermediateDir, instanceId, execId) {
   const basename = intermediateCacheBasename(instanceId, execId);
   const p = path.join(intermediateDir, instanceId, basename);

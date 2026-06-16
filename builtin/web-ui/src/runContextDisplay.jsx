@@ -96,3 +96,14 @@ export function runContextOutputFormatPill(o) {
   return formatPill(o);
 }
 
+/** 复制 slot 内容用的文本；图片类返回 null（不提供复制按钮）。 */
+export function runContextOutputCopyText(o) {
+  if (!o) return null;
+  const kind = inferLegacyKind(o);
+  if (kind === "image" || (o.encoding === "base64" && o.mimeType?.startsWith("image/"))) return null;
+  const raw = o.content;
+  if (raw == null || raw === "") return null;
+  if (kind === "json") return prettyJson(String(raw));
+  return String(raw);
+}
+

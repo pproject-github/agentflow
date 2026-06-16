@@ -252,7 +252,7 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
         if (fs.existsSync(absPath)) {
           resolvedInputs[slotName] = fs.readFileSync(absPath, "utf-8").trim();
         } else {
-          // 备份机制（backupResolvedOutputsIfExist）会将 foo.md 重命名为 foo_N.md，
+          // 备份机制（snapshotPriorRoundIfNeeded）会将 foo.md 重命名为 foo_N.md，
           // 循环节点第二轮起原始文件不存在时，回退查找最新的 _N 备份文件。
           const dir = path.dirname(absPath);
           const ext = path.extname(absPath);

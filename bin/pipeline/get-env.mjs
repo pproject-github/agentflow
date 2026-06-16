@@ -19,7 +19,6 @@ import os from "os";
 
 import { getRunDir } from "../lib/paths.mjs";
 import { writeResult } from "./write-result.mjs";
-import { backupResolvedOutputsIfExist } from "./backup-resolved-output.mjs";
 import { outputDirForNode, outputNodeBasename } from "./get-exec-id.mjs";
 
 function getFromConfig(config, keyStr) {
@@ -62,7 +61,7 @@ function main() {
     const runDir = getRunDir(workspaceRoot, flowName, uuid);
     const outputDir = path.join(runDir, outputDirForNode(instanceId));
     fs.mkdirSync(outputDir, { recursive: true });
-    backupResolvedOutputsIfExist(runDir, instanceId, execId, ["value", "result"]);
+    // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理。
     const valueFile = path.join(outputDir, outputNodeBasename(instanceId, execId, "value"));
     const resultFile = path.join(outputDir, outputNodeBasename(instanceId, execId, "result"));
     fs.writeFileSync(valueFile, value, "utf-8");

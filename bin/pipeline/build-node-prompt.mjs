@@ -11,7 +11,6 @@ import { fileURLToPath } from "url";
 
 import { getRunDir, PIPELINES_DIR } from "../lib/paths.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
-import { backupIntermediateFileIfExists } from "./backup-intermediate-file.mjs";
 import { loadFlowDefinition } from "./parse-flow.mjs";
 import { getResolvedValues, getOutputPathForSlot } from "./get-resolved-values.mjs";
 import { loadExecId } from "./get-exec-id.mjs";
@@ -139,20 +138,10 @@ ${taskBody || "(无)"}
 
   try {
     fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    // Skip backup + rewrite when file already exists with identical content.
-    // computeCacheMd5 calls buildNodePrompt again after pre-process already wrote it;
-    // without this guard the second call creates a spurious _N backup that the UI
-    // displays as a phantom history round.
-    let needWrite = true;
-    if (fs.existsSync(promptPath)) {
-      try {
-        if (fs.readFileSync(promptPath, "utf-8") === content) needWrite = false;
-      } catch { /* fall through to write */ }
-    }
-    if (needWrite) {
-      backupIntermediateFileIfExists(promptPath, e);
-      fs.writeFileSync(promptPath, content, "utf-8");
-    }
+    // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理；
+    // 本函数可能在单轮内被多次调用（pre-process + computeCacheMd5），
+    // 但 round 内内容相同，直接覆盖写即可，不会产生伪历史备份。
+    fs.writeFileSync(promptPath, content, "utf-8");
   } catch (e) {
     return { ok: false, error: e.message || "Failed to write prompt file" };
   }
