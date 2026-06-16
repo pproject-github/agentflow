@@ -53,7 +53,7 @@ Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
 
 ```bash
 # 安装
-npm install -g agentflow
+npm install -g @fieldwangai/agentflow
 
 # 启动 Web UI（端口 8765）
 agentflow ui

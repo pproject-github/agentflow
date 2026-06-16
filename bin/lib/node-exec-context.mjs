@@ -4,7 +4,12 @@
  */
 import fs from "fs";
 import path from "path";
-import { getWorkspaceRunBuildRoot } from "./paths.mjs";
+import {
+  getFlowRuntimeRoot,
+  getLegacyUserRunBuildRoot,
+  getRunDirCandidates,
+  getWorkspaceRunBuildRoot,
+} from "./paths.mjs";
 
 /**
  * @param {string} workspaceRoot
@@ -14,28 +19,48 @@ import { getWorkspaceRunBuildRoot } from "./paths.mjs";
  * @returns {{ ok: boolean, rounds: Array, runId?: string, error?: string }}
  */
 export function getNodeExecContext(workspaceRoot, flowId, instanceId, runId) {
-  const runBuildRoot = getWorkspaceRunBuildRoot(workspaceRoot);
-  const flowRunDir = path.join(runBuildRoot, flowId);
-  if (!fs.existsSync(flowRunDir)) return { ok: true, rounds: [], runId: "" };
-
   let uuid = runId;
-  if (!uuid) {
-    const entries = fs.readdirSync(flowRunDir).filter((e) => {
-      const s = fs.statSync(path.join(flowRunDir, e));
-      return s.isDirectory();
-    });
-    entries.sort((a, b) => b.localeCompare(a));
-    uuid = entries[0] || "";
+  let runDir = "";
+  if (uuid) {
+    runDir = getRunDirCandidates(workspaceRoot, flowId, uuid).find((p) => fs.existsSync(p)) || "";
+  } else {
+    const latest = findLatestRunDir(workspaceRoot, flowId);
+    uuid = latest.uuid;
+    runDir = latest.runDir;
   }
   if (!uuid) return { ok: true, rounds: [], runId: "" };
-
-  const runDir = path.join(flowRunDir, uuid);
+  if (!runDir) return { ok: true, rounds: [], runId: uuid };
   const interDir = path.join(runDir, "intermediate", instanceId);
   const outDir = path.join(runDir, "output", instanceId);
 
   const rounds = collectRounds(interDir, outDir, instanceId);
 
   return { ok: true, rounds, runId: uuid };
+}
+
+function findLatestRunDir(workspaceRoot, flowId) {
+  const roots = [
+    path.join(getFlowRuntimeRoot(workspaceRoot, flowId), "runBuild"),
+    path.join(getWorkspaceRunBuildRoot(workspaceRoot), flowId),
+    path.join(getLegacyUserRunBuildRoot(), flowId),
+  ];
+  const seen = new Set();
+  const runs = [];
+  for (const root of roots) {
+    const resolvedRoot = path.resolve(root);
+    if (seen.has(resolvedRoot) || !fs.existsSync(resolvedRoot)) continue;
+    seen.add(resolvedRoot);
+    for (const entry of fs.readdirSync(resolvedRoot)) {
+      const runDir = path.join(resolvedRoot, entry);
+      try {
+        if (fs.statSync(runDir).isDirectory()) runs.push({ uuid: entry, runDir });
+      } catch {
+        /* ignore disappearing run dirs */
+      }
+    }
+  }
+  runs.sort((a, b) => b.uuid.localeCompare(a.uuid));
+  return runs[0] || { uuid: "", runDir: "" };
 }
 
 function collectRounds(interDir, outDir, instanceId) {
