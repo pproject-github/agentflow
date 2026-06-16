@@ -29,8 +29,8 @@ import {
   shouldUseMultiStep,
   runComposerPostFlowValidationAndRepair,
   buildScriptContentBlockForInstances,
-  buildQueryContextBlock,
 } from "./composer-agent.mjs";
+import { buildNodeSchemaCompactSection } from "./composer-node-schema.mjs";
 import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
@@ -41,7 +41,6 @@ import {
 import { RUN_INTERRUPTED_FILENAME } from "./recent-runs.mjs";
 import {
   detectIntents,
-  classifyIntentCategory,
   loadResourcesForIntents,
   buildSkillInjectionBlock,
   buildSkillCompactInjectionBlock,
@@ -274,33 +273,7 @@ function formatThreadHistory(thread) {
 }
 
 function buildComposerPromptWithFlowContext(p) {
-  const intentCategory = p.intentCategory || "generic";
   const flowDirAbs = path.dirname(p.flowYamlAbs);
-
-  // ── query 轻量路径：只注入节点上下文 + 问题，跳过全部编辑规则 ──
-  if (intentCategory === "query") {
-    const queryCtx = buildQueryContextBlock(p.flowYamlAbs, p.instanceIds);
-    const parts = [
-      "## AgentFlow 问答上下文",
-      `- 流水线（flowId=${p.flowId}）：${flowDirAbs}`,
-      `- 图定义文件：${p.flowYamlAbs}`,
-      "",
-    ];
-    if (queryCtx) {
-      parts.push(queryCtx, "");
-    }
-    parts.push(
-      "请基于上方注入的节点 YAML 与脚本内容回答用户的问题。**不要修改任何文件。**",
-      ""
-    );
-    if (p.thread && p.thread.length > 0) {
-      parts.push(formatThreadHistory(p.thread), "");
-    }
-    parts.push("## 用户说明", "", p.userPrompt.trim());
-    return parts.join("\n");
-  }
-
-  // ── 编辑路径（edit-node / add-node / add-flow / edit-flow / generic） ──
   const idsLine =
     p.instanceIds.length > 0 ? p.instanceIds.map(String).join(", ") : "（无，可能为全局修改或新增节点）";
   const syncFs = p.editorSyncFlowSource ?? p.flowSource;
@@ -330,48 +303,29 @@ function buildComposerPromptWithFlowContext(p) {
         "- 仅改已有实例文案/占位等：遵循 `skills/agentflow-flow-edit-node-fields/SKILL.md`，勿改 definitionId、instanceId、IO 结构与边拓扑。",
       ];
 
-  // edit-node: 不需要重型节点类型选择规则和 tool_nodejs 区分
-  const needsNodeTypeRules = intentCategory !== "edit-node";
+  const nodeSchemaSection = buildNodeSchemaCompactSection();
 
   const prefix = [
-    "## AgentFlow 编辑上下文",
+    "## AgentFlow Composer 上下文",
     `- 流水线目录（flowId=${p.flowId}）：${flowDirAbs}`,
-    `- 图定义文件（必读/必改此文件）：${p.flowYamlAbs}`,
+    `- 图定义文件：${p.flowYamlAbs}`,
     `- flowId：${p.flowId}`,
     `- flowSource：${p.flowSource}`,
     ...builtinExtra,
     `- 当前关联的节点实例 ID（顺序：画布选中优先，再输入框 @提及）：${idsLine}`,
+    "- 请根据用户需求自行判断：如果是在问问题，只回答；如果是在要求新增、修改、完善或修复流程，请直接修改对应文件。",
+    "- 一旦修改 flow.yaml、脚本或相关文件，必须按下方方式刷新 Web 画布。",
     ...skillPathHints,
     "",
-    ...(needsNodeTypeRules ? [
-      "### 节点类型选择（必须遵守）",
-      "**判据**：**确定性任务 → `tool_nodejs`；非确定性任务 → `agent_subAgent`**。",
-      "- **确定性**：相同输入永远产出相同输出，可用普通代码完整描述（CLI/npm 调用、读写文件、JSON/路径转换、调现成 API 解析固定格式、跑脚手架等）",
-      "- **非确定性**：需要语义理解或创造（代码翻译/生成、源码/文本解析改写、多步推理决策、创意写作）",
-      "| 场景 | 推荐节点 |",
-      "|------|----------|",
-      "| 确定性逻辑（跑命令、读写文件、转换格式、调 API） | **tool_nodejs** + `script` |",
-      "| 醒目输出 | **tool_print** |",
-      "| 代码翻译/生成、源码/文本理解、多步决策、创意写作 | **agent_subAgent** |",
-      "**反例**：「Android 转 RN/TS」「分析代码生成测试」「代码 review」必须 agent——做成 tool_nodejs 必然失败。",
-      "",
-      "tool_nodejs + script 示例（打印文本）：",
-      "```yaml",
-      "print_hello:",
-      "  definitionId: tool_nodejs",
-      "  label: 打印Hello",
-      '  script: node -e "console.log(${value})"',
-      "  input:",
-      "    - { type: 节点, name: prev, value: '' }",
-      "    - { type: 文本, name: value, value: '' }",
-      "  output:",
-      "    - { type: 节点, name: next, value: '' }",
-      "    - { type: 文本, name: result, value: '' }",
-      "```",
-      "script 成败以 exit code 为准（0=success），stdout 直接作为 result 槽位内容（纯文本即可，如 console.log）。",
-      "常见误用：用 agent_subAgent 做「打印一段文字」「执行已有脚本」→ 应改用 tool_nodejs + script 或 tool_print。",
-      "",
-    ] : []),
+    "### 节点能力选择",
+    "**判据**：确定性任务优先 `tool_nodejs`；需要语义理解、生成、判断或多步推理时使用 `agent_subAgent`。",
+    "- **确定性**：相同输入永远产出相同输出，可用普通代码完整描述（CLI/npm 调用、读写文件、JSON/路径转换、调现成 API 解析固定格式、跑脚手架等）。",
+    "- **非确定性**：需要语义理解或创造（代码翻译/生成、源码/文本解析改写、多步推理决策、创意写作）。",
+    "- 分支/循环使用 `control_toBool` / `control_agent_toBool` + `control_if` + `control_anyOne` 组合。",
+    "- 常量输入使用 `provide_str` / `provide_file`；读取环境变量使用 `tool_get_env`；终端展示使用 `tool_print`。",
+    "",
+    nodeSchemaSection,
+    "",
     "### tool_nodejs 的 script 与 body 关键区分",
     "- **`script` 字段**：实际执行的命令代码，流水线直接 spawn 执行；**tool_nodejs 必须写 script**",
     "- **`body` 字段**：纯文档注释，有 script 时完全不执行；**禁止在 body 写期望执行的逻辑**",
@@ -1761,7 +1715,6 @@ finishedAt: "${new Date().toISOString()}"
 
         // 基于用户意图动态加载 skill 上下文
         const multiStepIntents = detectIntents(prompt);
-        const intentCategory = classifyIntentCategory(multiStepIntents);
         const multiStepResources = loadResourcesForIntents(multiStepIntents, PACKAGE_ROOT);
         const flowPipelineDir = flowYamlAbs ? path.dirname(flowYamlAbs) : "";
 
@@ -1770,7 +1723,6 @@ finishedAt: "${new Date().toISOString()}"
           flowId,
           flowSource,
           intents: multiStepIntents,
-          intentCategory,
           canvasInstanceIds: instanceIds,
           skillsHint: multiStepResources.skillsHint,
           skillInjectionBlock: multiStepResources.hasContext
@@ -1794,7 +1746,6 @@ finishedAt: "${new Date().toISOString()}"
           flowArchived,
           thread,
           scriptContentBlock,
-          intentCategory,
         });
         cliWorkspace = composerCliWorkspaceForFlowDir(root, flowDirForCli);
       }
@@ -1887,13 +1838,9 @@ finishedAt: "${new Date().toISOString()}"
       log.debug(`[ui] composer-agent: flowId=${flowId || "(none)"} model=${model || "default"} promptLen=${finalPrompt.length}`);
 
       const hasPhaseContext = payload.phaseContext && typeof payload.phaseContext === "object" && typeof payload.phaseContext.phaseIndex === "number";
-      // query 意图：跳过 planner，直接走单步轻量路径
-      const resolvedIntentCategory = flowContextForMultiStep?.intentCategory || "generic";
       let useMultiStep;
       try {
-        useMultiStep = resolvedIntentCategory === "query"
-          ? false
-          : (hasPhaseContext || ((await shouldUseMultiStep({ flowYamlAbs, userPrompt: prompt.trim(), cliWorkspace })) && !payload.singleStep));
+        useMultiStep = hasPhaseContext || ((await shouldUseMultiStep({ flowYamlAbs, userPrompt: prompt.trim(), cliWorkspace })) && !payload.singleStep);
       } catch (classifyErr) {
         log.debug(`[ui] composer classify error: ${classifyErr.message}`);
         logComposerEvent(composerLogPath, "composer-done", {

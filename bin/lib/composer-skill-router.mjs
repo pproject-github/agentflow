@@ -149,24 +149,6 @@ export function detectIntents(userPrompt) {
   return [...new Set(matched)];
 }
 
-/**
- * 将意图列表归类为注入策略类别。
- * @param {string[]} intents
- * @returns {"query" | "edit-node" | "add-node" | "add-flow" | "edit-flow" | "generic"}
- */
-export function classifyIntentCategory(intents) {
-  if (!intents || intents.length === 0) return "generic";
-  // 纯 query（无任何编辑意图混入）
-  const editIntents = intents.filter(i => i !== "query-explain");
-  if (editIntents.length === 0) return "query";
-  // 混合 query + 编辑 → 按编辑侧分类
-  if (editIntents.includes("create-flow")) return "add-flow";
-  if (editIntents.includes("optimize-flow")) return "edit-flow";
-  if (editIntents.includes("add-instances")) return "add-node";
-  if (editIntents.includes("edit-fields") || editIntents.includes("optimize-nodes")) return "edit-node";
-  return "generic";
-}
-
 // ─── 加载 skill 和 reference 内容 ─────────────────────────────────────────
 
 /**

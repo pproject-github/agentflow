@@ -53,7 +53,7 @@ You can write a numbered plan in a prompt, but you can't express "loop until com
 
 ```bash
 # Install
-npm install -g agentflow
+npm install -g @fieldwangai/agentflow
 
 # Launch Web UI (port 8765)
 agentflow ui
