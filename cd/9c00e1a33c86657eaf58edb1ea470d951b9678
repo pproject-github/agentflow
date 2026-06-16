@@ -1,0 +1,62 @@
+.github/workflows/deploy-website.yml
+  s_10c929efab4cca::t_2f20b99e22d082 27,32
+  s_10c929efab4cca::t_f554abbad406b3 34,61
+.github/workflows/ci.yml
+  s_10c929efab4cca::t_f554abbad406b3 14,39,42
+  s_10c929efab4cca::t_2f20b99e22d082 16,19,37,40,55
+.github/workflows/release.yml
+  s_10c929efab4cca::t_2f20b99e22d082 12,15,33,36,73,76,99
+  s_10c929efab4cca::t_f554abbad406b3 14,17,35,38,75,78,125
+bin/lib/node-exec-context.mjs
+  s_3211bd638ac372::t_3dc26ada64c4f6 7-12,23-29,32,39-63
+README.zh-CN.md
+  s_0e3ec9e6eb07c0::t_e2eac6faf48d22 56
+bin/lib/composer-agent.mjs
+  s_3211bd638ac372::t_507c0e4253ae3a 173,205,217-226,228,255-260,266
+package.json
+  s_0e3ec9e6eb07c0::t_e2eac6faf48d22 2
+  s_10c929efab4cca::t_e94d5adbdf8c11 41-43
+  s_3211bd638ac372::t_70bd75b8ed307c 3
+README.md
+  s_0e3ec9e6eb07c0::t_e2eac6faf48d22 56
+.github/workflows/manual-deploy.yml
+  s_10c929efab4cca::t_f554abbad406b3 25,52
+  s_10c929efab4cca::t_2f20b99e22d082 20,23
+bin/lib/ui-server.mjs
+  s_3211bd638ac372::t_e94aabae7d076b 306,309,311,316-317,319-327
+  s_3211bd638ac372::t_3b1a0f311d6353 33
+  s_3211bd638ac372::t_7005eeb462698e 1843
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "cd9c00e1a33c86657eaf58edb1ea470d951b9678",
+  "prompts": {},
+  "logical_commit_id": "cd9c00e1a33c86657eaf58edb1ea470d951b9678",
+  "sessions": {
+    "s_0e3ec9e6eb07c0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf8d-014d-7093-bd96-88085629b3ef",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_10c929efab4cca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf74-4e8d-7da3-abfe-f40f8419bdde",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_3211bd638ac372": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf91-534f-7f00-985e-8228abfa792b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
