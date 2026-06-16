@@ -18,7 +18,6 @@
 import fs from "fs";
 import path from "path";
 
-import { backupIntermediateFileIfExists } from "./backup-intermediate-file.mjs";
 import { getRunDir } from "../lib/paths.mjs";
 import { loadExecId } from "./get-exec-id.mjs";
 import { intermediateResultBasename, intermediateDirForNode } from "./get-exec-id.mjs";
@@ -44,22 +43,6 @@ function getExistingBody(resultPath) {
   const raw = fs.readFileSync(resultPath, "utf-8");
   const match = raw.match(/---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n([\s\S]*)$/);
   return match ? match[1] : "";
-}
-
-/**
- * 从现有 result frontmatter 中读取 execId。
- * @param {string} resultPath
- * @returns {number | null}
- */
-function getExistingExecId(resultPath) {
-  if (!fs.existsSync(resultPath)) return null;
-  const raw = fs.readFileSync(resultPath, "utf-8");
-  const fm = raw.match(/---\s*\r?\n([\s\S]*?)\r?\n---/);
-  if (!fm) return null;
-  const m = fm[1].match(/(?:^|\n)\s*execId:\s*"?(\d+)"?\s*(?:\n|$)/);
-  if (!m) return null;
-  const n = Number(m[1]);
-  return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
 /**
@@ -91,15 +74,12 @@ export function writeResult(workspaceRoot, flowName, uuid, instanceId, fields, o
   const elapsedMs =
     fields.elapsedMs != null && Number.isFinite(fields.elapsedMs) && fields.elapsedMs >= 0 ? Math.round(fields.elapsedMs) : undefined;
 
-  const existingExecId = getExistingExecId(resultPath);
   let body = options.body;
   if (body === undefined && options.preserveBody !== false) {
     body = getExistingBody(resultPath);
   }
   if (body === undefined) body = "";
-  if (fs.existsSync(resultPath) && existingExecId !== execId) {
-    backupIntermediateFileIfExists(resultPath, execId);
-  }
+  // 备份由 snapshotPriorRoundIfNeeded 在 pre-process 入口统一处理，此处只覆盖写。
 
   const lines = [
     "---",

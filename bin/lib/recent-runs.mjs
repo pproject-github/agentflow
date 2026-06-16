@@ -3,7 +3,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { getLegacyUserRunBuildRoot, getWorkspaceRunBuildRoot } from "./paths.mjs";
+import { listAllRunDirs } from "./workspace.mjs";
 import { isApplyProcessAlive } from "./run-apply-active-lock.mjs";
 
 /** Web UI 调用 /api/flow/run/stop 时写入，用于与「未跑完但未标记」区分 */
@@ -15,6 +15,44 @@ function parseResultStatusFromFile(filePath) {
     const raw = fs.readFileSync(filePath, "utf-8");
     const m = raw.match(/^\s*status:\s*["']?(\w+)["']?/m);
     return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读取 result.md 里的 finishedAt（ISO 字符串），返回 ms 时间戳或 null */
+function parseResultFinishedAtFromFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const m = raw.match(/^\s*finishedAt:\s*["']?([^"'\n]+?)["']?\s*$/m);
+    if (!m) return null;
+    const t = Date.parse(m[1]);
+    return Number.isFinite(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 扫 run 目录所有 result.md，返回最大的 finishedAt。回退到 runDir mtime */
+function computeEndedAt(runDir) {
+  const interRoot = path.join(runDir, "intermediate");
+  let maxAt = 0;
+  if (fs.existsSync(interRoot) && fs.statSync(interRoot).isDirectory()) {
+    try {
+      const dirs = fs.readdirSync(interRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+      for (const d of dirs) {
+        const rp = path.join(interRoot, d.name, `${d.name}.result.md`);
+        if (!fs.existsSync(rp)) continue;
+        const t = parseResultFinishedAtFromFile(rp);
+        if (t != null && t > maxAt) maxAt = t;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  if (maxAt > 0) return maxAt;
+  try {
+    return fs.statSync(runDir).mtimeMs;
   } catch {
     return null;
   }
@@ -99,63 +137,35 @@ function readKeyFromMemory(runDir, key) {
   return null;
 }
 
-function getRunBuildRoots(workspaceRoot) {
-  const roots = [
-    { dir: getWorkspaceRunBuildRoot(workspaceRoot), source: "workspace" },
-    { dir: getLegacyUserRunBuildRoot(), source: "user" },
-  ];
-  const out = [];
-  const seen = new Set();
-  for (const { dir, source } of roots) {
-    const resolved = path.resolve(dir);
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    out.push({ dir: resolved, source });
-  }
-  return out;
+/** listAllRunDirs 的 source 映射到 UI 里的 flowSource 字段 */
+function mapFlowSource(src) {
+  if (src === "user") return "user";
+  if (src === "workspace") return "workspace";
+  // legacy 位置仍归到它物理所在的 scope
+  if (src === "legacyWorkspaceRoot") return "workspace";
+  if (src === "legacyUserRoot") return "user";
+  return "workspace";
 }
 
 /**
  * @param {string} workspaceRoot
- * @returns {Array<{ flowId: string, flowSource: 'workspace'|'user', runId: string, at: number, durationMs: number, status: 'success'|'failed'|'running'|'stopped'|'interrupted'|'unknown' }>}
+ * @returns {Array<{ flowId: string, flowSource: 'workspace'|'user', runId: string, at: number, durationMs: number, endedAt: number|null, status: 'success'|'failed'|'running'|'stopped'|'interrupted'|'unknown' }>}
  */
 export function listRecentRunsFromDisk(workspaceRoot) {
   const out = [];
-  const seenRuns = new Set();
-  for (const { dir: runBuildDir, source: flowSource } of getRunBuildRoots(workspaceRoot)) {
-    if (!fs.existsSync(runBuildDir) || !fs.statSync(runBuildDir).isDirectory()) continue;
-    const flowNames = fs.readdirSync(runBuildDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-
-    for (const flowId of flowNames) {
-      const flowDir = path.join(runBuildDir, flowId);
-      let uuids;
+  for (const { flowName, uuid, runDir, source } of listAllRunDirs(workspaceRoot)) {
+    let at = readKeyFromMemory(runDir, "runStartTime");
+    if (at == null) {
       try {
-        uuids = fs.readdirSync(flowDir, { withFileTypes: true })
-          .filter((e) => e.isDirectory())
-          .map((e) => e.name);
+        at = fs.statSync(runDir).mtimeMs;
       } catch {
         continue;
       }
-      for (const uuid of uuids) {
-        const runKey = `${flowId}\t${uuid}`;
-        if (seenRuns.has(runKey)) continue;
-        const runDir = path.join(flowDir, uuid);
-        let at = readKeyFromMemory(runDir, "runStartTime");
-        if (at == null) {
-          try {
-            at = fs.statSync(runDir).mtimeMs;
-          } catch {
-            continue;
-          }
-        }
-        const durationMs = readKeyFromMemory(runDir, "totalExecutedMs") ?? 0;
-        const status = inferRunStatusFromRunDir(runDir);
-        out.push({ flowId, flowSource, runId: uuid, at, durationMs, status });
-        seenRuns.add(runKey);
-      }
     }
+    const durationMs = readKeyFromMemory(runDir, "totalExecutedMs") ?? 0;
+    const status = inferRunStatusFromRunDir(runDir);
+    const endedAt = status === "running" ? null : computeEndedAt(runDir);
+    out.push({ flowId: flowName, flowSource: mapFlowSource(source), runId: uuid, at, durationMs, endedAt, status });
   }
 
   out.sort((a, b) => b.at - a.at);

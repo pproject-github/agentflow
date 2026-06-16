@@ -117,8 +117,11 @@ export async function hubPublish(workspaceRoot, argv) {
     contentType = "text/yaml";
   }
 
-  // If updating and the file extension changed (yaml ↔ zip), delete the old artifact.
-  if (existing && existing.yaml_key && existing.yaml_key !== fileKey) {
+  // Updating：先删老 artifact 再 INSERT 新文件。
+  // Supabase Storage 的 bucket 策略多数只放行 INSERT；x-upsert=true 走 UPDATE 路径
+  // 会被拒成 "new row violates row-level security policy"。DELETE + INSERT 最稳：
+  // 不论扩展名是否变，老对象先清掉，再走纯 INSERT。
+  if (existing && existing.yaml_key) {
     log.info("Removing old artifact: " + existing.yaml_key);
     await deleteStorageObject(session.access_token, existing.yaml_key);
   }

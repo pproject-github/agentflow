@@ -30,6 +30,7 @@ import { startUiServer } from "./ui-server.mjs";
 import { hubLogin, hubLogout } from "./hub-login.mjs";
 import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
+import { listScheduleStatuses, startScheduler } from "./scheduler.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -304,19 +305,49 @@ export async function main() {
   }
   if (sub === "ui") {
     let port = 8765;
+    let host = process.env.AGENTFLOW_UI_HOST || "127.0.0.1";
+    let schedulerEnabled = false;
+    let schedulerPollMs;
     const portIdx = argv.indexOf("--port");
     if (portIdx >= 0 && argv[portIdx + 1]) {
       port = parseInt(argv[portIdx + 1], 10);
       argv.splice(portIdx, 2);
+    }
+    const hostIdx = argv.indexOf("--host");
+    if (hostIdx >= 0 && argv[hostIdx + 1]) {
+      host = argv[hostIdx + 1];
+      argv.splice(hostIdx, 2);
+    }
+    if (argv.includes("--scheduler")) {
+      schedulerEnabled = true;
+      argv.splice(argv.indexOf("--scheduler"), 1);
+    }
+    if (argv.includes("--no-scheduler")) {
+      schedulerEnabled = false;
+      argv.splice(argv.indexOf("--no-scheduler"), 1);
+    }
+    const schedulerPollIdx = argv.indexOf("--scheduler-poll-ms");
+    if (schedulerPollIdx >= 0 && argv[schedulerPollIdx + 1]) {
+      schedulerPollMs = parseInt(argv[schedulerPollIdx + 1], 10);
+      argv.splice(schedulerPollIdx, 2);
     }
     const noOpen = argv.includes("--no-open");
     if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
     if (Number.isNaN(port) || port <= 0 || port > 65535) {
       throw new Error("Invalid --port (use 1–65535)");
     }
-    await startUiServer({ workspaceRoot, port });
-    const url = "http://127.0.0.1:" + port;
-    process.stderr.write("AgentFlow UI: " + url + "\n");
+    if (!host) {
+      throw new Error("Invalid --host");
+    }
+    await startUiServer({ workspaceRoot, port, host });
+    if (schedulerEnabled) {
+      startScheduler(workspaceRoot, { pollMs: schedulerPollMs }).catch((e) => {
+        log.error("Scheduler failed: " + ((e && e.message) || String(e)));
+      });
+    }
+    const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+    const url = "http://" + (browserHost.includes(":") ? `[${browserHost}]` : browserHost) + ":" + port;
+    process.stderr.write("AgentFlow UI: " + url + (browserHost === host ? "" : ` (listening on ${host}:${port})`) + "\n");
     if (!noOpen) {
       if (process.platform === "win32") {
         const child = spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" });
@@ -330,6 +361,45 @@ export async function main() {
       }
     }
     await new Promise(() => {});
+  }
+  if (sub === "scheduler") {
+    const action = shift();
+    if (action === "start") {
+      let pollMs;
+      const pollIdx = argv.indexOf("--poll-ms");
+      if (pollIdx >= 0 && argv[pollIdx + 1]) {
+        pollMs = parseInt(argv[pollIdx + 1], 10);
+        argv.splice(pollIdx, 2);
+      }
+      const once = argv.includes("--once");
+      if (once) argv.splice(argv.indexOf("--once"), 1);
+      await startScheduler(workspaceRoot, { pollMs, once });
+      process.exit(0);
+    }
+    if (action === "status") {
+      if (jsonMode) {
+        process.stdout.write(JSON.stringify({ schedules: listScheduleStatuses(workspaceRoot) }) + "\n");
+        process.exit(0);
+      }
+      const rows = listScheduleStatuses(workspaceRoot);
+      const table = new Table({ head: ["flow", "source", "enabled", "cron", "timezone", "next", "running", "lastRun", "error"], style: { head: [] } });
+      for (const r of rows) {
+        table.push([
+          r.flowId,
+          r.flowSource,
+          r.enabled ? "yes" : "no",
+          r.cron || "",
+          r.timezone || "",
+          r.nextRunAt || "",
+          r.running ? "yes" : "no",
+          r.lastRunUuid || "",
+          r.lastError || "",
+        ]);
+      }
+      process.stdout.write(table.toString() + "\n");
+      process.exit(0);
+    }
+    throw new Error("Usage: agentflow scheduler <start|status> [--once] [--poll-ms <ms>] [--json]");
   }
   // ──── Hub commands ────
   if (sub === "login") {

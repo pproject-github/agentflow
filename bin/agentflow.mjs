@@ -33,7 +33,10 @@ if (langIdx >= 0 && argv[langIdx + 1]) {
 
 const updateNotifier = require("update-notifier").default;
 const pkg = require(path.join(__dirname, "..", "package.json"));
-updateNotifier({ pkg }).notify();
+const machineOutput = argv.includes("--json") || argv.includes("--machine-readable");
+if (!machineOutput) {
+  updateNotifier({ pkg }).notify();
+}
 
 /** 当 stderr 非 TTY（如被 desktop 管道捕获）时禁用 chalk，避免日志里出现 [90m 等 ANSI 转义码 */
 if (process.stderr && !process.stderr.isTTY) {

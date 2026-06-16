@@ -4,7 +4,33 @@ import {
   RunContextPromptBody,
   RunContextOutputBody,
   runContextOutputFormatPill,
+  runContextOutputCopyText,
 } from "./runContextDisplay.jsx";
+
+function CopySlotButton({ text, title, copiedLabel }) {
+  const [copied, setCopied] = useState(false);
+  if (!text) return null;
+  const onClick = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <button
+      type="button"
+      className="af-icon-btn af-run-ctx-copy-btn"
+      onClick={onClick}
+      title={copied ? copiedLabel : title}
+      aria-label={copied ? copiedLabel : title}
+    >
+      <span className="material-symbols-outlined">{copied ? "check" : "content_copy"}</span>
+    </button>
+  );
+}
 
 /**
  * Run-mode right sidebar: shows a selected node's execution context.
@@ -302,34 +328,27 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
 
         {rounds.length > 0 && (
           <>
-            <div className="af-run-ctx-rounds">
-              {rounds.map((r) => {
-                const isActive = r.execId === selectedRound;
-                const statusCls =
-                  r.status === "success" ? " af-run-ctx-round--success" :
-                  r.status === "failed" ? " af-run-ctx-round--failed" :
-                  r.status === "running" ? " af-run-ctx-round--running" : "";
-                return (
-                  <button
-                    key={r.execId}
-                    type="button"
-                    className={"af-run-ctx-round" + (isActive ? " af-run-ctx-round--active" : "") + statusCls}
-                    onClick={() => setSelectedRound(r.execId)}
-                  >
-                    <span className="af-run-ctx-round-id">
-                      {r.execId === "latest" ? t("flow:runContext.latest") : `#${r.execId}`}
-                    </span>
-                    <span className={"af-run-ctx-round-status" + statusCls}>
-                      {r.status || "–"}
-                    </span>
-                    {r.finishedAt && (
-                      <span className="af-run-ctx-round-date">
-                        {formatDate(r.finishedAt)}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+            <div className={"af-run-ctx-rounds af-run-ctx-rounds--select af-run-ctx-round--" + roundStatusTone(active?.status || "")}>
+              <span className="af-run-ctx-round-dot" aria-hidden />
+              <select
+                className="af-run-ctx-round-select"
+                value={String(selectedRound ?? "")}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSelectedRound(v === "latest" ? "latest" : Number(v));
+                }}
+              >
+                {[...rounds].reverse().map((r) => {
+                  const label = r.execId === "latest" ? t("flow:runContext.latest") : `#${r.execId}`;
+                  const status = formatRoundStatus(t, r.status);
+                  const date = r.finishedAt ? ` · ${formatDate(r.finishedAt)}` : "";
+                  return (
+                    <option key={r.execId} value={String(r.execId)}>
+                      {`${label} · ${status}${date}`}
+                    </option>
+                  );
+                })}
+              </select>
             </div>
 
             {active && (
@@ -383,6 +402,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                     </h3>
                     {active.outputs.map((o, i) => {
                       const hint = runContextOutputFormatPill(o);
+                      const copyText = runContextOutputCopyText(o);
                       return (
                         <div key={`${o.slot}-${i}`} className="af-run-ctx-output-slot">
                           <div className="af-run-ctx-slot-head">
@@ -392,6 +412,11 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                                 {hint}
                               </span>
                             ) : null}
+                            <CopySlotButton
+                              text={copyText}
+                              title={t("common:common.copy")}
+                              copiedLabel={t("common:common.copied")}
+                            />
                           </div>
                           <RunContextOutputBody o={o} />
                         </div>
@@ -429,6 +454,7 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
               )}
               {expandedSection === "output" && active.outputs && active.outputs.map((o, i) => {
                 const hint = runContextOutputFormatPill(o);
+                const copyText = runContextOutputCopyText(o);
                 return (
                   <div key={`${o.slot}-${i}`} className="af-run-ctx-output-slot" style={{ marginBottom: "1rem" }}>
                     <div className="af-run-ctx-slot-head">
@@ -436,6 +462,11 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
                       {hint ? (
                         <span className="af-run-ctx-format-badge">{hint}</span>
                       ) : null}
+                      <CopySlotButton
+                        text={copyText}
+                        title={t("common:common.copy")}
+                        copiedLabel={t("common:common.copied")}
+                      />
                     </div>
                     <RunContextOutputBody o={o} />
                   </div>
@@ -454,8 +485,38 @@ function formatDate(iso) {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
     const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   } catch {
     return iso;
   }
+}
+
+/** 映射 result 状态到 chip 色调：success / failed / running / cache / pending / unknown。 */
+function roundStatusTone(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "success" || s === "completed" || s === "done") return "success";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "running" || s === "executing") return "running";
+  if (s === "cache_not_met") return "cache";
+  if (!s) return "pending";
+  return "unknown";
+}
+
+/** 把内部状态 id 翻译成人类可读短标签。 */
+function formatRoundStatus(t, status) {
+  const s = String(status || "").toLowerCase();
+  if (!s) return t("flow:runContext.statusPending", { defaultValue: "等待" });
+  if (s === "success" || s === "completed" || s === "done") {
+    return t("flow:runContext.statusSuccess", { defaultValue: "成功" });
+  }
+  if (s === "failed" || s === "error") {
+    return t("flow:runContext.statusFailed", { defaultValue: "失败" });
+  }
+  if (s === "running" || s === "executing") {
+    return t("flow:runContext.statusRunning", { defaultValue: "运行中" });
+  }
+  if (s === "cache_not_met") {
+    return t("flow:runContext.statusCacheMiss", { defaultValue: "缓存失效" });
+  }
+  return status;
 }
