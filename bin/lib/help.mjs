@@ -20,6 +20,10 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 
   agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
   agentflow scheduler start [--poll-ms <ms>]  启动定时执行调度器（读取各流水线 schedule.json）
   agentflow scheduler status [--json]         查看定时执行配置与状态
+  agentflow scheduler cancel <FlowName> <uuid>  取消某次等待中的 watch/run
+  agentflow marketplace list [--json]         查看 workspace 本地节点市场
+  agentflow marketplace publish-node <dir>    发布本地节点包到 workspace market
+  agentflow marketplace install-node <FlowName> <nodeSpec>  将 market 节点依赖写入 flow
   agentflow apply <FlowName> [uuid]            或 agentflow apply <uuid>（由 uuid 反查 pipeline）
   agentflow validate <FlowName> [uuid]        校验流程；终端下输出易读结果，--json 或管道时输出 JSON；传 uuid 时写入 runDir/intermediate/validation.json
   agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
@@ -85,6 +89,10 @@ Usage:
   agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
   agentflow scheduler start [--poll-ms <ms>]  Start the scheduled-run scheduler (reads each pipeline schedule.json)
   agentflow scheduler status [--json]         Show scheduled-run configuration and state
+  agentflow scheduler cancel <FlowName> <uuid>  Cancel a waiting watch/run
+  agentflow marketplace list [--json]         Show workspace local marketplace packages
+  agentflow marketplace publish-node <dir>    Publish a local node package to the workspace market
+  agentflow marketplace install-node <FlowName> <nodeSpec>  Add a marketplace node dependency to a flow
   agentflow apply <FlowName> [uuid]            Or agentflow apply <uuid> (resolve pipeline from uuid)
   agentflow validate <FlowName> [uuid]        Validate flow; readable output in terminal, JSON with --json or pipe; writes to runDir/intermediate/validation.json when uuid provided
   agentflow resume <FlowName> <uuid> [instanceId]  Mark pending and failed nodes as acknowledged and continue apply

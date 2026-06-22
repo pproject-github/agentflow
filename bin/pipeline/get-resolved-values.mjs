@@ -10,6 +10,7 @@ import fs from "fs";
 import path from "path";
 
 import { getRunDir, LEGACY_NODES_DIR, PIPELINES_DIR, PROJECT_NODES_DIR } from "../lib/paths.mjs";
+import { isMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "../lib/marketplace.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
 import { fileURLToPath } from "url";
 
@@ -102,6 +103,11 @@ function extractDescriptionFromFrontmatter(frontmatter) {
 }
 
 function readNodeDescription(workspaceRoot, flowDir, definitionId) {
+  if (isMarketplaceDefinitionId(definitionId)) {
+    const flowData = loadFlowDefinition(flowDir);
+    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, definitionId, flowData);
+    if (resolved?.description) return resolved.description;
+  }
   const fileName = definitionId.endsWith(".md") ? definitionId : `${definitionId}.md`;
   const flowNodesPath = path.join(flowDir, "nodes", fileName);
   const projectNodesNew = path.join(workspaceRoot, PROJECT_NODES_DIR, fileName);

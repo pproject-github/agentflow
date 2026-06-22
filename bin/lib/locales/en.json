@@ -241,6 +241,26 @@
       "displayName": "To Bool",
       "description": "Execute script to produce true/false prediction. Like tool_nodejs but enforces bool output. Extensible inputs."
     },
+    "control_delay": {
+      "displayName": "Delay",
+      "description": "Persistently wait for a relative duration, then scheduler resumes this run."
+    },
+    "control_wait_until": {
+      "displayName": "Wait Until",
+      "description": "Persistently wait until an absolute time, then scheduler resumes this run."
+    },
+    "control_deadline": {
+      "displayName": "Deadline",
+      "description": "Check whether the deadline has expired and output expired as bool."
+    },
+    "control_cancelled": {
+      "displayName": "Cancelled",
+      "description": "Check whether the current run/watch has been cancelled and output cancelled as bool."
+    },
+    "control_interval_loop": {
+      "displayName": "Interval Loop",
+      "description": "Persistently wait by interval and branch to continue, done, timeout, or cancelled based on done, cancelled, and deadline inputs."
+    },
     "control_agent_toBool": {
       "displayName": "Agent ToBool",
       "description": "AI-powered boolean judgment for non-deterministic scenarios"

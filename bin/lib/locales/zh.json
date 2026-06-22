@@ -241,6 +241,26 @@
       "displayName": "转布尔",
       "description": "执行 script 脚本输出 true/false 到 prediction，类似 tool_nodejs 但强制 bool 输出，可扩展输入"
     },
+    "control_delay": {
+      "displayName": "延迟等待",
+      "description": "持久化等待一段时间，到点后由 scheduler 唤醒当前 run 继续执行"
+    },
+    "control_wait_until": {
+      "displayName": "等待到时间",
+      "description": "持久化等待到指定时间，到点后由 scheduler 唤醒当前 run 继续执行"
+    },
+    "control_deadline": {
+      "displayName": "截止判断",
+      "description": "判断当前时间是否已超过截止时间，输出 expired 布尔值"
+    },
+    "control_cancelled": {
+      "displayName": "取消判断",
+      "description": "判断当前 run/watch 是否已被取消，输出 cancelled 布尔值"
+    },
+    "control_interval_loop": {
+      "displayName": "间隔循环",
+      "description": "按固定间隔持久化等待，并根据 done、cancelled、deadline 分支到继续、完成、超时或取消"
+    },
     "control_agent_toBool": {
       "displayName": "AI 转布尔",
       "description": "由 AI 判断输入内容的布尔含义，适用于不确定性场景"

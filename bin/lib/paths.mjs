@@ -170,6 +170,8 @@ export const LEGACY_PIPELINES_DIR = ".cursor/agentflow/pipelines";
 export const WORKSPACE_AGENTFLOW_ROOT = ".workspace/agentflow";
 /** 项目内自定义节点 .md 目录（主路径；与包内 builtin/nodes 区分） */
 export const PROJECT_NODES_DIR = ".workspace/agentflow/nodes";
+/** Workspace local marketplace package store. */
+export const MARKETPLACE_PACKAGES_DIR = ".workspace/agentflow/marketplace/packages";
 /** 旧版项目内节点目录；仅用于读取回退 */
 export const LEGACY_NODES_DIR = ".cursor/agentflow/nodes";
 /** Web UI 模型映射等项目内配置（主路径） */
@@ -197,6 +199,11 @@ export const CURSOR_NON_MODEL_PATTERNS = [
 /** 仅 pre+post、不执行任何命令的节点类型 */
 export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_if",
+  "control_delay",
+  "control_wait_until",
+  "control_deadline",
+  "control_cancelled",
+  "control_interval_loop",
   "control_start",
   "control_end",
   "tool_print",

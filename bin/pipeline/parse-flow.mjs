@@ -14,6 +14,7 @@ import yaml from "js-yaml";
 
 import { getRunDir, LEGACY_NODES_DIR, PIPELINES_DIR, PROJECT_NODES_DIR } from "../lib/paths.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
+import { isMarketplaceDefinitionId, resolveMarketplaceNodePackage, writeFlowMarketplaceLock } from "../lib/marketplace.mjs";
 import { loadAllExecIds, latestResultExecId, intermediateResultBasename, intermediateDirForNode, outputDirForNode } from "./get-exec-id.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,7 @@ function loadFlowDefinition(flowDir) {
       instances: data.instances && typeof data.instances === "object" ? data.instances : {},
       edges,
       ui: data.ui && typeof data.ui === "object" ? data.ui : {},
+      dependencies: data.dependencies && typeof data.dependencies === "object" ? data.dependencies : {},
     };
   } catch {
     return null;
@@ -48,6 +50,7 @@ function loadFlowDefinition(flowDir) {
 /** 由 definitionId 前缀推导 type */
 function definitionIdToType(definitionId) {
   const id = (definitionId || "").toLowerCase();
+  if (id.startsWith("marketplace:")) return "agent";
   if (id.startsWith("control_")) return "control";
   if (id.startsWith("agent_")) return "agent";
   if (id.startsWith("provide_")) return "provide";
@@ -62,8 +65,14 @@ function definitionIdToType(definitionId) {
  * @param {string} definitionName - 实例中引用的定义名（如 user_confirm_scope）
  * @returns {{ definitionId: string, definitionName: string }}
  */
-function resolveDefinitionIdFromNodeClass(flowDir, definitionName) {
-  const workspaceRoot = path.resolve(flowDir, "..", "..", "..", "..");
+function resolveDefinitionIdFromNodeClass(flowDir, definitionName, workspaceRoot, flowData) {
+  if (isMarketplaceDefinitionId(definitionName)) {
+    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, definitionName, flowData);
+    return {
+      definitionId: resolved?.resolvedDefinitionId || definitionName,
+      definitionName,
+    };
+  }
   const fileName = definitionName.endsWith(".md") ? definitionName : `${definitionName}.md`;
   const flowNodesPath = path.join(flowDir, "nodes", fileName);
   const projectNodesNew = path.join(workspaceRoot, PROJECT_NODES_DIR, fileName);
@@ -85,7 +94,7 @@ function resolveDefinitionIdFromNodeClass(flowDir, definitionName) {
 }
 
 /** 从 loadFlowDefinition 结果得到 nodes 和 edges（与 readFlowMd 输出形状一致） */
-function readFlowFromYaml(flowDir) {
+function readFlowFromYaml(flowDir, workspaceRoot = path.resolve(flowDir, "..", "..", "..", "..")) {
   const def = loadFlowDefinition(flowDir);
   if (!def) return { nodes: [], edges: [] };
   const instances = def.instances;
@@ -98,7 +107,7 @@ function readFlowFromYaml(flowDir) {
   const nodes = Array.from(nodeIds).map((id) => {
     const inst = instances[id] || {};
     const definitionName = inst.definitionId ?? id;
-    const { definitionId } = resolveDefinitionIdFromNodeClass(flowDir, definitionName);
+    const { definitionId } = resolveDefinitionIdFromNodeClass(flowDir, definitionName, workspaceRoot, def);
     const type = definitionIdToType(definitionId);
     const label = inst.label != null ? String(inst.label) : id;
     const role =
@@ -613,7 +622,8 @@ function main() {
     process.exit(1);
   }
   try {
-    const { nodes, edges } = readFlowFromYaml(flowDir);
+    writeFlowMarketplaceLock(workspaceRoot || path.resolve(flowDir, "..", "..", "..", ".."), flowDir, flowData);
+    const { nodes, edges } = readFlowFromYaml(flowDir, workspaceRoot || path.resolve(flowDir, "..", "..", "..", ".."));
     const { order: topoOrder, hasCycle } = topoSort(nodes, edges);
     const order = hasCycle ? nodes.map((n) => n.id) : topoOrder;
     const cycleNodes = hasCycle ? Array.from(findCycleNodes(nodes, edges)) : [];

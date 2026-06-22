@@ -64,6 +64,7 @@ import {
 import { runNodeScript } from "./pipeline-scripts.mjs";
 import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
+import { installFlowDependency, listMarketplacePackages, publishNodeFromInstance } from "./marketplace.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -881,6 +882,77 @@ export function startUiServer({
         json(res, 200, listNodesJson(root, flowId, flowSource, { archived: nodesArchived }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/marketplace/nodes") {
+      try {
+        json(res, 200, listMarketplacePackages(root));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/install-node") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = payload?.flowId;
+      const flowSource = payload?.flowSource || "user";
+      const flowArchived = payload?.archived === true;
+      const nodeSpec = payload?.nodeSpec || payload?.definitionId || payload?.id;
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (!nodeSpec) {
+        json(res, 400, { error: "Missing nodeSpec" });
+        return;
+      }
+      if (flowArchived || !isValidFlowSourceWrite(flowSource)) {
+        json(res, 400, { error: "Cannot install marketplace nodes into builtin or archived flow" });
+        return;
+      }
+      try {
+        const resolved = resolveFlowDirForWrite(root, flowId, flowSource);
+        if (resolved.error || !resolved.flowDir) {
+          json(res, 400, { error: resolved.error || "Could not resolve flow directory" });
+          return;
+        }
+        const result = installFlowDependency(root, resolved.flowDir, nodeSpec);
+        json(res, result.ok ? 200 : 400, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/publish-node-from-instance") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const flowId = payload?.flowId;
+        const flowSource = payload?.flowSource || "user";
+        let flowDir = "";
+        if (flowId && isValidFlowSourceWrite(flowSource)) {
+          const resolved = resolveFlowDirForWrite(root, flowId, flowSource);
+          if (!resolved.error && resolved.flowDir) flowDir = resolved.flowDir;
+        }
+        const result = publishNodeFromInstance(root, payload || {}, { flowDir });
+        json(res, result.ok ? 200 : 400, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
       }
       return;
     }

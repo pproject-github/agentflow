@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 
 import { getRunDir, PIPELINES_DIR } from "../lib/paths.mjs";
 import { getFlowDir } from "../lib/workspace.mjs";
+import { isMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "../lib/marketplace.mjs";
 import { loadFlowDefinition } from "./parse-flow.mjs";
 import { getResolvedValues, getOutputPathForSlot } from "./get-resolved-values.mjs";
 import { loadExecId } from "./get-exec-id.mjs";
@@ -22,7 +23,8 @@ function shellQuote(s) {
 }
 
 function resolvePlaceholder(k, resolvedInputs, resolvedOutputs, opts) {
-  const { instanceId, currentExecId, runDir } = opts;
+  const { instanceId, currentExecId, runDir, extra = {} } = opts;
+  if (Object.prototype.hasOwnProperty.call(extra, k)) return extra[k];
   const execId = currentExecId ?? 1;
   const toAbs = (rel) => (runDir && rel ? path.join(runDir, rel) : rel);
   if (k.startsWith("input.")) {
@@ -76,6 +78,39 @@ function resolveScriptCommand(
   });
 }
 
+function marketplaceRuntimeCommand(marketplaceNode, resolvedInputs, resolvedOutputs, opts) {
+  if (!marketplaceNode || !marketplaceNode.runtime) return "";
+  const runtime = marketplaceNode.runtime;
+  const packageDir = marketplaceNode.packageDir;
+  const entry = runtime.entry ? path.join(packageDir, String(runtime.entry)) : "";
+  const language = String(runtime.language || "").trim();
+  const runner =
+    language === "python"
+      ? "python3"
+      : language === "bash"
+        ? "bash"
+        : language === "nodejs" || entry
+          ? "node"
+          : "";
+  const args = Array.isArray(runtime.args) ? runtime.args.map((x) => String(x)).join(" ") : "";
+  const command = runtime.command
+    ? String(runtime.command)
+    : entry
+      ? [runner, "${entry}", args].filter(Boolean).join(" ")
+      : "";
+  if (!command) return "";
+  return resolveScriptCommand(command, resolvedInputs, resolvedOutputs, {
+    ...opts,
+    extra: {
+      ...(opts.extra || {}),
+      entry,
+      packageDir,
+      workspaceRoot: opts.workspaceRoot || "",
+      runDir: opts.runDir || "",
+    },
+  });
+}
+
 /**
  * 执行占位符替换，组装 prompt 并写入 intermediate 文件（文件名带 _execId）。
  * @param {number} [execId] - 本轮 execId，缺省则从 memory 读取
@@ -105,6 +140,10 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
 
   const flowData = loadFlowDefinition(flowDir);
   const inst = flowData?.instances?.[instanceId];
+  const marketplaceNode =
+    inst?.definitionId && isMarketplaceDefinitionId(inst.definitionId)
+      ? resolveMarketplaceNodePackage(workspaceRoot, flowDir, inst.definitionId, flowData)
+      : null;
   const instanceBody =
     inst?.body != null
       ? String(inst.body || "").trim()
@@ -115,7 +154,7 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
       : "";
 
   const { resolvedInputs = {}, resolvedOutputs = {}, systemPrompt = "" } = data;
-  const resolveOpts = { instanceId, currentExecId: e, runDir };
+  const resolveOpts = { instanceId, currentExecId: e, runDir, workspaceRoot };
   const taskBody = resolvePlaceholdersInText(
     instanceBody,
     resolvedInputs,
@@ -125,6 +164,8 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
 
   const resolvedScript = instanceScript
     ? resolveScriptCommand(instanceScript, resolvedInputs, resolvedOutputs, resolveOpts)
+    : marketplaceNode
+      ? marketplaceRuntimeCommand(marketplaceNode, resolvedInputs, resolvedOutputs, resolveOpts)
     : "";
 
   const content = `## 节点上下文

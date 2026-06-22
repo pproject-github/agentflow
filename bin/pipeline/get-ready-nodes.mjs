@@ -248,7 +248,7 @@ function main() {
     for (const id of pendingInstances) {
       if (instanceStatus[id] !== "success") continue;
       nextPending.delete(id);
-      if (nodeDefinitions[id] === "control_if" || nodeDefinitions[id] === "tool_user_ask") {
+      if (nodeDefinitions[id] === "control_if" || nodeDefinitions[id] === "tool_user_ask" || nodeDefinitions[id] === "control_interval_loop") {
         const predLatestE = latestResultExecId(execIdMap[id] ?? 1);
         const resultPath = predLatestE
           ? path.join(intermediateDir, id, intermediateResultBasename(id, predLatestE))
@@ -309,7 +309,7 @@ function main() {
     /** 判断 predecessor P 对 target N 是否算「就绪」：普通节点看 status；control_if / tool_user_ask 看 branch 与出边 sourceHandle */
     const isPredecessorReadyFor = (predSource, predDefId, targetId) => {
       if (instanceStatus[predSource] !== "success") return false;
-      if (predDefId !== "control_if" && predDefId !== "tool_user_ask") return true;
+      if (predDefId !== "control_if" && predDefId !== "tool_user_ask" && predDefId !== "control_interval_loop") return true;
       const inEdges = inEdgesByTarget[targetId] || [];
       const edge = inEdges.find((ie) => ie.source === predSource);
       if (!edge) return true;

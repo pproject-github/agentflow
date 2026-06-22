@@ -16,6 +16,7 @@ import {
   getUserPipelinesRoot,
 } from "./paths.mjs";
 import { Table } from "./table.mjs";
+import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -201,6 +202,16 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const archived = Boolean(opts.archived);
   const byId = new Map();
   const pipelineTranslations = {};
+  let marketplaceFlowData = null;
+  if (flowId && flowSource) {
+    const flowPath = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
+    if (flowPath.path && fs.existsSync(flowPath.path)) {
+      try {
+        const parsed = yaml.load(fs.readFileSync(flowPath.path, "utf-8"));
+        if (parsed && typeof parsed === "object") marketplaceFlowData = parsed;
+      } catch (_) {}
+    }
+  }
   const addFromDir = (dir, source, flowIdOpt) => {
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
@@ -235,6 +246,26 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   addFromDir(PACKAGE_BUILTIN_NODES_DIR, "project");
   addFromDir(path.join(root, LEGACY_NODES_DIR), "project");
   addFromDir(path.join(root, PROJECT_NODES_DIR), "project");
+  for (const manifest of listMarketplaceNodes(root, marketplaceFlowData)) {
+    let type = "agent";
+    const runtimeType = String(manifest.runtime?.type || manifest.type || "").toLowerCase();
+    if (runtimeType.startsWith("control")) type = "control";
+    else if (runtimeType.startsWith("provide")) type = "provide";
+    byId.set(manifest.definitionId, {
+      id: manifest.definitionId,
+      packageId: manifest.id,
+      version: manifest.version,
+      type,
+      label: manifest.displayName,
+      displayName: manifest.displayName,
+      description: manifest.description,
+      inputs: manifest.input,
+      outputs: manifest.output,
+      source: manifest.source || "marketplace",
+      packageDir: manifest.packageDir,
+      runtime: manifest.runtime,
+    });
+  }
   if (flowId && flowSource) {
     if (flowSource === "builtin") {
       addFromDir(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes"), "flow", flowId);
@@ -443,6 +474,40 @@ export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) 
 export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(opts.archived);
+  const marketSpec = parseMarketplaceDefinitionId(nodeId);
+  if (marketSpec) {
+    let flowDir = root;
+    if (flowId && flowSource) {
+      const flowPath = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
+      if (flowPath.path) flowDir = path.dirname(flowPath.path);
+      if (flowPath.path && fs.existsSync(flowPath.path)) {
+        try {
+          const parsed = yaml.load(fs.readFileSync(flowPath.path, "utf-8"));
+          if (parsed && typeof parsed === "object") opts.flowData = parsed;
+        } catch (_) {}
+      }
+    }
+    const resolved = resolveMarketplaceNodePackage(root, flowDir, nodeId, opts.flowData || null);
+    if (!resolved) return { error: "Node not found: " + nodeId };
+    const readmePath = path.join(resolved.packageDir, "README.md");
+    let type = "agent";
+    const runtimeType = String(resolved.runtime?.type || resolved.type || "").toLowerCase();
+    if (runtimeType.startsWith("control")) type = "control";
+    else if (runtimeType.startsWith("provide")) type = "provide";
+    return {
+      type,
+      label: resolved.displayName,
+      displayName: resolved.displayName,
+      inputs: resolved.input,
+      outputs: resolved.output,
+      executionLogic: fs.existsSync(readmePath) ? fs.readFileSync(readmePath, "utf-8").trim() : undefined,
+      description: resolved.description,
+      packageId: resolved.id,
+      version: resolved.version,
+      packageDir: resolved.packageDir,
+      runtime: resolved.runtime,
+    };
+  }
   const fileName = nodeId.endsWith(".md") ? nodeId : `${nodeId}.md`;
   const pathsToTry = [];
   if (flowId && flowSource) {
