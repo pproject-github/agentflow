@@ -13,6 +13,7 @@
  */
 import fs from "fs";
 import path from "path";
+import yaml from "js-yaml";
 
 // ─── 意图模式定义 ─────────────────────────────────────────────────────────
 
@@ -122,6 +123,112 @@ function readFileCached(absPath) {
   } catch {
     return null;
   }
+}
+
+function parseSkillFile(absPath) {
+  const content = readFileCached(absPath);
+  if (!content) return null;
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  let meta = {};
+  if (fmMatch) {
+    try {
+      meta = yaml.load(fmMatch[1]) || {};
+    } catch {
+      meta = {};
+    }
+  }
+  const dirName = path.basename(path.dirname(absPath));
+  const name = String(meta.name || dirName).trim();
+  if (!name) return null;
+  const description = String(meta.description || "").trim();
+  return {
+    name,
+    description,
+    content,
+    body: stripFrontmatter(content),
+    absPath,
+  };
+}
+
+function listSkillDirs(rootDir) {
+  try {
+    return fs.readdirSync(rootDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(rootDir, e.name, "SKILL.md"))
+      .filter((p) => fs.existsSync(p));
+  } catch {
+    return [];
+  }
+}
+
+function skillSources(packageRoot, workspaceRoot) {
+  const sources = [
+    { source: "builtin", label: "AgentFlow", dir: path.join(packageRoot, "skills") },
+  ];
+  if (workspaceRoot) {
+    sources.push(
+      { source: "workspace-agents", label: ".agents", dir: path.join(workspaceRoot, ".agents", "skills") },
+      { source: "workspace-cursor", label: ".cursor", dir: path.join(workspaceRoot, ".cursor", "skills") },
+    );
+  }
+  return sources;
+}
+
+export function listComposerSkills(packageRoot, workspaceRoot) {
+  const out = [];
+  const seenKeys = new Set();
+  for (const src of skillSources(packageRoot, workspaceRoot)) {
+    for (const skillPath of listSkillDirs(src.dir)) {
+      const skill = parseSkillFile(skillPath);
+      if (!skill) continue;
+      const key = `${src.source}:${skill.name}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      out.push({
+        key,
+        id: skill.name,
+        name: skill.name,
+        description: skill.description,
+        source: src.source,
+        sourceLabel: src.label,
+        path: skill.absPath,
+      });
+    }
+  }
+  return out.sort((a, b) => {
+    const bySource = a.sourceLabel.localeCompare(b.sourceLabel);
+    if (bySource !== 0) return bySource;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+export function loadResourcesForSkillKeys(skillKeys, packageRoot, workspaceRoot) {
+  if (!Array.isArray(skillKeys) || skillKeys.length === 0) {
+    return { skills: [], references: [], skillsHint: "", hasContext: false };
+  }
+  const wanted = new Set(skillKeys.map((x) => String(x || "").trim()).filter(Boolean));
+  if (wanted.size === 0) return { skills: [], references: [], skillsHint: "", hasContext: false };
+
+  const skills = [];
+  for (const item of listComposerSkills(packageRoot, workspaceRoot)) {
+    if (!wanted.has(item.key) && !wanted.has(item.name)) continue;
+    const parsed = parseSkillFile(item.path);
+    if (!parsed) continue;
+    skills.push({
+      id: item.name,
+      content: parsed.body,
+      absPath: item.path,
+      source: item.source,
+      sourceLabel: item.sourceLabel,
+    });
+  }
+
+  return {
+    skills,
+    references: [],
+    skillsHint: buildSelectedSkillsHint(skills),
+    hasContext: skills.length > 0,
+  };
 }
 
 // ─── 意图检测 ─────────────────────────────────────────────────────────────
@@ -304,6 +411,16 @@ function buildSkillsHint(intents, skills, references) {
     "如果无法写出完整可执行的 script，必须改用 agent_subAgent。"
   );
 
+  return lines.join("\n");
+}
+
+function buildSelectedSkillsHint(skills) {
+  if (!Array.isArray(skills) || skills.length === 0) return "";
+  const lines = ["## 用户选择的 skills"];
+  for (const s of skills) {
+    lines.push(`- 使用 skill \`${s.id}\`：${s.absPath}`);
+  }
+  lines.push("如任务与所选 skill 匹配，请先读取对应 SKILL.md 并遵循其说明；如果只是问答，按问题直接回答。");
   return lines.join("\n");
 }
 

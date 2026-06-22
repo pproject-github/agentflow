@@ -26,11 +26,9 @@ import { updateModelLists } from "./model-lists.mjs";
 import {
   startComposerAgent,
   startComposerMultiStep,
-  shouldUseMultiStep,
   runComposerPostFlowValidationAndRepair,
   buildScriptContentBlockForInstances,
 } from "./composer-agent.mjs";
-import { buildNodeSchemaCompactSection } from "./composer-node-schema.mjs";
 import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
@@ -42,6 +40,8 @@ import { RUN_INTERRUPTED_FILENAME } from "./recent-runs.mjs";
 import {
   detectIntents,
   loadResourcesForIntents,
+  loadResourcesForSkillKeys,
+  listComposerSkills,
   buildSkillInjectionBlock,
   buildSkillCompactInjectionBlock,
 } from "./composer-skill-router.mjs";
@@ -277,10 +277,6 @@ function buildComposerPromptWithFlowContext(p) {
   const flowDirAbs = path.dirname(p.flowYamlAbs);
   const idsLine =
     p.instanceIds.length > 0 ? p.instanceIds.map(String).join(", ") : "（无，可能为全局修改或新增节点）";
-  const syncFs = p.editorSyncFlowSource ?? p.flowSource;
-  const syncBody = { flowId: p.flowId, flowSource: syncFs };
-  if (p.flowArchived) syncBody.flowArchived = true;
-  const syncJsonArg = JSON.stringify(JSON.stringify(syncBody));
   const builtinExtra =
     p.flowSource === "builtin" && p.workspaceWriteDirAbs
       ? [
@@ -288,23 +284,6 @@ function buildComposerPromptWithFlowContext(p) {
           "- 保存后刷新 Web 画布时，flow-editor-sync 的 JSON 须使用 flowSource: workspace（与上方 curl 一致）。",
         ]
       : [];
-
-  // 基于用户意图动态注入 skill 和 reference 内容
-  const intents = detectIntents(p.userPrompt);
-  const resources = loadResourcesForIntents(intents, PACKAGE_ROOT);
-  const skillBlock = resources.hasContext
-    ? buildSkillInjectionBlock(resources.skills, resources.references)
-    : "";
-
-  // 无意图匹配时使用通用 skill 路径引用作为兜底
-  const skillPathHints = resources.hasContext
-    ? []
-    : [
-        "- 新增实例与边：遵循 skill `skills/agentflow-flow-add-instances/SKILL.md`（或 `.cursor/skills/.../SKILL.md`）。",
-        "- 仅改已有实例文案/占位等：遵循 `skills/agentflow-flow-edit-node-fields/SKILL.md`，勿改 definitionId、instanceId、IO 结构与边拓扑。",
-      ];
-
-  const nodeSchemaSection = buildNodeSchemaCompactSection();
 
   const prefix = [
     "## AgentFlow Composer 上下文",
@@ -314,33 +293,15 @@ function buildComposerPromptWithFlowContext(p) {
     `- flowSource：${p.flowSource}`,
     ...builtinExtra,
     `- 当前关联的节点实例 ID（顺序：画布选中优先，再输入框 @提及）：${idsLine}`,
-    "- 请根据用户需求自行判断：如果是在问问题，只回答；如果是在要求新增、修改、完善或修复流程，请直接修改对应文件。",
-    "- 一旦修改 flow.yaml、脚本或相关文件，必须按下方方式刷新 Web 画布。",
-    ...skillPathHints,
+    "- 像普通 agent 请求一样处理用户说明：可能只是问问题，也可能要求编辑文件。不要因为存在 flowId 就默认修改 flow.yaml。",
+    "- 按需使用当前环境可用的 skills；如果用户点名某个 skill，遵循该 skill 的 SKILL.md。",
+    "- 如果你判断需要编辑 AgentFlow 流程，可按需读取这些本地 skills：",
+    "  - `skills/agentflow-flow-add-instances/SKILL.md`：新增实例、边和布局",
+    "  - `skills/agentflow-flow-edit-node-fields/SKILL.md`：只改已有节点字段",
+    "  - `skills/agentflow-flow-sync-ui/SKILL.md`：保存 flow.yaml 后刷新画布",
+    "- 如果只是回答问题，不要修改文件。",
     "",
-    "### 节点能力选择",
-    "**判据**：确定性任务优先 `tool_nodejs`；需要语义理解、生成、判断或多步推理时使用 `agent_subAgent`。",
-    "- **确定性**：相同输入永远产出相同输出，可用普通代码完整描述（CLI/npm 调用、读写文件、JSON/路径转换、调现成 API 解析固定格式、跑脚手架等）。",
-    "- **非确定性**：需要语义理解或创造（代码翻译/生成、源码/文本解析改写、多步推理决策、创意写作）。",
-    "- 分支/循环使用 `control_toBool` / `control_agent_toBool` + `control_if` + `control_anyOne` 组合。",
-    "- 常量输入使用 `provide_str` / `provide_file`；读取环境变量使用 `tool_get_env`；终端展示使用 `tool_print`。",
-    "",
-    nodeSchemaSection,
-    "",
-    "### tool_nodejs 的 script 与 body 关键区分",
-    "- **`script` 字段**：实际执行的命令代码，流水线直接 spawn 执行；**tool_nodejs 必须写 script**",
-    "- **`body` 字段**：纯文档注释，有 script 时完全不执行；**禁止在 body 写期望执行的逻辑**",
-    "- 如果无法写出完整可执行的 script（需要 AI 理解/判断），**必须改用 agent_subAgent**，不要用 tool_nodejs",
-    "- script 支持多行（YAML `|`）和管道，可写复杂的 curl + node 组合",
-    "- **禁止**：tool_nodejs 只有 body 没有 script（body 中的自然语言不会被执行，节点会失败）",
-    "",
-    // 动态注入的 skill 和 reference 内容
-    ...(skillBlock ? [skillBlock, ""] : []),
-    "- **保存 flow.yaml 后必须刷新 Web 画布**：遵循 `skills/agentflow-flow-sync-ui/SKILL.md`；在终端执行（将 JSON 与上方 flowId、flowSource" +
-      (p.flowArchived ? "、flowArchived" : "") +
-      " 保持一致）：",
-    `  curl -sS -X POST http://127.0.0.1:${p.uiPort}/api/flow-editor-sync -H 'Content-Type: application/json' -d ${syncJsonArg}`,
-    "",
+    ...(p.selectedSkillBlock ? [p.selectedSkillBlock, ""] : []),
     ...(p.thread && p.thread.length > 0
       ? [formatThreadHistory(p.thread), ""]
       : []),
@@ -350,6 +311,15 @@ function buildComposerPromptWithFlowContext(p) {
     p.userPrompt.trim(),
   ].join("\n");
   return prefix;
+}
+
+function flowYamlChangedSince(flowYamlAbs, beforeText) {
+  if (!flowYamlAbs || beforeText == null) return false;
+  try {
+    return fs.readFileSync(flowYamlAbs, "utf-8") !== beforeText;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeContextInstanceIds(raw) {
@@ -1709,6 +1679,11 @@ finishedAt: "${new Date().toISOString()}"
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/skills") {
+      json(res, 200, { skills: listComposerSkills(PACKAGE_ROOT, root) });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/composer-agent") {
       let payload;
       try {
@@ -1728,6 +1703,9 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Invalid model" });
         return;
       }
+      const selectedSkillKeys = Array.isArray(payload.selectedSkills)
+        ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 20)
+        : [];
 
       const flowIdRaw = payload.flowId;
       const flowSourceRaw = payload.flowSource;
@@ -1750,6 +1728,8 @@ finishedAt: "${new Date().toISOString()}"
       let flowSource = null;
       let instanceIds = [];
       let flowContextForMultiStep = null;
+      let flowYamlBefore = null;
+      const hasPhaseContext = payload.phaseContext && typeof payload.phaseContext === "object" && typeof payload.phaseContext.phaseIndex === "number";
 
       if (hasFlowId) {
         flowId = String(flowIdRaw).trim();
@@ -1765,6 +1745,7 @@ finishedAt: "${new Date().toISOString()}"
           return;
         }
         flowYamlAbs = yamlRes.path;
+        try { flowYamlBefore = fs.readFileSync(flowYamlAbs, "utf-8"); } catch { flowYamlBefore = null; }
         let workspaceWriteDirAbs;
         let editorSyncFlowSource = flowSource;
         let flowDirForCli = path.dirname(flowYamlAbs);
@@ -1785,10 +1766,18 @@ finishedAt: "${new Date().toISOString()}"
         if (flowArchived) syncBody.flowArchived = true;
         const syncJsonArg = JSON.stringify(JSON.stringify(syncBody));
 
-        // 基于用户意图动态加载 skill 上下文
+        // 多步分阶段仍需要技能上下文；普通 Composer 请求直接交给 agent + skills 自行判断。
         const multiStepIntents = detectIntents(prompt);
-        const multiStepResources = loadResourcesForIntents(multiStepIntents, PACKAGE_ROOT);
+        const selectedSkillResources = selectedSkillKeys.length > 0
+          ? loadResourcesForSkillKeys(selectedSkillKeys, PACKAGE_ROOT, root)
+          : { skills: [], references: [], skillsHint: "", hasContext: false };
+        const multiStepResources = selectedSkillResources.hasContext
+          ? selectedSkillResources
+          : loadResourcesForIntents(multiStepIntents, PACKAGE_ROOT);
         const flowPipelineDir = flowYamlAbs ? path.dirname(flowYamlAbs) : "";
+        const selectedSkillBlock = selectedSkillResources.hasContext
+          ? buildSkillInjectionBlock(selectedSkillResources.skills, selectedSkillResources.references)
+          : "";
 
         flowContextForMultiStep = {
           flowYamlAbs,
@@ -1818,6 +1807,7 @@ finishedAt: "${new Date().toISOString()}"
           flowArchived,
           thread,
           scriptContentBlock,
+          selectedSkillBlock,
         });
         cliWorkspace = composerCliWorkspaceForFlowDir(root, flowDirForCli);
       }
@@ -1909,10 +1899,9 @@ finishedAt: "${new Date().toISOString()}"
       onStreamEvent({ type: "status", line: t("composer.analyzing_task") });
       log.debug(`[ui] composer-agent: flowId=${flowId || "(none)"} model=${model || "default"} promptLen=${finalPrompt.length}`);
 
-      const hasPhaseContext = payload.phaseContext && typeof payload.phaseContext === "object" && typeof payload.phaseContext.phaseIndex === "number";
       let useMultiStep;
       try {
-        useMultiStep = hasPhaseContext || ((await shouldUseMultiStep({ flowYamlAbs, userPrompt: prompt.trim(), cliWorkspace })) && !payload.singleStep);
+        useMultiStep = hasPhaseContext && !payload.singleStep;
       } catch (classifyErr) {
         log.debug(`[ui] composer classify error: ${classifyErr.message}`);
         logComposerEvent(composerLogPath, "composer-done", {
@@ -2009,7 +1998,8 @@ finishedAt: "${new Date().toISOString()}"
                 endSafe();
                 return;
               }
-              if (flowYamlAbs && flowContextForMultiStep) {
+              const flowYamlChanged = flowYamlChangedSince(flowYamlAbs, flowYamlBefore);
+              if (flowYamlChanged && flowYamlAbs && flowContextForMultiStep) {
                 try {
                   await runComposerPostFlowValidationAndRepair({
                     uiWorkspaceRoot: root,
@@ -2038,7 +2028,7 @@ finishedAt: "${new Date().toISOString()}"
                   flowId: flowId || null,
                   flowSource: flowSource || null,
                 });
-                if (flowId && flowSource) {
+                if (flowYamlChanged && flowId && flowSource) {
                   broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived));
                 }
                 try { res.write(JSON.stringify({ type: "done" }) + "\n"); } catch (_) {}

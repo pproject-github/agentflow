@@ -975,6 +975,12 @@ export default function FlowEditorPage() {
   const [modelLists, setModelLists] = useState(/** @type {{ cursor: string[], opencode: string[], claudeCode: string[] }} */ ({ cursor: [], opencode: [], claudeCode: [] }));
   const [composerModel, setComposerModel] = useState("");
   const [composerPhaseRole, setComposerPhaseRole] = useState("");
+  const [composerSkills, setComposerSkills] = useState(/** @type {Array<{ key: string, name: string, description?: string, sourceLabel?: string }>} */ ([]));
+  const [composerSelectedSkills, setComposerSelectedSkills] = useState(/** @type {string[]} */ ([]));
+  const [composerSkillsOpen, setComposerSkillsOpen] = useState(false);
+  const composerSkillsButtonRef = useRef(/** @type {HTMLButtonElement | null} */ (null));
+  const composerSkillsMenuRef = useRef(/** @type {HTMLDivElement | null} */ (null));
+  const [composerSkillsMenuStyle, setComposerSkillsMenuStyle] = useState(/** @type {React.CSSProperties} */ ({}));
 
   // 多 Session 支持
   /** @typedef {{ id: string, label: string, thread: Array, segments: Array, running: boolean, statusLine: string, steps: Array, outputDismissed: boolean, createdAt: number, phaseContext: null | { phases: Array, currentPhase: number, isLastPhase: boolean, userPromptOriginal: string, nextPhase: object | null } }} ComposerSession */
@@ -1658,6 +1664,31 @@ export default function FlowEditorPage() {
     return () => {
       cancelled = true;
       clearTimeout(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/skills")
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const skills = Array.isArray(j.skills)
+          ? j.skills
+              .filter((s) => s && typeof s.key === "string" && s.key.trim())
+              .map((s) => ({
+                key: String(s.key),
+                name: String(s.name || s.id || s.key),
+                description: s.description ? String(s.description) : "",
+                sourceLabel: s.sourceLabel ? String(s.sourceLabel) : "",
+              }))
+          : [];
+        setComposerSkills(skills);
+        setComposerSelectedSkills((prev) => prev.filter((k) => skills.some((s) => s.key === k)));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -3495,6 +3526,26 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, currentNotInLists: extra };
   }, [modelLists, composerModel]);
 
+  const composerSelectedSkillSet = useMemo(() => new Set(composerSelectedSkills), [composerSelectedSkills]);
+  const composerSelectedSkillCount = composerSelectedSkills.length;
+
+  const updateComposerSkillsMenuPosition = useCallback(() => {
+    const btn = composerSkillsButtonRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const width = Math.min(400, Math.max(300, window.innerWidth - 24));
+    const left = Math.min(Math.max(12, rect.right - width), window.innerWidth - width - 12);
+    const availableAbove = Math.max(140, rect.top - 22);
+    const maxHeight = Math.min(360, availableAbove);
+    setComposerSkillsMenuStyle({
+      position: "fixed",
+      left: `${left}px`,
+      top: `${Math.max(12, rect.top - maxHeight - 10)}px`,
+      width: `${width}px`,
+      maxHeight: `${maxHeight}px`,
+    });
+  }, []);
+
   useEffect(() => {
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
@@ -3504,6 +3555,29 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       return next === prev ? prev : next;
     });
   }, [modelLists.cursor, modelLists.opencode, modelLists.claudeCode]);
+
+  useEffect(() => {
+    if (!composerSkillsOpen) return;
+    updateComposerSkillsMenuPosition();
+    const onPointerDown = (e) => {
+      const target = e.target;
+      if (composerSkillsButtonRef.current?.contains(target) || composerSkillsMenuRef.current?.contains(target)) return;
+      setComposerSkillsOpen(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setComposerSkillsOpen(false);
+    };
+    window.addEventListener("resize", updateComposerSkillsMenuPosition);
+    window.addEventListener("scroll", updateComposerSkillsMenuPosition, true);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("resize", updateComposerSkillsMenuPosition);
+      window.removeEventListener("scroll", updateComposerSkillsMenuPosition, true);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [composerSkillsOpen, updateComposerSkillsMenuPosition]);
 
   const submitComposer = useCallback(async (overridePrompt, options = {}) => {
     if (!selected || composerSubmittingRef.current) return;
@@ -3569,6 +3643,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         ...(selected.archived ? { flowArchived: true } : {}),
         contextInstanceIds,
         thread: threadForApi,
+        selectedSkills: composerSelectedSkills,
       };
       if (currentPhaseCtx && currentPhaseCtx.nextPhase && !currentPhaseCtx.isLastPhase) {
         reqBody.phaseContext = {
@@ -3753,7 +3828,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         );
       }
     }
-  }, [selected, composerText, composerModel, modelLists, composerStripEntries, loadFlow, composerThread, activeSessionId, composerPhaseContext, composerPhaseRole]);
+  }, [selected, composerText, composerModel, modelLists, composerStripEntries, loadFlow, composerThread, activeSessionId, composerPhaseContext, composerPhaseRole, composerSelectedSkills]);
 
   submitComposerRef.current = submitComposer;
 
@@ -5284,6 +5359,68 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                         </select>
                       </label>
                     )}
+                    <div className="af-composer-skills-field">
+                      <button
+                        ref={composerSkillsButtonRef}
+                        type="button"
+                        className={
+                          "af-composer-skills-button" +
+                          (composerSelectedSkillCount > 0 ? " af-composer-skills-button--active" : "")
+                        }
+                        disabled={!selected || composerRunning}
+                        aria-haspopup="listbox"
+                        aria-expanded={composerSkillsOpen}
+                        onClick={() => setComposerSkillsOpen((v) => !v)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>extension</span>
+                        <span>{composerSelectedSkillCount > 0 ? `Skills ${composerSelectedSkillCount}` : "Skills"}</span>
+                      </button>
+                      {composerSkillsOpen && !composerRunning
+                        ? createPortal(
+                            <div
+                              ref={composerSkillsMenuRef}
+                              className="af-composer-skills-menu"
+                              role="listbox"
+                              aria-label="Composer skills"
+                              style={composerSkillsMenuStyle}
+                            >
+                              {composerSkills.length === 0 ? (
+                                <div className="af-composer-skills-empty">No skills found</div>
+                              ) : (
+                                composerSkills.map((skill) => (
+                                  <label key={skill.key} className="af-composer-skill-option">
+                                    <input
+                                      type="checkbox"
+                                      checked={composerSelectedSkillSet.has(skill.key)}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setComposerSelectedSkills((prev) => {
+                                          if (checked) {
+                                            return prev.includes(skill.key) ? prev : [...prev, skill.key];
+                                          }
+                                          return prev.filter((k) => k !== skill.key);
+                                        });
+                                      }}
+                                    />
+                                    <span className="af-composer-skill-option-main">
+                                      <span className="af-composer-skill-option-title">
+                                        {skill.name}
+                                        {skill.sourceLabel ? (
+                                          <span className="af-composer-skill-option-source">{skill.sourceLabel}</span>
+                                        ) : null}
+                                      </span>
+                                      {skill.description ? (
+                                        <span className="af-composer-skill-option-desc">{skill.description}</span>
+                                      ) : null}
+                                    </span>
+                                  </label>
+                                ))
+                              )}
+                            </div>,
+                            document.body,
+                          )
+                        : null}
+                    </div>
                     <label className="af-composer-model-field">
                       <span className="af-visually-hidden">{t("flow:composer.modelLabel")}</span>
                       <select

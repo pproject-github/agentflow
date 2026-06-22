@@ -5506,6 +5506,119 @@ button.af-project-card {
   cursor: not-allowed;
 }
 
+.af-composer-skills-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.af-composer-skills-button {
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.85rem;
+  border: none;
+  border-radius: 999px;
+  font-family: var(--af-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(229, 226, 225, 0.9);
+  background: rgba(55, 55, 55, 0.95);
+  box-shadow: 0 0 0 1px rgba(229, 226, 225, 0.12);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, color 0.15s;
+}
+
+.af-composer-skills-button:hover:not(:disabled),
+.af-composer-skills-button--active:not(:disabled) {
+  color: #f3efff;
+  background: rgba(70, 62, 92, 0.96);
+  box-shadow: 0 0 0 1px rgba(205, 189, 255, 0.24);
+}
+
+.af-composer-skills-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.af-composer-skills-button .material-symbols-outlined {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.af-composer-skills-menu {
+  z-index: 4000;
+  overflow: auto;
+  padding: 0.45rem;
+  border-radius: 0.75rem;
+  background: rgba(31, 31, 31, 0.98);
+  border: 1px solid rgba(229, 226, 225, 0.12);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+.af-composer-skills-empty {
+  padding: 0.7rem 0.75rem;
+  font-size: 0.78rem;
+  color: rgba(229, 226, 225, 0.62);
+}
+
+.af-composer-skill-option {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.af-composer-skill-option:hover {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.af-composer-skill-option input {
+  margin: 0.12rem 0 0;
+  accent-color: #9c7cff;
+}
+
+.af-composer-skill-option-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.af-composer-skill-option-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: rgba(245, 242, 241, 0.94);
+}
+
+.af-composer-skill-option-source {
+  flex: 0 0 auto;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 650;
+  color: rgba(220, 211, 255, 0.9);
+  background: rgba(124, 77, 255, 0.16);
+}
+
+.af-composer-skill-option-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: rgba(229, 226, 225, 0.62);
+}
+
 .af-composer-model-field {
   margin: 0;
   display: inline-flex;
