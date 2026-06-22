@@ -32,6 +32,18 @@ const PARALLEL_PREFIX_COLORS = [
   (s) => chalk.blue(s),
 ];
 
+function readExistingResultBranch(workspaceRoot, flowName, uuid, instanceId) {
+  const resultPath = path.join(getRunDir(workspaceRoot, flowName, uuid), "intermediate", instanceId, `${instanceId}.result.md`);
+  if (!fs.existsSync(resultPath)) return null;
+  try {
+    const raw = fs.readFileSync(resultPath, "utf-8");
+    const m = raw.match(/^\s*branch:\s*["']?([^"'\s]+)["']?/m);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 /** parallel 默认 false */
 export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel = null, force = true, parallel = false, cliInputs = {}) {
   ensureReference(workspaceRoot);
@@ -764,8 +776,13 @@ export async function resume(workspaceRoot, flowName, uuid, instanceIdOptional, 
     const failedNodes = Object.keys(instanceStatus).filter((id) => instanceStatus[id] === "failed");
     nodesToResume = [...new Set([...pendingNodes, ...failedNodes])];
   }
-  const payload = JSON.stringify({ status: "success", message: t("apply.user_confirmed") });
   for (const instanceId of nodesToResume) {
+    const existingBranch = readExistingResultBranch(workspaceRoot, flowName, uuid, instanceId);
+    const payload = JSON.stringify({
+      status: "success",
+      message: t("apply.user_confirmed"),
+      ...(existingBranch ? { branch: existingBranch } : {}),
+    });
     const wr = runNodeScript(
       workspaceRoot,
       "write-result.mjs",

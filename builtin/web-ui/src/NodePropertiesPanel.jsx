@@ -132,6 +132,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
  *   disabled: boolean,
  *   onIdBlur: () => void,
  *   onClose: () => void,
+ *   onPublishToMarketplace?: (draft: any, definitionId: string) => Promise<any>,
  *   error: string,
  *   ioSlots: { inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] },
  * }} props
@@ -145,12 +146,14 @@ export function NodePropertiesPanel({
   disabled,
   onIdBlur,
   onClose,
+  onPublishToMarketplace,
   error,
   ioSlots,
 }) {
   const { t } = useTranslation();
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [scriptExpanded, setScriptExpanded] = useState(false);
+  const [publishState, setPublishState] = useState({ status: "idle", message: "" });
 
   const update = useCallback(
     (patch) => {
@@ -181,12 +184,38 @@ export function NodePropertiesPanel({
   const scriptStr = String(draft.script ?? "");
   const showScriptSection =
     definitionId === "tool_nodejs" || scriptStr.trim() !== "";
+  const canPublish = typeof onPublishToMarketplace === "function" && !disabled && draft?.newId;
+  const publishCurrentNode = async () => {
+    if (!canPublish) return;
+    setPublishState({ status: "running", message: t("flow:nodeProps.publishRunning") });
+    try {
+      const result = await onPublishToMarketplace(draft, definitionId);
+      setPublishState({
+        status: "success",
+        message: result?.definitionId
+          ? t("flow:nodeProps.publishSuccessWithId", { id: result.definitionId })
+          : t("flow:nodeProps.publishSuccess"),
+      });
+    } catch (e) {
+      setPublishState({ status: "error", message: String(e?.message || e) });
+    }
+  };
 
   return (
     <>
       <div className="af-pipeline-drawer-head af-node-props-head">
         <h2 className="af-pipeline-drawer-title">{t("flow:nodeProps.title")}</h2>
         <div className="af-node-props-head-actions">
+          <button
+            type="button"
+            className="af-btn-ghost af-node-props-market-btn"
+            onClick={publishCurrentNode}
+            disabled={!canPublish || publishState.status === "running"}
+            title={t("flow:nodeProps.publishToMarketplaceHint")}
+          >
+            <span className="material-symbols-outlined" aria-hidden>inventory_2</span>
+            {publishState.status === "running" ? t("flow:nodeProps.publishing") : t("flow:nodeProps.publishToMarketplace")}
+          </button>
           <button type="button" className="af-btn-ghost af-node-props-close-secondary" onClick={onClose}>
             {t("common:common.close")}
           </button>
@@ -195,6 +224,11 @@ export function NodePropertiesPanel({
 
       <div className="af-pipeline-drawer-body af-node-props-body">
         {error ? <p className="af-err af-node-props-err">{error}</p> : null}
+        {publishState.message ? (
+          <p className={`af-node-props-market-status af-node-props-market-status--${publishState.status}`}>
+            {publishState.message}
+          </p>
+        ) : null}
 
         <label className="af-pipeline-drawer-field af-node-props-field">
           <span className="af-node-props-label">{t("flow:node.nodeType")}</span>

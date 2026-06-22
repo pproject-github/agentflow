@@ -30,7 +30,8 @@ import { startUiServer } from "./ui-server.mjs";
 import { hubLogin, hubLogout } from "./hub-login.mjs";
 import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
-import { listScheduleStatuses, startScheduler } from "./scheduler.mjs";
+import { cancelScheduledRun, listScheduleStatuses, startScheduler } from "./scheduler.mjs";
+import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -210,6 +211,43 @@ export async function main() {
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(result.error ? 1 : 0);
   }
+  if (sub === "marketplace") {
+    const action = shift();
+    if (action === "list") {
+      const result = listMarketplacePackages(workspaceRoot);
+      if (jsonMode) {
+        process.stdout.write(JSON.stringify(result) + "\n");
+      } else {
+        const table = new Table({ head: ["type", "id", "version", "name", "path"], style: { head: [] } });
+        for (const n of result.nodes) table.push(["node", n.id, n.version, n.displayName || "", n.packageDir]);
+        for (const c of result.collections) table.push(["collection", c.id, c.version, c.displayName || "", c.packageDir]);
+        process.stdout.write(table.toString() + "\n");
+      }
+      process.exit(0);
+    }
+    if (action === "publish-node") {
+      const sourceDir = shift();
+      if (!sourceDir) throw new Error("Usage: agentflow marketplace publish-node <packageDir> [--json]");
+      const result = publishNodePackage(workspaceRoot, sourceDir);
+      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
+      else if (result.ok) process.stdout.write(`Published node ${result.id}@${result.version}: ${result.definitionId}\n`);
+      else throw new Error(result.error || "publish-node failed");
+      process.exit(result.ok ? 0 : 1);
+    }
+    if (action === "install-node") {
+      const flowId = shift();
+      const spec = shift();
+      if (!flowId || !spec) throw new Error("Usage: agentflow marketplace install-node <flow> <nodeSpec> [--json]");
+      const flowDir = getFlowDir(workspaceRoot, flowId);
+      if (!flowDir) throw new Error(`Flow not found: ${flowId}`);
+      const result = installFlowDependency(workspaceRoot, flowDir, spec);
+      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
+      else if (result.ok) process.stdout.write(`Installed ${result.definitionId} into ${flowId}\n`);
+      else throw new Error(result.error || "install-node failed");
+      process.exit(result.ok ? 0 : 1);
+    }
+    throw new Error("Usage: agentflow marketplace <list|publish-node|install-node> [--json]");
+  }
   if (sub === "copy-builtin" && jsonMode) {
     const flowId = shift();
     let targetFlowId;
@@ -382,7 +420,7 @@ export async function main() {
         process.exit(0);
       }
       const rows = listScheduleStatuses(workspaceRoot);
-      const table = new Table({ head: ["flow", "source", "enabled", "cron", "timezone", "next", "running", "lastRun", "error"], style: { head: [] } });
+      const table = new Table({ head: ["flow", "source", "enabled", "cron", "timezone", "next", "running", "waiting", "lastRun", "error"], style: { head: [] } });
       for (const r of rows) {
         table.push([
           r.flowId,
@@ -392,6 +430,7 @@ export async function main() {
           r.timezone || "",
           r.nextRunAt || "",
           r.running ? "yes" : "no",
+          String(r.waiting || 0),
           r.lastRunUuid || "",
           r.lastError || "",
         ]);
@@ -399,7 +438,21 @@ export async function main() {
       process.stdout.write(table.toString() + "\n");
       process.exit(0);
     }
-    throw new Error("Usage: agentflow scheduler <start|status> [--once] [--poll-ms <ms>] [--json]");
+    if (action === "cancel") {
+      const flowId = shift();
+      const uuid = shift();
+      if (!flowId || !uuid) throw new Error("Usage: agentflow scheduler cancel <flow> <uuid> [--json]");
+      const result = cancelScheduledRun(workspaceRoot, flowId, uuid);
+      if (jsonMode) {
+        process.stdout.write(JSON.stringify(result) + "\n");
+      } else if (result.ok) {
+        process.stdout.write(`Cancelled ${flowId}/${uuid}; updated waits: ${result.updatedWaits}\n`);
+      } else {
+        throw new Error(result.error || "cancel failed");
+      }
+      process.exit(result.ok ? 0 : 1);
+    }
+    throw new Error("Usage: agentflow scheduler <start|status|cancel> [--once] [--poll-ms <ms>] [--json]");
   }
   // ──── Hub commands ────
   if (sub === "login") {

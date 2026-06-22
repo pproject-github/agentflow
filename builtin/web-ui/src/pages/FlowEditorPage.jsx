@@ -119,6 +119,18 @@ function schemaTypeForPalette(node) {
   return "agent";
 }
 
+function summarizeMarketplaceSlots(slots) {
+  const list = Array.isArray(slots) ? slots : [];
+  return list
+    .map((slot) => {
+      const name = String(slot?.name || slot?.id || "").trim();
+      const type = String(slot?.type || "").trim();
+      if (!name && !type) return "";
+      return type ? `${name || "-"}: ${type}` : name;
+    })
+    .filter(Boolean);
+}
+
 function paletteIcon(cat) {
   if (cat === "CONTROL") return "account_tree";
   if (cat === "TOOL") return "build";
@@ -830,6 +842,11 @@ export default function FlowEditorPage() {
   const slotWarningsRefreshBusyRef = useRef(false);
   const [palette, setPalette] = useState([]);
   const [paletteSearch, setPaletteSearch] = useState("");
+  const [marketplaceCatalogNodes, setMarketplaceCatalogNodes] = useState([]);
+  const [marketplaceCatalogLoading, setMarketplaceCatalogLoading] = useState(false);
+  const [marketplaceCatalogError, setMarketplaceCatalogError] = useState("");
+  const [marketplaceInstallBusy, setMarketplaceInstallBusy] = useState("");
+  const [marketplacePreviewNode, setMarketplacePreviewNode] = useState(null);
   const [rightPanel, setRightPanel] = useState(/** @type {null | "settings" | "history" | "node" | "composer"} */ (null));
   const [recentRuns, setRecentRuns] = useState(
     /** @type {Array<{ flowId: string, runId?: string, at: number, durationMs?: number, status?: string }>} */ ([]),
@@ -910,6 +927,7 @@ export default function FlowEditorPage() {
   const [scheduleStatus, setScheduleStatus] = useState("");
   const [scheduleState, setScheduleState] = useState(DEFAULT_SCHEDULE_STATE);
   const [scheduleRuntimeStatus, setScheduleRuntimeStatus] = useState(null);
+  const scheduleEditSeqRef = useRef(0);
   const runAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const runLogEndRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   // 终端式粘底：用户在底部时自动跟随；用户手动上滑后暂停；重新回到底部自动恢复。
@@ -1398,9 +1416,16 @@ export default function FlowEditorPage() {
       });
   }, [selected?.id, selected?.source, selected?.archived]);
 
+  const updateScheduleDraft = useCallback((updater) => {
+    scheduleEditSeqRef.current += 1;
+    setScheduleDraft(updater);
+  }, []);
+
   const loadSchedule = useCallback(async (flow, opts = {}) => {
     if (!flow) return;
     const quiet = Boolean(opts.quiet);
+    const force = Boolean(opts.force);
+    const editSeqAtStart = scheduleEditSeqRef.current;
     if (!quiet) {
       setScheduleLoading(true);
       setScheduleError("");
@@ -1415,10 +1440,12 @@ export default function FlowEditorPage() {
       const r = await fetch(`/api/flow/schedule?${params.toString()}`);
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      if (!force && scheduleEditSeqRef.current !== editSeqAtStart) return;
       setScheduleDraft({ ...DEFAULT_SCHEDULE, ...(data.schedule || {}) });
       setScheduleState(data.state && typeof data.state === "object" ? data.state : DEFAULT_SCHEDULE_STATE);
       setScheduleRuntimeStatus(data.status || null);
     } catch (e) {
+      if (!force && scheduleEditSeqRef.current !== editSeqAtStart) return;
       setScheduleDraft(DEFAULT_SCHEDULE);
       setScheduleState(DEFAULT_SCHEDULE_STATE);
       setScheduleRuntimeStatus(null);
@@ -1560,6 +1587,31 @@ export default function FlowEditorPage() {
     () => PALETTE_ORDER.reduce((n, cat) => n + filteredGroupedPalette[cat].length, 0),
     [filteredGroupedPalette],
   );
+
+  const marketplaceNodes = useMemo(
+    () =>
+      palette.filter((n) => {
+        const id = String(n.id ?? "");
+        const source = String(n.source ?? "");
+        return id.startsWith("marketplace:") || source === "marketplace" || source === "collection";
+      }),
+    [palette],
+  );
+
+  const installedMarketplaceKeys = useMemo(() => {
+    const keys = new Set();
+    for (const n of marketplaceNodes) {
+      const id = String(n.id ?? "");
+      if (!id) continue;
+      keys.add(id);
+      if (id.startsWith("marketplace:")) {
+        const spec = id.slice("marketplace:".length);
+        const [pkgId] = spec.split("@");
+        if (pkgId) keys.add(`marketplace:${pkgId}`);
+      }
+    }
+    return keys;
+  }, [marketplaceNodes]);
 
   const loadFlowList = useCallback(async () => {
     setListError("");
@@ -1773,6 +1825,96 @@ export default function FlowEditorPage() {
       }
     },
     [fetchFlowGraphData, setNodes, setEdges],
+  );
+
+  const reloadPaletteForSelectedFlow = useCallback(async () => {
+    if (!selected?.id) return;
+    const flowSource = selected.source ?? "user";
+    const nodeQ = new URLSearchParams({ flowId: selected.id, flowSource });
+    if (selected.archived) nodeQ.set("archived", "1");
+    const resp = await fetch("/api/nodes?" + nodeQ.toString());
+    const paletteJson = await resp.json();
+    if (!resp.ok) throw new Error(paletteJson?.error || t("flow:nodePropsError.loadNodesFailed"));
+    const paletteList = Array.isArray(paletteJson) ? paletteJson : Array.isArray(paletteJson?.nodes) ? paletteJson.nodes : [];
+    setPalette(paletteList);
+  }, [selected, t]);
+
+  const loadMarketplaceCatalog = useCallback(async () => {
+    setMarketplaceCatalogLoading(true);
+    setMarketplaceCatalogError("");
+    try {
+      const resp = await fetch("/api/marketplace/nodes");
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || "Failed to load marketplace nodes");
+      setMarketplaceCatalogNodes(Array.isArray(data?.nodes) ? data.nodes : []);
+    } catch (e) {
+      setMarketplaceCatalogError(String(e.message || e));
+      setMarketplaceCatalogNodes([]);
+    } finally {
+      setMarketplaceCatalogLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    void loadMarketplaceCatalog();
+  }, [selected?.id, selected?.source, selected?.archived, loadMarketplaceCatalog]);
+
+  const installMarketplaceNodeForFlow = useCallback(
+    async (node) => {
+      if (!selected || !node) return;
+      const nodeSpec = node.definitionId || `marketplace:${node.id}${node.version ? `@${node.version}` : ""}`;
+      if (!nodeSpec) return;
+      setMarketplaceInstallBusy(nodeSpec);
+      setMarketplaceCatalogError("");
+      try {
+        const resp = await fetch("/api/marketplace/install-node", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            flowId: selected.id,
+            flowSource: selected.source || "user",
+            archived: Boolean(selected.archived),
+            nodeSpec,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data?.ok === false) throw new Error(data?.error || "Failed to install marketplace node");
+        await reloadPaletteForSelectedFlow();
+      } catch (e) {
+        setMarketplaceCatalogError(String(e.message || e));
+      } finally {
+        setMarketplaceInstallBusy("");
+      }
+    },
+    [selected, reloadPaletteForSelectedFlow],
+  );
+
+  const publishNodeToMarketplace = useCallback(
+    async (draft, definitionId) => {
+      const payload = {
+        packageId: draft?.newId || draft?.id || draft?.label,
+        label: draft?.label || draft?.newId || draft?.id,
+        version: "1.0.0",
+        definitionId,
+        body: draft?.body || "",
+        script: draft?.script || "",
+        inputs: Array.isArray(draft?.inputs) ? draft.inputs : [],
+        outputs: Array.isArray(draft?.outputs) ? draft.outputs : [],
+        flowId: selected?.id,
+        flowSource: selected?.source || "user",
+      };
+      const resp = await fetch("/api/marketplace/publish-node-from-instance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await resp.json();
+      if (!resp.ok || result?.ok === false) throw new Error(result?.error || "Publish failed");
+      await reloadPaletteForSelectedFlow();
+      return result;
+    },
+    [reloadPaletteForSelectedFlow, selected],
   );
 
   const handleSlotWarningsRefresh = useCallback(async () => {
@@ -2232,13 +2374,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       if (!r.ok || !data.success) throw new Error(data.error || "Failed to save schedule");
       setScheduleDraft({ ...DEFAULT_SCHEDULE, ...(data.schedule || {}) });
       setScheduleStatus(t("flow:schedule.saved"));
-      await loadSchedule(selected, { quiet: true });
+      await loadSchedule(selected, { quiet: true, force: true });
     } catch (e) {
       setScheduleError(String(e.message || e));
     } finally {
       setScheduleSaving(false);
     }
   }, [selected, scheduleDraft, loadSchedule, t]);
+
+  const handleSavePipelineSettings = useCallback(async () => {
+    if (!selected) return;
+    await persistFlowToServer(nodesRef.current, edgesRef.current);
+    if (!selected.archived && selected.source !== "builtin") {
+      await handleSaveSchedule();
+    }
+  }, [selected, persistFlowToServer, handleSaveSchedule]);
 
   const handleRenameFlow = useCallback(async () => {
     if (!selected || !renameFlowId.trim()) return;
@@ -3719,6 +3869,583 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   }, []);
 
   const flowSelectValue = selected ? flowListEntryKey(selected) : "";
+  const renderPipelineSettingsPage = () => {
+    if (!selected) return null;
+    const scheduleReadOnly = scheduleSaving || selected.archived || selected.source === "builtin";
+    const scheduleRuntimeLabel = scheduleRuntimeStatus?.running
+      ? t("flow:schedule.running")
+      : scheduleDraft.enabled
+        ? t("flow:schedule.waiting")
+        : t("flow:schedule.disabled");
+    const scheduleRuntimeMod = scheduleRuntimeStatus?.running
+      ? "running"
+      : scheduleDraft.enabled
+        ? "waiting"
+        : "disabled";
+    const marketplacePreview = marketplaceCatalogNodes.slice(0, 12);
+    const marketReadOnly = selected.archived || selected.source === "builtin";
+    return (
+      <section className="af-pipeline-settings-page" aria-label={t("flow:settings.title")}>
+        <aside className="af-pipeline-settings-nav" aria-label={t("flow:settings.sectionNav")}>
+          <div className="af-pipeline-settings-nav-title">{t("flow:settings.title")}</div>
+          <a href="#pipeline-basic" className="af-pipeline-settings-nav-item af-pipeline-settings-nav-item--active">
+            <span className="material-symbols-outlined" aria-hidden>badge</span>
+            {t("flow:settings.basicInfo")}
+          </a>
+          <a href="#pipeline-storage" className="af-pipeline-settings-nav-item">
+            <span className="material-symbols-outlined" aria-hidden>folder_open</span>
+            {t("flow:settings.storageAndPath")}
+          </a>
+          <a href="#pipeline-marketplace" className="af-pipeline-settings-nav-item">
+            <span className="material-symbols-outlined" aria-hidden>deployed_code</span>
+            {t("flow:settings.nodeMarketplace")}
+          </a>
+          <a href="#pipeline-schedule" className="af-pipeline-settings-nav-item">
+            <span className="material-symbols-outlined" aria-hidden>schedule</span>
+            {t("flow:schedule.title")}
+          </a>
+          <a href="#pipeline-metadata" className="af-pipeline-settings-nav-item">
+            <span className="material-symbols-outlined" aria-hidden>dataset</span>
+            {t("flow:pipeline.metadata")}
+          </a>
+          <button type="button" className="af-pipeline-settings-nav-link" onClick={() => navigate("/settings")}>
+            {t("flow:settings.globalSettings")}
+            <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+          </button>
+        </aside>
+
+        <main className="af-pipeline-settings-main">
+          <div className="af-pipeline-settings-main-head">
+            <div>
+              <h1 className="af-pipeline-settings-title">{t("flow:settings.title")}</h1>
+              <p className="af-pipeline-settings-subtitle">{t("flow:settings.subtitle")}</p>
+            </div>
+            <button type="button" className="af-btn-secondary" onClick={closeRightPanel}>
+              <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+              {t("flow:settings.backToCanvas")}
+            </button>
+          </div>
+
+          <section id="pipeline-basic" className="af-pipeline-settings-section">
+            <div className="af-pipeline-settings-section-head">
+              <span className="af-pipeline-settings-section-index">1.</span>
+              <h2>{t("flow:settings.basicInfo")}</h2>
+            </div>
+            <div className="af-pipeline-settings-grid af-pipeline-settings-grid--two">
+              <div className="af-pipeline-drawer-field">
+                <span className="af-pipeline-drawer-label">{t("flow:pipeline.pipelineId")}</span>
+                {(selected.source === "user" || selected.source === "workspace") && !selected.archived ? (
+                  <div className="af-pipeline-rename-row">
+                    <input
+                      type="text"
+                      className="af-pipeline-rename-input"
+                      value={renameFlowId}
+                      onChange={(e) => { setRenameFlowId(e.target.value); setRenameFlowError(""); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleRenameFlow(); } }}
+                      onBlur={() => { if (renameFlowId.trim() && renameFlowId.trim() !== selected.id) handleRenameFlow(); }}
+                      placeholder={selected.id}
+                      disabled={renameFlowBusy}
+                      spellCheck={false}
+                    />
+                    <span className="af-pipeline-drawer-badge">
+                      {flowSourceLabelZh(selected.source ?? "user", t)}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="af-pipeline-drawer-readonly">
+                    {selected.id}
+                    <span className="af-pipeline-drawer-badge">
+                      {flowSourceLabelZh(selected.source ?? "user", t)}
+                    </span>
+                    {selected.archived ? (
+                      <span className="af-pipeline-drawer-badge af-pipeline-drawer-badge--muted">{t("flow:settings.archived")}</span>
+                    ) : null}
+                  </div>
+                )}
+                {renameFlowError ? <p className="af-err af-pipeline-drawer-err">{renameFlowError}</p> : null}
+              </div>
+
+              <div className="af-pipeline-settings-kv-block">
+                <span className="af-pipeline-drawer-label">{t("flow:settings.owner")}</span>
+                <div className="af-pipeline-drawer-readonly">
+                  <span className="material-symbols-outlined" aria-hidden>person</span>
+                  {selected.owner || "bigo"}
+                </div>
+              </div>
+            </div>
+            <label className="af-pipeline-drawer-field">
+              <span className="af-pipeline-drawer-label">{t("flow:pipeline.introduction")}</span>
+              <textarea
+                className="af-pipeline-drawer-textarea af-pipeline-settings-textarea"
+                value={flowDescription}
+                onChange={(e) => setFlowDescription(e.target.value)}
+                placeholder={t("flow:pipeline.introductionPlaceholder")}
+                rows={4}
+                spellCheck={false}
+              />
+            </label>
+          </section>
+
+          <section id="pipeline-storage" className="af-pipeline-settings-section">
+            <div className="af-pipeline-settings-section-head">
+              <span className="af-pipeline-settings-section-index">2.</span>
+              <h2>{t("flow:settings.storageAndPath")}</h2>
+            </div>
+            {typeof selected.path === "string" && selected.path ? (
+              <div className="af-pipeline-drawer-field">
+                <span className="af-pipeline-drawer-label">{t("flow:pipeline.diskPath")}</span>
+                <div className="af-pipeline-drawer-readonly af-pipeline-drawer-readonly--mono af-pipeline-path-row">
+                  <span className="af-pipeline-path-text">{selected.path}</span>
+                  <button
+                    type="button"
+                    className="af-icon-btn af-pipeline-copy-btn"
+                    onClick={() => handleCopyPath(selected.path)}
+                    title={t("flow:settings.copyPath")}
+                  >
+                    <span className="material-symbols-outlined">{pathCopied ? "check" : "content_copy"}</span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {(selected.source === "user" || selected.source === "workspace") ? (
+              selected.archived ? (
+                <p className="af-pipeline-drawer-muted">{t("flow:settings.archivedNote")}</p>
+              ) : (
+                <div className="af-pipeline-drawer-field">
+                  <span className="af-pipeline-drawer-label">{t("flow:pipeline.storageLocation")}</span>
+                  <div className="af-pipeline-move-actions">
+                    {selected.source === "user" ? (
+                      <button
+                        type="button"
+                        className="af-btn-secondary"
+                        disabled={moveFlowBusy}
+                        onClick={() => handleMoveFlow("workspace")}
+                      >
+                        {moveFlowBusy ? t("flow:settings.moveBusy") : t("flow:settings.moveToWorkspace")}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="af-btn-secondary"
+                        disabled={moveFlowBusy}
+                        onClick={() => handleMoveFlow("user")}
+                      >
+                        {moveFlowBusy ? t("flow:settings.moveBusy") : t("flow:settings.moveToUserDir")}
+                      </button>
+                    )}
+                  </div>
+                  {moveFlowError ? <p className="af-err af-pipeline-drawer-err">{moveFlowError}</p> : null}
+                </div>
+              )
+            ) : (
+              <p className="af-pipeline-drawer-muted">{t("flow:settings.builtinNote")}</p>
+            )}
+          </section>
+
+          <section id="pipeline-marketplace" className="af-pipeline-settings-section">
+            <div className="af-pipeline-settings-section-head">
+              <span className="af-pipeline-settings-section-index">3.</span>
+              <h2>{t("flow:settings.nodeMarketplace")}</h2>
+            </div>
+            <div className="af-pipeline-market-row">
+              <div>
+                <div className="af-pipeline-market-count">
+                  {marketplaceCatalogNodes.length} {t("flow:settings.marketNodesUnit")}
+                </div>
+                <p className="af-pipeline-drawer-muted">{t("flow:settings.marketplaceHint")}</p>
+              </div>
+              <button type="button" className="af-btn-secondary" onClick={loadMarketplaceCatalog} disabled={marketplaceCatalogLoading}>
+                <span className="material-symbols-outlined" aria-hidden>refresh</span>
+                {marketplaceCatalogLoading ? t("common:common.loading") : t("common:common.refresh")}
+              </button>
+            </div>
+            {marketplaceCatalogError ? <p className="af-err af-pipeline-drawer-err">{marketplaceCatalogError}</p> : null}
+            {marketplaceCatalogLoading ? (
+              <p className="af-pipeline-drawer-muted">{t("common:common.loading")}</p>
+            ) : marketplacePreview.length > 0 ? (
+              <div className="af-pipeline-market-list">
+                {marketplacePreview.map((n) => {
+                  const definitionId = n.definitionId || `marketplace:${n.id}${n.version ? `@${n.version}` : ""}`;
+                  const installed = installedMarketplaceKeys.has(definitionId) || installedMarketplaceKeys.has(`marketplace:${n.id}`);
+                  const paletteDef = marketplaceNodes.find(
+                    (x) => String(x.id) === definitionId || String(x.id) === `marketplace:${n.id}`,
+                  );
+                  const busy = marketplaceInstallBusy === definitionId;
+                  const inputSlots = summarizeMarketplaceSlots(n.inputs || n.input);
+                  const outputSlots = summarizeMarketplaceSlots(n.outputs || n.output);
+                  return (
+                    <div key={definitionId} className="af-pipeline-market-item">
+                      <span className="material-symbols-outlined" aria-hidden>{installed ? "check_circle" : "extension"}</span>
+                      <div className="af-pipeline-market-main">
+                        <div className="af-pipeline-market-title-row">
+                          <strong>{n.displayName || n.label || n.id}</strong>
+                          <span>{n.version ? `v${n.version}` : definitionId}</span>
+                        </div>
+                        <p className="af-pipeline-market-purpose">
+                          {n.description || t("flow:settings.marketplaceNoDescription")}
+                        </p>
+                        <div className="af-pipeline-market-io">
+                          <div>
+                            <span className="af-pipeline-market-io-label">Inputs</span>
+                            <div className="af-pipeline-market-chips">
+                              {inputSlots.length > 0 ? inputSlots.map((slot) => (
+                                <span key={`in-${definitionId}-${slot}`} className="af-pipeline-market-chip">{slot}</span>
+                              )) : <span className="af-pipeline-market-chip af-pipeline-market-chip--muted">{t("flow:settings.noInputs")}</span>}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="af-pipeline-market-io-label">Outputs</span>
+                            <div className="af-pipeline-market-chips">
+                              {outputSlots.length > 0 ? outputSlots.map((slot) => (
+                                <span key={`out-${definitionId}-${slot}`} className="af-pipeline-market-chip">{slot}</span>
+                              )) : <span className="af-pipeline-market-chip af-pipeline-market-chip--muted">{t("flow:settings.noOutputs")}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="af-pipeline-market-actions">
+                        <button
+                          type="button"
+                          className="af-btn-secondary af-pipeline-market-action"
+                          onClick={() => setMarketplacePreviewNode(n)}
+                        >
+                          {t("flow:settings.previewNode")}
+                        </button>
+                        <button
+                          type="button"
+                          className={installed ? "af-btn-secondary af-pipeline-market-action" : "af-btn-primary af-pipeline-market-action"}
+                          disabled={marketReadOnly || busy}
+                          onClick={() => {
+                            if (installed && paletteDef) {
+                              addNodeFromPalette(paletteDef);
+                              setRightPanel(null);
+                            } else {
+                              void installMarketplaceNodeForFlow(n);
+                            }
+                          }}
+                        >
+                          {busy
+                            ? t("flow:settings.installingNode")
+                            : installed
+                              ? t("flow:settings.addInstalledNode")
+                              : t("flow:settings.installNode")}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="af-pipeline-settings-empty">{t("flow:settings.marketplaceEmpty")}</div>
+            )}
+          </section>
+
+          <section id="pipeline-schedule" className="af-pipeline-settings-section">
+            <div className="af-pipeline-settings-section-head">
+              <span className="af-pipeline-settings-section-index">4.</span>
+              <h2>{t("flow:schedule.title")}</h2>
+            </div>
+            {scheduleLoading ? (
+              <p className="af-pipeline-drawer-muted">{t("common:common.loading")}</p>
+            ) : (
+              <>
+                <div className="af-pipeline-settings-schedule-grid">
+                  <label className="af-new-pipeline-radio af-pipeline-settings-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(scheduleDraft.enabled)}
+                      disabled={scheduleReadOnly}
+                      onChange={(e) =>
+                        updateScheduleDraft((prev) => ({ ...prev, enabled: e.target.checked }))
+                      }
+                    />
+                    <span>{t("flow:schedule.enabled")}</span>
+                  </label>
+                  <label className="af-pipeline-drawer-field">
+                    <span className="af-pipeline-drawer-label">{t("flow:schedule.cron")}</span>
+                    <input
+                      type="text"
+                      className="af-pipeline-rename-input"
+                      value={scheduleDraft.cron || ""}
+                      disabled={scheduleReadOnly}
+                      onChange={(e) =>
+                        updateScheduleDraft((prev) => ({ ...prev, cron: e.target.value }))
+                      }
+                      placeholder="0 9 * * *"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="af-pipeline-drawer-field">
+                    <span className="af-pipeline-drawer-label">{t("flow:schedule.timezone")}</span>
+                    <input
+                      type="text"
+                      className="af-pipeline-rename-input"
+                      value={scheduleDraft.timezone || ""}
+                      disabled={scheduleReadOnly}
+                      onChange={(e) =>
+                        updateScheduleDraft((prev) => ({ ...prev, timezone: e.target.value }))
+                      }
+                      placeholder="Asia/Shanghai"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="af-pipeline-drawer-field">
+                    <span className="af-pipeline-drawer-label">{t("flow:schedule.preset")}</span>
+                    <select
+                      className="af-pipeline-flow-select"
+                      value={scheduleDraft.preset || ""}
+                      disabled={scheduleReadOnly}
+                      onChange={(e) =>
+                        updateScheduleDraft((prev) => ({ ...prev, preset: e.target.value }))
+                      }
+                    >
+                      <option value="">{t("flow:schedule.defaultPreset")}</option>
+                      {Object.keys(runPresets).map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="af-pipeline-settings-schedule-status">
+                  <span className={`af-pipeline-settings-status-dot af-pipeline-settings-status-dot--${scheduleRuntimeMod}`} />
+                  <span>
+                    {scheduleDraft.nextRunAt
+                      ? t("flow:schedule.nextRun", { time: new Date(scheduleDraft.nextRunAt).toLocaleString() })
+                      : t("flow:schedule.noNextRun")}
+                  </span>
+                  <span>{t("flow:schedule.runtime")}：{scheduleRuntimeLabel}</span>
+                </div>
+                <dl className="af-pipeline-meta-dl af-pipeline-settings-dl">
+                  {scheduleState.lastTriggeredAt ? (
+                    <div className="af-pipeline-meta-row">
+                      <dt>{t("flow:schedule.lastTriggeredAt")}</dt>
+                      <dd>{new Date(scheduleState.lastTriggeredAt).toLocaleString()}</dd>
+                    </div>
+                  ) : null}
+                  {scheduleState.lastSkippedAt ? (
+                    <div className="af-pipeline-meta-row">
+                      <dt>{t("flow:schedule.lastSkippedAt")}</dt>
+                      <dd>
+                        {new Date(scheduleState.lastSkippedAt).toLocaleString()}
+                        {scheduleState.lastSkipReason ? ` · ${scheduleState.lastSkipReason}` : ""}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {scheduleState.lastRunUuid ? (
+                    <div className="af-pipeline-meta-row">
+                      <dt>{t("flow:schedule.lastRun")}</dt>
+                      <dd>{scheduleState.lastRunUuid}</dd>
+                    </div>
+                  ) : null}
+                  {scheduleState.lastExitCode != null ? (
+                    <div className="af-pipeline-meta-row">
+                      <dt>{t("flow:schedule.lastExit")}</dt>
+                      <dd>{String(scheduleState.lastExitCode)}</dd>
+                    </div>
+                  ) : null}
+                  {scheduleState.lastFinishedAt ? (
+                    <div className="af-pipeline-meta-row">
+                      <dt>{t("flow:schedule.lastFinishedAt")}</dt>
+                      <dd>{new Date(scheduleState.lastFinishedAt).toLocaleString()}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {(scheduleRuntimeStatus?.lastError || scheduleState.lastError) ? (
+                  <p className="af-err af-pipeline-drawer-err">
+                    {scheduleRuntimeStatus?.lastError || scheduleState.lastError}
+                  </p>
+                ) : null}
+                {selected.archived || selected.source === "builtin" ? (
+                  <p className="af-pipeline-drawer-muted">{t("flow:schedule.readonlyNote")}</p>
+                ) : null}
+                {scheduleError ? <p className="af-err af-pipeline-drawer-err">{scheduleError}</p> : null}
+                {scheduleStatus ? <p className="af-pipeline-drawer-muted">{scheduleStatus}</p> : null}
+              </>
+            )}
+          </section>
+
+          <section id="pipeline-metadata" className="af-pipeline-settings-section">
+            <div className="af-pipeline-settings-section-head">
+              <span className="af-pipeline-settings-section-index">5.</span>
+              <h2>{t("flow:pipeline.metadata")}</h2>
+            </div>
+            <dl className="af-pipeline-meta-dl af-pipeline-settings-dl">
+              <div className="af-pipeline-meta-row">
+                <dt>{t("flow:pipeline.nodeCount")}</dt>
+                <dd>{nodes.length} {t("flow:pipeline.nodesUnit")}</dd>
+              </div>
+              <div className="af-pipeline-meta-row">
+                <dt>{t("flow:settings.marketplaceNodes")}</dt>
+                <dd>{marketplaceNodes.length}</dd>
+              </div>
+              <div className="af-pipeline-meta-row">
+                <dt>{t("flow:settings.source")}</dt>
+                <dd>{flowSourceLabelZh(selected.source ?? "user", t)}</dd>
+              </div>
+            </dl>
+          </section>
+        </main>
+
+        <aside className="af-pipeline-settings-side" aria-label={t("flow:settings.overview")}>
+          <section className="af-pipeline-settings-side-card">
+            <div className="af-pipeline-settings-overview-head">
+              <span className="af-pipeline-settings-overview-icon material-symbols-outlined" aria-hidden>account_tree</span>
+              <div>
+                <h2>{selected.id}</h2>
+                <span className={`af-pipeline-settings-status af-pipeline-settings-status--${scheduleRuntimeMod}`}>
+                  {scheduleRuntimeLabel}
+                </span>
+              </div>
+            </div>
+            <dl className="af-pipeline-settings-side-dl">
+              <div>
+                <dt>{t("flow:pipeline.nodeCount")}</dt>
+                <dd>{nodes.length}</dd>
+              </div>
+              <div>
+                <dt>{t("flow:settings.owner")}</dt>
+                <dd>{selected.owner || "bigo"}</dd>
+              </div>
+              <div>
+                <dt>{t("flow:settings.source")}</dt>
+                <dd>{flowSourceLabelZh(selected.source ?? "user", t)}</dd>
+              </div>
+            </dl>
+          </section>
+          <section className="af-pipeline-settings-side-card">
+            <h2>{t("flow:settings.quickActions")}</h2>
+            <button type="button" className="af-btn-primary af-pipeline-settings-side-action" onClick={() => void handleSavePipelineSettings()} disabled={scheduleSaving}>
+              <span className="material-symbols-outlined" aria-hidden>save</span>
+              {scheduleSaving ? t("flow:settings.savingChanges") : t("flow:settings.saveChanges")}
+            </button>
+            <button type="button" className="af-btn-secondary af-pipeline-settings-side-action" onClick={closeRightPanel}>
+              <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+              {t("flow:settings.backToCanvas")}
+            </button>
+          </section>
+          <section className="af-pipeline-settings-side-card">
+            <h2>{t("flow:settings.help")}</h2>
+            <p className="af-pipeline-drawer-muted">{t("flow:settings.helpText")}</p>
+            <button type="button" className="af-pipeline-drawer-link" onClick={() => navigate("/settings")}>
+              {t("flow:settings.globalSettings")}
+            </button>
+          </section>
+        </aside>
+      </section>
+    );
+  };
+
+  const renderMarketplacePreviewDialog = () => {
+    const n = marketplacePreviewNode;
+    if (!n) return null;
+    const definitionId = n.definitionId || `marketplace:${n.id}${n.version ? `@${n.version}` : ""}`;
+    const title = n.displayName || n.label || n.id;
+    const inputSlots = summarizeMarketplaceSlots(n.inputs || n.input);
+    const outputSlots = summarizeMarketplaceSlots(n.outputs || n.output);
+    return createPortal(
+      <div
+        className="af-market-preview-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("flow:settings.nodePreviewTitle")}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setMarketplacePreviewNode(null);
+        }}
+      >
+        <div className="af-market-preview-dialog">
+          <div className="af-market-preview-head">
+            <div>
+              <span className="af-pipeline-drawer-label">{t("flow:settings.nodePreviewTitle")}</span>
+              <h2>{title}</h2>
+            </div>
+            <button
+              type="button"
+              className="af-icon-btn"
+              onClick={() => setMarketplacePreviewNode(null)}
+              aria-label={t("flow:settings.closePreview")}
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <div className="af-market-preview-body">
+            <section className="af-market-preview-visual" aria-label={t("flow:settings.nodeStylePreview")}>
+              <div className="af-market-preview-node">
+                <div className="af-market-preview-node-ports af-market-preview-node-ports--left">
+                  {(inputSlots.length > 0 ? inputSlots : [""]).slice(0, 4).map((slot, idx) => (
+                    <span key={`preview-in-${idx}`} title={slot} />
+                  ))}
+                </div>
+                <div className="af-market-preview-node-main">
+                  <span className="af-market-preview-node-icon material-symbols-outlined" aria-hidden>
+                    extension
+                  </span>
+                  <strong>{title}</strong>
+                  <span>{definitionId}</span>
+                </div>
+                <div className="af-market-preview-node-ports af-market-preview-node-ports--right">
+                  {(outputSlots.length > 0 ? outputSlots : [""]).slice(0, 4).map((slot, idx) => (
+                    <span key={`preview-out-${idx}`} title={slot} />
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="af-market-preview-section">
+              <h3>{t("flow:settings.nodeFunction")}</h3>
+              <p>{n.description || t("flow:settings.marketplaceNoDescription")}</p>
+            </section>
+
+            <div className="af-market-preview-io-grid">
+              <section className="af-market-preview-section">
+                <h3>Inputs</h3>
+                <div className="af-pipeline-market-chips af-market-preview-chips">
+                  {inputSlots.length > 0 ? inputSlots.map((slot) => (
+                    <span key={`preview-input-${slot}`} className="af-pipeline-market-chip">{slot}</span>
+                  )) : <span className="af-pipeline-market-chip af-pipeline-market-chip--muted">{t("flow:settings.noInputs")}</span>}
+                </div>
+              </section>
+              <section className="af-market-preview-section">
+                <h3>Outputs</h3>
+                <div className="af-pipeline-market-chips af-market-preview-chips">
+                  {outputSlots.length > 0 ? outputSlots.map((slot) => (
+                    <span key={`preview-output-${slot}`} className="af-pipeline-market-chip">{slot}</span>
+                  )) : <span className="af-pipeline-market-chip af-pipeline-market-chip--muted">{t("flow:settings.noOutputs")}</span>}
+                </div>
+              </section>
+            </div>
+
+            <section className="af-market-preview-section">
+              <h3>{t("flow:settings.nodePackageInfo")}</h3>
+              <dl className="af-market-preview-dl">
+                <div>
+                  <dt>{t("flow:settings.definitionId")}</dt>
+                  <dd>{definitionId}</dd>
+                </div>
+                <div>
+                  <dt>{t("flow:settings.version")}</dt>
+                  <dd>{n.version || "-"}</dd>
+                </div>
+                <div>
+                  <dt>{t("flow:settings.packagePath")}</dt>
+                  <dd>{n.packageDir || "-"}</dd>
+                </div>
+                <div>
+                  <dt>{t("flow:settings.packagedFiles")}</dt>
+                  <dd>
+                    {Array.isArray(n.packagedFiles) && n.packagedFiles.length > 0
+                      ? n.packagedFiles.map((f) => f.to || f).join(", ")
+                      : "-"}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  };
 
   return (
     <ReactFlowProvider>
@@ -4055,7 +4782,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         </header>
 
         <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "")}>
-          {runMode === "edit" ? (
+          {runMode === "edit" && rightPanel !== "settings" ? (
           <aside className="af-node-palette af-flow-left-panel" id="af-node-palette" aria-label={t("flow:palette2.nodePalette")}>
             {/* 工作区切换区域 - 可展开 */}
             <div className={`af-palette-workspace${workspaceExpanded ? " af-palette-workspace--expanded" : ""}`}>
@@ -4230,7 +4957,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               ) : null}
             </footer>
           </aside>
-          ) : selected ? (
+          ) : runMode !== "edit" && selected ? (
             <RunConfigPanel
               flowId={selected.id}
               flowSource={selected.source || "user"}
@@ -4337,6 +5064,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 </div>
               </div>
             ) : null}
+            {rightPanel === "settings" && selected && runMode === "edit" ? (
+              renderPipelineSettingsPage()
+            ) : (
             <div className="af-react-flow-wrap af-pipeline-flow">
               {selected ? (
                 <FlowBoard
@@ -4753,6 +5483,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <div className="af-placeholder af-pipeline-placeholder">{t("flow:pipeline.selectPipeline")}</div>
               )}
             </div>
+            )}
           </div>
 
         {runMode !== "edit" && runConsoleOpen && (
@@ -4824,7 +5555,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             />
           ) : null}
 
-          {rightPanel && selected && runMode === "edit" ? (
+          {rightPanel && rightPanel !== "settings" && selected && runMode === "edit" ? (
             <aside
               className={"af-pipeline-drawer" + (rightPanel === "node" ? " af-pipeline-drawer--wide" : "") + (rightPanel === "composer" ? " af-pipeline-drawer--wide" : "")}
               aria-label={
@@ -4978,6 +5709,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     disabled={!selected}
                     onIdBlur={commitIdRename}
                     onClose={closeRightPanel}
+                    onPublishToMarketplace={publishNodeToMarketplace}
                     error={nodePropsError}
                     ioSlots={{
                       inputs: Array.isArray(nodePropDraft?.inputs) ? nodePropDraft.inputs : [],
@@ -5116,7 +5848,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   checked={Boolean(scheduleDraft.enabled)}
                                   disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
                                   onChange={(e) =>
-                                    setScheduleDraft((prev) => ({ ...prev, enabled: e.target.checked }))
+                                    updateScheduleDraft((prev) => ({ ...prev, enabled: e.target.checked }))
                                   }
                                 />
                                 <span>{t("flow:schedule.enabled")}</span>
@@ -5129,7 +5861,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   value={scheduleDraft.cron || ""}
                                   disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
                                   onChange={(e) =>
-                                    setScheduleDraft((prev) => ({ ...prev, cron: e.target.value }))
+                                    updateScheduleDraft((prev) => ({ ...prev, cron: e.target.value }))
                                   }
                                   placeholder="0 9 * * *"
                                   spellCheck={false}
@@ -5143,7 +5875,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   value={scheduleDraft.timezone || ""}
                                   disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
                                   onChange={(e) =>
-                                    setScheduleDraft((prev) => ({ ...prev, timezone: e.target.value }))
+                                    updateScheduleDraft((prev) => ({ ...prev, timezone: e.target.value }))
                                   }
                                   placeholder="Asia/Shanghai"
                                   spellCheck={false}
@@ -5156,7 +5888,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   value={scheduleDraft.preset || ""}
                                   disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
                                   onChange={(e) =>
-                                    setScheduleDraft((prev) => ({ ...prev, preset: e.target.value }))
+                                    updateScheduleDraft((prev) => ({ ...prev, preset: e.target.value }))
                                   }
                                 >
                                   <option value="">{t("flow:schedule.defaultPreset")}</option>
@@ -5416,6 +6148,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           onCancel={() => setBackPromptOpen(false)}
         />
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        {renderMarketplacePreviewDialog()}
         <NodeJumpPalette
           open={jumpPaletteOpen}
           onClose={() => setJumpPaletteOpen(false)}

@@ -124,6 +124,153 @@ function bashSingleQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
+function parseDurationMs(raw) {
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("duration is required");
+  const m = text.match(/^(\d+(?:\.\d+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days)$/i);
+  if (!m) throw new Error(`Invalid duration: ${text}`);
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid duration: ${text}`);
+  const unit = m[2].toLowerCase();
+  const mult =
+    unit === "ms" || unit.startsWith("millisecond") ? 1 :
+    unit === "s" || unit === "sec" || unit === "secs" || unit.startsWith("second") ? 1000 :
+    unit === "m" || unit === "min" || unit === "mins" || unit.startsWith("minute") ? 60_000 :
+    unit === "h" || unit === "hr" || unit.startsWith("hour") ? 3_600_000 :
+    86_400_000;
+  return Math.round(n * mult);
+}
+
+function zonedDateTimeToUtc(year, month, day, hour, minute, second, timezone) {
+  const guess = Date.UTC(year, month - 1, day, hour, minute, second);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(guess)).reduce((acc, p) => {
+    if (p.type !== "literal") acc[p.type] = Number(p.value);
+    return acc;
+  }, {});
+  if (parts.hour === 24) parts.hour = 0;
+  const asIfUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  return new Date(guess - (asIfUtc - guess));
+}
+
+function parseDateTime(raw, timezone = "Asia/Shanghai") {
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("until/deadlineAt is required");
+  const ymd = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (ymd) {
+    return zonedDateTimeToUtc(
+      Number(ymd[1]),
+      Number(ymd[2]),
+      Number(ymd[3]),
+      Number(ymd[4] || 0),
+      Number(ymd[5] || 0),
+      Number(ymd[6] || 0),
+      timezone,
+    );
+  }
+  const direct = Date.parse(text);
+  if (Number.isFinite(direct)) return new Date(direct);
+
+  const hm = text.match(/^(tomorrow\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?$/i);
+  if (hm) {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now).reduce((acc, p) => {
+      if (p.type !== "literal") acc[p.type] = Number(p.value);
+      return acc;
+    }, {});
+    const date = zonedDateTimeToUtc(parts.year, parts.month, parts.day, Number(hm[2]), Number(hm[3]), Number(hm[4] || 0), timezone);
+    if (hm[1]) date.setUTCDate(date.getUTCDate() + 1);
+    return date;
+  }
+
+  throw new Error(`Invalid datetime: ${text}`);
+}
+
+function outputPathAbs(runDir, instanceId, execId, slotName) {
+  return path.join(runDir, outputDirForNode(instanceId), outputNodeBasename(instanceId, execId, slotName));
+}
+
+function writeOutputSlot(runDir, instanceId, execId, slotName, value) {
+  const p = outputPathAbs(runDir, instanceId, execId, slotName);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, String(value ?? "") + "\n", "utf-8");
+}
+
+function writeWaitState(runDir, state) {
+  const legacyPath = path.join(runDir, "wait-state.json");
+  const registryPath = path.join(runDir, "wait-states.json");
+  let registry = { version: 1, flowName: state.flowName, uuid: state.uuid, waits: [] };
+  if (fs.existsSync(registryPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.waits)) registry = parsed;
+    } catch (_) {}
+  }
+  const waits = registry.waits.filter((w) => w && w.instanceId !== state.instanceId);
+  const wait = { ...state, id: state.id || state.instanceId };
+  waits.push(wait);
+  registry = {
+    ...registry,
+    version: 1,
+    flowName: state.flowName,
+    uuid: state.uuid,
+    updatedAt: new Date().toISOString(),
+    waits,
+  };
+  fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2) + "\n", "utf-8");
+  fs.writeFileSync(legacyPath, JSON.stringify(wait, null, 2) + "\n", "utf-8");
+}
+
+function readCancelFlag(runDir) {
+  for (const name of ["cancelled", "cancelled.json", "wait-cancelled.json"]) {
+    const p = path.join(runDir, name);
+    if (!fs.existsSync(p)) continue;
+    if (name.endsWith(".json")) {
+      try {
+        const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+        if (data && (data.cancelled === true || data.status === "cancelled")) return true;
+      } catch (_) {}
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
+function boolish(v) {
+  if (v == null || String(v).trim() === "") return false;
+  const s = String(v).trim();
+  if (fs.existsSync(s)) {
+    try {
+      return parseBool(fs.readFileSync(s, "utf-8").trim());
+    } catch (_) {
+      return false;
+    }
+  }
+  return parseBool(s);
+}
+
+function emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, suffix, content) {
+  const nodeIntermediateDir = path.join(runDir, intermediateDirForNode(instanceId));
+  fs.mkdirSync(nodeIntermediateDir, { recursive: true });
+  const promptPath = path.join(nodeIntermediateDir, `${instanceId}.${suffix}.prompt.md`);
+  fs.writeFileSync(promptPath, content, "utf-8");
+  return path.relative(workspaceRoot, promptPath).replace(/\\/g, "/");
+}
+
 /**
  * 若为 tool_load_key / tool_save_key / tool_get_env，写入「直接执行 agentflow apply -ai run-tool-nodejs + 对应脚本」的 prompt，
  * key/value 从 getResolvedValues 的 resolvedInputs 读取并拼入命令。
@@ -380,6 +527,194 @@ function main() {
     return;
   }
 
+  if (definitionId === "control_delay" || definitionId === "control_wait_until") {
+    const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+    if (!data.ok) {
+      console.error(JSON.stringify({ ok: false, error: `${definitionId}: getResolvedValues failed` }));
+      process.exit(1);
+    }
+    const inputs = data.resolvedInputs || {};
+    let wakeAt;
+    try {
+      if (definitionId === "control_delay") {
+        const duration = inputs.duration ?? inputs.value ?? "";
+        wakeAt = new Date(Date.now() + parseDurationMs(duration)).toISOString();
+      } else {
+        const timezone = inputs.timezone || "Asia/Shanghai";
+        wakeAt = parseDateTime(inputs.until ?? inputs.wakeAt ?? "", timezone).toISOString();
+      }
+    } catch (e) {
+      console.error(JSON.stringify({ ok: false, error: `${definitionId}: ${e.message}` }));
+      process.exit(1);
+    }
+
+    writeOutputSlot(runDir, instanceId, execId, "wakeAt", wakeAt);
+    writeWaitState(runDir, {
+      status: "waiting",
+      reason: definitionId,
+      flowName,
+      uuid,
+      instanceId,
+      execId,
+      wakeAt,
+      createdAt: new Date().toISOString(),
+    });
+    writeResult(
+      workspaceRoot,
+      flowName,
+      uuid,
+      instanceId,
+      { status: "pending", message: `等待至 ${wakeAt}` },
+      { execId, preserveBody: false },
+    );
+    const promptPath = emitLocalNoopPrompt(
+      workspaceRoot,
+      runDir,
+      instanceId,
+      "waiting",
+      `此节点为 ${definitionId}，已写入 wait-state.json，等待 scheduler 在 ${wakeAt} 唤醒。\n`,
+    );
+    writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
+    logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "waiting", instanceId, wakeAt, definitionId });
+    console.log(JSON.stringify({
+      ok: true,
+      promptPath,
+      resultPath: resultPathRel,
+      execId,
+      subagent: "agentflow-node-executor",
+      optionalPromptPath: promptPath,
+      definitionId,
+    }));
+    return;
+  }
+
+  if (definitionId === "control_interval_loop") {
+    const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+    if (!data.ok) {
+      console.error(JSON.stringify({ ok: false, error: "control_interval_loop: getResolvedValues failed" }));
+      process.exit(1);
+    }
+    const inputs = data.resolvedInputs || {};
+    let branch = "continue";
+    let message = "";
+    let wakeAt = "";
+    let expired = false;
+    try {
+      const timezone = inputs.timezone || "Asia/Shanghai";
+      const cancelled = boolish(inputs.cancelled) || readCancelFlag(runDir);
+      const done = boolish(inputs.done);
+      if (cancelled) {
+        branch = "cancelled";
+        message = "已取消";
+      } else if (done) {
+        branch = "done";
+        message = "已完成";
+      } else {
+        let deadline = null;
+        if (inputs.deadlineAt) {
+          deadline = parseDateTime(inputs.deadlineAt, timezone);
+        } else if (inputs.duration) {
+          const start = inputs.startAt ? parseDateTime(inputs.startAt, timezone) : new Date();
+          deadline = new Date(start.getTime() + parseDurationMs(inputs.duration));
+        }
+        expired = deadline ? Date.now() >= deadline.getTime() : false;
+        if (deadline) writeOutputSlot(runDir, instanceId, execId, "deadlineAt", deadline.toISOString());
+        if (expired) {
+          branch = "timeout";
+          message = `已超过截止时间 ${deadline.toISOString()}`;
+        } else {
+          const interval = inputs.interval || "10m";
+          wakeAt = new Date(Date.now() + parseDurationMs(interval)).toISOString();
+          branch = "continue";
+          message = `等待至 ${wakeAt}`;
+        }
+      }
+    } catch (e) {
+      console.error(JSON.stringify({ ok: false, error: `control_interval_loop: ${e.message}` }));
+      process.exit(1);
+    }
+    writeOutputSlot(runDir, instanceId, execId, "expired", expired ? "true" : "false");
+    if (wakeAt) writeOutputSlot(runDir, instanceId, execId, "wakeAt", wakeAt);
+    const promptPath = emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "interval-loop", `此节点为 control_interval_loop，分支：${branch}。\n`);
+    writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
+    if (wakeAt) {
+      writeWaitState(runDir, {
+        status: "waiting",
+        reason: definitionId,
+        flowName,
+        uuid,
+        instanceId,
+        execId,
+        branch,
+        wakeAt,
+        createdAt: new Date().toISOString(),
+      });
+      writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "pending", message, branch }, { execId, preserveBody: false });
+    } else {
+      writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message, branch }, { execId, preserveBody: false });
+    }
+    logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "interval-loop", instanceId, branch, wakeAt: wakeAt || undefined });
+    console.log(JSON.stringify({
+      ok: true,
+      promptPath,
+      resultPath: resultPathRel,
+      execId,
+      subagent: "agentflow-node-executor",
+      optionalPromptPath: promptPath,
+      definitionId,
+    }));
+    return;
+  }
+
+  if (definitionId === "control_deadline" || definitionId === "control_cancelled") {
+    const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+    if (!data.ok) {
+      console.error(JSON.stringify({ ok: false, error: `${definitionId}: getResolvedValues failed` }));
+      process.exit(1);
+    }
+    const inputs = data.resolvedInputs || {};
+    let boolValue = false;
+    let message = "";
+    try {
+      if (definitionId === "control_deadline") {
+        const timezone = inputs.timezone || "Asia/Shanghai";
+        let deadline;
+        if (inputs.deadlineAt) {
+          deadline = parseDateTime(inputs.deadlineAt, timezone);
+        } else {
+          const start = inputs.startAt ? parseDateTime(inputs.startAt, timezone) : new Date();
+          deadline = new Date(start.getTime() + parseDurationMs(inputs.duration || ""));
+        }
+        const deadlineAt = deadline.toISOString();
+        boolValue = Date.now() >= deadline.getTime();
+        writeOutputSlot(runDir, instanceId, execId, "deadlineAt", deadlineAt);
+        writeOutputSlot(runDir, instanceId, execId, "expired", boolValue ? "true" : "false");
+        message = boolValue ? `已超过截止时间 ${deadlineAt}` : `未超过截止时间 ${deadlineAt}`;
+      } else {
+        boolValue = readCancelFlag(runDir);
+        writeOutputSlot(runDir, instanceId, execId, "cancelled", boolValue ? "true" : "false");
+        message = boolValue ? "已取消" : "未取消";
+      }
+    } catch (e) {
+      console.error(JSON.stringify({ ok: false, error: `${definitionId}: ${e.message}` }));
+      process.exit(1);
+    }
+    writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message }, { execId, preserveBody: false });
+    const promptPath = emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "local", `此节点为 ${definitionId}，已本地计算完成。\n`);
+    writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
+    logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "local-control", instanceId, definitionId, value: boolValue });
+    console.log(JSON.stringify({
+      ok: true,
+      promptPath,
+      resultPath: resultPathRel,
+      execId,
+      subagent: "agentflow-node-executor",
+      optionalPromptPath: promptPath,
+      definitionId,
+    }));
+    return;
+  }
+
   const data = buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId);
   if (!data.ok) {
     console.error(JSON.stringify({ ok: false, error: data.error || "build-node-prompt failed" }));
@@ -425,7 +760,7 @@ function main() {
       output.optionalPromptPath = anyOneResult.optionalPromptPath;
       output.directCommand = anyOneResult.directCommand;
     }
-  } else if ((definitionId === "tool_nodejs" || definitionId === "control_toBool") && data.script) {
+  } else if ((definitionId === "tool_nodejs" || definitionId === "control_toBool" || String(definitionId || "").startsWith("marketplace:")) && data.script) {
     const toolNodejsResult = emitToolNodejsDirectCommand(workspaceRoot, flowName, uuid, instanceId, data.script, execId);
     if (toolNodejsResult) {
       output.optionalPromptPath = toolNodejsResult.optionalPromptPath;

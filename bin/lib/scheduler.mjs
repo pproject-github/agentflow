@@ -12,9 +12,12 @@ import {
 import { getRunDir, PACKAGE_ROOT } from "./paths.mjs";
 import { isApplyProcessAlive } from "./run-apply-active-lock.mjs";
 import { log } from "./log.mjs";
+import { writeResult } from "../pipeline/write-result.mjs";
 
 const DEFAULT_POLL_MS = 30_000;
 const RUN_CONFIG_FILENAME = "run-config.json";
+const WAIT_STATE_FILENAME = "wait-state.json";
+const WAIT_STATES_FILENAME = "wait-states.json";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,6 +106,104 @@ function getLatestRunUuidForFlow(workspaceRoot, flowId) {
       .map((e) => e.name)
       .sort();
     return dirs[dirs.length - 1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function listRunDirsForFlow(flow) {
+  const flowDir = flow.path || "";
+  const runRoot = flowDir ? path.join(flowDir, "runBuild") : "";
+  if (!runRoot || !fs.existsSync(runRoot)) return [];
+  try {
+    return fs.readdirSync(runRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /^\d{14}$/.test(e.name))
+      .map((e) => ({ uuid: e.name, runDir: path.join(runRoot, e.name) }));
+  } catch {
+    return [];
+  }
+}
+
+function readJsonObject(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const state = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return state && typeof state === "object" ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function waitStateKey(state) {
+  return String((state && (state.id || state.instanceId)) || "");
+}
+
+function persistedWaitState(state) {
+  const {
+    waitPath: _waitPath,
+    legacyPath: _legacyPath,
+    registryPath: _registryPath,
+    runDir: _runDir,
+    ...persisted
+  } = state && typeof state === "object" ? state : {};
+  return persisted;
+}
+
+function readWaitStates(runDir) {
+  const legacyPath = path.join(runDir, WAIT_STATE_FILENAME);
+  const registryPath = path.join(runDir, WAIT_STATES_FILENAME);
+  const states = [];
+  const seen = new Set();
+  const registry = readJsonObject(registryPath);
+  if (registry && Array.isArray(registry.waits)) {
+    for (const raw of registry.waits) {
+      if (!raw || typeof raw !== "object") continue;
+      const state = { ...raw, runDir, legacyPath, registryPath };
+      const key = waitStateKey(state);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      states.push(state);
+    }
+  }
+  const legacy = readJsonObject(legacyPath);
+  if (legacy) {
+    const state = { ...legacy, runDir, waitPath: legacyPath, legacyPath, registryPath: fs.existsSync(registryPath) ? registryPath : null };
+    const key = waitStateKey(state);
+    if (key && !seen.has(key)) states.push(state);
+  }
+  return states;
+}
+
+function writeWaitState(waitState, patch = {}) {
+  const next = {
+    ...(waitState && typeof waitState === "object" ? waitState : {}),
+    ...(patch && typeof patch === "object" ? patch : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  const runDir = next.runDir || (next.waitPath ? path.dirname(next.waitPath) : "");
+  if (!runDir) return;
+
+  const legacyPath = next.legacyPath || next.waitPath || path.join(runDir, WAIT_STATE_FILENAME);
+  const registryPath = next.registryPath || path.join(runDir, WAIT_STATES_FILENAME);
+  const persisted = persistedWaitState(next);
+  const key = waitStateKey(persisted);
+
+  const registry = readJsonObject(registryPath);
+  if (registry && Array.isArray(registry.waits)) {
+    const waits = registry.waits.filter((w) => waitStateKey(w) !== key);
+    waits.push(persisted);
+    fs.writeFileSync(registryPath, JSON.stringify({ ...registry, updatedAt: new Date().toISOString(), waits }, null, 2) + "\n", "utf-8");
+  }
+  fs.writeFileSync(legacyPath, JSON.stringify(persisted, null, 2) + "\n", "utf-8");
+}
+
+function readNodeResultStatus(runDir, instanceId) {
+  const resultPath = path.join(runDir, "intermediate", instanceId, `${instanceId}.result.md`);
+  if (!fs.existsSync(resultPath)) return null;
+  try {
+    const raw = fs.readFileSync(resultPath, "utf-8");
+    const m = raw.match(/^\s*status:\s*["']?([^"'\s]+)["']?/m);
+    return m ? m[1] : null;
   } catch {
     return null;
   }
@@ -206,6 +307,110 @@ function startScheduledRun(workspaceRoot, flow, schedule, state) {
   return child;
 }
 
+function startWaitingRunResume(workspaceRoot, flow, waitState) {
+  const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
+  const uuid = String(waitState.uuid || "");
+  const instanceId = String(waitState.instanceId || "");
+  const args = [
+    agentflowBin,
+    "resume",
+    flow.id,
+    uuid,
+    instanceId,
+    "--machine-readable",
+    "--workspace-root",
+    path.resolve(workspaceRoot),
+    "--force",
+  ];
+  const child = spawn(process.execPath, args, {
+    cwd: path.resolve(workspaceRoot),
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, FORCE_COLOR: "0" },
+    detached: true,
+  });
+  child.stdout.on("data", () => {});
+  child.stderr.on("data", (chunk) => {
+    const text = chunk.toString("utf8").trim();
+    if (text) log.debug(`[scheduler] resume ${flow.id}/${uuid}: ${text.slice(0, 1000)}`);
+  });
+  child.on("exit", (code, signal) => {
+    const runDir = waitState.runDir || (waitState.waitPath ? path.dirname(waitState.waitPath) : "");
+    if (!runDir) return;
+    const latest = readWaitStates(runDir).find((s) => waitStateKey(s) === waitStateKey(waitState));
+    if (!latest || latest.wakeAt !== waitState.wakeAt || latest.instanceId !== waitState.instanceId) return;
+    writeWaitState(latest, {
+      status: code === 0 ? "resumed" : "waiting",
+      lastResumeExitCode: code,
+      lastResumeExitSignal: signal || "",
+      lastResumeFinishedAt: new Date().toISOString(),
+      ...(code === 0 ? {} : { lastError: `resume exited with code ${code}${signal ? ` signal ${signal}` : ""}` }),
+    });
+  });
+  child.unref();
+  return child;
+}
+
+function countActiveWaitsForFlow(flow) {
+  let count = 0;
+  for (const run of listRunDirsForFlow(flow)) {
+    for (const waitState of readWaitStates(run.runDir)) {
+      if (waitState && (waitState.status === "waiting" || waitState.status === "resuming")) count += 1;
+    }
+  }
+  return count;
+}
+
+function hasNodeBranchEdge(runDir, instanceId, branchName) {
+  const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
+  const flow = readJsonObject(flowJsonPath);
+  if (!flow || !Array.isArray(flow.edges)) return false;
+  const outputSlotTypes = flow.outputSlotTypes && flow.outputSlotTypes[instanceId];
+  if (!outputSlotTypes || typeof outputSlotTypes !== "object") return false;
+  const idx = Object.keys(outputSlotTypes).indexOf(branchName);
+  if (idx < 0) return false;
+  const sourceHandle = `output-${idx}`;
+  return flow.edges.some((e) => e && e.source === instanceId && (e.sourceHandle || "output-0") === sourceHandle);
+}
+
+export function cancelScheduledRun(workspaceRoot, flowId, uuid) {
+  const flow = listFlowsJson(workspaceRoot).find((f) => f.id === flowId && !f.archived && f.source !== "builtin");
+  if (!flow) return { ok: false, error: `flow not found: ${flowId}` };
+  const runDir = getRunDir(workspaceRoot, flow.id, uuid);
+  if (!fs.existsSync(runDir)) return { ok: false, error: `run not found: ${flowId}/${uuid}` };
+  const cancelledAt = new Date().toISOString();
+  fs.writeFileSync(path.join(runDir, "cancelled.json"), JSON.stringify({ cancelled: true, cancelledAt }, null, 2) + "\n", "utf-8");
+  let updated = 0;
+  let propagated = 0;
+  let resumePid = null;
+  for (const waitState of readWaitStates(runDir)) {
+    if (waitState.status !== "waiting" && waitState.status !== "resuming") continue;
+    const instanceId = String(waitState.instanceId || "");
+    const canPropagate =
+      waitState.reason === "control_interval_loop" &&
+      instanceId &&
+      hasNodeBranchEdge(runDir, instanceId, "cancelled") &&
+      !resumePid;
+    if (canPropagate) {
+      writeResult(
+        workspaceRoot,
+        flow.id,
+        uuid,
+        instanceId,
+        { status: "success", message: "已取消", branch: "cancelled" },
+        { execId: Number(waitState.execId) || undefined, preserveBody: false },
+      );
+      const child = startWaitingRunResume(workspaceRoot, flow, { ...waitState, uuid, runDir, branch: "cancelled" });
+      resumePid = child.pid || null;
+      writeWaitState(waitState, { status: "resuming", branch: "cancelled", cancelledAt, resumePid, resumeStartedAt: cancelledAt });
+      propagated += 1;
+    } else {
+      writeWaitState(waitState, { status: "cancelled", cancelledAt });
+    }
+    updated += 1;
+  }
+  return { ok: true, flowId, uuid, cancelledAt, updatedWaits: updated, propagatedWaits: propagated, resumePid };
+}
+
 export function listScheduleStatuses(workspaceRoot) {
   const rows = [];
   for (const flow of listFlowsJson(workspaceRoot)) {
@@ -232,6 +437,7 @@ export function listScheduleStatuses(workspaceRoot) {
         ? "workspace flow is shadowed by a user flow with the same id"
         : state.lastError || "",
       running: isFlowCurrentlyRunning(workspaceRoot, flow.id, state),
+      waiting: countActiveWaitsForFlow(flow),
     });
   }
   rows.sort((a, b) => {
@@ -251,6 +457,46 @@ export async function startScheduler(workspaceRoot, opts = {}) {
     for (const flow of listFlowsJson(workspaceRoot)) {
       if (flow.archived || flow.source === "builtin") continue;
       const flowSource = flow.source || "user";
+      let resumedWaitingRun = false;
+      for (const run of listRunDirsForFlow(flow)) {
+        if (resumedWaitingRun) break;
+        for (const waitState of readWaitStates(run.runDir)) {
+          if (!waitState || !waitState.wakeAt || !waitState.instanceId) continue;
+          if (waitState.status === "resuming" && !isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid })) {
+            const nodeStatus = readNodeResultStatus(run.runDir, String(waitState.instanceId));
+            writeWaitState(waitState, {
+              status: nodeStatus === "pending" ? "waiting" : "resumed",
+              reconciledAt: new Date().toISOString(),
+            });
+            continue;
+          }
+          if (waitState.status !== "waiting") continue;
+          if (Date.parse(waitState.wakeAt) > now) continue;
+          if (isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid })) continue;
+          const nextState = {
+            ...waitState,
+            status: "resuming",
+            resumePid: null,
+            resumeStartedAt: new Date().toISOString(),
+          };
+          try {
+            const child = startWaitingRunResume(workspaceRoot, flow, { ...waitState, uuid: run.uuid, runDir: run.runDir });
+            nextState.resumePid = child.pid || null;
+            writeWaitState(waitState, nextState);
+            resumedWaitingRun = true;
+            log.info(`[scheduler] resume ${flow.id}/${run.uuid} at ${waitState.instanceId}; pid=${child.pid || "?"}`);
+            break;
+          } catch (e) {
+            writeWaitState(waitState, {
+              status: "waiting",
+              lastError: e && e.message ? e.message : String(e),
+              lastErrorAt: new Date().toISOString(),
+            });
+            log.info(`[scheduler] resume failed ${flow.id}/${run.uuid}: ${e && e.message ? e.message : String(e)}`);
+          }
+        }
+      }
+
       const scheduleRes = readFlowSchedule(workspaceRoot, flow.id, flowSource);
       if (!scheduleRes.success) {
         log.debug(`[scheduler] ${flow.id}: ${scheduleRes.error}`);
