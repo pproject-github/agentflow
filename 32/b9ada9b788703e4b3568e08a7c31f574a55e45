@@ -1,0 +1,136 @@
+builtin/web-ui/src/NodePropertiesPanel.jsx
+  s_e6e3a1ee0d2f60::t_fecfb3e20e32b8 135,149,156,187-202,209-218,227-231
+bin/lib/paths.mjs
+  s_e6e3a1ee0d2f60::t_85515c0dcc9771 173-174
+  s_e6e3a1ee0d2f60::t_8e1777265f3a92 202-205
+  s_e6e3a1ee0d2f60::t_2171f1c50addfd 206
+builtin/nodes/control_deadline.md
+  s_e6e3a1ee0d2f60::t_33561cd5821c6c 1-32
+bin/lib/ui-server.mjs
+  s_e6e3a1ee0d2f60::t_0e458a891b0545 885-888,936-944,953-955
+  s_e6e3a1ee0d2f60::t_515b1de1aad404 945-952
+  s_e6e3a1ee0d2f60::t_2589da9ac2a8c4 889-935
+  s_e6e3a1ee0d2f60::t_03fd232636c0f9 67
+builtin/web-ui/dist/index.html
+  s_e6e3a1ee0d2f60::t_df88ef99776102 19
+builtin/nodes/control_interval_loop.md
+  s_e6e3a1ee0d2f60::t_9d6d6b9c5137e7 1-53
+bin/lib/main.mjs
+  s_e6e3a1ee0d2f60::t_1cc1dd9d65d4dc 33,423,433,440-453,455
+  s_e6e3a1ee0d2f60::t_19943289eff0a8 34,214-249
+bin/pipeline/build-node-prompt.mjs
+  s_e6e3a1ee0d2f60::t_bc86811232467f 86-95,99
+  s_e6e3a1ee0d2f60::t_4894b881f3ca8d 14,26-27,81-85,96-98,100-113,143-146,157,167-168
+builtin/nodes/control_wait_until.md
+  s_e6e3a1ee0d2f60::t_33561cd5821c6c 1-23
+bin/lib/locales/zh.json
+  s_e6e3a1ee0d2f60::t_0873314e21dcc2 260-263
+  s_e6e3a1ee0d2f60::t_9d58117c8f6548 244-259,364
+builtin/web-ui/dist/assets/index-CFuFD_86.css
+  s_e6e3a1ee0d2f60::t_df88ef99776102 1
+bin/lib/help.mjs
+  s_e6e3a1ee0d2f60::t_9012a9213d7670 23,92
+  s_e6e3a1ee0d2f60::t_30475d8b458fc2 24-26,93-95
+builtin/nodes/control_delay.md
+  s_e6e3a1ee0d2f60::t_33561cd5821c6c 1-20
+bin/lib/catalog-flows.mjs
+  s_e6e3a1ee0d2f60::t_9776fcde38e837 205-214,249,483-488,490
+  s_e6e3a1ee0d2f60::t_2fd918546caaa6 19,250-268,477-478,491-510
+  s_e6e3a1ee0d2f60::t_ea8c41e0d3839e 479-482,489
+bin/pipeline/get-resolved-values.mjs
+  s_e6e3a1ee0d2f60::t_655b9accfaa914 13,106-110
+bin/lib/marketplace.mjs
+  s_e6e3a1ee0d2f60::t_441f85d51f1c20 306-318,459-476,498-506,508-514,523-524
+  s_e6e3a1ee0d2f60::t_e80ea887ba7261 1-240,244-305,525-542
+  s_e6e3a1ee0d2f60::t_d9e0a7ad824c6c 241-242
+  s_e6e3a1ee0d2f60::t_c40984d5bd0bf4 319-458,477-497,507,515-522
+  s_e6e3a1ee0d2f60::t_1da0b14dd72f19 243
+bin/pipeline/pre-process-node.mjs
+  s_e6e3a1ee0d2f60::t_8cd1372f1d082a 127-143,164-166,179-193,195-212,235-252,266-273
+  s_e6e3a1ee0d2f60::t_6ef76bebe27b4b 144-163,167-178,194
+  s_e6e3a1ee0d2f60::t_36191bc19d221e 253-265,579-625,627-656
+  s_e6e3a1ee0d2f60::t_2ffce109809ce1 626
+  s_e6e3a1ee0d2f60::t_122bd02207d4e2 530-578,657-714
+  s_e6e3a1ee0d2f60::t_87e7c2703448f7 763
+  s_e6e3a1ee0d2f60::t_c6126462041d9c 213-234
+bin/lib/scheduler.mjs
+  s_e6e3a1ee0d2f60::t_9c7231a5d53d98 465-496
+  s_e6e3a1ee0d2f60::t_d16aa1eb730502 15,363-374,383-384,387-408,411
+  s_e6e3a1ee0d2f60::t_da1067db3e2338 200-211
+  s_e6e3a1ee0d2f60::t_dc056367331361 114-126,129,132-136,198-199,305-308,310-335,461,497-499
+  s_e6e3a1ee0d2f60::t_9204f3b07f3d00 460,462-464
+  s_e6e3a1ee0d2f60::t_39729034c90a39 337-339,341,353-362,375-382,385-386,409-410,440
+  s_e6e3a1ee0d2f60::t_0060baaf0e62ea 336,340,342-348
+  s_e6e3a1ee0d2f60::t_fae97eafa68dcf 19-20,127-128,130-131,137-197
+builtin/web-ui/src/i18n/locales/zh/flow.json
+  s_e6e3a1ee0d2f60::t_3005bb0bbe356a 356-364,366-368
+  s_e6e3a1ee0d2f60::t_2823bbbc1f1464 365
+  s_e6e3a1ee0d2f60::t_e13abf6654ce36 347,352-355
+  s_e6e3a1ee0d2f60::t_8a87861555deb3 68-74
+  s_e6e3a1ee0d2f60::t_c14f6bd628b0e7 337-346,348-351,369-371
+bin/pipeline/parse-flow.mjs
+  s_e6e3a1ee0d2f60::t_3f8345a60fe5ee 17,43,53,68-75,97,110,625-626
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_e6e3a1ee0d2f60::t_1476d3ea2ea251 4106-4133
+  s_e6e3a1ee0d2f60::t_a1d5a220f9fbe6 849
+  s_e6e3a1ee0d2f60::t_a2d57d4c2de04a 1917
+  s_e6e3a1ee0d2f60::t_39c4344fb48c85 845-848
+  s_e6e3a1ee0d2f60::t_6ef34558554cd1 2385-2391
+  s_e6e3a1ee0d2f60::t_6cff5385eca60d 3872-3884,3887-4052,4054-4056,4060-4061,4066,4134,4137-4316,4318,4320-4336
+  s_e6e3a1ee0d2f60::t_3088ba862cd52f 1842-1892
+  s_e6e3a1ee0d2f60::t_aec36bf8819e2f 5067-5069,5486
+  s_e6e3a1ee0d2f60::t_a02bbf8caa1f8d 5712
+  s_e6e3a1ee0d2f60::t_f32663ba124a5f 4785,4960
+  s_e6e3a1ee0d2f60::t_34d337bae9a265 4053,4057-4059,4062-4065,4067-4073,4076-4078,4105,4135-4136
+  s_e6e3a1ee0d2f60::t_3bf45e0af470ee 4074-4075,4079-4104
+  s_e6e3a1ee0d2f60::t_bc32ed75a381f0 6151
+  s_e6e3a1ee0d2f60::t_8b4ebda9a9df20 3885-3886
+  s_e6e3a1ee0d2f60::t_99c736d2343daa 5558
+  s_e6e3a1ee0d2f60::t_ba087d9552526f 930,1418-1422,1427-1428,1443,1448,2377,5851,5864,5878,5891
+  s_e6e3a1ee0d2f60::t_bc148d01ed2592 1601-1615
+  s_e6e3a1ee0d2f60::t_3ac7e7a0068d7e 1591-1598
+  s_e6e3a1ee0d2f60::t_45ec3f8171fe7f 1904-1905
+  s_e6e3a1ee0d2f60::t_4f3074de55f315 4317,4319
+  s_e6e3a1ee0d2f60::t_d2363b47765e5e 4338-4432,4441-4448
+  s_e6e3a1ee0d2f60::t_63ec569009aae4 122-133
+  s_e6e3a1ee0d2f60::t_9d6895893a1e47 1830-1841,1893-1903,1906-1916
+  s_e6e3a1ee0d2f60::t_859cb6f6e704bd 4433-4440
+builtin/nodes/control_cancelled.md
+  s_e6e3a1ee0d2f60::t_33561cd5821c6c 1-20
+bin/pipeline/get-ready-nodes.mjs
+  s_e6e3a1ee0d2f60::t_6dba00974ecc88 251,312
+builtin/web-ui/src/index.css
+  s_e6e3a1ee0d2f60::t_a9073539d11a79 5888-5891,5896-5899,6256-6279
+  s_e6e3a1ee0d2f60::t_a4352a06a4cad9 3280-3483
+  s_e6e3a1ee0d2f60::t_4e0dce6b1968e3 3185,3216-3217,3220-3223,3225,3272-3277
+  s_e6e3a1ee0d2f60::t_236e580f1d033b 2984-3182,3184,3186-3187,3189-3190,3200-3204,3208-3211,3214-3215,3278-3279,3484-3702
+  s_e6e3a1ee0d2f60::t_53bbc9718f3ee7 3183,3188,3191-3199,3205-3207,3212-3213,3218-3219,3224,3226-3271
+builtin/web-ui/src/i18n/locales/en/flow.json
+  s_e6e3a1ee0d2f60::t_a4e14ca19ffa78 337-346,348-351,369-371
+  s_e6e3a1ee0d2f60::t_c9396cea72d663 347,352-355
+  s_e6e3a1ee0d2f60::t_72fac5f9e4668b 68-74
+  s_e6e3a1ee0d2f60::t_8b1aaff69a8d8c 356-364,366-368
+  s_e6e3a1ee0d2f60::t_803b52be0f2f19 365
+bin/lib/apply.mjs
+  s_e6e3a1ee0d2f60::t_c00d075c53be9b 35-46,780-785
+bin/lib/locales/en.json
+  s_e6e3a1ee0d2f60::t_76a6afa54d3579 260-263
+  s_e6e3a1ee0d2f60::t_9d58117c8f6548 244-259,364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "32b9ada9b788703e4b3568e08a7c31f574a55e45",
+  "prompts": {},
+  "logical_commit_id": "32b9ada9b788703e4b3568e08a7c31f574a55e45",
+  "sessions": {
+    "s_e6e3a1ee0d2f60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ed38f-0249-7721-b018-4ab6e7bfac4d",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
