@@ -16,6 +16,7 @@ import { loadFlowDefinition } from "./parse-flow.mjs";
 import { getResolvedValues, getOutputPathForSlot } from "./get-resolved-values.mjs";
 import { loadExecId } from "./get-exec-id.mjs";
 import { intermediatePromptBasename, intermediateDirForNode } from "./get-exec-id.mjs";
+import { normalizeSkillsContext, normalizeWorkspaceContext, renderSkillsContextForPrompt } from "../lib/runtime-context.mjs";
 
 function shellQuote(s) {
   if (s == null) return "''";
@@ -116,7 +117,7 @@ function marketplaceRuntimeCommand(marketplaceNode, resolvedInputs, resolvedOutp
  * @param {number} [execId] - 本轮 execId，缺省则从 memory 读取
  * @returns {{ ok: boolean, promptPath?: string, nodeContext?: string, taskBody?: string, error?: string }}
  */
-export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId) {
+export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId, opts = {}) {
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
   const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
   let flowDir = getFlowDir(workspaceRoot, flowName) || path.join(workspaceRoot, PIPELINES_DIR, flowName);
@@ -154,7 +155,26 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
       : "";
 
   const { resolvedInputs = {}, resolvedOutputs = {}, systemPrompt = "" } = data;
-  const resolveOpts = { instanceId, currentExecId: e, runDir, workspaceRoot };
+  const workspaceContext = normalizeWorkspaceContext(opts.workspaceContext || resolvedInputs.workspaceContext, workspaceRoot, flowName, { flowDir });
+  const skillsContext = normalizeSkillsContext(opts.skillsContext || resolvedInputs.skillsContext);
+  if (workspaceContext?.workspaceRoot) {
+    resolvedInputs.workspaceRoot = workspaceContext.workspaceRoot;
+    resolvedInputs.cwd = workspaceContext.cwd || workspaceContext.workspaceRoot;
+    resolvedInputs.pipelineWorkspace = workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot);
+  }
+  const resolveOpts = {
+    instanceId,
+    currentExecId: e,
+    runDir,
+    workspaceRoot: workspaceContext?.workspaceRoot || workspaceRoot,
+    extra: {
+      workspaceRoot: workspaceContext?.workspaceRoot || path.resolve(workspaceRoot),
+      cwd: workspaceContext?.cwd || workspaceContext?.workspaceRoot || path.resolve(workspaceRoot),
+      pipelineWorkspace: workspaceContext?.pipelineWorkspace || path.resolve(workspaceRoot),
+      flowDir: path.resolve(flowDir),
+      runDir,
+    },
+  };
   const taskBody = resolvePlaceholdersInText(
     instanceBody,
     resolvedInputs,
@@ -168,9 +188,12 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
       ? marketplaceRuntimeCommand(marketplaceNode, resolvedInputs, resolvedOutputs, resolveOpts)
     : "";
 
+  const skillsPrompt = renderSkillsContextForPrompt(skillsContext);
+  const contextBlocks = [systemPrompt || "(无)", skillsPrompt].filter((x) => x && String(x).trim());
+
   const content = `## 节点上下文
 
-${systemPrompt || "(无)"}
+${contextBlocks.join("\n\n")}
 
 ## 执行任务
 
@@ -191,9 +214,11 @@ ${taskBody || "(无)"}
   return {
     ok: true,
     promptPath: relativePath.replace(/\\/g, "/"),
-    nodeContext: systemPrompt || "",
+    nodeContext: contextBlocks.join("\n\n") || "",
     taskBody: taskBody || "",
     script: resolvedScript || "",
+    workspaceContext,
+    skillsContext,
   };
 }
 

@@ -11,7 +11,8 @@ readonly: true
 
 执行时**只引用本节的变量**，勿自行推导或拼接路径：
 
-- workspaceRoot：${workspaceRoot}（工作区根目录）
+- workspaceRoot：${workspaceRoot}（当前执行工作区根目录，可能由 CD Workspace 节点切换）
+- pipelineWorkspace：${pipelineWorkspace}（流水线所在工作区，写 AgentFlow 结果时使用）
 - flowName：${flowName}
 - uuid：${uuid}
 - instanceId：${instanceId}
@@ -28,5 +29,5 @@ ${taskBody}
 
 以代码实现为核心：理清需求与接口，编写或修改代码，确保可运行、通过类型检查与项目规范，节点中如有写入文件的操作可以执行。任务完成后直接退出，结果由系统自动标记成功。**仅当任务明确失败时**，执行以下命令报告失败（`agentflow` 是可直接在终端运行的 CLI 命令）：
 ```bash
-agentflow apply -ai write-result ${workspaceRoot} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"失败原因"}'
+agentflow apply -ai write-result ${pipelineWorkspace} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"失败原因"}'
 ```

@@ -13,7 +13,7 @@
  */
 import fs from "fs";
 import path from "path";
-import yaml from "js-yaml";
+import { listSkills as registryListSkills, readSkillDetail as registryReadSkillDetail } from "./skill-registry.mjs";
 
 // ─── 意图模式定义 ─────────────────────────────────────────────────────────
 
@@ -125,81 +125,12 @@ function readFileCached(absPath) {
   }
 }
 
-function parseSkillFile(absPath) {
-  const content = readFileCached(absPath);
-  if (!content) return null;
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  let meta = {};
-  if (fmMatch) {
-    try {
-      meta = yaml.load(fmMatch[1]) || {};
-    } catch {
-      meta = {};
-    }
-  }
-  const dirName = path.basename(path.dirname(absPath));
-  const name = String(meta.name || dirName).trim();
-  if (!name) return null;
-  const description = String(meta.description || "").trim();
-  return {
-    name,
-    description,
-    content,
-    body: stripFrontmatter(content),
-    absPath,
-  };
-}
-
-function listSkillDirs(rootDir) {
-  try {
-    return fs.readdirSync(rootDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => path.join(rootDir, e.name, "SKILL.md"))
-      .filter((p) => fs.existsSync(p));
-  } catch {
-    return [];
-  }
-}
-
-function skillSources(packageRoot, workspaceRoot) {
-  const sources = [
-    { source: "builtin", label: "AgentFlow", dir: path.join(packageRoot, "skills") },
-  ];
-  if (workspaceRoot) {
-    sources.push(
-      { source: "workspace-agents", label: ".agents", dir: path.join(workspaceRoot, ".agents", "skills") },
-      { source: "workspace-cursor", label: ".cursor", dir: path.join(workspaceRoot, ".cursor", "skills") },
-    );
-  }
-  return sources;
-}
-
 export function listComposerSkills(packageRoot, workspaceRoot) {
-  const out = [];
-  const seenKeys = new Set();
-  for (const src of skillSources(packageRoot, workspaceRoot)) {
-    for (const skillPath of listSkillDirs(src.dir)) {
-      const skill = parseSkillFile(skillPath);
-      if (!skill) continue;
-      const key = `${src.source}:${skill.name}`;
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      out.push({
-        key,
-        id: skill.name,
-        name: skill.name,
-        description: skill.description,
-        source: src.source,
-        sourceLabel: src.label,
-        path: skill.absPath,
-      });
-    }
-  }
-  return out.sort((a, b) => {
-    const bySource = a.sourceLabel.localeCompare(b.sourceLabel);
-    if (bySource !== 0) return bySource;
-    return a.name.localeCompare(b.name);
-  });
+  return registryListSkills(packageRoot, workspaceRoot).map(({ body, content, ...skill }) => skill);
+}
+
+export function readComposerSkillDetail(packageRoot, workspaceRoot, keyOrName) {
+  return registryReadSkillDetail(packageRoot, workspaceRoot, keyOrName);
 }
 
 export function loadResourcesForSkillKeys(skillKeys, packageRoot, workspaceRoot) {
@@ -210,13 +141,11 @@ export function loadResourcesForSkillKeys(skillKeys, packageRoot, workspaceRoot)
   if (wanted.size === 0) return { skills: [], references: [], skillsHint: "", hasContext: false };
 
   const skills = [];
-  for (const item of listComposerSkills(packageRoot, workspaceRoot)) {
+  for (const item of registryListSkills(packageRoot, workspaceRoot)) {
     if (!wanted.has(item.key) && !wanted.has(item.name)) continue;
-    const parsed = parseSkillFile(item.path);
-    if (!parsed) continue;
     skills.push({
       id: item.name,
-      content: parsed.body,
+      content: item.body,
       absPath: item.path,
       source: item.source,
       sourceLabel: item.sourceLabel,
@@ -356,6 +285,9 @@ export function buildSkillCompactInjectionBlock(skills, references) {
  */
 export function buildSkillInjectionBlock(skills, references) {
   const parts = [];
+  if ((skills?.length || 0) + (references?.length || 0) > 8) {
+    return buildSkillCompactInjectionBlock(skills || [], references || []);
+  }
 
   if (skills.length > 0) {
     parts.push("### 相关编辑技能（请严格遵循）");

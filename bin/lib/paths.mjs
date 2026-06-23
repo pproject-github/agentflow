@@ -69,6 +69,21 @@ export function getAgentflowUserContexts() {
   return [{}, ...ids.map((userId) => ({ userId }))];
 }
 
+export function resolveUniqueUserPipelineDir(flowName) {
+  const name = flowName == null ? "" : String(flowName).trim();
+  if (!name) return null;
+  const matches = [];
+  for (const userId of listAgentflowUserIds()) {
+    const dir = path.join(getAgentflowDataRoot(), "users", userId, "pipelines", name);
+    try {
+      if (fs.existsSync(path.join(dir, "flow.yaml"))) matches.push(dir);
+    } catch {
+      /* ignore unreadable user dirs */
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** 项目内 runBuild 根目录：`<workspaceRoot>/.workspace/agentflow/runBuild`（legacy：写入路径已迁至 `<flowDir>/runBuild`，仅用于兼容读取） */
 export function getWorkspaceRunBuildRoot(workspaceRoot) {
   const root =
@@ -87,8 +102,8 @@ export function getLegacyUserRunBuildRoot() {
  * 统一 runtime root：每个 flow 的 pipeline 源、scripts、runBuild 共用一个根目录。
  * - 若 `~/agentflow/pipelines/<name>/flow.yaml` 存在 → user-scope：`~/agentflow/pipelines/<name>`
  * - 若 `<ws>/.workspace/agentflow/pipelines/<name>/flow.yaml` 存在 → workspace-scope：`<ws>/.workspace/agentflow/pipelines/<name>`
- * - archived（`_archived/<name>`）按对应 scope 返回
  * - 其他（builtin 只读 / 不存在）→ 默认 user-scope 路径（首次 run 时自动创建，builtin 源仍从包内读取但 runBuild 落到用户目录）
+ * 归档 flow 不参与普通 runtime root 解析，避免同名 archived flow 被误当作活跃 flow。
  */
 export function getFlowRuntimeRoot(workspaceRoot, flowName, opts = {}) {
   const root =
@@ -98,12 +113,10 @@ export function getFlowRuntimeRoot(workspaceRoot, flowName, opts = {}) {
   const userRoot = getUserPipelinesRoot(opts.userId);
   const userDir = path.join(userRoot, flowName);
   if (fs.existsSync(path.join(userDir, "flow.yaml"))) return userDir;
-  const userArchived = path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME, flowName);
-  if (fs.existsSync(path.join(userArchived, "flow.yaml"))) return userArchived;
+  const inferredUserDir = resolveUniqueUserPipelineDir(flowName);
+  if (inferredUserDir) return inferredUserDir;
   const wsDir = path.join(root, PIPELINES_DIR, flowName);
   if (fs.existsSync(path.join(wsDir, "flow.yaml"))) return wsDir;
-  const wsArchived = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowName);
-  if (fs.existsSync(path.join(wsArchived, "flow.yaml"))) return wsArchived;
   // builtin / legacy / 尚未落盘 → 默认 user 目录，runBuild 首次写入时创建
   return userDir;
 }

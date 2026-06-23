@@ -21,6 +21,7 @@ import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VA
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
 import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
+import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
 import { useRoute } from "../routeContext.jsx";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { getHandleColor } from "../nodeSchema.js";
@@ -898,6 +899,11 @@ export default function FlowEditorPage() {
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!selected?.id) return;
+    recordPipelineView(selected.id, selected.source ?? "user", "pipeline", Boolean(selected.archived));
+  }, [selected?.id, selected?.source, selected?.archived]);
 
   // ── Run mode state ──
   const [runMode, setRunMode] = useState(/** @type {"edit" | "ready" | "running" | "stopped" | "done" | "error"} */ ("edit"));
@@ -4584,6 +4590,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             <div className="af-pipeline-brand">
               <span className="af-pipeline-brand-name">PIPELINE</span>
               <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
+            </div>
+            <div className="af-view-switch" aria-label="视图切换">
+              <button type="button" className="af-view-switch__active">Pipeline</button>
+              <button type="button" onClick={() => navigate(flowUrlForView(selected, "workspace"))}>Workspace</button>
             </div>
           </div>
           <div className="af-pipeline-top-right af-flow-toolbar-actions">

@@ -6,7 +6,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { getAgentflowDataRoot } from "./paths.mjs";
+import { getAgentflowDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
 import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { planComposerTasks, hasPlannerApiAvailable, shouldUsePhased, classifyComplexity, classifyTaskComplexity, PHASED_DEFINITIONS } from "./composer-planner.mjs";
@@ -22,6 +22,11 @@ import { t } from "./i18n.mjs";
 const MAX_PROMPT_CHARS = 500_000;
 const MAX_COMPOSER_VALIDATION_REPAIR = 5;
 const MAX_SCRIPT_INJECT_BYTES = 30_000;
+
+function agentflowUserEnv(userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  return safe ? { AGENTFLOW_USER_ID: safe } : {};
+}
 
 // ─── script 内容注入辅助 ─────────────────────────────────────────────────
 
@@ -113,10 +118,12 @@ export function startComposerAgent(opts) {
   const cliWs = opts.cliWorkspace ? String(opts.cliWorkspace) : getAgentflowDataRoot();
   const modelKey = opts.modelKey != null ? String(opts.modelKey).trim() : "";
   const { cli, model } = resolveCliAndModel(uiRoot, modelKey || null, null);
+  const env = agentflowUserEnv(opts.agentflowUserId);
 
   const common = {
     onStreamEvent: opts.onStreamEvent,
     force: Boolean(opts.force),
+    env,
   };
 
   if (cli === "opencode") {
@@ -184,6 +191,10 @@ function buildAgentStepPrompt(step, flowContext) {
     if (flowContext.flowId) {
       parts.push(`- flowId：${flowContext.flowId}`);
       parts.push(`- flowSource：${flowContext.flowSource || "user"}`);
+    }
+    if (flowContext.userId) {
+      parts.push(`- agentflow 用户：${flowContext.userId}`);
+      parts.push(`- 执行 agentflow 命令时保留当前环境中的 AGENTFLOW_USER_ID，必要时显式前置 AGENTFLOW_USER_ID='${flowContext.userId}'。`);
     }
     if (flowContext.skillsHint) {
       parts.push(flowContext.skillsHint);
@@ -344,6 +355,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
   const flowYamlAbs = String(opts.flowYamlAbs || "").trim();
   const cliWs = opts.cliWorkspace ? String(opts.cliWorkspace) : getAgentflowDataRoot();
   const maxRepair = Math.max(1, Math.min(10, Number(opts.maxRepairAttempts) || MAX_COMPOSER_VALIDATION_REPAIR));
+  const env = agentflowUserEnv(opts.agentflowUserId || opts.flowContext?.userId);
 
   if (!uiRoot || !flowYamlAbs) {
     return { ok: true, result: { skipped: true } };
@@ -405,6 +417,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
           onStreamEvent: stepEmit,
           model: model || undefined,
           force: Boolean(opts.force),
+          env,
         });
         setChild(handle.child);
         await handle.finished;
@@ -413,6 +426,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
           onStreamEvent: stepEmit,
           model: model || undefined,
           force: Boolean(opts.force),
+          env,
         });
         setChild(handle.child);
         await handle.finished;
@@ -421,6 +435,7 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
           onStreamEvent: stepEmit,
           model: model || undefined,
           force: Boolean(opts.force),
+          env,
         });
         setChild(handle.child);
         await handle.finished;
@@ -490,6 +505,7 @@ export function startComposerMultiStep(opts) {
   const emit = typeof opts.onStreamEvent === "function" ? opts.onStreamEvent : () => {};
   let aborted = false;
   let currentChild = null;
+  const env = agentflowUserEnv(opts.agentflowUserId || opts.flowContext?.userId);
 
   const abort = () => {
     aborted = true;
@@ -674,6 +690,7 @@ export function startComposerMultiStep(opts) {
                 onStreamEvent: stepEmit,
                 model: model || undefined,
                 force: Boolean(opts.force),
+                env,
               });
               currentChild = handle.child;
               await handle.finished;
@@ -682,6 +699,7 @@ export function startComposerMultiStep(opts) {
                 onStreamEvent: stepEmit,
                 model: model || undefined,
                 force: Boolean(opts.force),
+                env,
               });
               currentChild = handle.child;
               await handle.finished;
@@ -690,6 +708,7 @@ export function startComposerMultiStep(opts) {
                 onStreamEvent: stepEmit,
                 model: model || undefined,
                 force: Boolean(opts.force),
+                env,
               });
               currentChild = handle.child;
               await handle.finished;
@@ -757,6 +776,7 @@ export function startComposerMultiStep(opts) {
           flowContext: opts.flowContext,
           modelKey: opts.modelKey,
           force: Boolean(opts.force),
+          agentflowUserId: opts.agentflowUserId || opts.flowContext?.userId,
           onStreamEvent: emit,
           getAborted: () => aborted,
           setCurrentChild: (c) => {

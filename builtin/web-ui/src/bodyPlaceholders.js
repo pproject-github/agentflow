@@ -1,8 +1,8 @@
 /** 与 get-resolved-values 注入的 resolvedInputs 一致（含 flowDir：当前 flow.yaml 所在目录绝对路径） */
-export const RUNTIME_PLACEHOLDER_KEYS = new Set(["workspaceRoot", "flowName", "runDir", "flowDir"]);
+export const RUNTIME_PLACEHOLDER_KEYS = new Set(["workspaceRoot", "pipelineWorkspace", "cwd", "flowName", "runDir", "flowDir"]);
 
 /** 补全菜单中运行时常量顺序（稳定展示） */
-export const RUNTIME_PLACEHOLDER_KEYS_ORDER = ["workspaceRoot", "flowName", "runDir", "flowDir"];
+export const RUNTIME_PLACEHOLDER_KEYS_ORDER = ["workspaceRoot", "pipelineWorkspace", "cwd", "flowName", "runDir", "flowDir"];
 
 /**
  * 光标处是否存在未闭合的 `${...}`（用于补全）。

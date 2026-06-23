@@ -59,8 +59,8 @@
     "expandEdit": "展开编辑",
     "editScript": "编辑 script",
     "editUserPrompt": "编辑用户提示",
-    "scriptPlaceholder": "instances.*.script，完整 shell 命令；支持 ${workspaceRoot}、${flowDir}、${runDir} 与各槽位名（勿对占位符再包双引号）",
-    "scriptPlaceholderExpand": "instances.*.script，完整 shell 命令；勿对 ${workspaceRoot}、${flowDir} 等占位符再包双引号",
+    "scriptPlaceholder": "instances.*.script，完整 shell 命令；支持 ${workspaceRoot}、${pipelineWorkspace}、${flowDir}、${runDir} 与各槽位名（勿对占位符再包双引号）",
+    "scriptPlaceholderExpand": "instances.*.script，完整 shell 命令；勿对 ${workspaceRoot}、${pipelineWorkspace}、${flowDir} 等占位符再包双引号",
     "bodyPlaceholder": "instances.*.body，支持多行与 ${变量}；输入 ${ 选择槽位",
     "bodyPlaceholderExpand": "instances.*.body，支持多行与 ${变量}",
     "noDescription": "（当前节点定义无 description）",
@@ -475,7 +475,8 @@
   },
   "toolPrint": {
     "title": "Print 输出: {{instanceId}}",
-    "truncated": "...内容已截断"
+    "expand": "放大",
+    "restore": "还原"
   },
   "provideEdit": {
     "save": "保存",

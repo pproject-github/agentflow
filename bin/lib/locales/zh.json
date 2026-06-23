@@ -111,7 +111,7 @@
   "composer": {
     "edit_context": "## AgentFlow 编辑上下文",
     "tool_nodejs_rules_title": "## tool_nodejs 节点编写规则（必须遵守）",
-    "tool_nodejs_rules_body": "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n- **类型选择自检**（写 script 前先问自己）：这事**确定性**吗？相同输入永远产出相同输出、可用普通代码完整描述？是 → 继续写 script；否（需要语义理解/代码翻译/LLM 推理）→ **该节点选错了类型**，应改 `definitionId: agent_subAgent`，删 `script` 字段，任务描述写到 `body`。反例：『Android→RN 页面转换』『代码 review』『生成测试用例』必须 agent。\n- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、runDir 等），值自动 shell-quote\n- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行",
+    "tool_nodejs_rules_body": "`definitionId: tool_nodejs` 的核心是 **`script` 字段**——必须写完整可执行的 shell/node 命令。\n- **类型选择自检**（写 script 前先问自己）：这事**确定性**吗？相同输入永远产出相同输出、可用普通代码完整描述？是 → 继续写 script；否（需要语义理解/代码翻译/LLM 推理）→ **该节点选错了类型**，应改 `definitionId: agent_subAgent`，删 `script` 字段，任务描述写到 `body`。反例：『Android→RN 页面转换』『代码 review』『生成测试用例』必须 agent。\n- `script`：流水线直接 spawn 执行，stdout 作为 result，exit code 决定成败\n- `body`：有 `script` 时仅作人类可读注释，**不会被执行**\n- `script` 支持 `${}` 占位符引用 input 槽位和系统变量（workspaceRoot、pipelineWorkspace、runDir 等），值自动 shell-quote；接了 CD Workspace 后 `${workspaceRoot}` 表示当前执行工作区，`${pipelineWorkspace}` 表示流水线工作区\n- **不要**再对 `${workspaceRoot}` 等占位符外包双引号（如 `node \"${workspaceRoot}/...\"`）；应写 `node ${workspaceRoot}/...`，否则路径会含多余引号导致执行失败\n- **禁止**只在 `body` 中写自然语言描述而不写 `script`——这会导致节点运行时无代码可执行",
     "task_title": "## 任务",
     "task_instruction": "请只完成上述单一任务，不要做额外修改。完成后按上下文中的指引同步 UI。",
     "validation_passed": "flow 校验已通过",
@@ -265,6 +265,18 @@
       "displayName": "AI 转布尔",
       "description": "由 AI 判断输入内容的布尔含义，适用于不确定性场景"
     },
+    "control_cd_workspace": {
+      "displayName": "CD 工作区",
+      "description": "切换下游节点的执行工作区上下文，不改变流水线所在工作区"
+    },
+    "control_load_skills": {
+      "displayName": "加载 Skills",
+      "description": "从当前工作区、流水线工作区、显式路径或组合来源加载 SKILL.md"
+    },
+    "tool_git_checkout": {
+      "displayName": "Git 拉取",
+      "description": "克隆或更新 Git 仓库，并输出可供下游使用的工作区上下文"
+    },
     "tool_nodejs": {
       "displayName": "Node.js 脚本",
       "description": "执行 Node.js 脚本，以 exit code 判断成败，stdout 作为结果"
@@ -284,6 +296,18 @@
     "tool_load_key": {
       "displayName": "加载键值",
       "description": "从全局存储加载键值"
+    },
+    "display_markdown": {
+      "displayName": "Markdown 展示",
+      "description": "在 Workspace 画布中渲染 Markdown 内容，并将文本继续传给下游"
+    },
+    "display_mermaid": {
+      "displayName": "Mermaid 展示",
+      "description": "在 Workspace 画布中渲染 Mermaid 图，并将源码继续传给下游"
+    },
+    "display_ascii": {
+      "displayName": "ASCII 图展示",
+      "description": "在 Workspace 画布中渲染等宽 ASCII 图，并将文本继续传给下游"
     },
     "provide_str": {
       "displayName": "文本",

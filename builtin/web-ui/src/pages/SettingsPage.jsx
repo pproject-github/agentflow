@@ -112,7 +112,6 @@ export default function SettingsPage() {
   const [listsLoading, setListsLoading] = useState(false);
   const [opencodeSaving, setOpencodeSaving] = useState(false);
   const [opencodeErr, setOpencodeErr] = useState("");
-
   const [envRows, setEnvRows] = useState(() => loadEnvFromStorage());
   const [draftKey, setDraftKey] = useState("");
   const [draftVal, setDraftVal] = useState("");

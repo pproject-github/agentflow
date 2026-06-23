@@ -10,7 +10,8 @@ description: |
   **JSON Compatible (Optional):** If stdout is `{"err_code":0,"message":{"result":"..."}}` format, err_code will override exit code semantics, message.result writes to result slot. Only use when needing different success/failure semantics than exit code.
 
   **Direct Execution Mode (Recommended):** Set `script` field in flow.yaml instance, pipeline will skip AI and execute directly.
-  `script` supports ${} placeholders (workspaceRoot, flowName, runDir, flowDir and all input/output slots), values are auto shell-quoted.
+  `script` supports ${} placeholders (workspaceRoot, pipelineWorkspace, flowName, runDir, flowDir and all input/output slots), values are auto shell-quoted.
+  When a CD Workspace node is connected, `workspaceRoot` is the current execution workspace; `pipelineWorkspace` is the original pipeline workspace.
   flowDir is absolute path of current pipeline flow.yaml directory, can be used to reference scripts in same directory.
   Example: `script: node ${flowDir}/scripts/my-check.mjs --root ${workspaceRoot} --input ${todo}`
 
@@ -28,6 +29,12 @@ displayName: NodeJs
 input:
   - type: node
     name: prev
+    default: ""
+  - type: text
+    name: workspaceContext
+    default: ""
+  - type: text
+    name: skillsContext
     default: ""
 output:
   - type: node

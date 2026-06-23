@@ -10,6 +10,16 @@ import { appendRunLogLine } from "./run-events.mjs";
 import { writeWithPrefix } from "./terminal.mjs";
 import { t } from "./i18n.mjs";
 
+function shouldPassCursorModelArg(model) {
+  const text = String(model || "").trim();
+  return text !== "" && !/^auto$/i.test(text);
+}
+
+function childEnv(options = {}, extra = {}) {
+  const optEnv = options && options.env && typeof options.env === "object" ? options.env : {};
+  return { ...process.env, ...optEnv, ...extra };
+}
+
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
  */
@@ -25,8 +35,11 @@ export function runCursorAgentForNode(
   const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
   if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
   const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
   const replacements = {
-    workspaceRoot: absWorkspaceRoot,
+    workspaceRoot: execWorkspaceRoot,
+    executionWorkspaceRoot: execWorkspaceRoot,
+    pipelineWorkspace: absWorkspaceRoot,
     promptPath: absPromptPath,
     nodeContext: nodeContext ?? "",
     taskBody: taskBody ?? "",
@@ -61,11 +74,11 @@ export function runCursorAgentForNode(
 
   return new Promise((resolve, reject) => {
     const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
-    const args = ["--print", "--output-format", "stream-json", "--trust", "--workspace", workspaceRoot];
+    const args = ["--print", "--output-format", "stream-json", "--trust", "--workspace", execWorkspaceRoot];
     const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
     if (approveMcps) args.push("--approve-mcps");
     if (options.force) args.push("--force");
-    args.push("--model", model);
+    if (shouldPassCursorModelArg(model)) args.push("--model", model);
     args.push(promptText);
     if (options.flowName && options.uuid) {
       const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
@@ -81,9 +94,10 @@ export function runCursorAgentForNode(
     }
     const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
     const child = spawn(agentCmd, args, {
-      cwd: workspaceRoot,
+      cwd: execWorkspaceRoot,
       stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
       shell: false,
+      env: childEnv(options),
     });
 
     let lastResult = null;
@@ -286,8 +300,11 @@ export function runOpenCodeAgentForNode(
   const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
   if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
   const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
   const replacements = {
-    workspaceRoot: absWorkspaceRoot,
+    workspaceRoot: execWorkspaceRoot,
+    executionWorkspaceRoot: execWorkspaceRoot,
+    pipelineWorkspace: absWorkspaceRoot,
     promptPath: absPromptPath,
     nodeContext: nodeContext ?? "",
     taskBody: taskBody ?? "",
@@ -325,16 +342,17 @@ export function runOpenCodeAgentForNode(
     if (model) {
       args.push("--model", model);
     }
-    args.push("--dir", workspaceRoot);
+    args.push("--dir", execWorkspaceRoot);
     args.push("--", promptText);
     const spawnOpts = {
-      cwd: workspaceRoot,
+      cwd: execWorkspaceRoot,
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
+      env: childEnv(options),
     };
     if (options.force) {
       spawnOpts.env = {
-        ...process.env,
+        ...spawnOpts.env,
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           permission: { external_directory: "allow" },
         }),
@@ -426,8 +444,11 @@ export function runClaudeCodeAgentForNode(
   const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
   if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
   const absWorkspaceRoot = path.resolve(workspaceRoot);
+  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
   const replacements = {
-    workspaceRoot: absWorkspaceRoot,
+    workspaceRoot: execWorkspaceRoot,
+    executionWorkspaceRoot: execWorkspaceRoot,
+    pipelineWorkspace: absWorkspaceRoot,
     promptPath: absPromptPath,
     nodeContext: nodeContext ?? "",
     taskBody: taskBody ?? "",
@@ -464,7 +485,7 @@ export function runClaudeCodeAgentForNode(
     const bypassPermissions =
       process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
       process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", workspaceRoot];
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", execWorkspaceRoot, "--add-dir", absWorkspaceRoot];
     if (bypassPermissions) args.push("--dangerously-skip-permissions");
     if (model) args.push("--model", model);
     args.push(promptText);
@@ -490,9 +511,10 @@ export function runClaudeCodeAgentForNode(
       process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "1" ||
       process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "true";
     const child = spawn(claudeCmd, args, {
-      cwd: workspaceRoot,
+      cwd: execWorkspaceRoot,
       stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
       shell: false,
+      env: childEnv(options),
     });
 
     let lastResult = null;
@@ -743,7 +765,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
   if (approveMcps) args.push("--approve-mcps");
   args.push("--force");
-  args.push("--model", model);
+  if (shouldPassCursorModelArg(model)) args.push("--model", model);
   args.push(promptText);
 
   const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
@@ -751,6 +773,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     cwd: ws,
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
+    env: childEnv(options),
   });
 
   let lastResult = null;
@@ -939,10 +962,11 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
     cwd: ws,
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
+    env: childEnv(options),
   };
   if (options.force) {
     spawnOpts.env = {
-      ...process.env,
+      ...spawnOpts.env,
       OPENCODE_CONFIG_CONTENT: JSON.stringify({
         permission: { external_directory: "allow" },
       }),
@@ -1047,6 +1071,7 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
     cwd: ws,
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
+    env: childEnv(options),
   });
 
   let lastResult = null;

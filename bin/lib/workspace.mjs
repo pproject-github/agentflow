@@ -9,6 +9,7 @@ import {
   getReferenceRootAbs,
   getWorkspaceRunBuildRoot,
   getUserPipelinesRoot,
+  resolveUniqueUserPipelineDir,
   ARCHIVED_PIPELINES_DIR_NAME,
 } from "./paths.mjs";
 
@@ -138,7 +139,7 @@ export function listRunsWithLogs(workspaceRoot) {
   return list;
 }
 
-/** 解析 flow 目录：~/agentflow/pipelines → .workspace/agentflow/pipelines → .cursor/agentflow/pipelines（旧）→ builtin/pipelines */
+/** 解析活跃 flow 目录：user → workspace → legacy workspace → builtin。归档 flow 必须走显式 archived resolver。 */
 export function getFlowDir(workspaceRoot, flowName, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const hasFlow = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
@@ -147,16 +148,13 @@ export function getFlowDir(workspaceRoot, flowName, opts = {}) {
   const userRoot = getUserPipelinesRoot(opts.userId);
   const userFlowDir = path.join(userRoot, flowName);
   if (hasFlow(userFlowDir)) return userFlowDir;
-  // user archived
-  const userArchivedDir = path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME, flowName);
-  if (hasFlow(userArchivedDir)) return userArchivedDir;
+
+  const inferredUserFlowDir = resolveUniqueUserPipelineDir(flowName);
+  if (inferredUserFlowDir) return inferredUserFlowDir;
 
   // workspace pipelines
   const wsFlowDir = path.join(root, PIPELINES_DIR, flowName);
   if (hasFlow(wsFlowDir)) return wsFlowDir;
-  // workspace archived
-  const wsArchivedDir = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowName);
-  if (hasFlow(wsArchivedDir)) return wsArchivedDir;
 
   // legacy
   const legacyFlowDir = path.join(root, LEGACY_PIPELINES_DIR, flowName);

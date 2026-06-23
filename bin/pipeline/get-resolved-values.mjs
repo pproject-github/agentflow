@@ -233,6 +233,7 @@ export function getResolvedValues(workspaceRoot, flowName, uuid, instanceId) {
     // 运行时常量放在后面，确保不会被 input 槽位的空值覆盖
     const runtimeConstants = {
       workspaceRoot: path.resolve(workspaceRoot),
+      pipelineWorkspace: path.resolve(workspaceRoot),
       flowName,
       runDir: runDirRel,
       flowDir: path.resolve(flowDir),
