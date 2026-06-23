@@ -2,10 +2,11 @@ import { useRoute } from "../routeContext.jsx";
 import { useTranslation } from "react-i18next";
 import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 
-/** 暂时不展示「Nodes」(/flow) 入口，流水线仅从 Projects 卡片进入 */
 const ITEMS = [
-  { to: "/projects", label: "Projects", icon: "folder_open" },
-  { to: "/settings", label: "Settings", icon: "settings" },
+  { to: "/projects", labelKey: "common:nav.projects", icon: "folder_open" },
+  { to: "/nodes", labelKey: "common:nav.nodes", icon: "account_tree" },
+  { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
+  { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
 
 const EXTERNAL_LINKS = [
@@ -23,7 +24,7 @@ function isActive(path, to) {
   return path === to || path.startsWith(to + "/");
 }
 
-export default function Sidebar() {
+export default function Sidebar({ authUser, onLogout }) {
   const { path, navigate } = useRoute();
   const { t } = useTranslation();
   return (
@@ -49,11 +50,18 @@ export default function Sidebar() {
             onClick={() => navigate(item.to)}
           >
             <span className="material-symbols-outlined">{item.icon}</span>
-            <span>{item.label}</span>
+            <span>{t(item.labelKey)}</span>
           </button>
         ))}
       </nav>
       <div className="af-sidebar-footer">
+        <div className="af-sidebar-user" title={authUser?.username || authUser?.userId || ""}>
+          <span className="material-symbols-outlined">person</span>
+          <span>{authUser?.username || authUser?.userId || ""}</span>
+          <button type="button" className="af-sidebar-logout" onClick={onLogout} aria-label="Logout" title="Logout">
+            <span className="material-symbols-outlined">logout</span>
+          </button>
+        </div>
         {EXTERNAL_LINKS.map((link) => {
           const label = t(link.labelKey);
           return (

@@ -221,13 +221,14 @@ function readFilesRecursive(dir, baseDir, maxDepth = 2, currentDepth = 0) {
   }
 }
 
-export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = false) {
+export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = false, opts = {}) {
   const root = path.resolve(workspaceRoot);
   let pipelineDir = null;
+  const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
 
   if (archived) {
     if (flowSource === "user") {
-      pipelineDir = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId);
+      pipelineDir = path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId);
     } else if (flowSource === "workspace") {
       pipelineDir = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId);
       if (!fs.existsSync(pipelineDir)) {
@@ -239,7 +240,7 @@ export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = f
     if (flowSource === "builtin") {
       pipelineDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
     } else if (flowSource === "user") {
-      pipelineDir = path.join(getUserPipelinesRoot(), flowId);
+      pipelineDir = path.join(userPipelinesRoot, flowId);
       if (!fs.existsSync(pipelineDir)) {
         const alt = path.join(root, PIPELINES_DIR, flowId);
         if (fs.existsSync(alt)) pipelineDir = alt;

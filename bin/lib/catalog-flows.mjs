@@ -50,7 +50,7 @@ export function readPipelineListDescription(flowDir) {
   }
 }
 
-export function listFlowsJson(workspaceRoot) {
+export function listFlowsJson(workspaceRoot, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const out = [];
   const fromBuiltin = collectPipelineNamesFromDir(PACKAGE_BUILTIN_PIPELINES_DIR);
@@ -59,7 +59,7 @@ export function listFlowsJson(workspaceRoot) {
     const description = readPipelineListDescription(dir);
     out.push({ id: name, path: dir, source: "builtin", ...(description ? { description } : {}) });
   }
-  const userPipelinesRoot = getUserPipelinesRoot();
+  const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
   const fromUserData = collectPipelineNamesFromDir(userPipelinesRoot);
   for (const name of fromUserData) {
     if (name === ARCHIVED_PIPELINES_DIR_NAME) continue;
@@ -200,6 +200,7 @@ export function parseNodeFrontmatter(raw) {
 export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(opts.archived);
+  const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
   const byId = new Map();
   const pipelineTranslations = {};
   let marketplaceFlowData = null;
@@ -293,13 +294,9 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       } catch (_) {}
     } else if (flowSource === "user") {
       if (archived) {
-        addFromDir(
-          path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes"),
-          "flow",
-          flowId,
-        );
+        addFromDir(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes"), "flow", flowId);
       } else {
-        addFromDir(path.join(getUserPipelinesRoot(), flowId, "nodes"), "flow", flowId);
+        addFromDir(path.join(userPipelinesRoot, flowId, "nodes"), "flow", flowId);
         addFromDir(path.join(root, PIPELINES_DIR, flowId, "nodes"), "flow", flowId);
         addFromDir(path.join(root, LEGACY_PIPELINES_DIR, flowId, "nodes"), "flow", flowId);
       }
@@ -342,13 +339,14 @@ export function printNodesTable(list) {
 export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(options.archived);
+  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
   let flowDir;
   if (archived) {
     if (flowSource === "builtin") {
       return { error: t("catalog.builtin_flow_archive_not_supported") };
     }
     if (flowSource === "user") {
-      flowDir = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId);
+      flowDir = path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId);
     } else if (flowSource === "workspace") {
       flowDir = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId);
     } else {
@@ -377,7 +375,7 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
   if (flowSource === "builtin") {
     flowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
   } else if (flowSource === "user") {
-    flowDir = path.join(getUserPipelinesRoot(), flowId);
+    flowDir = path.join(userPipelinesRoot, flowId);
   } else if (flowSource === "workspace") {
     flowDir = path.join(root, PIPELINES_DIR, flowId);
   } else {
@@ -422,13 +420,14 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
 export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(options.archived);
+  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
   let yamlPath;
   if (archived) {
     if (flowSource === "builtin") {
       return { error: t("catalog.builtin_flow_archive_path_not_supported") };
     }
     if (flowSource === "user") {
-      yamlPath = path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
+      yamlPath = path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
     } else if (flowSource === "workspace") {
       yamlPath = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
       if (!fs.existsSync(yamlPath)) {
@@ -447,7 +446,7 @@ export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) 
   if (flowSource === "builtin") {
     yamlPath = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "flow.yaml");
   } else if (flowSource === "user") {
-    yamlPath = path.join(getUserPipelinesRoot(), flowId, "flow.yaml");
+    yamlPath = path.join(userPipelinesRoot, flowId, "flow.yaml");
     if (!fs.existsSync(yamlPath)) {
       const alt = path.join(root, PIPELINES_DIR, flowId, "flow.yaml");
       if (fs.existsSync(alt)) yamlPath = alt;
@@ -474,6 +473,7 @@ export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) 
 export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const archived = Boolean(opts.archived);
+  const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
   const marketSpec = parseMarketplaceDefinitionId(nodeId);
   if (marketSpec) {
     let flowDir = root;
@@ -515,11 +515,9 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       pathsToTry.push(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes", fileName));
     } else if (flowSource === "user") {
       if (archived) {
-        pathsToTry.push(
-          path.join(getUserPipelinesRoot(), ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName),
-        );
+        pathsToTry.push(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
       } else {
-        pathsToTry.push(path.join(getUserPipelinesRoot(), flowId, "nodes", fileName));
+        pathsToTry.push(path.join(userPipelinesRoot, flowId, "nodes", fileName));
         pathsToTry.push(path.join(root, PIPELINES_DIR, flowId, "nodes", fileName));
         pathsToTry.push(path.join(root, LEGACY_PIPELINES_DIR, flowId, "nodes", fileName));
       }
@@ -566,6 +564,184 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
     } catch (_) {}
   }
   return { error: "Node not found: " + nodeId };
+}
+
+const NODE_DETAIL_MAX_FILES = 300;
+const NODE_FILE_MAX_BYTES = 256 * 1024;
+
+function isTextPreviewPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return [
+    ".md", ".mdx", ".txt", ".json", ".yaml", ".yml", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".sh", ".css", ".html", ".xml", ".toml", ".ini", ".env", ".sql",
+  ].includes(ext);
+}
+
+function listNodeFiles(baseDir, allowAllFiles, primaryFilePath = "") {
+  const root = path.resolve(baseDir);
+  const out = [];
+  const addFile = (filePath) => {
+    if (out.length >= NODE_DETAIL_MAX_FILES) return;
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) return;
+      const rel = path.relative(root, filePath).replace(/\\/g, "/");
+      out.push({
+        path: rel,
+        size: stat.size,
+        previewable: isTextPreviewPath(filePath),
+      });
+    } catch (_) {}
+  };
+  if (!allowAllFiles) {
+    if (primaryFilePath) addFile(primaryFilePath);
+    return out;
+  }
+  const walk = (dir) => {
+    if (out.length >= NODE_DETAIL_MAX_FILES) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (out.length >= NODE_DETAIL_MAX_FILES) return;
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.isFile()) addFile(p);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function resolveMarkdownNodeFile(workspaceRoot, nodeId, flowId, flowSource, opts = {}) {
+  const root = path.resolve(workspaceRoot);
+  const archived = Boolean(opts.archived);
+  const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
+  const fileName = nodeId.endsWith(".md") ? nodeId : `${nodeId}.md`;
+  const pathsToTry = [];
+  if (flowId && flowSource) {
+    if (flowSource === "builtin") {
+      pathsToTry.push(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes", fileName));
+    } else if (flowSource === "user") {
+      if (archived) {
+        pathsToTry.push(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
+      } else {
+        pathsToTry.push(path.join(userPipelinesRoot, flowId, "nodes", fileName));
+        pathsToTry.push(path.join(root, PIPELINES_DIR, flowId, "nodes", fileName));
+        pathsToTry.push(path.join(root, LEGACY_PIPELINES_DIR, flowId, "nodes", fileName));
+      }
+    } else if (flowSource === "workspace") {
+      if (archived) {
+        pathsToTry.push(path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
+        pathsToTry.push(path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
+      } else {
+        pathsToTry.push(path.join(root, PIPELINES_DIR, flowId, "nodes", fileName));
+        pathsToTry.push(path.join(root, LEGACY_PIPELINES_DIR, flowId, "nodes", fileName));
+      }
+    }
+  }
+  pathsToTry.push(path.join(root, PROJECT_NODES_DIR, fileName));
+  pathsToTry.push(path.join(root, LEGACY_NODES_DIR, fileName));
+  pathsToTry.push(path.join(PACKAGE_BUILTIN_NODES_DIR, fileName));
+  return pathsToTry.find((p) => fs.existsSync(p) && fs.statSync(p).isFile()) || "";
+}
+
+function readNodeUsage(workspaceRoot, nodeId, opts = {}) {
+  const usage = [];
+  for (const flow of listFlowsJson(workspaceRoot, opts)) {
+    const flowPath = getFlowYamlAbs(workspaceRoot, flow.id, flow.source || "user", { archived: Boolean(flow.archived), userId: opts.userId });
+    if (!flowPath.path) continue;
+    try {
+      const data = yaml.load(fs.readFileSync(flowPath.path, "utf-8"));
+      const instances = data && typeof data === "object" ? data.instances : null;
+      if (!instances || typeof instances !== "object") continue;
+      const hits = Object.entries(instances)
+        .filter(([, inst]) => inst && inst.definitionId === nodeId)
+        .map(([instanceId, inst]) => ({ instanceId, label: inst.label || instanceId }));
+      if (hits.length > 0) {
+        usage.push({ flowId: flow.id, flowSource: flow.source || "user", archived: Boolean(flow.archived), instances: hits });
+      }
+    } catch (_) {}
+  }
+  return usage;
+}
+
+function resolveNodeFileScope(workspaceRoot, nodeId, flowId, flowSource, opts = {}) {
+  const marketSpec = parseMarketplaceDefinitionId(nodeId);
+  if (marketSpec) {
+    let flowDir = path.resolve(workspaceRoot);
+    let flowData = null;
+    if (flowId && flowSource) {
+      const flowPath = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
+      if (flowPath.path) {
+        flowDir = path.dirname(flowPath.path);
+        try {
+          const parsed = yaml.load(fs.readFileSync(flowPath.path, "utf-8"));
+          if (parsed && typeof parsed === "object") flowData = parsed;
+        } catch (_) {}
+      }
+    }
+    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, nodeId, flowData);
+    if (!resolved) return null;
+    return { baseDir: resolved.packageDir, allowAllFiles: true, primaryFilePath: path.join(resolved.packageDir, "node.yaml"), manifest: resolved };
+  }
+  const filePath = resolveMarkdownNodeFile(workspaceRoot, nodeId, flowId, flowSource, opts);
+  if (!filePath) return null;
+  return { baseDir: path.dirname(filePath), allowAllFiles: false, primaryFilePath: filePath, manifest: null };
+}
+
+export function readNodeDetailJson(workspaceRoot, nodeId, flowId = "", flowSource = "", opts = {}) {
+  if (!nodeId) return { error: "Missing node id" };
+  const node = readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts);
+  if (node.error) return node;
+  const scope = resolveNodeFileScope(workspaceRoot, nodeId, flowId, flowSource, opts);
+  const files = scope ? listNodeFiles(scope.baseDir, scope.allowAllFiles, scope.primaryFilePath) : [];
+  return {
+    node: { id: nodeId, ...node },
+    readOnly: true,
+    manifest: scope?.manifest || null,
+    runtime: node.runtime || scope?.manifest?.runtime || null,
+    body: node.executionLogic || "",
+    baseDir: scope?.baseDir || "",
+    files,
+    usage: readNodeUsage(workspaceRoot, nodeId, opts),
+  };
+}
+
+export function readNodeFilePreview(workspaceRoot, nodeId, relPath, flowId = "", flowSource = "", opts = {}) {
+  if (!nodeId) return { error: "Missing node id" };
+  const rel = String(relPath || "").trim();
+  if (!rel || rel.includes("\0") || path.isAbsolute(rel) || rel.split(/[\\/]+/).includes("..")) {
+    return { error: "Invalid file path" };
+  }
+  const scope = resolveNodeFileScope(workspaceRoot, nodeId, flowId, flowSource, opts);
+  if (!scope) return { error: "Node files not found" };
+  if (!scope.allowAllFiles) {
+    const primaryRel = path.relative(scope.baseDir, scope.primaryFilePath).replace(/\\/g, "/");
+    if (rel !== primaryRel) return { error: "File is outside node preview scope" };
+  }
+  const base = path.resolve(scope.baseDir);
+  const abs = path.resolve(base, rel);
+  if (abs !== base && !abs.startsWith(base + path.sep)) return { error: "File is outside node package" };
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return { error: "File not found" };
+  const stat = fs.statSync(abs);
+  if (!isTextPreviewPath(abs)) {
+    return { path: rel, size: stat.size, binary: true, content: "", truncated: false };
+  }
+  const fd = fs.openSync(abs, "r");
+  try {
+    const len = Math.min(stat.size, NODE_FILE_MAX_BYTES);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
+    return { path: rel, size: stat.size, binary: false, content: buf.toString("utf-8"), truncated: stat.size > len };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** 列出所有 pipeline（包内 builtin + ~/agentflow/pipelines + 项目内 .workspace/.cursor agentflow/pipelines）；nodes 见 PROJECT_NODES_DIR / LEGACY_NODES_DIR */

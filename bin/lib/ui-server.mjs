@@ -8,10 +8,17 @@
 import fs from "fs";
 import http from "http";
 import path from "path";
-import { spawn } from "child_process";
+import { execFile, spawn } from "child_process";
 import busboy from "busboy";
 import { log } from "./log.mjs";
-import { getFlowYamlAbs, listFlowsJson, listNodesJson, readFlowJson } from "./catalog-flows.mjs";
+import {
+  getFlowYamlAbs,
+  listFlowsJson,
+  listNodesJson,
+  readFlowJson,
+  readNodeDetailJson,
+  readNodeFilePreview,
+} from "./catalog-flows.mjs";
 import {
   FLOW_YAML_FILENAME,
   archiveFlowPipeline,
@@ -42,6 +49,7 @@ import {
   loadResourcesForIntents,
   loadResourcesForSkillKeys,
   listComposerSkills,
+  readComposerSkillDetail,
   buildSkillInjectionBlock,
   buildSkillCompactInjectionBlock,
 } from "./composer-skill-router.mjs";
@@ -65,6 +73,14 @@ import { runNodeScript } from "./pipeline-scripts.mjs";
 import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
 import { installFlowDependency, listMarketplacePackages, publishNodeFromInstance } from "./marketplace.mjs";
+import {
+  authSetupRequired,
+  buildClearSessionCookie,
+  buildSessionCookie,
+  getAuthUserFromRequest,
+  loginOrCreateUser,
+  logoutRequest,
+} from "./auth.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -121,6 +137,99 @@ function readModelListsFromDisk(workspaceRoot) {
   } catch {
     return empty;
   }
+}
+
+const SKILLHUB_TIMEOUT_MS = 60_000;
+
+function runSkillhub(args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile("skillhub", args, {
+      cwd: opts.cwd || process.cwd(),
+      timeout: opts.timeoutMs || SKILLHUB_TIMEOUT_MS,
+      maxBuffer: opts.maxBuffer || 2 * 1024 * 1024,
+      env: {
+        ...process.env,
+        FORCE_COLOR: "0",
+      },
+    }, (error, stdout, stderr) => {
+      const out = String(stdout || "");
+      const err = String(stderr || "");
+      resolve({
+        ok: !error,
+        code: error && typeof error.code === "number" ? error.code : 0,
+        error: error ? (err.trim() || error.message || "skillhub failed") : "",
+        stdout: out,
+        stderr: err,
+      });
+    });
+  });
+}
+
+function parseJsonText(text, fallback = null) {
+  const s = String(text || "").trim();
+  if (!s) return fallback;
+  try {
+    return JSON.parse(s);
+  } catch {
+    const match = s.match(/(\{[\s\S]*\}|\[[\s\S]*\])\s*$/);
+    if (!match) return fallback;
+    try { return JSON.parse(match[1]); } catch { return fallback; }
+  }
+}
+
+function normalizeSkillhubSearchPayload(raw) {
+  const data = raw && typeof raw === "object" ? raw : {};
+  const items = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
+  return {
+    total: Number(data.total) || items.length,
+    mode: typeof data.mode === "string" ? data.mode : "",
+    degraded: Boolean(data.degraded),
+    items: items.map((item) => {
+      const x = item && typeof item === "object" ? item : {};
+      const id = x.id ?? x.skillId ?? x.skill_id ?? "";
+      const slug = String(x.slug ?? x.name ?? x.displayName ?? x.display_name ?? id ?? "").trim();
+      return {
+        id: String(id || slug),
+        slug,
+        name: String(x.displayName ?? x.display_name ?? x.name ?? slug),
+        summary: String(x.summary ?? x.description ?? ""),
+        version: String(x.version ?? x.latestVersion ?? x.latest_version ?? ""),
+        tags: Array.isArray(x.tags) ? x.tags.map(String) : [],
+      };
+    }).filter((x) => x.slug || x.name),
+  };
+}
+
+function normalizeSkillhubListPayload(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr.map((x) => ({
+    name: String(x?.name ?? ""),
+    baseDir: String(x?.baseDir ?? ""),
+    path: String(x?.path ?? ""),
+    kind: String(x?.kind ?? ""),
+    agent: String(x?.agent ?? ""),
+  })).filter((x) => x.name);
+}
+
+function skillhubInstallArgs(payload, { uninstall = false } = {}) {
+  const slug = String(payload?.slug || payload?.name || "").trim();
+  if (!slug && !payload?.collection) return null;
+  const args = [uninstall ? "uninstall" : "install"];
+  if (payload?.collection) {
+    args.push("--collection", String(payload.collection).trim());
+  } else {
+    args.push(slug);
+  }
+  if (payload?.skillId) args.push("--skill-id", String(payload.skillId).trim());
+  const target = String(payload?.target || "project").trim();
+  const agent = String(payload?.agent || "codex").trim();
+  if (target === "global") {
+    args.push("--global", "--agent", agent);
+  } else if (payload?.dir) {
+    args.push("--dir", String(payload.dir).trim());
+  }
+  if (payload?.force) args.push("--force");
+  return args;
 }
 
 function readBody(req) {
@@ -211,12 +320,12 @@ const flowEditorSyncSubscribers = new Map();
 /** 每次 broadcastFlowEditorSync 时递增，供轮询端点 /api/flow-editor-sync-poll 使用 */
 const flowEditorSyncVersions = new Map();
 
-function flowEditorSyncKey(flowId, flowSource, flowArchived) {
-  return `${String(flowId)}\t${String(flowSource)}\t${flowArchived ? "1" : "0"}`;
+function flowEditorSyncKey(flowId, flowSource, flowArchived, userId = "") {
+  return `${String(userId || "")}\t${String(flowId)}\t${String(flowSource)}\t${flowArchived ? "1" : "0"}`;
 }
 
-function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false) {
-  const key = flowEditorSyncKey(flowId, flowSource, flowArchived);
+function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userId = "") {
+  const key = flowEditorSyncKey(flowId, flowSource, flowArchived, userId);
 
   /* 递增轮询版本号 */
   flowEditorSyncVersions.set(key, (flowEditorSyncVersions.get(key) ?? 0) + 1);
@@ -363,10 +472,58 @@ export function startUiServer({
       return origEnd(...args);
     };
 
+    if (url.pathname === "/api/auth/me" && req.method === "GET") {
+      const user = getAuthUserFromRequest(req);
+      json(res, 200, { authenticated: Boolean(user), user: user || null, setupRequired: authSetupRequired() });
+      return;
+    }
+
+    if (url.pathname === "/api/auth/login" && req.method === "POST") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const result = loginOrCreateUser(payload?.username, payload?.password);
+      if (!result.ok) {
+        json(res, 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
+        return;
+      }
+      const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": Buffer.byteLength(body),
+        "Set-Cookie": buildSessionCookie(result.token),
+      });
+      res.end(body);
+      return;
+    }
+
+    if (url.pathname === "/api/auth/logout" && req.method === "POST") {
+      logoutRequest(req);
+      const body = JSON.stringify({ ok: true });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": Buffer.byteLength(body),
+        "Set-Cookie": buildClearSessionCookie(),
+      });
+      res.end(body);
+      return;
+    }
+
+    const authUser = getAuthUserFromRequest(req);
+    const userCtx = authUser ? { userId: authUser.userId } : {};
+    if (url.pathname.startsWith("/api/") && !authUser) {
+      json(res, 401, { error: "Authentication required", setupRequired: authSetupRequired() });
+      return;
+    }
+
     if (url.pathname === "/api/flows") {
       if (req.method === "GET") {
         try {
-          json(res, 200, listFlowsJson(root));
+          json(res, 200, listFlowsJson(root, userCtx));
         } catch (e) {
           json(res, 500, { error: (e && e.message) || String(e) });
         }
@@ -400,7 +557,7 @@ export function startUiServer({
         if (ts === "workspace" || ts === "user") {
           targetSpace = ts;
         }
-        const existing = listFlowsJson(root);
+        const existing = listFlowsJson(root, userCtx);
         if (
           existing.some(
             (f) => f.id === flowId && (f.source ?? "user") === targetSpace && !f.archived,
@@ -410,7 +567,7 @@ export function startUiServer({
           return;
         }
         const flowYaml = buildEmptyUserFlowYaml({ description: desc });
-        const result = writeFlowYaml(root, flowId, targetSpace, flowYaml);
+        const result = writeFlowYaml(root, flowId, targetSpace, flowYaml, userCtx);
         if (!result.success) {
           json(res, 400, result);
           return;
@@ -456,7 +613,7 @@ export function startUiServer({
       }
       const flowId = idCheck.flowId;
       const targetSpace = parsed.targetSpace === "workspace" ? "workspace" : "user";
-      const existing = listFlowsJson(root);
+      const existing = listFlowsJson(root, userCtx);
       if (
         existing.some(
           (f) => f.id === flowId && (f.source ?? "user") === targetSpace && !f.archived,
@@ -487,7 +644,7 @@ export function startUiServer({
         filesMap = new Map([["flow.yaml", Buffer.from(text, "utf8")]]);
       }
 
-      const w = writePipelineTree(root, flowId, targetSpace, filesMap);
+      const w = writePipelineTree(root, flowId, targetSpace, filesMap, userCtx);
       if (!w.success) {
         json(res, 400, { error: w.error });
         return;
@@ -507,7 +664,7 @@ export function startUiServer({
           return;
         }
         const { getNodeExecContext } = await import("./node-exec-context.mjs");
-        json(res, 200, getNodeExecContext(root, flowId, instanceId, runId));
+        json(res, 200, getNodeExecContext(root, flowId, instanceId, runId, userCtx));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -516,7 +673,7 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/pipeline-recent-runs") {
       try {
-        json(res, 200, { runs: listRecentRunsFromDisk(root) });
+        json(res, 200, { runs: listRecentRunsFromDisk(root, userCtx) });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -532,7 +689,7 @@ export function startUiServer({
           return;
         }
         const { getRunNodeStatusesFromDisk } = await import("./run-node-statuses-from-disk.mjs");
-        json(res, 200, { statuses: getRunNodeStatusesFromDisk(root, flowId, runId) });
+        json(res, 200, { statuses: getRunNodeStatusesFromDisk(root, flowId, runId, userCtx) });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -554,7 +711,7 @@ export function startUiServer({
         const { getRunDir } = await import("./workspace.mjs");
         const { RUN_LOG_REL } = await import("./paths.mjs");
         const { default: fsMod } = await import("node:fs");
-        const logPath = path.join(getRunDir(root, flowId, runId), RUN_LOG_REL);
+        const logPath = path.join(getRunDir(root, flowId, runId, userCtx), RUN_LOG_REL);
         if (!fsMod.existsSync(logPath)) {
           json(res, 200, { bytes: 0, text: "" });
           return;
@@ -605,7 +762,7 @@ export function startUiServer({
         return;
       }
       try {
-        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        const result = getPipelineFiles(root, flowId, flowSource, archived, userCtx);
         json(res, 200, result);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -623,7 +780,7 @@ export function startUiServer({
         return;
       }
       try {
-        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        const result = getPipelineFiles(root, flowId, flowSource, archived, userCtx);
         if (result.error) {
           json(res, 404, { error: result.error });
           return;
@@ -669,7 +826,7 @@ export function startUiServer({
         content = String(body);
       }
       try {
-        const result = getPipelineFiles(root, flowId, flowSource, archived);
+        const result = getPipelineFiles(root, flowId, flowSource, archived, userCtx);
         if (result.error) {
           json(res, 404, { error: result.error });
           return;
@@ -833,15 +990,108 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/skillhub/status") {
+      const versionRes = await runSkillhub(["version"], { cwd: root, timeoutMs: 15_000 });
+      const whoRes = await runSkillhub(["whoami"], { cwd: root, timeoutMs: 15_000 });
+      json(res, 200, {
+        available: versionRes.ok,
+        version: versionRes.ok ? versionRes.stdout.trim() : "",
+        loggedIn: whoRes.ok,
+        user: whoRes.ok ? whoRes.stdout.trim() : "",
+        error: versionRes.ok ? "" : versionRes.error,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/skillhub/list") {
+      const target = url.searchParams.get("target") || "global";
+      const agent = url.searchParams.get("agent") || "codex";
+      const args = ["list", "--json"];
+      if (target === "all") args.push("--all");
+      else if (target === "global") args.push("--global", "--agent", agent);
+      const result = await runSkillhub(args, { cwd: root });
+      if (!result.ok) {
+        json(res, 500, { error: result.error, stdout: result.stdout });
+        return;
+      }
+      json(res, 200, { skills: normalizeSkillhubListPayload(parseJsonText(result.stdout, [])) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/skillhub/search") {
+      const q = (url.searchParams.get("q") || "").trim();
+      if (!q) {
+        json(res, 200, { total: 0, items: [] });
+        return;
+      }
+      const result = await runSkillhub(["search", "-q", q], { cwd: root });
+      if (!result.ok) {
+        json(res, 500, { error: result.error, stdout: result.stdout });
+        return;
+      }
+      json(res, 200, normalizeSkillhubSearchPayload(parseJsonText(result.stdout, {})));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/skillhub/install") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const args = skillhubInstallArgs(payload);
+      if (!args) {
+        json(res, 400, { error: "Missing skill slug or collection" });
+        return;
+      }
+      const result = await runSkillhub(args, { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
+      if (!result.ok) {
+        json(res, 500, { error: result.error, stdout: result.stdout });
+        return;
+      }
+      json(res, 200, { ok: true, stdout: result.stdout });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/skillhub/uninstall") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const args = skillhubInstallArgs(payload, { uninstall: true });
+      if (!args) {
+        json(res, 400, { error: "Missing skill slug or collection" });
+        return;
+      }
+      const result = await runSkillhub(args, { cwd: root, timeoutMs: 120_000, maxBuffer: 4 * 1024 * 1024 });
+      if (!result.ok) {
+        json(res, 500, { error: result.error, stdout: result.stdout });
+        return;
+      }
+      json(res, 200, { ok: true, stdout: result.stdout });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/skillhub/update") {
+      const result = await runSkillhub(["update"], { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
+      if (!result.ok) {
+        json(res, 500, { error: result.error, stdout: result.stdout });
+        return;
+      }
+      json(res, 200, { ok: true, stdout: result.stdout });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/nodes") {
       const flowId = url.searchParams.get("flowId");
       const flowSource = url.searchParams.get("flowSource") || "user";
       const lang = url.searchParams.get("lang") || "en";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!isValidFlowSourceRead(flowSource)) {
+      if (flowId && !isValidFlowSourceRead(flowSource)) {
         json(res, 400, { error: "Invalid flowSource" });
         return;
       }
@@ -849,7 +1099,60 @@ export function startUiServer({
       try {
         const { setLanguage } = await import("./i18n.mjs");
         setLanguage(lang);
-        json(res, 200, listNodesJson(root, flowId, flowSource, { archived: nodesArchived }));
+        json(res, 200, listNodesJson(root, flowId || "", flowId ? flowSource : "", { archived: nodesArchived, ...userCtx }));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/nodes/detail") {
+      const nodeId = url.searchParams.get("id") || "";
+      const flowId = url.searchParams.get("flowId") || "";
+      const flowSource = url.searchParams.get("flowSource") || "";
+      if (!nodeId) {
+        json(res, 400, { error: "Missing node id" });
+        return;
+      }
+      if (flowId && !isValidFlowSourceRead(flowSource || "user")) {
+        json(res, 400, { error: "Invalid flowSource" });
+        return;
+      }
+      const archived = url.searchParams.get("archived") === "1";
+      try {
+        const detail = readNodeDetailJson(root, nodeId, flowId, flowId ? (flowSource || "user") : "", { archived, ...userCtx });
+        if (detail.error) {
+          json(res, 404, { error: detail.error });
+          return;
+        }
+        json(res, 200, detail);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/nodes/file") {
+      const nodeId = url.searchParams.get("id") || "";
+      const relPath = url.searchParams.get("path") || "";
+      const flowId = url.searchParams.get("flowId") || "";
+      const flowSource = url.searchParams.get("flowSource") || "";
+      if (!nodeId || !relPath) {
+        json(res, 400, { error: "Missing node id or path" });
+        return;
+      }
+      if (flowId && !isValidFlowSourceRead(flowSource || "user")) {
+        json(res, 400, { error: "Invalid flowSource" });
+        return;
+      }
+      const archived = url.searchParams.get("archived") === "1";
+      try {
+        const file = readNodeFilePreview(root, nodeId, relPath, flowId, flowId ? (flowSource || "user") : "", { archived, ...userCtx });
+        if (file.error) {
+          json(res, 404, { error: file.error });
+          return;
+        }
+        json(res, 200, file);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -890,7 +1193,7 @@ export function startUiServer({
         return;
       }
       try {
-        const resolved = resolveFlowDirForWrite(root, flowId, flowSource);
+        const resolved = resolveFlowDirForWrite(root, flowId, flowSource, userCtx);
         if (resolved.error || !resolved.flowDir) {
           json(res, 400, { error: resolved.error || "Could not resolve flow directory" });
           return;
@@ -916,7 +1219,7 @@ export function startUiServer({
         const flowSource = payload?.flowSource || "user";
         let flowDir = "";
         if (flowId && isValidFlowSourceWrite(flowSource)) {
-          const resolved = resolveFlowDirForWrite(root, flowId, flowSource);
+          const resolved = resolveFlowDirForWrite(root, flowId, flowSource, userCtx);
           if (!resolved.error && resolved.flowDir) flowDir = resolved.flowDir;
         }
         const result = publishNodeFromInstance(root, payload || {}, { flowDir });
@@ -939,7 +1242,7 @@ export function startUiServer({
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
-      const result = readFlowJson(root, flowId, flowSource, { archived: flowArchived });
+      const result = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (result.error) {
         json(res, 404, result);
         return;
@@ -965,7 +1268,7 @@ export function startUiServer({
           json(res, 400, { error: "Missing runUuid, instanceId, or content" });
           return;
         }
-        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid, userCtx));
         const outputPath = path.join(runDir, `output/${instanceId}/node_${instanceId}_content.md`);
         try {
           fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -1000,7 +1303,7 @@ ${content}
 
         const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
         const tmpPromptFile = path.join(
-          getRunDir(root, payload.flowId || "unknown", runUuid),
+          getRunDir(root, payload.flowId || "unknown", runUuid, userCtx),
           "intermediate",
           `${instanceId}_ai_edit_prompt.txt`,
         );
@@ -1045,7 +1348,7 @@ ${content}
           json(res, 400, { error: "Missing runUuid or instanceId" });
           return;
         }
-        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid, userCtx));
         const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}.result.md`);
         try {
           fs.mkdirSync(path.dirname(resultPath), { recursive: true });
@@ -1075,7 +1378,7 @@ finishedAt: "${new Date().toISOString()}"
           json(res, 400, { error: "Missing runUuid, instanceId, or branch" });
           return;
         }
-        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid));
+        const runDir = path.join(getRunDir(root, payload.flowId || "unknown", runUuid, userCtx));
         const resultPath = path.join(runDir, `intermediate/${instanceId}/${instanceId}.result.md`);
         try {
           fs.mkdirSync(path.dirname(resultPath), { recursive: true });
@@ -1123,7 +1426,7 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = Boolean(payload.flowArchived);
-      const result = writeFlowYaml(root, flowId, flowSource, flowYaml, { archived: flowArchived });
+      const result = writeFlowYaml(root, flowId, flowSource, flowYaml, { archived: flowArchived, ...userCtx });
       if (!result.success) {
         json(res, 400, result);
         return;
@@ -1151,7 +1454,7 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = Boolean(payload.flowArchived);
-      broadcastFlowEditorSync(flowId, flowSource, flowArchived);
+      broadcastFlowEditorSync(flowId, flowSource, flowArchived, userCtx.userId);
       json(res, 200, { ok: true });
       return;
     }
@@ -1168,7 +1471,7 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
-      const key = flowEditorSyncKey(flowId, flowSource, flowArchived);
+      const key = flowEditorSyncKey(flowId, flowSource, flowArchived, userCtx.userId);
       let set = flowEditorSyncSubscribers.get(key);
       if (!set) {
         set = new Set();
@@ -1202,7 +1505,7 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
-      const key = flowEditorSyncKey(flowId, flowSource, flowArchived);
+      const key = flowEditorSyncKey(flowId, flowSource, flowArchived, userCtx.userId);
       const serverVer = flowEditorSyncVersions.get(key) ?? 0;
       const clientVer = parseInt(url.searchParams.get("v") ?? "0", 10) || 0;
       json(res, 200, { version: serverVer, changed: serverVer > clientVer });
@@ -1232,7 +1535,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Invalid toSource" });
         return;
       }
-      const result = moveFlowDirectory(root, flowId.trim(), fromSource, toSource);
+      const result = moveFlowDirectory(root, flowId.trim(), fromSource, toSource, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "Move failed" });
         return;
@@ -1269,7 +1572,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 200, { success: true, flowId, flowSource });
         return;
       }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: false });
+      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: false, ...userCtx });
       if (yamlRes.error || !yamlRes.path) {
         json(res, 404, { error: yamlRes.error || "找不到流水线" });
         return;
@@ -1312,7 +1615,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "仅支持归档用户目录或工作区流水线" });
         return;
       }
-      const result = archiveFlowPipeline(root, flowId, flowSource);
+      const result = archiveFlowPipeline(root, flowId, flowSource, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "归档失败" });
         return;
@@ -1345,7 +1648,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "仅支持删除用户目录或工作区流水线" });
         return;
       }
-      const result = deleteFlowPipeline(root, flowId, flowSource, { archived: flowArchived });
+      const result = deleteFlowPipeline(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (!result.success) {
         json(res, 400, { error: result.error || "删除失败" });
         return;
@@ -1366,7 +1669,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Invalid flowSource" });
         return;
       }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived });
+      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (yamlRes.error) {
         json(res, 404, { error: yamlRes.error });
         return;
@@ -1407,7 +1710,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Cannot save config to builtin or archived flow" });
         return;
       }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived });
+      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (yamlRes.error) {
         json(res, 404, { error: yamlRes.error });
         return;
@@ -1437,12 +1740,12 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Invalid flowSource" });
         return;
       }
-      const result = readFlowSchedule(root, flowId, flowSource, { archived: flowArchived });
+      const result = readFlowSchedule(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (!result.success) {
         json(res, 400, { error: result.error || "Could not read schedule" });
         return;
       }
-      const status = listScheduleStatuses(root).find(
+      const status = listScheduleStatuses(root, userCtx).find(
         (s) => s.flowId === flowId && (s.flowSource || "user") === (flowSource || "user"),
       );
       json(res, 200, { schedule: result.schedule, state: result.state || {}, status: status || null });
@@ -1468,7 +1771,7 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Cannot save schedule to builtin or archived flow" });
         return;
       }
-      const result = writeFlowSchedule(root, flowId, flowSource, payload.schedule || {});
+      const result = writeFlowSchedule(root, flowId, flowSource, payload.schedule || {}, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "Could not save schedule" });
         return;
@@ -1491,7 +1794,8 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const runUuid = typeof payload.uuid === "string" ? payload.uuid.trim() : "";
-      if (activeFlowRuns.has(flowId)) {
+      const runKey = `${userCtx.userId || ""}:${payload.flowSource || "user"}:${flowId}`;
+      if (activeFlowRuns.has(runKey)) {
         json(res, 409, { error: "该流水线已在运行中" });
         return;
       }
@@ -1500,7 +1804,7 @@ finishedAt: "${new Date().toISOString()}"
       // UI 轮询会把 runMode 翻回 stopped，即便 CLI 正在运行也显示 PAUSED。
       if (runUuid) {
         try {
-          const runDir = getRunDir(root, flowId, runUuid);
+          const runDir = getRunDir(root, flowId, runUuid, userCtx);
           const interruptedPath = path.join(runDir, RUN_INTERRUPTED_FILENAME);
           if (fs.existsSync(interruptedPath)) fs.unlinkSync(interruptedPath);
         } catch (e) {
@@ -1542,7 +1846,7 @@ finishedAt: "${new Date().toISOString()}"
       const endSafe = () => {
         if (responseEnded) return;
         responseEnded = true;
-        activeFlowRuns.delete(flowId);
+        activeFlowRuns.delete(runKey);
         try {
           res.end();
         } catch (_) {}
@@ -1557,7 +1861,7 @@ finishedAt: "${new Date().toISOString()}"
         child = spawn(process.execPath, args, {
           cwd: root,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, FORCE_COLOR: "0" },
+          env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: userCtx.userId || "" },
           // detached: true 使 child 成为新进程组 leader，/api/flow/run/stop 时
           // 用 process.kill(-pid) 可以一次性 SIGTERM 整棵进程树（含 cursor-agent 等孙进程）
           detached: true,
@@ -1570,7 +1874,7 @@ finishedAt: "${new Date().toISOString()}"
 
       /** @type {{ child: import("child_process").ChildProcess, runUuid: string | null }} */
       const runEntry = { child, runUuid: runUuid || null };
-      activeFlowRuns.set(flowId, runEntry);
+      activeFlowRuns.set(runKey, runEntry);
       log.debug(`[ui] flow/run: spawned pid=${child.pid} flowId=${flowId}${runUuid ? ` uuid=${runUuid}` : ""}`);
 
       let stdoutBuf = "";
@@ -1643,7 +1947,8 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Missing flowId" });
         return;
       }
-      const entry = activeFlowRuns.get(flowId);
+      const runKey = `${userCtx.userId || ""}:${payload.flowSource || "user"}:${flowId}`;
+      const entry = activeFlowRuns.get(runKey);
       if (!entry || !entry.child) {
         json(res, 404, { error: "该流水线未在运行" });
         return;
@@ -1661,10 +1966,10 @@ finishedAt: "${new Date().toISOString()}"
         try { entry.child.kill("SIGTERM"); } catch (_) {}
       }
       const uuid = entry.runUuid;
-      activeFlowRuns.delete(flowId);
+      activeFlowRuns.delete(runKey);
       if (uuid) {
         try {
-          const runDir = getRunDir(root, flowId, uuid);
+          const runDir = getRunDir(root, flowId, uuid, userCtx);
           fs.mkdirSync(runDir, { recursive: true });
           fs.writeFileSync(
             path.join(runDir, RUN_INTERRUPTED_FILENAME),
@@ -1681,6 +1986,17 @@ finishedAt: "${new Date().toISOString()}"
 
     if (req.method === "GET" && url.pathname === "/api/skills") {
       json(res, 200, { skills: listComposerSkills(PACKAGE_ROOT, root) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/skills/detail") {
+      const key = url.searchParams.get("key") || url.searchParams.get("name") || "";
+      const detail = readComposerSkillDetail(PACKAGE_ROOT, root, key);
+      if (!detail) {
+        json(res, 404, { error: "Skill not found" });
+        return;
+      }
+      json(res, 200, { skill: detail });
       return;
     }
 
@@ -1739,7 +2055,7 @@ finishedAt: "${new Date().toISOString()}"
           return;
         }
         const flowArchived = Boolean(payload.flowArchived);
-        const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived });
+        const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
         if (yamlRes.error || !yamlRes.path) {
           json(res, 400, { error: yamlRes.error || "Could not resolve flow.yaml" });
           return;
@@ -1750,7 +2066,7 @@ finishedAt: "${new Date().toISOString()}"
         let editorSyncFlowSource = flowSource;
         let flowDirForCli = path.dirname(flowYamlAbs);
         if (flowSource === "builtin") {
-          const w = resolveFlowDirForWrite(root, flowId, "workspace");
+          const w = resolveFlowDirForWrite(root, flowId, "workspace", userCtx);
           if (w.error || !w.flowDir) {
             json(res, 400, { error: w.error || "Could not resolve workspace flow directory" });
             return;
@@ -1952,7 +2268,7 @@ finishedAt: "${new Date().toISOString()}"
                   flowSource: flowSource || null,
                 });
                 if (flowId && flowSource) {
-                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived));
+                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived), userCtx.userId);
                 }
                 try { res.write(JSON.stringify({ type: "done" }) + "\n"); } catch (_) {}
               }
@@ -2029,7 +2345,7 @@ finishedAt: "${new Date().toISOString()}"
                   flowSource: flowSource || null,
                 });
                 if (flowYamlChanged && flowId && flowSource) {
-                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived));
+                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived), userCtx.userId);
                 }
                 try { res.write(JSON.stringify({ type: "done" }) + "\n"); } catch (_) {}
               }

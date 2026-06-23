@@ -15,6 +15,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import ReactMarkdown from "react-markdown";
 import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
 import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
@@ -131,6 +132,38 @@ function summarizeMarketplaceSlots(slots) {
     .filter(Boolean);
 }
 
+function paletteDisplayLabel(node) {
+  const label = String(node?.label || "").trim();
+  return label || String(node?.id || "").trim();
+}
+
+function paletteDescription(node) {
+  const desc = String(node?.description || node?.body || "").replace(/\s+/g, " ").trim();
+  return desc;
+}
+
+function paletteSlotLabel(slot, index) {
+  const name = String(slot?.name || slot?.id || "").trim();
+  const type = String(slot?.type || "").trim();
+  if (name) return name;
+  if (type) return type;
+  return `#${index + 1}`;
+}
+
+function paletteSlotTip(kind, slot, index) {
+  const name = String(slot?.name || slot?.id || `#${index + 1}`).trim();
+  const type = String(slot?.type || "").trim();
+  const value = String(slot?.default ?? slot?.value ?? "").trim();
+  return [kind, name, type ? `type: ${type}` : "", value ? `default: ${value}` : ""].filter(Boolean).join(" · ");
+}
+
+function paletteSlotsPreview(slots, kind) {
+  const list = Array.isArray(slots) ? slots : [];
+  const shown = list.slice(0, 4);
+  const hidden = Math.max(0, list.length - shown.length);
+  return { list, shown, hidden, kind };
+}
+
 function paletteIcon(cat) {
   if (cat === "CONTROL") return "account_tree";
   if (cat === "TOOL") return "build";
@@ -142,25 +175,6 @@ function paletteNodeMatchesQuery(node, queryLower) {
   if (!queryLower) return true;
   const parts = [node?.id, node?.label, node?.description].filter(Boolean);
   return parts.some((s) => String(s).toLowerCase().includes(queryLower));
-}
-
-/**
- * 从 pipeline 路径提取工作区目录
- * @param {string} path
- * @returns {string}
- */
-function getWorkspaceFromPath(path) {
-  if (!path) return "";
-  // 移除 flow.yaml 文件名，返回所在目录
-  const lastSlash = path.lastIndexOf("/");
-  if (lastSlash === -1) return path;
-  const dir = path.slice(0, lastSlash);
-  // 如果是 .agentflow/pipelines/xxx/flow.yaml 结构，返回工作区根目录
-  const agentflowIdx = dir.indexOf("/.agentflow/");
-  if (agentflowIdx !== -1) {
-    return dir.slice(0, agentflowIdx) || dir;
-  }
-  return dir;
 }
 
 /** @type {RegExp} */
@@ -455,11 +469,16 @@ function FitViewHelper({ fitViewEpoch }) {
   fitViewRef.current = fitView;
   useEffect(() => {
     if (fitViewEpoch > 0) {
-      const t = requestAnimationFrame(() => fitViewRef.current({ padding: 0.2, duration: 200 }));
+      const t = requestAnimationFrame(() => fitViewRef.current({ padding: 0.2, duration: 200, maxZoom: 1 }));
       return () => cancelAnimationFrame(t);
     }
   }, [fitViewEpoch]);
   return null;
+}
+
+function clampFocusZoom(zoom) {
+  const n = Number.isFinite(zoom) ? zoom : 1;
+  return Math.min(Math.max(n, 0.75), 1);
 }
 
 // 长时间运行的 flow 会累积数万条 cli-raw / agent-stdout 日志。
@@ -751,13 +770,6 @@ function FlowBoard({
   );
 }
 
-/** @param {{ id: string, source?: string, archived?: boolean }} f */
-function flowListEntryKey(f) {
-  const src = f.source ?? "user";
-  const ar = f.archived ? "1" : "0";
-  return `${f.id}\u0000${src}\u0000${ar}`;
-}
-
 function replaceFlowUrl(flow) {
   if (!window.location.pathname.startsWith("/flow")) return;
   if (!flow) {
@@ -951,6 +963,7 @@ export default function FlowEditorPage() {
   const [toolPrintContent, setToolPrintContent] = useState(
     /** @type {null | { instanceId: string, execId: number, content: string, createdAt: number }} */ (null),
   );
+  const [toolPrintExpanded, setToolPrintExpanded] = useState(false);
 
   const [provideEditContent, setProvideEditContent] = useState(
     /** @type {null | { instanceId: string, label: string, definitionId: string, content: string }} */ (null),
@@ -1684,7 +1697,11 @@ export default function FlowEditorPage() {
               }))
           : [];
         setComposerSkills(skills);
-        setComposerSelectedSkills((prev) => prev.filter((k) => skills.some((s) => s.key === k)));
+        setComposerSelectedSkills((prev) => {
+          const availableKeys = new Set(skills.map((s) => s.key));
+          const kept = prev.filter((k) => availableKeys.has(k));
+          return kept.length > 0 ? kept : skills.map((s) => s.key);
+        });
       })
       .catch(() => {});
     return () => {
@@ -2017,6 +2034,10 @@ export default function FlowEditorPage() {
             { id: flowId, source: flowSource, archived: flowArchived },
             { preserveComposer: true, incrementalSync: true },
           );
+          await loadSchedule(
+            { id: flowId, source: flowSource, archived: flowArchived },
+            { quiet: true, force: true },
+          );
           if (selectedNodeIdBeforeRefresh) {
             setNodes((prev) =>
               prev.map((n) => ({
@@ -2036,7 +2057,7 @@ export default function FlowEditorPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [selected?.id, selected?.source, selected?.archived, loadFlow, setNodes]);
+  }, [selected?.id, selected?.source, selected?.archived, loadFlow, loadSchedule, setNodes]);
 
   /** 左下角 toast 语义色 */
   const paletteTipMods = useMemo(() => {
@@ -2182,7 +2203,7 @@ export default function FlowEditorPage() {
         const h = internal?.measured?.height ?? internal?.height ?? userNode.height ?? 88;
         const { zoom } = rfi.getViewport();
         void rfi.setCenter(userNode.position.x + w / 2, userNode.position.y + h / 2, {
-          zoom,
+          zoom: clampFocusZoom(zoom),
           duration: 220,
         });
       };
@@ -2204,7 +2225,7 @@ export default function FlowEditorPage() {
         const w = internal?.measured?.width ?? internal?.width ?? userNode.width ?? 200;
         const h = internal?.measured?.height ?? internal?.height ?? userNode.height ?? 88;
         const { zoom } = rfi.getViewport();
-        const targetZoom = Math.max(zoom, 1);
+        const targetZoom = clampFocusZoom(zoom);
         void rfi.setCenter(userNode.position.x + w / 2, userNode.position.y + h / 2, {
           zoom: targetZoom,
           duration: 260,
@@ -2900,7 +2921,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       const resp = await fetch("/api/flow/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flowId: selected.id, ...(runUuid ? { uuid: runUuid } : {}), cliInputs: inputsToUse }),
+        body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user", ...(runUuid ? { uuid: runUuid } : {}), cliInputs: inputsToUse }),
         signal: abort.signal,
       });
       if (!resp.ok) {
@@ -3026,6 +3047,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             content: msg.content || "",
             createdAt: Date.now(),
           });
+          setToolPrintExpanded(false);
         } else if (msg.type === "log") {
           setRunLogs((prev) => [
             ...prev,
@@ -3092,7 +3114,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         await fetch("/api/flow/run/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flowId: selected.id }),
+          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user" }),
         });
       } catch (_) {}
     }
@@ -3121,7 +3143,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         await fetch("/api/flow/run/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flowId: selected.id }),
+          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user" }),
         });
       } catch (_) {}
     }
@@ -3528,6 +3550,20 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   const composerSelectedSkillSet = useMemo(() => new Set(composerSelectedSkills), [composerSelectedSkills]);
   const composerSelectedSkillCount = composerSelectedSkills.length;
+  const composerSkillGroups = useMemo(() => {
+    const groups = [];
+    const byLabel = new Map();
+    for (const skill of composerSkills) {
+      const label = skill.sourceLabel || skill.source || "Skills";
+      if (!byLabel.has(label)) {
+        const group = { label, skills: [] };
+        byLabel.set(label, group);
+        groups.push(group);
+      }
+      byLabel.get(label).skills.push(skill);
+    }
+    return groups;
+  }, [composerSkills]);
 
   const updateComposerSkillsMenuPosition = useCallback(() => {
     const btn = composerSkillsButtonRef.current;
@@ -3818,17 +3854,18 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       composerStreamingSessionIdRef.current = null;
       if (connectTimer) clearTimeout(connectTimer);
       if (sawDone && flowForReload) {
-        void loadFlow(
-          {
-            id: flowForReload.id,
-            source: flowForReload.source ?? "user",
-            archived: flowForReload.archived,
-          },
-          { preserveComposer: true, incrementalSync: true },
-        );
+        const reloadFlow = {
+          id: flowForReload.id,
+          source: flowForReload.source ?? "user",
+          archived: flowForReload.archived,
+        };
+        void (async () => {
+          await loadFlow(reloadFlow, { preserveComposer: true, incrementalSync: true });
+          await loadSchedule(reloadFlow, { quiet: true, force: true });
+        })();
       }
     }
-  }, [selected, composerText, composerModel, modelLists, composerStripEntries, loadFlow, composerThread, activeSessionId, composerPhaseContext, composerPhaseRole, composerSelectedSkills]);
+  }, [selected, composerText, composerModel, modelLists, composerStripEntries, loadFlow, loadSchedule, composerThread, activeSessionId, composerPhaseContext, composerPhaseRole, composerSelectedSkills]);
 
   submitComposerRef.current = submitComposer;
 
@@ -3943,7 +3980,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     setShortcutsOpen((o) => !o);
   }, []);
 
-  const flowSelectValue = selected ? flowListEntryKey(selected) : "";
   const renderPipelineSettingsPage = () => {
     if (!selected) return null;
     const scheduleReadOnly = scheduleSaving || selected.archived || selected.source === "builtin";
@@ -4549,43 +4585,6 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               <span className="af-pipeline-brand-name">PIPELINE</span>
               <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
             </div>
-            <div className="af-pipeline-flow-pick">
-              <label className="af-visually-hidden" htmlFor="af-flow-select">
-                {t("flow:topbar.currentPipeline")}
-              </label>
-              <select
-                id="af-flow-select"
-                className="af-pipeline-flow-select"
-                value={flowSelectValue}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) return;
-                  const parts = v.split("\u0000");
-                  const id = parts[0];
-                  const src = parts[1] || "user";
-                  const archived = parts[2] === "1";
-                  const f = flows.find(
-                    (x) => x.id === id && (x.source ?? "user") === src && Boolean(x.archived) === archived,
-                  );
-                  if (f) loadFlow(f);
-                }}
-                disabled={flows.length === 0}
-              >
-                {flows.length === 0 ? (
-                  <option value="">{t("flow:palette.loading")}</option>
-                ) : (
-                  <>
-                    {!selected ? <option value="">{t("flow:pipeline.selectPipeline")}</option> : null}
-                    {flows.map((f) => (
-                      <option key={flowListEntryKey(f)} value={flowListEntryKey(f)}>
-                        {f.id} ({flowSourceLabelZh(f.source ?? "user", t)})
-                        {f.archived ? ` · ${t("flow:palette.archived")}` : ""}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
           </div>
           <div className="af-pipeline-top-right af-flow-toolbar-actions">
             {isDevMode && (
@@ -4875,8 +4874,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   {workspaceExpanded ? "expand_less" : "expand_more"}
                 </span>
               </button>
-              <div className="af-palette-workspace-path" title={selected?.path ? getWorkspaceFromPath(selected.path) : ""}>
-                {selected?.path ? getWorkspaceFromPath(selected.path) : t("flow:palette2.noPipelineSelected")}
+              <div className="af-palette-workspace-path" title={selected ? (selected.path || pipelineFiles.path || "") : ""}>
+                {selected ? selected.id : t("flow:palette2.noPipelineSelected")}
               </div>
 
               {/* 展开后的工作区树形结构 */}
@@ -4982,26 +4981,70 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <section key={cat} className={`af-palette-section af-flow-palette-section--${cat}`}>
                   <h3 className="af-palette-cat">{cat}</h3>
                   <div className="af-palette-cards">
-                    {filteredGroupedPalette[cat].map((n) => (
-                      <button
-                        key={n.id}
-                        type="button"
-                        className="af-palette-card"
-                        onClick={() => addNodeFromPalette(n)}
-                        draggable={!!selected}
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData("application/agentflow-node", n.id);
-                          e.dataTransfer.effectAllowed = "move";
-                        }}
-                        disabled={!selected}
-                        title={n.description || n.id}
-                      >
-                        <span className="af-palette-card-icon" aria-hidden>
-                          <span className="material-symbols-outlined">{paletteIcon(cat)}</span>
-                        </span>
-                        <span className="af-palette-card-label">{n.id}</span>
-                      </button>
-                    ))}
+                    {filteredGroupedPalette[cat].map((n) => {
+                      const inputs = paletteSlotsPreview(n.inputs, "input");
+                      const outputs = paletteSlotsPreview(n.outputs, "output");
+                      const desc = paletteDescription(n);
+                      const displayLabel = paletteDisplayLabel(n);
+                      return (
+                        <button
+                          key={n.id}
+                          type="button"
+                          className="af-palette-card"
+                          onClick={() => addNodeFromPalette(n)}
+                          draggable={!!selected}
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData("application/agentflow-node", n.id);
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          disabled={!selected}
+                          title={desc || n.id}
+                        >
+                          <span className="af-palette-card-head">
+                            <span className="af-palette-card-icon" aria-hidden>
+                              <span className="material-symbols-outlined">{paletteIcon(cat)}</span>
+                            </span>
+                            <span className="af-palette-card-main">
+                              <span className="af-palette-card-label">{displayLabel}</span>
+                              {displayLabel !== n.id ? <span className="af-palette-card-id">{n.id}</span> : null}
+                            </span>
+                          </span>
+                          {desc ? <span className="af-palette-card-desc">{desc}</span> : null}
+                          <span className="af-palette-card-ports" aria-hidden>
+                            <span className="af-palette-card-port-side af-palette-card-port-side--in">
+                              <span className="af-palette-card-port-count">{inputs.list.length} IN</span>
+                              <span className="af-palette-card-port-list">
+                                {inputs.shown.map((slot, i) => (
+                                  <span key={`in-${i}`} className="af-palette-card-port" title={paletteSlotTip("input", slot, i)}>
+                                    <span
+                                      className="af-palette-card-port-dot"
+                                      style={{ background: getHandleColor(slot?.type) }}
+                                    />
+                                    <span className="af-palette-card-port-name">{paletteSlotLabel(slot, i)}</span>
+                                  </span>
+                                ))}
+                                {inputs.hidden > 0 ? <span className="af-palette-card-port-more">+{inputs.hidden}</span> : null}
+                              </span>
+                            </span>
+                            <span className="af-palette-card-port-side af-palette-card-port-side--out">
+                              <span className="af-palette-card-port-count">{outputs.list.length} OUT</span>
+                              <span className="af-palette-card-port-list">
+                                {outputs.shown.map((slot, i) => (
+                                  <span key={`out-${i}`} className="af-palette-card-port" title={paletteSlotTip("output", slot, i)}>
+                                    <span className="af-palette-card-port-name">{paletteSlotLabel(slot, i)}</span>
+                                    <span
+                                      className="af-palette-card-port-dot"
+                                      style={{ background: getHandleColor(slot?.type) }}
+                                    />
+                                  </span>
+                                ))}
+                                {outputs.hidden > 0 ? <span className="af-palette-card-port-more">+{outputs.hidden}</span> : null}
+                              </span>
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               ))}
@@ -5387,33 +5430,38 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               {composerSkills.length === 0 ? (
                                 <div className="af-composer-skills-empty">No skills found</div>
                               ) : (
-                                composerSkills.map((skill) => (
-                                  <label key={skill.key} className="af-composer-skill-option">
-                                    <input
-                                      type="checkbox"
-                                      checked={composerSelectedSkillSet.has(skill.key)}
-                                      onChange={(e) => {
-                                        const checked = e.target.checked;
-                                        setComposerSelectedSkills((prev) => {
-                                          if (checked) {
-                                            return prev.includes(skill.key) ? prev : [...prev, skill.key];
-                                          }
-                                          return prev.filter((k) => k !== skill.key);
-                                        });
-                                      }}
-                                    />
-                                    <span className="af-composer-skill-option-main">
-                                      <span className="af-composer-skill-option-title">
-                                        {skill.name}
-                                        {skill.sourceLabel ? (
-                                          <span className="af-composer-skill-option-source">{skill.sourceLabel}</span>
-                                        ) : null}
-                                      </span>
-                                      {skill.description ? (
-                                        <span className="af-composer-skill-option-desc">{skill.description}</span>
-                                      ) : null}
-                                    </span>
-                                  </label>
+                                composerSkillGroups.map((group) => (
+                                  <div key={group.label} className="af-composer-skill-group">
+                                    <div className="af-composer-skill-group-title">
+                                      <span>{group.label}</span>
+                                      <span>{group.skills.length}</span>
+                                    </div>
+                                    {group.skills.map((skill) => (
+                                      <label key={skill.key} className="af-composer-skill-option">
+                                        <input
+                                          type="checkbox"
+                                          checked={composerSelectedSkillSet.has(skill.key)}
+                                          onChange={(e) => {
+                                            const checked = e.target.checked;
+                                            setComposerSelectedSkills((prev) => {
+                                              if (checked) {
+                                                return prev.includes(skill.key) ? prev : [...prev, skill.key];
+                                              }
+                                              return prev.filter((k) => k !== skill.key);
+                                            });
+                                          }}
+                                        />
+                                        <span className="af-composer-skill-option-main">
+                                          <span className="af-composer-skill-option-title">
+                                            {skill.name}
+                                          </span>
+                                          {skill.description ? (
+                                            <span className="af-composer-skill-option-desc">{skill.description}</span>
+                                          ) : null}
+                                        </span>
+                                      </label>
+                                    ))}
+                                  </div>
                                 ))
                               )}
                             </div>,
@@ -5733,20 +5781,26 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           title={session.label}
                         >
                           <span className="af-composer-session-label">{session.label}</span>
-                          {(composerSessions.length > 1 || session.running) && (
-                            <span
-                              className="af-composer-session-close"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                closeComposerSession(session.id);
-                              }}
-                              title={session.running ? t("flow:composer.endConversation") : t("flow:composer.closeConversation")}
-                            >
-                              <span className="material-symbols-outlined" style={{ fontSize: "0.75rem" }}>
-                                close
-                              </span>
+                          <span
+                            className="af-composer-session-close"
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              closeComposerSession(session.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key !== "Enter" && e.key !== " ") return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              closeComposerSession(session.id);
+                            }}
+                            title={session.running ? t("flow:composer.endConversation") : t("flow:composer.closeConversation")}
+                          >
+                            <span className="material-symbols-outlined" style={{ fontSize: "0.75rem" }}>
+                              close
                             </span>
-                          )}
+                          </span>
                         </button>
                       ))}
                       <button
@@ -6555,19 +6609,31 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       )}
 
       {toolPrintContent && runMode !== "edit" && (
-        <div className="af-tool-print-toast" role="status" aria-live="polite">
+        <div
+          className={"af-tool-print-toast" + (toolPrintExpanded ? " af-tool-print-toast--expanded" : "")}
+          role="status"
+          aria-live="polite"
+        >
           <div className="af-tool-print-toast__head">
             <span className="material-symbols-outlined">print</span>
             <span className="af-tool-print-toast__title">{t("flow:toolPrint.title", { instanceId: toolPrintContent.instanceId })}</span>
+            <button
+              type="button"
+              className="af-tool-print-toast__close"
+              onClick={() => setToolPrintExpanded((v) => !v)}
+              aria-label={toolPrintExpanded ? t("flow:toolPrint.restore") : t("flow:toolPrint.expand")}
+              title={toolPrintExpanded ? t("flow:toolPrint.restore") : t("flow:toolPrint.expand")}
+            >
+              <span className="material-symbols-outlined">{toolPrintExpanded ? "close_fullscreen" : "open_in_full"}</span>
+            </button>
             <button type="button" className="af-tool-print-toast__close" onClick={() => setToolPrintContent(null)} aria-label={t("common:close")}>
               <span className="material-symbols-outlined">close</span>
             </button>
           </div>
           <div className="af-tool-print-toast__body">
-            <pre>{toolPrintContent.content.length > 500 ? toolPrintContent.content.slice(0, 500) : toolPrintContent.content}</pre>
-            {toolPrintContent.content.length > 500 && (
-              <span className="af-tool-print-toast__more">{t("flow:toolPrint.truncated")}</span>
-            )}
+            <div className="af-tool-print-toast__markdown">
+              <ReactMarkdown>{toolPrintContent.content}</ReactMarkdown>
+            </div>
           </div>
         </div>
       )}

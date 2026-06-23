@@ -155,30 +155,6 @@ export function NewPipelineModal({ open, onClose, onCreated }) {
             ) : null}
           </label>
 
-          <fieldset className="af-new-pipeline-fieldset">
-            <legend className="af-pipeline-drawer-label">{t("project:newPipelineModal.locationLabel")}</legend>
-            <label className="af-new-pipeline-radio">
-              <input
-                type="radio"
-                name="targetSpace"
-                value="user"
-                checked={targetSpace === "user"}
-                onChange={() => setTargetSpace("user")}
-              />
-              <span>{t("project:newPipelineModal.userDir")}</span>
-            </label>
-            <label className="af-new-pipeline-radio">
-              <input
-                type="radio"
-                name="targetSpace"
-                value="workspace"
-                checked={targetSpace === "workspace"}
-                onChange={() => setTargetSpace("workspace")}
-              />
-              <span>{t("project:newPipelineModal.workspaceDir")}</span>
-            </label>
-          </fieldset>
-
           {error ? <p className="af-err af-new-pipeline-err">{error}</p> : null}
 
           <div className="af-new-pipeline-actions">

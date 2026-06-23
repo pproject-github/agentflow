@@ -34,6 +34,41 @@ export function getAgentflowDataRoot() {
   return path.join(os.homedir(), "agentflow");
 }
 
+export const AGENTFLOW_DEFAULT_USER_ID = "";
+
+export function sanitizeAgentflowUserId(userId) {
+  const raw = userId == null ? "" : String(userId).trim();
+  if (!raw) return AGENTFLOW_DEFAULT_USER_ID;
+  const normalized = raw.toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(normalized)) return AGENTFLOW_DEFAULT_USER_ID;
+  return normalized;
+}
+
+export function getAgentflowUserDataRoot(userId) {
+  const safe = sanitizeAgentflowUserId(userId ?? process.env.AGENTFLOW_USER_ID);
+  if (!safe) return getAgentflowDataRoot();
+  return path.join(getAgentflowDataRoot(), "users", safe);
+}
+
+export function listAgentflowUserIds() {
+  const usersRoot = path.join(getAgentflowDataRoot(), "users");
+  try {
+    if (!fs.existsSync(usersRoot) || !fs.statSync(usersRoot).isDirectory()) return [];
+    return fs.readdirSync(usersRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => sanitizeAgentflowUserId(entry.name))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+export function getAgentflowUserContexts() {
+  const ids = listAgentflowUserIds();
+  return [{}, ...ids.map((userId) => ({ userId }))];
+}
+
 /** 项目内 runBuild 根目录：`<workspaceRoot>/.workspace/agentflow/runBuild`（legacy：写入路径已迁至 `<flowDir>/runBuild`，仅用于兼容读取） */
 export function getWorkspaceRunBuildRoot(workspaceRoot) {
   const root =
@@ -55,12 +90,12 @@ export function getLegacyUserRunBuildRoot() {
  * - archived（`_archived/<name>`）按对应 scope 返回
  * - 其他（builtin 只读 / 不存在）→ 默认 user-scope 路径（首次 run 时自动创建，builtin 源仍从包内读取但 runBuild 落到用户目录）
  */
-export function getFlowRuntimeRoot(workspaceRoot, flowName) {
+export function getFlowRuntimeRoot(workspaceRoot, flowName, opts = {}) {
   const root =
     workspaceRoot != null && String(workspaceRoot).trim() !== ""
       ? path.resolve(String(workspaceRoot))
       : process.cwd();
-  const userRoot = getUserPipelinesRoot();
+  const userRoot = getUserPipelinesRoot(opts.userId);
   const userDir = path.join(userRoot, flowName);
   if (fs.existsSync(path.join(userDir, "flow.yaml"))) return userDir;
   const userArchived = path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME, flowName);
@@ -78,8 +113,8 @@ export function getFlowRuntimeRoot(workspaceRoot, flowName) {
  * 新运行走 `<flowRuntimeRoot>/runBuild/<uuid>`；
  * 若该 uuid 在旧位置（legacy workspace/user runBuild 根）已存在，则返回旧位置，保留 resume 兼容。
  */
-export function getRunDir(workspaceRoot, flowName, uuid) {
-  const candidates = getRunDirCandidates(workspaceRoot, flowName, uuid);
+export function getRunDir(workspaceRoot, flowName, uuid, opts = {}) {
+  const candidates = getRunDirCandidates(workspaceRoot, flowName, uuid, opts);
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
@@ -93,9 +128,9 @@ export function getRunDir(workspaceRoot, flowName, uuid) {
  *   2. 旧 workspace：<ws>/.workspace/agentflow/runBuild/<flow>/<uuid>
  *   3. 旧 user：~/agentflow/runBuild/<flow>/<uuid>
  */
-export function getRunDirCandidates(workspaceRoot, flowName, uuid) {
+export function getRunDirCandidates(workspaceRoot, flowName, uuid, opts = {}) {
   const candidates = [
-    path.join(getFlowRuntimeRoot(workspaceRoot, flowName), "runBuild", uuid),
+    path.join(getFlowRuntimeRoot(workspaceRoot, flowName, opts), "runBuild", uuid),
     path.join(getWorkspaceRunBuildRoot(workspaceRoot), flowName, uuid),
     path.join(getLegacyUserRunBuildRoot(), flowName, uuid),
   ];
@@ -110,8 +145,8 @@ export function getRunDirCandidates(workspaceRoot, flowName, uuid) {
   return out;
 }
 
-export function getUserPipelinesRoot() {
-  return path.join(getAgentflowDataRoot(), "pipelines");
+export function getUserPipelinesRoot(userId) {
+  return path.join(getAgentflowUserDataRoot(userId), "pipelines");
 }
 
 export function getReferenceRootAbs() {
@@ -204,8 +239,11 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_deadline",
   "control_cancelled",
   "control_interval_loop",
+  "control_cd_workspace",
+  "control_load_skills",
   "control_start",
   "control_end",
+  "tool_git_checkout",
   "tool_print",
   "tool_user_check",
   "tool_user_ask",

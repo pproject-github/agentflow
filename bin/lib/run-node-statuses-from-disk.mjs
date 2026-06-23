@@ -36,8 +36,8 @@ function parseElapsedMsLine(filePath) {
  * @param {string} uuid
  * @returns {Record<string, { status: string, elapsed?: string }>}
  */
-export function getRunNodeStatusesFromDisk(workspaceRoot, flowName, uuid) {
-  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+export function getRunNodeStatusesFromDisk(workspaceRoot, flowName, uuid, opts = {}) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid, opts);
   const flowJsonPath = path.join(runDir, "intermediate", "flow.json");
   if (!fs.existsSync(flowJsonPath)) return {};
 
@@ -51,7 +51,7 @@ export function getRunNodeStatusesFromDisk(workspaceRoot, flowName, uuid) {
 
   const order = Array.isArray(flow.order) ? flow.order : [];
   const nodeDefinitions = flow.nodeDefinitions && typeof flow.nodeDefinitions === "object" ? flow.nodeDefinitions : {};
-  const execIdMap = loadAllExecIds(workspaceRoot, flowName, uuid, order);
+  const execIdMap = loadAllExecIds(workspaceRoot, flowName, uuid, order, opts);
   const intermediateDir = path.join(runDir, "intermediate");
   /** @type {Record<string, { status: string, elapsed?: string }>} */
   const out = {};

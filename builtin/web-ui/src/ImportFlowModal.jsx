@@ -147,30 +147,6 @@ export function ImportFlowModal({ file, onClose, onImported }) {
             </span>
           </label>
 
-          <fieldset className="af-new-pipeline-fieldset">
-            <legend className="af-pipeline-drawer-label">{t("project:importModal.locationLabel")}</legend>
-            <label className="af-new-pipeline-radio">
-              <input
-                type="radio"
-                name="importTargetSpace"
-                value="user"
-                checked={targetSpace === "user"}
-                onChange={() => setTargetSpace("user")}
-              />
-              <span>{t("project:importModal.userDir")}</span>
-            </label>
-            <label className="af-new-pipeline-radio">
-              <input
-                type="radio"
-                name="importTargetSpace"
-                value="workspace"
-                checked={targetSpace === "workspace"}
-                onChange={() => setTargetSpace("workspace")}
-              />
-              <span>{t("project:importModal.workspaceDir")}</span>
-            </label>
-          </fieldset>
-
           <div className="af-import-repick">
             <button type="button" className="af-btn-secondary af-import-repick-btn" onClick={() => fileInputRef.current?.click()}>
               {t("project:importModal.changeFile")}

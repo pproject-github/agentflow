@@ -53,8 +53,8 @@ export function loadExecId(workspaceRoot, flowName, uuid, instanceId) {
 /**
  * 从 memory 读取所有 order 中节点的 execId。
  */
-export function loadAllExecIds(workspaceRoot, flowName, uuid, order) {
-  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+export function loadAllExecIds(workspaceRoot, flowName, uuid, order, opts = {}) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid, opts);
   const memoryPath = path.join(runDir, MEMORY_FILENAME);
   const map = fs.existsSync(memoryPath)
     ? parseMemory(fs.readFileSync(memoryPath, "utf-8"))

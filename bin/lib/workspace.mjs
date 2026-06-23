@@ -23,7 +23,7 @@ export { getRunDir } from "./paths.mjs";
  * - legacyUserRoot: ~/agentflow/runBuild/<name>/<uuid>
  * 后两者仅作为向下兼容读取；新写入只走 user/workspace。
  */
-export function listAllRunDirs(workspaceRoot) {
+export function listAllRunDirs(workspaceRoot, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const out = [];
   const seen = new Set();
@@ -62,7 +62,7 @@ export function listAllRunDirs(workspaceRoot) {
   };
 
   // 新位置（优先）
-  scanPipelinesDir(getUserPipelinesRoot(), "user");
+  scanPipelinesDir(getUserPipelinesRoot(opts.userId), "user");
   scanPipelinesDir(path.join(root, PIPELINES_DIR), "workspace");
 
   // 旧位置（兼容读）
@@ -139,12 +139,12 @@ export function listRunsWithLogs(workspaceRoot) {
 }
 
 /** 解析 flow 目录：~/agentflow/pipelines → .workspace/agentflow/pipelines → .cursor/agentflow/pipelines（旧）→ builtin/pipelines */
-export function getFlowDir(workspaceRoot, flowName) {
+export function getFlowDir(workspaceRoot, flowName, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const hasFlow = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
 
   // user pipelines
-  const userRoot = getUserPipelinesRoot();
+  const userRoot = getUserPipelinesRoot(opts.userId);
   const userFlowDir = path.join(userRoot, flowName);
   if (hasFlow(userFlowDir)) return userFlowDir;
   // user archived

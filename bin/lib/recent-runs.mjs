@@ -151,9 +151,9 @@ function mapFlowSource(src) {
  * @param {string} workspaceRoot
  * @returns {Array<{ flowId: string, flowSource: 'workspace'|'user', runId: string, at: number, durationMs: number, endedAt: number|null, status: 'success'|'failed'|'running'|'stopped'|'interrupted'|'unknown' }>}
  */
-export function listRecentRunsFromDisk(workspaceRoot) {
+export function listRecentRunsFromDisk(workspaceRoot, opts = {}) {
   const out = [];
-  for (const { flowName, uuid, runDir, source } of listAllRunDirs(workspaceRoot)) {
+  for (const { flowName, uuid, runDir, source } of listAllRunDirs(workspaceRoot, opts)) {
     let at = readKeyFromMemory(runDir, "runStartTime");
     if (at == null) {
       try {
