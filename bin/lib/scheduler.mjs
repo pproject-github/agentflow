@@ -9,7 +9,7 @@ import {
   readScheduleState,
   writeScheduleState,
 } from "./schedule-config.mjs";
-import { getRunDir, PACKAGE_ROOT } from "./paths.mjs";
+import { getAgentflowUserContexts, getRunDir, PACKAGE_ROOT } from "./paths.mjs";
 import { isApplyProcessAlive } from "./run-apply-active-lock.mjs";
 import { log } from "./log.mjs";
 import { writeResult } from "../pipeline/write-result.mjs";
@@ -92,13 +92,13 @@ function buildCliInputArgs(flowDir, presetName) {
   return args;
 }
 
-function hasHigherPriorityDuplicate(workspaceRoot, flow) {
+function hasHigherPriorityDuplicate(workspaceRoot, flow, opts = {}) {
   if ((flow.source || "user") !== "workspace") return false;
-  return listFlowsJson(workspaceRoot).some((f) => f.id === flow.id && !f.archived && (f.source || "user") === "user");
+  return listFlowsJson(workspaceRoot, opts).some((f) => f.id === flow.id && !f.archived && (f.source || "user") === "user");
 }
 
-function getLatestRunUuidForFlow(workspaceRoot, flowId) {
-  const runRoot = path.dirname(getRunDir(workspaceRoot, flowId, "00000000000000"));
+function getLatestRunUuidForFlow(workspaceRoot, flowId, opts = {}) {
+  const runRoot = path.dirname(getRunDir(workspaceRoot, flowId, "00000000000000", opts));
   if (!fs.existsSync(runRoot)) return null;
   try {
     const dirs = fs.readdirSync(runRoot, { withFileTypes: true })
@@ -209,13 +209,13 @@ function readNodeResultStatus(runDir, instanceId) {
   }
 }
 
-function isFlowCurrentlyRunning(workspaceRoot, flowId, state) {
+function isFlowCurrentlyRunning(workspaceRoot, flowId, state, opts = {}) {
   const candidates = [];
   if (state && typeof state.lastRunUuid === "string") candidates.push(state.lastRunUuid);
-  const latest = getLatestRunUuidForFlow(workspaceRoot, flowId);
+  const latest = getLatestRunUuidForFlow(workspaceRoot, flowId, opts);
   if (latest) candidates.push(latest);
   for (const uuid of candidates) {
-    const runDir = getRunDir(workspaceRoot, flowId, uuid);
+    const runDir = getRunDir(workspaceRoot, flowId, uuid, opts);
     if (isApplyProcessAlive(runDir)) return true;
   }
   return false;
@@ -231,7 +231,7 @@ function baseState(flow, schedule, previousState) {
   };
 }
 
-function ensureNextRunAt(workspaceRoot, flow, schedule, state) {
+function ensureNextRunAt(workspaceRoot, flow, schedule, state, opts = {}) {
   const identity = scheduleIdentity(schedule);
   if (state.scheduleIdentity === identity && state.nextRunAt) return state;
   const nextRunAt = schedule.enabled && schedule.cron ? computeNextRunAtFromSchedule(schedule) : null;
@@ -240,11 +240,11 @@ function ensureNextRunAt(workspaceRoot, flow, schedule, state) {
     nextRunAt,
     lastError: "",
   };
-  writeScheduleState(workspaceRoot, flow.id, flow.source || "user", next);
+  writeScheduleState(workspaceRoot, flow.id, flow.source || "user", next, opts);
   return next;
 }
 
-function startScheduledRun(workspaceRoot, flow, schedule, state) {
+function startScheduledRun(workspaceRoot, flow, schedule, state, opts = {}) {
   const flowDir = flow.path || "";
   const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
   const args = [agentflowBin, "apply", flow.id, "--machine-readable", "--workspace-root", path.resolve(workspaceRoot), "--force"];
@@ -252,7 +252,7 @@ function startScheduledRun(workspaceRoot, flow, schedule, state) {
   const child = spawn(process.execPath, args, {
     cwd: path.resolve(workspaceRoot),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
     detached: true,
   });
 
@@ -276,7 +276,7 @@ function startScheduledRun(workspaceRoot, flow, schedule, state) {
             lastRunUuid,
             lastPid: child.pid || null,
             lastError: "",
-          });
+          }, opts);
         }
       } catch {
         /* ignore non-json lines */
@@ -290,7 +290,7 @@ function startScheduledRun(workspaceRoot, flow, schedule, state) {
   });
 
   child.on("exit", (code, signal) => {
-    const prev = readScheduleState(workspaceRoot, flow.id, flow.source || "user").state || state;
+    const prev = readScheduleState(workspaceRoot, flow.id, flow.source || "user", opts).state || state;
     writeScheduleState(workspaceRoot, flow.id, flow.source || "user", {
       ...baseState(flow, schedule, prev),
       nextRunAt: prev.nextRunAt || computeNextRunAtFromSchedule(schedule),
@@ -300,14 +300,14 @@ function startScheduledRun(workspaceRoot, flow, schedule, state) {
       lastExitSignal: signal || "",
       lastFinishedAt: new Date().toISOString(),
       lastError: code === 0 ? "" : `scheduled run exited with code ${code}${signal ? ` signal ${signal}` : ""}`,
-    });
+    }, opts);
   });
 
   child.unref();
   return child;
 }
 
-function startWaitingRunResume(workspaceRoot, flow, waitState) {
+function startWaitingRunResume(workspaceRoot, flow, waitState, opts = {}) {
   const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
   const uuid = String(waitState.uuid || "");
   const instanceId = String(waitState.instanceId || "");
@@ -325,7 +325,7 @@ function startWaitingRunResume(workspaceRoot, flow, waitState) {
   const child = spawn(process.execPath, args, {
     cwd: path.resolve(workspaceRoot),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
     detached: true,
   });
   child.stdout.on("data", () => {});
@@ -411,17 +411,17 @@ export function cancelScheduledRun(workspaceRoot, flowId, uuid) {
   return { ok: true, flowId, uuid, cancelledAt, updatedWaits: updated, propagatedWaits: propagated, resumePid };
 }
 
-export function listScheduleStatuses(workspaceRoot) {
+export function listScheduleStatuses(workspaceRoot, opts = {}) {
   const rows = [];
-  for (const flow of listFlowsJson(workspaceRoot)) {
+  for (const flow of listFlowsJson(workspaceRoot, opts)) {
     if (flow.archived || flow.source === "builtin") continue;
-    const scheduleRes = readFlowSchedule(workspaceRoot, flow.id, flow.source || "user");
+    const scheduleRes = readFlowSchedule(workspaceRoot, flow.id, flow.source || "user", opts);
     if (!scheduleRes.success) {
       rows.push({ flowId: flow.id, flowSource: flow.source || "user", enabled: false, error: scheduleRes.error });
       continue;
     }
     const schedule = scheduleRes.schedule;
-    const stateRes = readScheduleState(workspaceRoot, flow.id, flow.source || "user");
+    const stateRes = readScheduleState(workspaceRoot, flow.id, flow.source || "user", opts);
     const state = stateRes.success ? stateRes.state : {};
     rows.push({
       flowId: flow.id,
@@ -433,10 +433,10 @@ export function listScheduleStatuses(workspaceRoot) {
       nextRunAt: state.nextRunAt || schedule.nextRunAt || null,
       lastTriggeredAt: state.lastTriggeredAt || null,
       lastRunUuid: state.lastRunUuid || null,
-      lastError: hasHigherPriorityDuplicate(workspaceRoot, flow)
+      lastError: hasHigherPriorityDuplicate(workspaceRoot, flow, opts)
         ? "workspace flow is shadowed by a user flow with the same id"
         : state.lastError || "",
-      running: isFlowCurrentlyRunning(workspaceRoot, flow.id, state),
+      running: isFlowCurrentlyRunning(workspaceRoot, flow.id, state, opts),
       waiting: countActiveWaitsForFlow(flow),
     });
   }
@@ -454,7 +454,9 @@ export async function startScheduler(workspaceRoot, opts = {}) {
   log.info(`AgentFlow scheduler started. workspace=${path.resolve(workspaceRoot)} poll=${pollMs}ms`);
   while (true) {
     const now = Date.now();
-    for (const flow of listFlowsJson(workspaceRoot)) {
+    const contexts = opts.userId ? [{ userId: opts.userId }] : getAgentflowUserContexts();
+    for (const scheduleCtx of contexts) {
+    for (const flow of listFlowsJson(workspaceRoot, scheduleCtx)) {
       if (flow.archived || flow.source === "builtin") continue;
       const flowSource = flow.source || "user";
       let resumedWaitingRun = false;
@@ -462,7 +464,7 @@ export async function startScheduler(workspaceRoot, opts = {}) {
         if (resumedWaitingRun) break;
         for (const waitState of readWaitStates(run.runDir)) {
           if (!waitState || !waitState.wakeAt || !waitState.instanceId) continue;
-          if (waitState.status === "resuming" && !isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid })) {
+          if (waitState.status === "resuming" && !isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid }, scheduleCtx)) {
             const nodeStatus = readNodeResultStatus(run.runDir, String(waitState.instanceId));
             writeWaitState(waitState, {
               status: nodeStatus === "pending" ? "waiting" : "resumed",
@@ -472,7 +474,7 @@ export async function startScheduler(workspaceRoot, opts = {}) {
           }
           if (waitState.status !== "waiting") continue;
           if (Date.parse(waitState.wakeAt) > now) continue;
-          if (isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid })) continue;
+          if (isFlowCurrentlyRunning(workspaceRoot, flow.id, { lastRunUuid: run.uuid }, scheduleCtx)) continue;
           const nextState = {
             ...waitState,
             status: "resuming",
@@ -480,7 +482,7 @@ export async function startScheduler(workspaceRoot, opts = {}) {
             resumeStartedAt: new Date().toISOString(),
           };
           try {
-            const child = startWaitingRunResume(workspaceRoot, flow, { ...waitState, uuid: run.uuid, runDir: run.runDir });
+            const child = startWaitingRunResume(workspaceRoot, flow, { ...waitState, uuid: run.uuid, runDir: run.runDir }, scheduleCtx);
             nextState.resumePid = child.pid || null;
             writeWaitState(waitState, nextState);
             resumedWaitingRun = true;
@@ -497,41 +499,41 @@ export async function startScheduler(workspaceRoot, opts = {}) {
         }
       }
 
-      const scheduleRes = readFlowSchedule(workspaceRoot, flow.id, flowSource);
+      const scheduleRes = readFlowSchedule(workspaceRoot, flow.id, flowSource, scheduleCtx);
       if (!scheduleRes.success) {
         log.debug(`[scheduler] ${flow.id}: ${scheduleRes.error}`);
         continue;
       }
       const schedule = scheduleRes.schedule;
       if (!schedule.enabled || !schedule.cron) continue;
-      if (hasHigherPriorityDuplicate(workspaceRoot, flow)) {
-        const stateRes = readScheduleState(workspaceRoot, flow.id, flowSource);
+      if (hasHigherPriorityDuplicate(workspaceRoot, flow, scheduleCtx)) {
+        const stateRes = readScheduleState(workspaceRoot, flow.id, flowSource, scheduleCtx);
         writeScheduleState(workspaceRoot, flow.id, flowSource, {
           ...baseState(flow, schedule, stateRes.success ? stateRes.state : {}),
           nextRunAt: null,
           lastError: "workspace flow is shadowed by a user flow with the same id; scheduled run skipped",
           lastErrorAt: new Date().toISOString(),
-        });
+        }, scheduleCtx);
         continue;
       }
-      const stateRes = readScheduleState(workspaceRoot, flow.id, flowSource);
-      let state = ensureNextRunAt(workspaceRoot, flow, schedule, stateRes.success ? stateRes.state : {});
+      const stateRes = readScheduleState(workspaceRoot, flow.id, flowSource, scheduleCtx);
+      let state = ensureNextRunAt(workspaceRoot, flow, schedule, stateRes.success ? stateRes.state : {}, scheduleCtx);
       if (!state.nextRunAt || Date.parse(state.nextRunAt) > now) continue;
 
-      if (isFlowCurrentlyRunning(workspaceRoot, flow.id, state)) {
+      if (isFlowCurrentlyRunning(workspaceRoot, flow.id, state, scheduleCtx)) {
         const nextRunAt = computeNextRunAtFromSchedule(schedule);
         writeScheduleState(workspaceRoot, flow.id, flowSource, {
           ...baseState(flow, schedule, state),
           nextRunAt,
           lastSkippedAt: new Date().toISOString(),
           lastSkipReason: "running",
-        });
+        }, scheduleCtx);
         log.info(`[scheduler] skip ${flow.id}: already running; next=${nextRunAt}`);
         continue;
       }
 
       try {
-        const child = startScheduledRun(workspaceRoot, flow, schedule, state);
+        const child = startScheduledRun(workspaceRoot, flow, schedule, state, scheduleCtx);
         const nextRunAt = computeNextRunAtFromSchedule(schedule);
         writeScheduleState(workspaceRoot, flow.id, flowSource, {
           ...baseState(flow, schedule, state),
@@ -539,7 +541,7 @@ export async function startScheduler(workspaceRoot, opts = {}) {
           lastTriggeredAt: new Date().toISOString(),
           lastPid: child.pid || null,
           lastError: "",
-        });
+        }, scheduleCtx);
         log.info(`[scheduler] triggered ${flow.id}; pid=${child.pid || "?"}; next=${nextRunAt}`);
       } catch (e) {
         const nextRunAt = computeNextRunAtFromSchedule(schedule);
@@ -548,9 +550,10 @@ export async function startScheduler(workspaceRoot, opts = {}) {
           nextRunAt,
           lastError: e && e.message ? e.message : String(e),
           lastErrorAt: new Date().toISOString(),
-        });
+        }, scheduleCtx);
         log.info(`[scheduler] failed ${flow.id}: ${e && e.message ? e.message : String(e)}`);
       }
+    }
     }
     if (once) return;
     await sleep(pollMs);

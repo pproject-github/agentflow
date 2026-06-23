@@ -68,11 +68,11 @@ export function buildEmptyUserFlowYaml(options = {}) {
  * @param {string} workspaceRoot
  * @param {FlowWriteSource} source
  */
-function getPipelinesRootByWriteSource(workspaceRoot, source) {
+function getPipelinesRootByWriteSource(workspaceRoot, source, opts = {}) {
   if (source === "workspace") {
     return path.join(path.resolve(workspaceRoot), PIPELINES_DIR);
   }
-  return getUserPipelinesRoot();
+  return getUserPipelinesRoot(opts.userId);
 }
 
 /**
@@ -94,7 +94,7 @@ function resolveExistingWorkspaceFlowDir(workspaceRoot, flowId) {
  * @param {FlowWriteSource} flowSource
  * @returns {{ flowDir: string, error?: string }}
  */
-export function resolveFlowDirForWrite(workspaceRoot, flowId, flowSource) {
+export function resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts = {}) {
   if (!workspaceRoot || !flowId) {
     return { flowDir: "", error: "workspaceRoot and flowId are required" };
   }
@@ -125,7 +125,7 @@ export function resolveFlowDirForWrite(workspaceRoot, flowId, flowSource) {
     }
   }
 
-  const pipelinesRoot = getPipelinesRootByWriteSource(workspaceRoot, flowSource);
+  const pipelinesRoot = getPipelinesRootByWriteSource(workspaceRoot, flowSource, opts);
   const flowDir = path.join(pipelinesRoot, flowId);
   const resolvedFlowDir = path.resolve(flowDir);
   const baseWithSep = boundariesBase.endsWith(path.sep) ? boundariesBase : boundariesBase + path.sep;
@@ -148,7 +148,7 @@ export function resolveFlowDirForWrite(workspaceRoot, flowId, flowSource) {
  * @param {FlowWriteSource} flowSource
  * @returns {{ flowDir: string, error?: string }}
  */
-export function resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource) {
+export function resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource, opts = {}) {
   if (!workspaceRoot || !flowId) {
     return { flowDir: "", error: "workspaceRoot and flowId are required" };
   }
@@ -176,7 +176,7 @@ export function resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource
     }
   }
 
-  const pipelinesRoot = getPipelinesRootByWriteSource(workspaceRoot, flowSource);
+  const pipelinesRoot = getPipelinesRootByWriteSource(workspaceRoot, flowSource, opts);
   const flowDir = path.join(pipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId);
   const resolvedFlowDir = path.resolve(flowDir);
   const baseWithSep = boundariesBase.endsWith(path.sep) ? boundariesBase : boundariesBase + path.sep;
@@ -197,8 +197,8 @@ export function resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource
 export function writeFlowYaml(workspaceRoot, flowId, flowSource, flowYaml, opts = {}) {
   const archived = Boolean(opts.archived);
   const { flowDir, error } = archived
-    ? resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource)
-    : resolveFlowDirForWrite(workspaceRoot, flowId, flowSource);
+    ? resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource, opts)
+    : resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
   if (error) return { success: false, error };
   try {
     fs.mkdirSync(flowDir, { recursive: true });
@@ -217,11 +217,11 @@ export function writeFlowYaml(workspaceRoot, flowId, flowSource, flowYaml, opts 
  * @param {FlowWriteSource} flowSource
  * @returns {{ success: true } | { success: false, error: string }}
  */
-export function archiveFlowPipeline(workspaceRoot, flowId, flowSource) {
+export function archiveFlowPipeline(workspaceRoot, flowId, flowSource, opts = {}) {
   if (flowSource !== "user" && flowSource !== "workspace") {
     return { success: false, error: "仅支持用户目录或工作区流水线归档" };
   }
-  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived: false });
+  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived: false, userId: opts.userId });
   if (yamlRes.error || !yamlRes.path) {
     return { success: false, error: yamlRes.error || "找不到流水线" };
   }
@@ -230,7 +230,7 @@ export function archiveFlowPipeline(workspaceRoot, flowId, flowSource) {
   if (fromDir.split(sep).includes(ARCHIVED_PIPELINES_DIR_NAME)) {
     return { success: false, error: "该流水线已在归档目录中" };
   }
-  const toRes = resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource);
+  const toRes = resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
   if (toRes.error || !toRes.flowDir) {
     return { success: false, error: toRes.error || "无法解析归档路径" };
   }
@@ -255,7 +255,7 @@ export function archiveFlowPipeline(workspaceRoot, flowId, flowSource) {
  * @param {"user" | "workspace"} toSource
  * @returns {{ success: true, flowSource: "user" | "workspace" } | { success: false, error: string }}
  */
-export function moveFlowDirectory(workspaceRoot, flowId, fromSource, toSource) {
+export function moveFlowDirectory(workspaceRoot, flowId, fromSource, toSource, opts = {}) {
   if (fromSource === toSource) {
     return { success: false, error: "fromSource and toSource must differ" };
   }
@@ -267,16 +267,16 @@ export function moveFlowDirectory(workspaceRoot, flowId, fromSource, toSource) {
   }
   let fromDir;
   if (fromSource === "workspace") {
-    const w = resolveFlowDirForWrite(workspaceRoot, flowId, "workspace");
+    const w = resolveFlowDirForWrite(workspaceRoot, flowId, "workspace", opts);
     if (w.error || !w.flowDir) return { success: false, error: w.error || "invalid source path" };
     fromDir = resolveExistingWorkspaceFlowDir(workspaceRoot, flowId);
     if (!fromDir) return { success: false, error: "source flow not found" };
   } else {
-    const fromRes = resolveFlowDirForWrite(workspaceRoot, flowId, fromSource);
+    const fromRes = resolveFlowDirForWrite(workspaceRoot, flowId, fromSource, opts);
     if (fromRes.error || !fromRes.flowDir) return { success: false, error: fromRes.error || "invalid source path" };
     fromDir = fromRes.flowDir;
   }
-  const toRes = resolveFlowDirForWrite(workspaceRoot, flowId, toSource);
+  const toRes = resolveFlowDirForWrite(workspaceRoot, flowId, toSource, opts);
   if (toRes.error || !toRes.flowDir) return { success: false, error: toRes.error || "invalid target path" };
   const toDir = toRes.flowDir;
   if (!fs.existsSync(path.join(fromDir, FLOW_YAML_FILENAME))) {
@@ -301,7 +301,7 @@ export function moveFlowDirectory(workspaceRoot, flowId, fromSource, toSource) {
  * @param {string} flowId
  * @returns {{ ok: true } | { ok: false, error: string }}
  */
-function assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId) {
+function assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId, opts = {}) {
   let realDir;
   try {
     realDir = fs.realpathSync(flowDir);
@@ -316,9 +316,9 @@ function assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId)
   const allowedRoots = [];
   if (flowSource === "user") {
     try {
-      allowedRoots.push(fs.realpathSync(getUserPipelinesRoot()));
+      allowedRoots.push(fs.realpathSync(getUserPipelinesRoot(opts.userId)));
     } catch {
-      allowedRoots.push(path.resolve(getUserPipelinesRoot()));
+      allowedRoots.push(path.resolve(getUserPipelinesRoot(opts.userId)));
     }
     for (const rel of [PIPELINES_DIR, LEGACY_PIPELINES_DIR]) {
       const base = path.join(root, rel);
@@ -379,12 +379,12 @@ export function deleteFlowPipeline(workspaceRoot, flowId, flowSource, opts = {})
     return { success: false, error: "invalid flowId" };
   }
   const archived = Boolean(opts.archived);
-  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived });
+  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived, userId: opts.userId });
   if (yamlRes.error || !yamlRes.path) {
     return { success: false, error: yamlRes.error || "找不到流水线" };
   }
   const flowDir = path.dirname(yamlRes.path);
-  const guard = assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId);
+  const guard = assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId, opts);
   if (!guard.ok) return { success: false, error: guard.error };
   try {
     fs.rmSync(flowDir, { recursive: true, force: true });

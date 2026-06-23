@@ -263,8 +263,8 @@ export function unzipAndNormalizePipelineZip(zipBuffer) {
  * @param {Map<string, Buffer>} filesRelative 相对流水线根，须含 flow.yaml
  * @returns {{ success: true } | { success: false, error: string }}
  */
-export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelative) {
-  const { flowDir, error } = resolveFlowDirForWrite(workspaceRoot, flowId, flowSource);
+export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelative, opts = {}) {
+  const { flowDir, error } = resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
   if (error) return { success: false, error };
   if (fs.existsSync(flowDir)) {
     return { success: false, error: "目标目录已存在" };

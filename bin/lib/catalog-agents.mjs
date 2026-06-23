@@ -278,10 +278,10 @@ description: ${description != null ? String(description).replace(/\n/g, " ") : "
   }
 }
 
-export function copyBuiltinJson(workspaceRoot, flowId, targetFlowId) {
+export function copyBuiltinJson(workspaceRoot, flowId, targetFlowId, opts = {}) {
   const destId = (targetFlowId && targetFlowId.trim()) || flowId;
   const srcDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
-  const pipelinesRoot = getUserPipelinesRoot();
+  const pipelinesRoot = getUserPipelinesRoot(opts.userId);
   const destDir = path.join(pipelinesRoot, destId);
   if (!fs.existsSync(srcDir) || !fs.existsSync(path.join(srcDir, "flow.yaml"))) {
     return { success: false, error: t("catalog.builtin_flow_not_found") };

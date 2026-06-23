@@ -18,13 +18,13 @@ import {
  * @param {string} [runId] - specific uuid; if empty, picks the latest run
  * @returns {{ ok: boolean, rounds: Array, runId?: string, error?: string }}
  */
-export function getNodeExecContext(workspaceRoot, flowId, instanceId, runId) {
+export function getNodeExecContext(workspaceRoot, flowId, instanceId, runId, opts = {}) {
   let uuid = runId;
   let runDir = "";
   if (uuid) {
-    runDir = getRunDirCandidates(workspaceRoot, flowId, uuid).find((p) => fs.existsSync(p)) || "";
+    runDir = getRunDirCandidates(workspaceRoot, flowId, uuid, opts).find((p) => fs.existsSync(p)) || "";
   } else {
-    const latest = findLatestRunDir(workspaceRoot, flowId);
+    const latest = findLatestRunDir(workspaceRoot, flowId, opts);
     uuid = latest.uuid;
     runDir = latest.runDir;
   }
@@ -38,9 +38,9 @@ export function getNodeExecContext(workspaceRoot, flowId, instanceId, runId) {
   return { ok: true, rounds, runId: uuid };
 }
 
-function findLatestRunDir(workspaceRoot, flowId) {
+function findLatestRunDir(workspaceRoot, flowId, opts = {}) {
   const roots = [
-    path.join(getFlowRuntimeRoot(workspaceRoot, flowId), "runBuild"),
+    path.join(getFlowRuntimeRoot(workspaceRoot, flowId, opts), "runBuild"),
     path.join(getWorkspaceRunBuildRoot(workspaceRoot), flowId),
     path.join(getLegacyUserRunBuildRoot(), flowId),
   ];
