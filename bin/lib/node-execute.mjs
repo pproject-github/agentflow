@@ -152,11 +152,11 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
  * 协议：与 run-tool-nodejs.mjs 一致——validate-script-output 解析 stdout；
  * JSON 时 message 的每个键写入同名 output 槽位（含 result）；纯文本则等价于 message.result。
  */
-async function executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, healOptions) {
+async function executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, healOptions, execWorkspaceRoot = workspaceRoot) {
   let lastError;
   for (let attempt = 1; attempt <= TOOL_NODEJS_MAX_RETRIES + 1; attempt++) {
     try {
-      executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId);
+      executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, execWorkspaceRoot);
       return;
     } catch (err) {
       lastError = err;
@@ -200,21 +200,22 @@ function persistToolNodejsStderr(outputDir, instanceId, execId, stderr) {
   } catch (_) {}
 }
 
-function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId) {
+function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, execWorkspaceRoot = workspaceRoot) {
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
   const outputDir = path.join(runDir, outputDirForNode(instanceId));
+  fs.mkdirSync(outputDir, { recursive: true });
 
   const { argv, commandLine: normalized } = nodeToolCommandToArgv(resolvedScript);
   let child;
   if (/^node\s/i.test(String(normalized).trim()) && argv.length >= 1) {
     child = spawnSync(process.execPath, argv, {
-      cwd: workspaceRoot,
+      cwd: execWorkspaceRoot,
       shell: false,
       stdio: ["inherit", "pipe", "pipe"],
     });
   } else {
     child = spawnSync(normalized, [], {
-      cwd: workspaceRoot,
+      cwd: execWorkspaceRoot,
       shell: true,
       stdio: ["inherit", "pipe", "pipe"],
     });
@@ -223,8 +224,6 @@ function executeToolNodejsOnce(workspaceRoot, flowName, uuid, instanceId, resolv
   const stdout = child.stdout?.toString("utf-8") ?? "";
   const stderr = child.stderr?.toString("utf-8") ?? "";
   const exitCode = child.status ?? 1;
-
-  fs.mkdirSync(outputDir, { recursive: true });
 
   // 直接写文件模式：stdout 为空 + exit 0 → 脚本已自行写入 output 文件，无需解析
   if (!stdout.trim() && exitCode === 0) {
@@ -310,6 +309,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
   const { definitionId, directCommand, resolvedScript, promptPath, nodeContext, taskBody, resultPath, subagent } = preOutput;
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
   const intermediatePath = runDir;
+  const execWorkspaceRoot = path.resolve(preOutput.workspaceContext?.workspaceRoot || preOutput.workspaceContext?.cwd || workspaceRoot);
 
   if (definitionId && LOCAL_ONLY_DEFINITION_IDS.has(definitionId)) {
     return;
@@ -331,7 +331,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
       directCommand: resolvedScript,
     });
     try {
-      await executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, healOptions);
+      await executeToolNodejsInline(workspaceRoot, flowName, uuid, instanceId, resolvedScript, execId, healOptions, execWorkspaceRoot);
       emitEvent(workspaceRoot, flowName, uuid, {
         event: "direct-command-done",
         instanceId,
@@ -356,7 +356,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
       directCommand,
     });
     try {
-      const result = spawnSync(directCommand, [], { cwd: workspaceRoot, shell: true, stdio: "inherit" });
+      const result = spawnSync(directCommand, [], { cwd: execWorkspaceRoot, shell: true, stdio: "inherit" });
       if (result.status !== 0) {
         emitEvent(workspaceRoot, flowName, uuid, {
           event: "direct-command-failed",
@@ -398,6 +398,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
     resultPathRel: resultPath ?? null,
     modelCli: cli,
     model: model ?? null,
+    execWorkspaceRoot,
   });
   try {
     if (cli === "api") {
@@ -409,6 +410,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
           onToolCall: options.onToolCall,
           flowName,
           uuid,
+          execWorkspaceRoot,
         },
       );
     } else if (cli === "opencode") {
@@ -424,6 +426,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
           onToolCall: options.onToolCall,
           flowName,
           uuid,
+          execWorkspaceRoot,
         },
       );
     } else if (cli === "claude-code") {
@@ -439,6 +442,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
           onToolCall: options.onToolCall,
           flowName,
           uuid,
+          execWorkspaceRoot,
         },
       );
     } else {
@@ -454,6 +458,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
           onToolCall: options.onToolCall,
           flowName,
           uuid,
+          execWorkspaceRoot,
         },
       );
     }

@@ -5,6 +5,8 @@
   },
   "nav": {
     "projects": "Projects",
+    "nodes": "Nodes",
+    "skills": "Skills",
     "flowEditor": "Flow Editor",
     "settings": "Settings",
     "back": "Back"

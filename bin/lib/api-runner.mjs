@@ -315,6 +315,7 @@ export function parseApiModel(str) {
  */
 export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContext, taskBody, subagent, instanceId }, options = {}) {
   const absRoot = path.resolve(workspaceRoot);
+  const execRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
   const flowName = options.flowName ?? null;
   const uuid = options.uuid ?? null;
 
@@ -329,7 +330,9 @@ export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContex
 
   // ── 读取 Agent 角色提示，注入 nodeContext/taskBody ────────────────────────
   const replacements = {
-    workspaceRoot: absRoot,
+    workspaceRoot: execRoot,
+    executionWorkspaceRoot: execRoot,
+    pipelineWorkspace: absRoot,
     nodeContext: nodeContext ?? "",
     taskBody: taskBody ?? "",
     flowName: flowName ?? "",
@@ -349,12 +352,12 @@ export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContex
   if (provider === "anthropic") {
     const key = process.env.ANTHROPIC_API_KEY;
     if (!key) throw new Error("[api-runner] ANTHROPIC_API_KEY is required for api:anthropic/* models");
-    await runAnthropicLoop(key, model, systemPrompt, userContent, absRoot, log, options);
+    await runAnthropicLoop(key, model, systemPrompt, userContent, execRoot, log, options);
   } else {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error("[api-runner] OPENAI_API_KEY is required for api:openai/* models");
     const baseUrl = (process.env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE).trim();
-    await runOpenAiLoop(key, baseUrl, model, systemPrompt, userContent, absRoot, log, options);
+    await runOpenAiLoop(key, baseUrl, model, systemPrompt, userContent, execRoot, log, options);
   }
 
   log(`done instanceId=${instanceId ?? "-"}`);

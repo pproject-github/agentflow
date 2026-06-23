@@ -241,6 +241,231 @@ function readBody(req) {
   });
 }
 
+const WORKSPACE_FILE_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  "dist",
+  "build",
+  "coverage",
+]);
+
+const WORKSPACE_TEXT_EXTS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".css",
+  ".html",
+  ".mjs",
+  ".cjs",
+]);
+
+function resolveWorkspaceFilePath(workspaceRoot, relPath) {
+  const root = path.resolve(workspaceRoot);
+  const rel = String(relPath || "").replace(/^[/\\]+/, "");
+  const abs = path.resolve(root, rel);
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
+    throw new Error("Path traversal not allowed");
+  }
+  return { root, rel: path.relative(root, abs).replace(/\\/g, "/"), abs };
+}
+
+function workspaceFileIcon(fileName, isDir = false) {
+  if (isDir) return "folder";
+  const ext = path.extname(fileName).toLowerCase();
+  if (ext === ".md" || ext === ".markdown") return "article";
+  if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) return "code";
+  if ([".yaml", ".yml", ".json"].includes(ext)) return "data_object";
+  if (ext === ".css") return "palette";
+  if (ext === ".html") return "web";
+  return "draft";
+}
+
+function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget = { count: 0 }) {
+  if (depth > maxDepth || budget.count > 500) return [];
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const entry of entries) {
+    if (budget.count > 500) break;
+    if (entry.name.startsWith(".") && entry.name !== ".agents" && entry.name !== ".codex") continue;
+    const abs = path.join(dir, entry.name);
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (entry.isDirectory()) {
+      if (WORKSPACE_FILE_SKIP_DIRS.has(entry.name)) continue;
+      budget.count++;
+      out.push({
+        type: "directory",
+        name: entry.name,
+        path: rel,
+        icon: workspaceFileIcon(entry.name, true),
+        children: readWorkspaceFilesRecursive(abs, root, depth + 1, maxDepth, budget),
+      });
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!WORKSPACE_TEXT_EXTS.has(ext)) continue;
+      let size = 0;
+      try { size = fs.statSync(abs).size; } catch {}
+      budget.count++;
+      out.push({ type: "file", name: entry.name, path: rel, icon: workspaceFileIcon(entry.name), size });
+    }
+  }
+  out.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
+function readWorkspaceFiles(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  return { root, files: readWorkspaceFilesRecursive(root, root) };
+}
+
+const WORKSPACE_GRAPH_FILENAME = "workspace.graph.json";
+
+function workspaceGraphPath(workspaceRoot) {
+  return path.join(path.resolve(workspaceRoot), WORKSPACE_GRAPH_FILENAME);
+}
+
+function emptyWorkspaceGraph() {
+  return { version: 1, instances: {}, edges: [], ui: { nodePositions: {} } };
+}
+
+function readWorkspaceGraph(workspaceRoot) {
+  const graphPath = workspaceGraphPath(workspaceRoot);
+  if (!fs.existsSync(graphPath)) return { path: graphPath, graph: emptyWorkspaceGraph() };
+  const raw = fs.readFileSync(graphPath, "utf-8");
+  if (!raw.trim()) return { path: graphPath, graph: emptyWorkspaceGraph() };
+  const parsed = JSON.parse(raw);
+  const graph = parsed && typeof parsed === "object" ? parsed : {};
+  return {
+    path: graphPath,
+    graph: {
+      version: Number(graph.version) || 1,
+      instances: graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
+      edges: Array.isArray(graph.edges) ? graph.edges : [],
+      ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
+    },
+  };
+}
+
+function normalizeWorkspaceGraphPayload(payload) {
+  const graph = payload?.graph && typeof payload.graph === "object" ? payload.graph : payload;
+  return {
+    version: 1,
+    instances: graph?.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
+    edges: Array.isArray(graph?.edges) ? graph.edges : [],
+    ui: graph?.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
+  const flowId = params.flowId != null ? String(params.flowId).trim() : "";
+  if (!flowId) return { root: path.resolve(workspaceRoot), flowId: "", flowSource: "", archived: false };
+  const flowSource = params.flowSource != null && String(params.flowSource).trim()
+    ? String(params.flowSource).trim()
+    : "user";
+  const archived = params.archived === true || params.archived === "1" || params.flowArchived === true;
+  if (!isValidFlowSourceRead(flowSource)) {
+    return { root: "", error: "Invalid flowSource" };
+  }
+  const result = getPipelineFiles(workspaceRoot, flowId, flowSource, archived, opts);
+  if (result.error || !result.path) {
+    return { root: "", error: result.error || "Pipeline workspace not found" };
+  }
+  return { root: path.resolve(result.path), flowId, flowSource, archived };
+}
+
+function buildWorkspaceGeneratePrompt(payload) {
+  const userPrompt = String(payload?.prompt || "").trim();
+  const outputKind = String(payload?.outputKind || payload?.kind || "markdown").trim().toLowerCase();
+  const allowFlowYaml = payload?.allowFlowYaml === true || payload?.allowFlowYaml === "1";
+  const workspaceGraph = payload?.workspaceGraph && typeof payload.workspaceGraph === "object" ? payload.workspaceGraph : null;
+  const selectedNodeIds = Array.isArray(payload?.selectedNodeIds)
+    ? payload.selectedNodeIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const skillsBlock = typeof payload?.skillsBlock === "string" ? payload.skillsBlock.trim() : "";
+  const contexts = Array.isArray(payload?.contexts) ? payload.contexts : [];
+  const contextBlocks = contexts
+    .map((ctx, idx) => {
+      const title = String(ctx?.title || ctx?.path || `context-${idx + 1}`).trim();
+      const kind = String(ctx?.kind || "text").trim();
+      const content = String(ctx?.content || "").trim();
+      if (!content) return "";
+      return `### ${title} (${kind})\n\n${content}`;
+    })
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+  const kindInstruction =
+    outputKind === "mermaid"
+      ? [
+          "你是 workspace Mermaid 图节点的内容生成器。",
+          "请根据用户 prompt 和上游节点/文件上下文生成 Mermaid flowchart 源码。",
+          "只输出 Mermaid 源码，不要解释，不要包裹 Markdown 代码围栏。",
+          "优先使用 `flowchart TD` 或 `graph TD`，节点 ID 使用简单英文/数字/下划线，节点 label 使用清晰短文本。",
+        ].join("\n")
+      : outputKind === "ascii"
+        ? [
+            "你是 workspace ASCII 图节点的内容生成器。",
+            "请根据用户 prompt 和上游节点/文件上下文生成等宽字体下可读的 ASCII 图。",
+            "只输出 ASCII 图正文，不要解释，不要包裹 Markdown 代码围栏。",
+            "使用 +-|/\\<> 等字符表达结构，尽量保持对齐。",
+          ].join("\n")
+        : [
+            "你是 workspace Markdown 节点的内容生成器。",
+            "请根据用户 prompt 和上游节点/文件上下文，生成可直接保存到工作区的 Markdown 正文。",
+            "只输出最终 Markdown 内容，不要解释你如何执行，也不要包裹代码围栏，除非正文本身需要代码块。",
+          ].join("\n");
+  return [
+    "你正在 AgentFlow 的 Workspace 工作画布中执行任务。",
+    "Workspace 是当前 pipeline 的临时工作区，用于分析、试验、生成中间文件和展示结果。",
+    allowFlowYaml
+      ? "用户已允许你考虑正式 flow.yaml；如需修改仍必须明确说明影响。"
+      : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.graph.json 或回复内容中完成任务。",
+    workspaceGraph ? `\n## 当前 workspace graph\n\n${JSON.stringify(workspaceGraph, null, 2)}` : "",
+    selectedNodeIds.length > 0 ? `\n## 当前用户选中的 workspace 节点\n\n${selectedNodeIds.map((id) => `- ${id}`).join("\n")}` : "",
+    skillsBlock ? `\n## Workspace Skills\n\n${skillsBlock}` : "",
+    kindInstruction,
+    contextBlocks ? `\n## 上下文\n\n${contextBlocks}` : "",
+    `\n## 用户 prompt\n\n${userPrompt}`,
+  ].filter(Boolean).join("\n");
+}
+
+function isTransientAgentNetworkError(err) {
+  const text = [
+    err?.message,
+    err?.cursorStderrTail,
+    err?.stderr,
+    err?.stack,
+  ].filter(Boolean).join("\n");
+  return /Client network socket disconnected before secure TLS connection was established/i.test(text) ||
+    /secure TLS connection was established/i.test(text) ||
+    /\bECONNRESET\b/i.test(text) ||
+    /\bETIMEDOUT\b/i.test(text) ||
+    /\bEAI_AGAIN\b/i.test(text) ||
+    /network socket disconnected/i.test(text) ||
+    /socket hang up/i.test(text);
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** ZIP 本地头：PK\x03\x04 / \x05\x06 / \x07\x08 */
 function bufferLooksLikeZip(buf) {
   return (
@@ -449,6 +674,7 @@ function normalizeContextInstanceIds(raw) {
  * @param {object} opts
  * @param {string} opts.workspaceRoot
  * @param {number} opts.port
+ * @param {boolean} [opts.hideCommunityLinks]
  * @param {string} [opts.staticDir] 默认 PACKAGE_ROOT/builtin/web-ui/dist（npm run build 产出）
  * @returns {Promise<import('http').Server>}
  */
@@ -456,10 +682,12 @@ export function startUiServer({
   workspaceRoot,
   port,
   host = "127.0.0.1",
+  hideCommunityLinks = false,
   staticDir = path.join(PACKAGE_ROOT, "builtin", "web-ui", "dist"),
 }) {
   const root = path.resolve(workspaceRoot);
   const uiPort = port;
+  const uiConfig = { hideCommunityLinks: Boolean(hideCommunityLinks) };
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -753,6 +981,303 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/workspace/files") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        json(res, 200, { ...readWorkspaceFiles(scoped.root), flowId: scoped.flowId, flowSource: scoped.flowSource, archived: scoped.archived });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/graph") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
+        json(res, 200, {
+          ok: true,
+          graph,
+          path: graphPath,
+          root: scoped.root,
+          flowId: scoped.flowId,
+          flowSource: scoped.flowSource,
+          archived: scoped.archived,
+          writable: !(scoped.archived || scoped.flowSource === "builtin"),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/graph") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || scoped.flowSource === "builtin") {
+          json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
+          return;
+        }
+        const graph = normalizeWorkspaceGraphPayload(payload.graph || payload);
+        const graphPath = workspaceGraphPath(scoped.root);
+        fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2) + "\n", "utf-8");
+        json(res, 200, { ok: true, path: graphPath, graph });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/file") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, url.searchParams.get("path") || "");
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+          json(res, 404, { error: "File not found" });
+          return;
+        }
+        const stat = fs.statSync(abs);
+        if (stat.size > 2 * 1024 * 1024) {
+          json(res, 413, { error: "File too large" });
+          return;
+        }
+        json(res, 200, { path: rel, content: fs.readFileSync(abs, "utf-8"), size: stat.size });
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/file") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || scoped.flowSource === "builtin") {
+          json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
+          return;
+        }
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, payload.path || "");
+        if (!rel) {
+          json(res, 400, { error: "Missing path" });
+          return;
+        }
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, String(payload.content ?? ""), "utf-8");
+        json(res, 200, { ok: true, path: rel });
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/folder") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || scoped.flowSource === "builtin") {
+          json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
+          return;
+        }
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, payload.path || "");
+        if (!rel) {
+          json(res, 400, { error: "Missing path" });
+          return;
+        }
+        fs.mkdirSync(abs, { recursive: true });
+        json(res, 200, { ok: true, path: rel });
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/delete") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || scoped.flowSource === "builtin") {
+          json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
+          return;
+        }
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, payload.path || "");
+        if (!rel) {
+          json(res, 400, { error: "Missing path" });
+          return;
+        }
+        if (!fs.existsSync(abs)) {
+          json(res, 404, { error: "Path not found" });
+          return;
+        }
+        fs.rmSync(abs, { recursive: true, force: true });
+        json(res, 200, { ok: true, path: rel });
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/generate") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const prompt = String(payload?.prompt || "").trim();
+      if (!prompt) {
+        json(res, 400, { error: "Missing prompt" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const selectedSkillKeys = Array.isArray(payload?.selectedSkills)
+          ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        const selectedSkillResources = selectedSkillKeys.length > 0
+          ? loadResourcesForSkillKeys(selectedSkillKeys, PACKAGE_ROOT, scoped.root)
+          : { skills: [], references: [] };
+        const skillsBlock = selectedSkillKeys.length > 0
+          ? buildSkillCompactInjectionBlock(selectedSkillResources.skills, selectedSkillResources.references)
+          : "";
+        let content = "";
+        const events = [];
+        const maxAttempts = 3;
+        const promptText = buildWorkspaceGeneratePrompt({ ...payload, skillsBlock });
+        const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          let attemptContent = "";
+          try {
+            if (attempt > 1) {
+              events.push({
+                type: "status",
+                line: `Workspace agent retry ${attempt}/${maxAttempts} after transient network failure...`,
+              });
+              await sleepMs(Math.min(1500 * attempt, 5000));
+            }
+            const handle = startComposerAgent({
+              uiWorkspaceRoot: scoped.root,
+              cliWorkspace: scoped.root,
+              prompt: promptText,
+              modelKey,
+              agentflowUserId: userCtx.userId || "",
+              onStreamEvent: (ev) => {
+                events.push(ev);
+                if (ev?.type === "natural" && typeof ev.text === "string") {
+                  attemptContent += (attemptContent ? "\n" : "") + ev.text;
+                }
+              },
+            });
+            await handle.finished;
+            content = attemptContent;
+            break;
+          } catch (e) {
+            if (attempt < maxAttempts && isTransientAgentNetworkError(e)) {
+              events.push({
+                type: "status",
+                line: `Workspace agent transient network error: ${String(e.message || e).slice(0, 220)}`,
+              });
+              continue;
+            }
+            throw e;
+          }
+        }
+        json(res, 200, { ok: true, content: content.trim(), events });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/pipeline-files") {
       const flowId = url.searchParams.get("flowId");
       const flowSource = url.searchParams.get("flowSource") || "user";
@@ -859,7 +1384,7 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/ui-context") {
       try {
-        json(res, 200, { workspaceRoot: root });
+        json(res, 200, { workspaceRoot: root, ...uiConfig });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -2099,6 +2624,7 @@ finishedAt: "${new Date().toISOString()}"
           flowYamlAbs,
           flowId,
           flowSource,
+          userId: userCtx.userId || "",
           intents: multiStepIntents,
           canvasInstanceIds: instanceIds,
           skillsHint: multiStepResources.skillsHint,
@@ -2255,6 +2781,7 @@ finishedAt: "${new Date().toISOString()}"
             thread,
             phaseContext,
             phaseRole: phaseRole || undefined,
+            agentflowUserId: userCtx.userId || "",
             force: true,
             onStreamEvent,
           });
@@ -2305,6 +2832,7 @@ finishedAt: "${new Date().toISOString()}"
             cliWorkspace,
             prompt: finalPrompt,
             modelKey: typeof model === "string" ? model.trim() : "",
+            agentflowUserId: userCtx.userId || "",
             onStreamEvent,
           });
           child = handle.child;
@@ -2323,6 +2851,7 @@ finishedAt: "${new Date().toISOString()}"
                     flowYamlAbs,
                     flowContext: flowContextForMultiStep,
                     modelKey: typeof model === "string" ? model.trim() : "",
+                    agentflowUserId: userCtx.userId || "",
                     force: true,
                     onStreamEvent,
                     getAborted: () => clientDisconnected || responseEnded,

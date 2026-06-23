@@ -17,6 +17,7 @@ import { getFlowDir } from "../lib/workspace.mjs";
 /** 槽位合法 type 集合（英文为 builtin/nodes 标准；中文为遗留兼容，新写代码统一英文） */
 const VALID_SLOT_TYPES = new Set(["node", "text", "file", "bool", "节点", "文本", "文件", "布尔"]);
 const CANONICAL_SLOT_TYPES = "node|text|file|bool";
+const RUNTIME_CONTEXT_INPUT_NAMES = new Set(["workspaceContext", "skillsContext"]);
 
 /** 与前端 flowFormat.VALID_ROLES + 内置 id 一致 */
 const VALID_ROLE_KEYS = ["requirement", "planning", "code", "test", "normal"];
@@ -470,6 +471,7 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
             const slotName = (slot && slot.name != null ? String(slot.name).trim() : "");
             const slotType = normType((slot && slot.type != null ? String(slot.type).trim() : ""));
             if (!slotName || slotType === "node") continue;
+            if (RUNTIME_CONTEXT_INPUT_NAMES.has(slotName)) continue;
             if (!phSet.has(slotName) && !phSet.has(`input.${slotName}`)) {
               errors.push(
                 `节点 "${n.id}"（${defId}）script 未引用 input 引脚 "${slotName}"（type: ${slotType}），` +

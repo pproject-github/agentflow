@@ -59,8 +59,8 @@
     "expandEdit": "Expand edit",
     "editScript": "Edit script",
     "editUserPrompt": "Edit user prompt",
-    "scriptPlaceholder": "instances.*.script — full shell command; supports ${workspaceRoot}, ${flowDir}, ${runDir} and slot names (don't quote placeholders)",
-    "scriptPlaceholderExpand": "instances.*.script — full shell command; don't quote ${workspaceRoot}, ${flowDir} placeholders",
+    "scriptPlaceholder": "instances.*.script — full shell command; supports ${workspaceRoot}, ${pipelineWorkspace}, ${flowDir}, ${runDir} and slot names (don't quote placeholders)",
+    "scriptPlaceholderExpand": "instances.*.script — full shell command; don't quote ${workspaceRoot}, ${pipelineWorkspace}, ${flowDir} placeholders",
     "bodyPlaceholder": "instances.*.body — supports multiline and ${variables}; type ${ to pick a slot",
     "bodyPlaceholderExpand": "instances.*.body — supports multiline and ${variables}",
     "noDescription": "(No description in current node definition)",
@@ -475,7 +475,8 @@
   },
   "toolPrint": {
     "title": "Print Output: {{instanceId}}",
-    "truncated": "...content truncated"
+    "expand": "Expand",
+    "restore": "Restore"
   },
   "provideEdit": {
     "save": "Save",

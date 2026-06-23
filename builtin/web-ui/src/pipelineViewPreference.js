@@ -1,0 +1,64 @@
+const STORAGE_KEY = "agentflow.pipelineViewPreference";
+
+function flowKey(flowId, flowSource = "user", archived = false) {
+  return `${String(flowSource || "user")}:${String(flowId || "")}:${archived ? "archived" : "active"}`;
+}
+
+function safeRead() {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function safeWrite(value) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    /* quota */
+  }
+}
+
+function normalizeView(view) {
+  return view === "pipeline" ? "pipeline" : "workspace";
+}
+
+function hasPipeline(flow) {
+  return flow?.hasPipeline !== false && flow?.hasFlow !== false && flow?.flowYaml !== false;
+}
+
+export function recordPipelineView(flowId, flowSource, view, archived = false) {
+  if (!flowId) return;
+  const store = safeRead();
+  store[flowKey(flowId, flowSource, archived)] = {
+    view: normalizeView(view),
+    at: Date.now(),
+  };
+  safeWrite(store);
+}
+
+export function getPreferredPipelineView(flow, fallback = "workspace") {
+  if (!flow?.id) return normalizeView(fallback);
+  const store = safeRead();
+  const entry = store[flowKey(flow.id, flow.source ?? "user", Boolean(flow.archived))];
+  const preferred = normalizeView(entry?.view || fallback);
+  return preferred === "pipeline" && !hasPipeline(flow) ? "workspace" : preferred;
+}
+
+export function flowUrlForView(flow, view = "workspace") {
+  if (!flow?.id) return view === "pipeline" ? "/flow" : "/workspace";
+  const q = new URLSearchParams({
+    flowId: flow.id,
+    flowSource: flow.source ?? "user",
+  });
+  if (flow.archived) q.set(view === "pipeline" ? "flowArchived" : "archived", "1");
+  return `/${normalizeView(view) === "pipeline" ? "flow" : "workspace"}?${q.toString()}`;
+}
+
+export function preferredFlowUrl(flow, fallback = "workspace") {
+  return flowUrlForView(flow, getPreferredPipelineView(flow, fallback));
+}

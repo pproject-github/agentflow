@@ -65,7 +65,8 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
           if (!k) continue;
           if (
             k.startsWith(`af:composer-sessions:${flowId}:${flowSource}`) ||
-            k.startsWith(`af:composer-active-session:${flowId}:${flowSource}`)
+            k.startsWith(`af:composer-active-session:${flowId}:${flowSource}`) ||
+            k.startsWith(`af:workspace-composer:${flowId}:${flowSource}`)
           ) {
             localStorage.removeItem(k);
           }

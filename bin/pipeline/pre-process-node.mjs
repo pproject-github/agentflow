@@ -36,7 +36,16 @@ import { parseBool, getFirstBoolInputValue } from "./parse-bool.mjs";
 import { writeResult } from "./write-result.mjs";
 import { intermediateResultBasename, intermediateCacheBasename, intermediateDirForNode, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
 import { logToRunTag } from "./run-log.mjs";
-import { getRunDir } from "../lib/paths.mjs";
+import { getRunDir, sanitizeAgentflowUserId } from "../lib/paths.mjs";
+import {
+  buildSkillsContext,
+  buildSkillsContextFromRegistry,
+  expandRuntimePlaceholders,
+  normalizeSkillsContext,
+  normalizeWorkspaceContext,
+  parseSkillKeyList,
+  resolveWorkspaceTarget,
+} from "../lib/runtime-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -124,6 +133,12 @@ function bashSingleQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
+function agentflowCommand() {
+  const userId = sanitizeAgentflowUserId(process.env.AGENTFLOW_USER_ID);
+  if (!userId) return "agentflow";
+  return `AGENTFLOW_USER_ID=${bashSingleQuote(userId)} agentflow`;
+}
+
 function parseDurationMs(raw) {
   const text = String(raw || "").trim();
   if (!text) throw new Error("duration is required");
@@ -207,6 +222,256 @@ function writeOutputSlot(runDir, instanceId, execId, slotName, value) {
   const p = outputPathAbs(runDir, instanceId, execId, slotName);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, String(value ?? "") + "\n", "utf-8");
+}
+
+function readFlowJsonObject(workspaceRoot, flowName, uuid) {
+  const flowJsonPath = path.join(getRunDir(workspaceRoot, flowName, uuid), "intermediate", "flow.json");
+  if (!fs.existsSync(flowJsonPath)) return null;
+  try {
+    const flow = JSON.parse(fs.readFileSync(flowJsonPath, "utf-8"));
+    return flow && typeof flow === "object" ? flow : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId) {
+  const flowJson = readFlowJsonObject(workspaceRoot, flowName, uuid);
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  const inputs = data.ok ? (data.resolvedInputs || {}) : {};
+  const workspaceContext = normalizeWorkspaceContext(inputs.workspaceContext, workspaceRoot, flowName, flowJson);
+  const skillsContext = normalizeSkillsContext(inputs.skillsContext);
+  return { inputs, workspaceContext, skillsContext, flowJson };
+}
+
+function sanitizeRepoDirName(repoUrl) {
+  const raw = String(repoUrl || "").trim().replace(/\.git$/i, "");
+  const last = raw.split(/[/:]/).filter(Boolean).pop() || "repo";
+  return last.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+}
+
+function runGit(args, cwd) {
+  return spawnSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function isTruthyInput(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "true" || text === "1" || text === "yes" || text === "y" || text === "on";
+}
+
+function emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const repoUrl = String(inputs.repoUrl || inputs.url || "").trim();
+  if (!repoUrl) throw new Error("tool_git_checkout: repoUrl is required");
+  const branch = String(inputs.branch || "").trim();
+  const pullIfExists = String(inputs.pullIfExists ?? "true").trim().toLowerCase() !== "false";
+  const includeSubmodules = isTruthyInput(inputs.includeSubmodules ?? inputs.submodules ?? inputs.pullSubmodules);
+  const defaultDir = path.join(workspaceContext.pipelineWorkspace || workspaceRoot, ".workspace", "agentflow", "git-repos", sanitizeRepoDirName(repoUrl));
+  const targetRaw = String(inputs.targetDir || "").trim();
+  const targetDir = targetRaw
+    ? resolveWorkspaceTarget(targetRaw, workspaceContext, { repoName: sanitizeRepoDirName(repoUrl) })
+    : defaultDir;
+
+  fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+  let changed = false;
+  let action = "clone";
+  if (fs.existsSync(path.join(targetDir, ".git"))) {
+    action = pullIfExists ? "pull" : "exists";
+    if (pullIfExists) {
+      const fetch = runGit(["fetch", "--all", "--prune"], targetDir);
+      if (fetch.status !== 0) throw new Error(`git fetch failed: ${fetch.stderr || fetch.stdout}`);
+      if (branch) {
+        const checkout = runGit(["checkout", branch], targetDir);
+        if (checkout.status !== 0) throw new Error(`git checkout failed: ${checkout.stderr || checkout.stdout}`);
+      }
+      const before = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+      const pull = runGit(["pull", "--ff-only"], targetDir);
+      if (pull.status !== 0) throw new Error(`git pull failed: ${pull.stderr || pull.stdout}`);
+      const after = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+      changed = before !== after;
+    }
+  } else {
+    const args = ["clone"];
+    if (includeSubmodules) args.push("--recurse-submodules");
+    if (branch) args.push("--branch", branch);
+    args.push(repoUrl, targetDir);
+    const clone = runGit(args, workspaceContext.cwd || workspaceRoot);
+    if (clone.status !== 0) throw new Error(`git clone failed: ${clone.stderr || clone.stdout}`);
+    changed = true;
+  }
+  if (includeSubmodules) {
+    const submodule = runGit(["submodule", "update", "--init", "--recursive"], targetDir);
+    if (submodule.status !== 0) throw new Error(`git submodule update failed: ${submodule.stderr || submodule.stdout}`);
+  }
+
+  const currentBranch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], targetDir).stdout.trim();
+  const commit = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+  const outWorkspaceContext = {
+    version: 1,
+    label: inputs.label || sanitizeRepoDirName(repoUrl),
+    cwd: path.resolve(targetDir),
+    workspaceRoot: path.resolve(targetDir),
+    pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+    flowDir: workspaceContext.flowDir,
+    previous: workspaceContext,
+  };
+  writeOutputSlot(runDir, instanceId, execId, "repoPath", targetDir);
+  writeOutputSlot(runDir, instanceId, execId, "branch", currentBranch);
+  writeOutputSlot(runDir, instanceId, execId, "commit", commit);
+  writeOutputSlot(runDir, instanceId, execId, "changed", changed ? "true" : "false");
+  writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(outWorkspaceContext));
+  writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `git ${action}: ${currentBranch}@${commit.slice(0, 8)}` }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "git-checkout", `Git checkout completed: ${targetDir}\n`);
+}
+
+function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const mode = String(inputs.mode || "set").trim().toLowerCase();
+  let next;
+  if (mode === "pop") {
+    next = normalizeWorkspaceContext(workspaceContext.previous, workspaceRoot, flowName);
+  } else {
+    const target = resolveWorkspaceTarget(inputs.target || inputs.path || inputs.repoPath || "", workspaceContext);
+    if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+      throw new Error(`control_cd_workspace: target directory not found: ${target}`);
+    }
+    next = {
+      version: 1,
+      label: String(inputs.label || path.basename(target) || "workspace").trim(),
+      cwd: path.resolve(target),
+      workspaceRoot: path.resolve(target),
+      pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+      flowDir: workspaceContext.flowDir,
+      previous: mode === "push" ? workspaceContext : workspaceContext.previous || null,
+    };
+  }
+  writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(next));
+  writeOutputSlot(runDir, instanceId, execId, "cwd", next.cwd);
+  writeOutputSlot(runDir, instanceId, execId, "previous", next.previous ? JSON.stringify(next.previous) : "");
+  writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `cwd=${next.cwd}` }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "cd-workspace", `Workspace context switched to: ${next.cwd}\n`);
+}
+
+function emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext, skillsContext: existingSkills } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const mergeMode = String(inputs.mergeMode || "replace").trim();
+  const skillKeys = parseSkillKeyList(inputs.skillKeys || inputs.skills || inputs.keys || "");
+  let source = "public-registry";
+  let loaded;
+  if (skillKeys.length > 0) {
+    loaded = buildSkillsContextFromRegistry({ workspaceContext, skillKeys, mergeMode });
+  } else {
+    source = String(inputs.source || "current-workspace").trim();
+    const paths = String(inputs.paths || "")
+      .split(/\r?\n|,/)
+      .map((x) => expandRuntimePlaceholders(x, workspaceContext).trim())
+      .filter(Boolean);
+    const include = String(inputs.include || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    const exclude = String(inputs.exclude || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    loaded = buildSkillsContext({ workspaceContext, source, paths, include, exclude, mergeMode });
+  }
+  let next = loaded;
+  if (existingSkills && mergeMode !== "replace") {
+    const existingBodies = Array.isArray(existingSkills.skillBodies) ? existingSkills.skillBodies : [];
+    const loadedBodies = Array.isArray(loaded.skillBodies) ? loaded.skillBodies : [];
+    const skillBodies = mergeMode === "prepend" ? [...loadedBodies, ...existingBodies] : [...existingBodies, ...loadedBodies];
+    const seen = new Set();
+    next = {
+      ...loaded,
+      skillBodies: skillBodies.filter((s) => {
+        const key = s.key || s.name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    };
+    next.skills = next.skillBodies.map(({ body, ...meta }) => meta);
+    next.skillKeys = next.skills.map((s) => s.key);
+    next.loadedCount = next.skills.length;
+  }
+  writeOutputSlot(runDir, instanceId, execId, "skillsContext", JSON.stringify(next));
+  writeOutputSlot(runDir, instanceId, execId, "loadedCount", String(next.loadedCount || 0));
+  writeOutputSlot(runDir, instanceId, execId, "summary", `${next.loadedCount || 0} skills loaded from ${source}`);
+  writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `加载 ${next.loadedCount || 0} 个 skills` }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "load-skills", `Loaded ${next.loadedCount || 0} skills.\n`);
+}
+
+function readPrintableValue(value, runDir) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const candidates = [];
+  if (path.isAbsolute(text)) candidates.push(text);
+  candidates.push(path.join(runDir, text));
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) continue;
+      const stat = fs.statSync(candidate);
+      if (stat.size > 1024 * 1024) {
+        return fs.readFileSync(candidate, "utf-8").slice(0, 1024 * 1024) + "\n\n[内容超过 1MB，已截断]";
+      }
+      return fs.readFileSync(candidate, "utf-8").trim();
+    } catch (_) {}
+  }
+  return text;
+}
+
+function readResultBody(runDir, sourceInstanceId) {
+  const id = String(sourceInstanceId || "").trim();
+  if (!id) return "";
+  const resultPath = path.join(runDir, intermediateDirForNode(id), intermediateResultBasename(id, 1));
+  try {
+    if (!fs.existsSync(resultPath)) return "";
+    const raw = fs.readFileSync(resultPath, "utf-8");
+    const match = raw.match(/---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n([\s\S]*)$/);
+    return (match ? match[1] : raw).trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+function emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const flowJson = readFlowJsonObject(workspaceRoot, flowName, uuid);
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  const inputs = data.ok ? (data.resolvedInputs || {}) : {};
+  const skipNames = new Set(["prev", "next", "workspaceContext", "skillsContext", "workspaceRoot", "pipelineWorkspace", "flowName", "runDir", "flowDir", "cwd"]);
+
+  let content = readPrintableValue(inputs.content, runDir);
+  if (!content) {
+    const parts = [];
+    for (const [name, value] of Object.entries(inputs)) {
+      if (skipNames.has(name)) continue;
+      const v = readPrintableValue(value, runDir);
+      if (!v) continue;
+      parts.push(name === "content" ? v : `## ${name}\n\n${v}`);
+    }
+    content = parts.join("\n\n").trim();
+  }
+  if (!content && inputs.prev) {
+    content = readResultBody(runDir, inputs.prev);
+  }
+  if (!content && flowJson?.nodes) {
+    const node = flowJson.nodes.find((n) => n.id === instanceId);
+    content = String(node?.body || "").trim();
+  }
+  if (!content) content = "(tool_print 没有可展示内容：请填写 content 输入，或连接上游输出到 content。)";
+
+  writeResult(
+    workspaceRoot,
+    flowName,
+    uuid,
+    instanceId,
+    { status: "success", message: "Print 输出" },
+    { execId, preserveBody: false, body: content },
+  );
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "tool-print", `Printed content for ${instanceId}.\n`);
 }
 
 function writeWaitState(runDir, state) {
@@ -300,16 +565,17 @@ function emitLoadSaveKeyOptionalPrompt(workspaceRoot, flowName, uuid, instanceId
   const rootArg = workspaceRoot;
   const q = bashSingleQuote;
   const keyQ = q(key);
+  const af = agentflowCommand();
   const directCommand =
     definitionId === "tool_get_env"
-      ? `agentflow apply -ai get-env ${q(rootArg)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} ${keyQ}`
+      ? `${af} apply -ai get-env ${q(rootArg)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} ${keyQ}`
       : (() => {
           const scriptArgs =
             definitionId === "tool_load_key"
               ? `${q(rootArg)} ${q(flowName)} ${q(uuid)} ${keyQ}`
               : `${q(rootArg)} ${q(flowName)} ${q(uuid)} ${keyQ} ${q(value)}`;
           const scriptPath = path.join(__dirname, definitionId === "tool_load_key" ? "load-key.mjs" : "save-key.mjs");
-          return `agentflow apply -ai run-tool-nodejs ${q(rootArg)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} -- node ${q(scriptPath)} ${scriptArgs}`;
+          return `${af} apply -ai run-tool-nodejs ${q(rootArg)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} -- node ${q(scriptPath)} ${scriptArgs}`;
         })();
   const content = `此节点不调用 subagent，请主 agent 在工作区根目录直接执行以下命令完成该节点。
 
@@ -342,7 +608,7 @@ function emitToolNodejsDirectCommand(workspaceRoot, flowName, uuid, instanceId, 
   const promptPath = path.join(nodeIntermediateDir, promptFileName);
 
   const q = bashSingleQuote;
-  const directCommand = `agentflow apply -ai run-tool-nodejs ${q(workspaceRoot)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} -- ${resolvedScript}`;
+  const directCommand = `${agentflowCommand()} apply -ai run-tool-nodejs ${q(workspaceRoot)} ${q(flowName)} ${q(uuid)} ${q(instanceId)} ${q(String(execId))} -- ${resolvedScript}`;
   const content = `此节点为 tool_nodejs（直接执行模式），不调用 subagent，由流水线直接执行以下命令。
 
 \`\`\`bash
@@ -376,7 +642,7 @@ function emitAnyOneOptionalPrompt(workspaceRoot, flowName, uuid, instanceId, exe
     message: "任一前驱已就绪，直接通过",
     execId,
   });
-  const directCommand = `agentflow apply -ai write-result ${bashSingleQuote(workspaceRoot)} ${bashSingleQuote(flowName)} ${bashSingleQuote(uuid)} ${bashSingleQuote(instanceId)} --json ${bashSingleQuote(jsonPayload)}`;
+  const directCommand = `${agentflowCommand()} apply -ai write-result ${bashSingleQuote(workspaceRoot)} ${bashSingleQuote(flowName)} ${bashSingleQuote(uuid)} ${bashSingleQuote(instanceId)} --json ${bashSingleQuote(jsonPayload)}`;
   const content = `此节点为 control_anyOne，不调用 subagent。请主 agent 在工作区根目录直接执行以下命令将该节点标记为 success。
 
 \`\`\`bash
@@ -715,7 +981,39 @@ function main() {
     return;
   }
 
-  const data = buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId);
+  if (definitionId === "tool_git_checkout" || definitionId === "control_cd_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
+    try {
+      const promptPath =
+        definitionId === "tool_git_checkout"
+          ? emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel)
+          : definitionId === "control_cd_workspace"
+            ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+            : definitionId === "control_load_skills"
+              ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
+              : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
+      writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
+      logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "runtime-context-node", instanceId, definitionId });
+      console.log(JSON.stringify({
+        ok: true,
+        promptPath,
+        resultPath: resultPathRel,
+        execId,
+        subagent: "agentflow-node-executor",
+        optionalPromptPath: promptPath,
+        definitionId,
+      }));
+      return;
+    } catch (e) {
+      console.error(JSON.stringify({ ok: false, error: `${definitionId}: ${e.message || e}` }));
+      process.exit(1);
+    }
+  }
+
+  const runtimeContexts = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const data = buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execId, {
+    workspaceContext: runtimeContexts.workspaceContext,
+    skillsContext: runtimeContexts.skillsContext,
+  });
   if (!data.ok) {
     console.error(JSON.stringify({ ok: false, error: data.error || "build-node-prompt failed" }));
     process.exit(1);
@@ -746,6 +1044,8 @@ function main() {
     definitionId,
     role,
   };
+  if (data.workspaceContext) output.workspaceContext = data.workspaceContext;
+  if (data.skillsContext) output.skillsContext = data.skillsContext;
   if (model) output.model = model;
   if (data.optionalPromptPath) {
     output.optionalPromptPath = data.optionalPromptPath;

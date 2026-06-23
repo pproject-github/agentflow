@@ -6,9 +6,12 @@ input:
   - type: node
     name: prev
     default: ""
+  - type: text
+    name: content
+    default: ""
 output:
   - type: node
     name: next
     default: ""
 ---
-${USER_PROMPT}
+Print `${content}` to the user.

@@ -346,6 +346,7 @@ export async function main() {
     let host = process.env.AGENTFLOW_UI_HOST || "127.0.0.1";
     let schedulerEnabled = false;
     let schedulerPollMs;
+    let hideCommunityLinks = /^(1|true|yes|on)$/i.test(String(process.env.AGENTFLOW_HIDE_COMMUNITY_LINKS || ""));
     const portIdx = argv.indexOf("--port");
     if (portIdx >= 0 && argv[portIdx + 1]) {
       port = parseInt(argv[portIdx + 1], 10);
@@ -371,13 +372,17 @@ export async function main() {
     }
     const noOpen = argv.includes("--no-open");
     if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
+    if (argv.includes("--hide-community-links")) {
+      hideCommunityLinks = true;
+      argv.splice(argv.indexOf("--hide-community-links"), 1);
+    }
     if (Number.isNaN(port) || port <= 0 || port > 65535) {
       throw new Error("Invalid --port (use 1–65535)");
     }
     if (!host) {
       throw new Error("Invalid --host");
     }
-    await startUiServer({ workspaceRoot, port, host });
+    await startUiServer({ workspaceRoot, port, host, hideCommunityLinks });
     if (schedulerEnabled) {
       startScheduler(workspaceRoot, { pollMs: schedulerPollMs }).catch((e) => {
         log.error("Scheduler failed: " + ((e && e.message) || String(e)));
