@@ -127,6 +127,24 @@ body {
   color: var(--af-error);
 }
 
+.af-ui-error-panel {
+  max-width: min(72rem, calc(100vw - 3rem));
+}
+
+.af-ui-error-panel pre {
+  max-height: 18rem;
+  overflow: auto;
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  border-radius: 0.6rem;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(245, 242, 241, 0.86);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .af-auth-submit {
   border: 0;
   border-radius: 6px;
@@ -738,6 +756,40 @@ button.af-project-card {
   font-size: 10px;
 }
 
+.af-skill-card-collections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.af-skill-card-collections span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  color: rgba(220, 211, 255, 0.82);
+  background: rgba(124, 77, 255, 0.12);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-skill-card-collections .af-skill-card-collection-empty {
+  color: rgba(202, 195, 216, 0.44);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.af-skill-detail-collections {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.af-skill-detail-collection-option {
+  margin: 0 -0.2rem;
+}
+
 .af-resource-toolbar {
   display: grid;
   gap: 0.85rem;
@@ -794,6 +846,144 @@ button.af-project-card {
   border-color: rgba(205, 189, 255, 0.36);
   background: rgba(124, 77, 255, 0.12);
   color: var(--af-primary);
+}
+
+.af-resource-filter-chip {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid rgba(73, 68, 85, 0.22);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.af-resource-filter-chip--active {
+  border-color: rgba(205, 189, 255, 0.36);
+  background: rgba(124, 77, 255, 0.12);
+}
+
+.af-resource-filter--embedded {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.af-resource-filter--embedded:hover {
+  background: transparent;
+}
+
+.af-resource-filter--embedded em {
+  color: rgba(202, 195, 216, 0.6);
+  font-style: normal;
+  font-weight: 750;
+}
+
+.af-resource-filter--embedded strong {
+  color: rgba(144, 205, 255, 0.86);
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.af-resource-filter-chip__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  border: 0;
+  border-left: 1px solid rgba(229, 226, 225, 0.08);
+  background: transparent;
+  color: rgba(202, 195, 216, 0.56);
+  cursor: pointer;
+}
+
+.af-resource-filter-chip__delete:hover:not(:disabled) {
+  color: rgba(255, 130, 130, 0.88);
+  background: rgba(255, 90, 90, 0.08);
+}
+
+.af-resource-filter-chip__delete .material-symbols-outlined {
+  font-size: 0.95rem;
+}
+
+.af-skill-collections-manager {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(73, 68, 85, 0.14);
+  border-radius: 0.75rem;
+  background: rgba(24, 24, 24, 0.55);
+}
+
+.af-skill-collections-create {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.af-skill-collections-create .af-set-input {
+  min-width: 12rem;
+  max-width: 18rem;
+}
+
+.af-skill-collections-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.af-skill-collection-chip {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(205, 189, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.1);
+}
+
+.af-skill-collection-chip button {
+  border: 0;
+  background: transparent;
+  color: rgba(229, 226, 225, 0.88);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.af-skill-collection-chip > button:first-child {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.34rem 0.3rem 0.34rem 0.65rem;
+}
+
+.af-skill-collection-chip em {
+  color: rgba(202, 195, 216, 0.58);
+  font-style: normal;
+  font-weight: 650;
+}
+
+.af-skill-collection-chip strong {
+  color: rgba(144, 205, 255, 0.86);
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.af-skill-collection-chip__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  color: rgba(202, 195, 216, 0.58);
+}
+
+.af-skill-collection-chip__delete .material-symbols-outlined {
+  font-size: 0.95rem;
 }
 
 .af-resource-detail {
@@ -3014,10 +3204,12 @@ button.af-project-card {
   min-height: 0;
   display: grid;
   grid-template-columns: 22rem minmax(0, 1fr);
+  position: relative;
+  overflow: hidden;
 }
 
 .af-workspace-body--drawer {
-  grid-template-columns: 22rem minmax(0, 1fr) min(26rem, 28vw);
+  grid-template-columns: 22rem minmax(0, 1fr);
 }
 
 .af-workspace-sidebar {
@@ -3304,7 +3496,7 @@ button.af-project-card {
   height: 1.25rem !important;
   right: -0.38rem !important;
   bottom: -0.38rem !important;
-  z-index: 5;
+  z-index: 14;
   display: grid;
   place-items: center;
   border: 1px solid rgba(151, 209, 255, 0.3);
@@ -3328,6 +3520,8 @@ button.af-project-card {
 }
 
 .af-work-display-card__head {
+  position: relative;
+  z-index: 12;
   min-height: 2.85rem;
   display: flex;
   align-items: center;
@@ -3374,6 +3568,8 @@ button.af-project-card {
 }
 
 .af-work-display-card__close {
+  position: relative;
+  z-index: 13;
   width: 1.8rem;
   height: 1.8rem;
   flex: 0 0 auto;
@@ -3395,6 +3591,8 @@ button.af-project-card {
 
 .af-work-display-empty,
 .af-work-display-body {
+  position: relative;
+  z-index: 0;
   flex: 0 1 auto;
   max-height: 30rem;
   overflow: auto;
@@ -3472,7 +3670,7 @@ button.af-project-card {
   width: 0.72rem;
   height: 0.72rem;
   border: 2px solid rgba(15, 15, 16, 0.96);
-  z-index: 2;
+  z-index: 10;
 }
 
 .af-work-display-handle--in {
@@ -3481,6 +3679,40 @@ button.af-project-card {
 
 .af-work-display-handle--out {
   right: -0.38rem;
+}
+
+.af-work-port-label {
+  position: absolute;
+  z-index: 9;
+  max-width: 8.5rem;
+  transform: translateY(-50%);
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.48);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.64rem;
+  line-height: 1;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-port-label--in {
+  right: calc(100% + 0.68rem);
+  text-align: right;
+}
+
+.af-work-port-label--out {
+  left: calc(100% + 0.68rem);
+  text-align: left;
+}
+
+.af-work-display-card:hover .af-work-port-label,
+.af-work-display-card--selected .af-work-port-label,
+.af-work-run-card:hover .af-work-port-label,
+.af-work-run-card--selected .af-work-port-label,
+.af-work-load-skills-card:hover .af-work-port-label,
+.af-work-load-skills-card--selected .af-work-port-label {
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .af-workspace-composer {
@@ -3526,8 +3758,493 @@ button.af-project-card {
 }
 
 .af-workspace-composer-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  width: min(30rem, calc(100% - 22rem));
   border-left: 1px solid rgba(255, 255, 255, 0.07);
   background: rgba(18, 18, 19, 0.98);
+  box-shadow: -22px 0 54px rgba(0, 0, 0, 0.34);
+}
+
+.af-workspace-node-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  width: min(44rem, calc(100% - 22rem));
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: -22px 0 54px rgba(0, 0, 0, 0.34);
+}
+
+.af-work-run-card {
+  width: 16rem;
+  overflow: hidden;
+  border: 1px solid rgba(124, 77, 255, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(28, 27, 31, 0.98);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.af-work-run-card--selected {
+  border-color: rgba(124, 77, 255, 0.82);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.32), 0 18px 44px rgba(0, 0, 0, 0.34);
+}
+
+.af-work-run-card--running {
+  border-color: rgba(92, 176, 255, 0.82);
+}
+
+.af-work-run-card__head {
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.af-work-run-card__head > .material-symbols-outlined {
+  color: rgba(168, 143, 255, 0.95);
+}
+
+.af-work-run-card__head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.98rem;
+}
+
+.af-work-run-card__head > span:last-of-type {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.72rem;
+}
+
+.af-work-run-card__button {
+  width: calc(100% - 1.3rem);
+  height: 2.5rem;
+  margin: 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(124, 77, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.22);
+  color: rgba(255, 255, 255, 0.94);
+  font-family: var(--af-headline);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.af-work-run-card__button:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.af-work-load-skills-card {
+  position: relative;
+  width: 23rem;
+  overflow: visible;
+  border: 1px solid rgba(124, 77, 255, 0.3);
+  border-radius: 0.75rem;
+  background: rgba(28, 27, 31, 0.98);
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+}
+
+.af-work-load-skills-card--selected {
+  border-color: rgba(124, 77, 255, 0.84);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.32), 0 18px 44px rgba(0, 0, 0, 0.34);
+}
+
+.af-work-load-skills-card__head {
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.af-work-load-skills-card__head > .material-symbols-outlined {
+  color: rgba(190, 172, 255, 0.95);
+}
+
+.af-work-load-skills-card__head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.98rem;
+}
+
+.af-work-load-skills-card__head > span:last-of-type {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.72rem;
+}
+
+.af-work-load-skills-card__body {
+  position: relative;
+  padding: 0.65rem;
+}
+
+.af-work-load-skills-card__select {
+  width: 100%;
+  min-height: 2.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid rgba(124, 77, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.2);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: var(--af-headline);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.af-work-load-skills-card__select .material-symbols-outlined {
+  font-size: 1.05rem;
+}
+
+.af-work-load-skills-menu {
+  position: absolute;
+  top: calc(100% - 0.3rem);
+  left: 0.65rem;
+  right: 0.65rem;
+  z-index: 40;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.7rem;
+  background: rgba(25, 24, 28, 0.98);
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.42);
+}
+
+.af-work-load-skills-menu__group {
+  padding: 0.25rem 0 0.5rem;
+}
+
+.af-work-load-skills-menu__group + .af-work-load-skills-menu__group {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.af-work-load-skills-menu__group-head,
+.af-work-load-skills-menu__option {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.af-work-load-skills-menu__group-head {
+  min-height: 2rem;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: var(--af-headline);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.af-work-load-skills-menu__group-head--plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.af-work-load-skills-menu__group-head small {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.7rem;
+}
+
+.af-work-load-skills-menu__options {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.af-work-load-skills-menu__option {
+  min-height: 1.95rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.38rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.af-work-load-skills-menu__option:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.af-work-load-skills-menu__option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-load-skills-menu input {
+  width: 0.9rem;
+  height: 0.9rem;
+  accent-color: var(--af-accent);
+}
+
+.af-work-load-skills-menu__clear {
+  width: 100%;
+  min-height: 2rem;
+  margin-top: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+}
+
+.af-work-load-skills-menu__clear:hover {
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.af-workspace-quick-add-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: min(12vh, 7rem);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.af-workspace-quick-add {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(36rem, calc(100vh - 4rem));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(124, 77, 255, 0.38);
+  border-radius: 0.8rem;
+  background: rgba(24, 24, 26, 0.98);
+  box-shadow: 0 28px 82px rgba(0, 0, 0, 0.52);
+}
+
+.af-workspace-quick-add__search {
+  height: 3.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 0.95rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.af-workspace-quick-add__search .material-symbols-outlined {
+  color: rgba(202, 195, 216, 0.56);
+}
+
+.af-workspace-quick-add__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: var(--af-body);
+  font-size: 1rem;
+}
+
+.af-workspace-quick-add__search input::placeholder {
+  color: rgba(202, 195, 216, 0.42);
+}
+
+.af-workspace-quick-add__list {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.45rem;
+}
+
+.af-workspace-quick-add__item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.72rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.86);
+  text-align: left;
+  cursor: pointer;
+}
+
+.af-workspace-quick-add__item--active,
+.af-workspace-quick-add__item:hover {
+  border-color: rgba(124, 77, 255, 0.34);
+  background: rgba(124, 77, 255, 0.16);
+}
+
+.af-workspace-quick-add__icon {
+  color: rgba(168, 143, 255, 0.92);
+}
+
+.af-workspace-quick-add__main {
+  min-width: 0;
+  display: grid;
+  gap: 0.16rem;
+}
+
+.af-workspace-quick-add__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+}
+
+.af-workspace-quick-add__meta,
+.af-workspace-quick-add__desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(202, 195, 216, 0.5);
+  font-size: 0.76rem;
+}
+
+.af-workspace-quick-add__cat {
+  padding: 0.24rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(202, 195, 216, 0.56);
+  font-family: var(--af-headline);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.af-workspace-quick-add__empty {
+  padding: 1.5rem;
+  color: rgba(202, 195, 216, 0.56);
+}
+
+.af-workspace-load-skills-panel {
+  gap: 1rem;
+}
+
+.af-workspace-load-skills-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem;
+  border: 1px solid rgba(124, 77, 255, 0.2);
+  border-radius: 0.65rem;
+  background: rgba(124, 77, 255, 0.08);
+}
+
+.af-workspace-load-skills-summary > span {
+  margin-right: auto;
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 750;
+}
+
+.af-workspace-load-skills-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.af-workspace-load-skills-group {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.af-workspace-load-skills-group-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.86);
+  font-weight: 800;
+}
+
+.af-workspace-load-skills-group-head--plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.af-workspace-load-skills-group-head em,
+.af-workspace-load-skills-group-head small {
+  color: rgba(202, 195, 216, 0.54);
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+.af-workspace-load-skills-options {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.35rem;
+}
+
+.af-workspace-load-skills-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+}
+
+.af-workspace-load-skills-option:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.af-workspace-load-skills-option span {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.af-workspace-load-skills-option strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.af-workspace-load-skills-option small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(202, 195, 216, 0.58);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.af-workspace-load-skills-note {
+  margin: 0;
+  color: rgba(202, 195, 216, 0.56);
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .af-work-node {
@@ -4209,12 +4926,34 @@ button.af-project-card {
 
 .af-node-palette-title {
   margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   font-family: var(--af-headline);
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--af-on-surface);
+}
+
+.af-node-palette-title-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.25rem;
+  padding: 0 0.36rem;
+  border-radius: 0.38rem;
+  border: 1px solid rgba(206, 196, 255, 0.3);
+  background: rgba(124, 86, 255, 0.15);
+  color: rgba(235, 229, 255, 0.86);
+  font-family: var(--af-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .af-palette-search-wrap {
@@ -4647,6 +5386,184 @@ button.af-project-card {
   box-shadow: 0 0 0 1px rgba(255, 99, 99, 0.28);
 }
 
+.af-connect-node-menu {
+  position: absolute;
+  z-index: 80;
+  width: min(320px, calc(100% - 24px));
+  max-height: min(440px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(202, 195, 216, 0.16);
+  border-radius: 8px;
+  background: rgba(24, 23, 29, 0.98);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.035) inset;
+}
+
+.af-connect-node-menu__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.65rem 0.45rem;
+}
+
+.af-connect-node-menu__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--af-headline);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(245, 241, 255, 0.88);
+}
+
+.af-connect-node-menu__title span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-connect-node-menu__dot,
+.af-connect-node-menu__port-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.af-connect-node-menu__close {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 224, 240, 0.72);
+  cursor: pointer;
+}
+
+.af-connect-node-menu__close:hover {
+  background: rgba(255, 255, 255, 0.075);
+  color: rgba(245, 241, 255, 0.95);
+}
+
+.af-connect-node-menu__close .material-symbols-outlined {
+  font-size: 17px;
+}
+
+.af-connect-node-menu__search {
+  margin: 0 0.65rem 0.55rem;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(202, 195, 216, 0.62);
+}
+
+.af-connect-node-menu__search .material-symbols-outlined {
+  margin-left: 0.55rem;
+  font-size: 17px;
+}
+
+.af-connect-node-menu__search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(245, 241, 255, 0.9);
+  font: 500 12px/1.2 var(--af-body);
+}
+
+.af-connect-node-menu__search input::placeholder {
+  color: rgba(202, 195, 216, 0.42);
+}
+
+.af-connect-node-menu__list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0.45rem 0.5rem;
+}
+
+.af-connect-node-menu__item {
+  width: 100%;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.52rem 0.55rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.af-connect-node-menu__item:hover,
+.af-connect-node-menu__item:focus-visible {
+  outline: 0;
+  background: rgba(124, 77, 255, 0.16);
+}
+
+.af-connect-node-menu__item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.af-connect-node-menu__item-label,
+.af-connect-node-menu__item-id,
+.af-connect-node-menu__port-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-connect-node-menu__item-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(245, 241, 255, 0.9);
+}
+
+.af-connect-node-menu__item-id {
+  font-size: 10px;
+  color: rgba(202, 195, 216, 0.45);
+}
+
+.af-connect-node-menu__port {
+  max-width: 128px;
+  display: inline-grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.24rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(230, 224, 240, 0.72);
+}
+
+.af-connect-node-menu__empty {
+  padding: 0.75rem 0.6rem 0.85rem;
+  font-size: 12px;
+  color: rgba(202, 195, 216, 0.48);
+}
+
 /* 画布 +（运行模式下）执行日志：与右侧 Run 侧栏并排，日志不铺满整屏宽度 */
 .af-pipeline-main-stack {
   flex: 1;
@@ -4856,16 +5773,18 @@ button.af-project-card {
 
 .af-pipeline-market-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr));
+  gap: 0.75rem;
 }
 
 .af-pipeline-market-item {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.65rem 0.75rem;
   min-width: 0;
-  padding: 0.7rem;
+  min-height: 14rem;
+  padding: 0.85rem;
   border-radius: 8px;
   background: rgba(12, 12, 12, 0.48);
 }
@@ -4876,7 +5795,6 @@ button.af-project-card {
 
 .af-pipeline-market-main {
   min-width: 0;
-  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
@@ -4944,11 +5862,13 @@ button.af-project-card {
 .af-pipeline-market-chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 0.28rem;
 }
 
 .af-pipeline-market-chip {
-  max-width: 12rem;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4966,16 +5886,21 @@ button.af-project-card {
 }
 
 .af-pipeline-market-action {
-  flex: 0 0 auto;
-  min-width: 6.5rem;
+  flex: 0 1 8.5rem;
+  min-width: 7.5rem;
   justify-content: center;
 }
 
 .af-pipeline-market-actions {
-  flex: 0 0 auto;
+  grid-column: 2;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  align-self: end;
+  margin-top: 0.35rem;
 }
 
 .af-market-preview-overlay {
@@ -5385,6 +6310,27 @@ button.af-project-card {
   .af-pipeline-settings-schedule-grid,
   .af-pipeline-settings-side {
     grid-template-columns: 1fr;
+  }
+
+  .af-pipeline-market-list {
+    grid-template-columns: 1fr;
+  }
+
+  .af-pipeline-market-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .af-pipeline-market-item > .material-symbols-outlined {
+    display: none;
+  }
+
+  .af-pipeline-market-actions {
+    grid-column: 1;
+    justify-content: stretch;
+  }
+
+  .af-pipeline-market-action {
+    flex: 1 1 10rem;
   }
 
   .af-pipeline-settings-main-head,
@@ -6862,6 +7808,7 @@ button.af-project-card {
   border-radius: 0.75rem;
   background: rgba(16, 16, 16, 0.55);
   padding: 0.2rem 0 0;
+  overflow: hidden;
 }
 
 .af-composer-node-chip {
@@ -7125,9 +8072,9 @@ button.af-project-card {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  min-height: calc(0.75rem + 0.75rem + 2 * 1.45 * 0.8125rem);
+  min-height: 4.9rem;
   max-height: calc(0.75rem + 0.75rem + 10 * 1.45 * 0.8125rem);
-  padding: 0.85rem 1rem 0.65rem;
+  padding: 0.95rem 1rem 0.85rem;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -7158,8 +8105,11 @@ button.af-project-card {
   flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  padding: 0.35rem 0.65rem 0.75rem;
+  row-gap: 0.45rem;
+  padding: 0.6rem 0.65rem 0.75rem;
+  border-top: 1px solid rgba(229, 226, 225, 0.07);
 }
 
 .af-composer-session-field {
@@ -7167,12 +8117,14 @@ button.af-project-card {
   margin-right: auto;
   display: inline-flex;
   align-items: center;
-  min-width: 0;
+  flex: 1 1 9rem;
+  min-width: 8rem;
 }
 
 .af-composer-session-select {
   appearance: none;
   -webkit-appearance: none;
+  width: 100%;
   max-width: 12rem;
   padding: 0.38rem 2rem 0.38rem 0.85rem;
   border: none;
@@ -7205,6 +8157,7 @@ button.af-project-card {
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .af-composer-skills-button {
@@ -7265,8 +8218,19 @@ button.af-project-card {
 
 .af-composer-skill-group + .af-composer-skill-group {
   margin-top: 0.45rem;
-  padding-top: 0.45rem;
-  border-top: 1px solid rgba(229, 226, 225, 0.08);
+}
+
+.af-composer-skill-group--framed {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(229, 226, 225, 0.1);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.af-composer-skill-group--framed:has(.af-composer-skill-group-title input:checked) {
+  border-color: rgba(156, 124, 255, 0.26);
+  background: rgba(124, 77, 255, 0.055);
 }
 
 .af-composer-skill-group-title {
@@ -7283,6 +8247,90 @@ button.af-project-card {
   text-transform: uppercase;
 }
 
+.af-composer-skill-group-title--selectable {
+  display: grid;
+  cursor: pointer;
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-content: stretch;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid rgba(229, 226, 225, 0.07);
+}
+
+.af-composer-skill-group--collapsed .af-composer-skill-group-title--selectable {
+  border-bottom: 0;
+}
+
+.af-composer-skill-group-title--selectable input {
+  margin: 0;
+  accent-color: #9c7cff;
+}
+
+.af-composer-skill-group-check {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.af-composer-skill-group-title-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.af-composer-skill-group-title-main > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-composer-skill-group-title-main em {
+  flex: 0 0 auto;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  color: rgba(220, 211, 255, 0.9);
+  background: rgba(124, 77, 255, 0.16);
+  font-family: var(--af-body);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.af-composer-skill-group-items {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.32rem;
+}
+
+.af-composer-skill-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  min-width: 3rem;
+  border: 0;
+  background: transparent;
+  color: rgba(202, 195, 216, 0.52);
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--af-headline);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.af-composer-skill-group-toggle:hover {
+  color: rgba(229, 226, 225, 0.86);
+}
+
+.af-composer-skill-group-toggle .material-symbols-outlined {
+  font-size: 1rem;
+}
+
 .af-composer-skill-option {
   display: grid;
   grid-template-columns: 1rem minmax(0, 1fr);
@@ -7295,6 +8343,10 @@ button.af-project-card {
 
 .af-composer-skill-option:hover {
   background: rgba(255, 255, 255, 0.055);
+}
+
+.af-composer-skill-option--collection {
+  background: rgba(124, 77, 255, 0.08);
 }
 
 .af-composer-skill-option input {
@@ -7343,12 +8395,16 @@ button.af-project-card {
   margin: 0;
   display: inline-flex;
   align-items: center;
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  max-width: 18rem;
 }
 
 .af-composer-model-select {
   appearance: none;
   -webkit-appearance: none;
-  max-width: 14rem;
+  width: 100%;
+  max-width: none;
   padding: 0.38rem 2rem 0.38rem 0.85rem;
   border: none;
   border-radius: 999px;
@@ -7461,7 +8517,11 @@ button.af-project-card {
 }
 
 .af-pipeline-drawer--wide {
-  width: min(26rem, calc(100vw - 2rem));
+  width: min(38rem, calc(100vw - 2rem));
+}
+
+.af-pipeline-drawer.af-workspace-node-drawer {
+  width: min(38rem, calc(100vw - 22rem));
 }
 
 /* Empty canvas hint */
@@ -7732,6 +8792,7 @@ button.af-project-card {
 
 .af-node-props-body {
   gap: 0.9rem;
+  overflow-x: hidden;
 }
 
 .af-node-props-field {
@@ -7777,12 +8838,14 @@ button.af-project-card {
   flex-direction: column;
   gap: 0.4rem;
   width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .af-node-props-io-table-head {
   display: grid;
-  grid-template-columns: 4.25rem minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr) 2rem;
-  gap: 0.35rem;
+  grid-template-columns: 3.7rem minmax(4rem, 0.75fr) minmax(5rem, 1fr) minmax(5rem, 1fr) 2.2rem 2.2rem 1.9rem;
+  gap: 0.3rem;
   align-items: center;
   font-family: var(--af-headline);
   font-size: 0.52rem;
@@ -7795,8 +8858,8 @@ button.af-project-card {
 
 .af-node-props-io-row {
   display: grid;
-  grid-template-columns: 4.25rem minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr) 2rem;
-  gap: 0.35rem;
+  grid-template-columns: 3.7rem minmax(4rem, 0.75fr) minmax(5rem, 1fr) minmax(5rem, 1fr) 2.2rem 2.2rem 1.9rem;
+  gap: 0.3rem;
   align-items: center;
 }
 
@@ -7811,8 +8874,25 @@ button.af-project-card {
 .af-node-props-io-cell {
   width: 100%;
   min-width: 0;
-  padding: 0.4rem 0.5rem;
+  padding: 0.4rem 0.45rem;
   font-size: 12px;
+}
+
+.af-node-props-io-flag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.af-node-props-io-flag input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--af-primary);
+}
+
+.af-node-props-io-flag input:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .af-node-props-io-remove {
@@ -8634,6 +9714,8 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__chrome {
+  position: relative;
+  z-index: 12;
   padding: 0.45rem 0.65rem 0.35rem;
   background: var(--af-surface-highest);
   border-radius: 1rem 1rem 0 0;
@@ -8679,6 +9761,8 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__expand {
+  position: relative;
+  z-index: 13;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8711,6 +9795,8 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__delete {
+  position: relative;
+  z-index: 13;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8743,6 +9829,8 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__body {
+  position: relative;
+  z-index: 0;
   display: flex;
   align-items: stretch;
   padding: 0.65rem 0.35rem 0.65rem 0.5rem;
@@ -8775,16 +9863,56 @@ button.af-exec-history-card {
   width: 10px !important;
   height: 10px !important;
   border: 2px solid var(--af-surface) !important;
+  z-index: 10;
+}
+
+.af-flow-node__port-label {
+  position: absolute;
+  top: 50%;
+  z-index: 9;
+  max-width: 9rem;
+  transform: translateY(-50%);
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.44);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.64rem;
+  line-height: 1;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-node__port-label--in {
+  right: 1.05rem;
+  text-align: right;
+}
+
+.af-flow-node__port-label--out {
+  left: 1.05rem;
+  text-align: left;
+}
+
+.af-flow-node__port-required {
+  margin-left: 0.12rem;
+  color: rgba(255, 183, 77, 0.92);
+}
+
+.af-flow-node:hover .af-flow-node__port-label,
+.af-flow-node--selected .af-flow-node__port-label {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .af-flow-node__title-wrap {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.28rem;
   text-align: center;
   padding: 0.2rem 0.35rem;
   min-height: 2.25rem;
+  min-width: 0;
 }
 
 .af-flow-node__title {
@@ -8794,6 +9922,17 @@ button.af-exec-history-card {
   letter-spacing: 0.01em;
   line-height: 1.35;
   color: var(--af-on-surface);
+}
+
+.af-flow-node__prompt-preview {
+  max-width: 12rem;
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.68rem;
+  line-height: 1.28;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .af-flow-node__model-wrap {

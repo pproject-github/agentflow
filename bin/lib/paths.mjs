@@ -182,6 +182,10 @@ export function getAgentflowUserConfigAbs() {
   return path.join(getAgentflowDataRoot(), "config.json");
 }
 
+export function getAgentflowUserEnvAbs(userId) {
+  return path.join(getAgentflowUserDataRoot(userId), "env.json");
+}
+
 /** CLI / UI 文案用 */
 export const USER_AGENTFLOW_DIR_LABEL = "~/agentflow";
 export const USER_AGENTFLOW_PIPELINES_LABEL = "~/agentflow/pipelines";
@@ -253,6 +257,7 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_cancelled",
   "control_interval_loop",
   "control_cd_workspace",
+  "control_user_workspace",
   "control_load_skills",
   "control_start",
   "control_end",

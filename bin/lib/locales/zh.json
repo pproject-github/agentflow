@@ -218,8 +218,8 @@
       "description": "AgentFlow 的结束节点，执行完成后流程结束"
     },
     "agent_subAgent": {
-      "displayName": "SubAgent",
-      "description": "利用 SubAgent 执行任务"
+      "displayName": "子 Agent",
+      "description": "利用子 Agent 执行任务"
     },
     "tool_user_ask": {
       "displayName": "用户选择",
@@ -268,6 +268,10 @@
     "control_cd_workspace": {
       "displayName": "CD 工作区",
       "description": "切换下游节点的执行工作区上下文，不改变流水线所在工作区"
+    },
+    "control_user_workspace": {
+      "displayName": "用户工作区",
+      "description": "输出指向当前用户 Home 目录的工作区上下文"
     },
     "control_load_skills": {
       "displayName": "加载 Skills",
