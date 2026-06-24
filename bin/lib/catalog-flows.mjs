@@ -656,16 +656,38 @@ function resolveMarkdownNodeFile(workspaceRoot, nodeId, flowId, flowSource, opts
 
 function readNodeUsage(workspaceRoot, nodeId, opts = {}) {
   const usage = [];
+  const marketSpec = parseMarketplaceDefinitionId(nodeId);
   for (const flow of listFlowsJson(workspaceRoot, opts)) {
     const flowPath = getFlowYamlAbs(workspaceRoot, flow.id, flow.source || "user", { archived: Boolean(flow.archived), userId: opts.userId });
     if (!flowPath.path) continue;
     try {
       const data = yaml.load(fs.readFileSync(flowPath.path, "utf-8"));
       const instances = data && typeof data === "object" ? data.instances : null;
-      if (!instances || typeof instances !== "object") continue;
-      const hits = Object.entries(instances)
-        .filter(([, inst]) => inst && inst.definitionId === nodeId)
-        .map(([instanceId, inst]) => ({ instanceId, label: inst.label || instanceId }));
+      const hits = [];
+      if (marketSpec) {
+        const deps = data && typeof data === "object" && data.dependencies && typeof data.dependencies === "object" ? data.dependencies : {};
+        const nodeDeps = Array.isArray(deps.nodes) ? deps.nodes : [];
+        if (nodeDeps.some((dep) => {
+          const parsed = typeof dep === "string"
+            ? parseMarketplaceDefinitionId(dep.startsWith("marketplace:") ? dep : `marketplace:${dep}`)
+            : dep && typeof dep === "object"
+              ? { id: dep.id, version: dep.version != null ? String(dep.version) : null }
+              : null;
+          return parsed && parsed.id === marketSpec.id && (!parsed.version || !marketSpec.version || parsed.version === marketSpec.version);
+        })) {
+          hits.push({ instanceId: "dependencies.nodes", label: "dependency" });
+        }
+      }
+      if (instances && typeof instances === "object") {
+        hits.push(...Object.entries(instances)
+          .filter(([, inst]) => {
+            if (!inst) return false;
+            if (!marketSpec) return inst.definitionId === nodeId;
+            const parsed = parseMarketplaceDefinitionId(inst.definitionId);
+            return parsed && parsed.id === marketSpec.id && (!parsed.version || !marketSpec.version || parsed.version === marketSpec.version);
+          })
+          .map(([instanceId, inst]) => ({ instanceId, label: inst.label || instanceId })));
+      }
       if (hits.length > 0) {
         usage.push({ flowId: flow.id, flowSource: flow.source || "user", archived: Boolean(flow.archived), instances: hits });
       }

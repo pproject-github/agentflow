@@ -6,6 +6,7 @@ import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 const ITEMS = [
   { to: "/projects", labelKey: "common:nav.projects", icon: "folder_open" },
   { to: "/nodes", labelKey: "common:nav.nodes", icon: "account_tree" },
+  { to: "/my-nodes", labelKey: "common:nav.myNodes", icon: "deployed_code" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];

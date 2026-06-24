@@ -415,6 +415,23 @@ body {
   cursor: not-allowed;
 }
 
+.af-btn-secondary.af-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-color: rgba(255, 180, 171, 0.32);
+  color: var(--af-error);
+}
+
+.af-btn-secondary.af-btn-danger:hover:not(:disabled) {
+  background: rgba(255, 180, 171, 0.08);
+}
+
+.af-btn-secondary.af-btn-danger .material-symbols-outlined {
+  font-size: 16px;
+  line-height: 1;
+}
+
 .af-btn-ghost {
   padding: 0.65rem 1.25rem;
   border-radius: 999px;
@@ -1103,6 +1120,19 @@ button.af-project-card {
   color: rgba(202, 195, 216, 0.68);
   font-size: 0.75rem;
   line-height: 1.5;
+}
+
+.af-resource-danger-zone {
+  border-color: rgba(255, 180, 171, 0.24);
+}
+
+.af-resource-danger-zone .af-btn-danger {
+  margin-top: 0.75rem;
+}
+
+.af-resource-action-message {
+  color: rgba(229, 226, 225, 0.78) !important;
+  word-break: break-word;
 }
 
 .af-resource-slot-group {

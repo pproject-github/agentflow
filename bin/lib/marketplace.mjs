@@ -2,7 +2,13 @@ import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
 
-import { MARKETPLACE_PACKAGES_DIR } from "./paths.mjs";
+import {
+  ARCHIVED_PIPELINES_DIR_NAME,
+  LEGACY_PIPELINES_DIR,
+  MARKETPLACE_PACKAGES_DIR,
+  PIPELINES_DIR,
+  getUserPipelinesRoot,
+} from "./paths.mjs";
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
@@ -98,6 +104,99 @@ function listVersionDirs(baseDir) {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter(Boolean);
+}
+
+function isSafePathSegment(value) {
+  const text = String(value || "").trim();
+  return Boolean(text) && !text.includes("\0") && !path.isAbsolute(text) && !text.split(/[\\/]+/).includes("..");
+}
+
+function resolveWorkspaceNodePackageDir(workspaceRoot, id, version) {
+  if (!isSafePathSegment(id) || !isSafePathSegment(version)) return null;
+  const base = path.resolve(workspacePackageRoot(workspaceRoot), "nodes");
+  const target = path.resolve(base, id, version);
+  if (target !== base && !target.startsWith(base + path.sep)) return null;
+  return target;
+}
+
+function collectFlowDirs(rootDir, source, archived = false) {
+  const out = [];
+  if (!fs.existsSync(rootDir)) return out;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === ARCHIVED_PIPELINES_DIR_NAME) continue;
+    const dir = path.join(rootDir, entry.name);
+    if (!fs.existsSync(path.join(dir, "flow.yaml"))) continue;
+    out.push({ flowId: entry.name, flowSource: source, archived, flowDir: dir });
+  }
+  return out;
+}
+
+function listWritableFlowDirs(workspaceRoot, opts = {}) {
+  const root = path.resolve(workspaceRoot);
+  const userRoot = getUserPipelinesRoot(opts.userId);
+  const wsRoot = path.join(root, PIPELINES_DIR);
+  const legacyRoot = path.join(root, LEGACY_PIPELINES_DIR);
+  return [
+    ...collectFlowDirs(userRoot, "user", false),
+    ...collectFlowDirs(path.join(userRoot, ARCHIVED_PIPELINES_DIR_NAME), "user", true),
+    ...collectFlowDirs(wsRoot, "workspace", false),
+    ...collectFlowDirs(path.join(wsRoot, ARCHIVED_PIPELINES_DIR_NAME), "workspace", true),
+    ...collectFlowDirs(legacyRoot, "workspace", false),
+    ...collectFlowDirs(path.join(legacyRoot, ARCHIVED_PIPELINES_DIR_NAME), "workspace", true),
+  ];
+}
+
+function depMatchesNode(dep, id, version) {
+  if (typeof dep === "string") {
+    const parsed = parseMarketplaceDefinitionId(dep.startsWith("marketplace:") ? dep : `marketplace:${dep}`);
+    return Boolean(parsed && parsed.id === id && (!parsed.version || parsed.version === version));
+  }
+  if (!dep || typeof dep !== "object") return false;
+  return dep.id === id && (dep.version == null || String(dep.version) === version);
+}
+
+function instanceMatchesNode(inst, id, version) {
+  const parsed = parseMarketplaceDefinitionId(inst?.definitionId);
+  return Boolean(parsed && parsed.id === id && (!parsed.version || parsed.version === version));
+}
+
+export function listMarketplaceNodeUsages(workspaceRoot, id, version, opts = {}) {
+  const usages = [];
+  if (!id || !version) return usages;
+  for (const flow of listWritableFlowDirs(workspaceRoot, opts)) {
+    const flowYamlPath = path.join(flow.flowDir, "flow.yaml");
+    const data = readYamlObject(flowYamlPath);
+    if (!data) continue;
+    const hits = [];
+    const deps = data.dependencies && typeof data.dependencies === "object" ? data.dependencies : {};
+    const nodeDeps = Array.isArray(deps.nodes) ? deps.nodes : [];
+    for (const dep of nodeDeps) {
+      if (depMatchesNode(dep, id, version)) {
+        hits.push({ instanceId: "dependencies.nodes", label: "dependency" });
+      }
+    }
+    const instances = data.instances && typeof data.instances === "object" ? data.instances : {};
+    for (const [instanceId, inst] of Object.entries(instances)) {
+      if (instanceMatchesNode(inst, id, version)) {
+        hits.push({ instanceId, label: inst?.label || instanceId });
+      }
+    }
+    if (hits.length > 0) {
+      usages.push({
+        flowId: flow.flowId,
+        flowSource: flow.flowSource,
+        archived: flow.archived,
+        instances: hits,
+      });
+    }
+  }
+  return usages;
 }
 
 function findNodePackageDir(workspaceRoot, id, version) {
@@ -230,7 +329,7 @@ export function listMarketplaceNodes(workspaceRoot, flowData = null) {
   return out.sort((a, b) => a.id.localeCompare(b.id) || a.version.localeCompare(b.version));
 }
 
-export function listMarketplacePackages(workspaceRoot) {
+export function listMarketplacePackages(workspaceRoot, opts = {}) {
   const root = workspacePackageRoot(workspaceRoot);
   const nodes = listMarketplaceNodes(workspaceRoot).map((n) => ({
     id: n.id,
@@ -242,6 +341,7 @@ export function listMarketplacePackages(workspaceRoot) {
     outputs: n.output,
     packagedFiles: Array.isArray(n.packagedFiles) ? n.packagedFiles : [],
     packageDir: n.packageDir,
+    usage: listMarketplaceNodeUsages(workspaceRoot, n.id, n.version, opts),
   }));
   const collections = [];
   const collectionsRoot = path.join(root, "collections");
@@ -263,6 +363,28 @@ export function listMarketplacePackages(workspaceRoot) {
     }
   }
   return { nodes, collections };
+}
+
+export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = {}) {
+  const packageDir = resolveWorkspaceNodePackageDir(workspaceRoot, id, version);
+  if (!packageDir) return { ok: false, error: "Invalid marketplace node id or version" };
+  if (!fs.existsSync(path.join(packageDir, NODE_MANIFEST))) {
+    return { ok: false, error: `Marketplace node package not found: ${id}@${version}` };
+  }
+  const usage = listMarketplaceNodeUsages(workspaceRoot, id, version, opts);
+  if (usage.length > 0) {
+    return { ok: false, error: "Marketplace node is still used by flows", usage };
+  }
+  fs.rmSync(packageDir, { recursive: true, force: true });
+  const versionRoot = path.dirname(packageDir);
+  try {
+    if (fs.existsSync(versionRoot) && fs.readdirSync(versionRoot).length === 0) {
+      fs.rmdirSync(versionRoot);
+    }
+  } catch {
+    /* keep non-empty or unreadable parent */
+  }
+  return { ok: true, id, version, packageDir };
 }
 
 export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData) {

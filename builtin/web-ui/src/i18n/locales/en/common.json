@@ -6,6 +6,7 @@
   "nav": {
     "projects": "Projects",
     "nodes": "Nodes",
+    "myNodes": "My Nodes",
     "skills": "Skills",
     "flowEditor": "Flow Editor",
     "settings": "Settings",

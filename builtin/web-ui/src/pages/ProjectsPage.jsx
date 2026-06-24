@@ -125,6 +125,7 @@ function nodeSourceLabel(source, t) {
 }
 
 const NODE_FILTERS = ["all", "agent", "control", "provide", "marketplace"];
+const MY_NODE_FILTERS = ["all", "agent", "control", "provide"];
 
 function slotsToRows(slots) {
   if (!slots || typeof slots !== "object") return [];
@@ -168,6 +169,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const [nodeFilePath, setNodeFilePath] = useState("");
   const [nodeFilePreviews, setNodeFilePreviews] = useState({});
   const [nodeFileLoading, setNodeFileLoading] = useState("");
+  const [nodeDeleteBusy, setNodeDeleteBusy] = useState("");
+  const [nodeDeleteMessage, setNodeDeleteMessage] = useState("");
   const [hideCommunityLinks, setHideCommunityLinks] = useState(false);
   const dragDepthRef = useRef(0);
   const mountIdRef = useRef(0);
@@ -307,8 +310,49 @@ export default function ProjectsPage({ resourceKind = "" }) {
     void saveSkillCollections(next);
   }, [saveSkillCollections, skillCollections]);
 
+  const deleteMarketplaceNode = useCallback(async (node) => {
+    const packageId = node?.packageId;
+    const version = node?.version;
+    if (!packageId || !version) return;
+    if (!window.confirm(t("project:deleteMyNodeConfirm", { id: packageId, version }))) return;
+    const key = resourceKey(node);
+    setNodeDeleteBusy(key);
+    setNodeDeleteMessage("");
+    setResourceError("");
+    try {
+      const params = new URLSearchParams({ id: packageId, version });
+      const res = await fetch(`/api/marketplace/node?${params.toString()}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) {
+        const usage = Array.isArray(json?.usage) && json.usage.length > 0
+          ? ` ${t("project:deleteMyNodeUsedBy", { count: json.usage.length })}`
+          : "";
+        throw new Error((json?.error || "Delete failed") + usage);
+      }
+      setNodeDeleteMessage(t("project:deleteMyNodeSuccess", { id: packageId, version }));
+      setNodeDetails((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setNodeFilePreviews((prev) => {
+        const next = {};
+        for (const [previewKey, value] of Object.entries(prev)) {
+          if (!previewKey.startsWith(`${key}:`)) next[previewKey] = value;
+        }
+        return next;
+      });
+      setSelectedResourceKey("");
+      await loadResources();
+    } catch (e) {
+      setNodeDeleteMessage(String(e.message || e));
+    } finally {
+      setNodeDeleteBusy("");
+    }
+  }, [loadResources, t]);
+
   useEffect(() => {
-    if (resourceKind === "nodes" || resourceKind === "skills") {
+    if (resourceKind === "nodes" || resourceKind === "my-nodes" || resourceKind === "skills") {
       setFilter(resourceKind);
       setResourceFilter("all");
       setSelectedResourceKey("");
@@ -325,6 +369,10 @@ export default function ProjectsPage({ resourceKind = "" }) {
     let changed = false;
     if (sp.get("tab") === "nodes") {
       navigate("/nodes");
+      return;
+    }
+    if (sp.get("tab") === "my-nodes") {
+      navigate("/my-nodes");
       return;
     }
     if (sp.get("tab") === "skills") {
@@ -371,9 +419,13 @@ export default function ProjectsPage({ resourceKind = "" }) {
     [displayedFlows, searchNorm, t],
   );
 
+  const isNodeResourceTab = filter === "nodes" || filter === "my-nodes";
+  const isMyNodesTab = filter === "my-nodes";
+
   const filteredNodes = useMemo(
     () =>
       globalNodes.filter((n) => {
+        if (isMyNodesTab && n.source !== "marketplace") return false;
         const filterMatch =
           resourceFilter === "all" ||
           (resourceFilter === "marketplace" ? n.source === "marketplace" : n.type === resourceFilter);
@@ -388,7 +440,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
           n.version,
         ]);
       }),
-    [globalNodes, pipelineSearch, resourceFilter],
+    [globalNodes, isMyNodesTab, pipelineSearch, resourceFilter],
   );
 
   const skillCollectionSkillSets = useMemo(() => {
@@ -436,7 +488,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
     [globalSkills, pipelineSearch, resourceFilter, skillCollectionSkillSets],
   );
 
-  const isResourceTab = filter === "nodes" || filter === "skills";
+  const isResourceTab = isNodeResourceTab || filter === "skills";
   const selectedNode = useMemo(
     () => filteredNodes.find((n) => resourceKey(n) === selectedResourceKey) || filteredNodes[0] || null,
     [filteredNodes, selectedResourceKey],
@@ -449,7 +501,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const selectedNodeDetail = selectedNode ? nodeDetails[resourceKey(selectedNode)] : null;
   const selectedNodeFilePreview = selectedNode && nodeFilePath ? nodeFilePreviews[`${resourceKey(selectedNode)}:${nodeFilePath}`] : null;
   const searchPlaceholder =
-    filter === "nodes"
+    isNodeResourceTab
       ? t("project:searchNodes")
       : filter === "skills"
         ? t("project:searchSkills")
@@ -479,7 +531,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
   }, [filter, selectedSkill, skillDetails]);
 
   useEffect(() => {
-    if (filter !== "nodes" || !selectedNode) return;
+    if (!isNodeResourceTab || !selectedNode) return;
     const key = resourceKey(selectedNode);
     if (nodeDetails[key]) return;
     let cancelled = false;
@@ -497,16 +549,16 @@ export default function ProjectsPage({ resourceKind = "" }) {
     return () => {
       cancelled = true;
     };
-  }, [filter, selectedNode, nodeDetails]);
+  }, [isNodeResourceTab, selectedNode, nodeDetails]);
 
   useEffect(() => {
-    if (filter !== "nodes") return;
+    if (!isNodeResourceTab) return;
     const files = Array.isArray(selectedNodeDetail?.files) ? selectedNodeDetail.files : [];
     setNodeFilePath((prev) => (prev && files.some((f) => f.path === prev) ? prev : files[0]?.path || ""));
-  }, [filter, selectedNodeDetail]);
+  }, [isNodeResourceTab, selectedNodeDetail]);
 
   useEffect(() => {
-    if (filter !== "nodes" || !selectedNode || !nodeFilePath) return;
+    if (!isNodeResourceTab || !selectedNode || !nodeFilePath) return;
     const key = `${resourceKey(selectedNode)}:${nodeFilePath}`;
     if (nodeFilePreviews[key]) return;
     let cancelled = false;
@@ -524,7 +576,11 @@ export default function ProjectsPage({ resourceKind = "" }) {
     return () => {
       cancelled = true;
     };
-  }, [filter, selectedNode, nodeFilePath, nodeFilePreviews]);
+  }, [isNodeResourceTab, selectedNode, nodeFilePath, nodeFilePreviews]);
+
+  useEffect(() => {
+    setNodeDeleteMessage("");
+  }, [selectedResourceKey, filter]);
 
   const openFlow = (f) => {
     navigate(preferredFlowUrl(f, "workspace"));
@@ -661,7 +717,9 @@ export default function ProjectsPage({ resourceKind = "" }) {
         <section className="af-projects-main">
           <header className="af-projects-section-head">
             <h2 className="af-projects-h2">
-              {filter === "nodes"
+              {filter === "my-nodes"
+                ? t("project:myNodes")
+                : filter === "nodes"
                 ? t("project:globalNodes")
                 : filter === "skills"
                   ? t("project:globalSkills")
@@ -673,12 +731,14 @@ export default function ProjectsPage({ resourceKind = "" }) {
               {searchNorm
                 ? t("project:filterResult", {
                     count:
-                      filter === "nodes"
+                      (filter === "nodes" || filter === "my-nodes")
                         ? filteredNodes.length
                         : filter === "skills"
                           ? filteredSkills.length
                           : filteredFlows.length,
                   })
+                : filter === "my-nodes"
+                  ? t("project:myNodesHint", { count: filteredNodes.length })
                 : filter === "nodes"
                   ? t("project:nodesHint", { count: globalNodes.length })
                   : filter === "skills"
@@ -695,14 +755,14 @@ export default function ProjectsPage({ resourceKind = "" }) {
             <div className="af-resource-toolbar">
               {filter === "skills" ? <SkillHubPanel onChanged={loadResources} /> : null}
               <div className="af-resource-purpose">
-                <span className="material-symbols-outlined">{filter === "nodes" ? "account_tree" : "extension"}</span>
+                <span className="material-symbols-outlined">{isNodeResourceTab ? (isMyNodesTab ? "deployed_code" : "account_tree") : "extension"}</span>
                 <div>
-                  <h3>{filter === "nodes" ? t("project:nodesPurposeTitle") : t("project:skillsPurposeTitle")}</h3>
-                  <p>{filter === "nodes" ? t("project:nodesPurposeDesc") : t("project:skillsPurposeDesc")}</p>
+                  <h3>{isMyNodesTab ? t("project:myNodesPurposeTitle") : isNodeResourceTab ? t("project:nodesPurposeTitle") : t("project:skillsPurposeTitle")}</h3>
+                  <p>{isMyNodesTab ? t("project:myNodesPurposeDesc") : isNodeResourceTab ? t("project:nodesPurposeDesc") : t("project:skillsPurposeDesc")}</p>
                 </div>
               </div>
               <div className="af-resource-filter-row">
-                {(filter === "nodes" ? NODE_FILTERS.map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
+                {(isNodeResourceTab ? (isMyNodesTab ? MY_NODE_FILTERS : NODE_FILTERS).map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
                   item.collection ? (
                     <span
                       key={item.id}
@@ -774,7 +834,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
             </div>
           ) : null}
 
-          {filter === "nodes" ? (
+          {isNodeResourceTab ? (
             <div className="af-resource-grid">
               {filteredNodes.length > 0 ? (
                 filteredNodes.map((n) => (
@@ -821,7 +881,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
               ) : (
                 <div className="af-projects-empty-block">
                   <p className="af-projects-empty">
-                    {searchNorm ? t("project:noNodeMatch", { query: pipelineSearch.trim() }) : t("project:noNodes")}
+                    {searchNorm ? t("project:noNodeMatch", { query: pipelineSearch.trim() }) : isMyNodesTab ? t("project:noMyNodes") : t("project:noNodes")}
                   </p>
                 </div>
               )}
@@ -973,8 +1033,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
         </section>
 
         {isResourceTab ? (
-          <aside className="af-resource-detail" aria-label={filter === "nodes" ? t("project:nodeDetail") : t("project:skillDetail")}>
-            {filter === "nodes" && selectedNode ? (
+          <aside className="af-resource-detail" aria-label={isNodeResourceTab ? t("project:nodeDetail") : t("project:skillDetail")}>
+            {isNodeResourceTab && selectedNode ? (
               <>
                 <div className="af-resource-detail-head">
                   <span className="material-symbols-outlined">account_tree</span>
@@ -1012,6 +1072,22 @@ export default function ProjectsPage({ resourceKind = "" }) {
                       ) : null}
                       <div><dt>{t("project:detailEditable")}</dt><dd>{selectedNodeDetail?.readOnly === false ? t("project:editable") : t("project:readOnly")}</dd></div>
                     </dl>
+                    {isMyNodesTab && selectedNode.source === "marketplace" ? (
+                      <div className="af-resource-detail-section af-resource-danger-zone">
+                        <h4>{t("project:myNodeManagement")}</h4>
+                        <p>{t("project:deleteMyNodeHint")}</p>
+                        <button
+                          type="button"
+                          className="af-btn-secondary af-btn-danger"
+                          disabled={nodeDeleteBusy === resourceKey(selectedNode)}
+                          onClick={() => deleteMarketplaceNode(selectedNode)}
+                        >
+                          <span className="material-symbols-outlined">delete</span>
+                          {nodeDeleteBusy === resourceKey(selectedNode) ? t("project:deletingMyNode") : t("project:deleteMyNode")}
+                        </button>
+                        {nodeDeleteMessage ? <p className="af-resource-action-message">{nodeDeleteMessage}</p> : null}
+                      </div>
+                    ) : null}
                     <div className="af-resource-detail-section">
                       <h4>{t("project:resourceMeaning")}</h4>
                       <p>{t("project:nodesMeaning")}</p>
