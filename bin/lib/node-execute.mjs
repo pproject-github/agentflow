@@ -404,7 +404,7 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
     if (cli === "api") {
       await runApiAgentForNode(
         workspaceRoot,
-        { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", subagent, instanceId },
+        { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", intermediatePath, resultPathRel: resultPath, subagent, instanceId },
         {
           model,
           onToolCall: options.onToolCall,

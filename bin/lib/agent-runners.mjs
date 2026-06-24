@@ -9,6 +9,8 @@ import { normalizeCursorModelForCli } from "./model-config.mjs";
 import { appendRunLogLine } from "./run-events.mjs";
 import { writeWithPrefix } from "./terminal.mjs";
 import { t } from "./i18n.mjs";
+import { readUserEnvObject } from "./user-env.mjs";
+import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 function shouldPassCursorModelArg(model) {
   const text = String(model || "").trim();
@@ -17,7 +19,19 @@ function shouldPassCursorModelArg(model) {
 
 function childEnv(options = {}, extra = {}) {
   const optEnv = options && options.env && typeof options.env === "object" ? options.env : {};
-  return { ...process.env, ...optEnv, ...extra };
+  const userId = optEnv.AGENTFLOW_USER_ID || process.env.AGENTFLOW_USER_ID || "";
+  return { ...process.env, ...readUserEnvObject(userId), ...optEnv, ...extra };
+}
+
+function writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, text) {
+  const body = String(text ?? "").trim();
+  if (!body) return;
+  fs.mkdirSync(path.dirname(absResultPath), { recursive: true });
+  fs.writeFileSync(absResultPath, body + "\n", "utf-8");
+  if (!instanceId) return;
+  const slotPath = path.join(absRunDir, "output", instanceId, outputNodeBasename(instanceId, 1, "result"));
+  fs.mkdirSync(path.dirname(slotPath), { recursive: true });
+  fs.writeFileSync(slotPath, body + "\n", "utf-8");
 }
 
 /**
@@ -102,6 +116,7 @@ export function runCursorAgentForNode(
 
     let lastResult = null;
     let hadError = false;
+    const assistantTextChunks = [];
     const STDERR_CAP_BYTES = 1024 * 1024;
     const stderrChunks = [];
     let stderrTotalBytes = 0;
@@ -186,6 +201,7 @@ export function runCursorAgentForNode(
               .join("");
             if (text) {
               text = text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+              assistantTextChunks.push(text);
               const out = mdStreamer.push(text);
               if (out) writeStdout(out);
             }
@@ -280,6 +296,7 @@ export function runCursorAgentForNode(
         reject(new Error(lastResult?.result || "Agent reported error."));
         return;
       }
+      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, assistantTextChunks.join("") || lastResult?.result || "");
       resolve();
     });
   });
@@ -364,6 +381,7 @@ export function runOpenCodeAgentForNode(
 
     let stdoutLogBuf = "";
     let stderrLogBuf = "";
+    let stdoutCaptured = "";
 
     function drainLogBuf(buf, tag) {
       let idx;
@@ -390,7 +408,9 @@ export function runOpenCodeAgentForNode(
     child.stdout.on("data", (chunk) => {
       if (coloredPrefix) writeWithPrefix(process.stdout, chunk, coloredPrefix, agentContentColor);
       else process.stdout.write(agentContentColor(chunk));
-      stdoutLogBuf += String(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const normalizedChunk = String(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      stdoutCaptured += normalizedChunk;
+      stdoutLogBuf += normalizedChunk;
       stdoutLogBuf = drainLogBuf(stdoutLogBuf, "opencode-stdout");
     });
 
@@ -422,6 +442,7 @@ export function runOpenCodeAgentForNode(
         reject(new Error(`OpenCode CLI exited ${code}.`));
         return;
       }
+      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, stripAnsi(stdoutCaptured));
       resolve();
     });
   });
@@ -520,6 +541,7 @@ export function runClaudeCodeAgentForNode(
     let lastResult = null;
     let hadError = false;
     let sessionId = null;
+    const assistantTextChunks = [];
     const STDERR_CAP_BYTES = 1024 * 1024;
     const stderrChunks = [];
     let stderrTotalBytes = 0;
@@ -596,6 +618,7 @@ export function runClaudeCodeAgentForNode(
               if (!block || typeof block !== "object") continue;
               if (block.type === "text" && block.text) {
                 const text = normalizeStreamTextChunk(block.text);
+                assistantTextChunks.push(text);
                 const out = mdStreamer.push(text);
                 if (out) writeStdout(out);
               } else if (block.type === "thinking") {
@@ -664,6 +687,7 @@ export function runClaudeCodeAgentForNode(
         reject(new Error(String(msg)));
         return;
       }
+      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, assistantTextChunks.join("") || lastResult?.result || "");
       resolve();
     });
   });

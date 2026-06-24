@@ -19,10 +19,22 @@ import { spawnSync } from "child_process";
 
 import { loadAgentPromptWithReplacements, stripYamlFrontmatter } from "./agents-path.mjs";
 import { appendRunLogLine } from "./run-events.mjs";
+import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 const DEFAULT_OPENAI_BASE = "https://api.openai.com/v1";
 const MAX_TOOL_ROUNDS = parseInt(process.env.AGENTFLOW_API_MAX_ROUNDS ?? "30", 10) || 30;
 const MAX_TOKENS = parseInt(process.env.AGENTFLOW_API_MAX_TOKENS ?? "8192", 10) || 8192;
+
+function writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, text) {
+  const body = String(text ?? "").trim();
+  if (!body || !absResultPath || !absRunDir) return;
+  fs.mkdirSync(path.dirname(absResultPath), { recursive: true });
+  fs.writeFileSync(absResultPath, body + "\n", "utf-8");
+  if (!instanceId) return;
+  const slotPath = path.join(absRunDir, "output", instanceId, outputNodeBasename(instanceId, 1, "result"));
+  fs.mkdirSync(path.dirname(slotPath), { recursive: true });
+  fs.writeFileSync(slotPath, body + "\n", "utf-8");
+}
 
 // ─── 工具定义 ────────────────────────────────────────────────────────────────
 
@@ -203,6 +215,7 @@ async function runOpenAiLoop(apiKey, baseUrl, model, systemPrompt, userContent, 
     ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
     { role: "user", content: userContent },
   ];
+  let finalText = "";
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     log(`[api/openai] round ${round + 1}`);
@@ -218,6 +231,7 @@ async function runOpenAiLoop(apiKey, baseUrl, model, systemPrompt, userContent, 
       const txt = typeof msg.content === "string" ? msg.content : "";
       if (txt.trim()) options.onToolCall("assistant", txt.slice(0, 200));
     }
+    if (typeof msg.content === "string" && msg.content.trim()) finalText = msg.content;
 
     if (choice.finish_reason === "stop" || choice.finish_reason === "end_turn" || !msg.tool_calls?.length) {
       log(`[api/openai] finished (${choice.finish_reason ?? "no-tool-calls"})`);
@@ -240,10 +254,12 @@ async function runOpenAiLoop(apiKey, baseUrl, model, systemPrompt, userContent, 
     }
     messages.push(...toolResults);
   }
+  return finalText;
 }
 
 async function runAnthropicLoop(apiKey, model, systemPrompt, userContent, workspaceRoot, log, options) {
   const messages = [{ role: "user", content: userContent }];
+  let finalText = "";
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     log(`[api/anthropic] round ${round + 1}`);
@@ -256,6 +272,8 @@ async function runAnthropicLoop(apiKey, model, systemPrompt, userContent, worksp
       const textBlock = resp.content?.find((b) => b.type === "text");
       if (textBlock?.text) options.onToolCall("assistant", textBlock.text.slice(0, 200));
     }
+    const textBlock = resp.content?.find((b) => b.type === "text");
+    if (textBlock?.text?.trim()) finalText = textBlock.text;
 
     if (resp.stop_reason === "end_turn" || resp.stop_reason === "stop_sequence") {
       log(`[api/anthropic] finished (${resp.stop_reason})`);
@@ -280,6 +298,7 @@ async function runAnthropicLoop(apiKey, model, systemPrompt, userContent, worksp
     }
     messages.push({ role: "user", content: toolResults });
   }
+  return finalText;
 }
 
 // ─── 公共解析函数 ─────────────────────────────────────────────────────────────
@@ -313,9 +332,11 @@ export function parseApiModel(str) {
  *   uuid       — 用于日志
  *   onToolCall — (subtype: string, name: string) => void  供 spinner 展示
  */
-export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContext, taskBody, subagent, instanceId }, options = {}) {
+export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId }, options = {}) {
   const absRoot = path.resolve(workspaceRoot);
   const execRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
+  const absRunDir = intermediatePath ? path.resolve(workspaceRoot, intermediatePath) : "";
+  const absResultPath = absRunDir && resultPathRel ? path.join(absRunDir, resultPathRel) : "";
   const flowName = options.flowName ?? null;
   const uuid = options.uuid ?? null;
 
@@ -352,12 +373,14 @@ export async function runApiAgentForNode(workspaceRoot, { promptPath, nodeContex
   if (provider === "anthropic") {
     const key = process.env.ANTHROPIC_API_KEY;
     if (!key) throw new Error("[api-runner] ANTHROPIC_API_KEY is required for api:anthropic/* models");
-    await runAnthropicLoop(key, model, systemPrompt, userContent, execRoot, log, options);
+    const finalText = await runAnthropicLoop(key, model, systemPrompt, userContent, execRoot, log, options);
+    writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, finalText);
   } else {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error("[api-runner] OPENAI_API_KEY is required for api:openai/* models");
     const baseUrl = (process.env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE).trim();
-    await runOpenAiLoop(key, baseUrl, model, systemPrompt, userContent, execRoot, log, options);
+    const finalText = await runOpenAiLoop(key, baseUrl, model, systemPrompt, userContent, execRoot, log, options);
+    writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, finalText);
   }
 
   log(`done instanceId=${instanceId ?? "-"}`);

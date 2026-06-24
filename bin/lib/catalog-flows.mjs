@@ -129,7 +129,10 @@ function normalizeFrontmatterSlots(arr) {
     let def = item.default !== undefined && item.default !== null ? item.default : item.value;
     if (def === undefined || def === null) def = "";
     else if (typeof def !== "string") def = String(def);
-    return { type, name, default: def };
+    const slot = { type, name, default: def };
+    if (item.required != null) slot.required = Boolean(item.required);
+    if (item.showOnNode != null) slot.showOnNode = Boolean(item.showOnNode);
+    return slot;
   });
 }
 

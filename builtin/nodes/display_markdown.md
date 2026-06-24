@@ -9,9 +9,14 @@ input:
   - type: text
     name: content
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: text
     name: content
+    default: ""
+  - type: node
+    name: next
     default: ""
 ---
 ${content}
