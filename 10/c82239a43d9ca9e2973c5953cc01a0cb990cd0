@@ -1,0 +1,62 @@
+builtin/web-ui/dist/index.html
+  s_902e25e5da2b02::t_34041a4585fecf 18
+  s_902e25e5da2b02::t_8ee7252360091c 19
+builtin/web-ui/src/index.css
+  s_902e25e5da2b02::t_223da3a986cd5c 418-434,1123-1135
+bin/lib/marketplace.mjs
+  s_902e25e5da2b02::t_551cb0cde2268a 200,366-387
+  s_902e25e5da2b02::t_b24ec09fa1e160 5-11,109-199
+  s_902e25e5da2b02::t_efff2960c273fa 332,344
+builtin/web-ui/src/i18n/locales/zh/common.json
+  s_902e25e5da2b02::t_5728b0cf27f8c4 9
+builtin/web-ui/src/i18n/locales/zh/project.json
+  s_902e25e5da2b02::t_45685d78f10b14 6,11,28-29,35,66-72
+builtin/web-ui/dist/assets/index-BHpZX418.js
+  s_902e25e5da2b02::t_34041a4585fecf 1,9,17,25,33,37-38,40,42,44,52,60,65-67,69-71,73,75,78-88,90-95,98,103,109-110,123-132,135-136,138,142,150,152,156,164-165,167,171,197
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_902e25e5da2b02::t_88b07b907fcd41 720-722,740-741,758,760-761,765,837,884
+  s_902e25e5da2b02::t_c3dd2f51a3550a 355,374-375
+  s_902e25e5da2b02::t_a810f65c7a4c50 1075-1090
+  s_902e25e5da2b02::t_9948f6d0d72e76 734
+  s_902e25e5da2b02::t_725fd97e7a1cf9 504
+  s_902e25e5da2b02::t_08bef460716a98 1036-1037
+  s_902e25e5da2b02::t_ba8c315f73bbf3 128,172-173,422-424,428,443,491
+  s_902e25e5da2b02::t_a976cf48e655d0 313-353,377
+  s_902e25e5da2b02::t_a83b829bcdc2e2 534,552,555,558,561,579
+  s_902e25e5da2b02::t_fd9e6b6601697e 581-584
+builtin/web-ui/src/i18n/locales/en/project.json
+  s_902e25e5da2b02::t_1c9bf22405ac62 6,11,28-29,35,66-72
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_902e25e5da2b02::t_2fb14508e7d0e3 9
+bin/lib/ui-server.mjs
+  s_902e25e5da2b02::t_c8e389876d0dfc 77,2283,2286-2301
+builtin/web-ui/src/i18n/locales/en/common.json
+  s_902e25e5da2b02::t_3b484c12687a14 9
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_902e25e5da2b02::t_fdb33376e29332 2509
+  s_902e25e5da2b02::t_a167de225c51d0 1131-1159
+builtin/web-ui/src/App.jsx
+  s_902e25e5da2b02::t_fd66981755d69b 52
+builtin/web-ui/dist/assets/index-D0Tkhqr6.css
+  s_902e25e5da2b02::t_8ee7252360091c 1
+bin/lib/catalog-flows.mjs
+  s_902e25e5da2b02::t_b1df2250e4827c 683-689
+  s_902e25e5da2b02::t_d6a751a70f91e6 659,666-682,690
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "10c82239a43d9ca9e2973c5953cc01a0cb990cd0",
+  "prompts": {},
+  "logical_commit_id": "10c82239a43d9ca9e2973c5953cc01a0cb990cd0",
+  "sessions": {
+    "s_902e25e5da2b02": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ef8f0-490e-70c2-8cad-7cf05ff84fee",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
