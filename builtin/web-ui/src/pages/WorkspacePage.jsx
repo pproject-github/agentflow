@@ -1128,6 +1128,35 @@ function WorkspacePageInner() {
     loadedRef.current = true;
   }, [flowParams, i18n.language, loadFiles, setEdges, setNodes]);
 
+  const publishNodeToMarketplace = useCallback(
+    async (draft, definitionId) => {
+      const payload = {
+        packageId: draft?.newId || draft?.id || draft?.label,
+        label: draft?.label || draft?.newId || draft?.id,
+        version: "1.0.0",
+        definitionId,
+        body: draft?.body || "",
+        script: draft?.script || "",
+        inputs: Array.isArray(draft?.inputs) ? draft.inputs : [],
+        outputs: Array.isArray(draft?.outputs) ? draft.outputs : [],
+        flowId: flowParams.flowId,
+        flowSource: flowParams.flowSource || "user",
+        archived: Boolean(flowParams.archived),
+      };
+      const resp = await fetch("/api/marketplace/publish-node-from-instance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await resp.json().catch(() => ({}));
+      if (!resp.ok || result?.ok === false) throw new Error(result?.error || "Publish failed");
+      await loadWorkspace();
+      setStatus(`Published node ${result.definitionId || result.id || payload.packageId}`);
+      return result;
+    },
+    [flowParams, loadWorkspace],
+  );
+
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!runNodeId || runningRunNodeId) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
@@ -2477,6 +2506,7 @@ function WorkspacePageInner() {
               disabled={false}
               onIdBlur={() => applyNodeProperties(true)}
               onClose={() => setSelectedNodeId("")}
+              onPublishToMarketplace={publishNodeToMarketplace}
               error={nodePropsError}
               ioSlots={{
                 inputs: Array.isArray(nodePropDraft?.inputs) ? nodePropDraft.inputs : [],

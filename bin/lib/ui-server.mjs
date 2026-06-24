@@ -74,7 +74,7 @@ import {
 import { runNodeScript } from "./pipeline-scripts.mjs";
 import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
-import { installFlowDependency, listMarketplacePackages, publishNodeFromInstance } from "./marketplace.mjs";
+import { deleteMarketplaceNodePackage, installFlowDependency, listMarketplacePackages, publishNodeFromInstance } from "./marketplace.mjs";
 import {
   authSetupRequired,
   buildClearSessionCookie,
@@ -2280,9 +2280,25 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/marketplace/nodes") {
       try {
-        json(res, 200, listMarketplacePackages(root));
+        json(res, 200, listMarketplacePackages(root, userCtx));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/marketplace/node") {
+      const id = url.searchParams.get("id") || "";
+      const version = url.searchParams.get("version") || "";
+      if (!id || !version) {
+        json(res, 400, { ok: false, error: "Missing marketplace node id or version" });
+        return;
+      }
+      try {
+        const result = deleteMarketplaceNodePackage(root, id, version, userCtx);
+        json(res, result.ok ? 200 : 400, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
       }
       return;
     }

@@ -6,6 +6,7 @@
   "nav": {
     "projects": "项目",
     "nodes": "Nodes",
+    "myNodes": "我的 Nodes",
     "skills": "Skills",
     "flowEditor": "流程编辑器",
     "settings": "设置",

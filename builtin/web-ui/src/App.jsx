@@ -49,6 +49,7 @@ function RoutedContent() {
   const { path } = useRoute();
   if (path === "/projects" || path === "/") return <ProjectsPage />;
   if (path === "/nodes") return <ProjectsPage resourceKind="nodes" />;
+  if (path === "/my-nodes") return <ProjectsPage resourceKind="my-nodes" />;
   if (path === "/skills") return <ProjectsPage resourceKind="skills" />;
   if (path === "/flow") return <FlowEditorPage />;
   if (path === "/workspace") return <WorkspacePage />;
