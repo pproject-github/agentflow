@@ -3,11 +3,94 @@
  */
 
 function toIOSlot(s) {
-  return {
+  const slot = {
     type: s.type || "node",
     name: s.name || "",
     default: s.value !== undefined && s.value !== null ? String(s.value) : s.default !== undefined ? String(s.default) : "",
   };
+  if (s.required != null) slot.required = Boolean(s.required);
+  if (s.showOnNode != null) slot.showOnNode = Boolean(s.showOnNode);
+  return slot;
+}
+
+const BUILTIN_DEFAULT_LABEL_ALIASES = {
+  agent_subAgent: ["SubAgent"],
+  control_start: ["Start"],
+  control_end: ["End"],
+  control_agent_toBool: ["Agent ToBool"],
+  control_anyOne: ["Any One"],
+  control_cancelled: ["Cancelled"],
+  control_cd_workspace: ["CD Workspace"],
+  control_deadline: ["Deadline"],
+  control_delay: ["Delay"],
+  control_if: ["If Branch"],
+  control_interval_loop: ["Interval Loop"],
+  control_load_skills: ["Load Skills"],
+  control_user_workspace: ["User Workspace"],
+  control_toBool: ["To Bool"],
+  control_wait_until: ["Wait Until"],
+  tool_git_checkout: ["Git Checkout"],
+  tool_get_env: ["Get Env"],
+  tool_load_key: ["Load Key"],
+  tool_nodejs: ["Node.js Script"],
+  tool_print: ["Print"],
+  tool_save_key: ["Save Key"],
+  tool_user_ask: ["UserAsk"],
+  tool_user_check: ["User Confirm"],
+  provide_file: ["File"],
+  provide_text: ["Text"],
+  display_markdown: ["Markdown Display"],
+  display_mermaid: ["Mermaid Display"],
+  display_ascii: ["ASCII Display"],
+};
+
+function displayLabelForNode(definitionId, label, def) {
+  const translated = String(def?.displayName || "").trim();
+  const current = String(label || "").trim();
+  if (!translated || !current || translated === current) return current;
+  const aliases = BUILTIN_DEFAULT_LABEL_ALIASES[definitionId] || [];
+  return aliases.includes(current) ? translated : current;
+}
+
+const LEGACY_AUTO_HIDDEN_SLOT_NAMES = {
+  tool_git_checkout: new Set(["targetDir", "pullIfExists", "includeSubmodules", "workspaceContext", "commit", "changed"]),
+  control_load_skills: new Set(["mergeMode", "workspaceContext", "skillsContext", "loadedCount", "summary"]),
+  agent_subAgent: new Set(["workspaceContext", "skillsContext"]),
+};
+
+const CANVAS_HIDDEN_SLOT_NAMES = {
+  control_cd_workspace: new Set(["mode", "label", "cwd", "previous"]),
+  control_user_workspace: new Set(["cwd"]),
+  tool_git_checkout: new Set([
+    "branch",
+    "targetDir",
+    "pullIfExists",
+    "includeSubmodules",
+    "repoPath",
+    "commit",
+    "changed",
+  ]),
+};
+
+function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
+  if (!Array.isArray(slots) || !Array.isArray(definitionSlots) || definitionSlots.length === 0) return slots;
+  return slots.map((slot, index) => {
+    const byIndex = definitionSlots[index];
+    const byName = definitionSlots.find((candidate) => candidate?.name && candidate.name === slot.name);
+    const def = byName || byIndex;
+    if (!def) return slot;
+    const wasLegacyAutoHidden =
+      slot.showOnNode === false &&
+      def.showOnNode == null &&
+      LEGACY_AUTO_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name);
+    return {
+      ...slot,
+      ...(slot.required == null && def.required != null ? { required: Boolean(def.required) } : {}),
+      ...(wasLegacyAutoHidden ? { showOnNode: true } : {}),
+      ...(slot.showOnNode == null && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
+      ...(CANVAS_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: false } : {}),
+    };
+  });
 }
 
 /**
@@ -21,7 +104,13 @@ export function cloneNodeIoDraftSlots(node) {
   const norm = (arr) =>
     arr.map((s) => {
       const sl = toIOSlot(s);
-      return { type: String(sl.type || "node"), name: String(sl.name ?? ""), default: String(sl.default ?? "") };
+      return {
+        type: String(sl.type || "node"),
+        name: String(sl.name ?? ""),
+        default: String(sl.default ?? ""),
+        required: Boolean(sl.required),
+        showOnNode: sl.showOnNode !== false,
+      };
     });
   return { inputs: norm(ins), outputs: norm(outs) };
 }
@@ -77,13 +166,29 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     if (outputs.length === 0 && def?.outputs?.length) outputs = def.outputs.map((x) => ({ ...x }));
   }
   const resolvedDefId = def?.id ?? definitionId;
+  if (resolvedDefId === "agent_subAgent" && !outputs.some((slot) => slot?.name === "result")) {
+    const resultSlot = def?.outputs?.find((slot) => slot?.name === "result");
+    outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
+  }
+  if (
+    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii") &&
+    !outputs.some((slot) => slot?.name === "next")
+  ) {
+    const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");
+    outputs = [...outputs, nextSlot ? { ...nextSlot } : { type: "node", name: "next", default: "" }];
+  }
+  inputs = mergeSlotDefinitionMeta(resolvedDefId, inputs, def?.inputs);
+  outputs = mergeSlotDefinitionMeta(resolvedDefId, outputs, def?.outputs);
+  const displayLabel = displayLabelForNode(resolvedDefId, translatedLabel || label, def);
   const showScriptField = resolvedDefId === "tool_nodejs" || String(mergedScript).trim() !== "";
-return {
+  return {
     ...n,
     type: "flowNode",
     data: {
       ...n.data,
       label: translatedLabel || label,
+      displayLabel,
+      definitionDisplayName: def?.displayName,
       definitionId: resolvedDefId,
       schemaType: n.data?.schemaType ?? n.type ?? "agent",
       role: mergedRole,
@@ -95,10 +200,7 @@ return {
       description: translatedDescription || mergedDescription,
       originalLabel: label,
       originalBody: mergedBody,
-      body: mergedBody,
       ...(showScriptField ? { script: mergedScript } : {}),
-      inputs,
-      outputs,
     },
   };
 }

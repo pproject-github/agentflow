@@ -269,6 +269,10 @@
       "displayName": "CD Workspace",
       "description": "Switch downstream execution to another workspace context without changing the pipeline workspace"
     },
+    "control_user_workspace": {
+      "displayName": "User Workspace",
+      "description": "Output a workspace context pointing to the current user's home directory"
+    },
     "control_load_skills": {
       "displayName": "Load Skills",
       "description": "Load SKILL.md files from the current workspace, pipeline workspace, explicit paths, or both"

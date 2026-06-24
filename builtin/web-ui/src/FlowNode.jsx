@@ -30,6 +30,8 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
   const nodeElapsed = data?.nodeElapsed ?? null;
   const definitionId = data?.definitionId || "";
   const isProvideNode = definitionId.startsWith("provide_");
+  const nodeTitle = data?.displayLabel || data?.label || t("flow:node.fallbackLabel");
+  const bodyPreview = data?.showBodyPreview ? String(data?.body || "").trim() : "";
 
   const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
   const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
@@ -207,10 +209,15 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
       <div className="af-flow-node__body">
         <div className="af-flow-node__ports af-flow-node__ports--in">
           {inputs.map((slot, i) => {
+            if (slot.showOnNode === false) return null;
             const tip = t("flow:node.inputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
               (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
+            const label = slot.name || `#${i + 1}`;
             return (
               <div key={`in-${i}`} className="af-flow-node__port-row" title={tip}>
+                <span className="af-flow-node__port-label af-flow-node__port-label--in">
+                  {label}{slot.required ? <span className="af-flow-node__port-required">*</span> : null}
+                </span>
                 <Handle
                   type="target"
                   position={Position.Left}
@@ -224,14 +231,24 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
           })}
         </div>
         <div className="af-flow-node__title-wrap">
-          <span className="af-flow-node__title">{data?.label ?? t("flow:node.fallbackLabel")}</span>
+          <span className="af-flow-node__title">{nodeTitle}</span>
+          {bodyPreview ? (
+            <span className="af-flow-node__prompt-preview" title={bodyPreview}>
+              {bodyPreview}
+            </span>
+          ) : null}
         </div>
         <div className="af-flow-node__ports af-flow-node__ports--out">
           {outputs.map((slot, i) => {
+            if (slot.showOnNode === false) return null;
             const tip = t("flow:node.outputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
               (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
+            const label = slot.name || `#${i + 1}`;
             return (
               <div key={`out-${i}`} className="af-flow-node__port-row" title={tip}>
+                <span className="af-flow-node__port-label af-flow-node__port-label--out">
+                  {label}{slot.required ? <span className="af-flow-node__port-required">*</span> : null}
+                </span>
                 <Handle
                   type="source"
                   position={Position.Right}

@@ -24,6 +24,7 @@
 
 import { spawnSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -337,9 +338,9 @@ function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) 
   if (mode === "pop") {
     next = normalizeWorkspaceContext(workspaceContext.previous, workspaceRoot, flowName);
   } else {
-    const target = resolveWorkspaceTarget(inputs.target || inputs.path || inputs.repoPath || "", workspaceContext);
+    const target = resolveWorkspaceTarget(inputs.path || inputs.target || inputs.repoPath || "", workspaceContext);
     if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
-      throw new Error(`control_cd_workspace: target directory not found: ${target}`);
+      throw new Error(`control_cd_workspace: path directory not found: ${target}`);
     }
     next = {
       version: 1,
@@ -356,6 +357,25 @@ function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) 
   writeOutputSlot(runDir, instanceId, execId, "previous", next.previous ? JSON.stringify(next.previous) : "");
   writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `cwd=${next.cwd}` }, { execId });
   return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "cd-workspace", `Workspace context switched to: ${next.cwd}\n`);
+}
+
+function emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const homeDir = path.resolve(os.homedir());
+  const next = {
+    version: 1,
+    label: "home",
+    cwd: homeDir,
+    workspaceRoot: homeDir,
+    pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+    flowDir: workspaceContext.flowDir,
+    previous: workspaceContext,
+  };
+  writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(next));
+  writeOutputSlot(runDir, instanceId, execId, "cwd", next.cwd);
+  writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `user workspace: ${homeDir}` }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "user-workspace", `Workspace context switched to user home: ${homeDir}\n`);
 }
 
 function emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId) {
@@ -981,16 +1001,18 @@ function main() {
     return;
   }
 
-  if (definitionId === "tool_git_checkout" || definitionId === "control_cd_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
+  if (definitionId === "tool_git_checkout" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
     try {
       const promptPath =
         definitionId === "tool_git_checkout"
           ? emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel)
           : definitionId === "control_cd_workspace"
             ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
-            : definitionId === "control_load_skills"
-              ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
-              : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
+            : definitionId === "control_user_workspace"
+              ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+              : definitionId === "control_load_skills"
+                ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
       writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
       logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "runtime-context-node", instanceId, definitionId });
       console.log(JSON.stringify({

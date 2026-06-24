@@ -7,6 +7,7 @@
  */
 import fs from "fs";
 import http from "http";
+import os from "os";
 import path from "path";
 import { execFile, spawn } from "child_process";
 import busboy from "busboy";
@@ -40,6 +41,7 @@ import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
   getAgentflowUserConfigAbs,
+  getAgentflowUserDataRoot,
   getModelListsAbs,
   getRunDir,
 } from "./paths.mjs";
@@ -81,6 +83,7 @@ import {
   loginOrCreateUser,
   logoutRequest,
 } from "./auth.mjs";
+import { readUserEnvObject, readUserEnvRows, writeUserEnvRows } from "./user-env.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -92,6 +95,49 @@ const MIME = {
 };
 
 const RUN_CONFIG_FILENAME = "run-config.json";
+const SKILL_COLLECTIONS_FILENAME = "skill-collections.json";
+const BUILTIN_SKILL_COLLECTIONS = [
+  {
+    id: "pipeline",
+    name: "Pipeline",
+    defaultKeys: [
+      "agentflow-flow-add-instances",
+      "agentflow-flow-edit-node-fields",
+      "agentflow-flow-recipes",
+      "agentflow-flow-sync-ui",
+      "agentflow-node-reference",
+      "agentflow-placeholder-reference",
+      "agentflow-runtime-reference",
+    ],
+  },
+  {
+    id: "workspace",
+    name: "Workspace",
+    defaultKeys: [
+      "agentflow-workspace-graph",
+      "agentflow-workspace-markdown",
+      "agentflow-workspace-mermaid",
+      "agentflow-workspace-ascii",
+      "agentflow-node-reference",
+      "agentflow-placeholder-reference",
+      "agentflow-runtime-reference",
+    ],
+    legacyDefaultKeys: [
+      [
+        "agentflow-flow-add-instances",
+        "agentflow-flow-edit-node-fields",
+        "agentflow-node-reference",
+        "agentflow-placeholder-reference",
+        "agentflow-runtime-reference",
+      ],
+      [
+        "agentflow-node-reference",
+        "agentflow-placeholder-reference",
+        "agentflow-runtime-reference",
+      ],
+    ],
+  },
+];
 
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -100,6 +146,155 @@ function json(res, status, obj) {
     "Content-Length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function skillCollectionsAbs(userCtx = {}) {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId), SKILL_COLLECTIONS_FILENAME);
+}
+
+function slugifySkillCollectionId(name, fallback = "collection") {
+  const raw = String(name || "").trim().toLowerCase();
+  const id = raw
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return id || fallback;
+}
+
+function isBuiltinSkillCollectionId(id) {
+  return BUILTIN_SKILL_COLLECTIONS.some((collection) => collection.id === id);
+}
+
+function resolveSkillKeys(skillNamesOrKeys = [], availableSkills = []) {
+  const byToken = buildSkillKeyLookup(availableSkills);
+  return skillNamesOrKeys.map((key) => byToken.get(key)).filter(Boolean);
+}
+
+function buildSkillKeyLookup(availableSkills = []) {
+  const byToken = new Map();
+  for (const skill of availableSkills) {
+    const key = String(skill?.key || "").trim();
+    if (!key) continue;
+    for (const token of [skill.key, skill.name, skill.id]) {
+      const normalized = String(token || "").trim();
+      if (normalized && !byToken.has(normalized)) byToken.set(normalized, key);
+    }
+  }
+  return byToken;
+}
+
+function defaultSkillKeysForCollection(def, availableSkills = []) {
+  const exact = resolveSkillKeys(def.defaultKeys, availableSkills);
+  if (exact.length > 0) return exact;
+  return availableSkills
+    .filter((skill) => String(skill?.name || skill?.id || skill?.key || "").includes("agentflow-"))
+    .map((skill) => String(skill.key || "").trim())
+    .filter(Boolean);
+}
+
+function sameSkillKeySet(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((key) => set.has(key));
+}
+
+function normalizeSkillCollectionConfig(value) {
+  const now = Date.now();
+  const seenIds = new Set();
+  const collections = [];
+  const input = Array.isArray(value?.collections) ? value.collections : [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const name = String(item.name || item.id || "").trim().slice(0, 80);
+    if (!name) continue;
+    let id = slugifySkillCollectionId(item.id || name);
+    let suffix = 2;
+    while (seenIds.has(id)) {
+      id = `${slugifySkillCollectionId(item.id || name)}-${suffix++}`;
+    }
+    seenIds.add(id);
+    const skillSeen = new Set();
+    const skillKeys = [];
+    for (const key of Array.isArray(item.skillKeys) ? item.skillKeys : []) {
+      const normalized = String(key || "").trim();
+      if (!normalized || skillSeen.has(normalized)) continue;
+      skillSeen.add(normalized);
+      skillKeys.push(normalized);
+    }
+    collections.push({
+      id,
+      name,
+      skillKeys,
+      builtin: Boolean(item.builtin) || isBuiltinSkillCollectionId(id),
+      createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : now,
+      updatedAt: Number.isFinite(item.updatedAt) ? Number(item.updatedAt) : now,
+    });
+  }
+  return { version: 1, collections };
+}
+
+function withBuiltinSkillCollections(config, availableSkills = []) {
+  const normalized = normalizeSkillCollectionConfig(config);
+  const byId = new Map(normalized.collections.map((collection) => [collection.id, collection]));
+  const out = [];
+  const now = Date.now();
+  for (const def of BUILTIN_SKILL_COLLECTIONS) {
+    const existing = byId.get(def.id);
+    if (existing) {
+      const nextDefaultKeys = defaultSkillKeysForCollection(def, availableSkills);
+      const legacyDefaultSets = (Array.isArray(def.legacyDefaultKeys) ? def.legacyDefaultKeys : [])
+        .map((keys) => Array.isArray(keys) ? resolveSkillKeys(keys, availableSkills) : [])
+        .filter((keys) => keys.length > 0);
+      const shouldMigrateLegacyDefault =
+        existing.skillKeys.length > 0 &&
+        legacyDefaultSets.some((keys) => sameSkillKeySet(existing.skillKeys, keys));
+      out.push({
+        ...existing,
+        name: def.name,
+        builtin: true,
+        skillKeys: existing.skillKeys.length > 0 && !shouldMigrateLegacyDefault ? existing.skillKeys : nextDefaultKeys,
+      });
+      byId.delete(def.id);
+    } else {
+      out.push({
+        id: def.id,
+        name: def.name,
+        builtin: true,
+        skillKeys: defaultSkillKeysForCollection(def, availableSkills),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  out.push(...Array.from(byId.values()).map((collection) => ({ ...collection, builtin: false })));
+  return { version: 1, collections: out };
+}
+
+function readSkillCollectionConfig(userCtx = {}, availableSkills = []) {
+  const p = skillCollectionsAbs(userCtx);
+  try {
+    if (!fs.existsSync(p)) return withBuiltinSkillCollections({}, availableSkills);
+    return withBuiltinSkillCollections(JSON.parse(fs.readFileSync(p, "utf-8")), availableSkills);
+  } catch {
+    return withBuiltinSkillCollections({}, availableSkills);
+  }
+}
+
+function writeSkillCollectionConfig(userCtx = {}, payload = {}, availableSkills = []) {
+  const p = skillCollectionsAbs(userCtx);
+  const config = withBuiltinSkillCollections(payload, availableSkills);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return config;
+}
+
+function runtimeEnvForUser(userCtx = {}, extra = {}) {
+  return {
+    ...process.env,
+    ...readUserEnvObject(userCtx.userId),
+    ...extra,
+    AGENTFLOW_USER_ID: userCtx.userId || "",
+  };
 }
 
 function readAgentflowUserConfigObject() {
@@ -427,23 +622,342 @@ function buildWorkspaceGeneratePrompt(payload) {
             "使用 +-|/\\<> 等字符表达结构，尽量保持对齐。",
           ].join("\n")
         : [
-            "你是 workspace Markdown 节点的内容生成器。",
-            "请根据用户 prompt 和上游节点/文件上下文，生成可直接保存到工作区的 Markdown 正文。",
-            "只输出最终 Markdown 内容，不要解释你如何执行，也不要包裹代码围栏，除非正文本身需要代码块。",
+            "你是 AgentFlow Workspace Composer。",
+            "优先根据已选择的 Skills 操作 workspace.graph.json，创建或修改 workspace 画布节点、连线与展示节点。",
+            "如果用户请求需要项目分析、加载代码、整理流程或生成展示结果，不要只给泛泛回答；应先让 Skills 驱动画布建模，例如创建 Git/工作目录/Load Skills/Agent/Markdown Display 等合适节点。",
+            "只有当用户明确只是询问概念或无需画布变更时，才直接输出 Markdown 回复。",
           ].join("\n");
   return [
     "你正在 AgentFlow 的 Workspace 工作画布中执行任务。",
     "Workspace 是当前 pipeline 的临时工作区，用于分析、试验、生成中间文件和展示结果。",
+    "Workspace 与 Pipeline 各自有独立的 Skill collection；此处只使用当前 Workspace Composer 选择的 collections / skills 作为本次行为规则与编辑依据。",
+    "当 Skills 提到修改 flow.yaml / instances / edges / ui 时，在 Workspace 视图下应映射为修改当前工作区的 workspace.graph.json，除非用户显式勾选并要求修改正式 flow.yaml。",
+    "workspace.graph.json 使用 JSON：{ version, instances, edges, ui: { nodePositions, nodeSizes } }。instances 的结构与 flow.yaml instances 一致；edges 使用 source/target/sourceHandle/targetHandle；ui.nodePositions 记录节点坐标。",
     allowFlowYaml
       ? "用户已允许你考虑正式 flow.yaml；如需修改仍必须明确说明影响。"
       : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.graph.json 或回复内容中完成任务。",
     workspaceGraph ? `\n## 当前 workspace graph\n\n${JSON.stringify(workspaceGraph, null, 2)}` : "",
     selectedNodeIds.length > 0 ? `\n## 当前用户选中的 workspace 节点\n\n${selectedNodeIds.map((id) => `- ${id}`).join("\n")}` : "",
-    skillsBlock ? `\n## Workspace Skills\n\n${skillsBlock}` : "",
+    skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
     kindInstruction,
     contextBlocks ? `\n## 上下文\n\n${contextBlocks}` : "",
     `\n## 用户 prompt\n\n${userPrompt}`,
   ].filter(Boolean).join("\n");
+}
+
+function workspaceSlotValue(slot) {
+  if (!slot || typeof slot !== "object") return "";
+  for (const key of ["value", "default"]) {
+    if (slot[key] != null && String(slot[key]).trim()) return String(slot[key]);
+  }
+  return "";
+}
+
+function workspaceInstanceText(instance) {
+  const body = String(instance?.body || "").trim();
+  if (body) return body;
+  const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
+  const textSlot = slots.find((slot) => String(slot?.type || "") === "text" && workspaceSlotValue(slot).trim());
+  return textSlot ? workspaceSlotValue(textSlot) : "";
+}
+
+function workspaceDisplayKind(definitionId) {
+  const id = String(definitionId || "");
+  if (id === "display_markdown") return "markdown";
+  if (id === "display_mermaid") return "mermaid";
+  if (id === "display_ascii") return "ascii";
+  return "";
+}
+
+function workspaceRunOrder(graph, runNodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const target = String(runNodeId || "").trim();
+  if (!target || !instances[target]) throw new Error("Missing workspace run node");
+  const upstream = new Map();
+  const downstream = new Map();
+  for (const edge of edges) {
+    const source = String(edge?.source || "");
+    const dest = String(edge?.target || "");
+    if (!source || !dest || !instances[source] || !instances[dest]) continue;
+    if (!upstream.has(dest)) upstream.set(dest, []);
+    upstream.get(dest).push(source);
+    if (!downstream.has(source)) downstream.set(source, []);
+    downstream.get(source).push(dest);
+  }
+  const reachable = new Set();
+  const visit = (id) => {
+    if (!id || reachable.has(id)) return;
+    reachable.add(id);
+    for (const next of downstream.get(id) || []) visit(next);
+  };
+  visit(target);
+  reachable.delete(target);
+  const needed = reachable;
+  const indegree = new Map(Array.from(needed).map((id) => [id, 0]));
+  for (const id of needed) {
+    for (const prev of upstream.get(id) || []) {
+      if (needed.has(prev)) indegree.set(id, (indegree.get(id) || 0) + 1);
+    }
+  }
+  const ready = Array.from(needed).filter((id) => (indegree.get(id) || 0) === 0);
+  const ordered = [];
+  while (ready.length) {
+    const id = ready.shift();
+    ordered.push(id);
+    for (const next of downstream.get(id) || []) {
+      if (!needed.has(next)) continue;
+      const n = (indegree.get(next) || 0) - 1;
+      indegree.set(next, n);
+      if (n === 0) ready.push(next);
+    }
+  }
+  if (ordered.length !== needed.size) {
+    throw new Error("Workspace run graph contains a cycle");
+  }
+  return ordered;
+}
+
+function workspaceUpstreamText(graph, nodeId, outputs) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
+  const contentEdge = incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0];
+  if (!contentEdge) return "";
+  const sourceId = String(contentEdge.source || "");
+  const out = outputs.get(sourceId);
+  if (out != null && String(out).trim()) return String(out);
+  return workspaceInstanceText(instances[sourceId]);
+}
+
+function parseWorkspaceSkillKeys(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed.map((item) => String(item || "").trim()).filter(Boolean);
+  } catch {
+    /* plain list fallback */
+  }
+  return text.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function selectedSkillKeysFromInstance(instance) {
+  const bodyKeys = parseWorkspaceSkillKeys(instance?.body || "");
+  if (bodyKeys.length > 0) return bodyKeys;
+  const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
+  const slot = slots.find((item) => item?.name === "skillsContext") || slots.find((item) => item?.name === "skillKeys");
+  return parseWorkspaceSkillKeys(workspaceSlotValue(slot) || "");
+}
+
+function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  return edges
+    .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
+    .filter((text) => text.includes("##") || text.includes("Skill"))
+    .join("\n\n---\n\n");
+}
+
+function workspaceWriteDisplayContent(instance, content) {
+  const next = { ...(instance || {}) };
+  const text = String(content || "");
+  next.body = text;
+  next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
+    String(slot?.name || "") === "content" || String(slot?.type || "") === "text"
+      ? { ...slot, default: text, value: text }
+      : slot
+  ));
+  next.output = (Array.isArray(next.output) ? next.output : []).map((slot) => (
+    String(slot?.name || "") === "content" || String(slot?.type || "") === "text"
+      ? { ...slot, default: text, value: text }
+      : slot
+  ));
+  return next;
+}
+
+function workspaceUpdateDirectDisplays(graph, sourceId, content) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const updated = [];
+  for (const edge of edges) {
+    if (String(edge?.source || "") !== String(sourceId)) continue;
+    const targetId = String(edge?.target || "");
+    const target = instances[targetId];
+    if (!target || !workspaceDisplayKind(target.definitionId)) continue;
+    instances[targetId] = workspaceWriteDisplayContent(target, content);
+    updated.push(targetId);
+  }
+  return updated;
+}
+
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock) {
+  const instance = graph.instances[nodeId] || {};
+  const body = String(instance.body || "").trim();
+  const label = String(instance.label || nodeId).trim();
+  return [
+    "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
+    "只输出该节点要传给下游展示/后续节点的正文，不要解释运行过程。",
+    skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
+    upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
+    `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
+    `\n## 节点任务\n\n${body || upstreamText}`,
+  ].filter(Boolean).join("\n");
+}
+
+async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
+  const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
+  const runNodeId = String(payload?.runNodeId || "").trim();
+  const order = workspaceRunOrder(graph, runNodeId);
+  const fallbackSelectedSkillKeys = Array.isArray(payload?.selectedSkills)
+    ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  const skillsBlockCache = new Map();
+  const loadSkillsBlockForKeys = (keys) => {
+    const normalized = Array.from(new Set((keys || []).map((x) => String(x || "").trim()).filter(Boolean)));
+    const cacheKey = normalized.join("\n");
+    if (skillsBlockCache.has(cacheKey)) return skillsBlockCache.get(cacheKey);
+    const selectedSkillResources = normalized.length > 0
+      ? loadResourcesForSkillKeys(normalized, PACKAGE_ROOT, scopedRoot)
+      : { skills: [], references: [] };
+    const block = normalized.length > 0
+      ? buildSkillCompactInjectionBlock(selectedSkillResources.skills, selectedSkillResources.references)
+      : "";
+    skillsBlockCache.set(cacheKey, block);
+    return block;
+  };
+  const outputs = new Map();
+  const events = [];
+  const emit = (event) => {
+    events.push(event);
+    if (typeof opts.onEvent === "function") opts.onEvent(event);
+  };
+  let cwd = scopedRoot;
+  const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
+
+  for (const nodeId of order) {
+    const instance = graph.instances[nodeId];
+    if (!instance) continue;
+    const defId = String(instance.definitionId || "");
+    emit({ type: "node-start", nodeId, definitionId: defId });
+
+    if (defId === "workspace_run") {
+      continue;
+    }
+
+    if (defId === "control_load_skills") {
+      const nodeSkillKeys = selectedSkillKeysFromInstance(instance);
+      const activeSkillKeys = nodeSkillKeys.length > 0 ? nodeSkillKeys : fallbackSelectedSkillKeys;
+      const skillsBlock = loadSkillsBlockForKeys(activeSkillKeys);
+      graph.instances[nodeId] = {
+        ...instance,
+        output: (Array.isArray(instance.output) ? instance.output : []).map((slot) => (
+          String(slot?.name || "") === "skillsContext" || String(slot?.type || "") === "text"
+            ? { ...slot, default: skillsBlock, value: skillsBlock }
+            : slot
+        )),
+      };
+      outputs.set(nodeId, skillsBlock);
+      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (workspaceDisplayKind(defId)) {
+      const content = workspaceUpstreamText(graph, nodeId, outputs);
+      graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
+      outputs.set(nodeId, content);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "provide_str") {
+      const content = workspaceInstanceText(instance);
+      outputs.set(nodeId, content);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "provide_file") {
+      const fileValue = workspaceSlotValue(Array.isArray(instance.output) ? instance.output[0] : null) || workspaceInstanceText(instance);
+      const abs = path.resolve(scopedRoot, fileValue);
+      if (!abs.startsWith(path.resolve(scopedRoot) + path.sep) && abs !== path.resolve(scopedRoot)) {
+        throw new Error(`Workspace file is outside root: ${fileValue}`);
+      }
+      const content = fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : fileValue;
+      outputs.set(nodeId, content);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_cd_workspace") {
+      const inputText = workspaceUpstreamText(graph, nodeId, outputs);
+      const inputSlots = Array.isArray(instance.input) ? instance.input : [];
+      const pathSlot = inputSlots.find((slot) => String(slot?.name || "") === "path") ||
+        inputSlots.find((slot) => String(slot?.name || "") === "target");
+      const candidate = workspaceSlotValue(pathSlot) || workspaceInstanceText(instance) || inputText;
+      const abs = candidate ? path.resolve(scopedRoot, candidate) : scopedRoot;
+      if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) cwd = abs;
+      outputs.set(nodeId, cwd);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_user_workspace") {
+      cwd = path.resolve(os.homedir());
+      outputs.set(nodeId, cwd);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    const upstreamText = workspaceUpstreamText(graph, nodeId, outputs);
+    const body = String(instance.body || "").trim();
+    if (defId === "agent_subAgent" && !body && !String(upstreamText || "").trim()) {
+      throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
+    }
+    const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, upstreamSkillBlocks || loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
+    let content = "";
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let attemptContent = "";
+      try {
+        const handle = startComposerAgent({
+          uiWorkspaceRoot: scopedRoot,
+          cliWorkspace: cwd,
+          prompt,
+          modelKey,
+          agentflowUserId: userCtx.userId || "",
+          onStreamEvent: (ev) => {
+            emit({ ...ev, nodeId });
+            if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
+              attemptContent += (attemptContent ? "\n" : "") + ev.text;
+              const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, attemptContent);
+              if (updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+            }
+          },
+        });
+        await handle.finished;
+        content = attemptContent.trim();
+        break;
+      } catch (e) {
+        if (attempt < maxAttempts && isTransientAgentNetworkError(e)) {
+          emit({ type: "status", nodeId, line: `Workspace node retry ${attempt + 1}/${maxAttempts} after network error` });
+          await sleepMs(Math.min(1500 * attempt, 5000));
+          continue;
+        }
+        throw e;
+      }
+    }
+    outputs.set(nodeId, content);
+    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, content);
+    if (updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+    emit({ type: "node-done", nodeId, definitionId: defId });
+  }
+  graph.updatedAt = new Date().toISOString();
+  return { graph, events, order };
 }
 
 function isTransientAgentNetworkError(err) {
@@ -719,7 +1233,7 @@ export function startUiServer({
         json(res, 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
         return;
       }
-      const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false });
+      const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false, migration: result.migration || null });
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": Buffer.byteLength(body),
@@ -1059,6 +1573,60 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/run") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || scoped.flowSource === "builtin") {
+          json(res, 400, { error: "Cannot run workspace graph for builtin or archived pipeline" });
+          return;
+        }
+        const wantsStream = /\bapplication\/x-ndjson\b/i.test(req.headers.accept || "") || payload.stream === true;
+        if (wantsStream) {
+          const graphPath = workspaceGraphPath(scoped.root);
+          res.writeHead(200, {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+          });
+          const writeEvent = (event) => {
+            res.write(JSON.stringify(event) + "\n");
+          };
+          try {
+            const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, { onEvent: writeEvent });
+            fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
+            writeEvent({ type: "done", ok: true, path: graphPath, graph: result.graph, order: result.order });
+            res.end();
+          } catch (e) {
+            writeEvent({ type: "error", error: (e && e.message) || String(e) });
+            res.end();
+          }
+          return;
+        }
+        const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx);
+        const graphPath = workspaceGraphPath(scoped.root);
+        fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
+        json(res, 200, { ok: true, path: graphPath, ...result });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace/file") {
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -1252,7 +1820,7 @@ export function startUiServer({
               agentflowUserId: userCtx.userId || "",
               onStreamEvent: (ev) => {
                 events.push(ev);
-                if (ev?.type === "natural" && typeof ev.text === "string") {
+                if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
                   attemptContent += (attemptContent ? "\n" : "") + ev.text;
                 }
               },
@@ -1488,6 +2056,32 @@ export function startUiServer({
           opencodeProvider: opencodeProvider || "",
           modelLists: readModelListsFromDisk(root),
         });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/user-env") {
+      try {
+        json(res, 200, { env: readUserEnvRows(userCtx.userId) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/user-env") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const envRows = writeUserEnvRows(userCtx.userId, payload?.env || []);
+        json(res, 200, { success: true, env: envRows });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -2386,7 +2980,7 @@ finishedAt: "${new Date().toISOString()}"
         child = spawn(process.execPath, args, {
           cwd: root,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: userCtx.userId || "" },
+          env: runtimeEnvForUser(userCtx, { FORCE_COLOR: "0" }),
           // detached: true 使 child 成为新进程组 leader，/api/flow/run/stop 时
           // 用 process.kill(-pid) 可以一次性 SIGTERM 整棵进程树（含 cursor-agent 等孙进程）
           detached: true,
@@ -2511,6 +3105,27 @@ finishedAt: "${new Date().toISOString()}"
 
     if (req.method === "GET" && url.pathname === "/api/skills") {
       json(res, 200, { skills: listComposerSkills(PACKAGE_ROOT, root) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/skill-collections") {
+      json(res, 200, readSkillCollectionConfig(userCtx, listComposerSkills(PACKAGE_ROOT, root)));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/skill-collections") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        json(res, 200, writeSkillCollectionConfig(userCtx, payload, listComposerSkills(PACKAGE_ROOT, root)));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
       return;
     }
 
