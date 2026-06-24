@@ -16,14 +16,15 @@ function modelEntryId(entry) {
  * @param {{
  *   kind: "input" | "output",
  *   label: string,
- *   slots: { type: string, name: string, default: string }[],
- *   onSlotsChange: (next: { type: string, name: string, default: string }[]) => void,
+ *   slots: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
+ *   onSlotsChange: (next: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[]) => void,
  *   disabled: boolean,
+ *   requiredReadonly?: boolean,
  * }} p
  */
-function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
+function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredReadonly = true }) {
   const { t } = useTranslation();
-  const add = () => onSlotsChange([...slots, { type: "node", name: "", default: "" }]);
+  const add = () => onSlotsChange([...slots, { type: "node", name: "", default: "", required: false, showOnNode: true }]);
   const removeAt = (i) => onSlotsChange(slots.filter((_, j) => j !== i));
   const patch = (i, field, value) => {
     const next = slots.map((s, j) => (j === i ? { ...s, [field]: value } : s));
@@ -56,6 +57,8 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
             <span>{t("flow:nodeProps.type")}</span>
             <span>{t("flow:nodeProps.name")}</span>
             <span>{t("flow:nodeProps.defaultValue")}</span>
+            <span>{t("flow:nodeProps.required")}</span>
+            <span>{t("flow:nodeProps.showOnNode")}</span>
             <span />
           </div>
           {slots.map((s, i) => (
@@ -94,6 +97,26 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
                 autoComplete="off"
                 aria-label={t("flow:nodeProps.pinDefaultAriaLabel", { label, index: i })}
               />
+              <label className="af-node-props-io-flag" title={t("flow:nodeProps.requiredHint")}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(s.required)}
+                  onChange={(e) => {
+                    if (!requiredReadonly) patch(i, "required", e.target.checked);
+                  }}
+                  disabled={disabled || requiredReadonly}
+                  aria-label={t("flow:nodeProps.pinRequiredAriaLabel", { label, index: i })}
+                />
+              </label>
+              <label className="af-node-props-io-flag" title={t("flow:nodeProps.showOnNodeHint")}>
+                <input
+                  type="checkbox"
+                  checked={s.showOnNode !== false}
+                  onChange={(e) => patch(i, "showOnNode", e.target.checked)}
+                  disabled={disabled}
+                  aria-label={t("flow:nodeProps.pinShowOnNodeAriaLabel", { label, index: i })}
+                />
+              </label>
               <button
                 type="button"
                 className="af-icon-btn af-node-props-io-remove"
@@ -122,8 +145,8 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
  *     model: string,
  *     body: string,
  *     script?: string,
- *     inputs: { type: string, name: string, default: string }[],
- *     outputs: { type: string, name: string, default: string }[],
+ *     inputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
+ *     outputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
  *   } | null,
  *   setDraft: (fn: (d: any) => any) => void,
  *   definitionId: string,
@@ -133,6 +156,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled }) {
  *   onIdBlur: () => void,
  *   onClose: () => void,
  *   onPublishToMarketplace?: (draft: any, definitionId: string) => Promise<any>,
+ *   allowEditRequiredPins?: boolean,
  *   error: string,
  *   ioSlots: { inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] },
  * }} props
@@ -147,6 +171,7 @@ export function NodePropertiesPanel({
   onIdBlur,
   onClose,
   onPublishToMarketplace,
+  allowEditRequiredPins = false,
   error,
   ioSlots,
 }) {
@@ -237,7 +262,7 @@ export function NodePropertiesPanel({
 
         <label className="af-pipeline-drawer-field af-node-props-field">
           <span className="af-node-props-label">
-            {t("flow:node.displayName")}
+            {t("flow:nodeProps.instanceId")}
             <span className="af-node-props-hint">{t("flow:node.displayNameHint")}</span>
           </span>
           <input
@@ -337,6 +362,7 @@ export function NodePropertiesPanel({
           slots={Array.isArray(draft.inputs) ? draft.inputs : []}
           onSlotsChange={(next) => update({ inputs: next })}
           disabled={disabled}
+          requiredReadonly={!allowEditRequiredPins}
         />
         <IoPinsEditor
           kind="output"
@@ -344,6 +370,7 @@ export function NodePropertiesPanel({
           slots={Array.isArray(draft.outputs) ? draft.outputs : []}
           onSlotsChange={(next) => update({ outputs: next })}
           disabled={disabled}
+          requiredReadonly={!allowEditRequiredPins}
         />
 
         {showScriptSection ? (

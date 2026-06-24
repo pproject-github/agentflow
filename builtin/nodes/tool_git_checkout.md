@@ -16,9 +16,12 @@ input:
   - type: text
     name: repoUrl
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: branch
     default: ""
+    showOnNode: true
   - type: text
     name: targetDir
     default: ""

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * apply -ai get-env：按 key 从系统环境变量与 ~/.cursor/config.json 读取 value。
- * 优先级：先查 process.env[key]，若无则查 ~/.cursor/config.json（支持点号路径如 openai.apiKey）。
+ * apply -ai get-env：按 key 从用户私有 env、系统环境变量与 ~/.cursor/config.json 读取 value。
+ * 优先级：先查当前 AGENTFLOW_USER_ID 的私有 env，再查 process.env[key]，最后查 ~/.cursor/config.json（支持点号路径如 openai.apiKey）。
  *
  * 用法（apply 步骤，由 CLI 调用）：
  *   agentflow apply -ai get-env <workspaceRoot> <flowName> <uuid> <instanceId> <execId> <key>
@@ -15,39 +15,15 @@
 
 import fs from "fs";
 import path from "path";
-import os from "os";
 
 import { getRunDir } from "../lib/paths.mjs";
+import { resolveUserEnvValue } from "../lib/user-env.mjs";
 import { writeResult } from "./write-result.mjs";
 import { outputDirForNode, outputNodeBasename } from "./get-exec-id.mjs";
 
-function getFromConfig(config, keyStr) {
-  if (!config || typeof config !== "object" || !keyStr) return undefined;
-  const parts = String(keyStr).trim().split(".");
-  let cur = config;
-  for (const p of parts) {
-    if (cur == null || typeof cur !== "object") return undefined;
-    cur = cur[p];
-  }
-  return cur != null ? String(cur) : undefined;
-}
-
 function resolveValue(keyStr) {
-  let value = "";
-  if (!keyStr) return value;
-  value = process.env[keyStr] ?? "";
-  if (value === "") {
-    const configPath = path.join(os.homedir(), ".cursor", "config.json");
-    if (fs.existsSync(configPath)) {
-      try {
-        const raw = fs.readFileSync(configPath, "utf-8");
-        const config = JSON.parse(raw);
-        const fromConfig = getFromConfig(config, keyStr);
-        if (fromConfig !== undefined) value = fromConfig;
-      } catch (_) {}
-    }
-  }
-  return value;
+  if (!keyStr) return "";
+  return resolveUserEnvValue(keyStr, process.env.AGENTFLOW_USER_ID || "");
 }
 
 function main() {

@@ -9,6 +9,7 @@ import { ImportFlowModal } from "../ImportFlowModal.jsx";
 import { NewPipelineModal } from "../NewPipelineModal.jsx";
 import { preferredFlowUrl } from "../pipelineViewPreference.js";
 import SkillHubPanel from "../components/SkillHubPanel.jsx";
+import { normalizeSkillCollections, skillCollectionConfig } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 
 function badgeClass(tone) {
@@ -124,7 +125,6 @@ function nodeSourceLabel(source, t) {
 }
 
 const NODE_FILTERS = ["all", "agent", "control", "provide", "marketplace"];
-const SKILL_FILTERS = ["all", "builtin", "workspace-agents", "workspace-cursor"];
 
 function slotsToRows(slots) {
   if (!slots || typeof slots !== "object") return [];
@@ -145,6 +145,9 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const [apiFlows, setApiFlows] = useState([]);
   const [globalNodes, setGlobalNodes] = useState([]);
   const [globalSkills, setGlobalSkills] = useState([]);
+  const [skillCollections, setSkillCollections] = useState([]);
+  const [newSkillCollectionName, setNewSkillCollectionName] = useState("");
+  const [skillCollectionSaving, setSkillCollectionSaving] = useState(false);
   const [recentRuns, setRecentRuns] = useState([]);
   const [listError, setListError] = useState("");
   const [resourceError, setResourceError] = useState("");
@@ -205,19 +208,24 @@ export default function ProjectsPage({ resourceKind = "" }) {
     setResourceError("");
     setResourcesLoaded(false);
     try {
-      const [nodesRes, skillsRes] = await Promise.all([
+      const [nodesRes, skillsRes, collectionsRes] = await Promise.all([
         fetch("/api/nodes"),
         fetch("/api/skills"),
+        fetch("/api/skill-collections"),
       ]);
       const nodesJson = await nodesRes.json().catch(() => ({}));
       const skillsJson = await skillsRes.json().catch(() => ({}));
+      const collectionsJson = await collectionsRes.json().catch(() => ({}));
       if (!nodesRes.ok) throw new Error(nodesJson.error || "Nodes HTTP " + nodesRes.status);
       if (!skillsRes.ok) throw new Error(skillsJson.error || "Skills HTTP " + skillsRes.status);
+      if (!collectionsRes.ok) throw new Error(collectionsJson.error || "Collections HTTP " + collectionsRes.status);
       setGlobalNodes(Array.isArray(nodesJson.nodes) ? nodesJson.nodes : Array.isArray(nodesJson) ? nodesJson : []);
       setGlobalSkills(Array.isArray(skillsJson.skills) ? skillsJson.skills : []);
+      setSkillCollections(normalizeSkillCollections(collectionsJson));
     } catch (e) {
       setGlobalNodes([]);
       setGlobalSkills([]);
+      setSkillCollections([]);
       setResourceError(String(e.message || e));
     } finally {
       setResourcesLoaded(true);
@@ -242,6 +250,62 @@ export default function ProjectsPage({ resourceKind = "" }) {
       cancelled = true;
     };
   }, []);
+
+  const saveSkillCollections = useCallback(async (nextCollections) => {
+    const normalized = normalizeSkillCollections({ collections: nextCollections });
+    setSkillCollectionSaving(true);
+    setResourceError("");
+    try {
+      const res = await fetch("/api/skill-collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(skillCollectionConfig(normalized)),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Collections HTTP " + res.status);
+      setSkillCollections(normalizeSkillCollections(json));
+    } catch (e) {
+      setResourceError(String(e.message || e));
+    } finally {
+      setSkillCollectionSaving(false);
+    }
+  }, []);
+
+  const createSkillCollection = useCallback(() => {
+    const name = newSkillCollectionName.trim();
+    if (!name) return;
+    const base = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "collection";
+    const used = new Set(skillCollections.map((collection) => collection.id));
+    let id = base;
+    let suffix = 2;
+    while (used.has(id)) id = `${base}-${suffix++}`;
+    const now = Date.now();
+    void saveSkillCollections([...skillCollections, { id, name, skillKeys: [], createdAt: now, updatedAt: now }]);
+    setNewSkillCollectionName("");
+    setResourceFilter(`collection:${id}`);
+  }, [newSkillCollectionName, saveSkillCollections, skillCollections]);
+
+  const deleteSkillCollection = useCallback((collectionId) => {
+    const collection = skillCollections.find((item) => item.id === collectionId);
+    if (collection?.builtin) return;
+    const next = skillCollections.filter((collection) => collection.id !== collectionId);
+    if (resourceFilter === `collection:${collectionId}`) setResourceFilter("all");
+    void saveSkillCollections(next);
+  }, [resourceFilter, saveSkillCollections, skillCollections]);
+
+  const toggleSkillCollectionMembership = useCallback((collectionId, skillKey, checked) => {
+    const key = String(skillKey || "").trim();
+    if (!key) return;
+    const now = Date.now();
+    const next = skillCollections.map((collection) => {
+      if (collection.id !== collectionId) return collection;
+      const keys = new Set(collection.skillKeys || []);
+      if (checked) keys.add(key);
+      else keys.delete(key);
+      return { ...collection, skillKeys: Array.from(keys), updatedAt: now };
+    });
+    void saveSkillCollections(next);
+  }, [saveSkillCollections, skillCollections]);
 
   useEffect(() => {
     if (resourceKind === "nodes" || resourceKind === "skills") {
@@ -327,10 +391,39 @@ export default function ProjectsPage({ resourceKind = "" }) {
     [globalNodes, pipelineSearch, resourceFilter],
   );
 
+  const skillCollectionSkillSets = useMemo(() => {
+    const map = new Map();
+    for (const collection of skillCollections) {
+      map.set(collection.id, new Set(collection.skillKeys || []));
+    }
+    return map;
+  }, [skillCollections]);
+
+  const skillResourceFilters = useMemo(
+    () => [
+      { id: "all", label: "全部" },
+      ...skillCollections.map((collection) => ({
+        id: `collection:${collection.id}`,
+        label: collection.name,
+        count: collection.skillKeys.length,
+        collection,
+      })),
+      { id: "ungrouped", label: "未分组" },
+    ],
+    [skillCollections],
+  );
+
   const filteredSkills = useMemo(
     () =>
       globalSkills.filter((s) => {
-        const filterMatch = resourceFilter === "all" || s.source === resourceFilter;
+        const key = resourceKey(s);
+        let filterMatch = resourceFilter === "all";
+        if (resourceFilter.startsWith("collection:")) {
+          const id = resourceFilter.slice("collection:".length);
+          filterMatch = Boolean(skillCollectionSkillSets.get(id)?.has(key));
+        } else if (resourceFilter === "ungrouped") {
+          filterMatch = !Array.from(skillCollectionSkillSets.values()).some((keys) => keys.has(key));
+        }
         return filterMatch && resourceTextMatches(pipelineSearch, [
           s.name,
           s.id,
@@ -340,7 +433,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
           s.path,
         ]);
       }),
-    [globalSkills, pipelineSearch, resourceFilter],
+    [globalSkills, pipelineSearch, resourceFilter, skillCollectionSkillSets],
   );
 
   const isResourceTab = filter === "nodes" || filter === "skills";
@@ -609,20 +702,75 @@ export default function ProjectsPage({ resourceKind = "" }) {
                 </div>
               </div>
               <div className="af-resource-filter-row">
-                {(filter === "nodes" ? NODE_FILTERS : SKILL_FILTERS).map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={"af-resource-filter" + (resourceFilter === item ? " af-resource-filter--active" : "")}
-                    onClick={() => {
-                      setResourceFilter(item);
-                      setSelectedResourceKey("");
-                    }}
-                  >
-                    {t(`project:resourceFilter.${item}`)}
-                  </button>
+                {(filter === "nodes" ? NODE_FILTERS.map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
+                  item.collection ? (
+                    <span
+                      key={item.id}
+                      className={"af-resource-filter-chip" + (resourceFilter === item.id ? " af-resource-filter-chip--active" : "")}
+                    >
+                      <button
+                        type="button"
+                        className="af-resource-filter af-resource-filter--embedded"
+                        onClick={() => {
+                          setResourceFilter(item.id);
+                          setSelectedResourceKey("");
+                        }}
+                      >
+                        {item.label}
+                        <em>{item.count}</em>
+                        {item.collection.builtin ? <strong>built-in</strong> : null}
+                      </button>
+                      {!item.collection.builtin ? (
+                        <button
+                          type="button"
+                          className="af-resource-filter-chip__delete"
+                          disabled={skillCollectionSaving}
+                          aria-label={`删除 ${item.collection.name}`}
+                          onClick={() => deleteSkillCollection(item.collection.id)}
+                        >
+                          <span className="material-symbols-outlined">close</span>
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={"af-resource-filter" + (resourceFilter === item.id ? " af-resource-filter--active" : "")}
+                      onClick={() => {
+                        setResourceFilter(item.id);
+                        setSelectedResourceKey("");
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  )
                 ))}
               </div>
+              {filter === "skills" ? (
+                <div className="af-skill-collections-manager">
+                  <div className="af-skill-collections-create">
+                    <input
+                      className="af-set-input af-set-input--sm"
+                      value={newSkillCollectionName}
+                      onChange={(e) => setNewSkillCollectionName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") createSkillCollection();
+                      }}
+                      placeholder="新建 skill collection"
+                    />
+                    <button
+                      type="button"
+                      className="af-set-btn-add af-set-btn-add--compact"
+                      disabled={!newSkillCollectionName.trim() || skillCollectionSaving}
+                      onClick={() => createSkillCollection()}
+                    >
+                      <span className="material-symbols-outlined">add</span>
+                      新建
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -705,6 +853,14 @@ export default function ProjectsPage({ resourceKind = "" }) {
                       <span className="af-path-text">
                         <HighlightMatch query={pipelineSearch}>{s.path || s.key || ""}</HighlightMatch>
                       </span>
+                    </div>
+                    <div className="af-skill-card-collections">
+                      {skillCollections.filter((collection) => collection.skillKeys.includes(resourceKey(s))).slice(0, 3).map((collection) => (
+                        <span key={collection.id}>{collection.name}</span>
+                      ))}
+                      {skillCollections.filter((collection) => collection.skillKeys.includes(resourceKey(s))).length === 0 ? (
+                        <span className="af-skill-card-collection-empty">未分组</span>
+                      ) : null}
                     </div>
                   </button>
                 ))
@@ -966,6 +1122,33 @@ export default function ProjectsPage({ resourceKind = "" }) {
                   <div><dt>{t("project:detailSource")}</dt><dd>{selectedSkill.sourceLabel || selectedSkill.source}</dd></div>
                   <div><dt>{t("project:detailPath")}</dt><dd>{selectedSkill.path || selectedSkill.key}</dd></div>
                 </dl>
+                <div className="af-resource-detail-section">
+                  <h4>Collections</h4>
+                  {skillCollections.length === 0 ? (
+                    <p>暂无 collection。可在左侧新建后再添加。</p>
+                  ) : (
+                    <div className="af-skill-detail-collections">
+                      {skillCollections.map((collection) => {
+                        const key = resourceKey(selectedSkill);
+                        const checked = collection.skillKeys.includes(key);
+                        return (
+                          <label key={collection.id} className="af-composer-skill-option af-skill-detail-collection-option">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={skillCollectionSaving}
+                              onChange={(e) => toggleSkillCollectionMembership(collection.id, key, e.target.checked)}
+                            />
+                            <span className="af-composer-skill-option-main">
+                              <span className="af-composer-skill-option-title">{collection.name}</span>
+                              <span className="af-composer-skill-option-desc">{collection.skillKeys.length} skills</span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <div className="af-resource-detail-section">
                   <h4>{t("project:resourceMeaning")}</h4>
                   <p>{t("project:skillsMeaning")}</p>

@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
 
-
-const ENV_STORAGE_KEY = "agentflow-settings-env-v1";
 /** 与服务器 config.json 同步的本地缓存（离线时回退） */
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
 
@@ -36,6 +34,10 @@ function newId() {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function isValidEnvKey(key) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key || "").trim());
+}
+
 /** @param {unknown} raw */
 function parseEnvRows(raw) {
   if (!Array.isArray(raw)) return [];
@@ -49,16 +51,6 @@ function parseEnvRows(raw) {
     out.push({ id, key: k, value: v });
   }
   return out;
-}
-
-function loadEnvFromStorage() {
-  try {
-    const s = localStorage.getItem(ENV_STORAGE_KEY);
-    if (!s) return [];
-    return parseEnvRows(JSON.parse(s));
-  } catch {
-    return [];
-  }
 }
 
 function loadOpcodePlan() {
@@ -112,13 +104,17 @@ export default function SettingsPage() {
   const [listsLoading, setListsLoading] = useState(false);
   const [opencodeSaving, setOpencodeSaving] = useState(false);
   const [opencodeErr, setOpencodeErr] = useState("");
-  const [envRows, setEnvRows] = useState(() => loadEnvFromStorage());
+  const [envRows, setEnvRows] = useState([]);
+  const [envErr, setEnvErr] = useState("");
+  const [envSaving, setEnvSaving] = useState(false);
   const [draftKey, setDraftKey] = useState("");
   const [draftVal, setDraftVal] = useState("");
   const [opcodeDraft, setOpcodeDraft] = useState("");
   /** 与服务器（或首次加载的本地回退）已同步的 Provider，用于防抖保存时去重 */
   const lastSyncedOpencode = useRef(/** @type {string | null} */ (null));
   const opencodeConfigReady = useRef(false);
+  const envConfigReady = useRef(false);
+  const lastSyncedEnv = useRef("");
 
   const loadContext = useCallback(async () => {
     setContextErr("");
@@ -148,6 +144,45 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadUserEnv = useCallback(async () => {
+    setEnvErr("");
+    try {
+      const r = await fetch("/api/user-env");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const rows = parseEnvRows(Array.isArray(j.env) ? j.env : []);
+      lastSyncedEnv.current = JSON.stringify(rows);
+      setEnvRows(rows);
+    } catch (e) {
+      setEnvRows([]);
+      setEnvErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      envConfigReady.current = true;
+    }
+  }, []);
+
+  const saveUserEnv = useCallback(async (rows) => {
+    const normalized = parseEnvRows(rows);
+    setEnvSaving(true);
+    setEnvErr("");
+    try {
+      const r = await fetch("/api/user-env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ env: normalized }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const nextRows = parseEnvRows(Array.isArray(j.env) ? j.env : []);
+      lastSyncedEnv.current = JSON.stringify(nextRows);
+      setEnvRows(nextRows);
+    } catch (e) {
+      setEnvErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setEnvSaving(false);
+    }
+  }, []);
+
   /** 重新执行 Cursor/OpenCode CLI 写入 model-lists.json */
   const refreshModelLists = useCallback(async () => {
     setListsErr("");
@@ -171,6 +206,7 @@ export default function SettingsPage() {
   useEffect(() => {
     loadContext();
     loadLists();
+    loadUserEnv();
     (async () => {
       try {
         const r = await fetch("/api/agentflow-config");
@@ -195,13 +231,17 @@ export default function SettingsPage() {
         opencodeConfigReady.current = true;
       }
     })();
-  }, [loadContext, loadLists]);
+  }, [loadContext, loadLists, loadUserEnv]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(ENV_STORAGE_KEY, JSON.stringify(envRows));
-    } catch (_) {}
-  }, [envRows]);
+    if (!envConfigReady.current) return;
+    const serialized = JSON.stringify(parseEnvRows(envRows));
+    if (serialized === lastSyncedEnv.current) return;
+    const t = setTimeout(() => {
+      void saveUserEnv(envRows);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [envRows, saveUserEnv]);
 
   /** OpenCode Provider：停止输入约 450ms 后写入 config 并触发模型清单更新 */
   useEffect(() => {
@@ -252,10 +292,14 @@ export default function SettingsPage() {
     const k = draftKey.trim();
     const v = draftVal;
     if (!k) return;
+    if (!isValidEnvKey(k)) {
+      setEnvErr(t("settings:env.invalidKey"));
+      return;
+    }
     setEnvRows((rows) => [...rows, { id: newId(), key: k, value: v }]);
     setDraftKey("");
     setDraftVal("");
-  }, [draftKey, draftVal]);
+  }, [draftKey, draftVal, t]);
 
   const removeEnvRow = useCallback((id) => {
     setEnvRows((rows) => rows.filter((r) => r.id !== id));
@@ -295,6 +339,7 @@ export default function SettingsPage() {
             </p>
             {contextErr ? <p className="af-err af-settings-api-hint">{contextErr}</p> : null}
             {listsErr ? <p className="af-err af-settings-api-hint">{listsErr}</p> : null}
+            {envErr ? <p className="af-err af-settings-api-hint">{envErr}</p> : null}
           </header>
 
           <div className="af-settings-layout">
@@ -505,7 +550,9 @@ export default function SettingsPage() {
                     </div>
                     <h2 className="af-set-h2">{t("settings:env.title")}</h2>
                   </div>
-                  <span className="af-set-env-note">{t("settings:env.note")}</span>
+                  <span className="af-set-env-note">
+                    {envSaving ? t("settings:env.saving") : t("settings:env.note")}
+                  </span>
                 </div>
 
                 <div className="af-set-env-rows">

@@ -12,6 +12,7 @@ import {
 import { getAgentflowUserContexts, getRunDir, PACKAGE_ROOT } from "./paths.mjs";
 import { isApplyProcessAlive } from "./run-apply-active-lock.mjs";
 import { log } from "./log.mjs";
+import { readUserEnvObject } from "./user-env.mjs";
 import { writeResult } from "../pipeline/write-result.mjs";
 
 const DEFAULT_POLL_MS = 30_000;
@@ -252,7 +253,7 @@ function startScheduledRun(workspaceRoot, flow, schedule, state, opts = {}) {
   const child = spawn(process.execPath, args, {
     cwd: path.resolve(workspaceRoot),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
+    env: { ...process.env, ...readUserEnvObject(opts.userId), FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
     detached: true,
   });
 
@@ -325,7 +326,7 @@ function startWaitingRunResume(workspaceRoot, flow, waitState, opts = {}) {
   const child = spawn(process.execPath, args, {
     cwd: path.resolve(workspaceRoot),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
+    env: { ...process.env, ...readUserEnvObject(opts.userId), FORCE_COLOR: "0", AGENTFLOW_USER_ID: opts.userId || "" },
     detached: true,
   });
   child.stdout.on("data", () => {});

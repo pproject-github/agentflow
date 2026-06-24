@@ -142,11 +142,16 @@ export function deserializeFromFlowYaml(flowYamlContent) {
  * @returns {Record<string, any>}
  */
 export function buildInstancesForYaml(nodes, instancesMap) {
-  const toSlotValue = (s) => ({
-    type: s?.type ?? "node",
-    name: s?.name ?? "",
-    value: s?.value ?? s?.default ?? "",
-  });
+  const toSlotValue = (s) => {
+    const slot = {
+      type: s?.type ?? "node",
+      name: s?.name ?? "",
+      value: s?.value ?? s?.default ?? "",
+    };
+    if (s?.required === true) slot.required = true;
+    if (s?.showOnNode === false) slot.showOnNode = false;
+    return slot;
+  };
   const instances = {};
   for (const n of nodes) {
     const base =

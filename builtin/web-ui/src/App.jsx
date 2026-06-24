@@ -1,5 +1,5 @@
 import { RouteProvider, useRoute } from "./routeContext.jsx";
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
@@ -7,6 +7,43 @@ import WorkspacePage from "./pages/WorkspacePage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
+
+class UiErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, info: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("[AgentFlow UI render error]", error, info);
+    this.setState({ error, info });
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    const errorText = String(this.state.error?.stack || this.state.error?.message || this.state.error);
+    const componentStack = String(this.state.info?.componentStack || "");
+    return (
+      <div className="af-auth-screen">
+        <div className="af-auth-panel af-ui-error-panel">
+          <div className="af-auth-brand">
+            <span className="material-symbols-outlined">error</span>
+            <div>
+              <h1>AgentFlow UI Error</h1>
+              <p>页面渲染失败，下面是调试堆栈。</p>
+            </div>
+          </div>
+          <pre>{errorText}</pre>
+          {componentStack ? <pre>{componentStack}</pre> : null}
+        </div>
+      </div>
+    );
+  }
+}
 
 function RoutedContent() {
   const { path } = useRoute();
@@ -119,10 +156,12 @@ function AppShell({ authUser, onLogout }) {
 
 export default function App() {
   return (
-    <RouteProvider>
-      <AuthGate>
-        {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}
-      </AuthGate>
-    </RouteProvider>
+    <UiErrorBoundary>
+      <RouteProvider>
+        <AuthGate>
+          {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}
+        </AuthGate>
+      </RouteProvider>
+    </UiErrorBoundary>
   );
 }

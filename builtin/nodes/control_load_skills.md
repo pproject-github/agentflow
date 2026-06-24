@@ -22,6 +22,8 @@ input:
   - type: text
     name: skillKeys
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: mergeMode
     default: "replace"

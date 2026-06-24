@@ -51,11 +51,13 @@
   },
   "env": {
     "title": "Environment Variables",
-    "note": "Local machine, this browser only",
+    "note": "Private to the current signed-in user; overrides service-level env at runtime",
+    "saving": "Saving...",
     "key": "Key",
     "value": "Value",
     "add": "Add",
     "delete": "Delete {{key}}",
+    "invalidKey": "Env key must start with a letter or underscore, and only contain letters, numbers, and underscores.",
     "newKey": "New env key",
     "newValue": "Value (be careful with secrets)"
   },

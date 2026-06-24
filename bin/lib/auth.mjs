@@ -1,7 +1,12 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { getAgentflowDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
+import {
+  ARCHIVED_PIPELINES_DIR_NAME,
+  getAgentflowDataRoot,
+  getUserPipelinesRoot,
+  sanitizeAgentflowUserId,
+} from "./paths.mjs";
 
 const SESSION_COOKIE = "af_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -77,6 +82,62 @@ export function authSetupRequired() {
   return Object.keys(readAuthUsers()).length === 0;
 }
 
+function listFlowDirs(root) {
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return [];
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.name !== ARCHIVED_PIPELINES_DIR_NAME)
+      .filter((entry) => fs.existsSync(path.join(root, entry.name, "flow.yaml")))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+function copyMissingFlowDirs(sourceRoot, targetRoot, relativeRoot = "") {
+  const fromRoot = path.join(sourceRoot, relativeRoot);
+  const toRoot = path.join(targetRoot, relativeRoot);
+  const copied = [];
+  const skipped = [];
+  for (const name of listFlowDirs(fromRoot)) {
+    const fromDir = path.join(fromRoot, name);
+    const toDir = path.join(toRoot, name);
+    if (fs.existsSync(toDir)) {
+      skipped.push(path.join(relativeRoot, name).replace(/\\/g, "/"));
+      continue;
+    }
+    fs.mkdirSync(path.dirname(toDir), { recursive: true });
+    fs.cpSync(fromDir, toDir, { recursive: true });
+    copied.push(path.join(relativeRoot, name).replace(/\\/g, "/"));
+  }
+  return { copied, skipped };
+}
+
+export function migrateLegacyPipelinesToAdminUser(userId) {
+  const safeUserId = sanitizeAgentflowUserId(userId);
+  if (!safeUserId) return { copied: [], skipped: [], source: "", target: "", error: "invalid userId" };
+
+  const source = getUserPipelinesRoot("");
+  const target = getUserPipelinesRoot(safeUserId);
+  if (path.resolve(source) === path.resolve(target)) {
+    return { copied: [], skipped: [], source, target };
+  }
+  if (!fs.existsSync(source)) {
+    return { copied: [], skipped: [], source, target };
+  }
+
+  const active = copyMissingFlowDirs(source, target);
+  const archived = copyMissingFlowDirs(source, target, ARCHIVED_PIPELINES_DIR_NAME);
+  return {
+    copied: [...active.copied, ...archived.copied],
+    skipped: [...active.skipped, ...archived.skipped],
+    source,
+    target,
+  };
+}
+
 export function getSessionCookieName() {
   return SESSION_COOKIE;
 }
@@ -145,6 +206,15 @@ export function loginOrCreateUser(username, password) {
     return { ok: false, error: "用户名或密码错误" };
   }
 
+  let migration = null;
+  if (Boolean(user.isAdmin)) {
+    try {
+      migration = migrateLegacyPipelinesToAdminUser(userId);
+    } catch (e) {
+      migration = { copied: [], skipped: [], error: (e && e.message) || String(e) };
+    }
+  }
+
   const token = crypto.randomBytes(32).toString("base64url");
   const sessions = readJsonObject(sessionsPath());
   sessions[hashToken(token)] = {
@@ -157,6 +227,7 @@ export function loginOrCreateUser(username, password) {
     ok: true,
     token,
     user: { userId, username: user.username || userId, isAdmin: Boolean(user.isAdmin) },
+    migration,
   };
 }
 
