@@ -136,7 +136,7 @@ function readJsonObject(filePath) {
 }
 
 function waitStateKey(state) {
-  return String((state && (state.id || state.instanceId)) || "");
+  return String((state && (state.waitId || state.id || state.instanceId)) || "");
 }
 
 function persistedWaitState(state) {
@@ -181,17 +181,22 @@ function writeWaitState(waitState, patch = {}) {
     ...(patch && typeof patch === "object" ? patch : {}),
     updatedAt: new Date().toISOString(),
   };
+  const key = waitStateKey(next);
+  if (key) {
+    next.waitId = String(next.waitId || key);
+    next.id = String(next.id || next.waitId);
+  }
   const runDir = next.runDir || (next.waitPath ? path.dirname(next.waitPath) : "");
   if (!runDir) return;
 
   const legacyPath = next.legacyPath || next.waitPath || path.join(runDir, WAIT_STATE_FILENAME);
   const registryPath = next.registryPath || path.join(runDir, WAIT_STATES_FILENAME);
   const persisted = persistedWaitState(next);
-  const key = waitStateKey(persisted);
+  const persistedKey = waitStateKey(persisted);
 
   const registry = readJsonObject(registryPath);
   if (registry && Array.isArray(registry.waits)) {
-    const waits = registry.waits.filter((w) => waitStateKey(w) !== key);
+    const waits = registry.waits.filter((w) => waitStateKey(w) !== persistedKey);
     waits.push(persisted);
     fs.writeFileSync(registryPath, JSON.stringify({ ...registry, updatedAt: new Date().toISOString(), waits }, null, 2) + "\n", "utf-8");
   }

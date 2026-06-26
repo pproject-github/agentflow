@@ -82,7 +82,7 @@ import {
   publishFlowSnippet,
   publishNodeFromInstance,
 } from "./marketplace.mjs";
-import { buildGitContext, loadGitWorktree, normalizeGitContext, runGit, unloadGitWorktree } from "./git-worktree.mjs";
+import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, unloadGitWorktree } from "./git-worktree.mjs";
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
 import {
   authSetupRequired,
@@ -1088,20 +1088,23 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
 
     if (defId === "tool_git_worktree_unload") {
       const gitContext = normalizeGitContext(workspaceSlotValue(workspaceSlotByName(instance, "gitContext")));
-      const repoPath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "repoPath"))) ||
-        (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
-      const worktreePath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "worktreePath"))) ||
-        (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
-      if (!repoPath) throw new Error("Unload Worktree requires repoPath");
-      if (!worktreePath) throw new Error("Unload Worktree requires worktreePath");
+      const workspaceContext = parseJsonText(workspaceSlotValue(workspaceSlotByName(instance, "workspaceContext")), null);
+      const contextCwd = workspaceContext?.cwd ? path.resolve(String(workspaceContext.cwd)) : cwd;
+      const worktreePath = workspaceResolvePath(contextCwd, workspaceSlotValue(workspaceSlotByName(instance, "worktreePath"))) ||
+        (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "") ||
+        contextCwd;
+      const repoPath = workspaceResolvePath(contextCwd, workspaceSlotValue(workspaceSlotByName(instance, "repoPath"))) ||
+        (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "") ||
+        inferGitRepoRootFromWorktree(worktreePath);
       const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
       const pruneRaw = workspaceSlotValue(workspaceSlotByName(instance, "prune")).trim().toLowerCase();
       const prune = pruneRaw !== "false";
       const result = unloadGitWorktree({ repoPath, worktreePath, force, prune });
-      cwd = scopedRoot;
+      const previousContext = workspaceContext?.previous && typeof workspaceContext.previous === "object" ? workspaceContext.previous : null;
+      cwd = previousContext?.cwd ? path.resolve(String(previousContext.cwd)) : scopedRoot;
       let nextInstance = workspaceSetOutputSlot(instance, "removed", "true");
       nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message);
-      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", JSON.stringify({
+      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", JSON.stringify(previousContext || {
         version: 1,
         label: "workspace",
         cwd,

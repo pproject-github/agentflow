@@ -1,6 +1,8 @@
 import { Handle, Position } from "@xyflow/react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getHandleColor } from "./nodeSchema.js";
+import { IMAGE_TOKEN_RE, addImageFiles, filterImagesReferencedByBody, imageFilesFromClipboardEvent, imageFilesFromDropEvent, normalizeImages } from "./imageAttachments.js";
 
 function modelEntryId(entry) {
   const idx = entry.indexOf(" - ");
@@ -21,7 +23,46 @@ function boolValueFromSlot(slot) {
   return ["true", "1", "yes", "on"].includes(String(slot?.value ?? slot?.default ?? "").trim().toLowerCase());
 }
 
-export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onProvideValueChange, modelLists, onModelChange }) {
+function stopInteractiveEvent(e) {
+  e.stopPropagation();
+}
+
+function escapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeImageToken(body, label) {
+  const token = `\\[${escapeRegExp(label)}\\]`;
+  return String(body || "")
+    .replace(new RegExp(`[ \\t]*${token}`, "gi"), "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderImageTokenHighlightHtml(text) {
+  const raw = String(text || "");
+  let html = "";
+  let last = 0;
+  IMAGE_TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = IMAGE_TOKEN_RE.exec(raw))) {
+    html += escapeHtml(raw.slice(last, match.index));
+    html += `<span class="af-flow-node__image-token">${escapeHtml(match[0])}</span>`;
+    last = match.index + match[0].length;
+  }
+  html += escapeHtml(raw.slice(last));
+  return html || " ";
+}
+
+export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onProvideValueChange, onNodeBodyChange, onNodeImagesChange, modelLists, onModelChange }) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
@@ -35,9 +76,40 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const definitionId = data?.definitionId || "";
   const isProvideNode = definitionId.startsWith("provide_");
   const isProvideBool = definitionId === "provide_bool";
+  const isProvideText = definitionId === "provide_str";
+  const isProvideFile = definitionId === "provide_file";
+  const isSubAgent = definitionId === "agent_subAgent";
+  const hasInlineBodyEditor = isSubAgent && !isRunMode;
   const provideBoolValue = isProvideBool ? boolValueFromSlot(outputs[0]) : false;
+  const provideValue = isProvideNode ? String(outputs[0]?.value ?? outputs[0]?.default ?? data?.body ?? "") : "";
+  const bodyValue = String(data?.body || "");
   const nodeTitle = data?.displayLabel || data?.label || t("flow:node.fallbackLabel");
-  const bodyPreview = data?.showBodyPreview ? String(data?.body || "").trim() : "";
+  const bodyPreview = !isProvideNode && !hasInlineBodyEditor && data?.showBodyPreview ? String(data?.body || "").trim() : "";
+  const images = normalizeImages(data?.images);
+  const provideComposingRef = useRef(false);
+  const bodyComposingRef = useRef(false);
+  const bodyTextareaRef = useRef(null);
+  const bodyBackdropRef = useRef(null);
+  const [provideDraft, setProvideDraft] = useState(provideValue);
+  const [bodyDraft, setBodyDraft] = useState(bodyValue);
+
+  useEffect(() => {
+    if (!provideComposingRef.current) setProvideDraft(provideValue);
+  }, [id, provideValue]);
+
+  useEffect(() => {
+    if (!bodyComposingRef.current) setBodyDraft(bodyValue);
+  }, [id, bodyValue]);
+
+  useEffect(() => {
+    const el = bodyTextareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 76), 180)}px`;
+    if (bodyBackdropRef.current) {
+      bodyBackdropRef.current.style.height = el.style.height;
+    }
+  }, [bodyDraft]);
 
   const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
   const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
@@ -100,9 +172,122 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     }
   };
 
-  const handleProvideBoolToggle = (e) => {
+  const handleProvideBoolChange = (e) => {
     e.stopPropagation();
-    onProvideValueChange?.(id, provideBoolValue ? "false" : "true");
+    onProvideValueChange?.(id, e.target.value === "true" ? "true" : "false");
+  };
+
+  const handleProvideValueChange = (e) => {
+    e.stopPropagation();
+    const next = e.target.value;
+    setProvideDraft(next);
+    if (!provideComposingRef.current) {
+      onProvideValueChange?.(id, next);
+    }
+  };
+
+  const handleProvideCompositionStart = (e) => {
+    e.stopPropagation();
+    provideComposingRef.current = true;
+  };
+
+  const handleProvideCompositionEnd = (e) => {
+    e.stopPropagation();
+    provideComposingRef.current = false;
+    const next = e.currentTarget.value;
+    setProvideDraft(next);
+    onProvideValueChange?.(id, next);
+  };
+
+  const handleProvideValueBlur = () => {
+    onProvideValueChange?.(id, provideDraft);
+  };
+
+  const handleProvideFilePick = (e) => {
+    e.stopPropagation();
+    const next = window.prompt("文件路径", provideDraft);
+    if (next != null) {
+      setProvideDraft(next);
+      onProvideValueChange?.(id, next);
+    }
+  };
+
+  const commitNodeBody = (next) => {
+    setBodyDraft(next);
+    onNodeBodyChange?.(id, next);
+    if (onNodeImagesChange) {
+      const filtered = filterImagesReferencedByBody(images, next);
+      if (filtered.length !== images.length || filtered.some((img, idx) => img.id !== images[idx]?.id)) {
+        onNodeImagesChange(id, filtered);
+      }
+    }
+  };
+
+  const handleNodeBodyChange = (e) => {
+    e.stopPropagation();
+    const next = e.target.value;
+    if (bodyComposingRef.current) {
+      setBodyDraft(next);
+    } else {
+      commitNodeBody(next);
+    }
+  };
+
+  const handleNodeBodyCompositionStart = (e) => {
+    e.stopPropagation();
+    bodyComposingRef.current = true;
+  };
+
+  const handleNodeBodyCompositionEnd = (e) => {
+    e.stopPropagation();
+    bodyComposingRef.current = false;
+    const next = e.currentTarget.value;
+    commitNodeBody(next);
+  };
+
+  const handleNodeBodyBlur = () => {
+    commitNodeBody(bodyDraft);
+  };
+
+  const attachImages = async (files) => {
+    const next = await addImageFiles({ files, body: bodyDraft, images });
+    if (!next) return;
+    setBodyDraft(next.body);
+    onNodeBodyChange?.(id, next.body);
+    onNodeImagesChange?.(id, next.images);
+  };
+
+  const handleRemoveImage = (e, image) => {
+    e.stopPropagation();
+    const nextImages = images.filter((item) => item.id !== image.id);
+    const nextBody = removeImageToken(bodyDraft, image.label);
+    setBodyDraft(nextBody);
+    onNodeBodyChange?.(id, nextBody);
+    onNodeImagesChange?.(id, nextImages);
+  };
+
+  const handlePromptPaste = (e) => {
+    const files = imageFilesFromClipboardEvent(e);
+    if (files.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    attachImages(files).catch(() => {});
+  };
+
+  const handlePromptDrop = (e) => {
+    const files = imageFilesFromDropEvent(e);
+    if (files.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    attachImages(files).catch(() => {});
+  };
+
+  const handlePromptScroll = () => {
+    const ta = bodyTextareaRef.current;
+    const bd = bodyBackdropRef.current;
+    if (!ta || !bd) return;
+    bd.scrollTop = ta.scrollTop;
+    bd.scrollLeft = ta.scrollLeft;
   };
 
   return (
@@ -129,11 +314,14 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           </span>
         )}
         {!isRunMode && needsModel && (
-          <div className="af-flow-node__model-wrap">
+          <div className="af-flow-node__model-wrap nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
             <select
-              className="af-flow-node__model"
+              className="af-flow-node__model nodrag"
               value={normalizedModelForSelect}
               onChange={handleModelChange}
+              onPointerDown={stopInteractiveEvent}
+              onMouseDown={stopInteractiveEvent}
+              onClick={stopInteractiveEvent}
               aria-label={t("flow:node.model")}
               title={displayModel || t("flow:node.defaultModel")}
             >
@@ -194,7 +382,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
             FAILED
           </span>
         )}
-        {!isRunMode && isProvideNode && !isProvideBool && (
+        {!isRunMode && isProvideNode && !isProvideBool && !isProvideText && !isProvideFile && (
           <button
             type="button"
             className="af-flow-node__expand"
@@ -244,15 +432,102 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         <div className="af-flow-node__title-wrap">
           <span className="af-flow-node__title">{nodeTitle}</span>
           {isProvideBool ? (
-            <button
-              type="button"
-              className={"af-flow-node__bool-toggle nodrag" + (provideBoolValue ? " af-flow-node__bool-toggle--true" : "")}
-              onClick={handleProvideBoolToggle}
-              aria-pressed={provideBoolValue}
+            <select
+              className={"af-flow-node__bool-select nodrag" + (provideBoolValue ? " af-flow-node__bool-select--true" : "")}
+              value={provideBoolValue ? "true" : "false"}
+              onChange={handleProvideBoolChange}
+              onPointerDown={stopInteractiveEvent}
+              onMouseDown={stopInteractiveEvent}
+              onClick={stopInteractiveEvent}
+              aria-label="Boolean value"
               title={provideBoolValue ? "true" : "false"}
             >
-              {provideBoolValue ? "true" : "false"}
-            </button>
+              <option value="false">false</option>
+              <option value="true">true</option>
+            </select>
+          ) : isProvideText ? (
+            <textarea
+              className="af-flow-node__inline-text nodrag"
+              value={provideDraft}
+              onChange={handleProvideValueChange}
+              onCompositionStart={handleProvideCompositionStart}
+              onCompositionEnd={handleProvideCompositionEnd}
+              onBlur={handleProvideValueBlur}
+              onPointerDown={stopInteractiveEvent}
+              onMouseDown={stopInteractiveEvent}
+              onClick={stopInteractiveEvent}
+              placeholder="输入文本"
+              rows={2}
+            />
+          ) : isProvideFile ? (
+            <div className="af-flow-node__file-value nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+              <input
+                className="af-flow-node__file-input nodrag"
+                value={provideDraft}
+                onChange={handleProvideValueChange}
+                onCompositionStart={handleProvideCompositionStart}
+                onCompositionEnd={handleProvideCompositionEnd}
+                onBlur={handleProvideValueBlur}
+                placeholder="选择或输入文件路径"
+                title={provideDraft || "选择或输入文件路径"}
+              />
+              <button
+                type="button"
+                className="af-flow-node__file-picker nodrag"
+                onClick={handleProvideFilePick}
+                aria-label="选择文件"
+                title="选择文件"
+              >
+                <span className="material-symbols-outlined">folder_open</span>
+              </button>
+            </div>
+          ) : isSubAgent && !isRunMode ? (
+            <div className="af-flow-node__prompt-stack nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+              <pre
+                ref={bodyBackdropRef}
+                className="af-flow-node__prompt-backdrop"
+                aria-hidden="true"
+                dangerouslySetInnerHTML={{ __html: renderImageTokenHighlightHtml(bodyDraft) + "\n" }}
+              />
+              <textarea
+                ref={bodyTextareaRef}
+                className="af-flow-node__prompt-editor nodrag"
+                value={bodyDraft}
+                onChange={handleNodeBodyChange}
+                onCompositionStart={handleNodeBodyCompositionStart}
+                onCompositionEnd={handleNodeBodyCompositionEnd}
+                onBlur={handleNodeBodyBlur}
+                onPaste={handlePromptPaste}
+                onDrop={handlePromptDrop}
+                onScroll={handlePromptScroll}
+                onDragOver={(e) => {
+                  if (imageFilesFromDropEvent(e).length > 0) e.preventDefault();
+                }}
+                placeholder="输入 prompt"
+                rows={2}
+              />
+            </div>
+          ) : null}
+          {isSubAgent && images.length > 0 ? (
+            <div className="af-flow-node__image-chips">
+              {images.map((img, idx) => (
+                <span key={img.id || idx} className="af-flow-node__image-chip" title={img.name}>
+                  <img src={img.dataUrl} alt="" />
+                  <span>[{img.label || `image ${idx + 1}`}]</span>
+                  <button
+                    type="button"
+                    className="af-flow-node__image-remove nodrag"
+                    onClick={(e) => handleRemoveImage(e, img)}
+                    onPointerDown={stopInteractiveEvent}
+                    onMouseDown={stopInteractiveEvent}
+                    aria-label={`删除 ${img.label || `image ${idx + 1}`}`}
+                    title="删除图片"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </span>
+              ))}
+            </div>
           ) : null}
           {bodyPreview ? (
             <span className="af-flow-node__prompt-preview" title={bodyPreview}>

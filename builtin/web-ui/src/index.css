@@ -3776,6 +3776,7 @@ button.af-project-card {
 .af-work-display-empty::-webkit-scrollbar,
 .af-work-display-body::-webkit-scrollbar,
 .af-work-load-skills-menu::-webkit-scrollbar,
+.af-composer-skills-menu::-webkit-scrollbar,
 .af-work-node__preview::-webkit-scrollbar,
 .af-work-node__mermaid-preview::-webkit-scrollbar {
   width: 0.62rem;
@@ -3785,6 +3786,7 @@ button.af-project-card {
 .af-work-display-empty::-webkit-scrollbar-track,
 .af-work-display-body::-webkit-scrollbar-track,
 .af-work-load-skills-menu::-webkit-scrollbar-track,
+.af-composer-skills-menu::-webkit-scrollbar-track,
 .af-work-node__preview::-webkit-scrollbar-track,
 .af-work-node__mermaid-preview::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.05);
@@ -3794,6 +3796,7 @@ button.af-project-card {
 .af-work-display-empty::-webkit-scrollbar-thumb,
 .af-work-display-body::-webkit-scrollbar-thumb,
 .af-work-load-skills-menu::-webkit-scrollbar-thumb,
+.af-composer-skills-menu::-webkit-scrollbar-thumb,
 .af-work-node__preview::-webkit-scrollbar-thumb,
 .af-work-node__mermaid-preview::-webkit-scrollbar-thumb {
   min-height: 2rem;
@@ -3805,6 +3808,7 @@ button.af-project-card {
 .af-work-display-empty::-webkit-scrollbar-thumb:hover,
 .af-work-display-body::-webkit-scrollbar-thumb:hover,
 .af-work-load-skills-menu::-webkit-scrollbar-thumb:hover,
+.af-composer-skills-menu::-webkit-scrollbar-thumb:hover,
 .af-work-node__preview::-webkit-scrollbar-thumb:hover,
 .af-work-node__mermaid-preview::-webkit-scrollbar-thumb:hover {
   background: rgba(205, 189, 255, 0.68);
@@ -4212,22 +4216,70 @@ button.af-project-card {
   font-size: 1.05rem;
 }
 
-.af-work-load-skills-menu {
+.af-work-load-skills-menu-shell {
   position: absolute;
   top: calc(100% - 0.3rem);
   left: 0.65rem;
   right: 0.65rem;
   z-index: 40;
   max-height: 22rem;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
-  padding: 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.7rem;
   background: rgba(25, 24, 28, 0.98);
   box-shadow: 0 22px 54px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+}
+
+.af-work-load-skills-menu {
+  position: relative;
+  z-index: 1;
+  max-height: 22rem;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-width: none;
+  padding: 0.65rem 1.1rem 0.65rem 0.65rem;
+}
+
+.af-work-load-skills-menu::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.af-work-load-skills-scrollbar {
+  position: absolute;
+  top: 0.65rem;
+  right: 0.22rem;
+  bottom: 0.65rem;
+  z-index: 2;
+  width: 0.64rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
+  cursor: grab;
+  touch-action: none;
+}
+
+.af-work-load-skills-scrollbar span {
+  position: absolute;
+  left: 0.14rem;
+  right: 0.14rem;
+  min-height: 1.8rem;
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.58);
+  box-shadow: 0 0 10px rgba(124, 77, 255, 0.18);
+}
+
+.af-work-load-skills-scrollbar:active {
+  cursor: grabbing;
+}
+
+.af-work-load-skills-scrollbar:hover span,
+.af-work-load-skills-scrollbar:active span {
+  background: rgba(205, 189, 255, 0.78);
+}
+
+.af-work-load-skills-scrollbar:not(.af-work-load-skills-scrollbar--visible) span {
+  opacity: 0.42;
 }
 
 .af-work-load-skills-menu__group {
@@ -8667,7 +8719,11 @@ button.af-project-card {
 
 .af-composer-skills-menu {
   z-index: 4000;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
   padding: 0.45rem;
   border-radius: 0.75rem;
   background: rgba(31, 31, 31, 0.98);
@@ -9467,6 +9523,86 @@ button.af-project-card {
 .af-body-prompt-editor {
   position: relative;
   width: 100%;
+}
+
+.af-body-image-list,
+.af-flow-node__image-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+}
+
+.af-body-image-chip,
+.af-flow-node__image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 12rem;
+  padding: 0.22rem 0.42rem 0.22rem 0.25rem;
+  border: 1px solid rgba(205, 189, 255, 0.18);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(229, 226, 225, 0.84);
+  font-family: var(--af-body);
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.af-body-image-chip img,
+.af-flow-node__image-chip img {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.35rem;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.af-body-image-chip span,
+.af-flow-node__image-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-node__image-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(229, 226, 225, 0.68);
+  cursor: pointer;
+}
+
+.af-flow-node__image-remove:hover {
+  background: rgba(255, 90, 90, 0.18);
+  color: rgba(255, 210, 210, 0.95);
+}
+
+.af-flow-node__image-remove .material-symbols-outlined {
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.af-flow-node__image-chips {
+  justify-content: center;
+  max-width: 16rem;
+  margin: 0.05rem 0 0;
+}
+
+.af-flow-node__image-chip {
+  font-size: 0.62rem;
+  padding: 0.18rem 0.36rem 0.18rem 0.22rem;
+}
+
+.af-flow-node__image-chip img {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .af-body-prompt-stack {
@@ -10464,7 +10600,8 @@ button.af-exec-history-card {
   color: rgba(158, 202, 255, 0.6);
 }
 
-.af-flow-node__bool-toggle {
+.af-flow-node__bool-toggle,
+.af-flow-node__bool-select {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
@@ -10478,17 +10615,149 @@ button.af-exec-history-card {
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.af-flow-node__bool-toggle:hover {
+.af-flow-node__bool-select {
+  min-width: 5.6rem;
+  min-height: 2rem;
+  padding: 0.32rem 0.65rem;
+  text-align: center;
+}
+
+.af-flow-node__bool-toggle:hover,
+.af-flow-node__bool-select:hover {
   border-color: rgba(156, 39, 176, 0.55);
   color: var(--af-text);
   background: rgba(156, 39, 176, 0.12);
 }
 
-.af-flow-node__bool-toggle--true {
+.af-flow-node__bool-toggle--true,
+.af-flow-node__bool-select--true {
   border-color: rgba(0, 228, 117, 0.45);
   background: rgba(0, 228, 117, 0.14);
   color: #c9f8dc;
   box-shadow: 0 0 14px rgba(0, 228, 117, 0.12);
+}
+
+.af-flow-node__inline-text,
+.af-flow-node__prompt-editor {
+  width: min(16rem, 100%);
+  min-width: 8.5rem;
+  min-height: 2.5rem;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.55rem;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--af-on-surface);
+  font-family: var(--af-font, system-ui, sans-serif);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  padding: 0.45rem 0.55rem;
+  outline: none;
+}
+
+.af-flow-node__prompt-stack {
+  position: relative;
+  width: min(16rem, 100%);
+  min-width: 8.5rem;
+}
+
+.af-flow-node__prompt-stack .af-flow-node__prompt-editor {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  border-color: transparent;
+  color: transparent;
+  caret-color: rgba(229, 226, 225, 0.95);
+  background: transparent;
+}
+
+.af-flow-node__prompt-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.8rem;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.55rem;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--af-on-surface);
+  font-family: var(--af-font, system-ui, sans-serif);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  padding: 0.45rem 0.55rem;
+}
+
+.af-flow-node__image-token {
+  color: #bca7ff;
+  background: rgba(124, 77, 255, 0.18);
+  border-radius: 0.2rem;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.af-flow-node__prompt-editor {
+  min-height: 2.8rem;
+}
+
+.af-flow-node__inline-text:focus,
+.af-flow-node__file-input:focus {
+  border-color: rgba(124, 77, 255, 0.62);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
+}
+
+.af-flow-node__prompt-stack:focus-within .af-flow-node__prompt-backdrop {
+  border-color: rgba(124, 77, 255, 0.62);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
+}
+
+.af-flow-node__file-value {
+  display: flex;
+  align-items: center;
+  width: min(16rem, 100%);
+  min-width: 9rem;
+  gap: 0.35rem;
+}
+
+.af-flow-node__file-input {
+  flex: 1;
+  min-width: 0;
+  height: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--af-on-surface);
+  font-size: 0.7rem;
+  padding: 0 0.5rem;
+  outline: none;
+}
+
+.af-flow-node__file-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid rgba(76, 175, 80, 0.38);
+  border-radius: 0.5rem;
+  background: rgba(76, 175, 80, 0.12);
+  color: rgba(190, 255, 203, 0.92);
+  cursor: pointer;
+}
+
+.af-flow-node__file-picker:hover {
+  border-color: rgba(76, 175, 80, 0.62);
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.af-flow-node__file-picker .material-symbols-outlined {
+  font-size: 1rem;
 }
 
 .af-flow-node--control .af-flow-node__chrome {

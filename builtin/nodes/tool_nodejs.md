@@ -33,6 +33,8 @@ input:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: skillsContext
     default: ""
@@ -43,5 +45,7 @@ output:
   - type: text
     name: result
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

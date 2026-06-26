@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
 import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
+import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
 import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
 import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
@@ -99,10 +100,20 @@ function FlowNodeWrapper(props) {
       const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
         ? node.data.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
         : [{ type: "bool", name: "value", default: value, value }];
-      return { ...node, data: { ...node.data, body: value, outputs } };
+      return { ...node, data: { ...node.data, body: "", outputs } };
     }));
   }, [setNodes]);
-  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} onProvideValueChange={onProvideValueChange} modelLists={modelLists} onModelChange={onModelChange} />;
+  const onNodeBodyChange = useCallback((nodeId, body) => {
+    setNodes((nds) => nds.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, body } } : node
+    )));
+  }, [setNodes]);
+  const onNodeImagesChange = useCallback((nodeId, images) => {
+    setNodes((nds) => nds.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, images: normalizeImages(images) } } : node
+    )));
+  }, [setNodes]);
+  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} onProvideValueChange={onProvideValueChange} onNodeBodyChange={onNodeBodyChange} onNodeImagesChange={onNodeImagesChange} modelLists={modelLists} onModelChange={onModelChange} />;
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: FlowNodeWrapper };
@@ -2383,6 +2394,7 @@ export default function FlowEditorPage() {
       role: soleSelectedNode.data?.role ?? "普通",
       model: String(soleSelectedNode.data?.model ?? inst.model ?? ""),
       body: String(soleSelectedNode.data?.body ?? inst.body ?? ""),
+      images: normalizeImages(soleSelectedNode.data?.images ?? inst.images),
       script: scriptDraft,
       inputs: draftInputs,
       outputs: draftOutputs,
@@ -2867,14 +2879,16 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const nextInputs = normIo(nodePropDraft.inputs);
     const nextOutputs = normIo(nodePropDraft.outputs);
     const defIdForScript = String(soleSelectedNode.data?.definitionId ?? trimmedNew);
+    const isProvideDef = defIdForScript.startsWith("provide_");
     const nextData = {
       ...soleSelectedNode.data,
       label: nodePropDraft.label.trim() || trimmedNew,
       role,
       model: modelTrim === "" || modelTrim === "default" ? undefined : modelTrim,
-      body: nodePropDraft.body,
+      body: isProvideDef ? "" : nodePropDraft.body,
+      images: isProvideDef ? [] : normalizeImages(nodePropDraft.images),
       inputs: nextInputs,
-      outputs: nextOutputs,
+      outputs: isProvideDef && Array.isArray(soleSelectedNode.data?.outputs) ? soleSelectedNode.data.outputs : nextOutputs,
     };
     const scriptTrim = String(nodePropDraft.script ?? "").trim();
     if (defIdForScript === "tool_nodejs" || scriptTrim !== "") {
@@ -2950,6 +2964,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const nextInputs = normIo(nodePropDraft.inputs);
     const nextOutputs = normIo(nodePropDraft.outputs);
     const defIdForScript = String(soleSelectedNode.data?.definitionId ?? oldId);
+    const isProvideDef = defIdForScript.startsWith("provide_");
     const labelVal = nodePropDraft.label.trim() || oldId;
     const modelVal = modelTrim === "" || modelTrim === "default" ? undefined : modelTrim;
     const nextData = {
@@ -2957,9 +2972,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       label: labelVal,
       role,
       model: modelVal,
-      body: nodePropDraft.body,
+      body: isProvideDef ? "" : nodePropDraft.body,
+      images: isProvideDef ? [] : normalizeImages(nodePropDraft.images),
       inputs: nextInputs,
-      outputs: nextOutputs,
+      outputs: isProvideDef && Array.isArray(soleSelectedNode.data?.outputs) ? soleSelectedNode.data.outputs : nextOutputs,
     };
     const scriptTrim = String(nodePropDraft.script ?? "").trim();
     if (defIdForScript === "tool_nodejs" || scriptTrim !== "") {
@@ -2973,6 +2989,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       prev.role !== nextData.role ||
       prev.model !== nextData.model ||
       prev.body !== nextData.body ||
+      JSON.stringify(normalizeImages(prev.images)) !== JSON.stringify(nextData.images) ||
       (prev.script ?? undefined) !== (nextData.script ?? undefined) ||
       JSON.stringify(prev.inputs || []) !== JSON.stringify(nextInputs) ||
       JSON.stringify(prev.outputs || []) !== JSON.stringify(nextOutputs);

@@ -253,7 +253,6 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_if",
   "control_delay",
   "control_wait_until",
-  "control_deadline",
   "control_cancelled",
   "control_interval_loop",
   "control_cd_workspace",

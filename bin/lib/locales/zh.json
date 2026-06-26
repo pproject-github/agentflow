@@ -238,7 +238,7 @@
       "description": "当任一上游输入就绪时，沿 next 继续执行"
     },
     "control_toBool": {
-      "displayName": "转布尔",
+      "displayName": "代码转布尔",
       "description": "执行 script 脚本输出 true/false 到 prediction，类似 tool_nodejs 但强制 bool 输出，可扩展输入"
     },
     "control_delay": {
@@ -249,13 +249,9 @@
       "displayName": "等待到时间",
       "description": "持久化等待到指定时间，到点后由 scheduler 唤醒当前 run 继续执行"
     },
-    "control_deadline": {
-      "displayName": "截止判断",
-      "description": "判断当前时间是否已超过截止时间，输出 expired 布尔值"
-    },
     "control_cancelled": {
       "displayName": "取消判断",
-      "description": "判断当前 run/watch 是否已被取消，输出 cancelled 布尔值"
+      "description": "判断当前 wait/run 是否已被取消，输出 cancelled 布尔值"
     },
     "control_interval_loop": {
       "displayName": "间隔循环",

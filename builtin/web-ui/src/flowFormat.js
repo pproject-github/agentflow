@@ -83,6 +83,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
       const model = inst?.model != null ? String(inst.model).trim() : undefined;
       const body = inst?.body != null ? String(inst.body) : "";
       const script = inst?.script != null ? String(inst.script) : "";
+      const images = Array.isArray(inst?.images) ? inst.images : [];
       return {
         id,
         type: normalizeNodeType(type),
@@ -94,6 +95,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
           role,
           model: model || undefined,
           body,
+          images,
           ...(script.trim() !== "" ? { script } : {}),
         },
       };
@@ -208,10 +210,21 @@ export function buildInstancesForYaml(nodes, instancesMap) {
       output,
     };
 
-    if (body.trim() === "") {
+    if (defId.startsWith("provide_") || body.trim() === "") {
       delete rec.body;
     } else {
       rec.body = body;
+    }
+
+    const images = Array.isArray(n.data?.images)
+      ? n.data.images
+      : Array.isArray(base.images)
+        ? base.images
+        : [];
+    if (images.length > 0) {
+      rec.images = images;
+    } else {
+      delete rec.images;
     }
 
     const scriptFromData = n.data?.script;

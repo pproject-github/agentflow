@@ -10,6 +10,8 @@ input:
     name: content
     description: 要展示给用户确认的内容（Markdown 格式）
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next

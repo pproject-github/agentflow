@@ -3,9 +3,8 @@
 description: |
   Remove a Git worktree.
 
-  - `repoPath` is required unless `gitContext.repoPath` is connected.
-  - `worktreePath` is required unless `gitContext.worktreePath` is connected.
-  - `workspaceContext` is required so the node can restore the previous execution context.
+  - `workspaceContext` is required. Its `cwd` is used as the worktree to remove.
+  - `repoPath`, `worktreePath` and `gitContext` are optional compatibility overrides.
   - By default `force` is false; dirty worktrees fail instead of being removed.
   - By default `prune` is true.
 displayName: Unload Worktree
@@ -16,11 +15,9 @@ input:
   - type: file
     name: repoPath
     default: ""
-    showOnNode: true
   - type: file
     name: worktreePath
     default: ""
-    showOnNode: true
   - type: text
     name: gitContext
     default: ""
@@ -28,6 +25,7 @@ input:
     name: workspaceContext
     default: ""
     required: true
+    showOnNode: true
   - type: bool
     name: force
     default: "false"
@@ -44,6 +42,8 @@ output:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: message
     default: ""

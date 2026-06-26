@@ -19,5 +19,7 @@ output:
   - type: text
     name: result
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

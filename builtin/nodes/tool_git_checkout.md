@@ -22,7 +22,6 @@ input:
   - type: text
     name: branch
     default: ""
-    showOnNode: true
   - type: text
     name: targetDir
     default: ""
@@ -38,6 +37,8 @@ input:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next
@@ -57,8 +58,12 @@ output:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: gitContext
     default: ""
+    required: true
+    showOnNode: true
 ---
 Clone or update `${repoUrl}` and output workspace/git contexts for the checked-out repository.

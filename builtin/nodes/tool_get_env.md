@@ -6,9 +6,13 @@ input:
   - type: text
     name: key
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: text
     name: value
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}
