@@ -10,6 +10,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useUpdateNodeInternals,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -92,7 +93,16 @@ function FlowNodeWrapper(props) {
     window.__provideEditContent = { instanceId: props.id, label, definitionId, content };
     window.dispatchEvent(new CustomEvent("provide-expand"));
   }, [props.id, props.data]);
-  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} modelLists={modelLists} onModelChange={onModelChange} />;
+  const onProvideValueChange = useCallback((nodeId, value) => {
+    setNodes((nds) => nds.map((node) => {
+      if (node.id !== nodeId) return node;
+      const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
+        ? node.data.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
+        : [{ type: "bool", name: "value", default: value, value }];
+      return { ...node, data: { ...node.data, body: value, outputs } };
+    }));
+  }, [setNodes]);
+  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} onProvideValueChange={onProvideValueChange} modelLists={modelLists} onModelChange={onModelChange} />;
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: FlowNodeWrapper };
@@ -583,6 +593,15 @@ function FitViewHelper({ fitViewEpoch }) {
   return null;
 }
 
+function NodeInternalsRefreshBridge({ onReady }) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    onReady(updateNodeInternals);
+    return () => onReady(null);
+  }, [onReady, updateNodeInternals]);
+  return null;
+}
+
 function clampFocusZoom(zoom) {
   const n = Number.isFinite(zoom) ? zoom : 1;
   return Math.min(Math.max(n, 0.75), 1);
@@ -692,6 +711,7 @@ function FlowBoard({
   isValidConnection,
   onNodesDelete,
   onNodeClick,
+  onNodeDoubleClick,
   onEdgeClick,
   onFlowInit,
   onDrop,
@@ -794,6 +814,7 @@ function FlowBoard({
       isValidConnection={isRunMode ? undefined : isValidConnection}
       onNodesDelete={isRunMode ? undefined : onNodesDelete}
       onNodeClick={onNodeClick}
+      onNodeDoubleClick={isRunMode ? undefined : onNodeDoubleClick}
       onEdgeClick={isRunMode ? undefined : onEdgeClick}
       onInit={onFlowInit}
       onDrop={isRunMode ? undefined : onDrop}
@@ -943,6 +964,10 @@ function readRunConsoleHeightPx() {
 export default function FlowEditorPage() {
   const { t, i18n } = useTranslation();
   const { navigate, path } = useRoute();
+  const updateNodeInternalsRef = useRef(null);
+  const handleNodeInternalsRefreshReady = useCallback((fn) => {
+    updateNodeInternalsRef.current = typeof fn === "function" ? fn : null;
+  }, []);
   const [flows, setFlows] = useState([]);
   const [listError, setListError] = useState("");
   const [selected, setSelected] = useState(null);
@@ -967,7 +992,17 @@ export default function FlowEditorPage() {
   const slotWarningsRefreshBusyRef = useRef(false);
   const [palette, setPalette] = useState([]);
   const [paletteSearch, setPaletteSearch] = useState("");
+  const [paletteMode, setPaletteMode] = useState("nodes");
   const paletteSearchInputRef = useRef(null);
+  const [flowSnippets, setFlowSnippets] = useState([]);
+  const [flowSnippetsLoading, setFlowSnippetsLoading] = useState(false);
+  const [flowSnippetsError, setFlowSnippetsError] = useState("");
+  const [publishSnippetOpen, setPublishSnippetOpen] = useState(false);
+  const [publishSnippetDraft, setPublishSnippetDraft] = useState({ name: "", id: "", description: "" });
+  const [publishSnippetBusy, setPublishSnippetBusy] = useState(false);
+  const [publishSnippetError, setPublishSnippetError] = useState("");
+  const [flowSnippetToast, setFlowSnippetToast] = useState("");
+  const flowSnippetToastTimerRef = useRef(null);
   const [marketplaceCatalogNodes, setMarketplaceCatalogNodes] = useState([]);
   const [marketplaceCatalogLoading, setMarketplaceCatalogLoading] = useState(false);
   const [marketplaceCatalogError, setMarketplaceCatalogError] = useState("");
@@ -979,6 +1014,31 @@ export default function FlowEditorPage() {
   );
   const [recentRunsError, setRecentRunsError] = useState("");
   const [recentRunsLoading, setRecentRunsLoading] = useState(false);
+
+  const showFlowSnippetToast = useCallback((message) => {
+    if (flowSnippetToastTimerRef.current) {
+      window.clearTimeout(flowSnippetToastTimerRef.current);
+    }
+    setFlowSnippetToast(message);
+    flowSnippetToastTimerRef.current = window.setTimeout(() => {
+      setFlowSnippetToast("");
+      flowSnippetToastTimerRef.current = null;
+    }, 3800);
+  }, []);
+
+  const refreshNodeInternals = useCallback((nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    window.requestAnimationFrame(() => {
+      updateNodeInternalsRef.current?.(id);
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (flowSnippetToastTimerRef.current) {
+      window.clearTimeout(flowSnippetToastTimerRef.current);
+    }
+  }, []);
 
   // 工作区展开状态
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
@@ -1477,6 +1537,7 @@ export default function FlowEditorPage() {
   const edgesRef = useRef(edges);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
+  const insertFlowSnippetRef = useRef(null);
   const [connectionMenu, setConnectionMenu] = useState(null);
 
   const provideNodes = useMemo(
@@ -2094,10 +2155,27 @@ export default function FlowEditorPage() {
     }
   }, []);
 
+  const loadFlowSnippets = useCallback(async () => {
+    setFlowSnippetsLoading(true);
+    setFlowSnippetsError("");
+    try {
+      const resp = await fetch("/api/marketplace/flow-snippets");
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data?.error || "Failed to load flow snippets");
+      setFlowSnippets(Array.isArray(data?.snippets) ? data.snippets : []);
+    } catch (e) {
+      setFlowSnippetsError(String(e.message || e));
+      setFlowSnippets([]);
+    } finally {
+      setFlowSnippetsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selected) return;
     void loadMarketplaceCatalog();
-  }, [selected?.id, selected?.source, selected?.archived, loadMarketplaceCatalog]);
+    void loadFlowSnippets();
+  }, [selected?.id, selected?.source, selected?.archived, loadMarketplaceCatalog, loadFlowSnippets]);
 
   const installMarketplaceNodeForFlow = useCallback(
     async (node) => {
@@ -2311,7 +2389,7 @@ export default function FlowEditorPage() {
     });
   }, [soleSelectedNode?.id, nodePropsFlowEpoch]);
 
-  /** 仅一个节点选中时关闭抽屉；打开抽屉改由 onNodeClick（单击）触发，避免拖动节点时误开侧栏 */
+  /** 仅一个节点选中时关闭抽屉；打开抽屉改由双击节点触发，避免单击选中时误开侧栏 */
   useEffect(() => {
     if (!selected) return;
     if (!soleSelectedNode) {
@@ -2333,11 +2411,20 @@ export default function FlowEditorPage() {
       if (e.metaKey || e.ctrlKey || e.shiftKey) return;
       if (runMode !== "edit") {
         setRunContextNodeId(node?.id ?? null);
-        return;
       }
+    },
+    [runMode],
+  );
+
+  const onNodeDoubleClick = useCallback(
+    (/** @type {import("react").MouseEvent} */ e, /** @type {import("@xyflow/react").Node} */ node) => {
+      if (runMode !== "edit") return;
+      e.preventDefault();
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === node.id })));
+      setEdges((es) => es.map((edge) => ({ ...edge, selected: false })));
       openNodePanelFromCanvasClick();
     },
-    [openNodePanelFromCanvasClick, runMode],
+    [openNodePanelFromCanvasClick, runMode, setEdges, setNodes],
   );
 
   const handleEdgeClick = useCallback(
@@ -2541,16 +2628,22 @@ export default function FlowEditorPage() {
     (e) => {
       e.preventDefault();
       if (!selected) return;
+      const rfi = reactFlowInstanceRef.current;
+      if (!rfi) return;
+      const position = rfi.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const snippetKey = e.dataTransfer.getData("application/agentflow-snippet");
+      if (snippetKey) {
+        const snippet = flowSnippets.find((item) => `${item.id}@${item.version}` === snippetKey);
+        if (snippet) insertFlowSnippetRef.current?.(snippet, position);
+        return;
+      }
       const defId = e.dataTransfer.getData("application/agentflow-node");
       if (!defId) return;
       const def = palette.find((p) => p.id === defId);
       if (!def) return;
-      const rfi = reactFlowInstanceRef.current;
-      if (!rfi) return;
-      const position = rfi.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       setNodes((nds) => [...nds, createPaletteNodeAt(def, position)]);
     },
-    [selected, palette, setNodes, createPaletteNodeAt],
+    [selected, palette, flowSnippets, setNodes, createPaletteNodeAt],
   );
 
   const persistFlowToServer = useCallback(
@@ -2767,7 +2860,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         name: String(s?.name ?? ""),
         default: String(s?.default ?? ""),
         required: Boolean(s?.required),
-        showOnNode: s?.showOnNode !== false,
+        showOnNode: s?.showOnNode != null
+          ? s.showOnNode !== false
+          : Boolean(s?.required) || String(s?.type ?? "节点").trim().toLowerCase() === "node",
       }));
     const nextInputs = normIo(nodePropDraft.inputs);
     const nextOutputs = normIo(nodePropDraft.outputs);
@@ -2819,6 +2914,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
     setNodes(nextNodes);
     setEdges(nextEdges);
+    refreshNodeInternals(trimmedNew);
     persistFlowToServer(nextNodes, nextEdges);
     return true;
   }, [
@@ -2829,6 +2925,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     edges,
     setNodes,
     setEdges,
+    refreshNodeInternals,
     persistFlowToServer,
   ]);
 
@@ -2846,7 +2943,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         name: String(s?.name ?? ""),
         default: String(s?.default ?? ""),
         required: Boolean(s?.required),
-        showOnNode: s?.showOnNode !== false,
+        showOnNode: s?.showOnNode != null
+          ? s.showOnNode !== false
+          : Boolean(s?.required) || String(s?.type ?? "节点").trim().toLowerCase() === "node",
       }));
     const nextInputs = normIo(nodePropDraft.inputs);
     const nextOutputs = normIo(nodePropDraft.outputs);
@@ -2879,8 +2978,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       JSON.stringify(prev.outputs || []) !== JSON.stringify(nextOutputs);
     if (!changed) return true;
     setNodes((nds) => nds.map((n) => (n.id === oldId ? { ...n, data: nextData } : n)));
+    refreshNodeInternals(oldId);
     return true;
-  }, [nodePropDraft, selected, soleSelectedNode, setNodes]);
+  }, [nodePropDraft, selected, soleSelectedNode, setNodes, refreshNodeInternals]);
 
   // ref 转发避免依赖变化触发 effect 循环
   const applyNodePropertiesNoRenameRef = useRef(applyNodePropertiesNoRename);
@@ -3757,6 +3857,211 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   const mentionIdsOrdered = useMemo(() => parseMentionInstanceIds(composerText), [composerText]);
 
   const selectedCanvasNodes = useMemo(() => nodes.filter((n) => n.selected), [nodes]);
+
+  const selectedCanvasNodeIds = useMemo(
+    () => new Set(selectedCanvasNodes.map((n) => n.id)),
+    [selectedCanvasNodes],
+  );
+
+  const selectedCanvasInternalEdges = useMemo(
+    () => edges.filter((e) => selectedCanvasNodeIds.has(e.source) && selectedCanvasNodeIds.has(e.target)),
+    [edges, selectedCanvasNodeIds],
+  );
+
+  const filteredFlowSnippets = useMemo(() => {
+    const q = paletteSearch.trim().toLowerCase();
+    if (!q) return flowSnippets;
+    return flowSnippets.filter((snippet) =>
+      [
+        snippet.id,
+        snippet.version,
+        snippet.displayName,
+        snippet.name,
+        snippet.description,
+        ...(Array.isArray(snippet.tags) ? snippet.tags : []),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q)),
+    );
+  }, [flowSnippets, paletteSearch]);
+
+  const makeUniqueSnippetNodeId = useCallback((base, used) => {
+    const clean = String(base || "snippet-node")
+      .trim()
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "snippet-node";
+    const stamp = Date.now().toString(36);
+    let id = `${clean}-${stamp}`;
+    let i = 2;
+    while (used.has(id)) {
+      id = `${clean}-${stamp}-${i}`;
+      i += 1;
+    }
+    used.add(id);
+    return id;
+  }, []);
+
+  const insertFlowSnippet = useCallback(
+    (snippetEntry, positionOverride) => {
+      if (!selected || !snippetEntry) return;
+      const snippet = snippetEntry.snippet && typeof snippetEntry.snippet === "object" ? snippetEntry.snippet : {};
+      const instances = snippet.instances && typeof snippet.instances === "object" ? snippet.instances : {};
+      const oldIds = Object.keys(instances);
+      if (oldIds.length === 0) return;
+      const used = new Set(nodesRef.current.map((n) => n.id));
+      const idMap = {};
+      for (const oldId of oldIds) idMap[oldId] = makeUniqueSnippetNodeId(oldId, used);
+
+      const positions = snippet.ui?.nodePositions && typeof snippet.ui.nodePositions === "object"
+        ? snippet.ui.nodePositions
+        : {};
+      const sourcePositions = oldIds.map((id) => {
+        const p = positions[id];
+        return {
+          id,
+          x: typeof p?.x === "number" ? p.x : 0,
+          y: typeof p?.y === "number" ? p.y : 0,
+        };
+      });
+      const minX = Math.min(...sourcePositions.map((p) => p.x));
+      const minY = Math.min(...sourcePositions.map((p) => p.y));
+      let insertAt = positionOverride || { x: 180, y: 160 };
+      const rfi = reactFlowInstanceRef.current;
+      const wrap = document.querySelector(".af-pipeline-flow .react-flow");
+      if (!positionOverride && rfi && wrap) {
+        const rect = wrap.getBoundingClientRect();
+        insertAt = rfi.screenToFlowPosition({
+          x: rect.left + rect.width * 0.48,
+          y: rect.top + rect.height * 0.32,
+        });
+      }
+
+      const remappedInstances = {};
+      for (const oldId of oldIds) {
+        remappedInstances[idMap[oldId]] = { ...(instances[oldId] || {}) };
+      }
+      instancesRef.current = { ...instancesRef.current, ...remappedInstances };
+
+      const nextNodes = oldIds.map((oldId) => {
+        const inst = instances[oldId] || {};
+        const pos = sourcePositions.find((p) => p.id === oldId) || { x: 0, y: 0 };
+        const rawNode = {
+          id: idMap[oldId],
+          type: "flowNode",
+          selected: true,
+          position: {
+            x: insertAt.x + (pos.x - minX),
+            y: insertAt.y + (pos.y - minY),
+          },
+          data: {
+            label: inst.label || idMap[oldId],
+            definitionId: inst.definitionId || oldId,
+            role: inst.role || "normal",
+            body: inst.body || "",
+            script: inst.script || "",
+          },
+        };
+        return mergeNodeWithPalette(rawNode, instancesRef.current, palette, {}, selected.id);
+      });
+
+      const oldIdSet = new Set(oldIds);
+      const nextEdges = (Array.isArray(snippet.edges) ? snippet.edges : [])
+        .filter((edge) => oldIdSet.has(edge?.source) && oldIdSet.has(edge?.target))
+        .map((edge, index) => ({
+          id: `e-${idMap[edge.source]}-${idMap[edge.target]}-${Date.now()}-${index}`,
+          source: idMap[edge.source],
+          target: idMap[edge.target],
+          sourceHandle: edge.sourceHandle ?? undefined,
+          targetHandle: edge.targetHandle ?? undefined,
+          markerEnd: { type: MarkerType.ArrowClosed },
+        }));
+
+      setNodes((prev) => [...prev.map((n) => ({ ...n, selected: false })), ...nextNodes]);
+      setEdges((prev) => [...prev.map((e) => ({ ...e, selected: false })), ...nextEdges]);
+      setSaveStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}`);
+    },
+    [makeUniqueSnippetNodeId, palette, selected, setEdges, setNodes],
+  );
+  insertFlowSnippetRef.current = insertFlowSnippet;
+
+  const openPublishSnippetDialog = useCallback(() => {
+    if (selectedCanvasNodes.length < 2) {
+      setFlowSnippetsError("请先在画布上选择至少两个节点。");
+      setPaletteMode("flows");
+      return;
+    }
+    const first = selectedCanvasNodes[0];
+    const fallbackName =
+      selectedCanvasNodes.length === 2
+        ? `${first.data?.label || first.id} 片段`
+        : `${first.data?.label || first.id} 等 ${selectedCanvasNodes.length} 个节点`;
+    setPublishSnippetDraft({
+      name: fallbackName,
+      id: fallbackName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""),
+      description: "",
+    });
+    setPublishSnippetError("");
+    setPublishSnippetOpen(true);
+    setPaletteMode("flows");
+  }, [selectedCanvasNodes]);
+
+  const publishSelectedFlowSnippet = useCallback(async () => {
+    if (!selected || selectedCanvasNodes.length < 2) return;
+    const name = publishSnippetDraft.name.trim();
+    if (!name) {
+      setPublishSnippetError("请填写片段名称。");
+      return;
+    }
+    const instances = buildInstancesForYaml(selectedCanvasNodes, instancesRef.current);
+    const nodePositions = {};
+    for (const node of selectedCanvasNodes) {
+      nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
+    }
+    const snippetEdges = selectedCanvasInternalEdges.map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+      targetHandle: edge.targetHandle ?? null,
+    }));
+    setPublishSnippetBusy(true);
+    setPublishSnippetError("");
+    try {
+      const resp = await fetch("/api/marketplace/publish-flow-snippet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: publishSnippetDraft.id,
+          name,
+          displayName: name,
+          version: "1.0.0",
+          description: publishSnippetDraft.description,
+          snippet: {
+            instances,
+            edges: snippetEdges,
+            ui: { nodePositions },
+          },
+        }),
+      });
+      const result = await resp.json().catch(() => ({}));
+      if (!resp.ok || result?.ok === false) throw new Error(result?.error || "Publish failed");
+      setPublishSnippetOpen(false);
+      setSaveStatus(`流程片段已发布：${result.id || name}`);
+      showFlowSnippetToast(`流程片段已发布：${result.id || name}`);
+      await loadFlowSnippets();
+      setPaletteMode("flows");
+    } catch (e) {
+      setPublishSnippetError(String(e.message || e));
+    } finally {
+      setPublishSnippetBusy(false);
+    }
+  }, [
+    selected,
+    selectedCanvasNodes,
+    selectedCanvasInternalEdges,
+    publishSnippetDraft,
+    loadFlowSnippets,
+    showFlowSnippetToast,
+  ]);
 
   /** 画布选中优先，再补全仅出现在 @提及 中的节点 */
   const composerStripEntries = useMemo(() => {
@@ -4826,6 +5131,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   return (
     <ReactFlowProvider>
+      <NodeInternalsRefreshBridge onReady={handleNodeInternalsRefreshReady} />
       <FlowNodeContext.Provider value={{ modelLists, onModelChange: handleNodeModelChange }}>
         <div className={"af-pipeline-page" + (runMode !== "edit" ? " af-pipeline-page--run-mode" : "")}>
           <header className="af-pipeline-top">
@@ -5124,6 +5430,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             )}
           </div>
         </header>
+        {flowSnippetToast ? (
+          <div className="af-flow-snippet-toast" role="status" aria-live="polite">
+            <span className="material-symbols-outlined" aria-hidden>check_circle</span>
+            <span>{flowSnippetToast}</span>
+            <button type="button" onClick={() => setFlowSnippetToast("")} aria-label="关闭发布提示">
+              <span className="material-symbols-outlined" aria-hidden>close</span>
+            </button>
+          </div>
+        ) : null}
 
         <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "")}>
           {runMode === "edit" && rightPanel !== "settings" ? (
@@ -5230,11 +5545,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
             <div className="af-node-palette-head">
               <h2 className="af-node-palette-title">
-                <span>Node Palette</span>
+                <span>Palette</span>
                 <span className="af-node-palette-title-kbd" aria-label="快捷键 A">A</span>
               </h2>
               <label className="af-palette-search-wrap">
-                <span className="af-visually-hidden">{t("flow:palette.searchNodes")}</span>
+                <span className="af-visually-hidden">{paletteMode === "flows" ? "搜索流程片段" : t("flow:palette.searchNodes")}</span>
                 <span className="af-palette-search-icon material-symbols-outlined" aria-hidden>
                   search
                 </span>
@@ -5244,13 +5559,106 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   className="af-palette-search-input"
                   value={paletteSearch}
                   onChange={(e) => setPaletteSearch(e.target.value)}
-                  placeholder={t("flow:palette.searchNodes") + "…"}
-                  aria-label={t("flow:palette.searchNodes")}
+                  placeholder={(paletteMode === "flows" ? "搜索流程片段" : t("flow:palette.searchNodes")) + "…"}
+                  aria-label={paletteMode === "flows" ? "搜索流程片段" : t("flow:palette.searchNodes")}
                 />
               </label>
+              <div className="af-palette-tabs" role="tablist" aria-label="Palette 类型">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteMode === "nodes"}
+                  className={"af-palette-tab" + (paletteMode === "nodes" ? " af-palette-tab--active" : "")}
+                  onClick={() => setPaletteMode("nodes")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>category</span>
+                  节点
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteMode === "flows"}
+                  className={"af-palette-tab" + (paletteMode === "flows" ? " af-palette-tab--active" : "")}
+                  onClick={() => setPaletteMode("flows")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+                  流程
+                </button>
+              </div>
             </div>
             {listError ? <p className="af-err af-palette-list-err">{listError}</p> : null}
             <div className="af-node-palette-scroll">
+              {paletteMode === "flows" ? (
+                <>
+                  <section className="af-palette-section af-flow-palette-section--snippets">
+                    <div className="af-flow-snippet-actions">
+                      <button
+                        type="button"
+                        className="af-flow-snippet-publish-btn"
+                        onClick={openPublishSnippetDialog}
+                        disabled={!selected || selectedCanvasNodes.length < 2}
+                        title={selectedCanvasNodes.length < 2 ? "选择至少两个节点后发布流程片段" : "发布选中的流程片段"}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>ios_share</span>
+                        发布选中片段
+                      </button>
+                      <span className="af-flow-snippet-selection">
+                        已选 {selectedCanvasNodes.length} 节点 / {selectedCanvasInternalEdges.length} 连线
+                      </span>
+                    </div>
+                  </section>
+                  {flowSnippetsError ? <p className="af-err af-palette-list-err">{flowSnippetsError}</p> : null}
+                  {flowSnippetsLoading ? (
+                    <p className="af-palette-empty">正在加载流程片段…</p>
+                  ) : filteredFlowSnippets.length > 0 ? (
+                    <section className="af-palette-section af-flow-palette-section--snippets">
+                      <h3 className="af-palette-cat">FLOW SNIPPETS</h3>
+                      <div className="af-palette-cards">
+                        {filteredFlowSnippets.map((snippet) => {
+                          const key = `${snippet.id}@${snippet.version}`;
+                          const title = snippet.displayName || snippet.name || snippet.id;
+                          const desc = snippet.description || `${snippet.nodeCount || 0} 个节点，${snippet.edgeCount || 0} 条连线`;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className="af-palette-card af-flow-snippet-card"
+                              onClick={() => insertFlowSnippet(snippet)}
+                              draggable={!!selected}
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData("application/agentflow-snippet", key);
+                                e.dataTransfer.effectAllowed = "move";
+                              }}
+                              disabled={!selected}
+                              title={desc}
+                            >
+                              <span className="af-palette-card-head">
+                                <span className="af-palette-card-icon" aria-hidden>
+                                  <span className="material-symbols-outlined">account_tree</span>
+                                </span>
+                                <span className="af-palette-card-main">
+                                  <span className="af-palette-card-label">{title}</span>
+                                  <span className="af-palette-card-id">{snippet.id}@{snippet.version}</span>
+                                </span>
+                              </span>
+                              {desc ? <span className="af-palette-card-desc">{desc}</span> : null}
+                              <span className="af-flow-snippet-meta" aria-hidden>
+                                <span>{snippet.nodeCount || 0} nodes</span>
+                                <span>{snippet.edgeCount || 0} edges</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : (
+                    <p className="af-palette-empty">
+                      {paletteSearch.trim() ? "无匹配流程片段" : "暂无流程片段。选择多个节点后发布。"}
+                    </p>
+                  )}
+                </>
+              ) : (
+              <>
               {PALETTE_ORDER.filter((cat) => filteredGroupedPalette[cat].length > 0).map((cat) => (
                 <section key={cat} className={`af-palette-section af-flow-palette-section--${cat}`}>
                   <h3 className="af-palette-cat">{cat}</h3>
@@ -5334,6 +5742,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
               {!selected ? (
                 <p className="af-palette-empty">{t("flow:palette.selectPipeline")}</p>
               ) : null}
+              </>
+              )}
             </div>
 
             <footer className="af-palette-engine">
@@ -5478,6 +5888,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   isValidConnection={runMode !== "edit" ? undefined : isValidConnection}
                   onNodesDelete={runMode !== "edit" ? undefined : onNodesDelete}
                   onNodeClick={onNodeClick}
+                  onNodeDoubleClick={onNodeDoubleClick}
                   onEdgeClick={handleEdgeClick}
                   onFlowInit={onFlowInit}
                   onDrop={handlePaletteDrop}
@@ -6810,6 +7221,86 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           }}
         />
 
+        {publishSnippetOpen && createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal" role="dialog" aria-modal="true" aria-label="发布流程片段">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>ios_share</span>
+                  发布流程片段
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setPublishSnippetOpen(false)}
+                  aria-label={t("common:common.close")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <label className="af-flow-snippet-field">
+                  <span>名称</span>
+                  <input
+                    type="text"
+                    value={publishSnippetDraft.name}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setPublishSnippetDraft((prev) => ({
+                        ...prev,
+                        name,
+                        id: prev.id ? prev.id : name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""),
+                      }));
+                    }}
+                    placeholder="例如：PR 检查片段"
+                    autoFocus
+                  />
+                </label>
+                <label className="af-flow-snippet-field">
+                  <span>ID</span>
+                  <input
+                    type="text"
+                    value={publishSnippetDraft.id}
+                    onChange={(e) => setPublishSnippetDraft((prev) => ({ ...prev, id: e.target.value }))}
+                    placeholder="pr-check-snippet"
+                  />
+                </label>
+                <label className="af-flow-snippet-field">
+                  <span>说明</span>
+                  <textarea
+                    value={publishSnippetDraft.description}
+                    onChange={(e) => setPublishSnippetDraft((prev) => ({ ...prev, description: e.target.value }))}
+                    placeholder="这段流程适合什么场景、需要接哪些上下游。"
+                    rows={4}
+                  />
+                </label>
+                <div className="af-flow-snippet-summary">
+                  将发布 {selectedCanvasNodes.length} 个节点和 {selectedCanvasInternalEdges.length} 条内部连线。
+                </div>
+                {publishSnippetError ? <div className="af-flow-snippet-error">{publishSnippetError}</div> : null}
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  onClick={() => setPublishSnippetOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  disabled={publishSnippetBusy || !publishSnippetDraft.name.trim()}
+                  onClick={() => void publishSelectedFlowSnippet()}
+                >
+                  {publishSnippetBusy ? "发布中…" : "发布"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
         <FileEditModal
           open={Boolean(fileEditModal)}
           onClose={() => setFileEditModal(null)}
@@ -7121,24 +7612,37 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     if (!slotName) return null;
                     const definitionId = node.data?.definitionId || "";
                     const isFile = definitionId.startsWith("provide_file");
+                    const isBool = definitionId === "provide_bool";
                     const label = node.data?.label || node.id;
                     const currentValue = runParamsDraft[slotName] ?? "";
+                    const boolChecked = ["true", "1", "yes", "on"].includes(String(currentValue).trim().toLowerCase());
                     return (
                       <div key={node.id} className="af-run-params-item">
                         <div className="af-run-params-item__head">
                           <span className={"af-run-params-item__icon material-symbols-outlined" + (isFile ? " af-run-params-item__icon--file" : "")}>
-                            {isFile ? "description" : "text_fields"}
+                            {isFile ? "description" : isBool ? "toggle_on" : "text_fields"}
                           </span>
                           <span className="af-run-params-item__label">{label}</span>
                           <span className="af-run-params-item__slot">{slotName}</span>
                         </div>
-                        <input
-                          type="text"
-                          className="af-run-params-item__input"
-                          value={currentValue}
-                          onChange={(e) => setRunParamsDraft((d) => ({ ...d, [slotName]: e.target.value }))}
-                          placeholder={isFile ? t("flow:runConfig.filePathPlaceholder") : t("flow:runConfig.stringValuePlaceholder")}
-                        />
+                        {isBool ? (
+                          <button
+                            type="button"
+                            className={"af-run-config-bool-toggle" + (boolChecked ? " af-run-config-bool-toggle--true" : "")}
+                            onClick={() => setRunParamsDraft((d) => ({ ...d, [slotName]: boolChecked ? "false" : "true" }))}
+                            aria-pressed={boolChecked}
+                          >
+                            {boolChecked ? "true" : "false"}
+                          </button>
+                        ) : (
+                          <input
+                            type="text"
+                            className="af-run-params-item__input"
+                            value={currentValue}
+                            onChange={(e) => setRunParamsDraft((d) => ({ ...d, [slotName]: e.target.value }))}
+                            placeholder={isFile ? t("flow:runConfig.filePathPlaceholder") : t("flow:runConfig.stringValuePlaceholder")}
+                          />
+                        )}
                       </div>
                     );
                   })}

@@ -281,6 +281,18 @@
       "displayName": "Git 拉取",
       "description": "克隆或更新 Git 仓库，并输出可供下游使用的工作区上下文"
     },
+    "tool_git_worktree_load": {
+      "displayName": "加载 Worktree",
+      "description": "创建或复用 Git worktree，并输出 workspaceContext 与 gitContext"
+    },
+    "tool_git_worktree_unload": {
+      "displayName": "卸载 Worktree",
+      "description": "移除 Git worktree，并恢复下游工作区上下文"
+    },
+    "tool_gitlab_create_mr": {
+      "displayName": "提交 GitLab MR",
+      "description": "为当前分支创建或复用 GitLab Merge Request，并输出 MR 链接"
+    },
     "tool_nodejs": {
       "displayName": "Node.js 脚本",
       "description": "执行 Node.js 脚本，以 exit code 判断成败，stdout 作为结果"
@@ -313,6 +325,14 @@
       "displayName": "ASCII 图展示",
       "description": "在 Workspace 画布中渲染等宽 ASCII 图，并将文本继续传给下游"
     },
+    "display_html": {
+      "displayName": "HTML 展示",
+      "description": "在 Workspace 画布中用 sandbox iframe 渲染 HTML，并将源码继续传给下游"
+    },
+    "display_image": {
+      "displayName": "图片展示",
+      "description": "在 Workspace 画布中预览图片 URL、data URL 或图片路径，并将来源继续传给下游"
+    },
     "provide_str": {
       "displayName": "文本",
       "description": "直接提供一段文本，value 会原样供下游引用"
@@ -320,6 +340,10 @@
     "provide_file": {
       "displayName": "文件",
       "description": "直接提供文件路径或内容，value 会原样供下游引用"
+    },
+    "provide_bool": {
+      "displayName": "布尔",
+      "description": "直接提供 true/false 布尔值，value 会供下游 bool 引脚引用"
     }
   },
   "pipeline": {

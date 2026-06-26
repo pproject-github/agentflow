@@ -123,7 +123,7 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 为**每个**需要完善的 instance 生成独立 agent 步骤（或确定性 script 步骤）：
 - **agent_subAgent**：若 body 已是可执行 prompt 则跳过；否则编写**准确、可执行**的 \`body\`（提示词/规则/输入输出占位 \`\${...}\`）。**复杂度用 "simple"**。
 - **tool_nodejs**：若 \`script\` 字段已是完整命令且 scripts/ 下脚本已存在 → 跳过；否则在 **scripts/** 子目录创建 Node 脚本（\`scripts/<instanceId>.mjs\`），\`script\` 写入完整 \`node ...\` 调用并用 \`\${}\` 引用槽位。**引用 scripts/ 必须用 \`\${flowDir}/scripts/xxx.mjs\`**，不要写 \`\${workspaceRoot}/.workspace/agentflow/pipelines/\${flowName}/scripts/...\`（flow 可能安装到 \`~/agentflow/pipelines\` 或 builtin，硬编码 workspace 路径会找不到脚本）。**不要**给 \`\${workspaceRoot}\`、\`\${runDir}\` 等外包双引号（已自动 shell-quote）。**禁止**仅 body 自然语言无 script。
-- **control_toBool / provide_str / provide_file** 等：按规格书补齐空的 \`body\` 或 output \`value\`。
+- **control_toBool / provide_str / provide_file / provide_bool** 等：按规格书补齐空的 \`body\` 或 output \`value\`。
 - **引脚补漏**：核对 body/script 中每个 \`\${X}\` 是否对应实际槽位 name；缺槽就在末尾追加（type 必为 \`text\` 或 \`file\`，**绝不写 node**），多余的不要动（可能是阶段三连线用）。
 - **不得删改基础控制槽**（\`prev\`/\`next\` 的 type/name 与顺序）；**固定槽位节点**（control_* / provide_* / tool_load_key/save_key/get_env / tool_print / tool_user_ask）的 input/output 结构永不修改。
 
@@ -146,9 +146,9 @@ function buildPhasedSystemPrompt(phaseName, intents) {
 2. **引脚语义审查 checklist**（每节点过一遍，发现问题修正）：
    a. **同 output 多消费者冲突**：一个 output 槽被两条边消费且消费方语义矛盾（如同时供 \`control_toBool.value\`（要 true/false 单行）和 \`agent.input\`（要详细内容）→ 必须**拆成两个 output 槽**（如 \`result:text\` + \`report:file\`）
    b. **text vs file 错配**：内容超过 ~1KB 或为多行报告/日志/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
-   c. **bool 误用**：\`bool\` 槽只允许出现在 \`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) 与 \`control_if.prediction\`(in) 这一对位置，其它任何节点禁用
+   c. **bool 误用**：\`bool\` 槽只允许出现在 \`provide_bool.value\`、\`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) 与 \`control_if.prediction\`(in)，其它任何节点禁用
    d. **节点类型错配**：发现 \`tool_nodejs\` 实际做的是非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 把要求写到 body
-   e. **provide_* 类型对齐**：\`provide_str\` 必须 \`output[0].type=text\`；\`provide_file\` 必须 \`output[0].type=file\`
+   e. **provide_* 类型对齐**：\`provide_str\` 必须 \`output[0].type=text\`；\`provide_file\` 必须 \`output[0].type=file\`；\`provide_bool\` 必须 \`output[0].type=bool\`
 3. **ui.nodePositions**：按 \`reference/flow-layout.md\` 优化布局（主链 x 递增、分支 y 错开、避免一条线）。
 4. 完成后应能通过 validate-flow；可用 add-edge、update-position 等 script 步骤，必要时用 agent 步骤处理复杂拓扑。
 
@@ -648,9 +648,9 @@ function buildPhaseCliGuide(phaseIndex) {
 2. **引脚语义审查 checklist**（每节点过一遍）：
    a. **同 output 多消费者冲突**：一个 output 同时供给两个语义矛盾的下游（如 \`toBool.value\` 要单行 true/false 与 \`agent.input\` 要详细内容）→ 拆成两个 output 槽
    b. **text/file 错配**：内容超 ~1KB 或多行报告/源码 → 应是 \`file\`；只是路径串/key/JSON 短串 → 应是 \`text\`
-   c. **bool 误用**：\`bool\` 槽只允许 \`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) → \`control_if.prediction\`(in)，其它禁用
+   c. **bool 误用**：\`bool\` 槽只允许 \`provide_bool.value\`、\`control_toBool.prediction\` / \`control_agent_toBool.prediction\`(out) → \`control_if.prediction\`(in)，其它禁用
    d. **节点类型错配**：\`tool_nodejs\` 实际做非确定性任务（代码翻译/源码理解/创意生成）→ 改 \`definitionId: agent_subAgent\` + 删 script + 写 body
-   e. **provide_* 类型对齐**：\`provide_str.output[0].type\` 必为 \`text\`；\`provide_file.output[0].type\` 必为 \`file\`
+   e. **provide_* 类型对齐**：\`provide_str.output[0].type\` 必为 \`text\`；\`provide_file.output[0].type\` 必为 \`file\`；\`provide_bool.output[0].type\` 必为 \`bool\`
 3. **优化 ui.nodePositions**（参考 flow-layout.md：主链 x 递增、分支 y 错开）。
 4. 完成后须能通过 **validate-flow**；本轮结束后系统会自动校验并尝试修复。`;
   }

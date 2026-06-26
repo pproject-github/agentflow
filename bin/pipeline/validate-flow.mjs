@@ -493,26 +493,16 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
         }
       }
 
-      // provide_str / provide_file output 类型校验
-      if (defId === "provide_str") {
+      // provide_str / provide_file / provide_bool output 类型校验
+      if (defId === "provide_str" || defId === "provide_file" || defId === "provide_bool") {
         const out = Array.isArray(inst.output) ? inst.output : [];
+        const expectedType = defId === "provide_file" ? "file" : defId === "provide_bool" ? "bool" : "text";
         if (out.length !== 1) {
-          errors.push(`节点 "${n.id}"（provide_str）output 必须仅有 1 个槽位（value:text），当前 ${out.length} 个`);
+          errors.push(`节点 "${n.id}"（${defId}）output 必须仅有 1 个槽位（value:${expectedType}），当前 ${out.length} 个`);
         } else {
           const t0 = normType(out[0] && out[0].type);
-          if (t0 !== "text") {
-            errors.push(`节点 "${n.id}"（provide_str）output[0].type 必须为 \`text\`，当前为 \`${t0 || "(空)"}\``);
-          }
-        }
-      }
-      if (defId === "provide_file") {
-        const out = Array.isArray(inst.output) ? inst.output : [];
-        if (out.length !== 1) {
-          errors.push(`节点 "${n.id}"（provide_file）output 必须仅有 1 个槽位（value:file），当前 ${out.length} 个`);
-        } else {
-          const t0 = normType(out[0] && out[0].type);
-          if (t0 !== "file") {
-            errors.push(`节点 "${n.id}"（provide_file）output[0].type 必须为 \`file\`，当前为 \`${t0 || "(空)"}\``);
+          if (t0 !== expectedType) {
+            errors.push(`节点 "${n.id}"（${defId}）output[0].type 必须为 \`${expectedType}\`，当前为 \`${t0 || "(空)"}\``);
           }
         }
       }
@@ -675,7 +665,7 @@ function computeValidation(loaded, workspaceRoot) {
     if (!isNodeEdge) continue;
     if (srcDef.startsWith("provide_") || tgtDef.startsWith("provide_")) {
       validationErrors.push(
-        `provide_* 节点不得出现在控制链上（node→node 边）：${e.source} ${sh} -> ${e.target} ${th}；provide 仅作数据源，请改连下游 text/file 数据槽`
+        `provide_* 节点不得出现在控制链上（node→node 边）：${e.source} ${sh} -> ${e.target} ${th}；provide 仅作数据源，请改连下游 text/file/bool 数据槽`
       );
     }
   }

@@ -3242,6 +3242,11 @@ button.af-project-card {
   grid-template-columns: 22rem minmax(0, 1fr);
 }
 
+.af-workspace-body--sidebar-collapsed,
+.af-workspace-body--drawer.af-workspace-body--sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .af-workspace-sidebar {
   min-height: 0;
   overflow: hidden;
@@ -3251,6 +3256,107 @@ button.af-project-card {
   display: grid;
   grid-template-rows: minmax(0, 1fr) minmax(16rem, 1fr);
   gap: 1rem;
+}
+
+.af-workspace-body--sidebar-collapsed .af-workspace-sidebar {
+  display: none;
+}
+
+.af-workspace-rail {
+  position: absolute;
+  z-index: 20;
+  left: 1.15rem;
+  top: 1.15rem;
+  width: 3.4rem;
+  height: min(22rem, calc(100% - 2.3rem));
+  min-height: 12.8rem;
+  padding: 0.42rem 0.34rem 0.46rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1.7rem;
+  background: rgba(30, 30, 31, 0.96);
+  box-shadow: 0 0.9rem 2.4rem rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.af-workspace-rail__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.82rem;
+}
+
+.af-workspace-rail__primary,
+.af-workspace-rail__btn,
+.af-workspace-rail__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  cursor: pointer;
+}
+
+.af-workspace-rail__primary {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #111;
+}
+
+.af-workspace-rail__primary .material-symbols-outlined {
+  font-size: 1.55rem;
+  font-weight: 400;
+}
+
+.af-workspace-rail__dot {
+  position: absolute;
+  right: 0.2rem;
+  top: 0.34rem;
+  width: 0.56rem;
+  height: 0.56rem;
+  border-radius: 999px;
+  background: #55aee8;
+}
+
+.af-workspace-rail__btn {
+  width: 2.12rem;
+  height: 2.12rem;
+  border-radius: 0.72rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.af-workspace-rail__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.af-workspace-rail__btn .material-symbols-outlined {
+  font-size: 1.25rem;
+}
+
+.af-workspace-rail__divider {
+  width: 1.25rem;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.13);
+  margin: 0.05rem 0 0;
+}
+
+.af-workspace-rail__avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  background: #4a5d67;
+  color: rgba(255, 255, 255, 0.94);
+  font-family: var(--af-headline);
+  font-size: 1.12rem;
+  font-weight: 700;
+  box-shadow: 0 0.32rem 0.8rem rgba(0, 0, 0, 0.35);
 }
 
 .af-workspace-sidebar section {
@@ -3521,6 +3627,32 @@ button.af-project-card {
   box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.32), 0 18px 44px rgba(0, 0, 0, 0.36);
 }
 
+.af-work-display-card--executing,
+.af-work-run-card--executing {
+  border-color: rgba(0, 228, 117, 0.72);
+  box-shadow:
+    0 0 0 2px rgba(0, 228, 117, 0.36),
+    0 0 26px rgba(0, 228, 117, 0.18),
+    0 18px 44px rgba(0, 0, 0, 0.36);
+}
+
+.af-work-display-card--done,
+.af-work-run-card--done {
+  border-color: rgba(0, 228, 117, 0.38);
+  box-shadow:
+    0 0 0 1px rgba(0, 228, 117, 0.18),
+    0 18px 44px rgba(0, 0, 0, 0.34);
+}
+
+.af-work-display-card--failed,
+.af-work-run-card--failed {
+  border-color: rgba(255, 82, 82, 0.58);
+  box-shadow:
+    0 0 0 1px rgba(255, 82, 82, 0.28),
+    0 0 20px rgba(255, 82, 82, 0.14),
+    0 18px 44px rgba(0, 0, 0, 0.34);
+}
+
 .af-work-display-resize {
   width: 1.25rem !important;
   height: 1.25rem !important;
@@ -3597,6 +3729,7 @@ button.af-project-card {
   letter-spacing: 0.02em;
 }
 
+.af-work-display-card__action,
 .af-work-display-card__close {
   position: relative;
   z-index: 13;
@@ -3610,13 +3743,19 @@ button.af-project-card {
   cursor: pointer;
 }
 
+.af-work-display-card__action:hover,
 .af-work-display-card__close:hover {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
 }
 
+.af-work-display-card__action .material-symbols-outlined,
 .af-work-display-card__close .material-symbols-outlined {
   font-size: 1.15rem;
+}
+
+.af-work-display-card__action {
+  color: rgba(205, 189, 255, 0.62);
 }
 
 .af-work-display-empty,
@@ -3626,9 +3765,49 @@ button.af-project-card {
   flex: 0 1 auto;
   max-height: 30rem;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
   padding: 1rem 1.1rem;
   color: rgba(255, 255, 255, 0.84);
   line-height: 1.55;
+}
+
+.af-work-display-empty::-webkit-scrollbar,
+.af-work-display-body::-webkit-scrollbar,
+.af-work-load-skills-menu::-webkit-scrollbar,
+.af-work-node__preview::-webkit-scrollbar,
+.af-work-node__mermaid-preview::-webkit-scrollbar {
+  width: 0.62rem;
+  height: 0.62rem;
+}
+
+.af-work-display-empty::-webkit-scrollbar-track,
+.af-work-display-body::-webkit-scrollbar-track,
+.af-work-load-skills-menu::-webkit-scrollbar-track,
+.af-work-node__preview::-webkit-scrollbar-track,
+.af-work-node__mermaid-preview::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+
+.af-work-display-empty::-webkit-scrollbar-thumb,
+.af-work-display-body::-webkit-scrollbar-thumb,
+.af-work-load-skills-menu::-webkit-scrollbar-thumb,
+.af-work-node__preview::-webkit-scrollbar-thumb,
+.af-work-node__mermaid-preview::-webkit-scrollbar-thumb {
+  min-height: 2rem;
+  border: 2px solid rgba(25, 24, 28, 0.92);
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.46);
+}
+
+.af-work-display-empty::-webkit-scrollbar-thumb:hover,
+.af-work-display-body::-webkit-scrollbar-thumb:hover,
+.af-work-load-skills-menu::-webkit-scrollbar-thumb:hover,
+.af-work-node__preview::-webkit-scrollbar-thumb:hover,
+.af-work-node__mermaid-preview::-webkit-scrollbar-thumb:hover {
+  background: rgba(205, 189, 255, 0.68);
 }
 
 .af-work-display-card--sized .af-work-display-empty,
@@ -3649,6 +3828,30 @@ button.af-project-card {
 
 .af-work-display-body--markdown :last-child {
   margin-bottom: 0;
+}
+
+.af-work-display-body--html,
+.af-work-display-body--image {
+  padding: 0;
+  overflow: hidden;
+}
+
+.af-work-display-html-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  border: 0;
+  background: #fff;
+}
+
+.af-work-display-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  object-fit: contain;
+  background: #050505;
 }
 
 .af-work-display-body--markdown h1,
@@ -3755,7 +3958,61 @@ button.af-project-card {
 }
 
 .af-workspace-composer .af-pipeline-composer-inner {
+  position: relative;
   width: 100%;
+}
+
+.af-workspace-composer-minimize {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.85rem;
+  z-index: 2;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.56);
+  cursor: pointer;
+}
+
+.af-workspace-composer-minimize:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.af-workspace-composer-minimize .material-symbols-outlined {
+  font-size: 1.05rem;
+}
+
+.af-workspace-composer-fab {
+  position: absolute;
+  right: 1.35rem;
+  bottom: 1.25rem;
+  z-index: 8;
+  width: 3.4rem;
+  height: 3.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(36, 36, 37, 0.96);
+  color: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  box-shadow: 0 0.9rem 2.2rem rgba(0, 0, 0, 0.38);
+}
+
+.af-workspace-composer-fab:hover {
+  background: rgba(54, 54, 56, 0.98);
+  color: #fff;
+}
+
+.af-workspace-composer-fab .material-symbols-outlined {
+  font-size: 1.55rem;
 }
 
 .af-workspace-flowyaml-toggle {
@@ -3963,6 +4220,9 @@ button.af-project-card {
   z-index: 40;
   max-height: 22rem;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
   padding: 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.7rem;
@@ -4068,12 +4328,38 @@ button.af-project-card {
   width: min(34rem, calc(100vw - 2rem));
   max-height: min(36rem, calc(100vh - 4rem));
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid rgba(124, 77, 255, 0.38);
   border-radius: 0.8rem;
   background: rgba(24, 24, 26, 0.98);
   box-shadow: 0 28px 82px rgba(0, 0, 0, 0.52);
+}
+
+.af-workspace-quick-add__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.5rem 0.55rem 0;
+}
+
+.af-workspace-quick-add__tab {
+  min-height: 2.15rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(202, 195, 216, 0.66);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.af-workspace-quick-add__tab:hover,
+.af-workspace-quick-add__tab--active {
+  border-color: rgba(124, 77, 255, 0.38);
+  background: rgba(124, 77, 255, 0.2);
+  color: rgba(236, 230, 255, 0.96);
 }
 
 .af-workspace-quick-add__search {
@@ -4405,6 +4691,9 @@ button.af-project-card {
 .af-work-node__preview {
   max-height: 18rem;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
   margin-top: 0.7rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 0.65rem;
@@ -4423,6 +4712,9 @@ button.af-project-card {
 .af-work-node__mermaid-preview {
   max-height: 18rem;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
   margin-top: 0.7rem;
   border: 1px solid rgba(92, 184, 255, 0.22);
   border-radius: 0.5rem;
@@ -5053,6 +5345,43 @@ button.af-project-card {
   background: var(--af-surface-bright);
 }
 
+.af-palette-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+  margin-top: 0.55rem;
+  padding: 0.18rem;
+  border-radius: 0.5rem;
+  background: var(--af-surface-lowest);
+}
+
+.af-palette-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  min-width: 0;
+  height: 1.8rem;
+  border: 1px solid transparent;
+  border-radius: 0.38rem;
+  background: transparent;
+  color: rgba(232, 227, 239, 0.55);
+  font-family: var(--af-headline);
+  font-size: 0.62rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-palette-tab .material-symbols-outlined {
+  font-size: 15px;
+}
+
+.af-palette-tab--active {
+  border-color: rgba(124, 77, 255, 0.32);
+  background: rgba(124, 77, 255, 0.16);
+  color: var(--af-on-surface);
+}
+
 .af-node-palette-scroll {
   flex: 1;
   min-height: 0;
@@ -5315,6 +5644,117 @@ button.af-project-card {
   font-size: 0.52rem;
   line-height: 1;
   color: rgba(202, 195, 216, 0.42);
+}
+
+.af-flow-snippet-actions {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.af-flow-snippet-publish-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-height: 2.25rem;
+  border: 1px solid rgba(124, 77, 255, 0.3);
+  border-radius: 0.48rem;
+  background: rgba(124, 77, 255, 0.14);
+  color: var(--af-on-surface);
+  font-family: var(--af-headline);
+  font-size: 0.66rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-flow-snippet-publish-btn:hover:not(:disabled) {
+  background: rgba(124, 77, 255, 0.22);
+}
+
+.af-flow-snippet-publish-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.af-flow-snippet-publish-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.af-flow-snippet-selection {
+  color: rgba(202, 195, 216, 0.45);
+  font-family: var(--af-mono);
+  font-size: 0.58rem;
+  text-align: center;
+}
+
+.af-flow-snippet-card {
+  grid-template-rows: auto auto;
+}
+
+.af-flow-snippet-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.af-flow-snippet-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.15rem;
+  padding: 0 0.35rem;
+  border-radius: 0.3rem;
+  background: rgba(202, 195, 216, 0.08);
+  color: rgba(202, 195, 216, 0.58);
+  font-family: var(--af-mono);
+  font-size: 0.52rem;
+}
+
+.af-flow-snippet-toast {
+  position: fixed;
+  z-index: 12000;
+  top: 5.5rem;
+  right: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(30rem, calc(100vw - 2rem));
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(148, 220, 170, 0.36);
+  border-radius: 0.75rem;
+  background: rgba(27, 35, 30, 0.94);
+  color: rgba(235, 255, 240, 0.92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.af-flow-snippet-toast > .material-symbols-outlined {
+  color: rgba(148, 220, 170, 0.96);
+  font-size: 1.25rem;
+}
+
+.af-flow-snippet-toast button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(235, 255, 240, 0.72);
+  cursor: pointer;
+}
+
+.af-flow-snippet-toast button:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.af-flow-snippet-toast button .material-symbols-outlined {
+  font-size: 1rem;
 }
 
 .af-palette-empty {
@@ -8554,6 +8994,15 @@ button.af-project-card {
   width: min(38rem, calc(100vw - 22rem));
 }
 
+.af-workspace-body--sidebar-collapsed .af-workspace-composer-drawer {
+  width: min(30rem, calc(100% - 7rem));
+}
+
+.af-workspace-body--sidebar-collapsed .af-workspace-node-drawer,
+.af-workspace-body--sidebar-collapsed .af-pipeline-drawer.af-workspace-node-drawer {
+  width: min(38rem, calc(100vw - 7rem));
+}
+
 /* Empty canvas hint */
 .af-flow-empty-hint {
   position: absolute;
@@ -10013,6 +10462,33 @@ button.af-exec-history-card {
 
 .af-flow-node__model-wrap:hover .af-flow-node__model-arrow {
   color: rgba(158, 202, 255, 0.6);
+}
+
+.af-flow-node__bool-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--af-text-muted);
+  padding: 0.22rem 0.55rem;
+  font-size: 0.72rem;
+  font-family: var(--af-font-mono);
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.af-flow-node__bool-toggle:hover {
+  border-color: rgba(156, 39, 176, 0.55);
+  color: var(--af-text);
+  background: rgba(156, 39, 176, 0.12);
+}
+
+.af-flow-node__bool-toggle--true {
+  border-color: rgba(0, 228, 117, 0.45);
+  background: rgba(0, 228, 117, 0.14);
+  color: #c9f8dc;
+  box-shadow: 0 0 14px rgba(0, 228, 117, 0.12);
 }
 
 .af-flow-node--control .af-flow-node__chrome {
@@ -11532,6 +12008,158 @@ button.af-exec-history-card {
   }
 }
 
+.af-flow-snippet-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(4px);
+}
+
+.af-flow-snippet-modal {
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(92vh, 40rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 0.75rem;
+  background: var(--af-surface-low);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+}
+
+.af-flow-snippet-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgba(202, 195, 216, 0.1);
+  background: rgba(42, 42, 42, 0.58);
+}
+
+.af-flow-snippet-modal__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  color: var(--af-on-surface);
+  font-family: var(--af-headline);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.af-flow-snippet-modal__title .material-symbols-outlined,
+.af-flow-snippet-modal__close .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.af-flow-snippet-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 227, 239, 0.7);
+  cursor: pointer;
+}
+
+.af-flow-snippet-modal__body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.af-flow-snippet-field {
+  display: grid;
+  gap: 0.32rem;
+  color: rgba(232, 227, 239, 0.78);
+  font-family: var(--af-headline);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.af-flow-snippet-field input,
+.af-flow-snippet-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 0.45rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  font-family: var(--af-body);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  outline: none;
+}
+
+.af-flow-snippet-field input {
+  height: 2.2rem;
+  padding: 0 0.65rem;
+}
+
+.af-flow-snippet-field textarea {
+  min-height: 5.8rem;
+  resize: vertical;
+  padding: 0.55rem 0.65rem;
+}
+
+.af-flow-snippet-field input:focus,
+.af-flow-snippet-field textarea:focus {
+  border-color: rgba(124, 77, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.14);
+}
+
+.af-flow-snippet-summary {
+  color: rgba(202, 195, 216, 0.52);
+  font-family: var(--af-mono);
+  font-size: 0.65rem;
+}
+
+.af-flow-snippet-error {
+  color: #fca5a5;
+  font-size: 0.68rem;
+}
+
+.af-flow-snippet-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid rgba(202, 195, 216, 0.1);
+}
+
+.af-flow-snippet-modal__btn {
+  min-width: 4.6rem;
+  height: 2.1rem;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--af-on-surface);
+  font-family: var(--af-headline);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-flow-snippet-modal__btn--primary {
+  border-color: rgba(124, 77, 255, 0.55);
+  background: rgba(124, 77, 255, 0.72);
+}
+
+.af-flow-snippet-modal__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .af-user-check-modal-overlay {
   position: fixed;
   inset: 0;
@@ -12200,6 +12828,33 @@ button.af-exec-history-card {
 .af-run-config-input-field:focus {
   outline: none;
   border-color: var(--af-primary);
+}
+
+.af-run-config-bool-toggle {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--af-surface-lowest);
+  border: 1px solid var(--af-outline-variant);
+  border-radius: 8px;
+  color: var(--af-on-surface-variant);
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.af-run-config-bool-toggle:hover {
+  border-color: rgba(156, 39, 176, 0.55);
+  background: rgba(156, 39, 176, 0.1);
+  color: var(--af-on-surface);
+}
+
+.af-run-config-bool-toggle--true {
+  border-color: rgba(0, 228, 117, 0.45);
+  background: rgba(0, 228, 117, 0.12);
+  color: #c9f8dc;
 }
 
 /* ── 全局运行中指示器（左下角） ── */

@@ -328,9 +328,11 @@ function RunConfigPanel({
             {provideNodes.map((node) => {
               const definitionId = node.data?.definitionId || "";
               const isFile = definitionId.startsWith("provide_file");
+              const isBool = definitionId === "provide_bool";
               const label = node.data?.label || node.id;
               const instanceId = node.id;
               const value = inputValues[instanceId] || "";
+              const boolChecked = ["true", "1", "yes", "on"].includes(String(value).trim().toLowerCase());
               return (
                 <div key={instanceId} className="af-run-config-input-item">
                   <div className="af-run-config-input-head">
@@ -341,31 +343,44 @@ function RunConfigPanel({
                       }
                       aria-hidden
                     >
-                      {isFile ? "description" : "text_fields"}
+                      {isFile ? "description" : isBool ? "toggle_on" : "text_fields"}
                     </span>
                     <span className="af-run-config-input-label">{label}</span>
-                    <button
-                      type="button"
-                      className="af-run-config-input-expand"
-                      onClick={() => setExpandedProvide({ instanceId, label, content: value })}
-                      aria-label={t("flow:runConfig.expandInput")}
-                      title={t("flow:runConfig.expandInput")}
-                    >
-                      <span className="material-symbols-outlined">open_in_full</span>
-                    </button>
+                    {!isBool ? (
+                      <button
+                        type="button"
+                        className="af-run-config-input-expand"
+                        onClick={() => setExpandedProvide({ instanceId, label, content: value })}
+                        aria-label={t("flow:runConfig.expandInput")}
+                        title={t("flow:runConfig.expandInput")}
+                      >
+                        <span className="material-symbols-outlined">open_in_full</span>
+                      </button>
+                    ) : null}
                   </div>
                   <div className="af-run-config-input-id">{instanceId}</div>
-                  <input
-                    type="text"
-                    className="af-run-config-input-field"
-                    value={value}
-                    onChange={(e) => handleValueChange(instanceId, e.target.value)}
-                    placeholder={
-                      isFile
-                        ? t("flow:runConfig.filePathPlaceholder")
-                        : t("flow:runConfig.stringValuePlaceholder")
-                    }
-                  />
+                  {isBool ? (
+                    <button
+                      type="button"
+                      className={"af-run-config-bool-toggle" + (boolChecked ? " af-run-config-bool-toggle--true" : "")}
+                      onClick={() => handleValueChange(instanceId, boolChecked ? "false" : "true")}
+                      aria-pressed={boolChecked}
+                    >
+                      {boolChecked ? "true" : "false"}
+                    </button>
+                  ) : (
+                    <input
+                      type="text"
+                      className="af-run-config-input-field"
+                      value={value}
+                      onChange={(e) => handleValueChange(instanceId, e.target.value)}
+                      placeholder={
+                        isFile
+                          ? t("flow:runConfig.filePathPlaceholder")
+                          : t("flow:runConfig.stringValuePlaceholder")
+                      }
+                    />
+                  )}
                 </div>
               );
             })}

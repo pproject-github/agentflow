@@ -149,7 +149,7 @@ export function buildInstancesForYaml(nodes, instancesMap) {
       value: s?.value ?? s?.default ?? "",
     };
     if (s?.required === true) slot.required = true;
-    if (s?.showOnNode === false) slot.showOnNode = false;
+    if (s?.showOnNode != null) slot.showOnNode = Boolean(s.showOnNode);
     return slot;
   };
   const instances = {};

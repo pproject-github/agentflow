@@ -114,13 +114,13 @@ export function buildNodeSchemaCompactSection() {
   lines.push("- **`node`**（控制流连线）：只表达「执行顺序」，**不携带业务数据**。串主链（Start→A→B→End）、汇合分支用它。槽位名通常是 `prev` / `next` / `prev1` / `next2` / `option_N`。⚠️ 业务字段绝不要标 `node`。");
   lines.push("- **`text`**（短上下文 / 结论 / 路径串）：上游把字符串结果（分析结论、用户输入、key 名、JSON 串）直接传给下游；下游 body / script 用 `${slotName}` 引用，apply 时原样替换。适合 < ~1KB 的内容。");
   lines.push("- **`file`**（大块产物 / 上下文文件）：上游把内容写到一个**文件**，下游通过 `${slotName}` 拿到的是**文件绝对路径**（不是内容）。下游需 Read 该路径取内容。适合报告 / todolist / 中间代码 / 截图等 > 1KB 或二进制。");
-  lines.push("- **`bool`**（仅做分支判定）：只在 `control_toBool.prediction` / `control_agent_toBool.prediction`(out) → `control_if.prediction`(in) 一对位置使用，其它任何节点禁止 `bool` 槽。");
+  lines.push("- **`bool`**（仅做分支判定）：由 `provide_bool.value` / `control_toBool.prediction` / `control_agent_toBool.prediction` 输出，接到 `control_if.prediction` 输入；其它业务节点不要新增 `bool` 槽。");
   lines.push("");
   lines.push("**选 type 决策**：");
   lines.push("- 想表达「下一步走谁」 → `node`");
   lines.push("- 想传「短串/路径/key/JSON」 → `text`");
   lines.push("- 想传「整篇文档/报告/JSON 文件/代码」 → `file`");
-  lines.push("- 想做「if 真假分支」 → `control_toBool`（确定性）或 `control_agent_toBool`（AI 判断）→ `control_if`（用 bool 引脚）");
+  lines.push("- 想做「if 真假分支」 → 手动开关用 `provide_bool`，确定性判断用 `control_toBool`，AI 判断用 `control_agent_toBool`，再接 `control_if` 的 bool 引脚");
   lines.push("");
   lines.push("## 内置节点 schema（权威，必须严格遵守）");
   lines.push(
@@ -136,7 +136,7 @@ export function buildNodeSchemaCompactSection() {
   lines.push("**硬性约束（违反则 validate-flow 失败）：**");
   lines.push("1. **固定槽位节点**（未带 ★）：`input`/`output` 数组必须**完整复制**上表槽位（`type`、`name`、顺序、个数均不可改），仅可填写 `value`。");
   lines.push("2. **可扩展节点**（带 ★）：基础骨架不可删改，可在数组**末尾追加** type=`text` 或 `file` 的业务数据槽（按上方语义选 text 还是 file）。⚠️ 业务槽 type 必须 `text` 或 `file`，**绝对不能写 `node`**（node 仅控制流）。");
-  lines.push("3. `provide_*` 节点不得连入控制链（node→node 边），仅作数据源向下游 text/file 槽供值。");
+  lines.push("3. `provide_*` 节点不得连入控制链（node→node 边），仅作数据源向下游 text/file/bool 槽供值。");
   lines.push("4. 边连接时 `sourceHandle: output-N` 与 `targetHandle: input-N` 的索引必须对应**同一 type**；type 不一致禁止连线（text 不能接 file，node 不能接 text）。");
   lines.push("5. **YAML 多行字符串必须用 `|` 块标量。** 写 `script` / `body` / `value` 等字符串字段时，只要内容含 `: `、`\"`、`'`、`#`、换行、shell 操作符，**强制**使用 `|` 块。");
   cachedCompact = lines.join("\n");
@@ -157,7 +157,7 @@ export function buildNodeSchemaPromptSection() {
   lines.push("- **`node`**（控制流连线）：只表达「执行顺序」，**不携带业务数据**。串主链、汇合分支用它。槽位名通常是 `prev` / `next` / `prev1` / `next2` / `option_N`。⚠️ 业务字段绝不要标 `node`。");
   lines.push("- **`text`**（短上下文 / 结论 / 路径串）：上游把字符串结果（分析结论、用户输入、key 名、JSON 串）直接传给下游；下游 body / script 用 `${slotName}` 引用，apply 时原样替换。适合 < ~1KB 的内容。");
   lines.push("- **`file`**（大块产物 / 上下文文件）：上游把内容写到一个**文件**，下游通过 `${slotName}` 拿到的是**文件绝对路径**（不是内容）。下游需 Read 该路径取内容。适合报告 / todolist / 中间代码 / 截图等 > 1KB 或二进制。");
-  lines.push("- **`bool`**（仅做分支判定）：只在 `control_toBool.prediction` / `control_agent_toBool.prediction`(out) → `control_if.prediction`(in) 一对位置使用，其它任何节点禁止 `bool` 槽。");
+  lines.push("- **`bool`**（仅做分支判定）：由 `provide_bool.value` / `control_toBool.prediction` / `control_agent_toBool.prediction` 输出，接到 `control_if.prediction` 输入；其它业务节点不要新增 `bool` 槽。");
   lines.push("");
   lines.push("## 内置节点 schema（权威，必须严格遵守）");
   lines.push(
@@ -177,7 +177,7 @@ export function buildNodeSchemaPromptSection() {
   lines.push(
     "2. **可扩展节点**（带 ★：agent_subAgent / tool_nodejs / tool_user_check）：" +
     "上表槽位为**基础骨架不可删改**（`prev`/`next` 等控制槽与 schema 已有数据槽的 `type`/`name`/顺序保持一致）；" +
-    "可在数组**末尾追加** type=`text` 或 `file` 的业务数据槽（`bool` 仅 control_toBool / control_agent_toBool / control_if 使用，禁止他处出现），" +
+    "可在数组**末尾追加** type=`text` 或 `file` 的业务数据槽（`bool` 仅 provide_bool / control_toBool / control_agent_toBool / control_if 使用，禁止他处出现），" +
     "命名应与上下游语义对齐（如 `fromapp`、`analysis`、`compile_result`、`result`），便于阶段三连线。"
   );
   lines.push(
@@ -186,7 +186,7 @@ export function buildNodeSchemaPromptSection() {
     " 不要因为 schema 表里 `prev:node` 就惯性给 `fromapp`/`toapp`/`page_name` 也写 `node`——那意味着「控制流连线」，下游会报「边类型不一致」。"
   );
   lines.push(
-    "3. `provide_*` 节点不得连入控制链（node→node 边），仅作数据源向下游 text/file 槽供值。"
+    "3. `provide_*` 节点不得连入控制链（node→node 边），仅作数据源向下游 text/file/bool 槽供值。"
   );
   lines.push(
     "4. 边连接时 `sourceHandle: output-N` 与 `targetHandle: input-N` 的索引必须对应同一 type；type 不一致禁止连线。"
@@ -214,7 +214,7 @@ export function buildNodeSchemaPromptSection() {
   lines.push("│    └─ type: text   ✅");
   lines.push("├─ 文件绝对路径（todolist.json、conversion_result.md、screenshot.png …）");
   lines.push("│    └─ type: file   ✅");
-  lines.push("└─ 二元判定值（仅 control_toBool / control_agent_toBool 的 prediction、control_if 的 prediction）");
+  lines.push("└─ 二元判定值（provide_bool.value、control_toBool / control_agent_toBool 的 prediction、control_if 的 prediction）");
   lines.push("     └─ type: bool   ✅（其他节点禁用）");
   lines.push("");
   lines.push("⛔ 任何业务数据槽都**不可**写 type: node");

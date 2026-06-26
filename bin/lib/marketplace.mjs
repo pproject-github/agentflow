@@ -12,6 +12,7 @@ import {
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
+const FLOW_SNIPPET_MANIFEST = "flow-snippet.yaml";
 const LOCK_FILENAME = "agentflow.lock.json";
 
 function workspacePackageRoot(workspaceRoot) {
@@ -61,15 +62,20 @@ function readJsonObject(filePath) {
 function normalizeSlotList(value) {
   if (!Array.isArray(value)) return [];
   return value.map((slot) => {
-    if (!slot || typeof slot !== "object") return { type: "text", name: "", default: "" };
+    if (!slot || typeof slot !== "object") return { type: "text", name: "", default: "", showOnNode: false };
     const type = slot.type != null ? String(slot.type).trim() : "text";
     const name = slot.name != null ? String(slot.name).trim() : "";
     const def = slot.default !== undefined ? slot.default : slot.value;
-    return {
+    const normalized = {
       type,
       name,
       default: def == null ? "" : String(def),
     };
+    if (slot.required != null) normalized.required = Boolean(slot.required);
+    normalized.showOnNode = slot.showOnNode != null
+      ? Boolean(slot.showOnNode)
+      : Boolean(normalized.required) || type.toLowerCase() === "node";
+    return normalized;
   });
 }
 
@@ -114,6 +120,14 @@ function isSafePathSegment(value) {
 function resolveWorkspaceNodePackageDir(workspaceRoot, id, version) {
   if (!isSafePathSegment(id) || !isSafePathSegment(version)) return null;
   const base = path.resolve(workspacePackageRoot(workspaceRoot), "nodes");
+  const target = path.resolve(base, id, version);
+  if (target !== base && !target.startsWith(base + path.sep)) return null;
+  return target;
+}
+
+function resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version) {
+  if (!isSafePathSegment(id) || !isSafePathSegment(version)) return null;
+  const base = path.resolve(workspacePackageRoot(workspaceRoot), "flow-snippets");
   const target = path.resolve(base, id, version);
   if (target !== base && !target.startsWith(base + path.sep)) return null;
   return target;
@@ -365,6 +379,41 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
   return { nodes, collections };
 }
 
+export function listMarketplaceFlowSnippets(workspaceRoot) {
+  const root = workspacePackageRoot(workspaceRoot);
+  const snippetsRoot = path.join(root, "flow-snippets");
+  const snippets = [];
+  if (!fs.existsSync(snippetsRoot)) return { snippets };
+  for (const entry of fs.readdirSync(snippetsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const base = path.join(snippetsRoot, entry.name);
+    for (const version of listVersionDirs(base)) {
+      const dir = path.join(base, version);
+      const manifest = readYamlObject(path.join(dir, FLOW_SNIPPET_MANIFEST));
+      if (!manifest) continue;
+      const snippet = manifest.snippet && typeof manifest.snippet === "object" ? manifest.snippet : {};
+      snippets.push({
+        id: manifest.id || entry.name,
+        version: manifest.version || version,
+        displayName: manifest.displayName || manifest.name || entry.name,
+        description: manifest.description || "",
+        tags: Array.isArray(manifest.tags) ? manifest.tags.map((x) => String(x)) : [],
+        nodeCount: Number(manifest.nodeCount) || Object.keys(snippet.instances || {}).length || 0,
+        edgeCount: Number(manifest.edgeCount) || (Array.isArray(snippet.edges) ? snippet.edges.length : 0),
+        createdAt: manifest.createdAt || "",
+        updatedAt: manifest.updatedAt || "",
+        packageDir: dir,
+        snippet,
+      });
+    }
+  }
+  snippets.sort((a, b) => {
+    const byTime = String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
+    return byTime || a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
+  });
+  return { snippets };
+}
+
 export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = {}) {
   const packageDir = resolveWorkspaceNodePackageDir(workspaceRoot, id, version);
   if (!packageDir) return { ok: false, error: "Invalid marketplace node id or version" };
@@ -587,11 +636,15 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     type: slot.type,
     name: slot.name,
     default: slot.default,
+    ...(slot.required != null ? { required: Boolean(slot.required) } : {}),
+    ...(slot.showOnNode != null ? { showOnNode: Boolean(slot.showOnNode) } : {}),
   }));
   const outputs = normalizeSlotList(payload.outputs || payload.output).map((slot) => ({
     type: slot.type,
     name: slot.name,
     default: slot.default,
+    ...(slot.required != null ? { required: Boolean(slot.required) } : {}),
+    ...(slot.showOnNode != null ? { showOnNode: Boolean(slot.showOnNode) } : {}),
   }));
   const script = String(payload.script || "").trim();
   const body = String(payload.body || "").trim();
@@ -642,6 +695,57 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     definitionId: `marketplace:${id}@${version}`,
     packagedFiles: packagedScript?.packagedFiles || [],
   };
+}
+
+export function publishFlowSnippet(workspaceRoot, payload = {}) {
+  const label = String(payload.displayName || payload.name || payload.id || "flow snippet").trim();
+  const id = safePackageId(payload.id || payload.packageId || label);
+  const version = normalizeVersion(payload.version || "1.0.0");
+  if (!id) return { ok: false, error: "Invalid snippet id" };
+
+  const rawSnippet = payload.snippet && typeof payload.snippet === "object" ? payload.snippet : {};
+  const instances = rawSnippet.instances && typeof rawSnippet.instances === "object" ? rawSnippet.instances : {};
+  const edges = Array.isArray(rawSnippet.edges) ? rawSnippet.edges : [];
+  const ui = rawSnippet.ui && typeof rawSnippet.ui === "object" ? rawSnippet.ui : {};
+  const nodeCount = Object.keys(instances).length;
+  if (nodeCount < 2) return { ok: false, error: "A flow snippet needs at least two nodes" };
+
+  const now = new Date().toISOString();
+  const dest = resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version);
+  if (!dest) return { ok: false, error: "Invalid snippet id or version" };
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+
+  const manifest = {
+    id,
+    version,
+    name: label,
+    displayName: label,
+    description: String(payload.description || "").trim(),
+    tags: Array.isArray(payload.tags) ? payload.tags.map((x) => String(x).trim()).filter(Boolean) : [],
+    nodeCount,
+    edgeCount: edges.length,
+    createdAt: now,
+    updatedAt: now,
+    snippet: {
+      instances,
+      edges: edges.map((edge) => ({
+        source: String(edge.source || ""),
+        target: String(edge.target || ""),
+        sourceHandle: edge.sourceHandle ?? null,
+        targetHandle: edge.targetHandle ?? null,
+      })).filter((edge) => edge.source && edge.target),
+      ui,
+    },
+  };
+  fs.writeFileSync(path.join(dest, FLOW_SNIPPET_MANIFEST), yaml.dump(manifest, { lineWidth: -1 }), "utf-8");
+  fs.writeFileSync(
+    path.join(dest, "README.md"),
+    `# ${label}\n\n${manifest.description || "Published from an AgentFlow canvas selection."}\n`,
+    "utf-8",
+  );
+  return { ok: true, id, version, packageDir: dest, snippet: manifest.snippet };
 }
 
 export function installFlowDependency(workspaceRoot, flowDir, spec) {

@@ -17,7 +17,11 @@ function getNodeTypeLabel(data) {
   return "agent";
 }
 
-export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, modelLists, onModelChange }) {
+function boolValueFromSlot(slot) {
+  return ["true", "1", "yes", "on"].includes(String(slot?.value ?? slot?.default ?? "").trim().toLowerCase());
+}
+
+export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onProvideValueChange, modelLists, onModelChange }) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
@@ -30,6 +34,8 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
   const nodeElapsed = data?.nodeElapsed ?? null;
   const definitionId = data?.definitionId || "";
   const isProvideNode = definitionId.startsWith("provide_");
+  const isProvideBool = definitionId === "provide_bool";
+  const provideBoolValue = isProvideBool ? boolValueFromSlot(outputs[0]) : false;
   const nodeTitle = data?.displayLabel || data?.label || t("flow:node.fallbackLabel");
   const bodyPreview = data?.showBodyPreview ? String(data?.body || "").trim() : "";
 
@@ -92,6 +98,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
     if (onProvideExpand) {
       onProvideExpand();
     }
+  };
+
+  const handleProvideBoolToggle = (e) => {
+    e.stopPropagation();
+    onProvideValueChange?.(id, provideBoolValue ? "false" : "true");
   };
 
   return (
@@ -183,7 +194,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
             FAILED
           </span>
         )}
-        {!isRunMode && isProvideNode && (
+        {!isRunMode && isProvideNode && !isProvideBool && (
           <button
             type="button"
             className="af-flow-node__expand"
@@ -232,6 +243,17 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, mode
         </div>
         <div className="af-flow-node__title-wrap">
           <span className="af-flow-node__title">{nodeTitle}</span>
+          {isProvideBool ? (
+            <button
+              type="button"
+              className={"af-flow-node__bool-toggle nodrag" + (provideBoolValue ? " af-flow-node__bool-toggle--true" : "")}
+              onClick={handleProvideBoolToggle}
+              aria-pressed={provideBoolValue}
+              title={provideBoolValue ? "true" : "false"}
+            >
+              {provideBoolValue ? "true" : "false"}
+            </button>
+          ) : null}
           {bodyPreview ? (
             <span className="af-flow-node__prompt-preview" title={bodyPreview}>
               {bodyPreview}

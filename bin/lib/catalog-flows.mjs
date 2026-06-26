@@ -120,10 +120,15 @@ export function listFlowsJson(workspaceRoot, opts = {}) {
 }
 
 /** 将 YAML 解析得到的 input/output 项转为 Web UI / 校验使用的槽位结构 */
+function defaultShowOnNodeForSlot(slot) {
+  const type = String(slot?.type || "").trim().toLowerCase();
+  return Boolean(slot?.required) || type === "node";
+}
+
 function normalizeFrontmatterSlots(arr) {
   if (!Array.isArray(arr)) return [];
   return arr.map((item) => {
-    if (!item || typeof item !== "object") return { type: t("catalog.type_text"), name: "", default: "" };
+    if (!item || typeof item !== "object") return { type: t("catalog.type_text"), name: "", default: "", showOnNode: false };
     const type = item.type != null ? String(item.type).trim() : t("catalog.type_text");
     const name = item.name != null ? String(item.name).trim() : "";
     let def = item.default !== undefined && item.default !== null ? item.default : item.value;
@@ -131,7 +136,7 @@ function normalizeFrontmatterSlots(arr) {
     else if (typeof def !== "string") def = String(def);
     const slot = { type, name, default: def };
     if (item.required != null) slot.required = Boolean(item.required);
-    if (item.showOnNode != null) slot.showOnNode = Boolean(item.showOnNode);
+    slot.showOnNode = item.showOnNode != null ? Boolean(item.showOnNode) : defaultShowOnNodeForSlot(slot);
     return slot;
   });
 }

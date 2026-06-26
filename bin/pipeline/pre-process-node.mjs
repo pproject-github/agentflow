@@ -41,12 +41,15 @@ import { getRunDir, sanitizeAgentflowUserId } from "../lib/paths.mjs";
 import {
   buildSkillsContext,
   buildSkillsContextFromRegistry,
+  buildDefaultWorkspaceContext,
   expandRuntimePlaceholders,
   normalizeSkillsContext,
   normalizeWorkspaceContext,
   parseSkillKeyList,
   resolveWorkspaceTarget,
 } from "../lib/runtime-context.mjs";
+import { buildGitContext, loadGitWorktree, normalizeGitContext, unloadGitWorktree } from "../lib/git-worktree.mjs";
+import { createGitLabMergeRequest } from "../lib/gitlab-mr.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -264,6 +267,12 @@ function isTruthyInput(value) {
   return text === "true" || text === "1" || text === "yes" || text === "y" || text === "on";
 }
 
+function resolveMaybeWorkspacePath(raw, workspaceContext, extra = {}) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  return resolveWorkspaceTarget(text, workspaceContext, extra);
+}
+
 function emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel) {
   const runDir = getRunDir(workspaceRoot, flowName, uuid);
   const { inputs, workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
@@ -312,6 +321,12 @@ function emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, 
 
   const currentBranch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], targetDir).stdout.trim();
   const commit = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+  const gitContext = buildGitContext({
+    repoPath: targetDir,
+    branch: currentBranch === "HEAD" ? "DETACHED" : currentBranch,
+    commit,
+    remote: String(inputs.remote || "origin").trim() || "origin",
+  });
   const outWorkspaceContext = {
     version: 1,
     label: inputs.label || sanitizeRepoDirName(repoUrl),
@@ -326,8 +341,125 @@ function emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, 
   writeOutputSlot(runDir, instanceId, execId, "commit", commit);
   writeOutputSlot(runDir, instanceId, execId, "changed", changed ? "true" : "false");
   writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(outWorkspaceContext));
+  writeOutputSlot(runDir, instanceId, execId, "gitContext", JSON.stringify(gitContext));
   writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message: `git ${action}: ${currentBranch}@${commit.slice(0, 8)}` }, { execId });
   return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "git-checkout", `Git checkout completed: ${targetDir}\n`);
+}
+
+function requireWorkspaceContextInput(inputs, definitionId) {
+  if (!String(inputs?.workspaceContext || "").trim()) {
+    throw new Error(`${definitionId}: workspaceContext is required`);
+  }
+}
+
+function emitGitWorktreeLoadNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  requireWorkspaceContextInput(inputs, "tool_git_worktree_load");
+  const gitContext = normalizeGitContext(inputs.gitContext);
+  const repoPath = resolveMaybeWorkspacePath(inputs.repoPath, workspaceContext) ||
+    (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
+  if (!repoPath) throw new Error("tool_git_worktree_load: repoPath or gitContext.repoPath is required");
+  const branch = String(inputs.branch || "").trim();
+  const worktreePath = resolveMaybeWorkspacePath(inputs.worktreePath, workspaceContext, { branch }) ||
+    (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+  const result = loadGitWorktree({
+    repoPath,
+    branch,
+    worktreePath,
+    pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+  });
+  const outWorkspaceContext = {
+    version: 1,
+    label: result.branch === "DETACHED" ? `worktree:${result.commit.slice(0, 8)}` : `worktree:${result.branch}`,
+    cwd: result.worktreePath,
+    workspaceRoot: result.worktreePath,
+    pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+    flowDir: workspaceContext.flowDir,
+    previous: workspaceContext,
+  };
+  const outGitContext = buildGitContext({
+    repoPath: result.repoRoot,
+    worktreePath: result.worktreePath,
+    branch: result.branch,
+    commit: result.commit,
+    remote: gitContext?.remote || "origin",
+    remoteUrl: gitContext?.remoteUrl || "",
+  });
+  writeOutputSlot(runDir, instanceId, execId, "worktreePath", result.worktreePath);
+  writeOutputSlot(runDir, instanceId, execId, "branch", result.branch);
+  writeOutputSlot(runDir, instanceId, execId, "commit", result.commit);
+  writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(outWorkspaceContext));
+  writeOutputSlot(runDir, instanceId, execId, "gitContext", JSON.stringify(outGitContext));
+  writeResult(workspaceRoot, flowName, uuid, instanceId, {
+    status: "success",
+    message: `worktree loaded: ${result.worktreePath} (${result.branch}@${result.commit.slice(0, 8)})`,
+  }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "git-worktree-load", `Git worktree loaded: ${result.worktreePath}\n`);
+}
+
+function emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext, flowJson } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  requireWorkspaceContextInput(inputs, "tool_git_worktree_unload");
+  const gitContext = normalizeGitContext(inputs.gitContext);
+  const repoPath = resolveMaybeWorkspacePath(inputs.repoPath, workspaceContext) ||
+    (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
+  const worktreePath = resolveMaybeWorkspacePath(inputs.worktreePath, workspaceContext) ||
+    (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+  if (!repoPath) throw new Error("tool_git_worktree_unload: repoPath or gitContext.repoPath is required");
+  if (!worktreePath) throw new Error("tool_git_worktree_unload: worktreePath or gitContext.worktreePath is required");
+  const force = isTruthyInput(inputs.force);
+  const prune = String(inputs.prune ?? "true").trim().toLowerCase() !== "false";
+  const result = unloadGitWorktree({ repoPath, worktreePath, force, prune });
+  const nextWorkspaceContext = workspaceContext.previous
+    ? normalizeWorkspaceContext(workspaceContext.previous, workspaceRoot, flowName, flowJson)
+    : buildDefaultWorkspaceContext(workspaceRoot, flowName, flowJson);
+  writeOutputSlot(runDir, instanceId, execId, "removed", "true");
+  writeOutputSlot(runDir, instanceId, execId, "message", result.message);
+  writeOutputSlot(runDir, instanceId, execId, "workspaceContext", JSON.stringify(nextWorkspaceContext));
+  writeResult(workspaceRoot, flowName, uuid, instanceId, {
+    status: "success",
+    message: result.message,
+  }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "git-worktree-unload", `${result.message}\n`);
+}
+
+async function emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const { inputs, workspaceContext } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
+  const repoPath = resolveMaybeWorkspacePath(inputs.repoPath, workspaceContext);
+  const result = await createGitLabMergeRequest({
+    gitContext: inputs.gitContext,
+    workspaceCwd: workspaceContext.cwd,
+    repoPath,
+    sourceBranch: inputs.sourceBranch,
+    targetBranch: inputs.targetBranch,
+    title: inputs.title,
+    description: inputs.description,
+    draft: inputs.draft,
+    labels: inputs.labels,
+    push: inputs.push,
+    remote: inputs.remote,
+    tokenEnv: inputs.tokenEnv,
+    gitlabApiBase: inputs.gitlabApiBase,
+    removeSourceBranch: inputs.removeSourceBranch,
+    squash: inputs.squash,
+  }, process.env);
+  writeOutputSlot(runDir, instanceId, execId, "mrUrl", result.mrUrl);
+  writeOutputSlot(runDir, instanceId, execId, "created", result.created ? "true" : "false");
+  writeOutputSlot(runDir, instanceId, execId, "mrIid", result.mrIid ?? "");
+  writeOutputSlot(runDir, instanceId, execId, "projectId", result.projectId ?? "");
+  writeOutputSlot(runDir, instanceId, execId, "sourceBranch", result.sourceBranch ?? "");
+  writeOutputSlot(runDir, instanceId, execId, "targetBranch", result.targetBranch ?? "");
+  writeOutputSlot(runDir, instanceId, execId, "title", result.title ?? "");
+  writeOutputSlot(runDir, instanceId, execId, "message", result.message ?? "");
+  writeResult(workspaceRoot, flowName, uuid, instanceId, {
+    status: "success",
+    message: result.message || result.mrUrl,
+    body: result.mrUrl,
+  }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "gitlab-create-mr", `${result.message || "GitLab MR ready"}\n${result.mrUrl}\n`);
 }
 
 function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) {
@@ -461,7 +593,7 @@ function emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId) {
   const flowJson = readFlowJsonObject(workspaceRoot, flowName, uuid);
   const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
   const inputs = data.ok ? (data.resolvedInputs || {}) : {};
-  const skipNames = new Set(["prev", "next", "workspaceContext", "skillsContext", "workspaceRoot", "pipelineWorkspace", "flowName", "runDir", "flowDir", "cwd"]);
+  const skipNames = new Set(["prev", "next", "workspaceContext", "gitContext", "skillsContext", "workspaceRoot", "pipelineWorkspace", "flowName", "runDir", "flowDir", "cwd"]);
 
   let content = readPrintableValue(inputs.content, runDir);
   if (!content) {
@@ -681,7 +813,7 @@ ${directCommand}
   return { optionalPromptPath: relativePath.replace(/\\/g, "/"), directCommand };
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   if (args.length < 4) {
     console.error(
@@ -1001,18 +1133,24 @@ function main() {
     return;
   }
 
-  if (definitionId === "tool_git_checkout" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
+  if (definitionId === "tool_git_checkout" || definitionId === "tool_git_worktree_load" || definitionId === "tool_git_worktree_unload" || definitionId === "tool_gitlab_create_mr" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
     try {
       const promptPath =
         definitionId === "tool_git_checkout"
           ? emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel)
-          : definitionId === "control_cd_workspace"
-            ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
-            : definitionId === "control_user_workspace"
-              ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
-              : definitionId === "control_load_skills"
-                ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
+          : definitionId === "tool_git_worktree_load"
+            ? emitGitWorktreeLoadNode(workspaceRoot, flowName, uuid, instanceId, execId)
+            : definitionId === "tool_git_worktree_unload"
+              ? emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, execId)
+              : definitionId === "tool_gitlab_create_mr"
+                ? await emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                : definitionId === "control_cd_workspace"
+                  ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                  : definitionId === "control_user_workspace"
+                    ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                    : definitionId === "control_load_skills"
+                      ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                      : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
       writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
       logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "runtime-context-node", instanceId, definitionId });
       console.log(JSON.stringify({
@@ -1103,4 +1241,7 @@ function main() {
   console.log(JSON.stringify(output));
 }
 
-main();
+main().catch((e) => {
+  console.error(JSON.stringify({ ok: false, error: e.message || String(e) }));
+  process.exit(1);
+});
