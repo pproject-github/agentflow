@@ -1,0 +1,149 @@
+builtin/web-ui/src/flowFormat.js
+  s_1f4a653f13be4a::t_4c9a480a240d58 213
+  s_1f4a653f13be4a::t_cdf0318b2139e6 86,98,217-227
+  s_1f4a653f13be4a::t_f2b53a73957f30 228-229
+bin/lib/ui-server.mjs
+  s_1f4a653f13be4a::t_76a88e90d1c42e 85
+  s_1f4a653f13be4a::t_476e581b74c544 1091-1098,1103-1104,1107
+builtin/nodes/provide_file.md
+  s_1f4a653f13be4a::t_3307d7adb18c3e 10-11
+builtin/web-ui/dist/index.html
+  s_1f4a653f13be4a::t_98ff6ccedfb9f7 18-19
+builtin/web-ui/src/mergeFlowNodes.js
+  s_1f4a653f13be4a::t_b8c2d8679c82e0 27
+  s_1f4a653f13be4a::t_4c9a480a240d58 224-226
+  s_1f4a653f13be4a::t_aaf2e8b55b1717 34
+  s_1f4a653f13be4a::t_51a22ba4b0be02 164,176,184,242
+builtin/nodes/agent_subAgent.md
+  s_1f4a653f13be4a::t_3307d7adb18c3e 22-23
+builtin/nodes/control_user_workspace.md
+  s_1f4a653f13be4a::t_a12a729d0e769f 16-17
+builtin/nodes/tool_load_key.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 12-13,21-22
+builtin/nodes/control_cancelled.md
+  s_1f4a653f13be4a::t_b8c2d8679c82e0 2,4,12-13,21-22
+  s_1f4a653f13be4a::t_22b0c41cf37f35 3,10
+builtin/nodes/control_agent_toBool.md
+  s_1f4a653f13be4a::t_8b623caae9e314 12-13,21-22
+bin/pipeline/build-node-prompt.mjs
+  s_1f4a653f13be4a::t_49ab0576392c9f 115-139,181,226
+builtin/nodes/control_wait_until.md
+  s_1f4a653f13be4a::t_22b0c41cf37f35 12-13,22-26,29-30
+  s_1f4a653f13be4a::t_c27894df7ce483 21
+builtin/web-ui/src/NodePropertiesPanel.jsx
+  s_1f4a653f13be4a::t_02389140909ed9 152,430-431,504-505
+bin/lib/git-worktree.mjs
+  s_1f4a653f13be4a::t_596a84c8d0a3dd 115-129
+bin/lib/locales/zh.json
+  s_1f4a653f13be4a::t_aaf2e8b55b1717 241
+  s_1f4a653f13be4a::t_b26cabdfbf9939 254
+builtin/nodes/control_cd_workspace.md
+  s_1f4a653f13be4a::t_0b26535b065c3c 38-39
+builtin/nodes/tool_user_ask.md
+  s_1f4a653f13be4a::t_b8bd3319d582d3 11,13-14
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_1f4a653f13be4a::t_5cfffe04d3b5f7 1011,1052-1093,1192-1197
+  s_1f4a653f13be4a::t_4c9a480a240d58 838
+  s_1f4a653f13be4a::t_e836bc4c6c5012 841-845
+  s_1f4a653f13be4a::t_37dfaebe250daf 1902
+  s_1f4a653f13be4a::t_8a68cfaffc8b77 1837-1838,1844-1845,1847
+  s_1f4a653f13be4a::t_97791cb8732a2e 23,846-850,870,1801,1860
+  s_1f4a653f13be4a::t_becdd719186543 1010,1012,1035-1051,1150-1179,1181-1182,1189-1191,1198-1199
+builtin/nodes/tool_save_key.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 12-13,17-18
+builtin/nodes/control_delay.md
+  s_1f4a653f13be4a::t_22b0c41cf37f35 12-13,19-23,26-27
+  s_1f4a653f13be4a::t_6eeacbdf4b19d8 18
+builtin/web-ui/dist/assets/index-ChiTnW0H.css
+  s_1f4a653f13be4a::t_98ff6ccedfb9f7 1
+builtin/nodes/control_toBool.md
+  s_1f4a653f13be4a::t_aaf2e8b55b1717 2,4
+  s_1f4a653f13be4a::t_8b623caae9e314 12-13,21-22
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_1f4a653f13be4a::t_e836bc4c6c5012 106-110
+  s_1f4a653f13be4a::t_4c9a480a240d58 103
+  s_1f4a653f13be4a::t_80f46deef14870 23,111-116,2397,2992
+  s_1f4a653f13be4a::t_3ef34ad0d76f23 2882,2888-2889,2891,2967,2975-2976,2978
+builtin/web-ui/src/index.css
+  s_1f4a653f13be4a::t_9713c0b285abd0 3779,3789,3799,3811,8722-8726
+  s_1f4a653f13be4a::t_bfde86abbab32e 10668
+  s_1f4a653f13be4a::t_2183bc5c8150b2 9526,10603-10604,10616-10622,10624-10626,10632-10633,10638-10644,10647-10657,10705-10710,10716-10760
+  s_1f4a653f13be4a::t_0082351c205aed 9568-9591,10645-10646
+  s_1f4a653f13be4a::t_3303308e402c0b 4251,4254,4256,4258-4259,4264-4265,4270-4278
+  s_1f4a653f13be4a::t_7e72477299682a 10658-10667,10669-10704,10711-10715
+  s_1f4a653f13be4a::t_d83e5b659d79d9 4219,4230-4250,4252-4253,4255,4257,4260-4263,4266-4269,4279-4282
+  s_1f4a653f13be4a::t_0e55f4c4421fcc 9528-9567,9592-9600,9602-9607
+  s_1f4a653f13be4a::t_210a779f782e07 9601
+  s_1f4a653f13be4a::t_e173ab55f2c3fd 10623
+  s_1f4a653f13be4a::t_b24bc806b0d73f 10761-10762
+builtin/nodes/tool_git_checkout.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 40-41,61-62,66-67
+builtin/nodes/provide_bool.md
+  s_1f4a653f13be4a::t_3307d7adb18c3e 10-11
+builtin/nodes/tool_git_worktree_load.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 28-29,34,51-52,56-57
+builtin/nodes/tool_nodejs.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 36-37,48-49
+builtin/nodes/tool_git_worktree_unload.md
+  s_1f4a653f13be4a::t_cd1c1d7b373ab3 6-7,28,45-46
+builtin/web-ui/src/FlowNode.jsx
+  s_1f4a653f13be4a::t_33e8de718714ab 5,43-64,92,109-111,283-290,485-509
+  s_1f4a653f13be4a::t_0efadc86cd2fdb 2,85,89-90,93-102,172,182-203,208-211,223,227-228,234-236,238-244,246-248,253,255
+  s_1f4a653f13be4a::t_8bb2ea4f3a7c78 30-42,91,104-108,112-113,212-222,229-232,245,249,258-266,517-527
+  s_1f4a653f13be4a::t_721dbe2e8153a9 82,87
+  s_1f4a653f13be4a::t_a736e0ded3daed 451,453-455,466,468-470,472
+  s_1f4a653f13be4a::t_7f13f82be387ef 206-207,224-225,385,477
+  s_1f4a653f13be4a::t_372a16238a6c83 26-29,79-81,84,175-181,204-205,226,237,317,319,322-324,435-442,445-450,452,456-465,467,471,473-476,478-484
+  s_1f4a653f13be4a::t_faddccd07b57ca 65,88,173,250,252,254,256-257,268-272,274,276-282,291-292,510-516,528-530
+  s_1f4a653f13be4a::t_67ee2184bbc0fb 103
+  s_1f4a653f13be4a::t_e409f268ff745a 233
+  s_1f4a653f13be4a::t_e8f26ad98aa634 251
+  s_1f4a653f13be4a::t_83b26fda7b6f03 267
+  s_1f4a653f13be4a::t_84ac86e695b140 273
+  s_1f4a653f13be4a::t_ecd152ce00559c 275
+builtin/nodes/tool_print.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 12-13
+bin/pipeline/pre-process-node.mjs
+  s_1f4a653f13be4a::t_ac1893a10462c2 1017-1018,1021,1047,1147-1149
+  s_1f4a653f13be4a::t_75b31a74cc47ee 1138,1141,1144-1145,1150-1151,1153
+  s_1f4a653f13be4a::t_b007dfb992d842 51,407-412,414
+  s_1f4a653f13be4a::t_4dfbc18f0b154b 643-650,662-699
+  s_1f4a653f13be4a::t_5387817583f77c 413,415
+  s_1f4a653f13be4a::t_240bb2e59beb34 700-701
+builtin/web-ui/src/imageAttachments.js
+  s_1f4a653f13be4a::t_5ccc98ee6c2b53 25-38
+  s_1f4a653f13be4a::t_7464ecf68cfb00 1-24,39-103
+builtin/nodes/tool_get_env.md
+  s_1f4a653f13be4a::t_d13c16aa2fec7f 9-10,15-16
+builtin/web-ui/src/BodyPromptEditor.jsx
+  s_1f4a653f13be4a::t_5f1441843b6122 12,25-26,38-39,48,169-188,191-200,235-249
+builtin/nodes/provide_str.md
+  s_1f4a653f13be4a::t_3307d7adb18c3e 10-11
+bin/lib/locales/en.json
+  s_1f4a653f13be4a::t_aaf2e8b55b1717 241
+  s_1f4a653f13be4a::t_b8c2d8679c82e0 253
+  s_1f4a653f13be4a::t_b26cabdfbf9939 254
+bin/lib/scheduler.mjs
+  s_1f4a653f13be4a::t_ff9d650563f54c 139,184-188,195,199
+builtin/nodes/tool_user_check.md
+  s_1f4a653f13be4a::t_a046856b1915c8 13-14,24
+builtin/web-ui/dist/assets/index-q7XIIhst.js
+  s_1f4a653f13be4a::t_98ff6ccedfb9f7 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-95,97-98,102-104,106,109-110,123-136,139-141,143,147,155,157,161,169-172,176,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "333ae8cab78d1e57e00e45129dce193993430f64",
+  "prompts": {},
+  "logical_commit_id": "333ae8cab78d1e57e00e45129dce193993430f64",
+  "sessions": {
+    "s_1f4a653f13be4a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ef9a3-f9a1-7670-ad2d-22350ca999ed",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
