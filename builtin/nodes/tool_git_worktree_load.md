@@ -16,21 +16,22 @@ input:
   - type: file
     name: repoPath
     default: ""
-    showOnNode: true
   - type: text
     name: branch
     default: ""
-    showOnNode: true
   - type: file
     name: worktreePath
     default: ""
   - type: text
     name: gitContext
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: workspaceContext
     default: ""
     required: true
+    showOnNode: true
 output:
   - type: node
     name: next
@@ -47,8 +48,12 @@ output:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: gitContext
     default: ""
+    required: true
+    showOnNode: true
 ---
 Load a Git worktree from `${repoPath}` and switch downstream workspace context to it.

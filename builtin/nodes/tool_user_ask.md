@@ -8,8 +8,10 @@ input:
     default: ""
   - type: file
     name: question
-    description: 要展示给用户的问题（Markdown 格式，可选）
+    description: 要展示给用户的问题（Markdown 格式）
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: option_0

@@ -24,15 +24,14 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   control_end: ["End"],
   control_agent_toBool: ["Agent ToBool"],
   control_anyOne: ["Any One"],
-  control_cancelled: ["Cancelled"],
+  control_cancelled: ["Cancelled", "Cancel Check"],
   control_cd_workspace: ["CD Workspace"],
-  control_deadline: ["Deadline"],
   control_delay: ["Delay"],
   control_if: ["If Branch"],
   control_interval_loop: ["Interval Loop"],
   control_load_skills: ["Load Skills"],
   control_user_workspace: ["User Workspace"],
-  control_toBool: ["To Bool"],
+  control_toBool: ["To Bool", "Code ToBool"],
   control_wait_until: ["Wait Until"],
   tool_git_checkout: ["Git Checkout"],
   tool_get_env: ["Get Env"],
@@ -162,6 +161,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   let instanceRole;
   let instanceModel;
   let instanceBody;
+  let instanceImages;
   /** @type {string | undefined} */
   let instanceScript;
   /** flow.yaml 里已有该 instance 时，引脚以 YAML 为准（含空数组），不回填 palette，避免「YAML 无槽位仍显示定义引脚」 */
@@ -173,6 +173,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     if (inst.role && typeof inst.role === "string") instanceRole = inst.role;
     if (inst.model != null) instanceModel = String(inst.model).trim();
     if (inst.body != null) instanceBody = String(inst.body);
+    if (Array.isArray(inst.images)) instanceImages = inst.images;
     if (inst.script != null) instanceScript = String(inst.script);
   }
   const mergedRole = instanceRole ?? (typeof n.data?.role === "string" ? n.data.role : "普通");
@@ -180,6 +181,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   const defDescRaw = def?.description != null ? String(def.description).trim() : "";
   const mergedDescription = defDescRaw !== "" ? defDescRaw : undefined;
   const mergedBody = instanceBody ?? n.data?.body ?? "";
+  const mergedImages = Array.isArray(instanceImages) ? instanceImages : Array.isArray(n.data?.images) ? n.data.images : [];
   const mergedScript =
     instanceScript !== undefined
       ? instanceScript
@@ -219,6 +221,9 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   }
   inputs = mergeSlotDefinitionMeta(resolvedDefId, inputs, def?.inputs);
   outputs = mergeSlotDefinitionMeta(resolvedDefId, outputs, def?.outputs);
+  if (resolvedDefId.startsWith("provide_") && outputs[0] && String(outputs[0].default ?? outputs[0].value ?? "").trim() === "" && String(mergedBody).trim() !== "") {
+    outputs = outputs.map((slot, index) => index === 0 ? { ...slot, default: mergedBody, value: mergedBody } : slot);
+  }
   const displayLabel = displayLabelForNode(resolvedDefId, translatedLabel || label, def);
   const showScriptField = resolvedDefId === "tool_nodejs" || String(mergedScript).trim() !== "";
   return {
@@ -234,6 +239,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
       role: mergedRole,
       model: mergedModel,
       body: translatedBody || mergedBody,
+      images: mergedImages,
       script: mergedScript,
       inputs,
       outputs,

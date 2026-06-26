@@ -7,5 +7,7 @@ output:
   - type: bool
     name: value
     default: "false"
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

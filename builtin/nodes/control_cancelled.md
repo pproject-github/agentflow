@@ -1,14 +1,16 @@
 ---
-# 内置节点：取消状态判断
-description: Check whether the current run/watch has been cancelled. Use cancelled output with control_if.
-displayName: Cancelled
+# 内置节点：取消判断
+description: Check whether the current wait/run has been cancelled. Use cancelled output with control_if.
+displayName: Cancel Check
 input:
   - type: node
     name: prev
     default: ""
   - type: text
-    name: watchId
+    name: waitId
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next
@@ -16,5 +18,7 @@ output:
   - type: bool
     name: cancelled
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

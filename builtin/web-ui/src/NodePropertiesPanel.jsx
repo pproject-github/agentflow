@@ -149,6 +149,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
  *     role: string,
  *     model: string,
  *     body: string,
+ *     images?: Array<any>,
  *     script?: string,
  *     inputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
  *     outputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
@@ -426,6 +427,8 @@ export function NodePropertiesPanel({
           <BodyPromptEditor
             value={draft.body}
             onChange={(next) => update({ body: next })}
+            images={draft.images}
+            onImagesChange={(next) => update({ images: next })}
             disabled={disabled}
             placeholder={t("flow:nodeProps.bodyPlaceholder")}
             rows={8}
@@ -498,6 +501,8 @@ export function NodePropertiesPanel({
             <BodyPromptEditor
               value={draft.body}
               onChange={(next) => update({ body: next })}
+              images={draft.images}
+              onImagesChange={(next) => update({ images: next })}
               disabled={disabled}
               placeholder={t("flow:nodeProps.bodyPlaceholderExpand")}
               rows={16}

@@ -48,7 +48,7 @@ import {
   parseSkillKeyList,
   resolveWorkspaceTarget,
 } from "../lib/runtime-context.mjs";
-import { buildGitContext, loadGitWorktree, normalizeGitContext, unloadGitWorktree } from "../lib/git-worktree.mjs";
+import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, unloadGitWorktree } from "../lib/git-worktree.mjs";
 import { createGitLabMergeRequest } from "../lib/gitlab-mr.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -403,12 +403,16 @@ function emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, ex
   const { inputs, workspaceContext, flowJson } = resolveNodeRuntimeContexts(workspaceRoot, flowName, uuid, instanceId);
   requireWorkspaceContextInput(inputs, "tool_git_worktree_unload");
   const gitContext = normalizeGitContext(inputs.gitContext);
-  const repoPath = resolveMaybeWorkspacePath(inputs.repoPath, workspaceContext) ||
-    (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
   const worktreePath = resolveMaybeWorkspacePath(inputs.worktreePath, workspaceContext) ||
-    (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
-  if (!repoPath) throw new Error("tool_git_worktree_unload: repoPath or gitContext.repoPath is required");
-  if (!worktreePath) throw new Error("tool_git_worktree_unload: worktreePath or gitContext.worktreePath is required");
+    (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "") ||
+    (workspaceContext.cwd ? path.resolve(workspaceContext.cwd) : "") ||
+    (workspaceContext.workspaceRoot ? path.resolve(workspaceContext.workspaceRoot) : "");
+  if (!worktreePath) throw new Error("tool_git_worktree_unload: workspaceContext.cwd or worktreePath is required");
+  const repoPath = resolveMaybeWorkspacePath(inputs.repoPath, workspaceContext) ||
+    (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "") ||
+    inferGitRepoRootFromWorktree(worktreePath) ||
+    (workspaceContext.previous?.cwd ? path.resolve(workspaceContext.previous.cwd) : "") ||
+    (workspaceContext.previous?.workspaceRoot ? path.resolve(workspaceContext.previous.workspaceRoot) : "");
   const force = isTruthyInput(inputs.force);
   const prune = String(inputs.prune ?? "true").trim().toLowerCase() !== "false";
   const result = unloadGitWorktree({ repoPath, worktreePath, force, prune });
@@ -636,8 +640,14 @@ function writeWaitState(runDir, state) {
       if (parsed && typeof parsed === "object" && Array.isArray(parsed.waits)) registry = parsed;
     } catch (_) {}
   }
-  const waits = registry.waits.filter((w) => w && w.instanceId !== state.instanceId);
-  const wait = { ...state, id: state.id || state.instanceId };
+  const waitId = String(state.waitId || state.id || `${state.instanceId}:${state.execId || 1}`).trim();
+  const waits = registry.waits.filter((w) => {
+    if (!w) return false;
+    const key = String(w.waitId || w.id || "").trim();
+    if (key && key === waitId) return false;
+    return !(w.instanceId === state.instanceId && String(w.execId || 1) === String(state.execId || 1));
+  });
+  const wait = { ...state, waitId, id: state.id || waitId };
   waits.push(wait);
   registry = {
     ...registry,
@@ -649,6 +659,44 @@ function writeWaitState(runDir, state) {
   };
   fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2) + "\n", "utf-8");
   fs.writeFileSync(legacyPath, JSON.stringify(wait, null, 2) + "\n", "utf-8");
+}
+
+function buildWaitId(uuid, instanceId, execId, explicit = "") {
+  const text = String(explicit || "").trim();
+  if (text) return text;
+  return `${uuid}:${instanceId}:${execId || 1}`;
+}
+
+function readWaitStateById(runDir, waitId) {
+  const text = String(waitId || "").trim();
+  if (!text) return null;
+  const registryPath = path.join(runDir, "wait-states.json");
+  if (fs.existsSync(registryPath)) {
+    try {
+      const registry = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+      const waits = Array.isArray(registry?.waits) ? registry.waits : [];
+      const found = waits.find((w) => {
+        const key = String(w?.waitId || w?.id || "").trim();
+        return key === text;
+      });
+      if (found) return found;
+    } catch (_) {}
+  }
+  const legacyPath = path.join(runDir, "wait-state.json");
+  if (fs.existsSync(legacyPath)) {
+    try {
+      const state = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+      const key = String(state?.waitId || state?.id || "").trim();
+      if (key === text) return state;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function readCancelFlagForWait(runDir, waitId) {
+  const state = readWaitStateById(runDir, waitId);
+  if (state && (state.cancelled === true || state.status === "cancelled" || state.branch === "cancelled")) return true;
+  return readCancelFlag(runDir);
 }
 
 function readCancelFlag(runDir) {
@@ -966,8 +1014,11 @@ async function main() {
       process.exit(1);
     }
 
+    const waitId = buildWaitId(uuid, instanceId, execId, inputs.waitId || inputs.watchId);
+    writeOutputSlot(runDir, instanceId, execId, "waitId", waitId);
     writeOutputSlot(runDir, instanceId, execId, "wakeAt", wakeAt);
     writeWaitState(runDir, {
+      waitId,
       status: "waiting",
       reason: definitionId,
       flowName,
@@ -993,7 +1044,7 @@ async function main() {
       `此节点为 ${definitionId}，已写入 wait-state.json，等待 scheduler 在 ${wakeAt} 唤醒。\n`,
     );
     writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
-    logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "waiting", instanceId, wakeAt, definitionId });
+    logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "waiting", instanceId, waitId, wakeAt, definitionId });
     console.log(JSON.stringify({
       ok: true,
       promptPath,
@@ -1084,37 +1135,22 @@ async function main() {
     return;
   }
 
-  if (definitionId === "control_deadline" || definitionId === "control_cancelled") {
+  if (definitionId === "control_cancelled") {
     const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
     if (!data.ok) {
-      console.error(JSON.stringify({ ok: false, error: `${definitionId}: getResolvedValues failed` }));
+      console.error(JSON.stringify({ ok: false, error: "control_cancelled: getResolvedValues failed" }));
       process.exit(1);
     }
-    const inputs = data.resolvedInputs || {};
-    let boolValue = false;
-    let message = "";
+    let boolValue;
+    let message;
     try {
-      if (definitionId === "control_deadline") {
-        const timezone = inputs.timezone || "Asia/Shanghai";
-        let deadline;
-        if (inputs.deadlineAt) {
-          deadline = parseDateTime(inputs.deadlineAt, timezone);
-        } else {
-          const start = inputs.startAt ? parseDateTime(inputs.startAt, timezone) : new Date();
-          deadline = new Date(start.getTime() + parseDurationMs(inputs.duration || ""));
-        }
-        const deadlineAt = deadline.toISOString();
-        boolValue = Date.now() >= deadline.getTime();
-        writeOutputSlot(runDir, instanceId, execId, "deadlineAt", deadlineAt);
-        writeOutputSlot(runDir, instanceId, execId, "expired", boolValue ? "true" : "false");
-        message = boolValue ? `已超过截止时间 ${deadlineAt}` : `未超过截止时间 ${deadlineAt}`;
-      } else {
-        boolValue = readCancelFlag(runDir);
-        writeOutputSlot(runDir, instanceId, execId, "cancelled", boolValue ? "true" : "false");
-        message = boolValue ? "已取消" : "未取消";
-      }
+      const inputs = data.resolvedInputs || {};
+      const waitId = String(inputs.waitId || inputs.watchId || "").trim();
+      boolValue = waitId ? readCancelFlagForWait(runDir, waitId) : readCancelFlag(runDir);
+      writeOutputSlot(runDir, instanceId, execId, "cancelled", boolValue ? "true" : "false");
+      message = boolValue ? "已取消" : "未取消";
     } catch (e) {
-      console.error(JSON.stringify({ ok: false, error: `${definitionId}: ${e.message}` }));
+      console.error(JSON.stringify({ ok: false, error: `control_cancelled: ${e.message}` }));
       process.exit(1);
     }
     writeResult(workspaceRoot, flowName, uuid, instanceId, { status: "success", message }, { execId, preserveBody: false });

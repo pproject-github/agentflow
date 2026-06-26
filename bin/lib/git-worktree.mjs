@@ -112,6 +112,21 @@ export function resolveGitRepoRoot(repoPath) {
   return path.resolve(gitOrThrow(["rev-parse", "--show-toplevel"], abs, "git rev-parse"));
 }
 
+export function inferGitRepoRootFromWorktree(worktreePath) {
+  const raw = String(worktreePath || "").trim();
+  if (!raw) throw new Error("worktreePath is required");
+  const abs = path.resolve(raw);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+    throw new Error(`worktreePath directory not found: ${abs}`);
+  }
+  const commonDir = gitOrThrow(["rev-parse", "--git-common-dir"], abs, "git rev-parse common dir");
+  const commonAbs = path.resolve(abs, commonDir);
+  if (path.basename(commonAbs) === ".git") {
+    return path.dirname(commonAbs);
+  }
+  return resolveGitRepoRoot(abs);
+}
+
 export function currentGitBranch(repoRoot) {
   const branch = gitOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], repoRoot, "git rev-parse branch");
   return branch === "HEAD" ? "" : branch;

@@ -9,6 +9,7 @@ import {
   segmentsToBackdropHtml,
   validateBodyPlaceholders,
 } from "./bodyPlaceholders.js";
+import { addImageFiles, imageFilesFromClipboardEvent, imageFilesFromDropEvent, normalizeImages } from "./imageAttachments.js";
 import { getCaretViewportRect } from "./textareaCaret.js";
 
 /**
@@ -21,6 +22,8 @@ import { getCaretViewportRect } from "./textareaCaret.js";
  *   textareaClassName: string,
  *   ioSlots: { inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] },
  *   variant?: "drawer" | "expand",
+ *   images?: Array<{ id?: string, label?: string, name?: string, mimeType?: string, dataUrl?: string }>,
+ *   onImagesChange?: (next: any[]) => void,
  * }} props
  */
 export function BodyPromptEditor({
@@ -32,6 +35,8 @@ export function BodyPromptEditor({
   textareaClassName,
   ioSlots,
   variant = "drawer",
+  images,
+  onImagesChange,
 }) {
   const { t } = useTranslation();
   const issuesId = useId();
@@ -40,6 +45,7 @@ export function BodyPromptEditor({
   const [cursor, setCursor] = useState(0);
   const [menuHighlight, setMenuHighlight] = useState(0);
   const [menuPop, setMenuPop] = useState(/** @type {{ top: number, left: number } | null} */ (null));
+  const imageList = useMemo(() => normalizeImages(images), [images]);
 
   const invalidRanges = useMemo(() => validateBodyPlaceholders(value, ioSlots, t), [value, ioSlots, t]);
   const hasInvalid = invalidRanges.length > 0;
@@ -160,8 +166,38 @@ export function BodyPromptEditor({
     [disabled, openCtx, menuItems, menuHighlight, insertPick],
   );
 
+  const attachImages = useCallback(
+    async (files) => {
+      if (disabled || typeof onImagesChange !== "function") return false;
+      const next = await addImageFiles({ files, body: value, images: imageList });
+      if (!next) return false;
+      onChange(next.body);
+      onImagesChange(next.images);
+      queueMicrotask(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.focus();
+        const pos = next.body.length;
+        el.setSelectionRange(pos, pos);
+        setCursor(pos);
+      });
+      return true;
+    },
+    [disabled, imageList, onChange, onImagesChange, value],
+  );
+
   return (
     <div className={"af-body-prompt-editor" + (variant === "expand" ? " af-body-prompt-editor--expand" : "")}>
+      {imageList.length > 0 ? (
+        <div className="af-body-image-list" aria-label="image attachments">
+          {imageList.map((img, idx) => (
+            <span key={img.id || idx} className="af-body-image-chip" title={img.name}>
+              <img src={img.dataUrl} alt="" />
+              <span>[{img.label || `image ${idx + 1}`}]</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="af-body-prompt-stack">
         <pre
           ref={backdropRef}
@@ -196,6 +232,21 @@ export function BodyPromptEditor({
             if (t instanceof HTMLTextAreaElement) setCursor(t.selectionStart ?? t.value.length);
           }}
           onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            const files = imageFilesFromClipboardEvent(e);
+            if (files.length === 0) return;
+            e.preventDefault();
+            attachImages(files).catch(() => {});
+          }}
+          onDragOver={(e) => {
+            if (imageFilesFromDropEvent(e).length > 0) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            const files = imageFilesFromDropEvent(e);
+            if (files.length === 0) return;
+            e.preventDefault();
+            attachImages(files).catch(() => {});
+          }}
           onScroll={syncScroll}
         />
       </div>

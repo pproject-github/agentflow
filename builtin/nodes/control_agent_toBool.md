@@ -9,6 +9,8 @@ input:
   - type: text
     name: value
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next
@@ -16,5 +18,7 @@ output:
   - type: bool
     name: prediction
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

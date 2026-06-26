@@ -7,5 +7,7 @@ output:
   - type: file
     name: value
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

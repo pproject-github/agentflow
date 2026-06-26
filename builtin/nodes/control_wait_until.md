@@ -9,6 +9,8 @@ input:
   - type: text
     name: until
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: timezone
     default: "Asia/Shanghai"
@@ -17,7 +19,14 @@ output:
     name: next
     default: ""
   - type: text
+    name: waitId
+    default: ""
+    required: true
+    showOnNode: true
+  - type: text
     name: wakeAt
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

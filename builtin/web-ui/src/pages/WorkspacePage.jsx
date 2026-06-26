@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import { buildInstancesForYaml, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
+import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
@@ -834,8 +835,18 @@ function WorkspaceFlowNode(props) {
       const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
         ? node.data.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
         : [{ type: "bool", name: "value", default: value, value }];
-      return { ...node, data: { ...node.data, body: value, outputs } };
+      return { ...node, data: { ...node.data, body: "", outputs } };
     }));
+  }, [setNodes]);
+  const onNodeBodyChange = useCallback((nodeId, body) => {
+    setNodes((list) => list.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, body } } : node
+    )));
+  }, [setNodes]);
+  const onNodeImagesChange = useCallback((nodeId, images) => {
+    setNodes((list) => list.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, images: normalizeImages(images) } } : node
+    )));
   }, [setNodes]);
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
@@ -856,7 +867,7 @@ function WorkspaceFlowNode(props) {
   }
   return (
     <div className="af-work-flow-node">
-      <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} onProvideValueChange={onProvideValueChange} />
+      <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} onProvideValueChange={onProvideValueChange} onNodeBodyChange={onNodeBodyChange} onNodeImagesChange={onNodeImagesChange} />
     </div>
   );
 }
@@ -996,6 +1007,9 @@ function WorkspaceLoadSkillsNode({
   const skillsList = Array.isArray(skills) ? skills : [];
   const collectionsList = Array.isArray(skillCollections) ? skillCollections : [];
   const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+  const scrollbarTrackRef = useRef(null);
+  const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
   const keys = useMemo(() => new Set(selectedSkillKeysFromNodeData(data)), [data]);
   const byKey = useMemo(() => new Map(skillsList.map((skill) => [skill.key, skill])), [skillsList]);
   const groups = useMemo(() => {
@@ -1018,6 +1032,65 @@ function WorkspaceLoadSkillsNode({
     }
     onChangeSkillKeys?.(id, Array.from(next));
   }, [id, keys, onChangeSkillKeys]);
+  const updateMenuScrollbar = useCallback(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const scrollHeight = Math.max(1, el.scrollHeight);
+    const clientHeight = Math.max(1, el.clientHeight);
+    const visible = scrollHeight > clientHeight + 1;
+    const height = visible ? Math.max(12, (clientHeight / scrollHeight) * 100) : 100;
+    const maxTop = Math.max(0, 100 - height);
+    const top = visible ? Math.min(maxTop, (el.scrollTop / Math.max(1, scrollHeight - clientHeight)) * maxTop) : 0;
+    setScrollbar({ visible, top, height });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(updateMenuScrollbar);
+    return () => cancelAnimationFrame(frame);
+  }, [open, groups, keys.size, updateMenuScrollbar]);
+  const scrollMenuToRatio = useCallback((ratio) => {
+    const el = menuRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(1, Math.max(0, ratio)) * maxScroll;
+    updateMenuScrollbar();
+  }, [updateMenuScrollbar]);
+  const pointerRatioFromTrack = useCallback((clientY, grabOffsetPx = 0) => {
+    const track = scrollbarTrackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const thumbPx = (scrollbar.height / 100) * rect.height;
+    const maxTopPx = Math.max(1, rect.height - thumbPx);
+    return (clientY - rect.top - grabOffsetPx) / maxTopPx;
+  }, [scrollbar.height]);
+  const handleScrollbarPointerDown = useCallback((event) => {
+    if (!scrollbar.visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = scrollbarTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const thumbTopPx = (scrollbar.top / 100) * rect.height;
+    const thumbHeightPx = (scrollbar.height / 100) * rect.height;
+    const insideThumb = event.clientY >= rect.top + thumbTopPx && event.clientY <= rect.top + thumbTopPx + thumbHeightPx;
+    const grabOffsetPx = insideThumb ? event.clientY - rect.top - thumbTopPx : thumbHeightPx / 2;
+    scrollMenuToRatio(pointerRatioFromTrack(event.clientY, grabOffsetPx));
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture?.(pointerId);
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      scrollMenuToRatio(pointerRatioFromTrack(moveEvent.clientY, grabOffsetPx));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [pointerRatioFromTrack, scrollMenuToRatio, scrollbar.height, scrollbar.top, scrollbar.visible]);
 
   return (
     <div className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}>
@@ -1074,46 +1147,56 @@ function WorkspaceLoadSkillsNode({
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
         {open ? (
-          <div className="af-work-load-skills-menu" onClick={(event) => event.stopPropagation()}>
-            {groups.collectionGroups.map((group) => {
-              const groupKeys = group.skills.map((skill) => skill.key);
-              const checkedCount = groupKeys.filter((key) => keys.has(key)).length;
-              const allChecked = groupKeys.length > 0 && checkedCount === groupKeys.length;
-              return (
-                <section key={group.id} className="af-work-load-skills-menu__group">
-                  <label className="af-work-load-skills-menu__group-head">
-                    <input type="checkbox" checked={allChecked} onChange={(event) => toggleKeys(groupKeys, event.target.checked)} />
-                    <span>{group.name}</span>
-                    <small>{checkedCount}/{groupKeys.length}</small>
-                  </label>
+          <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
+            <div ref={menuRef} className="af-work-load-skills-menu" onScroll={updateMenuScrollbar}>
+              {groups.collectionGroups.map((group) => {
+                const groupKeys = group.skills.map((skill) => skill.key);
+                const checkedCount = groupKeys.filter((key) => keys.has(key)).length;
+                const allChecked = groupKeys.length > 0 && checkedCount === groupKeys.length;
+                return (
+                  <section key={group.id} className="af-work-load-skills-menu__group">
+                    <label className="af-work-load-skills-menu__group-head">
+                      <input type="checkbox" checked={allChecked} onChange={(event) => toggleKeys(groupKeys, event.target.checked)} />
+                      <span>{group.name}</span>
+                      <small>{checkedCount}/{groupKeys.length}</small>
+                    </label>
+                    <div className="af-work-load-skills-menu__options">
+                      {group.skills.map((skill) => (
+                        <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
+                          <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
+                          <span>{skill.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+              {groups.ungrouped.length > 0 ? (
+                <section className="af-work-load-skills-menu__group">
+                  <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
+                    <span>Ungrouped</span>
+                    <small>{groups.ungrouped.length}</small>
+                  </div>
                   <div className="af-work-load-skills-menu__options">
-                    {group.skills.map((skill) => (
-                      <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
+                    {groups.ungrouped.map((skill) => (
+                      <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
                         <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
                         <span>{skill.name}</span>
                       </label>
                     ))}
                   </div>
                 </section>
-              );
-            })}
-            {groups.ungrouped.length > 0 ? (
-              <section className="af-work-load-skills-menu__group">
-                <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
-                  <span>Ungrouped</span>
-                  <small>{groups.ungrouped.length}</small>
-                </div>
-                <div className="af-work-load-skills-menu__options">
-                  {groups.ungrouped.map((skill) => (
-                    <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
-                      <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
-                      <span>{skill.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-            <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeSkillKeys?.(id, [])}>清空</button>
+              ) : null}
+              <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeSkillKeys?.(id, [])}>清空</button>
+            </div>
+            <div
+              ref={scrollbarTrackRef}
+              className={"af-work-load-skills-scrollbar" + (scrollbar.visible ? " af-work-load-skills-scrollbar--visible" : "")}
+              onPointerDown={handleScrollbarPointerDown}
+              aria-hidden="true"
+            >
+              <span style={{ height: `${scrollbar.height}%`, top: `${scrollbar.top}%` }} />
+            </div>
           </div>
         ) : null}
       </div>
@@ -1715,6 +1798,7 @@ function WorkspacePageInner() {
       role: String(selectedNode.data?.role ?? "normal"),
       model: String(selectedNode.data?.model ?? ""),
       body: String(selectedNode.data?.body ?? ""),
+      images: normalizeImages(selectedNode.data?.images),
       script: String(selectedNode.data?.script ?? ""),
       inputs,
       outputs,
@@ -1750,17 +1834,19 @@ function WorkspacePageInner() {
         ? slot.showOnNode !== false
         : Boolean(slot?.required) || String(slot?.type ?? "node").trim().toLowerCase() === "node",
     }));
+    const defId = String(selectedNode.data?.definitionId ?? nextId);
+    const isProvideDef = defId.startsWith("provide_");
     const nextData = {
       ...selectedNode.data,
       label: String(nodePropDraft.label || "").trim() || nextId,
       role,
       model: modelTrim === "" || modelTrim === "default" ? undefined : modelTrim,
-      body: String(nodePropDraft.body ?? ""),
+      body: isProvideDef ? "" : String(nodePropDraft.body ?? ""),
+      images: isProvideDef ? [] : normalizeImages(nodePropDraft.images),
       inputs: normIo(nodePropDraft.inputs),
-      outputs: normIo(nodePropDraft.outputs),
+      outputs: isProvideDef && Array.isArray(selectedNode.data?.outputs) ? selectedNode.data.outputs : normIo(nodePropDraft.outputs),
     };
     const scriptTrim = String(nodePropDraft.script ?? "").trim();
-    const defId = String(selectedNode.data?.definitionId ?? nextId);
     if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(nodePropDraft.script ?? "");
     else delete nextData.script;
 
@@ -1771,6 +1857,7 @@ function WorkspacePageInner() {
       prevData.role !== nextData.role ||
       prevData.model !== nextData.model ||
       prevData.body !== nextData.body ||
+      JSON.stringify(normalizeImages(prevData.images)) !== JSON.stringify(nextData.images) ||
       (prevData.script ?? undefined) !== (nextData.script ?? undefined) ||
       JSON.stringify(prevData.inputs || []) !== JSON.stringify(nextData.inputs || []) ||
       JSON.stringify(prevData.outputs || []) !== JSON.stringify(nextData.outputs || []);
@@ -1812,6 +1899,7 @@ function WorkspacePageInner() {
     nodePropDraft?.role,
     nodePropDraft?.model,
     nodePropDraft?.body,
+    JSON.stringify(nodePropDraft?.images || []),
     nodePropDraft?.script,
     JSON.stringify(nodePropDraft?.inputs || []),
     JSON.stringify(nodePropDraft?.outputs || []),

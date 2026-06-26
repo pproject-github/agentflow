@@ -9,6 +9,8 @@ input:
   - type: text
     name: content
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next

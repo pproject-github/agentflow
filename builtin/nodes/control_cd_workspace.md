@@ -35,6 +35,8 @@ output:
   - type: text
     name: workspaceContext
     default: ""
+    required: true
+    showOnNode: true
   - type: file
     name: cwd
     default: ""

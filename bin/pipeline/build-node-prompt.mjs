@@ -112,6 +112,31 @@ function marketplaceRuntimeCommand(marketplaceNode, resolvedInputs, resolvedOutp
   });
 }
 
+function normalizePromptImages(images) {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      label: String(item.label || `image ${index + 1}`),
+      name: String(item.name || `image-${index + 1}`),
+      mimeType: String(item.mimeType || item.type || "image/png"),
+      dataUrl: String(item.dataUrl || item.data || ""),
+    }))
+    .filter((item) => item.dataUrl.startsWith("data:image/"));
+}
+
+function renderImagesForPrompt(images) {
+  const list = normalizePromptImages(images);
+  if (list.length === 0) return "";
+  const blocks = list.map((item) => [
+    `### [${item.label}]`,
+    `name: ${item.name}`,
+    `mimeType: ${item.mimeType}`,
+    `dataUrl: ${item.dataUrl}`,
+  ].join("\n"));
+  return `## 图片附件\n\n${blocks.join("\n\n")}`;
+}
+
 /**
  * 执行占位符替换，组装 prompt 并写入 intermediate 文件（文件名带 _execId）。
  * @param {number} [execId] - 本轮 execId，缺省则从 memory 读取
@@ -153,6 +178,7 @@ export function buildNodePrompt(workspaceRoot, flowName, uuid, instanceId, execI
     inst?.script != null
       ? String(inst.script || "").trim()
       : "";
+  const imagePrompt = renderImagesForPrompt(inst?.images);
 
   const { resolvedInputs = {}, resolvedOutputs = {}, systemPrompt = "" } = data;
   const workspaceContext = normalizeWorkspaceContext(opts.workspaceContext || resolvedInputs.workspaceContext, workspaceRoot, flowName, { flowDir });
@@ -197,7 +223,7 @@ ${contextBlocks.join("\n\n")}
 
 ## 执行任务
 
-${taskBody || "(无)"}
+${[taskBody || "(无)", imagePrompt].filter((x) => x && String(x).trim()).join("\n\n")}
 `;
 
   try {

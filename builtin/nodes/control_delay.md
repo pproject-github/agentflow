@@ -9,12 +9,21 @@ input:
   - type: text
     name: duration
     default: "10m"
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next
     default: ""
   - type: text
+    name: waitId
+    default: ""
+    required: true
+    showOnNode: true
+  - type: text
     name: wakeAt
     default: ""
+    required: true
+    showOnNode: true
 ---
 ${USER_PROMPT}

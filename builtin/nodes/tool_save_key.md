@@ -9,9 +9,13 @@ input:
   - type: text
     name: key
     default: ""
+    required: true
+    showOnNode: true
   - type: text
     name: value
     default: ""
+    required: true
+    showOnNode: true
 output:
   - type: node
     name: next
