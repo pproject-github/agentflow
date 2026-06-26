@@ -24,10 +24,15 @@ function modelEntryId(entry) {
  */
 function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredReadonly = true }) {
   const { t } = useTranslation();
-  const add = () => onSlotsChange([...slots, { type: "node", name: "", default: "", required: false, showOnNode: true }]);
+  const add = () => onSlotsChange([...slots, { type: "text", name: "", default: "", required: false, showOnNode: false }]);
   const removeAt = (i) => onSlotsChange(slots.filter((_, j) => j !== i));
   const patch = (i, field, value) => {
-    const next = slots.map((s, j) => (j === i ? { ...s, [field]: value } : s));
+    const next = slots.map((s, j) => {
+      if (j !== i) return s;
+      const patched = { ...s, [field]: value };
+      if (field === "required" && value === true) patched.showOnNode = true;
+      return patched;
+    });
     onSlotsChange(next);
   };
   const handlePrefix = kind === "input" ? "input" : "output";

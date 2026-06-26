@@ -8,6 +8,7 @@ description: |
   - If `targetDir` is empty, the repository is cloned into `${pipelineWorkspace}/.workspace/agentflow/git-repos/<repo-name>`.
   - Set `includeSubmodules` to `true` to clone/update Git submodules recursively.
   - The `workspaceContext` output can be connected to CD Workspace, Load Skills, agent, or tool nodes.
+  - The `gitContext` output can be connected to Worktree, GitLab MR, or other Git nodes.
 displayName: Git Checkout
 input:
   - type: node
@@ -32,6 +33,9 @@ input:
     name: includeSubmodules
     default: "false"
   - type: text
+    name: remote
+    default: "origin"
+  - type: text
     name: workspaceContext
     default: ""
 output:
@@ -53,5 +57,8 @@ output:
   - type: text
     name: workspaceContext
     default: ""
+  - type: text
+    name: gitContext
+    default: ""
 ---
-Clone or update `${repoUrl}` and output a workspace context for the checked-out repository.
+Clone or update `${repoUrl}` and output workspace/git contexts for the checked-out repository.

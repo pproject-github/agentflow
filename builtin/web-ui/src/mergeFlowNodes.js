@@ -3,13 +3,18 @@
  */
 
 function toIOSlot(s) {
+  const type = s.type || "node";
+  const hasShowOnNode = s.showOnNode != null;
   const slot = {
-    type: s.type || "node",
+    type,
     name: s.name || "",
     default: s.value !== undefined && s.value !== null ? String(s.value) : s.default !== undefined ? String(s.default) : "",
   };
   if (s.required != null) slot.required = Boolean(s.required);
-  if (s.showOnNode != null) slot.showOnNode = Boolean(s.showOnNode);
+  slot.showOnNode = hasShowOnNode
+    ? Boolean(s.showOnNode)
+    : Boolean(slot.required) || String(type).trim().toLowerCase() === "node";
+  slot._showOnNodeExplicit = hasShowOnNode;
   return slot;
 }
 
@@ -38,7 +43,9 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   tool_user_ask: ["UserAsk"],
   tool_user_check: ["User Confirm"],
   provide_file: ["File"],
+  provide_bool: ["Boolean"],
   provide_text: ["Text"],
+  provide_str: ["Text"],
   display_markdown: ["Markdown Display"],
   display_mermaid: ["Mermaid Display"],
   display_ascii: ["ASCII Display"],
@@ -70,6 +77,26 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
     "commit",
     "changed",
   ]),
+  tool_gitlab_create_mr: new Set([
+    "repoPath",
+    "workspaceContext",
+    "sourceBranch",
+    "targetBranch",
+    "title",
+    "description",
+    "draft",
+    "labels",
+    "push",
+    "remote",
+    "tokenEnv",
+    "gitlabApiBase",
+    "removeSourceBranch",
+    "squash",
+    "created",
+    "mrIid",
+    "projectId",
+    "message",
+  ]),
 };
 
 function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
@@ -87,7 +114,8 @@ function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
       ...slot,
       ...(slot.required == null && def.required != null ? { required: Boolean(def.required) } : {}),
       ...(wasLegacyAutoHidden ? { showOnNode: true } : {}),
-      ...(slot.showOnNode == null && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
+      ...(!slot._showOnNodeExplicit && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
+      ...(!slot._showOnNodeExplicit && def.showOnNode == null ? { showOnNode: Boolean(slot.required) || String(slot.type || "").trim().toLowerCase() === "node" } : {}),
       ...(CANVAS_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: false } : {}),
     };
   });
@@ -109,7 +137,9 @@ export function cloneNodeIoDraftSlots(node) {
         name: String(sl.name ?? ""),
         default: String(sl.default ?? ""),
         required: Boolean(sl.required),
-        showOnNode: sl.showOnNode !== false,
+        showOnNode: sl.showOnNode != null
+          ? sl.showOnNode !== false
+          : Boolean(sl.required) || String(sl.type || "").trim().toLowerCase() === "node",
       };
     });
   return { inputs: norm(ins), outputs: norm(outs) };
@@ -176,6 +206,16 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   ) {
     const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");
     outputs = [...outputs, nextSlot ? { ...nextSlot } : { type: "node", name: "next", default: "" }];
+  }
+  if (resolvedDefId === "workspace_run") {
+    if (!inputs.some((slot) => slot?.name === "prev")) {
+      const prevSlot = def?.inputs?.find((slot) => slot?.name === "prev");
+      inputs = [prevSlot ? { ...prevSlot } : { type: "node", name: "prev", default: "" }, ...inputs];
+    }
+    if (!outputs.some((slot) => slot?.name === "next")) {
+      const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");
+      outputs = [...outputs, nextSlot ? { ...nextSlot } : { type: "node", name: "next", default: "" }];
+    }
   }
   inputs = mergeSlotDefinitionMeta(resolvedDefId, inputs, def?.inputs);
   outputs = mergeSlotDefinitionMeta(resolvedDefId, outputs, def?.outputs);

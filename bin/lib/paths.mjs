@@ -262,11 +262,15 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "control_start",
   "control_end",
   "tool_git_checkout",
+  "tool_git_worktree_load",
+  "tool_git_worktree_unload",
+  "tool_gitlab_create_mr",
   "tool_print",
   "tool_user_check",
   "tool_user_ask",
   "provide_str",
   "provide_file",
+  "provide_bool",
 ]);
 
 /** 仅 pre+post 且由 CLI 负责写终态的节点 */
@@ -276,4 +280,5 @@ export const LOCAL_ONLY_TERMINAL_SUCCESS_IDS = new Set([
   "tool_print",
   "provide_str",
   "provide_file",
+  "provide_bool",
 ]);

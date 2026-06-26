@@ -11,6 +11,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useUpdateNodeInternals,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +21,7 @@ import ReactMarkdown from "react-markdown";
 import { buildInstancesForYaml, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
+import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import {
   areSlotsCompatible,
@@ -37,6 +39,7 @@ import {
   removeSkillKeys,
 } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
+import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
@@ -47,7 +50,7 @@ const WORKSPACE_RUN_DEFINITION = {
   label: "Run",
   description: "Run the downstream workspace subgraph connected from this node.",
   type: "control",
-  inputs: [],
+  inputs: [{ type: "node", name: "prev", default: "" }],
   outputs: [{ type: "node", name: "next", default: "" }],
 };
 const WORKSPACE_LOAD_SKILLS_DEFINITION = {
@@ -275,7 +278,9 @@ function cloneSlots(slots) {
     name: slot?.name || "",
     default: slotDefault(slot),
     required: Boolean(slot?.required),
-    showOnNode: slot?.showOnNode !== false,
+    showOnNode: slot?.showOnNode != null
+      ? slot.showOnNode !== false
+      : Boolean(slot?.required) || String(slot?.type || "node").trim().toLowerCase() === "node",
   }));
 }
 
@@ -359,13 +364,34 @@ function displayKind(definitionId) {
   if (id === "display_markdown") return "markdown";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
+  if (id === "display_html") return "html";
+  if (id === "display_image") return "image";
   return "";
 }
 
 function displayContent(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
-  const contentSlot = slots.find((slot) => slot?.name === "content") || slots.find((slot) => slot?.type === "text");
+  const kind = displayKind(data?.definitionId);
+  const primaryName = kind === "image" ? "src" : "content";
+  const contentSlot =
+    slots.find((slot) => slot?.name === primaryName && String(slot?.default || "").trim()) ||
+    slots.find((slot) => slot?.name === "filePath" && String(slot?.default || "").trim()) ||
+    slots.find((slot) => slot?.type === "text" && String(slot?.default || "").trim());
   return String(data?.body || contentSlot?.default || "");
+}
+
+function displayAltText(data) {
+  const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
+  const altSlot = slots.find((slot) => slot?.name === "alt");
+  return String(altSlot?.default || data?.label || "Image preview");
+}
+
+function displayIcon(kind) {
+  if (kind === "mermaid") return "account_tree";
+  if (kind === "ascii") return "notes";
+  if (kind === "html") return "html";
+  if (kind === "image") return "image";
+  return "article";
 }
 
 function splitMarkdownTableRow(line) {
@@ -559,6 +585,25 @@ function DisplayBody({ data }) {
   if (!kind) return null;
   const content = displayContent(data);
   if (!content.trim()) return <div className="af-work-display-empty">No display content</div>;
+  if (kind === "html") {
+    return (
+      <div className="af-work-display-body af-work-display-body--html">
+        <iframe
+          className="af-work-display-html-frame"
+          title={data?.label || "HTML preview"}
+          sandbox=""
+          srcDoc={content}
+        />
+      </div>
+    );
+  }
+  if (kind === "image") {
+    return (
+      <div className="af-work-display-body af-work-display-body--image">
+        <img className="af-work-display-image" src={content} alt={displayAltText(data)} loading="lazy" />
+      </div>
+    );
+  }
   if (kind === "markdown") {
     return <div className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} /></div>;
   }
@@ -571,6 +616,29 @@ function DisplayBody({ data }) {
     );
   }
   return <pre className="af-work-display-body af-work-node__diagram af-work-node__diagram--ascii">{content}</pre>;
+}
+
+function displayFileExtension(kind) {
+  if (kind === "mermaid") return "mmd";
+  if (kind === "ascii") return "txt";
+  if (kind === "html") return "html";
+  if (kind === "image") return "txt";
+  return "md";
+}
+
+function displayFileStem(value) {
+  return String(value || "display")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "display";
+}
+
+function suggestDisplayFilePath(id, data) {
+  const kind = displayKind(data?.definitionId) || "markdown";
+  const stem = displayFileStem(data?.label || id || kind);
+  return `outputs/${stem}.${displayFileExtension(kind)}`;
 }
 
 function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
@@ -590,13 +658,20 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       return a.idx - b.idx;
     });
   const kind = displayKind(data?.definitionId);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : "Markdown");
+  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : "Markdown");
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
   return (
     <div
-      className={"af-work-display-card" + (displaySize ? " af-work-display-card--sized" : "") + (selected ? " af-work-display-card--selected" : "")}
+      className={
+        "af-work-display-card" +
+        (displaySize ? " af-work-display-card--sized" : "") +
+        (selected ? " af-work-display-card--selected" : "") +
+        (data?.isExecuting ? " af-work-display-card--executing" : "") +
+        (data?.nodeStatus === "success" ? " af-work-display-card--done" : "") +
+        (data?.nodeStatus === "failed" ? " af-work-display-card--failed" : "")
+      }
       style={displaySize ? { width: displaySize.width, height: displaySize.height } : undefined}
     >
       <NodeResizeControl
@@ -647,10 +722,19 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       })}
       <div className="af-work-display-card__head">
         <div className="af-work-display-card__title">
-          <span className="material-symbols-outlined">{kind === "mermaid" ? "account_tree" : kind === "ascii" ? "notes" : "article"}</span>
+          <span className="material-symbols-outlined">{displayIcon(kind)}</span>
           <strong>{title}</strong>
           <span>{data?.definitionId || "display"}</span>
         </div>
+        <button
+          type="button"
+          className="af-work-display-card__action nodrag"
+          onClick={() => data?.onSaveDisplayNodeToFile?.(id, data)}
+          aria-label="另存为文件"
+          title="另存为文件"
+        >
+          <span className="material-symbols-outlined">save</span>
+        </button>
         <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
           <span className="material-symbols-outlined">close</span>
         </button>
@@ -661,10 +745,38 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
 }
 
 function WorkspaceRunNode({ id, data, selected, deleteNode }) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const running = data?.runningRunNodeId === id;
   return (
-    <div className={"af-work-run-card" + (selected ? " af-work-run-card--selected" : "") + (running ? " af-work-run-card--running" : "")}>
+    <div
+      className={
+        "af-work-run-card" +
+        (selected ? " af-work-run-card--selected" : "") +
+        (running ? " af-work-run-card--running" : "") +
+        (data?.isExecuting ? " af-work-run-card--executing" : "") +
+        (data?.nodeStatus === "success" ? " af-work-run-card--done" : "") +
+        (data?.nodeStatus === "failed" ? " af-work-run-card--failed" : "")
+      }
+    >
+      {inputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.25 + idx * 1.75}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`in-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--in" style={{ top }}>{label}</span>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`input-${idx}`}
+              className="af-work-display-handle af-work-display-handle--in"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
       {outputs.map((slot, idx) => {
         if (slot.showOnNode === false) return null;
         const top = `${2.25 + idx * 1.75}rem`;
@@ -716,6 +828,15 @@ function WorkspaceFlowNode(props) {
   const onModelChange = useCallback((nodeId, model) => {
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
   }, [setNodes]);
+  const onProvideValueChange = useCallback((nodeId, value) => {
+    setNodes((list) => list.map((node) => {
+      if (node.id !== nodeId) return node;
+      const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
+        ? node.data.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
+        : [{ type: "bool", name: "value", default: value, value }];
+      return { ...node, data: { ...node.data, body: value, outputs } };
+    }));
+  }, [setNodes]);
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
   }
@@ -735,7 +856,7 @@ function WorkspaceFlowNode(props) {
   }
   return (
     <div className="af-work-flow-node">
-      <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} />
+      <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} onProvideValueChange={onProvideValueChange} />
     </div>
   );
 }
@@ -746,6 +867,15 @@ function flattenFiles(files, out = []) {
   for (const item of files || []) {
     if (item.type === "file") out.push(item);
     if (Array.isArray(item.children)) flattenFiles(item.children, out);
+  }
+  return out;
+}
+
+function collectDirectoryPaths(files, out = []) {
+  for (const item of files || []) {
+    if (item.type !== "directory") continue;
+    out.push(item.path);
+    if (Array.isArray(item.children)) collectDirectoryPaths(item.children, out);
   }
   return out;
 }
@@ -802,8 +932,8 @@ function WorkspaceComposerThread({ messages, running }) {
   return (
     <div className="af-composer-ai-stack af-composer-ai-stack--in-panel af-composer-thread-stack">
       {messages.map((msg, idx) => {
-        const role = msg.role === "user" ? "user-msg" : msg.error ? "error" : "reply";
-        const label = msg.role === "user" ? "You" : msg.error ? "Error" : "Reply";
+        const role = msg.kind === "run-log" ? "reply" : msg.role === "user" ? "user-msg" : msg.error ? "error" : "reply";
+        const label = msg.kind === "run-log" ? "Run" : msg.role === "user" ? "You" : msg.error ? "Error" : "Reply";
         return (
           <section key={`${idx}-${msg.role}-${String(msg.text || "").slice(0, 24)}`} className={`af-composer-ai-block af-composer-ai-block--${role}`}>
             <div className="af-composer-ai-block-label">{label}</div>
@@ -995,6 +1125,7 @@ function WorkspacePageInner() {
   const { i18n } = useTranslation();
   const { navigate } = useRoute();
   const reactFlow = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const [nodes, setNodes] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -1008,7 +1139,18 @@ function WorkspacePageInner() {
   const saveTimerRef = useRef(null);
   const [palette, setPalette] = useState([]);
   const [paletteSearch, setPaletteSearch] = useState("");
+  const [paletteMode, setPaletteMode] = useState("nodes");
+  const [flowSnippets, setFlowSnippets] = useState([]);
+  const [flowSnippetsLoading, setFlowSnippetsLoading] = useState(false);
+  const [flowSnippetsError, setFlowSnippetsError] = useState("");
+  const [publishSnippetOpen, setPublishSnippetOpen] = useState(false);
+  const [publishSnippetDraft, setPublishSnippetDraft] = useState({ name: "", id: "", description: "" });
+  const [publishSnippetBusy, setPublishSnippetBusy] = useState(false);
+  const [publishSnippetError, setPublishSnippetError] = useState("");
+  const [flowSnippetToast, setFlowSnippetToast] = useState("");
+  const flowSnippetToastTimerRef = useRef(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddMode, setQuickAddMode] = useState("nodes");
   const [quickAddSearch, setQuickAddSearch] = useState("");
   const [quickAddActiveIndex, setQuickAddActiveIndex] = useState(0);
   const [selectedNodeId, setSelectedNodeId] = useState("");
@@ -1025,18 +1167,49 @@ function WorkspacePageInner() {
   const [selectedSkills, setSelectedSkills] = useState([]);
   const [skillCollections, setSkillCollections] = useState([]);
   const [skillCollectionsLoaded, setSkillCollectionsLoaded] = useState(false);
+
+  const showFlowSnippetToast = useCallback((message) => {
+    if (flowSnippetToastTimerRef.current) {
+      window.clearTimeout(flowSnippetToastTimerRef.current);
+    }
+    setFlowSnippetToast(message);
+    flowSnippetToastTimerRef.current = window.setTimeout(() => {
+      setFlowSnippetToast("");
+      flowSnippetToastTimerRef.current = null;
+    }, 3800);
+  }, []);
+
+  const refreshNodeInternals = useCallback((nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    window.requestAnimationFrame(() => {
+      updateNodeInternals(id);
+    });
+  }, [updateNodeInternals]);
+
+  useEffect(() => () => {
+    if (flowSnippetToastTimerRef.current) {
+      window.clearTimeout(flowSnippetToastTimerRef.current);
+    }
+  }, []);
   const [collapsedSkillCollections, setCollapsedSkillCollections] = useState(() => new Set());
   const [skillsOpen, setSkillsOpen] = useState(false);
   const skillsButtonRef = useRef(null);
   const skillsMenuRef = useRef(null);
   const quickAddInputRef = useRef(null);
   const [skillsMenuStyle, setSkillsMenuStyle] = useState({});
-  const [allowFlowYaml, setAllowFlowYaml] = useState(false);
   const [composerText, setComposerText] = useState("");
   const [composerRunning, setComposerRunning] = useState(false);
   const [composerMessages, setComposerMessages] = useState([]);
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
+  const [composerMinimized, setComposerMinimized] = useState(false);
+  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [canvasTool, setCanvasTool] = useState("pan");
+  const [authUser, setAuthUser] = useState(null);
   const [runningRunNodeId, setRunningRunNodeId] = useState("");
+  const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
+  const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
   const [status, setStatus] = useState("");
   const composerStorageKey = useMemo(() => workspaceComposerStorageKey(flowParams), [flowParams]);
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
@@ -1079,9 +1252,27 @@ function WorkspacePageInner() {
     const res = await fetch(`/api/workspace/files?${q.toString()}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "读取 workspace 失败");
-    setFiles(json.files || []);
+    const nextFiles = json.files || [];
+    setFiles(nextFiles);
+    setCollapsedDirs(new Set(collectDirectoryPaths(nextFiles)));
     setWorkspaceRoot(json.root || "");
   }, [flowParams]);
+
+  const loadFlowSnippets = useCallback(async () => {
+    setFlowSnippetsLoading(true);
+    setFlowSnippetsError("");
+    try {
+      const res = await fetch("/api/marketplace/flow-snippets");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "读取流程片段失败");
+      setFlowSnippets(Array.isArray(json.snippets) ? json.snippets : []);
+    } catch (e) {
+      setFlowSnippetsError(String(e.message || e));
+      setFlowSnippets([]);
+    } finally {
+      setFlowSnippetsLoading(false);
+    }
+  }, []);
 
   const saveGraph = useCallback(async (nextNodes = nodes, nextEdges = edges) => {
     if (!loadedRef.current) return;
@@ -1161,7 +1352,14 @@ function WorkspacePageInner() {
     if (!runNodeId || runningRunNodeId) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
     setRunningRunNodeId(runNodeId);
+    setWorkspaceExecutingNodes(new Set([runNodeId]));
+    setWorkspaceNodeRunStatus({ [runNodeId]: { status: "running" } });
     setStatus(`Running ${runNodeId}...`);
+    setComposerSidebarOpen(true);
+    setComposerMessages((list) => [
+      ...list,
+      { role: "assistant", kind: "run-log", text: `Run started: ${runNodeId}`, at: Date.now() },
+    ]);
     try {
       await saveGraph(nodes, edges);
       const res = await fetch("/api/workspace/run", {
@@ -1185,6 +1383,49 @@ function WorkspacePageInner() {
       const decoder = new TextDecoder();
       let buffer = "";
       let finalOrder = [];
+      let finalPauseNodeIds = [];
+      let activeNodeId = runNodeId;
+      const appendRunLog = (text) => {
+        const line = String(text || "").trim();
+        if (!line) return;
+        setComposerMessages((list) => [...list, { role: "assistant", kind: "run-log", text: line, at: Date.now() }]);
+      };
+      const markNodeStart = (nodeId) => {
+        const id = String(nodeId || "").trim();
+        if (!id) return;
+        const previousId = activeNodeId;
+        activeNodeId = id;
+        setWorkspaceExecutingNodes(new Set([id]));
+        setWorkspaceNodeRunStatus((current) => ({
+          ...current,
+          ...(previousId && previousId !== id && current[previousId]?.status === "running" ? { [previousId]: { status: "success" } } : {}),
+          [id]: { status: "running" },
+        }));
+      };
+      const markNodeDone = (nodeId) => {
+        const id = String(nodeId || "").trim();
+        if (!id) return;
+        setWorkspaceExecutingNodes((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+        setWorkspaceNodeRunStatus((current) => ({ ...current, [id]: { status: "success" } }));
+      };
+      const appendAssistantText = (text) => {
+        const chunk = String(text || "");
+        if (!chunk.trim()) return;
+        setComposerMessages((list) => {
+          const next = [...list];
+          const last = next[next.length - 1];
+          if (last && last.role === "assistant" && !last.kind && !last.error) {
+            next[next.length - 1] = { ...last, text: `${last.text || ""}${last.text ? "\n" : ""}${chunk}` };
+          } else {
+            next.push({ role: "assistant", text: chunk, at: Date.now() });
+          }
+          return next;
+        });
+      };
       const applyGraph = (nextGraph) => {
         const flow = graphToFlow(nextGraph || graph, palette);
         instancesRef.current = flow.instances;
@@ -1202,34 +1443,97 @@ function WorkspacePageInner() {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
           if (event.type === "error") throw new Error(event.error || "Workspace run failed");
-          if (event.type === "node-start") setStatus(`Running ${event.nodeId}...`);
+          if (event.type === "node-start") {
+            setStatus(`Running ${event.nodeId}...`);
+            markNodeStart(event.nodeId);
+            appendRunLog(`Started ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+          }
+          if (event.type === "node-done") {
+            markNodeDone(event.nodeId);
+            appendRunLog(`Completed ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+          }
+          if (event.type === "status") {
+            appendRunLog(event.line || event.message || "");
+          }
+          if (event.type === "paused") {
+            finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
+            appendRunLog(event.message || (finalPauseNodeIds.length ? `Paused at ${finalPauseNodeIds.join(", ")}` : "Paused"));
+          }
+          if (event.type === "natural" && event.kind === "assistant") {
+            appendAssistantText(event.text || "");
+          }
           if (event.type === "graph" && event.graph) applyGraph(event.graph);
           if (event.type === "done") {
             if (event.graph) applyGraph(event.graph);
             finalOrder = Array.isArray(event.order) ? event.order : [];
+            const hadPauseLog = finalPauseNodeIds.length > 0;
+            finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
+            if (!finalPauseNodeIds.length) {
+              appendRunLog(`Run finished${finalOrder.length ? `: ${finalOrder.join(" -> ")}` : ""}`);
+            } else if (!hadPauseLog) {
+              appendRunLog(`Run paused at ${finalPauseNodeIds.join(", ")}`);
+            }
           }
         }
       }
       if (buffer.trim()) {
         const event = JSON.parse(buffer);
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
+        if (event.type === "node-start") {
+          setStatus(`Running ${event.nodeId}...`);
+          markNodeStart(event.nodeId);
+          appendRunLog(`Started ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+        }
+        if (event.type === "node-done") {
+          markNodeDone(event.nodeId);
+          appendRunLog(`Completed ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+        }
+        if (event.type === "status") {
+          appendRunLog(event.line || event.message || "");
+        }
+        if (event.type === "paused") {
+          finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
+          appendRunLog(event.message || (finalPauseNodeIds.length ? `Paused at ${finalPauseNodeIds.join(", ")}` : "Paused"));
+        }
+        if (event.type === "natural" && event.kind === "assistant") {
+          appendAssistantText(event.text || "");
+        }
         if (event.type === "graph" && event.graph) applyGraph(event.graph);
         if (event.type === "done") {
           if (event.graph) applyGraph(event.graph);
           finalOrder = Array.isArray(event.order) ? event.order : [];
+          const hadPauseLog = finalPauseNodeIds.length > 0;
+          finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
+          if (!finalPauseNodeIds.length) {
+            appendRunLog(`Run finished${finalOrder.length ? `: ${finalOrder.join(" -> ")}` : ""}`);
+          } else if (!hadPauseLog) {
+            appendRunLog(`Run paused at ${finalPauseNodeIds.join(", ")}`);
+          }
         }
       }
-      setStatus(`Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`);
+      setStatus(
+        finalPauseNodeIds.length
+          ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
+          : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
+      );
       await loadFiles();
     } catch (e) {
+      setWorkspaceExecutingNodes(new Set());
+      setWorkspaceNodeRunStatus((current) => {
+        const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0];
+        return id ? { ...current, [id]: { status: "failed" } } : current;
+      });
       setStatus(String(e.message || e));
+      setComposerMessages((list) => [...list, { role: "assistant", error: true, text: String(e.message || e), at: Date.now() }]);
     } finally {
       setRunningRunNodeId("");
+      setWorkspaceExecutingNodes(new Set());
     }
   }, [composerModel, edges, flowParams, loadFiles, nodes, palette, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes]);
 
   useEffect(() => {
     loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+    void loadFlowSnippets();
     fetch("/api/model-lists").then((r) => r.json()).then((j) => setModelLists({
       cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
       opencode: Array.isArray(j.opencode) ? j.opencode.map(String) : [],
@@ -1249,7 +1553,11 @@ function WorkspacePageInner() {
       setSkillCollections(normalizeSkillCollections(j));
       setSkillCollectionsLoaded(true);
     }).catch(() => {});
-  }, [loadWorkspace, skillsStorageKey]);
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((j) => setAuthUser(j.user || null))
+      .catch(() => setAuthUser(null));
+  }, [loadWorkspace, loadFlowSnippets, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -1317,7 +1625,7 @@ function WorkspacePageInner() {
       if (slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
       return { ...slot, default: serialized, value: serialized };
     }) : []);
-    setNodes((list) => list.map((node) => {
+    const nextNodes = nodes.map((node) => {
       if (node.id !== nodeId) return node;
       return {
         ...node,
@@ -1328,22 +1636,47 @@ function WorkspacePageInner() {
           outputs: patchSlots(node.data?.outputs),
         },
       };
-    }));
-    setInstances((prev) => {
-      const base = prev[nodeId] && typeof prev[nodeId] === "object" ? prev[nodeId] : {};
-      const next = {
-        ...prev,
-        [nodeId]: {
-          ...base,
-          body: serialized,
-          input: patchSlots(base.input),
-          output: patchSlots(base.output),
-        },
-      };
-      instancesRef.current = next;
-      return next;
     });
-  }, [setNodes]);
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [nodeId]: {
+        ...base,
+        body: serialized,
+        input: patchSlots(base.input),
+        output: patchSlots(base.output),
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
+  }, [edges, nodes, saveGraph, setNodes]);
+
+  const saveDisplayNodeToFile = useCallback(async (nodeId, data) => {
+    const content = displayContent(data);
+    if (!String(content || "").trim()) {
+      setStatus("展示节点没有可保存内容");
+      return;
+    }
+    const defaultPath = suggestDisplayFilePath(nodeId, data);
+    const relPath = window.prompt("保存到 workspace 相对路径", defaultPath);
+    if (!relPath) return;
+    try {
+      const res = await fetch("/api/workspace/file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, path: relPath, content }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "保存文件失败");
+      setStatus(`已保存 ${json.path || relPath}`);
+      await loadFiles();
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }, [flowParams, loadFiles]);
 
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
@@ -1351,13 +1684,17 @@ function WorkspacePageInner() {
       ...node.data,
       modelLists,
       showBodyPreview: true,
+      isExecuting: workspaceExecutingNodes.has(node.id),
+      nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
+      nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
       onRunWorkspaceNode: runWorkspaceNode,
       runningRunNodeId,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
+      onSaveDisplayNodeToFile: saveDisplayNodeToFile,
     },
-  })), [changeLoadSkillKeys, modelLists, nodes, runWorkspaceNode, runningRunNodeId, skillCollections, skills]);
+  })), [changeLoadSkillKeys, modelLists, nodes, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, skillCollections, skills, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -1409,7 +1746,9 @@ function WorkspacePageInner() {
       name: String(slot?.name ?? ""),
       default: String(slot?.default ?? ""),
       required: Boolean(slot?.required),
-      showOnNode: slot?.showOnNode !== false,
+      showOnNode: slot?.showOnNode != null
+        ? slot.showOnNode !== false
+        : Boolean(slot?.required) || String(slot?.type ?? "node").trim().toLowerCase() === "node",
     }));
     const nextData = {
       ...selectedNode.data,
@@ -1458,8 +1797,9 @@ function WorkspacePageInner() {
     }
     setNodes(nextNodes);
     setEdges(nextEdges);
+    refreshNodeInternals(nextId);
     return true;
-  }, [edges, nodePropDraft, nodes, selectedNode, setEdges, setNodes]);
+  }, [edges, nodePropDraft, nodes, selectedNode, setEdges, setNodes, refreshNodeInternals]);
 
   useEffect(() => {
     if (!nodePropDraft || !selectedNode) return;
@@ -1523,9 +1863,24 @@ function WorkspacePageInner() {
       .slice(0, 30);
   }, [palette, quickAddSearch]);
 
+  const quickAddFlowItems = useMemo(() => {
+    const q = quickAddSearch.trim().toLowerCase();
+    return flowSnippets
+      .filter((snippet) => !q || [
+        snippet.id,
+        snippet.version,
+        snippet.displayName,
+        snippet.name,
+        snippet.description,
+        ...(Array.isArray(snippet.tags) ? snippet.tags : []),
+      ].some((value) => String(value || "").toLowerCase().includes(q)))
+      .sort((a, b) => String(a.displayName || a.name || a.id).localeCompare(String(b.displayName || b.name || b.id)))
+      .slice(0, 30);
+  }, [flowSnippets, quickAddSearch]);
+
   useEffect(() => {
     setQuickAddActiveIndex(0);
-  }, [quickAddSearch, quickAddOpen]);
+  }, [quickAddSearch, quickAddOpen, quickAddMode]);
 
   useEffect(() => {
     if (!quickAddOpen) return;
@@ -1574,6 +1929,187 @@ function WorkspacePageInner() {
   }, [nodes, selectedNodeId]);
 
   const selectedCanvasNodeIds = useMemo(() => selectedCanvasNodes.map((node) => node.id), [selectedCanvasNodes]);
+
+  const authInitial = useMemo(() => {
+    const name = String(authUser?.username || authUser?.userId || "").trim();
+    return name ? name.slice(0, 1).toUpperCase() : "?";
+  }, [authUser]);
+
+  const selectedCanvasNodeIdSet = useMemo(() => new Set(selectedCanvasNodeIds), [selectedCanvasNodeIds]);
+
+  const selectedCanvasInternalEdges = useMemo(
+    () => edges.filter((edge) => selectedCanvasNodeIdSet.has(edge.source) && selectedCanvasNodeIdSet.has(edge.target)),
+    [edges, selectedCanvasNodeIdSet],
+  );
+
+  const filteredFlowSnippets = useMemo(() => {
+    const q = paletteSearch.trim().toLowerCase();
+    if (!q) return flowSnippets;
+    return flowSnippets.filter((snippet) =>
+      [
+        snippet.id,
+        snippet.version,
+        snippet.displayName,
+        snippet.name,
+        snippet.description,
+        ...(Array.isArray(snippet.tags) ? snippet.tags : []),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q)),
+    );
+  }, [flowSnippets, paletteSearch]);
+
+  const makeUniqueSnippetNodeId = useCallback((base, used) => {
+    const clean = String(base || "snippet_node")
+      .trim()
+      .replace(/[^a-zA-Z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "snippet_node";
+    let id = `${clean}_${Date.now().toString(36)}`;
+    let index = 2;
+    while (used.has(id)) {
+      id = `${clean}_${Date.now().toString(36)}_${index}`;
+      index += 1;
+    }
+    used.add(id);
+    return id;
+  }, []);
+
+  const insertFlowSnippet = useCallback((snippetEntry, positionOverride) => {
+    const snippet = snippetEntry?.snippet && typeof snippetEntry.snippet === "object" ? snippetEntry.snippet : {};
+    const sourceInstances = snippet.instances && typeof snippet.instances === "object" ? snippet.instances : {};
+    const oldIds = Object.keys(sourceInstances);
+    if (oldIds.length === 0) return;
+
+    const used = new Set(nodesRef.current.map((node) => node.id));
+    const idMap = {};
+    for (const oldId of oldIds) idMap[oldId] = makeUniqueSnippetNodeId(oldId, used);
+
+    const sourcePositions = snippet.ui?.nodePositions && typeof snippet.ui.nodePositions === "object"
+      ? snippet.ui.nodePositions
+      : {};
+    const points = oldIds.map((id) => {
+      const pos = sourcePositions[id];
+      return {
+        id,
+        x: typeof pos?.x === "number" ? pos.x : 0,
+        y: typeof pos?.y === "number" ? pos.y : 0,
+      };
+    });
+    const minX = Math.min(...points.map((point) => point.x));
+    const minY = Math.min(...points.map((point) => point.y));
+    let insertAt = positionOverride || { x: 360 + nodesRef.current.length * 24, y: 180 + nodesRef.current.length * 18 };
+    if (!positionOverride) {
+      const wrap = document.querySelector(".af-workspace-canvas .react-flow");
+      if (wrap) {
+        const rect = wrap.getBoundingClientRect();
+        insertAt = reactFlow.screenToFlowPosition({
+          x: rect.left + rect.width * 0.48,
+          y: rect.top + rect.height * 0.32,
+        });
+      }
+    }
+
+    const nextInstances = {};
+    const nodePositions = {};
+    for (const point of points) {
+      const nextId = idMap[point.id];
+      nextInstances[nextId] = { ...(sourceInstances[point.id] || {}) };
+      nodePositions[nextId] = {
+        x: insertAt.x + (point.x - minX),
+        y: insertAt.y + (point.y - minY),
+      };
+    }
+
+    const oldIdSet = new Set(oldIds);
+    const nextEdges = (Array.isArray(snippet.edges) ? snippet.edges : [])
+      .filter((edge) => oldIdSet.has(edge?.source) && oldIdSet.has(edge?.target))
+      .map((edge) => ({
+        source: idMap[edge.source],
+        target: idMap[edge.target],
+        sourceHandle: edge.sourceHandle ?? null,
+        targetHandle: edge.targetHandle ?? null,
+      }));
+
+    const flow = graphToFlow({ instances: nextInstances, edges: nextEdges, ui: { nodePositions } }, palette);
+    const insertedNodes = flow.nodes.map((node) => ({ ...node, selected: true }));
+    instancesRef.current = { ...instancesRef.current, ...flow.instances };
+    setInstances(instancesRef.current);
+    setNodes((list) => [...list.map((node) => ({ ...node, selected: false })), ...insertedNodes]);
+    setEdges((list) => [...list.map((edge) => ({ ...edge, selected: false })), ...flow.edges]);
+    setSelectedNodeId(insertedNodes[0]?.id || "");
+    setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}`);
+  }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes]);
+
+  const openPublishSnippetDialog = useCallback(() => {
+    if (selectedCanvasNodes.length < 2) {
+      setFlowSnippetsError("请先在 workspace 画布上选择至少两个节点。");
+      setPaletteMode("flows");
+      return;
+    }
+    const first = selectedCanvasNodes[0];
+    const fallbackName =
+      selectedCanvasNodes.length === 2
+        ? `${first.data?.label || first.id} 片段`
+        : `${first.data?.label || first.id} 等 ${selectedCanvasNodes.length} 个节点`;
+    setPublishSnippetDraft({
+      name: fallbackName,
+      id: fallbackName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""),
+      description: "",
+    });
+    setPublishSnippetError("");
+    setPublishSnippetOpen(true);
+    setPaletteMode("flows");
+  }, [selectedCanvasNodes]);
+
+  const publishSelectedFlowSnippet = useCallback(async () => {
+    if (selectedCanvasNodes.length < 2) return;
+    const name = publishSnippetDraft.name.trim();
+    if (!name) {
+      setPublishSnippetError("请填写片段名称。");
+      return;
+    }
+    const nodePositions = {};
+    for (const node of selectedCanvasNodes) {
+      nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
+    }
+    const snippetEdges = selectedCanvasInternalEdges.map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? null,
+      targetHandle: edge.targetHandle ?? null,
+    }));
+    setPublishSnippetBusy(true);
+    setPublishSnippetError("");
+    try {
+      const res = await fetch("/api/marketplace/publish-flow-snippet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: publishSnippetDraft.id,
+          name,
+          displayName: name,
+          version: "1.0.0",
+          description: publishSnippetDraft.description,
+          snippet: {
+            instances: buildInstancesForYaml(selectedCanvasNodes, instancesRef.current),
+            edges: snippetEdges,
+            ui: { nodePositions },
+          },
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "发布流程片段失败");
+      setPublishSnippetOpen(false);
+      setStatus(`流程片段已发布：${json.id || name}`);
+      showFlowSnippetToast(`流程片段已发布：${json.id || name}`);
+      await loadFlowSnippets();
+      setPaletteMode("flows");
+    } catch (e) {
+      setPublishSnippetError(String(e.message || e));
+    } finally {
+      setPublishSnippetBusy(false);
+    }
+  }, [loadFlowSnippets, publishSnippetDraft, selectedCanvasInternalEdges, selectedCanvasNodes, showFlowSnippetToast]);
 
   const dismissSelectedNode = useCallback((nodeId) => {
     setNodes((list) => list.map((node) => (
@@ -1788,18 +2324,60 @@ function WorkspacePageInner() {
     setQuickAddSearch("");
   }, [addNodeFromDefinition, quickAddNodePosition]);
 
+  const addQuickFlowSnippet = useCallback((snippet) => {
+    if (!snippet) return;
+    insertFlowSnippet(snippet, quickAddNodePosition());
+    setQuickAddOpen(false);
+    setQuickAddSearch("");
+  }, [insertFlowSnippet, quickAddNodePosition]);
+
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isEditableShortcutTarget(event.target)) return;
+      if (event.defaultPrevented) return;
+      const editable = isEditableFocus(event.target) || isEditableShortcutTarget(event.target);
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        saveGraph().catch((e) => setStatus(String(e.message || e)));
+        return;
+      }
+      if (shortcutsOpen) {
+        if (event.key === "Escape" || isQuestionMarkShortcut(event)) {
+          event.preventDefault();
+          setShortcutsOpen(false);
+        }
+        return;
+      }
+      if (editable) return;
+      if (isQuestionMarkShortcut(event) && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
       if (event.key === "a" || event.key === "A") {
+        if (event.metaKey || event.ctrlKey) {
+          event.preventDefault();
+          setNodes((list) => list.map((node) => ({ ...node, selected: true })));
+          setEdges((list) => list.map((edge) => ({ ...edge, selected: false })));
+          return;
+        }
+        if (event.altKey) return;
         event.preventDefault();
         setQuickAddOpen(true);
+        return;
+      }
+      if ((event.key === "v" || event.key === "V") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setCanvasTool("select");
+        return;
+      }
+      if ((event.key === "h" || event.key === "H") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setCanvasTool("pan");
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [saveGraph, shortcutsOpen, setEdges, setNodes]);
 
   const toggleDir = useCallback((dirPath) => {
     setCollapsedDirs((prev) => {
@@ -1809,14 +2387,6 @@ function WorkspacePageInner() {
       return next;
     });
   }, []);
-
-  const openFileNode = useCallback((item) => {
-    const def = palette.find((node) => node.id === "provide_file");
-    if (!def) return;
-    const outputs = cloneSlots(def.outputs);
-    if (outputs[0]) outputs[0] = { ...outputs[0], default: item.path };
-    addNodeFromDefinition(def, { label: item.name, outputs });
-  }, [addNodeFromDefinition, palette]);
 
   const handleFileDragStart = useCallback((event, item) => {
     event.dataTransfer.effectAllowed = "copy";
@@ -1862,6 +2432,10 @@ function WorkspacePageInner() {
     setStatus(`已创建 Markdown 展示：${item.path}`);
   }, [addNodeFromDefinition, flowParams, palette]);
 
+  const openFileNode = useCallback((item) => {
+    addMarkdownDisplayFromFile(item, defaultWorkspaceNodePosition()).catch((e) => setStatus(String(e.message || e)));
+  }, [addMarkdownDisplayFromFile, defaultWorkspaceNodePosition]);
+
   const handleWorkspaceDrop = useCallback((event) => {
     const raw = event.dataTransfer.getData("application/x-agentflow-workspace-file");
     if (raw) {
@@ -1878,6 +2452,16 @@ function WorkspacePageInner() {
       return;
     }
 
+    const snippetKey = event.dataTransfer.getData("application/agentflow-snippet");
+    if (snippetKey) {
+      const snippet = flowSnippets.find((item) => `${item.id}@${item.version}` === snippetKey);
+      if (!snippet) return;
+      event.preventDefault();
+      const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      insertFlowSnippet(snippet, position);
+      return;
+    }
+
     const defId = event.dataTransfer.getData("application/agentflow-node");
     if (!defId) return;
     const def = palette.find((node) => node.id === defId);
@@ -1885,13 +2469,17 @@ function WorkspacePageInner() {
     event.preventDefault();
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     addNodeFromDefinition(def, { position });
-  }, [addMarkdownDisplayFromFile, addNodeFromDefinition, palette, reactFlow]);
+  }, [addMarkdownDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow]);
 
   const handleWorkspaceDragOver = useCallback((event) => {
     const types = Array.from(event.dataTransfer.types || []);
-    if (!types.includes("application/x-agentflow-workspace-file") && !types.includes("application/agentflow-node")) return;
+    if (
+      !types.includes("application/x-agentflow-workspace-file") &&
+      !types.includes("application/agentflow-node") &&
+      !types.includes("application/agentflow-snippet")
+    ) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = types.includes("application/agentflow-node") ? "move" : "copy";
+    event.dataTransfer.dropEffect = types.includes("application/agentflow-node") || types.includes("application/agentflow-snippet") ? "move" : "copy";
   }, []);
 
   const createWorkspaceFile = useCallback(async (baseDir = "") => {
@@ -1972,7 +2560,7 @@ function WorkspacePageInner() {
           prompt,
           outputKind: "markdown",
           workspaceGraph: graph,
-          allowFlowYaml,
+          allowFlowYaml: false,
           model: composerModel,
           selectedSkills,
           selectedNodeIds: selectedCanvasNodeIds,
@@ -1991,7 +2579,7 @@ function WorkspacePageInner() {
     } finally {
       setComposerRunning(false);
     }
-  }, [allowFlowYaml, composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills]);
+  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills]);
 
   return (
     <div className="af-workspace-page">
@@ -2019,6 +2607,15 @@ function WorkspacePageInner() {
           <span className="af-workspace-save-status">{status}</span>
           <button
             type="button"
+            className="af-icon-btn"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="快捷键"
+            title="快捷键 (?)"
+          >
+            <span className="material-symbols-outlined">help</span>
+          </button>
+          <button
+            type="button"
             className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
             onClick={() => setComposerSidebarOpen((v) => !v)}
           >
@@ -2029,13 +2626,66 @@ function WorkspacePageInner() {
           </button>
         </div>
       </header>
+      {flowSnippetToast ? (
+        <div className="af-flow-snippet-toast" role="status" aria-live="polite">
+          <span className="material-symbols-outlined" aria-hidden>check_circle</span>
+          <span>{flowSnippetToast}</span>
+          <button type="button" onClick={() => setFlowSnippetToast("")} aria-label="关闭发布提示">
+            <span className="material-symbols-outlined" aria-hidden>close</span>
+          </button>
+        </div>
+      ) : null}
 
-      <div className={"af-workspace-body" + (composerSidebarOpen || nodePropDraft ? " af-workspace-body--drawer" : "")}>
-        <aside className="af-workspace-sidebar">
+      <div
+        className={
+          "af-workspace-body" +
+          (composerSidebarOpen || nodePropDraft ? " af-workspace-body--drawer" : "") +
+          (workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "")
+        }
+      >
+        {workspaceSidebarCollapsed ? (
+          <nav className="af-workspace-rail" aria-label="Workspace sidebar">
+            <div className="af-workspace-rail__stack">
+              <button
+                type="button"
+                className="af-workspace-rail__primary"
+                onClick={() => setQuickAddOpen(true)}
+                aria-label="添加节点"
+                title="添加节点"
+              >
+                <span className="material-symbols-outlined" aria-hidden>add</span>
+                <span className="af-workspace-rail__dot" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="af-workspace-rail__btn"
+                onClick={() => setWorkspaceSidebarCollapsed(false)}
+                aria-label="展开文件"
+                title="展开文件"
+              >
+                <span className="material-symbols-outlined" aria-hidden>folder</span>
+              </button>
+              <span className="af-workspace-rail__divider" aria-hidden />
+              <button
+                type="button"
+                className="af-workspace-rail__avatar"
+                onClick={() => setWorkspaceSidebarCollapsed(false)}
+                aria-label="展开侧边栏"
+                title={authUser?.username || authUser?.userId || "展开侧边栏"}
+              >
+                {authInitial}
+              </button>
+            </div>
+          </nav>
+        ) : null}
+        <aside className="af-workspace-sidebar" aria-hidden={workspaceSidebarCollapsed}>
           <section className="af-workspace-files-section">
             <div className="af-workspace-sidebar-head">
               <h2>Files</h2>
               <div className="af-workspace-sidebar-actions">
+                <button type="button" className="af-icon-btn" onClick={() => setWorkspaceSidebarCollapsed(true)} aria-label="最小化侧边栏" title="最小化侧边栏">
+                  <span className="material-symbols-outlined">keyboard_double_arrow_left</span>
+                </button>
                 <button type="button" className="af-icon-btn" onClick={() => createWorkspaceFile("")} aria-label="新增文件" title="新增文件">
                   <span className="material-symbols-outlined">note_add</span>
                 </button>
@@ -2056,11 +2706,11 @@ function WorkspacePageInner() {
           <section className="af-workspace-nodes-section">
             <div className="af-node-palette-head af-workspace-node-palette-head">
               <h2 className="af-node-palette-title">
-                <span>Node Palette</span>
+                <span>Palette</span>
                 <span className="af-node-palette-title-kbd" aria-label="快捷键 A">A</span>
               </h2>
               <label className="af-palette-search-wrap">
-                <span className="af-visually-hidden">搜索节点</span>
+                <span className="af-visually-hidden">{paletteMode === "flows" ? "搜索流程片段" : "搜索节点"}</span>
                 <span className="af-palette-search-icon material-symbols-outlined" aria-hidden>
                   search
                 </span>
@@ -2069,12 +2719,105 @@ function WorkspacePageInner() {
                   className="af-palette-search-input"
                   value={paletteSearch}
                   onChange={(e) => setPaletteSearch(e.target.value)}
-                  placeholder="搜索节点..."
-                  aria-label="搜索节点"
+                  placeholder={paletteMode === "flows" ? "搜索流程片段..." : "搜索节点..."}
+                  aria-label={paletteMode === "flows" ? "搜索流程片段" : "搜索节点"}
                 />
               </label>
+              <div className="af-palette-tabs" role="tablist" aria-label="Palette 类型">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteMode === "nodes"}
+                  className={"af-palette-tab" + (paletteMode === "nodes" ? " af-palette-tab--active" : "")}
+                  onClick={() => setPaletteMode("nodes")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>category</span>
+                  节点
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteMode === "flows"}
+                  className={"af-palette-tab" + (paletteMode === "flows" ? " af-palette-tab--active" : "")}
+                  onClick={() => setPaletteMode("flows")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+                  流程
+                </button>
+              </div>
             </div>
             <div className="af-node-palette-scroll af-workspace-node-palette-scroll">
+              {paletteMode === "flows" ? (
+                <>
+                  <section className="af-palette-section af-flow-palette-section--snippets">
+                    <div className="af-flow-snippet-actions">
+                      <button
+                        type="button"
+                        className="af-flow-snippet-publish-btn"
+                        onClick={openPublishSnippetDialog}
+                        disabled={selectedCanvasNodes.length < 2}
+                        title={selectedCanvasNodes.length < 2 ? "选择至少两个节点后发布流程片段" : "发布选中的流程片段"}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>ios_share</span>
+                        发布选中片段
+                      </button>
+                      <span className="af-flow-snippet-selection">
+                        已选 {selectedCanvasNodes.length} 节点 / {selectedCanvasInternalEdges.length} 连线
+                      </span>
+                    </div>
+                  </section>
+                  {flowSnippetsError ? <p className="af-err af-palette-list-err">{flowSnippetsError}</p> : null}
+                  {flowSnippetsLoading ? (
+                    <p className="af-palette-empty">正在加载流程片段...</p>
+                  ) : filteredFlowSnippets.length > 0 ? (
+                    <section className="af-palette-section af-flow-palette-section--snippets">
+                      <h3 className="af-palette-cat">FLOW SNIPPETS</h3>
+                      <div className="af-palette-cards">
+                        {filteredFlowSnippets.map((snippet) => {
+                          const key = `${snippet.id}@${snippet.version}`;
+                          const title = snippet.displayName || snippet.name || snippet.id;
+                          const desc = snippet.description || `${snippet.nodeCount || 0} 个节点，${snippet.edgeCount || 0} 条连线`;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              className="af-palette-card af-flow-snippet-card"
+                              draggable
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("application/agentflow-snippet", key);
+                                event.dataTransfer.setData("text/plain", key);
+                              }}
+                              onClick={() => insertFlowSnippet(snippet)}
+                              title={desc}
+                            >
+                              <span className="af-palette-card-head">
+                                <span className="af-palette-card-icon" aria-hidden>
+                                  <span className="material-symbols-outlined">account_tree</span>
+                                </span>
+                                <span className="af-palette-card-main">
+                                  <span className="af-palette-card-label">{title}</span>
+                                  <span className="af-palette-card-id">{snippet.id}@{snippet.version}</span>
+                                </span>
+                              </span>
+                              {desc ? <span className="af-palette-card-desc">{desc}</span> : null}
+                              <span className="af-flow-snippet-meta" aria-hidden>
+                                <span>{snippet.nodeCount || 0} nodes</span>
+                                <span>{snippet.edgeCount || 0} edges</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : (
+                    <p className="af-palette-empty">
+                      {paletteSearch.trim() ? "没有匹配的流程片段" : "暂无流程片段。选择多个节点后发布。"}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
               {PALETTE_ORDER.map((cat) => groupedPalette[cat]?.length ? (
                 <section key={cat} className={`af-palette-section af-flow-palette-section--${cat}`}>
                   <h3 className="af-palette-cat">{cat}</h3>
@@ -2145,6 +2888,8 @@ function WorkspacePageInner() {
               {palette.length > 0 && paletteSearch.trim() && PALETTE_ORDER.every((cat) => !groupedPalette[cat]?.length) ? (
                 <p className="af-palette-empty">没有匹配的节点</p>
               ) : null}
+                </>
+              )}
             </div>
           </section>
 
@@ -2152,7 +2897,7 @@ function WorkspacePageInner() {
 
         <main className="af-workspace-canvas">
           <ReactFlow
-            className="af-flow-canvas af-workspace-flow"
+            className={"af-flow-canvas af-workspace-flow" + (canvasTool === "pan" ? " af-flow-canvas--tool-pan" : " af-flow-canvas--tool-select")}
             nodes={hydratedNodes}
             edges={coloredEdges}
             nodeTypes={nodeTypes}
@@ -2163,12 +2908,23 @@ function WorkspacePageInner() {
             onConnectEnd={handleConnectEnd}
             isValidConnection={isValidConnection}
             onNodeClick={(_, node) => {
+              // React Flow handles selection on click. If the properties drawer is already open,
+              // keep it in sync with the clicked node; otherwise opening requires double click.
+              if (selectedNodeId) setSelectedNodeId(node.id);
+            }}
+            onNodeDoubleClick={(event, node) => {
+              event.preventDefault();
               setComposerSidebarOpen(false);
+              setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
+              setEdges((list) => list.map((item) => ({ ...item, selected: false })));
               setSelectedNodeId(node.id);
             }}
             onPaneClick={() => setSelectedNodeId("")}
             onDrop={handleWorkspaceDrop}
             onDragOver={handleWorkspaceDragOver}
+            selectionOnDrag={canvasTool === "select"}
+            panOnDrag={canvasTool === "pan" ? true : [1, 2]}
+            panActivationKeyCode="Space"
             proOptions={{ hideAttribution: true }}
             fitView={false}
             minZoom={0.1}
@@ -2267,8 +3023,18 @@ function WorkspacePageInner() {
             );
           })() : null}
 
+          {!composerMinimized ? (
           <div className="af-workspace-composer af-bottom-composer-stack af-flow-bottom-composer">
             <div className="af-pipeline-composer-inner">
+              <button
+                type="button"
+                className="af-workspace-composer-minimize"
+                onClick={() => setComposerMinimized(true)}
+                aria-label="最小化 AI 输入框"
+                title="最小化"
+              >
+                <span className="material-symbols-outlined" aria-hidden>remove</span>
+              </button>
               <div className="af-composer-selected" aria-label="Selected workspace nodes">
                 {selectedCanvasNodes.length === 0 ? (
                   <span className="af-composer-selected-empty">
@@ -2315,12 +3081,6 @@ function WorkspacePageInner() {
                   />
                 </div>
                 <div className="af-composer-toolbar">
-                  <label className="af-composer-session-field">
-                    <select className="af-composer-session-select" value="workspace" disabled aria-label="Workspace conversation">
-                      <option value="workspace">Workspace</option>
-                    </select>
-                  </label>
-
                   <div className="af-composer-skills-field">
                     <button
                       ref={skillsButtonRef}
@@ -2438,11 +3198,6 @@ function WorkspacePageInner() {
                       : null}
                   </div>
 
-                  <label className="af-workspace-flowyaml-toggle" title="Workspace 默认不修改正式 flow.yaml">
-                    <input type="checkbox" checked={allowFlowYaml} onChange={(e) => setAllowFlowYaml(e.target.checked)} />
-                    <span>flow.yaml</span>
-                  </label>
-
                   <label className="af-composer-model-field">
                     <select className="af-composer-model-select" value={composerModel} onChange={(e) => setComposerModel(e.target.value)} aria-label="模型">
                       <option value="">默认模型</option>
@@ -2463,6 +3218,17 @@ function WorkspacePageInner() {
               </div>
             </div>
           </div>
+          ) : (
+            <button
+              type="button"
+              className="af-workspace-composer-fab"
+              onClick={() => setComposerMinimized(false)}
+              aria-label="展开 AI 输入框"
+              title="展开 AI 输入框"
+            >
+              <span className="material-symbols-outlined" aria-hidden>auto_awesome</span>
+            </button>
+          )}
         </main>
         {composerSidebarOpen ? (
           <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workspace-composer-drawer" aria-label="Workspace AI Composer">
@@ -2515,9 +3281,109 @@ function WorkspacePageInner() {
             />
           </aside>
         ) : null}
+        <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        {publishSnippetOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal" role="dialog" aria-modal="true" aria-label="发布流程片段">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>ios_share</span>
+                  发布流程片段
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setPublishSnippetOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <label className="af-flow-snippet-field">
+                  <span>名称</span>
+                  <input
+                    type="text"
+                    value={publishSnippetDraft.name}
+                    onChange={(event) => {
+                      const name = event.target.value;
+                      setPublishSnippetDraft((prev) => ({
+                        ...prev,
+                        name,
+                        id: prev.id ? prev.id : name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""),
+                      }));
+                    }}
+                    placeholder="例如：内容整理片段"
+                    autoFocus
+                  />
+                </label>
+                <label className="af-flow-snippet-field">
+                  <span>ID</span>
+                  <input
+                    type="text"
+                    value={publishSnippetDraft.id}
+                    onChange={(event) => setPublishSnippetDraft((prev) => ({ ...prev, id: event.target.value }))}
+                    placeholder="content-cleanup-snippet"
+                  />
+                </label>
+                <label className="af-flow-snippet-field">
+                  <span>说明</span>
+                  <textarea
+                    value={publishSnippetDraft.description}
+                    onChange={(event) => setPublishSnippetDraft((prev) => ({ ...prev, description: event.target.value }))}
+                    placeholder="这段流程适合什么 workspace 场景、需要接哪些上下游。"
+                    rows={4}
+                  />
+                </label>
+                <div className="af-flow-snippet-summary">
+                  将发布 {selectedCanvasNodes.length} 个节点和 {selectedCanvasInternalEdges.length} 条内部连线。
+                </div>
+                {publishSnippetError ? <div className="af-flow-snippet-error">{publishSnippetError}</div> : null}
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  onClick={() => setPublishSnippetOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  disabled={publishSnippetBusy || !publishSnippetDraft.name.trim()}
+                  onClick={() => void publishSelectedFlowSnippet()}
+                >
+                  {publishSnippetBusy ? "发布中..." : "发布"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
         {quickAddOpen ? createPortal(
           <div className="af-workspace-quick-add-backdrop" onMouseDown={() => setQuickAddOpen(false)}>
             <div className="af-workspace-quick-add" role="dialog" aria-modal="true" aria-label="Add workspace node" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="af-workspace-quick-add__tabs" role="tablist" aria-label="选择添加类型">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={quickAddMode === "nodes"}
+                  className={"af-workspace-quick-add__tab" + (quickAddMode === "nodes" ? " af-workspace-quick-add__tab--active" : "")}
+                  onClick={() => setQuickAddMode("nodes")}
+                >
+                  节点
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={quickAddMode === "flows"}
+                  className={"af-workspace-quick-add__tab" + (quickAddMode === "flows" ? " af-workspace-quick-add__tab--active" : "")}
+                  onClick={() => setQuickAddMode("flows")}
+                >
+                  流程
+                </button>
+              </div>
               <div className="af-workspace-quick-add__search">
                 <span className="material-symbols-outlined" aria-hidden>search</span>
                 <input
@@ -2530,21 +3396,58 @@ function WorkspacePageInner() {
                       setQuickAddOpen(false);
                     } else if (event.key === "ArrowDown") {
                       event.preventDefault();
-                      setQuickAddActiveIndex((idx) => Math.min(quickAddItems.length - 1, idx + 1));
+                      const count = quickAddMode === "flows" ? quickAddFlowItems.length : quickAddItems.length;
+                      setQuickAddActiveIndex((idx) => Math.min(Math.max(0, count - 1), idx + 1));
                     } else if (event.key === "ArrowUp") {
                       event.preventDefault();
                       setQuickAddActiveIndex((idx) => Math.max(0, idx - 1));
+                    } else if (event.key === "Tab") {
+                      event.preventDefault();
+                      setQuickAddMode((mode) => (mode === "nodes" ? "flows" : "nodes"));
                     } else if (event.key === "Enter") {
                       event.preventDefault();
-                      addQuickNode(quickAddItems[quickAddActiveIndex] || quickAddItems[0]);
+                      if (quickAddMode === "flows") {
+                        addQuickFlowSnippet(quickAddFlowItems[quickAddActiveIndex] || quickAddFlowItems[0]);
+                      } else {
+                        addQuickNode(quickAddItems[quickAddActiveIndex] || quickAddItems[0]);
+                      }
                     }
                   }}
-                  placeholder="搜索节点..."
-                  aria-label="搜索节点"
+                  placeholder={quickAddMode === "flows" ? "搜索流程片段..." : "搜索节点..."}
+                  aria-label={quickAddMode === "flows" ? "搜索流程片段" : "搜索节点"}
                 />
               </div>
               <div className="af-workspace-quick-add__list">
-                {quickAddItems.length === 0 ? (
+                {quickAddMode === "flows" ? (
+                  quickAddFlowItems.length === 0 ? (
+                    <div className="af-workspace-quick-add__empty">
+                      {flowSnippetsLoading ? "正在加载流程片段..." : flowSnippetsError || "没有匹配的流程片段"}
+                    </div>
+                  ) : quickAddFlowItems.map((snippet, index) => {
+                    const label = snippet.displayName || snippet.name || snippet.id;
+                    const instances = snippet.snippet && typeof snippet.snippet === "object" ? snippet.snippet.instances : null;
+                    const edges = snippet.snippet && typeof snippet.snippet === "object" ? snippet.snippet.edges : null;
+                    const nodeCount = Number.isFinite(Number(snippet.nodeCount)) ? Number(snippet.nodeCount) : Object.keys(instances || {}).length;
+                    const edgeCount = Number.isFinite(Number(snippet.edgeCount)) ? Number(snippet.edgeCount) : (Array.isArray(edges) ? edges.length : 0);
+                    return (
+                      <button
+                        key={`${snippet.id}@${snippet.version}`}
+                        type="button"
+                        className={"af-workspace-quick-add__item" + (index === quickAddActiveIndex ? " af-workspace-quick-add__item--active" : "")}
+                        onMouseEnter={() => setQuickAddActiveIndex(index)}
+                        onClick={() => addQuickFlowSnippet(snippet)}
+                      >
+                        <span className="af-workspace-quick-add__icon material-symbols-outlined" aria-hidden>schema</span>
+                        <span className="af-workspace-quick-add__main">
+                          <span className="af-workspace-quick-add__label">{label}</span>
+                          <span className="af-workspace-quick-add__meta">{snippet.id}{snippet.version ? ` · v${snippet.version}` : ""}</span>
+                          <span className="af-workspace-quick-add__desc">{snippet.description || `${nodeCount} 节点 / ${edgeCount} 连线`}</span>
+                        </span>
+                        <span className="af-workspace-quick-add__cat">FLOW</span>
+                      </button>
+                    );
+                  })
+                ) : quickAddItems.length === 0 ? (
                   <div className="af-workspace-quick-add__empty">没有匹配的节点</div>
                 ) : quickAddItems.map((node, index) => {
                   const cat = paletteCategory(node);

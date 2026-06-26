@@ -281,6 +281,18 @@
       "displayName": "Git Checkout",
       "description": "Clone or update a Git repository and expose it as a workspace context"
     },
+    "tool_git_worktree_load": {
+      "displayName": "Load Worktree",
+      "description": "Create or reuse a Git worktree and output workspaceContext and gitContext"
+    },
+    "tool_git_worktree_unload": {
+      "displayName": "Unload Worktree",
+      "description": "Remove a Git worktree and restore downstream workspace context"
+    },
+    "tool_gitlab_create_mr": {
+      "displayName": "Create GitLab MR",
+      "description": "Create or reuse a GitLab merge request for the current branch and output its URL"
+    },
     "tool_nodejs": {
       "displayName": "Node.js Script",
       "description": "Execute Node.js script, success determined by exit code, stdout as result"
@@ -313,6 +325,14 @@
       "displayName": "ASCII Display",
       "description": "Render ASCII diagram text on the Workspace canvas and pass the text downstream"
     },
+    "display_html": {
+      "displayName": "HTML Display",
+      "description": "Render HTML in a sandboxed iframe on the Workspace canvas and pass the source downstream"
+    },
+    "display_image": {
+      "displayName": "Image Display",
+      "description": "Preview an image URL, data URL, or image path on the Workspace canvas and pass the source downstream"
+    },
     "provide_str": {
       "displayName": "Text",
       "description": "Provide a text value directly, value will be passed to downstream as-is"
@@ -320,6 +340,10 @@
     "provide_file": {
       "displayName": "File",
       "description": "Provide file path or content directly, value will be passed to downstream as-is"
+    },
+    "provide_bool": {
+      "displayName": "Boolean",
+      "description": "Provide a true/false boolean value directly to downstream bool pins"
     }
   },
   "pipeline": {

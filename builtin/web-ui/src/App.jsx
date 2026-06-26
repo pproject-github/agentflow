@@ -50,6 +50,7 @@ function RoutedContent() {
   if (path === "/projects" || path === "/") return <ProjectsPage />;
   if (path === "/nodes") return <ProjectsPage resourceKind="nodes" />;
   if (path === "/my-nodes") return <ProjectsPage resourceKind="my-nodes" />;
+  if (path === "/my-flows") return <ProjectsPage resourceKind="my-flows" />;
   if (path === "/skills") return <ProjectsPage resourceKind="skills" />;
   if (path === "/flow") return <FlowEditorPage />;
   if (path === "/workspace") return <WorkspacePage />;

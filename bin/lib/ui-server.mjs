@@ -74,7 +74,16 @@ import {
 import { runNodeScript } from "./pipeline-scripts.mjs";
 import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
-import { deleteMarketplaceNodePackage, installFlowDependency, listMarketplacePackages, publishNodeFromInstance } from "./marketplace.mjs";
+import {
+  deleteMarketplaceNodePackage,
+  installFlowDependency,
+  listMarketplaceFlowSnippets,
+  listMarketplacePackages,
+  publishFlowSnippet,
+  publishNodeFromInstance,
+} from "./marketplace.mjs";
+import { buildGitContext, loadGitWorktree, normalizeGitContext, runGit, unloadGitWorktree } from "./git-worktree.mjs";
+import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
 import {
   authSetupRequired,
   buildClearSessionCookie,
@@ -439,12 +448,18 @@ function readBody(req) {
 const WORKSPACE_FILE_SKIP_DIRS = new Set([
   ".git",
   "node_modules",
+  "runBuild",
   ".next",
   ".nuxt",
   ".turbo",
   "dist",
   "build",
   "coverage",
+]);
+
+const WORKSPACE_FILE_SKIP_FILES = new Set([
+  "flow.yaml",
+  "workspace.graph.json",
 ]);
 
 const WORKSPACE_TEXT_EXTS = new Set([
@@ -510,6 +525,7 @@ function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget 
         children: readWorkspaceFilesRecursive(abs, root, depth + 1, maxDepth, budget),
       });
     } else if (entry.isFile()) {
+      if (WORKSPACE_FILE_SKIP_FILES.has(entry.name)) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (!WORKSPACE_TEXT_EXTS.has(ext)) continue;
       let size = 0;
@@ -653,6 +669,39 @@ function workspaceSlotValue(slot) {
   return "";
 }
 
+function workspaceSlotByName(instance, name) {
+  const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
+  return slots.find((slot) => String(slot?.name || "") === String(name || "")) || null;
+}
+
+function workspaceSetOutputSlot(instance, name, value) {
+  const text = String(value ?? "");
+  return {
+    ...(instance || {}),
+    output: (Array.isArray(instance?.output) ? instance.output : []).map((slot) => (
+      String(slot?.name || "") === String(name || "") ? { ...slot, default: text, value: text } : slot
+    )),
+  };
+}
+
+function workspaceResolvePath(baseCwd, raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  return path.isAbsolute(text) ? path.resolve(text) : path.resolve(baseCwd, text);
+}
+
+function workspaceSanitizeRepoDirName(repoUrl) {
+  const raw = String(repoUrl || "").trim().replace(/\.git$/i, "");
+  const last = raw.split(/[/:]/).filter(Boolean).pop() || "repo";
+  return last.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+}
+
+function workspaceBoolSlot(instance, name, defaultValue = false) {
+  const value = workspaceSlotValue(workspaceSlotByName(instance, name));
+  if (!value.trim()) return Boolean(defaultValue);
+  return ["true", "1", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
 function workspaceInstanceText(instance) {
   const body = String(instance?.body || "").trim();
   if (body) return body;
@@ -666,10 +715,12 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_markdown") return "markdown";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
+  if (id === "display_html") return "html";
+  if (id === "display_image") return "image";
   return "";
 }
 
-function workspaceRunOrder(graph, runNodeId) {
+function workspaceRunPlan(graph, runNodeId) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const target = String(runNodeId || "").trim();
@@ -685,15 +736,20 @@ function workspaceRunOrder(graph, runNodeId) {
     if (!downstream.has(source)) downstream.set(source, []);
     downstream.get(source).push(dest);
   }
-  const reachable = new Set();
+  const needed = new Set();
+  const pauseNodeIds = new Set();
   const visit = (id) => {
-    if (!id || reachable.has(id)) return;
-    reachable.add(id);
+    if (!id || needed.has(id)) return;
+    const defId = String(instances[id]?.definitionId || "");
+    if (id !== target && defId === "workspace_run") {
+      pauseNodeIds.add(id);
+      return;
+    }
+    needed.add(id);
     for (const next of downstream.get(id) || []) visit(next);
   };
   visit(target);
-  reachable.delete(target);
-  const needed = reachable;
+  needed.delete(target);
   const indegree = new Map(Array.from(needed).map((id) => [id, 0]));
   for (const id of needed) {
     for (const prev of upstream.get(id) || []) {
@@ -715,7 +771,7 @@ function workspaceRunOrder(graph, runNodeId) {
   if (ordered.length !== needed.size) {
     throw new Error("Workspace run graph contains a cycle");
   }
-  return ordered;
+  return { order: ordered, pauseNodeIds: Array.from(pauseNodeIds) };
 }
 
 function workspaceUpstreamText(graph, nodeId, outputs) {
@@ -762,14 +818,16 @@ function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
 function workspaceWriteDisplayContent(instance, content) {
   const next = { ...(instance || {}) };
   const text = String(content || "");
+  const kind = workspaceDisplayKind(next.definitionId);
+  const primaryName = kind === "image" ? "src" : "content";
   next.body = text;
   next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
-    String(slot?.name || "") === "content" || String(slot?.type || "") === "text"
+    String(slot?.name || "") === primaryName || String(slot?.type || "") === "text"
       ? { ...slot, default: text, value: text }
       : slot
   ));
   next.output = (Array.isArray(next.output) ? next.output : []).map((slot) => (
-    String(slot?.name || "") === "content" || String(slot?.type || "") === "text"
+    String(slot?.name || "") === primaryName || String(slot?.type || "") === "text"
       ? { ...slot, default: text, value: text }
       : slot
   ));
@@ -808,7 +866,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock) {
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
   const runNodeId = String(payload?.runNodeId || "").trim();
-  const order = workspaceRunOrder(graph, runNodeId);
+  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId);
   const fallbackSelectedSkillKeys = Array.isArray(payload?.selectedSkills)
     ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean)
     : [];
@@ -880,6 +938,14 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
+    if (defId === "provide_bool") {
+      const raw = workspaceSlotValue(Array.isArray(instance.output) ? instance.output[0] : null) || workspaceInstanceText(instance);
+      const content = ["true", "1", "yes", "on"].includes(String(raw || "").trim().toLowerCase()) ? "true" : "false";
+      outputs.set(nodeId, content);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
     if (defId === "provide_file") {
       const fileValue = workspaceSlotValue(Array.isArray(instance.output) ? instance.output[0] : null) || workspaceInstanceText(instance);
       const abs = path.resolve(scopedRoot, fileValue);
@@ -908,6 +974,179 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     if (defId === "control_user_workspace") {
       cwd = path.resolve(os.homedir());
       outputs.set(nodeId, cwd);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_git_checkout") {
+      const repoUrl = workspaceSlotValue(workspaceSlotByName(instance, "repoUrl")).trim();
+      if (!repoUrl) throw new Error("Git Checkout requires repoUrl");
+      const branch = workspaceSlotValue(workspaceSlotByName(instance, "branch")).trim();
+      const targetRaw = workspaceSlotValue(workspaceSlotByName(instance, "targetDir")).trim();
+      const targetDir = targetRaw
+        ? workspaceResolvePath(cwd, targetRaw)
+        : path.join(scopedRoot, ".workspace", "agentflow", "git-repos", workspaceSanitizeRepoDirName(repoUrl));
+      const pullIfExists = workspaceBoolSlot(instance, "pullIfExists", true);
+      const includeSubmodules = workspaceBoolSlot(instance, "includeSubmodules", false);
+      fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+      let changed = false;
+      if (fs.existsSync(path.join(targetDir, ".git"))) {
+        if (pullIfExists) {
+          const fetch = runGit(["fetch", "--all", "--prune"], targetDir);
+          if (fetch.status !== 0) throw new Error(`git fetch failed: ${fetch.stderr || fetch.stdout}`);
+          if (branch) {
+            const checkout = runGit(["checkout", branch], targetDir);
+            if (checkout.status !== 0) throw new Error(`git checkout failed: ${checkout.stderr || checkout.stdout}`);
+          }
+          const before = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+          const pull = runGit(["pull", "--ff-only"], targetDir);
+          if (pull.status !== 0) throw new Error(`git pull failed: ${pull.stderr || pull.stdout}`);
+          const after = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+          changed = before !== after;
+        }
+      } else {
+        const args = ["clone"];
+        if (includeSubmodules) args.push("--recurse-submodules");
+        if (branch) args.push("--branch", branch);
+        args.push(repoUrl, targetDir);
+        const clone = runGit(args, cwd);
+        if (clone.status !== 0) throw new Error(`git clone failed: ${clone.stderr || clone.stdout}`);
+        changed = true;
+      }
+      if (includeSubmodules) {
+        const submodule = runGit(["submodule", "update", "--init", "--recursive"], targetDir);
+        if (submodule.status !== 0) throw new Error(`git submodule update failed: ${submodule.stderr || submodule.stdout}`);
+      }
+      const currentBranch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], targetDir).stdout.trim();
+      const commit = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+      const remote = workspaceSlotValue(workspaceSlotByName(instance, "remote")).trim() || "origin";
+      const gitContext = buildGitContext({
+        repoPath: targetDir,
+        branch: currentBranch === "HEAD" ? "DETACHED" : currentBranch,
+        commit,
+        remote,
+      });
+      const previousCwd = cwd;
+      cwd = path.resolve(targetDir);
+      let nextInstance = workspaceSetOutputSlot(instance, "repoPath", targetDir);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "branch", gitContext.branch);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "commit", commit);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "changed", changed ? "true" : "false");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "gitContext", JSON.stringify(gitContext));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", JSON.stringify({
+        version: 1,
+        label: workspaceSanitizeRepoDirName(repoUrl),
+        cwd,
+        workspaceRoot: cwd,
+        pipelineWorkspace: scopedRoot,
+        previous: { version: 1, label: "workspace", cwd: previousCwd, workspaceRoot: previousCwd, pipelineWorkspace: scopedRoot, previous: null },
+      }));
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, targetDir);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_git_worktree_load") {
+      const gitContext = normalizeGitContext(workspaceSlotValue(workspaceSlotByName(instance, "gitContext")));
+      const repoPath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "repoPath"))) ||
+        (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
+      if (!repoPath) throw new Error("Load Worktree requires repoPath");
+      const branch = workspaceSlotValue(workspaceSlotByName(instance, "branch")).trim();
+      const rawWorktreePath = workspaceSlotValue(workspaceSlotByName(instance, "worktreePath")).trim();
+      const worktreePath = rawWorktreePath ? workspaceResolvePath(cwd, rawWorktreePath) : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+      const previousCwd = cwd;
+      const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot });
+      const outGitContext = buildGitContext({
+        repoPath: result.repoRoot,
+        worktreePath: result.worktreePath,
+        branch: result.branch,
+        commit: result.commit,
+        remote: gitContext?.remote || "origin",
+        remoteUrl: gitContext?.remoteUrl || "",
+      });
+      cwd = result.worktreePath;
+      let nextInstance = workspaceSetOutputSlot(instance, "worktreePath", result.worktreePath);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "branch", result.branch);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "commit", result.commit);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "gitContext", JSON.stringify(outGitContext));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", JSON.stringify({
+        version: 1,
+        label: result.branch === "DETACHED" ? `worktree:${result.commit.slice(0, 8)}` : `worktree:${result.branch}`,
+        cwd: result.worktreePath,
+        workspaceRoot: result.worktreePath,
+        pipelineWorkspace: scopedRoot,
+        previous: { version: 1, label: "workspace", cwd: previousCwd, workspaceRoot: previousCwd, pipelineWorkspace: scopedRoot, previous: null },
+      }));
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, result.worktreePath);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_git_worktree_unload") {
+      const gitContext = normalizeGitContext(workspaceSlotValue(workspaceSlotByName(instance, "gitContext")));
+      const repoPath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "repoPath"))) ||
+        (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
+      const worktreePath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "worktreePath"))) ||
+        (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+      if (!repoPath) throw new Error("Unload Worktree requires repoPath");
+      if (!worktreePath) throw new Error("Unload Worktree requires worktreePath");
+      const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
+      const pruneRaw = workspaceSlotValue(workspaceSlotByName(instance, "prune")).trim().toLowerCase();
+      const prune = pruneRaw !== "false";
+      const result = unloadGitWorktree({ repoPath, worktreePath, force, prune });
+      cwd = scopedRoot;
+      let nextInstance = workspaceSetOutputSlot(instance, "removed", "true");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", JSON.stringify({
+        version: 1,
+        label: "workspace",
+        cwd,
+        workspaceRoot: cwd,
+        pipelineWorkspace: scopedRoot,
+        previous: null,
+      }));
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, result.message);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_gitlab_create_mr") {
+      const gitContext = normalizeGitContext(workspaceSlotValue(workspaceSlotByName(instance, "gitContext")));
+      const repoPath = workspaceResolvePath(cwd, workspaceSlotValue(workspaceSlotByName(instance, "repoPath")));
+      const result = await createGitLabMergeRequest({
+        gitContext,
+        workspaceCwd: cwd,
+        repoPath,
+        sourceBranch: workspaceSlotValue(workspaceSlotByName(instance, "sourceBranch")),
+        targetBranch: workspaceSlotValue(workspaceSlotByName(instance, "targetBranch")),
+        title: workspaceSlotValue(workspaceSlotByName(instance, "title")),
+        description: workspaceSlotValue(workspaceSlotByName(instance, "description")),
+        draft: workspaceSlotValue(workspaceSlotByName(instance, "draft")),
+        labels: workspaceSlotValue(workspaceSlotByName(instance, "labels")),
+        push: workspaceSlotValue(workspaceSlotByName(instance, "push")),
+        remote: workspaceSlotValue(workspaceSlotByName(instance, "remote")),
+        tokenEnv: workspaceSlotValue(workspaceSlotByName(instance, "tokenEnv")),
+        gitlabApiBase: workspaceSlotValue(workspaceSlotByName(instance, "gitlabApiBase")),
+        removeSourceBranch: workspaceSlotValue(workspaceSlotByName(instance, "removeSourceBranch")),
+        squash: workspaceSlotValue(workspaceSlotByName(instance, "squash")),
+      }, runtimeEnvForUser(userCtx));
+      let nextInstance = workspaceSetOutputSlot(instance, "mrUrl", result.mrUrl);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "created", result.created ? "true" : "false");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "mrIid", result.mrIid ?? "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "projectId", result.projectId ?? "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "sourceBranch", result.sourceBranch ?? "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "targetBranch", result.targetBranch ?? "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "title", result.title ?? "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message ?? "");
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, result.mrUrl);
+      emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -956,8 +1195,11 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     if (updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
+  if (pauseNodeIds.length > 0) {
+    emit({ type: "paused", nodeIds: pauseNodeIds, message: `Workspace run paused at ${pauseNodeIds.join(", ")}` });
+  }
   graph.updatedAt = new Date().toISOString();
-  return { graph, events, order };
+  return { graph, events, order, pauseNodeIds };
 }
 
 function isTransientAgentNetworkError(err) {
@@ -1609,7 +1851,7 @@ export function startUiServer({
           try {
             const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, { onEvent: writeEvent });
             fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
-            writeEvent({ type: "done", ok: true, path: graphPath, graph: result.graph, order: result.order });
+            writeEvent({ type: "done", ok: true, path: graphPath, graph: result.graph, order: result.order, pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
             writeEvent({ type: "error", error: (e && e.message) || String(e) });
@@ -2287,6 +2529,15 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/marketplace/flow-snippets") {
+      try {
+        json(res, 200, listMarketplaceFlowSnippets(root));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "DELETE" && url.pathname === "/api/marketplace/node") {
       const id = url.searchParams.get("id") || "";
       const version = url.searchParams.get("version") || "";
@@ -2358,6 +2609,23 @@ export function startUiServer({
           if (!resolved.error && resolved.flowDir) flowDir = resolved.flowDir;
         }
         const result = publishNodeFromInstance(root, payload || {}, { flowDir });
+        json(res, result.ok ? 200 : 400, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/publish-flow-snippet") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const result = publishFlowSnippet(root, payload || {});
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });

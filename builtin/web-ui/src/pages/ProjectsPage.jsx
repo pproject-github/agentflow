@@ -124,6 +124,11 @@ function nodeSourceLabel(source, t) {
   return source || t("project:resourceSource.global");
 }
 
+function flowSnippetPathHint(snippet) {
+  if (snippet?.packageDir) return snippet.packageDir;
+  return `marketplace/flow-snippets / ${snippet?.id || ""}`;
+}
+
 const NODE_FILTERS = ["all", "agent", "control", "provide", "marketplace"];
 const MY_NODE_FILTERS = ["all", "agent", "control", "provide"];
 
@@ -139,6 +144,10 @@ function resourceKey(item) {
   return item?.key || `${item?.id || item?.name || ""}:${item?.source || ""}:${item?.packageId || ""}`;
 }
 
+function flowSnippetKey(item) {
+  return `${item?.id || ""}:${item?.version || ""}:${item?.packageDir || ""}`;
+}
+
 export default function ProjectsPage({ resourceKind = "" }) {
   const { t } = useTranslation();
   const { navigate, path } = useRoute();
@@ -146,6 +155,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const [apiFlows, setApiFlows] = useState([]);
   const [globalNodes, setGlobalNodes] = useState([]);
   const [globalSkills, setGlobalSkills] = useState([]);
+  const [flowSnippets, setFlowSnippets] = useState([]);
   const [skillCollections, setSkillCollections] = useState([]);
   const [newSkillCollectionName, setNewSkillCollectionName] = useState("");
   const [skillCollectionSaving, setSkillCollectionSaving] = useState(false);
@@ -211,23 +221,28 @@ export default function ProjectsPage({ resourceKind = "" }) {
     setResourceError("");
     setResourcesLoaded(false);
     try {
-      const [nodesRes, skillsRes, collectionsRes] = await Promise.all([
+      const [nodesRes, skillsRes, collectionsRes, flowSnippetsRes] = await Promise.all([
         fetch("/api/nodes"),
         fetch("/api/skills"),
         fetch("/api/skill-collections"),
+        fetch("/api/marketplace/flow-snippets"),
       ]);
       const nodesJson = await nodesRes.json().catch(() => ({}));
       const skillsJson = await skillsRes.json().catch(() => ({}));
       const collectionsJson = await collectionsRes.json().catch(() => ({}));
+      const flowSnippetsJson = await flowSnippetsRes.json().catch(() => ({}));
       if (!nodesRes.ok) throw new Error(nodesJson.error || "Nodes HTTP " + nodesRes.status);
       if (!skillsRes.ok) throw new Error(skillsJson.error || "Skills HTTP " + skillsRes.status);
       if (!collectionsRes.ok) throw new Error(collectionsJson.error || "Collections HTTP " + collectionsRes.status);
+      if (!flowSnippetsRes.ok) throw new Error(flowSnippetsJson.error || "Flow snippets HTTP " + flowSnippetsRes.status);
       setGlobalNodes(Array.isArray(nodesJson.nodes) ? nodesJson.nodes : Array.isArray(nodesJson) ? nodesJson : []);
       setGlobalSkills(Array.isArray(skillsJson.skills) ? skillsJson.skills : []);
       setSkillCollections(normalizeSkillCollections(collectionsJson));
+      setFlowSnippets(Array.isArray(flowSnippetsJson.snippets) ? flowSnippetsJson.snippets : []);
     } catch (e) {
       setGlobalNodes([]);
       setGlobalSkills([]);
+      setFlowSnippets([]);
       setSkillCollections([]);
       setResourceError(String(e.message || e));
     } finally {
@@ -352,7 +367,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
   }, [loadResources, t]);
 
   useEffect(() => {
-    if (resourceKind === "nodes" || resourceKind === "my-nodes" || resourceKind === "skills") {
+    if (resourceKind === "nodes" || resourceKind === "my-nodes" || resourceKind === "my-flows" || resourceKind === "skills") {
       setFilter(resourceKind);
       setResourceFilter("all");
       setSelectedResourceKey("");
@@ -373,6 +388,10 @@ export default function ProjectsPage({ resourceKind = "" }) {
     }
     if (sp.get("tab") === "my-nodes") {
       navigate("/my-nodes");
+      return;
+    }
+    if (sp.get("tab") === "my-flows") {
+      navigate("/my-flows");
       return;
     }
     if (sp.get("tab") === "skills") {
@@ -421,6 +440,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
 
   const isNodeResourceTab = filter === "nodes" || filter === "my-nodes";
   const isMyNodesTab = filter === "my-nodes";
+  const isMyFlowsTab = filter === "my-flows";
 
   const filteredNodes = useMemo(
     () =>
@@ -488,7 +508,23 @@ export default function ProjectsPage({ resourceKind = "" }) {
     [globalSkills, pipelineSearch, resourceFilter, skillCollectionSkillSets],
   );
 
-  const isResourceTab = isNodeResourceTab || filter === "skills";
+  const filteredFlowSnippets = useMemo(
+    () =>
+      flowSnippets.filter((snippet) =>
+        resourceTextMatches(pipelineSearch, [
+          snippet.id,
+          snippet.name,
+          snippet.displayName,
+          snippet.description,
+          snippet.version,
+          snippet.packageDir,
+          Array.isArray(snippet.tags) ? snippet.tags.join(" ") : "",
+        ]),
+      ),
+    [flowSnippets, pipelineSearch],
+  );
+
+  const isResourceTab = isNodeResourceTab || isMyFlowsTab || filter === "skills";
   const selectedNode = useMemo(
     () => filteredNodes.find((n) => resourceKey(n) === selectedResourceKey) || filteredNodes[0] || null,
     [filteredNodes, selectedResourceKey],
@@ -497,12 +533,18 @@ export default function ProjectsPage({ resourceKind = "" }) {
     () => filteredSkills.find((s) => resourceKey(s) === selectedResourceKey) || filteredSkills[0] || null,
     [filteredSkills, selectedResourceKey],
   );
+  const selectedFlowSnippet = useMemo(
+    () => filteredFlowSnippets.find((s) => flowSnippetKey(s) === selectedResourceKey) || filteredFlowSnippets[0] || null,
+    [filteredFlowSnippets, selectedResourceKey],
+  );
   const selectedSkillDetail = selectedSkill ? skillDetails[resourceKey(selectedSkill)] : null;
   const selectedNodeDetail = selectedNode ? nodeDetails[resourceKey(selectedNode)] : null;
   const selectedNodeFilePreview = selectedNode && nodeFilePath ? nodeFilePreviews[`${resourceKey(selectedNode)}:${nodeFilePath}`] : null;
   const searchPlaceholder =
     isNodeResourceTab
       ? t("project:searchNodes")
+      : isMyFlowsTab
+        ? t("project:searchFlows")
       : filter === "skills"
         ? t("project:searchSkills")
         : t("project:searchPipelines");
@@ -719,6 +761,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
             <h2 className="af-projects-h2">
               {filter === "my-nodes"
                 ? t("project:myNodes")
+                : filter === "my-flows"
+                ? t("project:myFlows")
                 : filter === "nodes"
                 ? t("project:globalNodes")
                 : filter === "skills"
@@ -733,12 +777,16 @@ export default function ProjectsPage({ resourceKind = "" }) {
                     count:
                       (filter === "nodes" || filter === "my-nodes")
                         ? filteredNodes.length
+                        : filter === "my-flows"
+                          ? filteredFlowSnippets.length
                         : filter === "skills"
                           ? filteredSkills.length
                           : filteredFlows.length,
                   })
                 : filter === "my-nodes"
                   ? t("project:myNodesHint", { count: filteredNodes.length })
+                : filter === "my-flows"
+                  ? t("project:myFlowsHint", { count: filteredFlowSnippets.length })
                 : filter === "nodes"
                   ? t("project:nodesHint", { count: globalNodes.length })
                   : filter === "skills"
@@ -755,58 +803,60 @@ export default function ProjectsPage({ resourceKind = "" }) {
             <div className="af-resource-toolbar">
               {filter === "skills" ? <SkillHubPanel onChanged={loadResources} /> : null}
               <div className="af-resource-purpose">
-                <span className="material-symbols-outlined">{isNodeResourceTab ? (isMyNodesTab ? "deployed_code" : "account_tree") : "extension"}</span>
+                <span className="material-symbols-outlined">{isMyFlowsTab ? "schema" : isNodeResourceTab ? (isMyNodesTab ? "deployed_code" : "account_tree") : "extension"}</span>
                 <div>
-                  <h3>{isMyNodesTab ? t("project:myNodesPurposeTitle") : isNodeResourceTab ? t("project:nodesPurposeTitle") : t("project:skillsPurposeTitle")}</h3>
-                  <p>{isMyNodesTab ? t("project:myNodesPurposeDesc") : isNodeResourceTab ? t("project:nodesPurposeDesc") : t("project:skillsPurposeDesc")}</p>
+                  <h3>{isMyFlowsTab ? t("project:myFlowsPurposeTitle") : isMyNodesTab ? t("project:myNodesPurposeTitle") : isNodeResourceTab ? t("project:nodesPurposeTitle") : t("project:skillsPurposeTitle")}</h3>
+                  <p>{isMyFlowsTab ? t("project:myFlowsPurposeDesc") : isMyNodesTab ? t("project:myNodesPurposeDesc") : isNodeResourceTab ? t("project:nodesPurposeDesc") : t("project:skillsPurposeDesc")}</p>
                 </div>
               </div>
-              <div className="af-resource-filter-row">
-                {(isNodeResourceTab ? (isMyNodesTab ? MY_NODE_FILTERS : NODE_FILTERS).map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
-                  item.collection ? (
-                    <span
-                      key={item.id}
-                      className={"af-resource-filter-chip" + (resourceFilter === item.id ? " af-resource-filter-chip--active" : "")}
-                    >
+              {!isMyFlowsTab ? (
+                <div className="af-resource-filter-row">
+                  {(isNodeResourceTab ? (isMyNodesTab ? MY_NODE_FILTERS : NODE_FILTERS).map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
+                    item.collection ? (
+                      <span
+                        key={item.id}
+                        className={"af-resource-filter-chip" + (resourceFilter === item.id ? " af-resource-filter-chip--active" : "")}
+                      >
+                        <button
+                          type="button"
+                          className="af-resource-filter af-resource-filter--embedded"
+                          onClick={() => {
+                            setResourceFilter(item.id);
+                            setSelectedResourceKey("");
+                          }}
+                        >
+                          {item.label}
+                          <em>{item.count}</em>
+                          {item.collection.builtin ? <strong>built-in</strong> : null}
+                        </button>
+                        {!item.collection.builtin ? (
+                          <button
+                            type="button"
+                            className="af-resource-filter-chip__delete"
+                            disabled={skillCollectionSaving}
+                            aria-label={`删除 ${item.collection.name}`}
+                            onClick={() => deleteSkillCollection(item.collection.id)}
+                          >
+                            <span className="material-symbols-outlined">close</span>
+                          </button>
+                        ) : null}
+                      </span>
+                    ) : (
                       <button
+                        key={item.id}
                         type="button"
-                        className="af-resource-filter af-resource-filter--embedded"
+                        className={"af-resource-filter" + (resourceFilter === item.id ? " af-resource-filter--active" : "")}
                         onClick={() => {
                           setResourceFilter(item.id);
                           setSelectedResourceKey("");
                         }}
                       >
                         {item.label}
-                        <em>{item.count}</em>
-                        {item.collection.builtin ? <strong>built-in</strong> : null}
                       </button>
-                      {!item.collection.builtin ? (
-                        <button
-                          type="button"
-                          className="af-resource-filter-chip__delete"
-                          disabled={skillCollectionSaving}
-                          aria-label={`删除 ${item.collection.name}`}
-                          onClick={() => deleteSkillCollection(item.collection.id)}
-                        >
-                          <span className="material-symbols-outlined">close</span>
-                        </button>
-                      ) : null}
-                    </span>
-                  ) : (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={"af-resource-filter" + (resourceFilter === item.id ? " af-resource-filter--active" : "")}
-                      onClick={() => {
-                        setResourceFilter(item.id);
-                        setSelectedResourceKey("");
-                      }}
-                    >
-                      {item.label}
-                    </button>
-                  )
-                ))}
-              </div>
+                    )
+                  ))}
+                </div>
+              ) : null}
               {filter === "skills" ? (
                 <div className="af-skill-collections-manager">
                   <div className="af-skill-collections-create">
@@ -882,6 +932,60 @@ export default function ProjectsPage({ resourceKind = "" }) {
                 <div className="af-projects-empty-block">
                   <p className="af-projects-empty">
                     {searchNorm ? t("project:noNodeMatch", { query: pipelineSearch.trim() }) : isMyNodesTab ? t("project:noMyNodes") : t("project:noNodes")}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : isMyFlowsTab ? (
+            <div className="af-resource-grid">
+              {filteredFlowSnippets.length > 0 ? (
+                filteredFlowSnippets.map((snippet) => {
+                  const instances = snippet.snippet && Array.isArray(snippet.snippet.instances) ? snippet.snippet.instances : [];
+                  const edges = snippet.snippet && Array.isArray(snippet.snippet.edges) ? snippet.snippet.edges : [];
+                  const nodeCount = Number.isFinite(Number(snippet.nodeCount)) ? Number(snippet.nodeCount) : instances.length;
+                  const edgeCount = Number.isFinite(Number(snippet.edgeCount)) ? Number(snippet.edgeCount) : edges.length;
+                  return (
+                    <button
+                      key={flowSnippetKey(snippet)}
+                      type="button"
+                      className={"af-resource-card" + (selectedFlowSnippet && flowSnippetKey(snippet) === flowSnippetKey(selectedFlowSnippet) ? " af-resource-card--active" : "")}
+                      onClick={() => setSelectedResourceKey(flowSnippetKey(snippet))}
+                    >
+                      <div className="af-resource-card-head">
+                        <span className={badgeClass("primary")}>
+                          <HighlightMatch query={pipelineSearch}>{snippet.version ? `v${snippet.version}` : "flow"}</HighlightMatch>
+                        </span>
+                        <span className="af-resource-source">{t("project:flowSnippet")}</span>
+                      </div>
+                      <h3 className="af-project-title">
+                        <HighlightMatch query={pipelineSearch}>{snippet.displayName || snippet.name || snippet.id}</HighlightMatch>
+                      </h3>
+                      <p className="af-project-desc">
+                        <HighlightMatch query={pipelineSearch}>{snippet.description || t("project:noDescription")}</HighlightMatch>
+                      </p>
+                      <div className="af-resource-meta-row">
+                        <span>{t("project:flowSnippetNodes", { nodes: nodeCount, edges: edgeCount })}</span>
+                        <span>
+                          <HighlightMatch query={pipelineSearch}>{snippet.id}</HighlightMatch>
+                        </span>
+                      </div>
+                      <div className="af-project-path">
+                        <span className="material-symbols-outlined af-path-icon">schema</span>
+                        <span className="af-path-text">
+                          <HighlightMatch query={pipelineSearch}>{flowSnippetPathHint(snippet)}</HighlightMatch>
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : !resourcesLoaded ? (
+                <div className="af-projects-empty-block">
+                  <p className="af-projects-empty">{t("project:loadingResources")}</p>
+                </div>
+              ) : (
+                <div className="af-projects-empty-block">
+                  <p className="af-projects-empty">
+                    {searchNorm ? t("project:noFlowSnippetMatch", { query: pipelineSearch.trim() }) : t("project:noMyFlows")}
                   </p>
                 </div>
               )}
@@ -1033,7 +1137,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
         </section>
 
         {isResourceTab ? (
-          <aside className="af-resource-detail" aria-label={isNodeResourceTab ? t("project:nodeDetail") : t("project:skillDetail")}>
+          <aside className="af-resource-detail" aria-label={isNodeResourceTab ? t("project:nodeDetail") : isMyFlowsTab ? t("project:flowDetail") : t("project:skillDetail")}>
             {isNodeResourceTab && selectedNode ? (
               <>
                 <div className="af-resource-detail-head">
@@ -1183,6 +1287,48 @@ export default function ProjectsPage({ resourceKind = "" }) {
                     )}
                   </div>
                 )}
+              </>
+            ) : isMyFlowsTab && selectedFlowSnippet ? (
+              <>
+                <div className="af-resource-detail-head">
+                  <span className="material-symbols-outlined">schema</span>
+                  <div>
+                    <h3>{selectedFlowSnippet.displayName || selectedFlowSnippet.name || selectedFlowSnippet.id}</h3>
+                    <p>{selectedFlowSnippet.id}</p>
+                  </div>
+                </div>
+                <p className="af-resource-detail-desc">{selectedFlowSnippet.description || t("project:noDescription")}</p>
+                <dl className="af-resource-detail-kv">
+                  <div><dt>{t("project:detailVersion")}</dt><dd>{selectedFlowSnippet.version || "1.0.0"}</dd></div>
+                  <div><dt>{t("project:detailPath")}</dt><dd>{flowSnippetPathHint(selectedFlowSnippet)}</dd></div>
+                  <div>
+                    <dt>{t("project:flowSnippetScale")}</dt>
+                    <dd>
+                      {t("project:flowSnippetNodes", {
+                        nodes: Number.isFinite(Number(selectedFlowSnippet.nodeCount))
+                          ? Number(selectedFlowSnippet.nodeCount)
+                          : Array.isArray(selectedFlowSnippet.snippet?.instances)
+                            ? selectedFlowSnippet.snippet.instances.length
+                            : 0,
+                        edges: Number.isFinite(Number(selectedFlowSnippet.edgeCount))
+                          ? Number(selectedFlowSnippet.edgeCount)
+                          : Array.isArray(selectedFlowSnippet.snippet?.edges)
+                            ? selectedFlowSnippet.snippet.edges.length
+                            : 0,
+                      })}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="af-resource-detail-section">
+                  <h4>{t("project:resourceMeaning")}</h4>
+                  <p>{t("project:myFlowsMeaning")}</p>
+                </div>
+                <div className="af-resource-detail-section">
+                  <h4>{t("project:flowSnippetPreview")}</h4>
+                  <pre className="af-resource-skill-preview">
+                    {JSON.stringify(selectedFlowSnippet.snippet || {}, null, 2)}
+                  </pre>
+                </div>
               </>
             ) : filter === "skills" && selectedSkill ? (
               <>
