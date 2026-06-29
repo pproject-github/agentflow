@@ -274,3 +274,43 @@ export function filterValidEdges(edges, nodesWithSchema) {
     );
   });
 }
+
+function connectionHandleIndex(handle, prefix) {
+  const match = new RegExp(`^${prefix}-(\\d+)$`).exec(String(handle || ""));
+  if (!match) return 0;
+  const index = Number.parseInt(match[1], 10);
+  return Number.isFinite(index) && index >= 0 ? index : 0;
+}
+
+function revealSlotOnNode(slots, index) {
+  if (!Array.isArray(slots) || !slots[index]) return slots;
+  if (slots[index].showOnNode === true) return slots;
+  return slots.map((slot, i) => (i === index ? { ...slot, showOnNode: true } : slot));
+}
+
+export function revealConnectedSlots(nodes, connection) {
+  const source = String(connection?.source || "");
+  const target = String(connection?.target || "");
+  if (!source || !target) return nodes;
+  const sourceIndex = connectionHandleIndex(connection?.sourceHandle, "output");
+  const targetIndex = connectionHandleIndex(connection?.targetHandle, "input");
+  let changed = false;
+  const next = (nodes || []).map((node) => {
+    if (node.id === source) {
+      const outputs = revealSlotOnNode(node.data?.outputs, sourceIndex);
+      if (outputs !== node.data?.outputs) {
+        changed = true;
+        return { ...node, data: { ...node.data, outputs } };
+      }
+    }
+    if (node.id === target) {
+      const inputs = revealSlotOnNode(node.data?.inputs, targetIndex);
+      if (inputs !== node.data?.inputs) {
+        changed = true;
+        return { ...node, data: { ...node.data, inputs } };
+      }
+    }
+    return node;
+  });
+  return changed ? next : nodes;
+}

@@ -249,6 +249,83 @@ export function buildInstancesForYaml(nodes, instancesMap) {
   return instances;
 }
 
+function clonePlain(value) {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function nextCopyId(baseId, usedIds) {
+  const base = String(baseId || "node").replace(/_copy(?:_\d+)?$/i, "");
+  let candidate = `${base}_copy`;
+  let i = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${base}_copy_${i}`;
+    i += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+export function buildCanvasClipboard(nodes, edges, instancesMap) {
+  const selectedNodes = (nodes || []).filter((node) => node?.selected);
+  if (selectedNodes.length === 0) return null;
+  const selectedIds = new Set(selectedNodes.map((node) => node.id));
+  const selectedEdges = (edges || []).filter((edge) => selectedIds.has(edge.source) && selectedIds.has(edge.target));
+  return {
+    version: 1,
+    nodes: selectedNodes.map((node) => clonePlain(node)),
+    edges: selectedEdges.map((edge) => clonePlain(edge)),
+    instances: buildInstancesForYaml(selectedNodes, instancesMap || {}),
+  };
+}
+
+export function pasteCanvasClipboard(clipboard, nodes, edges, instancesMap, options = {}) {
+  if (!clipboard || !Array.isArray(clipboard.nodes) || clipboard.nodes.length === 0) return null;
+  const offset = options.offset || { x: 48, y: 48 };
+  const usedIds = new Set((nodes || []).map((node) => node.id));
+  const idMap = new Map();
+  for (const node of clipboard.nodes) {
+    idMap.set(node.id, nextCopyId(node.id, usedIds));
+  }
+  const nextNodes = clipboard.nodes.map((node) => {
+    const id = idMap.get(node.id);
+    return {
+      ...clonePlain(node),
+      id,
+      selected: true,
+      dragging: false,
+      position: {
+        x: Number(node.position?.x || 0) + offset.x,
+        y: Number(node.position?.y || 0) + offset.y,
+      },
+    };
+  });
+  const nextEdges = (clipboard.edges || [])
+    .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+    .map((edge, index) => {
+      const source = idMap.get(edge.source);
+      const target = idMap.get(edge.target);
+      return {
+        ...clonePlain(edge),
+        id: `e-${source}-${target}-${Date.now()}-${index}`,
+        source,
+        target,
+        selected: false,
+      };
+    });
+  const nextInstances = { ...(instancesMap || {}) };
+  for (const [oldId, newId] of idMap.entries()) {
+    const inst = clipboard.instances?.[oldId];
+    if (inst) nextInstances[newId] = { ...clonePlain(inst), label: inst.label != null ? String(inst.label) : newId };
+  }
+  return {
+    nodes: [...(nodes || []).map((node) => ({ ...node, selected: false })), ...nextNodes],
+    edges: [...(edges || []).map((edge) => ({ ...edge, selected: false })), ...nextEdges],
+    instances: nextInstances,
+    pastedNodeIds: nextNodes.map((node) => node.id),
+  };
+}
+
 /**
  * @param {import('@xyflow/react').Node[]} nodes
  * @param {import('@xyflow/react').Edge[]} edges

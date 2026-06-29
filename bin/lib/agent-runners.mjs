@@ -711,6 +711,14 @@ function truncateComposerLine(s) {
   return t.slice(0, COMPOSER_STATUS_MAX - 1) + "…";
 }
 
+const RAW_TRACE_MAX_CHARS = 4096;
+
+function rawTraceText(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text) return "";
+  return text.length > RAW_TRACE_MAX_CHARS ? text.slice(0, RAW_TRACE_MAX_CHARS) + "\n...[truncated]" : text;
+}
+
 function normalizeStreamTextChunk(t) {
   if (!t || typeof t !== "string") return "";
   return t.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
@@ -728,6 +736,7 @@ function extractCursorStreamNlText(event) {
   }
   if (typeof event.text === "string" && event.text.trim()) return normalizeStreamTextChunk(event.text);
   if (typeof event.thinking === "string" && event.thinking.trim()) return normalizeStreamTextChunk(event.thinking);
+  if (typeof event.delta === "string" && event.delta.trim()) return normalizeStreamTextChunk(event.delta);
   return "";
 }
 
@@ -864,6 +873,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
+        emit({ type: "raw", source: "cursor", stream: "stdout", eventType: event?.type || "unknown", text: rawTraceText(event) });
         if (event.type === "assistant" && event.message?.content) {
           const text = extractCursorStreamNlText(event);
           if (text) {
@@ -903,6 +913,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           emit({ type: "status", line: `${t("runner.event_label")}: ${event.type ?? "unknown"}` });
         }
       } catch (_) {
+        emit({ type: "raw", source: "cursor", stream: "stdout", eventType: "line", text: rawTraceText(line) });
         if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
           let subtype = "?";
           try {
@@ -1017,6 +1028,7 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
       const line = outBuf.slice(0, idx);
       outBuf = outBuf.slice(idx + 1);
       if (line) {
+        emit({ type: "raw", source: "opencode", stream: "stdout", eventType: "line", text: rawTraceText(line) });
         tryEmitOpenCodeLineAsNatural(line, emit);
         emit({ type: "status", line: `[stdout] ${truncateComposerLine(line)}` });
       }
@@ -1032,6 +1044,7 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
       const line = errBuf.slice(0, idx);
       errBuf = errBuf.slice(idx + 1);
       if (line) {
+        emit({ type: "raw", source: "opencode", stream: "stderr", eventType: "line", text: rawTraceText(line) });
         tryEmitOpenCodeLineAsNatural(line, emit);
         emit({ type: "status", line: `[stderr] ${truncateComposerLine(line)}` });
       }
@@ -1051,10 +1064,12 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
       child.stderr.removeAllListeners();
       child.removeAllListeners();
       if (outBuf.trim()) {
+        emit({ type: "raw", source: "opencode", stream: "stdout", eventType: "tail", text: rawTraceText(outBuf.trim()) });
         tryEmitOpenCodeLineAsNatural(outBuf.trim(), emit);
         emit({ type: "status", line: truncateComposerLine(outBuf.trim()) });
       }
       if (errBuf.trim()) {
+        emit({ type: "raw", source: "opencode", stream: "stderr", eventType: "tail", text: rawTraceText(errBuf.trim()) });
         tryEmitOpenCodeLineAsNatural(errBuf.trim(), emit);
         emit({ type: "status", line: `[opencode_stderr] ${truncateComposerLine(errBuf.trim())}` });
       }
@@ -1151,6 +1166,7 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
+        emit({ type: "raw", source: "claude-code", stream: "stdout", eventType: event?.type || "unknown", text: rawTraceText(event) });
         if (event.type === "assistant" && event.message && Array.isArray(event.message.content)) {
           for (const block of event.message.content) {
             if (!block || typeof block !== "object") continue;
@@ -1196,6 +1212,7 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
           emit({ type: "status", line: `${t("runner.event_label")}: ${event.type ?? "unknown"}` });
         }
       } catch (_) {
+        emit({ type: "raw", source: "claude-code", stream: "stdout", eventType: "line", text: rawTraceText(line) });
         emit({ type: "status", line: truncateComposerLine(line) });
       }
     }

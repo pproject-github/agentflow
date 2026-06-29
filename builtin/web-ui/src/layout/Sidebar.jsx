@@ -9,6 +9,7 @@ const ITEMS = [
   { to: "/my-nodes", labelKey: "common:nav.myNodes", icon: "deployed_code" },
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
+  { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
 
