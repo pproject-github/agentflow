@@ -38,7 +38,8 @@ function parseSkillFrontmatter(content) {
   const match = String(content || "").match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return {};
   try {
-    return yaml.load(match[1]) || {};
+    const parsed = yaml.load(match[1]) || {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -58,6 +59,7 @@ export function parseSkillFile(absPath, source = {}) {
     id: name,
     name,
     description: String(meta.description || "").trim(),
+    frontmatter: meta,
     source: sourceId,
     sourceLabel,
     path: absPath,

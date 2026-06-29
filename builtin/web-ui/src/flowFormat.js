@@ -210,6 +210,16 @@ export function buildInstancesForYaml(nodes, instancesMap) {
       output,
     };
 
+    const marketplaceRef = n.data?.marketplaceRef || base.marketplaceRef;
+    if (marketplaceRef) rec.marketplaceRef = String(marketplaceRef);
+    else delete rec.marketplaceRef;
+    const marketplacePackageId = n.data?.marketplacePackageId || base.marketplacePackageId;
+    if (marketplacePackageId) rec.marketplacePackageId = String(marketplacePackageId);
+    else delete rec.marketplacePackageId;
+    const marketplaceVersion = n.data?.marketplaceVersion || base.marketplaceVersion;
+    if (marketplaceVersion) rec.marketplaceVersion = String(marketplaceVersion);
+    else delete rec.marketplaceVersion;
+
     if (defId.startsWith("provide_") || body.trim() === "") {
       delete rec.body;
     } else {

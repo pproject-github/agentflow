@@ -8,6 +8,8 @@ description: |
   - `branch` is optional. When empty, AgentFlow creates a detached worktree at the current HEAD.
   - `worktreePath` is optional. When empty, AgentFlow creates a path under `${pipelineWorkspace}/.workspace/agentflow/worktrees`.
   - Existing worktree paths are reused only when they are registered by `git worktree list` for the given repo.
+  - `pruneMissing` defaults to true. When Git has a registered worktree whose directory is missing, AgentFlow runs `git worktree prune` before adding it again.
+  - `force` defaults to false. When true, AgentFlow passes `--force` to `git worktree add`.
 displayName: Load Worktree
 input:
   - type: node
@@ -22,6 +24,14 @@ input:
   - type: file
     name: worktreePath
     default: ""
+  - type: bool
+    name: pruneMissing
+    default: "true"
+    showOnNode: false
+  - type: bool
+    name: force
+    default: "false"
+    showOnNode: false
   - type: text
     name: gitContext
     default: ""

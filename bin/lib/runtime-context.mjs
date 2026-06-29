@@ -1,4 +1,5 @@
 import path from "path";
+import yaml from "js-yaml";
 import { getFlowDir } from "./workspace.mjs";
 import { PACKAGE_ROOT, PIPELINES_DIR } from "./paths.mjs";
 import { listSkills, listSkillsFromSources, workspaceSkillSources } from "./skill-registry.mjs";
@@ -118,6 +119,7 @@ function skillBodyFromRegistryItem(skill) {
     name: skill.name,
     key: skill.key,
     description: skill.description,
+    frontmatter: skill.frontmatter,
     source: skill.source,
     sourceLabel: skill.sourceLabel,
     path: skill.path,
@@ -201,6 +203,7 @@ export function buildSkillsContext({ workspaceContext, source = "current-workspa
       name: s.name,
       key: s.key,
       description: s.description,
+      frontmatter: s.frontmatter,
       sourceLabel: s.sourceLabel,
       path: s.path,
       body: s.body,
@@ -208,18 +211,33 @@ export function buildSkillsContext({ workspaceContext, source = "current-workspa
   };
 }
 
+function renderSkillFrontmatter(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return "";
+  const extra = Object.fromEntries(
+    Object.entries(frontmatter).filter(([key, value]) => {
+      if (key === "name" || key === "description") return false;
+      if (value == null) return false;
+      if (typeof value === "string" && value.trim() === "") return false;
+      return true;
+    }),
+  );
+  if (Object.keys(extra).length === 0) return "";
+  return yaml.dump(extra, { lineWidth: 100, noRefs: true }).trim();
+}
+
 export function renderSkillsContextForPrompt(skillsContext) {
   const ctx = normalizeSkillsContext(skillsContext);
   if (!ctx || !Array.isArray(ctx.skillBodies) || ctx.skillBodies.length === 0) return "";
   const blocks = ctx.skillBodies.slice(0, 20).map((skill) => {
     const body = String(skill.body || "").trim();
-    return [
+    const frontmatter = renderSkillFrontmatter(skill.frontmatter);
+    const header = [
       `### ${skill.name}`,
       skill.description ? `说明：${skill.description}` : "",
       `来源：${skill.path || skill.sourceLabel || ""}`,
-      "",
-      body.slice(0, 16000),
+      frontmatter ? `元数据：\n${frontmatter}` : "",
     ].filter(Boolean).join("\n");
+    return [header, body.slice(0, 16000)].filter(Boolean).join("\n\n");
   });
-  return ["## 已加载 Skills", "", ...blocks].join("\n\n");
+  return ["## 已加载 Skills", ...blocks].join("\n\n");
 }

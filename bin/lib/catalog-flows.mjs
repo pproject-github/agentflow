@@ -257,11 +257,13 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   addFromDir(path.join(root, PROJECT_NODES_DIR), "project");
   for (const manifest of listMarketplaceNodes(root, marketplaceFlowData)) {
     let type = "agent";
-    const runtimeType = String(manifest.runtime?.type || manifest.type || "").toLowerCase();
+    const runtimeType = String(manifest.baseDefinitionId || manifest.runtime?.type || manifest.type || "").toLowerCase();
     if (runtimeType.startsWith("control")) type = "control";
     else if (runtimeType.startsWith("provide")) type = "provide";
     byId.set(manifest.definitionId, {
       id: manifest.definitionId,
+      baseDefinitionId: manifest.baseDefinitionId || manifest.runtime?.type || "",
+      marketplaceDefinitionId: manifest.definitionId,
       packageId: manifest.id,
       version: manifest.version,
       type,

@@ -1,6 +1,6 @@
 /**
  * 本地 HTTP：静态 UI + /api/flows（GET/POST/HEAD）、/api/flows/import（POST multipart 导入 .yaml/.zip）、/api/flow/archive（POST）、/api/flow/delete（POST 永久删除）、/api/model-lists、/api/ui-context、/api/pipeline-recent-runs、/api/run-node-statuses（GET 某次 run 各节点磁盘状态）、/api/workspace-tree（GET 工作区目录树）、/api/nodes、/api/flow（GET/POST）、
- * /api/flow-editor-sync（POST 通知画布刷新）、/api/flow-editor-sync-events（GET SSE）、/api/flow/run（POST NDJSON 流式执行 agentflow apply --machine-readable）、/api/flow/run/stop（POST 终止运行）、
+ * /api/flow-editor-sync（POST 通知画布刷新）、/api/flow-editor-sync-events（GET SSE）、/api/flow/run（POST NDJSON 流式执行 agentflow apply --machine-readable）、/api/flow/run/stop（POST 终止运行）、/api/workspace/run/stop（POST 终止 Workspace 临时运行）、
  * /api/composer-agent（POST NDJSON；有 flow 时结束后 validate-flow，失败则自动 agent 修复至多 5 次）、
  * /api/agentflow-config（GET/POST 读写 ~/agentflow/config.json 的 opencodeProvider；POST 后执行 update-model-lists）、/api/update-model-lists（POST 可选 JSON body.opencodeProvider 覆盖本次拉取用的 Provider，未保存 config 也可用）；
  * listen 后后台 updateModelLists
@@ -89,8 +89,10 @@ import {
   buildClearSessionCookie,
   buildSessionCookie,
   getAuthUserFromRequest,
+  isAuthUserAllowed,
   loginOrCreateUser,
   logoutRequest,
+  readUserAllowlist,
 } from "./auth.mjs";
 import { readUserEnvObject, readUserEnvRows, writeUserEnvRows } from "./user-env.mjs";
 
@@ -415,6 +417,21 @@ function omitObjectKeys(obj, keys) {
   return out;
 }
 
+function privateKeyMetadataFromConfig(configValue = {}) {
+  const meta = configValue?.__agentflowPrivateKeys;
+  const env = Array.isArray(meta?.env) ? meta.env.map((key) => String(key || "").trim()).filter(Boolean) : [];
+  const headers = Array.isArray(meta?.headers) ? meta.headers.map((key) => String(key || "").trim()).filter(Boolean) : [];
+  return { env: Array.from(new Set(env)), headers: Array.from(new Set(headers)) };
+}
+
+function withPrivatePlaceholders(obj, keys) {
+  const out = { ...(obj && typeof obj === "object" && !Array.isArray(obj) ? obj : {}) };
+  for (const key of keys) {
+    if (key && !Object.prototype.hasOwnProperty.call(out, key)) out[key] = "";
+  }
+  return out;
+}
+
 function normalizeMcpServerConfig(value) {
   const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const next = {};
@@ -459,10 +476,13 @@ function readCursorMcpServers(userCtx = {}) {
     const privateValue = privateConfig.servers?.[name] && typeof privateConfig.servers[name] === "object" ? privateConfig.servers[name] : {};
     const privateEnv = privateValue.env && typeof privateValue.env === "object" && !Array.isArray(privateValue.env) ? privateValue.env : {};
     const privateHeaders = privateValue.headers && typeof privateValue.headers === "object" && !Array.isArray(privateValue.headers) ? privateValue.headers : {};
+    const privateMeta = privateKeyMetadataFromConfig(publicValue);
+    const privateEnvKeys = Array.from(new Set([...privateMeta.env, ...Object.keys(privateEnv)]));
+    const privateHeaderKeys = Array.from(new Set([...privateMeta.headers, ...Object.keys(privateHeaders)]));
     const configValue = {
       ...publicValue,
-      env: { ...(publicValue.env || {}), ...privateEnv },
-      headers: { ...(publicValue.headers || {}), ...privateHeaders },
+      env: { ...withPrivatePlaceholders(publicValue.env || {}, privateEnvKeys), ...privateEnv },
+      headers: { ...withPrivatePlaceholders(publicValue.headers || {}, privateHeaderKeys), ...privateHeaders },
     };
     return {
       name,
@@ -474,8 +494,8 @@ function readCursorMcpServers(userCtx = {}) {
       headers: configValue.headers && typeof configValue.headers === "object" ? configValue.headers : {},
       description: typeof configValue.description === "string" ? configValue.description : "",
       raw: configValue,
-      privateEnvKeys: Object.keys(privateEnv),
-      privateHeaderKeys: Object.keys(privateHeaders),
+      privateEnvKeys,
+      privateHeaderKeys,
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
   return { path: cursorMcpConfigPath(), servers };
@@ -496,6 +516,16 @@ function writeCursorMcpServer(payload = {}, userCtx = {}) {
     env: omitObjectKeys(server.env || {}, privateEnvKeys),
     headers: omitObjectKeys(server.headers || {}, privateHeaderKeys),
   };
+  publicServer.env = withPrivatePlaceholders(publicServer.env, privateEnvKeys);
+  publicServer.headers = withPrivatePlaceholders(publicServer.headers, privateHeaderKeys);
+  if (privateEnvKeys.size || privateHeaderKeys.size) {
+    publicServer.__agentflowPrivateKeys = {
+      ...(privateEnvKeys.size ? { env: Array.from(privateEnvKeys) } : {}),
+      ...(privateHeaderKeys.size ? { headers: Array.from(privateHeaderKeys) } : {}),
+    };
+  } else {
+    delete publicServer.__agentflowPrivateKeys;
+  }
   if (!Object.keys(publicServer.env).length) delete publicServer.env;
   if (!Object.keys(publicServer.headers).length) delete publicServer.headers;
   const p = cursorMcpConfigPath();
@@ -1125,6 +1155,21 @@ function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   return { root: path.resolve(result.path), flowId, flowSource, archived };
 }
 
+function workspaceSearchGuardrailsBlock() {
+  return [
+    "## 检索约束",
+    "",
+    "默认不要读取、搜索或 Glob 历史运行产物；除非用户明确要求分析历史 run/log，否则必须排除：",
+    "- `**/runBuild/**`",
+    "- `**/logs/**`",
+    "- `.workspace/agentflow/**/runBuild/**`",
+    "- `~/agentflow/runBuild/**`",
+    "- `node_modules/**`、`dist/**` 等依赖或构建产物",
+    "",
+    "使用 grep/rg/find/Glob 等工具时，应把上述路径作为 exclude/glob ignore；不要从历史 runBuild/logs 中推断业务事实、指标资产或 skill 文档。",
+  ].join("\n");
+}
+
 function buildWorkspaceGeneratePrompt(payload) {
   const userPrompt = String(payload?.prompt || "").trim();
   const outputKind = String(payload?.outputKind || payload?.kind || "markdown").trim().toLowerCase();
@@ -1175,6 +1220,7 @@ function buildWorkspaceGeneratePrompt(payload) {
     allowFlowYaml
       ? "用户已允许你考虑正式 flow.yaml；如需修改仍必须明确说明影响。"
       : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.graph.json 或回复内容中完成任务。",
+    workspaceSearchGuardrailsBlock(),
     workspaceGraph ? `\n## 当前 workspace graph\n\n${JSON.stringify(workspaceGraph, null, 2)}` : "",
     selectedNodeIds.length > 0 ? `\n## 当前用户选中的 workspace 节点\n\n${selectedNodeIds.map((id) => `- ${id}`).join("\n")}` : "",
     skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
@@ -1281,6 +1327,7 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
   if (id === "display_image") return "image";
+  if (id === "display_chart") return "chart";
   return "";
 }
 
@@ -1343,6 +1390,9 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   }
   if (kinds.has("image")) {
     rules.push("- 下游连接了图片展示节点：输出可作为 img src 使用的图片地址、data URL 或 base64 data URL；不要输出 Markdown 图片语法或解释文字。");
+  }
+  if (kinds.has("chart")) {
+    rules.push('- 下游连接了 Chart 展示节点：只输出 ChartSpec JSON 对象，不要 Markdown 代码围栏，不要解释文字。格式必须包含 `"type":"chart"`、`"version":"1.0"`、`"renderer":"echarts"`、`"option"`；`option.series[].type` 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。');
   }
   return [
     "## 下游输出要求",
@@ -1434,7 +1484,7 @@ function workspaceTargetSlotForEdge(graph, edge) {
 function isWorkspaceSemanticInputSlot(slot) {
   const name = String(slot?.name || "");
   const type = String(slot?.type || "");
-  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "workspaceContext" || name === "gitContext";
+  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "workspaceContext" || name === "gitContext";
 }
 
 function workspaceTaskUpstreamText(graph, nodeId, outputs) {
@@ -1470,6 +1520,14 @@ function selectedSkillKeysFromInstance(instance) {
   return parseWorkspaceSkillKeys(workspaceSlotValue(slot) || "");
 }
 
+function selectedMcpServerNamesFromInstance(instance) {
+  const bodyNames = parseWorkspaceSkillKeys(instance?.body || "");
+  if (bodyNames.length > 0) return bodyNames;
+  const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
+  const slot = slots.find((item) => item?.name === "mcpContext") || slots.find((item) => item?.name === "serverNames");
+  return parseWorkspaceSkillKeys(workspaceSlotValue(slot) || "");
+}
+
 function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const blocks = edges
@@ -1480,6 +1538,22 @@ function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
     })
     .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
     .filter((text) => text.includes("Skill") || text.includes("skill"))
+    .flatMap((text) => text.split(/\n\s*---\s*\n/g))
+    .map((text) => text.trim())
+    .filter(Boolean);
+  return Array.from(new Set(blocks)).join("\n\n---\n\n");
+}
+
+function workspaceUpstreamMcpBlocks(graph, nodeId, outputs) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const blocks = edges
+    .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .filter((edge) => {
+      const slot = workspaceTargetSlotForEdge(graph, edge);
+      return String(slot?.name || "") === "mcpContext";
+    })
+    .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
+    .filter((text) => text.includes("MCP") || text.includes("mcp"))
     .flatMap((text) => text.split(/\n\s*---\s*\n/g))
     .map((text) => text.trim())
     .filter(Boolean);
@@ -1518,6 +1592,43 @@ function buildWorkspaceSkillManifestBlock(skills, selectedKeys = []) {
   ].join("\n");
 }
 
+function buildWorkspaceMcpManifestBlock(results, servers = [], selectedNames = []) {
+  const serverByName = new Map((Array.isArray(servers) ? servers : []).map((server) => [String(server?.name || ""), server]));
+  const normalizedNames = Array.from(new Set((selectedNames || []).map((x) => String(x || "").trim()).filter(Boolean)));
+  const targets = (Array.isArray(results) ? results : []).filter((item) => !normalizedNames.length || normalizedNames.includes(String(item?.name || "")));
+  const rows = [];
+  for (const result of targets) {
+    const name = String(result?.name || "").trim();
+    if (!name) continue;
+    const server = serverByName.get(name) || {};
+    const description = String(server?.description || "").trim();
+    if (!result?.ok) {
+      rows.push(`- MCP server \`${name}\`: unavailable${result?.error ? ` (${String(result.error)})` : ""}`);
+      continue;
+    }
+    rows.push(`- MCP server \`${name}\`${description ? `: ${description}` : ""}`);
+    const tools = Array.isArray(result?.tools) ? result.tools : [];
+    if (!tools.length) {
+      rows.push("  - no tools reported");
+      continue;
+    }
+    for (const tool of tools.slice(0, 80)) {
+      const toolName = String(tool?.name || "").trim();
+      if (!toolName) continue;
+      const toolDescription = String(tool?.description || "").trim();
+      rows.push(`  - tool \`${toolName}\`${toolDescription ? `: ${toolDescription}` : ""}`);
+    }
+  }
+  if (!rows.length && !normalizedNames.length) return "";
+  return [
+    "### Workspace MCP Manifest",
+    "",
+    "这些 MCP servers/tools 已在当前 Agent 运行器中可用。需要外部工具能力时，优先使用下列 MCP 工具；不要声称调用了工具，除非实际工具调用成功。",
+    "",
+    ...(rows.length ? rows : normalizedNames.map((name) => `- MCP server \`${name}\``)),
+  ].join("\n");
+}
+
 function workspaceWriteDisplayContent(instance, content) {
   const next = { ...(instance || {}) };
   const kind = workspaceDisplayKind(next.definitionId);
@@ -1552,7 +1663,7 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content) {
   return updated;
 }
 
-function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock) {
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "") {
   const instance = graph.instances[nodeId] || {};
   const body = String(instance.body || "").trim();
   const label = String(instance.label || nodeId).trim();
@@ -1560,7 +1671,9 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock) {
   return [
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
     "只输出该节点要传给下游展示/后续节点的正文，不要解释运行过程。",
+    workspaceSearchGuardrailsBlock(),
     skillsBlock ? `\n## Available Skills\n\n${skillsBlock}` : "",
+    mcpBlock ? `\n## Available MCP\n\n${mcpBlock}` : "",
     upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
     downstreamRequirements ? `\n${downstreamRequirements}` : "",
     `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
@@ -1572,6 +1685,14 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
   const runNodeId = String(payload?.runNodeId || "").trim();
   const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId);
+  const signal = opts.signal || null;
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const err = new Error("Workspace run stopped");
+      err.code = "WORKSPACE_RUN_ABORTED";
+      throw err;
+    }
+  };
   const fallbackSelectedSkillKeys = Array.isArray(payload?.selectedSkills)
     ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean)
     : [];
@@ -1589,6 +1710,22 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     skillsBlockCache.set(cacheKey, block);
     return block;
   };
+  const mcpBlockCache = new Map();
+  const loadMcpBlockForNames = async (names) => {
+    const normalized = Array.from(new Set((names || []).map((x) => String(x || "").trim()).filter(Boolean)));
+    if (!normalized.length) return "";
+    const cacheKey = normalized.join("\n");
+    if (mcpBlockCache.has(cacheKey)) return mcpBlockCache.get(cacheKey);
+    const { servers } = readCursorMcpServers(userCtx);
+    const results = [];
+    for (const name of normalized) {
+      const checked = await checkCursorMcpServers(name, userCtx);
+      results.push(...(Array.isArray(checked.results) ? checked.results : []));
+    }
+    const block = buildWorkspaceMcpManifestBlock(results, servers, normalized);
+    mcpBlockCache.set(cacheKey, block);
+    return block;
+  };
   const outputs = new Map();
   const events = [];
   const emit = (event) => {
@@ -1603,6 +1740,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
 
   for (const nodeId of order) {
+    throwIfAborted();
     const instance = graph.instances[nodeId];
     if (!instance) continue;
     const defId = String(instance.definitionId || "");
@@ -1628,6 +1766,26 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       };
       outputs.set(nodeId, skillsBlock);
       workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_load_mcp") {
+      const mcpStartedAt = Date.now();
+      const serverNames = selectedMcpServerNamesFromInstance(instance);
+      const mcpBlock = await loadMcpBlockForNames(serverNames);
+      emitTiming(nodeId, "load-mcp", mcpStartedAt, { serverCount: serverNames.length, charCount: mcpBlock.length });
+      graph.instances[nodeId] = {
+        ...instance,
+        output: (Array.isArray(instance.output) ? instance.output : []).map((slot) => (
+          String(slot?.name || "") === "mcpContext" || String(slot?.type || "") === "text"
+            ? { ...slot, default: mcpBlock, value: mcpBlock }
+            : slot
+        )),
+      };
+      outputs.set(nodeId, mcpBlock);
+      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -1768,7 +1926,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const rawWorktreePath = workspaceSlotValue(workspaceSlotByName(instance, "worktreePath")).trim();
       const worktreePath = rawWorktreePath ? workspaceResolvePath(cwd, rawWorktreePath) : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
       const previousCwd = cwd;
-      const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot });
+      const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
+      const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
+      const pruneMissing = pruneMissingRaw !== "false";
+      const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot, force, pruneMissing });
       const outGitContext = buildGitContext({
         repoPath: result.repoRoot,
         worktreePath: result.worktreePath,
@@ -1873,8 +2034,9 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks, upstreamSkillBlocks ? "" : loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock);
-    emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length });
+    const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock);
+    emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length, mcpChars: promptMcpBlock.length });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
     const maxAttempts = 3;
@@ -1905,14 +2067,21 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             emit({ type: "status", nodeId, line: `工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
           },
         });
+        if (typeof opts.onActiveChild === "function") opts.onActiveChild(handle.child || null);
         emitTiming(nodeId, "spawn-agent", spawnStartedAt, { attempt });
-        await handle.finished;
+        try {
+          await handle.finished;
+        } finally {
+          if (typeof opts.onActiveChild === "function") opts.onActiveChild(null);
+        }
+        throwIfAborted();
         content = attemptContent.trim();
         break;
       } catch (e) {
+        if (signal?.aborted || e?.code === "WORKSPACE_RUN_ABORTED") throwIfAborted();
         if (attempt < maxAttempts && isTransientAgentNetworkError(e)) {
           emit({ type: "status", nodeId, line: `Workspace node retry ${attempt + 1}/${maxAttempts} after network error` });
-          await sleepMs(Math.min(1500 * attempt, 5000));
+          await sleepMs(Math.min(1500 * attempt, 5000), signal);
           continue;
         }
         throw e;
@@ -1928,6 +2097,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   }
   graph.updatedAt = new Date().toISOString();
   return { graph, events, order, pauseNodeIds };
+}
+
+function isWorkspaceRunAbortError(err) {
+  return err?.code === "WORKSPACE_RUN_ABORTED" || /Workspace run stopped/i.test(String(err?.message || ""));
 }
 
 function isTransientAgentNetworkError(err) {
@@ -1946,8 +2119,17 @@ function isTransientAgentNetworkError(err) {
     /socket hang up/i.test(text);
 }
 
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleepMs(ms, signal = null) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    }
+  });
 }
 
 /** ZIP 本地头：PK\x03\x04 / \x05\x06 / \x07\x08 */
@@ -2052,6 +2234,12 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 
 /** 正在执行的 flow run（flowId → { child, runUuid }）；同一 flow 只允许一个 run */
 const activeFlowRuns = new Map();
+/** 正在执行的 Workspace 临时 run（flowId → { controller, child }）；同一 flow 只允许一个 run */
+const activeWorkspaceRuns = new Map();
+
+function workspaceRunKey(userCtx, flowSource, flowId) {
+  return `${userCtx?.userId || ""}:${flowSource || "user"}:${flowId}`;
+}
 
 /** Cursor/OpenCode 执行目录统一使用当前 UI 启动 workspace。 */
 function composerCliWorkspaceForFlowDir(workspaceRoot, _flowDir) {
@@ -2186,7 +2374,16 @@ export function startUiServer({
 
     if (url.pathname === "/api/auth/me" && req.method === "GET") {
       const user = getAuthUserFromRequest(req);
-      json(res, 200, { authenticated: Boolean(user), user: user || null, setupRequired: authSetupRequired() });
+      const allowed = user ? isAuthUserAllowed(user) : true;
+      const allowlist = readUserAllowlist();
+      json(res, 200, {
+        authenticated: Boolean(user && allowed),
+        user: user && allowed ? user : null,
+        setupRequired: authSetupRequired(),
+        allowlistEnabled: allowlist.enabled,
+        forbidden: Boolean(user && !allowed),
+        error: user && !allowed ? "用户不在白名单中，请联系管理员开通访问权限" : "",
+      });
       return;
     }
 
@@ -2200,7 +2397,7 @@ export function startUiServer({
       }
       const result = loginOrCreateUser(payload?.username, payload?.password);
       if (!result.ok) {
-        json(res, 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
+        json(res, result.forbidden ? 403 : 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
         return;
       }
       const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false, migration: result.migration || null });
@@ -2229,6 +2426,10 @@ export function startUiServer({
     const userCtx = authUser ? { userId: authUser.userId } : {};
     if (url.pathname.startsWith("/api/") && !authUser) {
       json(res, 401, { error: "Authentication required", setupRequired: authSetupRequired() });
+      return;
+    }
+    if (url.pathname.startsWith("/api/") && authUser && !isAuthUserAllowed(authUser)) {
+      json(res, 403, { error: "用户不在白名单中，请联系管理员开通访问权限" });
       return;
     }
 
@@ -2566,6 +2767,34 @@ export function startUiServer({
           return;
         }
         const wantsStream = /\bapplication\/x-ndjson\b/i.test(req.headers.accept || "") || payload.stream === true;
+        const flowId = String(payload.flowId || "").trim();
+        if (!flowId) {
+          json(res, 400, { error: "Missing flowId" });
+          return;
+        }
+        const runKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
+        if (activeWorkspaceRuns.has(runKey)) {
+          json(res, 409, { error: "该 Workspace 正在运行" });
+          return;
+        }
+        const controller = new AbortController();
+        const runEntry = {
+          controller,
+          child: null,
+          stopChild() {
+            if (this.child && !this.child.killed) {
+              try { this.child.kill("SIGTERM"); } catch (_) {}
+            }
+          },
+        };
+        activeWorkspaceRuns.set(runKey, runEntry);
+        const setActiveChild = (child) => {
+          runEntry.child = child || null;
+          if (controller.signal.aborted) runEntry.stopChild();
+        };
+        const clearActiveRun = () => {
+          if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
+        };
         if (wantsStream) {
           const graphPath = workspaceGraphPath(scoped.root);
           res.writeHead(200, {
@@ -2574,26 +2803,74 @@ export function startUiServer({
             "X-Accel-Buffering": "no",
           });
           const writeEvent = (event) => {
-            res.write(JSON.stringify(event) + "\n");
+            try { res.write(JSON.stringify(event) + "\n"); } catch (_) {}
           };
           try {
-            const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, { onEvent: writeEvent });
+            const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, {
+              onEvent: writeEvent,
+              signal: controller.signal,
+              onActiveChild: setActiveChild,
+            });
             fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
             writeEvent({ type: "done", ok: true, path: graphPath, graph: result.graph, order: result.order, pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
-            writeEvent({ type: "error", error: (e && e.message) || String(e) });
+            if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
+              writeEvent({ type: "stopped", ok: false, stopped: true, message: "Workspace run stopped" });
+            } else {
+              writeEvent({ type: "error", error: (e && e.message) || String(e) });
+            }
             res.end();
+          } finally {
+            clearActiveRun();
           }
           return;
         }
-        const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx);
-        const graphPath = workspaceGraphPath(scoped.root);
-        fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
-        json(res, 200, { ok: true, path: graphPath, ...result });
+        try {
+          const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, {
+            signal: controller.signal,
+            onActiveChild: setActiveChild,
+          });
+          const graphPath = workspaceGraphPath(scoped.root);
+          fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
+          json(res, 200, { ok: true, path: graphPath, ...result });
+        } catch (e) {
+          if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
+            json(res, 200, { ok: false, stopped: true, message: "Workspace run stopped" });
+          } else {
+            throw e;
+          }
+        } finally {
+          clearActiveRun();
+        }
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/run/stop") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = typeof payload.flowId === "string" ? payload.flowId.trim() : "";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      const runKey = workspaceRunKey(userCtx, payload.flowSource || "user", flowId);
+      const entry = activeWorkspaceRuns.get(runKey);
+      if (!entry) {
+        json(res, 404, { error: "该 Workspace 未在运行" });
+        return;
+      }
+      try { entry.controller?.abort(); } catch (_) {}
+      try { entry.stopChild?.(); } catch (_) {}
+      json(res, 200, { ok: true, stopped: true });
       return;
     }
 

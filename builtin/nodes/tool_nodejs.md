@@ -38,6 +38,9 @@ input:
   - type: text
     name: skillsContext
     default: ""
+  - type: text
+    name: mcpContext
+    default: ""
 output:
   - type: node
     name: next

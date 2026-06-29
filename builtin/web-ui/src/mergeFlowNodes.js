@@ -30,6 +30,7 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   control_if: ["If Branch"],
   control_interval_loop: ["Interval Loop"],
   control_load_skills: ["Load Skills"],
+  control_load_mcp: ["Load MCP"],
   control_user_workspace: ["User Workspace"],
   control_toBool: ["To Bool", "Code ToBool"],
   control_wait_until: ["Wait Until"],
@@ -48,6 +49,7 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   display_markdown: ["Markdown Display"],
   display_mermaid: ["Mermaid Display"],
   display_ascii: ["ASCII Display"],
+  display_chart: ["Chart Display"],
 };
 
 function displayLabelForNode(definitionId, label, def) {
@@ -61,7 +63,8 @@ function displayLabelForNode(definitionId, label, def) {
 const LEGACY_AUTO_HIDDEN_SLOT_NAMES = {
   tool_git_checkout: new Set(["targetDir", "pullIfExists", "includeSubmodules", "workspaceContext", "commit", "changed"]),
   control_load_skills: new Set(["mergeMode", "workspaceContext", "skillsContext", "loadedCount", "summary"]),
-  agent_subAgent: new Set(["workspaceContext", "skillsContext"]),
+  control_load_mcp: new Set(["workspaceContext", "mcpContext", "loadedCount", "summary"]),
+  agent_subAgent: new Set(["workspaceContext", "skillsContext", "mcpContext"]),
 };
 
 const CANVAS_HIDDEN_SLOT_NAMES = {
@@ -97,6 +100,20 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
     "message",
   ]),
 };
+
+function marketplaceRefForDefinition(def) {
+  const id = String(def?.marketplaceDefinitionId || def?.id || "").trim();
+  return id.startsWith("marketplace:") ? id : "";
+}
+
+function runtimeDefinitionIdForPalette(def, fallback) {
+  const baseDefinitionId = String(def?.baseDefinitionId || "").trim();
+  if (!baseDefinitionId) return fallback;
+  const runtime = def?.runtime && typeof def.runtime === "object" ? def.runtime : {};
+  const hasPackagedRuntime = Boolean(runtime.entry || runtime.command);
+  if (hasPackagedRuntime && baseDefinitionId === "tool_nodejs") return fallback;
+  return baseDefinitionId;
+}
 
 function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
   if (!Array.isArray(slots) || !Array.isArray(definitionSlots) || definitionSlots.length === 0) return slots;
@@ -197,13 +214,14 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     if (inputs.length === 0 && def?.inputs?.length) inputs = def.inputs.map((x) => ({ ...x }));
     if (outputs.length === 0 && def?.outputs?.length) outputs = def.outputs.map((x) => ({ ...x }));
   }
-  const resolvedDefId = def?.id ?? definitionId;
+  const resolvedDefId = runtimeDefinitionIdForPalette(def, def?.id ?? definitionId);
+  const marketplaceRef = inst?.marketplaceRef || n.data?.marketplaceRef || marketplaceRefForDefinition(def);
   if (resolvedDefId === "agent_subAgent" && !outputs.some((slot) => slot?.name === "result")) {
     const resultSlot = def?.outputs?.find((slot) => slot?.name === "result");
     outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
   }
   if (
-    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii") &&
+    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart") &&
     !outputs.some((slot) => slot?.name === "next")
   ) {
     const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");
@@ -235,6 +253,13 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
       displayLabel,
       definitionDisplayName: def?.displayName,
       definitionId: resolvedDefId,
+      ...(marketplaceRef ? { marketplaceRef } : {}),
+      ...(inst?.marketplacePackageId || n.data?.marketplacePackageId || def?.packageId
+        ? { marketplacePackageId: inst?.marketplacePackageId || n.data?.marketplacePackageId || def?.packageId }
+        : {}),
+      ...(inst?.marketplaceVersion || n.data?.marketplaceVersion || def?.version
+        ? { marketplaceVersion: inst?.marketplaceVersion || n.data?.marketplaceVersion || def?.version }
+        : {}),
       schemaType: n.data?.schemaType ?? n.type ?? "agent",
       role: mergedRole,
       model: mergedModel,

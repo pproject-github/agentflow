@@ -329,6 +329,10 @@
       "displayName": "图片展示",
       "description": "在 Workspace 画布中预览图片 URL、data URL 或图片路径，并将来源继续传给下游"
     },
+    "display_chart": {
+      "displayName": "图表展示",
+      "description": "在 Workspace 画布中渲染 ChartSpec/ECharts JSON，并将 JSON 继续传给下游"
+    },
     "provide_str": {
       "displayName": "文本",
       "description": "直接提供一段文本，value 会原样供下游引用"

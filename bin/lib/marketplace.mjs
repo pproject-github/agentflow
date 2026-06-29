@@ -85,12 +85,21 @@ function normalizeManifest(raw, packageDir, source = "workspace") {
   const version = raw.version != null ? String(raw.version).trim() : "";
   if (!id || !version) return null;
   const runtime = raw.runtime && typeof raw.runtime === "object" ? raw.runtime : {};
+  const baseDefinitionId =
+    raw.baseDefinitionId != null && String(raw.baseDefinitionId).trim() !== ""
+      ? String(raw.baseDefinitionId).trim()
+      : raw.sourceDefinitionId != null && String(raw.sourceDefinitionId).trim() !== ""
+        ? String(raw.sourceDefinitionId).trim()
+        : runtime.type != null && String(runtime.type).trim() !== ""
+          ? String(runtime.type).trim()
+          : "";
   return {
     ...raw,
     id,
     version,
     packageDir,
     definitionId: `marketplace:${id}@${version}`,
+    baseDefinitionId,
     displayName: raw.displayName != null ? String(raw.displayName) : raw.name != null ? String(raw.name) : id,
     description: raw.description != null ? String(raw.description) : "",
     input: normalizeSlotList(raw.input || raw.inputs),
@@ -176,8 +185,11 @@ function depMatchesNode(dep, id, version) {
 }
 
 function instanceMatchesNode(inst, id, version) {
-  const parsed = parseMarketplaceDefinitionId(inst?.definitionId);
-  return Boolean(parsed && parsed.id === id && (!parsed.version || parsed.version === version));
+  const parsed =
+    parseMarketplaceDefinitionId(inst?.definitionId) ||
+    parseMarketplaceDefinitionId(inst?.marketplaceRef);
+  if (parsed) return Boolean(parsed.id === id && (!parsed.version || parsed.version === version));
+  return inst?.marketplacePackageId === id && (inst?.marketplaceVersion == null || String(inst.marketplaceVersion) === version);
 }
 
 export function listMarketplaceNodeUsages(workspaceRoot, id, version, opts = {}) {
@@ -349,6 +361,7 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
     id: n.id,
     version: n.version,
     definitionId: n.definitionId,
+    baseDefinitionId: n.baseDefinitionId,
     displayName: n.displayName,
     description: n.description,
     inputs: n.input,
@@ -440,7 +453,7 @@ export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData) {
   if (!flowData || !flowData.instances || typeof flowData.instances !== "object") return null;
   const nodes = {};
   for (const inst of Object.values(flowData.instances)) {
-    const defId = inst && inst.definitionId;
+    const defId = inst && (inst.marketplaceRef || inst.definitionId);
     const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, defId, flowData);
     if (!resolved) continue;
     nodes[resolved.id] = {
@@ -630,6 +643,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   const label = String(payload.label || payload.instanceId || "node").trim();
   const id = safePackageId(payload.id || payload.packageId || label);
   const version = normalizeVersion(payload.version || "1.0.0");
+  const sourceDefinitionId = String(payload.definitionId || "").trim();
   if (!id) return { ok: false, error: "Invalid package id" };
 
   const inputs = normalizeSlotList(payload.inputs || payload.input).map((slot) => ({
@@ -667,7 +681,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
           command: script,
         }
       : {
-          type: "agent_subAgent",
+          type: sourceDefinitionId || "agent_subAgent",
         }
   );
   const manifest = {
@@ -675,6 +689,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     version,
     name: label,
     description,
+    baseDefinitionId: sourceDefinitionId || runtime.type || "agent_subAgent",
     runtime,
     inputs,
     outputs,
@@ -693,6 +708,8 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     version,
     packageDir: dest,
     definitionId: `marketplace:${id}@${version}`,
+    baseDefinitionId: manifest.baseDefinitionId,
+    marketplaceDefinitionId: `marketplace:${id}@${version}`,
     packagedFiles: packagedScript?.packagedFiles || [],
   };
 }

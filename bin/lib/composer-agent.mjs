@@ -269,6 +269,8 @@ function buildAgentStepPrompt(step, flowContext) {
     parts.push(
       "## 上下文已就绪（禁止 forage）\n" +
       "- 节点定义见上方 schema 表，**禁止** Glob/Read `builtin/nodes/`、`.workspace/agentflow/nodes/`、历史 `runBuild/` 来推断节点结构。\n" +
+      "- 默认不要读取、搜索或 Glob 历史运行产物；除非用户明确要求分析历史 run/log，否则检索时必须排除 `**/runBuild/**`、`**/logs/**`、`.workspace/agentflow/**/runBuild/**`、`~/agentflow/runBuild/**`、`node_modules/**`、`dist/**`。\n" +
+      "- 不要从历史 runBuild/logs 中推断业务事实、指标资产或 skill 文档；优先读取当前 workspace 的源文件、analytics-docs、skills、配置与用户给出的上下文。\n" +
       "- 目标 instance 的当前 YAML 已附上（若 instanceId 已知）；tool_nodejs 节点引用的 .mjs 脚本内容也已附上（若存在）。\n" +
       "- 如需查看整份 flow，仅在确实需要时读取一次。"
     );
