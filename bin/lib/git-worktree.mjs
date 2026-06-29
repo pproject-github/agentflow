@@ -165,8 +165,42 @@ export function listGitWorktrees(repoRoot) {
 }
 
 export function findRegisteredWorktree(repoRoot, worktreePath) {
-  const target = path.resolve(worktreePath);
-  return listGitWorktrees(repoRoot).find((entry) => path.resolve(entry.path) === target) || null;
+  const target = canonicalPathForCompare(worktreePath);
+  return listGitWorktrees(repoRoot).find((entry) => canonicalPathForCompare(entry.path) === target) || null;
+}
+
+function canonicalPathForCompare(rawPath) {
+  const abs = path.resolve(String(rawPath || ""));
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    /* missing path: canonicalize the nearest existing parent */
+  }
+  const missingParts = [];
+  let cursor = abs;
+  while (cursor && !fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    missingParts.unshift(path.basename(cursor));
+    cursor = parent;
+  }
+  try {
+    return path.join(fs.realpathSync.native(cursor), ...missingParts);
+  } catch {
+    return abs;
+  }
+}
+
+function pruneGitWorktrees(repoRoot) {
+  const result = runGit(["worktree", "prune", "--expire", "now"], repoRoot);
+  if (result.status !== 0) {
+    throw new Error(`git worktree prune failed: ${result.stderr || result.stdout}`);
+  }
+}
+
+function isMissingRegisteredWorktreeError(result) {
+  const text = String(result?.stderr || result?.stdout || "");
+  return /missing but already registered worktree/i.test(text);
 }
 
 function branchExists(repoRoot, branch) {
@@ -187,7 +221,7 @@ function actualWorktreeBranch(worktreePath) {
   return branch === "HEAD" ? "DETACHED" : branch;
 }
 
-export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipelineWorkspace }) {
+export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipelineWorkspace, force = false, pruneMissing = true }) {
   const repoRoot = resolveGitRepoRoot(repoPath);
   const wantedBranch = String(branch || "").trim();
   const target = path.resolve(worktreePath || defaultWorktreePath(pipelineWorkspace || repoRoot, repoRoot, wantedBranch));
@@ -196,7 +230,7 @@ export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipe
     throw new Error(`branch does not exist in repoPath: ${wantedBranch}`);
   }
 
-  const registered = findRegisteredWorktree(repoRoot, target);
+  let registered = findRegisteredWorktree(repoRoot, target);
   if (fs.existsSync(target)) {
     if (!registered) {
       throw new Error(`worktreePath exists but is not registered for repoPath: ${target}`);
@@ -205,11 +239,26 @@ export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipe
       throw new Error(`worktreePath branch mismatch: expected ${wantedBranch}, got ${registered.branch || "DETACHED"}`);
     }
   } else {
+    if (registered && pruneMissing) {
+      pruneGitWorktrees(repoRoot);
+      registered = findRegisteredWorktree(repoRoot, target);
+    }
+    if (registered && !force) {
+      throw new Error(`worktreePath is missing but still registered: ${target}; set pruneMissing=true or force=true`);
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const args = wantedBranch
-      ? ["worktree", "add", target, wantedBranch]
-      : ["worktree", "add", "--detach", target, "HEAD"];
-    const result = runGit(args, repoRoot);
+    const args = ["worktree", "add"];
+    if (force) args.push("--force");
+    if (wantedBranch) {
+      args.push(target, wantedBranch);
+    } else {
+      args.push("--detach", target, "HEAD");
+    }
+    let result = runGit(args, repoRoot);
+    if (result.status !== 0 && pruneMissing && isMissingRegisteredWorktreeError(result)) {
+      pruneGitWorktrees(repoRoot);
+      result = runGit(args, repoRoot);
+    }
     if (result.status !== 0) {
       throw new Error(`git worktree add failed: ${result.stderr || result.stdout}`);
     }

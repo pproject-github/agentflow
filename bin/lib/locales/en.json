@@ -329,6 +329,10 @@
       "displayName": "Image Display",
       "description": "Preview an image URL, data URL, or image path on the Workspace canvas and pass the source downstream"
     },
+    "display_chart": {
+      "displayName": "Chart Display",
+      "description": "Render ChartSpec/ECharts JSON on the Workspace canvas and pass the JSON downstream"
+    },
     "provide_str": {
       "displayName": "Text",
       "description": "Provide a text value directly, value will be passed to downstream as-is"

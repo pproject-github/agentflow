@@ -363,11 +363,15 @@ function emitGitWorktreeLoadNode(workspaceRoot, flowName, uuid, instanceId, exec
   const branch = String(inputs.branch || "").trim();
   const worktreePath = resolveMaybeWorkspacePath(inputs.worktreePath, workspaceContext, { branch }) ||
     (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+  const force = isTruthyInput(inputs.force);
+  const pruneMissing = String(inputs.pruneMissing ?? "true").trim().toLowerCase() !== "false";
   const result = loadGitWorktree({
     repoPath,
     branch,
     worktreePath,
     pipelineWorkspace: workspaceContext.pipelineWorkspace || path.resolve(workspaceRoot),
+    force,
+    pruneMissing,
   });
   const outWorkspaceContext = {
     version: 1,

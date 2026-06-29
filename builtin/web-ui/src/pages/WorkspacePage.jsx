@@ -18,6 +18,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
+import { parseChartSpec } from "../chartSpec.js";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -44,7 +45,7 @@ import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
-const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills"]);
+const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp"]);
 const WORKSPACE_RUN_DEFINITION = {
   id: "workspace_run",
   displayName: "Run",
@@ -66,7 +67,22 @@ const WORKSPACE_LOAD_SKILLS_DEFINITION = {
   ],
   outputs: [
     { type: "node", name: "next", default: "" },
-    { type: "text", name: "skillsContext", default: "" },
+    { type: "text", name: "skillsContext", default: "", showOnNode: true },
+  ],
+};
+const WORKSPACE_LOAD_MCP_DEFINITION = {
+  id: "control_load_mcp",
+  displayName: "Load MCP",
+  label: "Load MCP",
+  description: "Load selected Cursor MCP server tool manifests for downstream agent nodes.",
+  type: "control",
+  inputs: [
+    { type: "node", name: "prev", default: "" },
+    { type: "text", name: "serverNames", default: "", showOnNode: false },
+  ],
+  outputs: [
+    { type: "node", name: "next", default: "" },
+    { type: "text", name: "mcpContext", default: "", showOnNode: true },
   ],
 };
 
@@ -88,13 +104,6 @@ function flowParamsQuery(params) {
   if (params.flowSource) q.set("flowSource", params.flowSource);
   if (params.archived) q.set("archived", "1");
   return q;
-}
-
-function workspaceComposerStorageKey(params) {
-  const flowId = String(params?.flowId || "").trim();
-  if (!flowId) return "";
-  const flowSource = String(params?.flowSource || "user").trim() || "user";
-  return `af:workspace-composer:${flowId}:${flowSource}${params?.archived ? ":archived" : ""}`;
 }
 
 function workspaceSkillsStorageKey(params) {
@@ -184,19 +193,6 @@ function extractThinkingDeltaFromRawTrace(event) {
   }
 }
 
-function normalizeWorkspaceComposerMessages(value) {
-  return (Array.isArray(value) ? value : [])
-    .filter((msg) => msg && (msg.role === "user" || msg.role === "assistant") && typeof msg.text === "string")
-    .filter((msg) => !(msg.role === "assistant" && isLegacyWorkspaceRunLogText(msg.text)))
-    .map((msg) => ({
-      role: msg.role,
-      text: msg.text,
-      ...(msg.error ? { error: true } : {}),
-      ...(typeof msg.at === "number" ? { at: msg.at } : {}),
-    }))
-    .slice(-80);
-}
-
 function schemaTypeForDefinition(definitionId, def) {
   const id = String(definitionId || def?.id || "").toLowerCase();
   if (id.startsWith("control_")) return "control";
@@ -205,8 +201,23 @@ function schemaTypeForDefinition(definitionId, def) {
   return def?.type || "agent";
 }
 
+function marketplaceRefForDefinition(def) {
+  const id = String(def?.marketplaceDefinitionId || def?.id || "").trim();
+  return id.startsWith("marketplace:") ? id : "";
+}
+
+function runtimeDefinitionIdForPalette(def) {
+  if (!def) return "";
+  const baseDefinitionId = String(def.baseDefinitionId || "").trim();
+  if (!baseDefinitionId) return String(def.id || "").trim();
+  const runtime = def.runtime && typeof def.runtime === "object" ? def.runtime : {};
+  const hasPackagedRuntime = Boolean(runtime.entry || runtime.command);
+  if (hasPackagedRuntime && baseDefinitionId === "tool_nodejs") return String(def.id || "").trim();
+  return baseDefinitionId;
+}
+
 function paletteCategory(node) {
-  const id = String(node?.id || "");
+  const id = String(runtimeDefinitionIdForPalette(node) || node?.id || "");
   if (id === "workspace_run") return "CONTROL";
   if (id.startsWith("display_")) return "DISPLAY";
   if (/^control/i.test(id)) return "CONTROL";
@@ -365,7 +376,8 @@ function cloneSlots(slots) {
 }
 
 function graphToFlow(graph, palette) {
-  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const instances = sanitizeWorkspaceRuntimeOutputs(rawInstances);
   const rawEdges = Array.isArray(graph?.edges) ? graph.edges : [];
   const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object" ? graph.ui.nodePositions : {};
   const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
@@ -378,22 +390,28 @@ function graphToFlow(graph, palette) {
     const inst = instances[id] || {};
     const definitionId = inst.definitionId || id;
     const def = palette.find((p) => p.id === definitionId);
+    const runtimeDefinitionId = runtimeDefinitionIdForPalette(def) || definitionId;
+    const runtimeDef = palette.find((p) => p.id === runtimeDefinitionId) || def;
+    const marketplaceRef = inst.marketplaceRef || marketplaceRefForDefinition(def);
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
       : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
     const size = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
-    const isDisplay = Boolean(displayKind(definitionId));
+    const isDisplay = Boolean(displayKind(runtimeDefinitionId));
     return {
       id,
       type: FLOW_NODE_TYPE,
       position: pos,
       ...(isDisplay && size ? { width: size.width, height: size.height } : {}),
       data: {
-        label: inst.label || labelForDefinition(def) || id,
-        definitionId,
-        schemaType: schemaTypeForDefinition(definitionId, def),
+        label: inst.label || labelForDefinition(def) || labelForDefinition(runtimeDef) || id,
+        definitionId: runtimeDefinitionId,
+        ...(marketplaceRef ? { marketplaceRef } : {}),
+        ...(def?.packageId ? { marketplacePackageId: def.packageId } : {}),
+        ...(def?.version ? { marketplaceVersion: def.version } : {}),
+        schemaType: schemaTypeForDefinition(runtimeDefinitionId, runtimeDef || def),
         role: inst.role || "normal",
         model: inst.model || undefined,
         body: inst.body || "",
@@ -417,7 +435,7 @@ function graphToFlow(graph, palette) {
 }
 
 function flowToGraph(nodes, edges, instances) {
-  const graphInstances = buildInstancesForYaml(nodes, instances || {});
+  const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(nodes, instances || {}));
   const graphEdges = edges.map((edge) => ({
     source: edge.source,
     target: edge.target,
@@ -439,6 +457,27 @@ function flowToGraph(nodes, edges, instances) {
   return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes } };
 }
 
+function sanitizeWorkspaceRuntimeOutputs(instances) {
+  const next = {};
+  for (const [id, instance] of Object.entries(instances || {})) {
+    const definitionId = String(instance?.definitionId || id);
+    const shouldKeepOutputValues = Boolean(displayKind(definitionId)) || definitionId.startsWith("provide_");
+    if (shouldKeepOutputValues || !Array.isArray(instance?.output)) {
+      next[id] = instance;
+      continue;
+    }
+    next[id] = {
+      ...instance,
+      output: instance.output.map((slot) => ({
+        ...slot,
+        value: "",
+        default: "",
+      })),
+    };
+  }
+  return next;
+}
+
 function displayKind(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_markdown") return "markdown";
@@ -446,6 +485,7 @@ function displayKind(definitionId) {
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
   if (id === "display_image") return "image";
+  if (id === "display_chart") return "chart";
   return "";
 }
 
@@ -504,6 +544,7 @@ function displayIcon(kind) {
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
   if (kind === "image") return "image";
+  if (kind === "chart") return "bar_chart";
   return "article";
 }
 
@@ -787,6 +828,63 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
+function ChartDisplayContent({ content }) {
+  const hostRef = useRef(null);
+  const parsed = useMemo(() => parseChartSpec(content), [content]);
+  const [renderState, setRenderState] = useState({ loading: false, error: "" });
+
+  useEffect(() => {
+    if (!parsed.ok) {
+      setRenderState({ loading: false, error: parsed.error || "Invalid chart spec" });
+      return undefined;
+    }
+    let disposed = false;
+    let chart = null;
+    let resizeObserver = null;
+    let resize = null;
+    setRenderState({ loading: true, error: "" });
+    import("echarts")
+      .then((echarts) => {
+        if (disposed || !hostRef.current) return;
+        chart = echarts.init(hostRef.current, "dark", { renderer: "canvas" });
+        chart.setOption(parsed.spec.option, true);
+        resize = () => chart?.resize();
+        if (typeof ResizeObserver !== "undefined") {
+          resizeObserver = new ResizeObserver(resize);
+          resizeObserver.observe(hostRef.current);
+        }
+        window.addEventListener("resize", resize);
+        window.requestAnimationFrame(resize);
+        if (!disposed) setRenderState({ loading: false, error: "" });
+      })
+      .catch((error) => {
+        if (!disposed) setRenderState({ loading: false, error: String(error?.message || error) });
+      });
+    return () => {
+      disposed = true;
+      if (resize) window.removeEventListener("resize", resize);
+      resizeObserver?.disconnect?.();
+      chart?.dispose?.();
+    };
+  }, [parsed]);
+
+  if (!parsed.ok || renderState.error) {
+    return (
+      <div className="af-work-display-chart-error">
+        <strong>Chart configuration error</strong>
+        <span>{renderState.error || parsed.error}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="af-work-display-chart">
+      <div ref={hostRef} className="af-work-display-chart__canvas" />
+      {renderState.loading ? <div className="af-work-display-chart__loading">Loading chart...</div> : null}
+    </div>
+  );
+}
+
 function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
   const kind = displayKind(data?.definitionId);
   if (!kind) return null;
@@ -817,6 +915,9 @@ function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (kind === "markdown") {
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} /></VisibleScrollFrame>;
   }
+  if (kind === "chart") {
+    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--chart"><ChartDisplayContent content={content} /></VisibleScrollFrame>;
+  }
   if (kind === "mermaid") {
     return (
       <VisibleScrollFrame className="af-work-display-body">
@@ -825,7 +926,7 @@ function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
       </VisibleScrollFrame>
     );
   }
-  return <VisibleScrollFrame className="af-work-display-body"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
+  return <VisibleScrollFrame className="af-work-display-body af-work-display-body--ascii"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
 }
 
 function MarkdownDisplayEditor({ value, onChange }) {
@@ -847,12 +948,15 @@ function MarkdownDisplayEditor({ value, onChange }) {
 
 function WorkspaceNodeChat({ nodeId, data }) {
   const active = data?.nodeChatActive;
+  const selected = Boolean(data?.selected);
   const chat = data?.nodeChat || {};
   const messages = Array.isArray(chat.messages) ? chat.messages : [];
   const draft = String(chat.draft || "");
   const candidate = String(chat.candidateContent || "");
   const running = Boolean(chat.running);
   const error = String(chat.error || "");
+
+  if (!active && !selected) return null;
 
   if (!active) {
     return (
@@ -941,6 +1045,7 @@ function displayFileExtension(kind) {
   if (kind === "ascii") return "txt";
   if (kind === "html") return "html";
   if (kind === "image") return "txt";
+  if (kind === "chart") return "json";
   return "md";
 }
 
@@ -984,7 +1089,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : "Markdown");
+  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : "Markdown");
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
@@ -1169,6 +1274,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const running = data?.runningRunNodeId === id;
+  const stopped = data?.nodeStatus === "stopped";
   return (
     <div
       className={
@@ -1177,7 +1283,8 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         (running ? " af-work-run-card--running" : "") +
         (data?.isExecuting ? " af-work-run-card--executing" : "") +
         (data?.nodeStatus === "success" ? " af-work-run-card--done" : "") +
-        (data?.nodeStatus === "failed" ? " af-work-run-card--failed" : "")
+        (data?.nodeStatus === "failed" ? " af-work-run-card--failed" : "") +
+        (stopped ? " af-work-run-card--stopped" : "")
       }
     >
       {inputs.map((slot, idx) => {
@@ -1226,15 +1333,15 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
       </div>
       <button
         type="button"
-        className="af-work-run-card__button nodrag"
-        disabled={running}
+        className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
         onClick={(event) => {
           event.stopPropagation();
-          data?.onRunWorkspaceNode?.(id);
+          if (running) data?.onStopWorkspaceNode?.(id);
+          else data?.onRunWorkspaceNode?.(id);
         }}
       >
-        <span className={"material-symbols-outlined" + (running ? " af-spin" : "")}>{running ? "sync" : "play_arrow"}</span>
-        <span>{running ? "Running" : "Run line"}</span>
+        <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+        <span>{running ? "Stop" : "Run line"}</span>
       </button>
     </div>
   );
@@ -1293,6 +1400,16 @@ function WorkspaceFlowNode(props) {
         skills={props.data?.skills}
         skillCollections={props.data?.skillCollections}
         onChangeSkillKeys={props.data?.onChangeLoadSkillKeys}
+      />
+    );
+  }
+  if (props.data?.definitionId === "control_load_mcp") {
+    return (
+      <WorkspaceLoadMcpNode
+        {...props}
+        deleteNode={deleteNode}
+        servers={props.data?.mcpServers}
+        onChangeMcpNames={props.data?.onChangeLoadMcpNames}
       />
     );
   }
@@ -1452,6 +1569,50 @@ function serializeSkillKeys(keys) {
   return JSON.stringify(Array.from(new Set((keys || []).map(String).filter(Boolean))));
 }
 
+function selectedMcpNamesFromNodeData(data) {
+  const bodyNames = selectedSkillKeysFromValue(data?.body || "");
+  if (bodyNames.length > 0) return bodyNames;
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const slot = inputs.find((item) => item?.name === "mcpContext" || item?.name === "serverNames" || item?.type === "text");
+  return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
+}
+
+function serializeMcpNames(names) {
+  return JSON.stringify(Array.from(new Set((names || []).map(String).filter(Boolean))));
+}
+
+function nodeToPropDraft(node) {
+  if (!node) return null;
+  const { inputs, outputs } = cloneNodeIoDraftSlots(node);
+  return {
+    id: node.id,
+    newId: node.id,
+    label: String(node.data?.label ?? node.id),
+    role: String(node.data?.role ?? "normal"),
+    model: String(node.data?.model ?? ""),
+    body: String(node.data?.body ?? ""),
+    images: normalizeImages(node.data?.images),
+    script: String(node.data?.script ?? ""),
+    inputs,
+    outputs,
+  };
+}
+
+function draftValueEquals(a, b) {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+function mergeUntouchedPropDraft(current, previousNodeDraft, nextNodeDraft) {
+  if (!current || !previousNodeDraft || !nextNodeDraft) return nextNodeDraft;
+  const next = { ...current };
+  for (const key of ["newId", "label", "role", "model", "body", "images", "script", "inputs", "outputs"]) {
+    if (draftValueEquals(current[key], previousNodeDraft[key])) {
+      next[key] = nextNodeDraft[key];
+    }
+  }
+  return next;
+}
+
 function WorkspaceLoadSkillsNode({
   id,
   data,
@@ -1485,6 +1646,19 @@ function WorkspaceLoadSkillsNode({
     const ungrouped = skillsList.filter((skill) => !used.has(skill.key));
     return { collectionGroups, ungrouped };
   }, [byKey, collectionsList, skillsList]);
+  useEffect(() => {
+    setCollapsedGroups((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const group of groups.collectionGroups) {
+        if (!next.has(group.id)) {
+          next.add(group.id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [groups.collectionGroups]);
   const filteredGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return groups;
@@ -1682,7 +1856,10 @@ function WorkspaceLoadSkillsNode({
                         onClick={() => toggleCollapsedGroup(group.id)}
                         aria-expanded={!collapsed}
                       >
-                        <span>{group.name}</span>
+                        <span className="af-work-load-skills-menu__group-main">
+                          <span>{group.name}</span>
+                          {group.description ? <em>{group.description}</em> : null}
+                        </span>
                       </button>
                       <small>{checkedCount}/{groupKeys.length}</small>
                       <button
@@ -1696,12 +1873,15 @@ function WorkspaceLoadSkillsNode({
                     </div>
                     {!collapsed ? (
                       <div className="af-work-load-skills-menu__options">
-                        {group.skills.map((skill) => (
-                          <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
-                            <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
-                            <span>{skill.name}</span>
-                          </label>
-                        ))}
+	                        {group.skills.map((skill) => (
+	                          <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
+	                            <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
+	                            <span className="af-work-load-skills-menu__option-main">
+	                              <span className="af-work-load-skills-menu__option-title">{skill.name}</span>
+	                              {skill.description ? <span className="af-work-load-skills-menu__option-desc">{skill.description}</span> : null}
+	                            </span>
+	                          </label>
+	                        ))}
                       </div>
                     ) : null}
                   </section>
@@ -1714,12 +1894,15 @@ function WorkspaceLoadSkillsNode({
                     <small>{filteredGroups.ungrouped.length}</small>
                   </div>
                   <div className="af-work-load-skills-menu__options">
-                    {filteredGroups.ungrouped.map((skill) => (
-                      <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
-                        <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
-                        <span>{skill.name}</span>
-                      </label>
-                    ))}
+	                    {filteredGroups.ungrouped.map((skill) => (
+	                      <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
+	                        <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
+	                        <span className="af-work-load-skills-menu__option-main">
+	                          <span className="af-work-load-skills-menu__option-title">{skill.name}</span>
+	                          {skill.description ? <span className="af-work-load-skills-menu__option-desc">{skill.description}</span> : null}
+	                        </span>
+	                      </label>
+	                    ))}
                   </div>
                 </section>
               ) : null}
@@ -1735,6 +1918,140 @@ function WorkspaceLoadSkillsNode({
               aria-hidden="true"
             >
               <span style={{ height: `${scrollbar.height}%`, top: `${scrollbar.top}%` }} />
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceLoadMcpNode({ id, data, selected, deleteNode, servers = [], onChangeMcpNames }) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const keys = useMemo(() => new Set(selectedMcpNamesFromNodeData(data)), [data]);
+  const serverList = useMemo(() => (Array.isArray(servers) ? servers : [])
+    .map((server) => ({
+      name: String(server?.name || ""),
+      description: String(server?.description || ""),
+      detail: String(server?.url || [server?.command, ...(Array.isArray(server?.args) ? server.args : [])].filter(Boolean).join(" ") || ""),
+      type: String(server?.type || ""),
+    }))
+    .filter((server) => server.name), [servers]);
+  const filteredServers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return serverList;
+    return serverList.filter((server) => [server.name, server.description, server.detail, server.type].join(" ").toLowerCase().includes(q));
+  }, [search, serverList]);
+  const toggleKeys = useCallback((toggleKeysList, checked) => {
+    const next = new Set(keys);
+    for (const key of toggleKeysList) {
+      if (checked) next.add(key);
+      else next.delete(key);
+    }
+    onChangeMcpNames?.(id, Array.from(next));
+  }, [id, keys, onChangeMcpNames]);
+
+  return (
+    <div className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}>
+      {inputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.6 + idx * 1.7}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`in-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--in" style={{ top }}>{label}</span>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`input-${idx}`}
+              className="af-work-display-handle af-work-display-handle--in"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      {outputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.6 + idx * 1.7}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`out-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--out" style={{ top }}>{label}</span>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id={`output-${idx}`}
+              className="af-work-display-handle af-work-display-handle--out"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      <div className="af-work-load-skills-card__head">
+        <span className="material-symbols-outlined">hub</span>
+        <strong>{data?.label || "Load MCP"}</strong>
+        <span>{data?.definitionId || "control_load_mcp"}</span>
+        <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div className="af-work-load-skills-card__body nodrag">
+        <button type="button" className="af-work-load-skills-card__select" onClick={(event) => {
+          event.stopPropagation();
+          if (!open) data?.onRefreshMcps?.();
+          setOpen((v) => !v);
+        }}>
+          <span>{keys.size > 0 ? `${keys.size} MCP selected` : "选择 MCP"}</span>
+          <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
+        </button>
+        {open ? (
+          <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="af-work-load-skills-search">
+              <span className="material-symbols-outlined" aria-hidden>search</span>
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索 MCP..."
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="搜索 MCP"
+              />
+              {search ? (
+                <button type="button" onClick={() => setSearch("")} aria-label="清空搜索">
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              ) : null}
+            </div>
+            <div className="af-work-load-skills-menu">
+              <section className="af-work-load-skills-menu__group">
+                <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
+                  <span>MCP Servers</span>
+                  <small>{filteredServers.length}</small>
+                </div>
+                <div className="af-work-load-skills-menu__options">
+                  {filteredServers.map((server) => (
+                    <label key={server.name} className="af-work-load-skills-menu__option">
+                      <input type="checkbox" checked={keys.has(server.name)} onChange={(event) => toggleKeys([server.name], event.target.checked)} />
+                      <span className="af-work-load-skills-menu__option-main">
+                        <span className="af-work-load-skills-menu__option-title">{server.name}</span>
+                        {server.description || server.detail ? (
+                          <span className="af-work-load-skills-menu__option-desc">{server.description || server.detail}</span>
+                        ) : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+              {filteredServers.length === 0 ? (
+                <div className="af-work-load-skills-menu__empty">没有匹配的 MCP</div>
+              ) : null}
+              <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeMcpNames?.(id, [])}>清空</button>
             </div>
           </div>
         ) : null}
@@ -1791,6 +2108,7 @@ function WorkspacePageInner() {
   const [selectedSkills, setSelectedSkills] = useState([]);
   const [skillCollections, setSkillCollections] = useState([]);
   const [skillCollectionsLoaded, setSkillCollectionsLoaded] = useState(false);
+  const [mcpServers, setMcpServers] = useState([]);
 
   const showFlowSnippetToast = useCallback((message) => {
     if (flowSnippetToastTimerRef.current) {
@@ -1836,12 +2154,12 @@ function WorkspacePageInner() {
   const [canvasTool, setCanvasTool] = useState("pan");
   const [authUser, setAuthUser] = useState(null);
   const [runningRunNodeId, setRunningRunNodeId] = useState("");
+  const workspaceRunAbortRef = useRef(null);
+  const workspaceRunStoppedRef = useRef(false);
   const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
   const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
   const [status, setStatus] = useState("");
-  const composerStorageKey = useMemo(() => workspaceComposerStorageKey(flowParams), [flowParams]);
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
-  const composerLoadedRef = useRef(false);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
 
   useEffect(() => {
@@ -1850,32 +2168,10 @@ function WorkspacePageInner() {
   }, [flowParams]);
 
   useEffect(() => {
-    composerLoadedRef.current = false;
+    setComposerMessages([]);
     setComposerRunSessions([]);
     setActiveComposerSessionId("workspace");
-    if (!composerStorageKey) {
-      setComposerMessages([]);
-      composerLoadedRef.current = true;
-      return;
-    }
-    try {
-      const raw = localStorage.getItem(composerStorageKey);
-      setComposerMessages(raw ? normalizeWorkspaceComposerMessages(JSON.parse(raw)) : []);
-    } catch {
-      setComposerMessages([]);
-    } finally {
-      composerLoadedRef.current = true;
-    }
-  }, [composerStorageKey]);
-
-  useEffect(() => {
-    if (!composerLoadedRef.current || !composerStorageKey) return;
-    try {
-      localStorage.setItem(composerStorageKey, JSON.stringify(normalizeWorkspaceComposerMessages(composerMessages)));
-    } catch {
-      /* ignore quota */
-    }
-  }, [composerMessages, composerStorageKey]);
+  }, [flowParams]);
 
   const loadFiles = useCallback(async () => {
     const q = flowParamsQuery(flowParams);
@@ -1936,6 +2232,7 @@ function WorkspacePageInner() {
     const paletteList = [
       ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
       WORKSPACE_LOAD_SKILLS_DEFINITION,
+      WORKSPACE_LOAD_MCP_DEFINITION,
       WORKSPACE_RUN_DEFINITION,
     ];
     setPalette(paletteList);
@@ -1985,11 +2282,55 @@ function WorkspacePageInner() {
     setActiveComposerSessionId(sessionId || "workspace");
   }, []);
 
+  const stopWorkspaceRun = useCallback(async (runNodeId = "") => {
+    const id = String(runNodeId || runningRunNodeId || "").trim();
+    if (!id) return;
+    workspaceRunStoppedRef.current = true;
+    if (workspaceRunAbortRef.current) {
+      workspaceRunAbortRef.current.abort();
+      workspaceRunAbortRef.current = null;
+    }
+    setRunningRunNodeId("");
+    setWorkspaceExecutingNodes(new Set());
+    setWorkspaceNodeRunStatus((current) => {
+      const next = { ...current };
+      for (const [nodeId, item] of Object.entries(next)) {
+        if (item?.status === "running") next[nodeId] = { status: "stopped" };
+      }
+      next[id] = { status: "stopped" };
+      return next;
+    });
+    setStatus(`Workspace run stopped: ${id}`);
+    setComposerRunSessions((list) => list.map((session) => (
+      session.runNodeId === id && session.status === "running"
+        ? {
+            ...session,
+            status: "stopped",
+            endedAt: Date.now(),
+            messages: [
+              ...(Array.isArray(session.messages) ? session.messages : []),
+              { role: "assistant", kind: "status", text: "Workspace run stopped.", at: Date.now() },
+            ].slice(-160),
+          }
+        : session
+    )));
+    try {
+      await fetch("/api/workspace/run/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, runNodeId: id }),
+      });
+    } catch (_) {}
+  }, [flowParams, runningRunNodeId]);
+
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!runNodeId || runningRunNodeId) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
     const runSessionLabel = `Run ${runNodeId}`;
+    const abortController = new AbortController();
+    workspaceRunAbortRef.current = abortController;
+    workspaceRunStoppedRef.current = false;
     setRunningRunNodeId(runNodeId);
     setWorkspaceExecutingNodes(new Set([runNodeId]));
     setWorkspaceNodeRunStatus({ [runNodeId]: { status: "running" } });
@@ -2012,6 +2353,7 @@ function WorkspacePageInner() {
       const res = await fetch("/api/workspace/run", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+        signal: abortController.signal,
         body: JSON.stringify({
           ...flowParams,
           graph,
@@ -2223,10 +2565,33 @@ function WorkspacePageInner() {
       };
       const applyGraph = (nextGraph) => {
         const flow = graphToFlow(nextGraph || graph, palette);
-        instancesRef.current = flow.instances;
-        setInstances(flow.instances);
-        setNodes(flow.nodes);
-        setEdges(flow.edges);
+        const incomingNodesById = new Map(flow.nodes.map((node) => [node.id, node]));
+        const incomingInstances = flow.instances || {};
+        setNodes((currentNodes) => {
+          const currentIds = new Set(currentNodes.map((node) => node.id));
+          const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current);
+          const nextInstances = { ...(currentGraph.instances || {}) };
+          for (const [instanceId, instance] of Object.entries(incomingInstances)) {
+            if (!currentIds.has(instanceId)) continue;
+            const currentInstance = nextInstances[instanceId];
+            if (!displayKind(instance?.definitionId || currentInstance?.definitionId)) continue;
+            nextInstances[instanceId] = instance;
+          }
+          instancesRef.current = nextInstances;
+          setInstances(nextInstances);
+          return currentNodes.map((node) => {
+            const incomingNode = incomingNodesById.get(node.id);
+            if (!incomingNode) return node;
+            if (!displayKind(incomingNode.data?.definitionId || node.data?.definitionId)) return node;
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                ...incomingNode.data,
+              },
+            };
+          });
+        });
       };
       for (;;) {
         const { value, done } = await reader.read();
@@ -2238,6 +2603,11 @@ function WorkspacePageInner() {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
           if (event.type === "error") throw new Error(event.error || "Workspace run failed");
+          if (event.type === "stopped") {
+            workspaceRunStoppedRef.current = true;
+            finalOrder = Array.isArray(event.order) ? event.order : finalOrder;
+            continue;
+          }
           if (event.type === "node-start") {
             setStatus(`Running ${event.nodeId}...`);
             markNodeStart(event.nodeId);
@@ -2273,6 +2643,9 @@ function WorkspacePageInner() {
       if (buffer.trim()) {
         const event = JSON.parse(buffer);
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
+        if (event.type === "stopped") {
+          workspaceRunStoppedRef.current = true;
+        }
         if (event.type === "node-start") {
           setStatus(`Running ${event.nodeId}...`);
           markNodeStart(event.nodeId);
@@ -2304,14 +2677,35 @@ function WorkspacePageInner() {
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
         }
       }
+      if (workspaceRunStoppedRef.current) {
+        setWorkspaceExecutingNodes(new Set());
+        setWorkspaceNodeRunStatus((current) => {
+          const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0] || runNodeId;
+          return id ? { ...current, [id]: { status: "stopped" } } : current;
+        });
+      }
       setStatus(
-        finalPauseNodeIds.length
+        workspaceRunStoppedRef.current
+          ? `Workspace run stopped: ${runNodeId}`
+          : finalPauseNodeIds.length
           ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
           : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
       );
-      markRunSessionStatus(finalPauseNodeIds.length ? "paused" : "done");
-      await loadFiles();
+      markRunSessionStatus(workspaceRunStoppedRef.current ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
+      if (!workspaceRunStoppedRef.current) await loadFiles();
     } catch (e) {
+      if (workspaceRunStoppedRef.current || e?.name === "AbortError") {
+        setWorkspaceExecutingNodes(new Set());
+        setWorkspaceNodeRunStatus((current) => {
+          const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0] || runNodeId;
+          return id ? { ...current, [id]: { status: "stopped" } } : current;
+        });
+        setStatus(`Workspace run stopped: ${runNodeId}`);
+        setComposerRunSessions((list) => list.map((session) => (
+          session.id === runSessionId ? { ...session, status: "stopped", endedAt: Date.now() } : session
+        )));
+        return;
+      }
       setWorkspaceExecutingNodes(new Set());
       setWorkspaceNodeRunStatus((current) => {
         const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0];
@@ -2332,6 +2726,7 @@ function WorkspacePageInner() {
           : session
       )));
     } finally {
+      if (workspaceRunAbortRef.current === abortController) workspaceRunAbortRef.current = null;
       setRunningRunNodeId("");
       setWorkspaceExecutingNodes(new Set());
     }
@@ -2354,6 +2749,24 @@ function WorkspacePageInner() {
     }
   }, []);
 
+  const refreshMcps = useCallback(async () => {
+    try {
+      const r = await fetch("/api/mcps");
+      const j = await r.json().catch(() => ({}));
+      const list = Array.isArray(j.servers) ? j.servers.map((server) => ({
+        name: String(server?.name || ""),
+        type: String(server?.type || ""),
+        url: String(server?.url || ""),
+        command: String(server?.command || ""),
+        args: Array.isArray(server?.args) ? server.args.map(String) : [],
+        description: String(server?.description || ""),
+      })).filter((server) => server.name) : [];
+      setMcpServers(list);
+    } catch {
+      setMcpServers([]);
+    }
+  }, []);
+
   useEffect(() => {
     loadWorkspace().catch((e) => setStatus(String(e.message || e)));
     void loadFlowSnippets();
@@ -2363,6 +2776,7 @@ function WorkspacePageInner() {
       claudeCode: Array.isArray(j.claudeCode) ? j.claudeCode.map(String) : [],
     })).catch(() => {});
     void refreshSkills();
+    void refreshMcps();
     fetch("/api/skill-collections").then((r) => r.json()).then((j) => {
       setSkillCollections(normalizeSkillCollections(j));
       setSkillCollectionsLoaded(true);
@@ -2371,7 +2785,7 @@ function WorkspacePageInner() {
       .then((r) => r.json())
       .then((j) => setAuthUser(j.user || null))
       .catch(() => setAuthUser(null));
-  }, [loadWorkspace, loadFlowSnippets, refreshSkills, skillsStorageKey]);
+  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -2466,6 +2880,55 @@ function WorkspacePageInner() {
     instancesRef.current = nextInstances;
     setNodes(nextNodes);
     setInstances(nextInstances);
+    setNodePropDraft((draft) => {
+      if (!draft || draft.id !== nodeId) return draft;
+      return {
+        ...draft,
+        body: serialized,
+        inputs: patchInputSlots(draft.inputs),
+      };
+    });
+    saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
+  }, [edges, nodes, saveGraph, setNodes]);
+
+  const changeLoadMcpNames = useCallback((nodeId, names) => {
+    const serialized = serializeMcpNames(names);
+    const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name !== "serverNames" && slot?.name !== "mcpContext" && slot?.type !== "text") return slot;
+      return { ...slot, default: serialized, value: serialized };
+    }) : []);
+    const nextNodes = nodes.map((node) => {
+      if (node.id !== nodeId) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          body: serialized,
+          inputs: patchInputSlots(node.data?.inputs),
+        },
+      };
+    });
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [nodeId]: {
+        ...base,
+        body: serialized,
+        input: patchInputSlots(base.input),
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    setNodePropDraft((draft) => {
+      if (!draft || draft.id !== nodeId) return draft;
+      return {
+        ...draft,
+        body: serialized,
+        inputs: patchInputSlots(draft.inputs),
+      };
+    });
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes]);
 
@@ -2684,17 +3147,22 @@ function WorkspacePageInner() {
     ...node,
     data: {
       ...node.data,
+      selected: node.selected === true,
       modelLists,
       showBodyPreview: true,
       isExecuting: workspaceExecutingNodes.has(node.id),
       nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
       nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
       onRunWorkspaceNode: runWorkspaceNode,
+      onStopWorkspaceNode: stopWorkspaceRun,
       runningRunNodeId,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
       onRefreshSkills: refreshSkills,
+      mcpServers,
+      onChangeLoadMcpNames: changeLoadMcpNames,
+      onRefreshMcps: refreshMcps,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
       nodeChatActive: activeNodeChatId === node.id,
       nodeChat: nodeChatSessions[node.id] || null,
@@ -2706,34 +3174,35 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadSkillKeys, modelLists, nodeChatSessions, nodes, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
     [nodes, selectedNodeId],
   );
+  const selectedNodePropSnapshotRef = useRef({ id: "", draft: null });
+  const selectedNodePropSignature = useMemo(() => {
+    const draft = nodeToPropDraft(selectedNode);
+    return draft ? JSON.stringify(draft) : "";
+  }, [selectedNode]);
 
   useEffect(() => {
     if (!selectedNode) {
+      selectedNodePropSnapshotRef.current = { id: "", draft: null };
       setNodePropDraft(null);
       setNodePropsError("");
       return;
     }
-    const { inputs, outputs } = cloneNodeIoDraftSlots(selectedNode);
-    setNodePropDraft({
-      id: selectedNode.id,
-      newId: selectedNode.id,
-      label: String(selectedNode.data?.label ?? selectedNode.id),
-      role: String(selectedNode.data?.role ?? "normal"),
-      model: String(selectedNode.data?.model ?? ""),
-      body: String(selectedNode.data?.body ?? ""),
-      images: normalizeImages(selectedNode.data?.images),
-      script: String(selectedNode.data?.script ?? ""),
-      inputs,
-      outputs,
+    const nextDraft = nodeToPropDraft(selectedNode);
+    const previousSnapshot = selectedNodePropSnapshotRef.current;
+    selectedNodePropSnapshotRef.current = { id: selectedNode.id, draft: nextDraft };
+    setNodePropDraft((current) => {
+      if (!current || current.id !== selectedNode.id) return nextDraft;
+      if (previousSnapshot.id !== selectedNode.id || !previousSnapshot.draft) return nextDraft;
+      return mergeUntouchedPropDraft(current, previousSnapshot.draft, nextDraft);
     });
     setNodePropsError("");
-  }, [selectedNode?.id]);
+  }, [selectedNode?.id, selectedNodePropSignature]);
 
   const applyNodeProperties = useCallback((allowRename = false) => {
     if (!nodePropDraft || !selectedNode) return false;
@@ -2938,6 +3407,19 @@ function WorkspacePageInner() {
     });
     return { groups, ungrouped };
   }, [skillCollections, skills]);
+  useEffect(() => {
+    setCollapsedSkillCollections((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const group of skillCollectionGroups.groups) {
+        if (!next.has(group.id)) {
+          next.add(group.id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [skillCollectionGroups.groups]);
 
   const selectedCanvasNodes = useMemo(() => {
     const selected = nodes.filter((node) => node.selected);
@@ -3053,7 +3535,6 @@ function WorkspacePageInner() {
     setInstances(instancesRef.current);
     setNodes((list) => [...list.map((node) => ({ ...node, selected: false })), ...insertedNodes]);
     setEdges((list) => [...list.map((edge) => ({ ...edge, selected: false })), ...flow.edges]);
-    setSelectedNodeId(insertedNodes[0]?.id || "");
     setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}`);
   }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes]);
 
@@ -3224,11 +3705,16 @@ function WorkspacePageInner() {
 
   const addNodeFromDefinition = useCallback((def, overrides = {}) => {
     if (!def) return null;
-    const id = overrides.id || nextNodeId(def.id, nodes);
+    const runtimeDefinitionId = runtimeDefinitionIdForPalette(def) || def.id;
+    const marketplaceRef = marketplaceRefForDefinition(def);
+    const id = overrides.id || nextNodeId(runtimeDefinitionId, nodes);
     const input = cloneSlots(def.inputs);
     const output = cloneSlots(def.outputs);
     const instance = {
-      definitionId: def.id,
+      definitionId: runtimeDefinitionId,
+      ...(marketplaceRef ? { marketplaceRef } : {}),
+      ...(def.packageId ? { marketplacePackageId: def.packageId } : {}),
+      ...(def.version ? { marketplaceVersion: def.version } : {}),
       label: overrides.label || labelForDefinition(def),
       role: "normal",
       body: overrides.body || "",
@@ -3241,8 +3727,11 @@ function WorkspacePageInner() {
       position: overrides.position || defaultWorkspaceNodePosition(),
       data: {
         label: instance.label,
-        definitionId: def.id,
-        schemaType: schemaTypeForDefinition(def.id, def),
+        definitionId: runtimeDefinitionId,
+        ...(marketplaceRef ? { marketplaceRef } : {}),
+        ...(def.packageId ? { marketplacePackageId: def.packageId } : {}),
+        ...(def.version ? { marketplaceVersion: def.version } : {}),
+        schemaType: schemaTypeForDefinition(runtimeDefinitionId, def),
         role: "normal",
         body: instance.body,
         inputs: instance.input,
@@ -3251,7 +3740,7 @@ function WorkspacePageInner() {
     };
     const merged = { ...mergeNodeWithPalette(node, { ...instancesRef.current, [id]: instance }, palette), selected: true };
     setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
-    setSelectedNodeId(id);
+    if (overrides.openProperties) setSelectedNodeId(id);
     return id;
   }, [defaultWorkspaceNodePosition, nodes, palette, setNodes]);
 
@@ -3386,7 +3875,6 @@ function WorkspacePageInner() {
           setInstances(pasted.instances);
           setNodes(pasted.nodes);
           setEdges(pasted.edges);
-          setSelectedNodeId(pasted.pastedNodeIds[0] || "");
           setStatus(`Pasted ${pasted.pastedNodeIds.length} node${pasted.pastedNodeIds.length > 1 ? "s" : ""}`);
         }
         return;

@@ -77,6 +77,7 @@ function AuthGate({ children }) {
         user: j.user || null,
         setupRequired: Boolean(j.setupRequired),
       });
+      setError(j.error ? String(j.error) : "");
     } catch (e) {
       setAuth({ loading: false, authenticated: false, user: null, setupRequired: false });
       setError(String(e.message || e));

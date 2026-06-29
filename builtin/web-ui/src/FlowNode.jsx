@@ -70,6 +70,18 @@ function renderImageTokenHighlightHtml(text) {
   return html || " ";
 }
 
+function promptEditorHeightForText(el, text) {
+  const style = window.getComputedStyle(el);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 18;
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+  const borderTop = Number.parseFloat(style.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(style.borderBottomWidth) || 0;
+  const lineCount = String(text || "").split(/\r\n|\r|\n/).length;
+  const rows = Math.min(Math.max(lineCount, 2), 8);
+  return Math.ceil(rows * lineHeight + paddingTop + paddingBottom + borderTop + borderBottom);
+}
+
 export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onProvideValueChange, onNodeBodyChange, onNodeImagesChange, modelLists, onModelChange }) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
@@ -113,10 +125,10 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   useEffect(() => {
     const el = bodyTextareaRef.current;
     if (!el) return;
-    const desiredHeight = Math.min(Math.max(el.scrollHeight, 76), 220);
-    const currentHeight = el.getBoundingClientRect().height || 0;
-    if (!el.style.height || currentHeight < desiredHeight - 1) {
-      el.style.height = `${desiredHeight}px`;
+    const desiredHeight = promptEditorHeightForText(el, bodyDraft);
+    el.style.height = `${desiredHeight}px`;
+    if (bodyBackdropRef.current) {
+      bodyBackdropRef.current.style.height = `${desiredHeight}px`;
     }
   }, [bodyDraft]);
 

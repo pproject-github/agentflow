@@ -23,6 +23,10 @@ function sessionsPath() {
   return path.join(authRoot(), "sessions.json");
 }
 
+function userAllowlistPath() {
+  return path.join(authRoot(), "user-allowlist.json");
+}
+
 function readJsonObject(filePath) {
   try {
     if (!fs.existsSync(filePath)) return {};
@@ -80,6 +84,57 @@ export function readAuthUsers() {
 
 export function authSetupRequired() {
   return Object.keys(readAuthUsers()).length === 0;
+}
+
+function normalizeUserAllowlistInput(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(/[\s,;]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+export function readUserAllowlist() {
+  const fromEnv = normalizeUserAllowlistInput(process.env.AGENTFLOW_USER_WHITELIST || process.env.AGENTFLOW_ALLOWED_USERS || "");
+  let fromFile = [];
+  try {
+    const p = userAllowlistPath();
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+      fromFile = normalizeUserAllowlistInput(Array.isArray(data) ? data : data?.users);
+    }
+  } catch {
+    fromFile = [];
+  }
+  const users = Array.from(new Set([...fromFile, ...fromEnv].map((item) => String(item || "").trim()).filter(Boolean)));
+  return { enabled: users.length > 0, users, path: userAllowlistPath() };
+}
+
+function userAllowlistMatchSet(users) {
+  const out = new Set();
+  for (const user of users) {
+    const raw = String(user || "").trim().toLowerCase();
+    if (raw) out.add(raw);
+    const safe = sanitizeAgentflowUserId(user);
+    if (safe) out.add(safe);
+  }
+  return out;
+}
+
+export function isAuthUserAllowed(user) {
+  const allowlist = readUserAllowlist();
+  if (!allowlist.enabled) return true;
+  const allowed = userAllowlistMatchSet(allowlist.users);
+  const candidates = [
+    String(user?.userId || "").trim().toLowerCase(),
+    String(user?.username || "").trim().toLowerCase(),
+    sanitizeAgentflowUserId(user?.userId),
+    sanitizeAgentflowUserId(user?.username),
+  ].filter(Boolean);
+  return candidates.some((candidate) => allowed.has(candidate));
 }
 
 function listFlowDirs(root) {
@@ -183,6 +238,9 @@ export function loginOrCreateUser(username, password) {
   const userId = sanitizeAgentflowUserId(username);
   if (!userId) {
     return { ok: false, error: "用户名须以字母开头，仅可使用字母、数字、下划线与连字符，最多 64 字符" };
+  }
+  if (!isAuthUserAllowed({ userId, username: String(username || "").trim() })) {
+    return { ok: false, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
   }
   const pwd = String(password || "");
   if (pwd.length < 4) return { ok: false, error: "密码至少 4 位" };

@@ -38,7 +38,7 @@ function serverToDraft(server = null) {
     envRows: objectToRows(raw.env || server?.env, server?.privateEnvKeys),
     headerRows: objectToRows(raw.headers || server?.headers, server?.privateHeaderKeys),
     extraJson: JSON.stringify(
-      Object.fromEntries(Object.entries(raw).filter(([key]) => !["url", "command", "args", "env", "headers", "description"].includes(key))),
+      Object.fromEntries(Object.entries(raw).filter(([key]) => !["url", "command", "args", "env", "headers", "description", "__agentflowPrivateKeys"].includes(key))),
       null,
       2,
     ),
