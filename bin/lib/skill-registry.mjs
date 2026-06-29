@@ -5,6 +5,15 @@ import yaml from "js-yaml";
 
 const fileCache = new Map();
 const CACHE_TTL_MS = 60_000;
+const SOURCE_PRIORITY = new Map([
+  ["workspace-agents", 100],
+  ["workspace-codex", 95],
+  ["workspace-cursor", 90],
+  ["builtin", 80],
+  ["global-agents", 70],
+  ["global-codex", 65],
+  ["global-cursor", 60],
+]);
 
 function readFileCached(absPath) {
   const now = Date.now();
@@ -62,7 +71,15 @@ export function listSkillFiles(dir) {
   try {
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
     return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => {
+        if (entry.isDirectory()) return true;
+        if (!entry.isSymbolicLink()) return false;
+        try {
+          return fs.statSync(path.join(dir, entry.name)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
       .map((entry) => path.join(dir, entry.name, "SKILL.md"))
       .filter((skillPath) => fs.existsSync(skillPath));
   } catch {
@@ -132,14 +149,41 @@ export function listSkillsFromSources(sources, opts = {}) {
   return { skills, warnings };
 }
 
+function skillPriority(skill) {
+  return SOURCE_PRIORITY.get(String(skill?.source || "")) ?? 0;
+}
+
+export function dedupeSkillsByName(skills) {
+  const byName = new Map();
+  for (const skill of Array.isArray(skills) ? skills : []) {
+    const name = String(skill?.name || skill?.id || "").trim();
+    if (!name) continue;
+    const existing = byName.get(name);
+    if (!existing || skillPriority(skill) > skillPriority(existing)) {
+      byName.set(name, skill);
+    }
+  }
+  return Array.from(byName.values()).sort((a, b) => {
+    const bySource = String(a.sourceLabel || "").localeCompare(String(b.sourceLabel || ""));
+    if (bySource !== 0) return bySource;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
 export function listSkills(packageRoot, workspaceRoot, opts = {}) {
   return listSkillsFromSources(defaultSkillSources(packageRoot, workspaceRoot), opts).skills;
+}
+
+export function listUniqueSkills(packageRoot, workspaceRoot, opts = {}) {
+  return dedupeSkillsByName(listSkills(packageRoot, workspaceRoot, opts));
 }
 
 export function readSkillDetail(packageRoot, workspaceRoot, keyOrName) {
   const wanted = String(keyOrName || "").trim();
   if (!wanted) return null;
-  const item = listSkills(packageRoot, workspaceRoot).find((skill) => skill.key === wanted || skill.name === wanted);
+  const all = listSkills(packageRoot, workspaceRoot);
+  const item = all.find((skill) => skill.key === wanted)
+    || dedupeSkillsByName(all).find((skill) => skill.name === wanted);
   if (!item) return null;
   return item;
 }

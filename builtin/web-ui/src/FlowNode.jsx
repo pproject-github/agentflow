@@ -19,6 +19,14 @@ function getNodeTypeLabel(data) {
   return "agent";
 }
 
+function getNodeTypeShortLabel(label) {
+  const text = String(label || "").trim();
+  if (!text) return "";
+  const marketplacePrefix = text.match(/^marketplace:/i);
+  if (marketplacePrefix) return "MARKETPLACE";
+  return text;
+}
+
 function boolValueFromSlot(slot) {
   return ["true", "1", "yes", "on"].includes(String(slot?.value ?? slot?.default ?? "").trim().toLowerCase());
 }
@@ -68,6 +76,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const outputs = data?.outputs ?? [];
   const schemaType = (data?.schemaType ?? "agent").toLowerCase();
   const typeLabel = getNodeTypeLabel(data);
+  const typeShortLabel = getNodeTypeShortLabel(typeLabel);
   const isRunMode = data?.isRunMode ?? false;
   const isExecuting = data?.isExecuting ?? false;
   const isDim = data?.isDim ?? false;
@@ -104,10 +113,10 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   useEffect(() => {
     const el = bodyTextareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 76), 180)}px`;
-    if (bodyBackdropRef.current) {
-      bodyBackdropRef.current.style.height = el.style.height;
+    const desiredHeight = Math.min(Math.max(el.scrollHeight, 76), 220);
+    const currentHeight = el.getBoundingClientRect().height || 0;
+    if (!el.style.height || currentHeight < desiredHeight - 1) {
+      el.style.height = `${desiredHeight}px`;
     }
   }, [bodyDraft]);
 
@@ -306,13 +315,8 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     >
       <div className="af-flow-node__chrome">
         <span className="af-flow-node__type" title={typeLabel}>
-          {typeLabel}
+          {typeShortLabel}
         </span>
-        {id && (
-          <span className="af-flow-node__id" title={id}>
-            {id}
-          </span>
-        )}
         {!isRunMode && needsModel && (
           <div className="af-flow-node__model-wrap nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
             <select
@@ -431,6 +435,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         </div>
         <div className="af-flow-node__title-wrap">
           <span className="af-flow-node__title">{nodeTitle}</span>
+          {id ? (
+            <span className="af-flow-node__subtitle" title={id}>
+              {id}
+            </span>
+          ) : null}
           {isProvideBool ? (
             <select
               className={"af-flow-node__bool-select nodrag" + (provideBoolValue ? " af-flow-node__bool-select--true" : "")}

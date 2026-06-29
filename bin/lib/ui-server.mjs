@@ -297,6 +297,45 @@ function writeSkillCollectionConfig(userCtx = {}, payload = {}, availableSkills 
   return config;
 }
 
+function upsertSkillhubCollectionGroup(userCtx = {}, collectionId = "", beforeSkills = [], afterSkills = [], collectionName = "") {
+  const rawCollectionId = String(collectionId || "").trim();
+  if (!rawCollectionId) return null;
+  const beforeKeys = new Set((Array.isArray(beforeSkills) ? beforeSkills : []).map((skill) => String(skill?.key || "")).filter(Boolean));
+  const addedKeys = (Array.isArray(afterSkills) ? afterSkills : [])
+    .map((skill) => String(skill?.key || "").trim())
+    .filter((key) => key && !beforeKeys.has(key));
+  const config = readSkillCollectionConfig(userCtx, afterSkills);
+  const groupId = slugifySkillCollectionId(`skillhub-collection-${rawCollectionId}`, "skillhub-collection");
+  const now = Date.now();
+  const existing = config.collections.find((collection) => collection.id === groupId);
+  const existingKeys = Array.isArray(existing?.skillKeys) ? existing.skillKeys : [];
+  const mergedKeys = Array.from(new Set([...existingKeys, ...addedKeys]));
+  const nextCollections = config.collections.filter((collection) => collection.id !== groupId);
+  nextCollections.push({
+    id: groupId,
+    name: String(collectionName || "").trim() || `SkillHub Collection ${rawCollectionId}`,
+    skillKeys: mergedKeys,
+    builtin: false,
+    createdAt: Number.isFinite(existing?.createdAt) ? existing.createdAt : now,
+    updatedAt: now,
+  });
+  return writeSkillCollectionConfig(userCtx, { version: 1, collections: nextCollections }, afterSkills);
+}
+
+function removeSkillhubCollectionGroup(userCtx = {}, collectionId = "", root = process.cwd()) {
+  const rawCollectionId = String(collectionId || "").trim();
+  if (!rawCollectionId) return null;
+  const availableSkills = listComposerSkills(PACKAGE_ROOT, root);
+  const config = readSkillCollectionConfig(userCtx, availableSkills);
+  const groupId = slugifySkillCollectionId(`skillhub-collection-${rawCollectionId}`, "skillhub-collection");
+  if (!config.collections.some((collection) => collection.id === groupId)) return config;
+  return writeSkillCollectionConfig(
+    userCtx,
+    { version: 1, collections: config.collections.filter((collection) => collection.id !== groupId) },
+    availableSkills,
+  );
+}
+
 function runtimeEnvForUser(userCtx = {}, extra = {}) {
   return {
     ...process.env,
@@ -315,6 +354,420 @@ function readAgentflowUserConfigObject() {
   } catch {
     return {};
   }
+}
+
+function cursorMcpConfigPath() {
+  return path.join(os.homedir(), ".cursor", "mcp.json");
+}
+
+function readCursorMcpConfig() {
+  const p = cursorMcpConfigPath();
+  try {
+    if (!fs.existsSync(p)) return { mcpServers: {} };
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : { mcpServers: {} };
+  } catch {
+    return { mcpServers: {} };
+  }
+}
+
+function userMcpPrivatePath(userCtx = {}) {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId), "mcp-private.json");
+}
+
+function readUserMcpPrivate(userCtx = {}) {
+  const p = userMcpPrivatePath(userCtx);
+  try {
+    if (!fs.existsSync(p)) return { version: 1, servers: {} };
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    const servers = data?.servers && typeof data.servers === "object" && !Array.isArray(data.servers) ? data.servers : {};
+    return { version: 1, servers };
+  } catch {
+    return { version: 1, servers: {} };
+  }
+}
+
+function writeUserMcpPrivate(userCtx = {}, data = {}) {
+  const p = userMcpPrivatePath(userCtx);
+  const servers = data?.servers && typeof data.servers === "object" && !Array.isArray(data.servers) ? data.servers : {};
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify({ version: 1, servers }, null, 2) + "\n", "utf-8");
+  return { version: 1, servers };
+}
+
+function normalizeMcpPrivateKeys(keys) {
+  return new Set((Array.isArray(keys) ? keys : []).map((key) => String(key || "").trim()).filter(Boolean));
+}
+
+function pickObjectKeys(obj, keys) {
+  const out = {};
+  for (const key of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, key)) out[key] = String(obj[key] ?? "");
+  }
+  return out;
+}
+
+function omitObjectKeys(obj, keys) {
+  const out = {};
+  for (const [key, value] of Object.entries(obj && typeof obj === "object" ? obj : {})) {
+    if (!keys.has(key)) out[key] = value;
+  }
+  return out;
+}
+
+function normalizeMcpServerConfig(value) {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const next = {};
+  const url = typeof raw.url === "string" ? raw.url.trim() : "";
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
+  const description = typeof raw.description === "string" ? raw.description.trim() : "";
+  if (url) next.url = url;
+  if (command) next.command = command;
+  if (Array.isArray(raw.args)) next.args = raw.args.map((x) => String(x)).filter((x) => x.length > 0);
+  if (raw.env && typeof raw.env === "object" && !Array.isArray(raw.env)) {
+    const env = {};
+    for (const [k, v] of Object.entries(raw.env)) {
+      const key = String(k || "").trim();
+      if (key) env[key] = String(v ?? "");
+    }
+    if (Object.keys(env).length) next.env = env;
+  }
+  if (raw.headers && typeof raw.headers === "object" && !Array.isArray(raw.headers)) {
+    const headers = {};
+    for (const [k, v] of Object.entries(raw.headers)) {
+      const key = String(k || "").trim();
+      if (key) headers[key] = String(v ?? "");
+    }
+    if (Object.keys(headers).length) next.headers = headers;
+  }
+  if (description) next.description = description;
+  for (const [k, v] of Object.entries(raw)) {
+    if (["url", "command", "args", "env", "headers", "description"].includes(k)) continue;
+    next[k] = v;
+  }
+  return next;
+}
+
+function readCursorMcpServers(userCtx = {}) {
+  const config = readCursorMcpConfig();
+  const privateConfig = readUserMcpPrivate(userCtx);
+  const rawServers = config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
+    ? config.mcpServers
+    : {};
+  const servers = Object.entries(rawServers).map(([name, value]) => {
+    const publicValue = normalizeMcpServerConfig(value);
+    const privateValue = privateConfig.servers?.[name] && typeof privateConfig.servers[name] === "object" ? privateConfig.servers[name] : {};
+    const privateEnv = privateValue.env && typeof privateValue.env === "object" && !Array.isArray(privateValue.env) ? privateValue.env : {};
+    const privateHeaders = privateValue.headers && typeof privateValue.headers === "object" && !Array.isArray(privateValue.headers) ? privateValue.headers : {};
+    const configValue = {
+      ...publicValue,
+      env: { ...(publicValue.env || {}), ...privateEnv },
+      headers: { ...(publicValue.headers || {}), ...privateHeaders },
+    };
+    return {
+      name,
+      type: configValue.url ? "url" : "command",
+      url: typeof configValue.url === "string" ? configValue.url : "",
+      command: typeof configValue.command === "string" ? configValue.command : "",
+      args: Array.isArray(configValue.args) ? configValue.args : [],
+      env: configValue.env && typeof configValue.env === "object" ? configValue.env : {},
+      headers: configValue.headers && typeof configValue.headers === "object" ? configValue.headers : {},
+      description: typeof configValue.description === "string" ? configValue.description : "",
+      raw: configValue,
+      privateEnvKeys: Object.keys(privateEnv),
+      privateHeaderKeys: Object.keys(privateHeaders),
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  return { path: cursorMcpConfigPath(), servers };
+}
+
+function writeCursorMcpServer(payload = {}, userCtx = {}) {
+  const name = String(payload?.name || "").trim();
+  const nextName = String(payload?.nextName || payload?.name || "").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(nextName)) throw new Error("Invalid MCP name");
+  const server = normalizeMcpServerConfig(payload?.server);
+  if (!server.url && !server.command) throw new Error("MCP server requires url or command");
+  const privateEnvKeys = normalizeMcpPrivateKeys(payload?.privateEnvKeys);
+  const privateHeaderKeys = normalizeMcpPrivateKeys(payload?.privateHeaderKeys);
+  const privateEnv = pickObjectKeys(server.env || {}, privateEnvKeys);
+  const privateHeaders = pickObjectKeys(server.headers || {}, privateHeaderKeys);
+  const publicServer = {
+    ...server,
+    env: omitObjectKeys(server.env || {}, privateEnvKeys),
+    headers: omitObjectKeys(server.headers || {}, privateHeaderKeys),
+  };
+  if (!Object.keys(publicServer.env).length) delete publicServer.env;
+  if (!Object.keys(publicServer.headers).length) delete publicServer.headers;
+  const p = cursorMcpConfigPath();
+  const config = readCursorMcpConfig();
+  const mcpServers = config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
+    ? { ...config.mcpServers }
+    : {};
+  if (name && name !== nextName) delete mcpServers[name];
+  mcpServers[nextName] = publicServer;
+  const next = { ...config, mcpServers };
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  const privateConfig = readUserMcpPrivate(userCtx);
+  const privateServers = { ...(privateConfig.servers || {}) };
+  if (name && name !== nextName) delete privateServers[name];
+  if (Object.keys(privateEnv).length || Object.keys(privateHeaders).length) {
+    privateServers[nextName] = {
+      ...(Object.keys(privateEnv).length ? { env: privateEnv } : {}),
+      ...(Object.keys(privateHeaders).length ? { headers: privateHeaders } : {}),
+    };
+  } else {
+    delete privateServers[nextName];
+  }
+  writeUserMcpPrivate(userCtx, { servers: privateServers });
+  return readCursorMcpServers(userCtx);
+}
+
+function deleteCursorMcpServer(name, userCtx = {}) {
+  const key = String(name || "").trim();
+  if (!key) throw new Error("Missing MCP name");
+  const p = cursorMcpConfigPath();
+  const config = readCursorMcpConfig();
+  const mcpServers = config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
+    ? { ...config.mcpServers }
+    : {};
+  delete mcpServers[key];
+  const next = { ...config, mcpServers };
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  const privateConfig = readUserMcpPrivate(userCtx);
+  const privateServers = { ...(privateConfig.servers || {}) };
+  delete privateServers[key];
+  writeUserMcpPrivate(userCtx, { servers: privateServers });
+  return readCursorMcpServers(userCtx);
+}
+
+function compactErrorMessage(error) {
+  const text = String(error?.message || error || "").trim();
+  return text.length > 260 ? `${text.slice(0, 257)}...` : text;
+}
+
+function parseMcpSsePayload(text) {
+  const events = [];
+  let data = [];
+  for (const rawLine of String(text || "").split(/\r?\n/g)) {
+    const line = rawLine.trimEnd();
+    if (!line) {
+      if (data.length) {
+        const joined = data.join("\n").trim();
+        if (joined) events.push(joined);
+        data = [];
+      }
+      continue;
+    }
+    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  }
+  if (data.length) events.push(data.join("\n").trim());
+  for (const event of events) {
+    try {
+      const parsed = JSON.parse(event);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+async function mcpHttpRequest(url, headers, body, sessionId = "") {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        ...(headers || {}),
+        ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 180)}`);
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    const parsed = contentType.includes("text/event-stream") ? parseMcpSsePayload(text) : JSON.parse(text || "{}");
+    return { message: parsed, sessionId: response.headers.get("mcp-session-id") || sessionId };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function checkMcpHttpServer(server) {
+  const url = String(server?.raw?.url || server?.url || "").trim();
+  if (!url) throw new Error("Missing MCP URL");
+  const headers = server?.raw?.headers && typeof server.raw.headers === "object" ? server.raw.headers : {};
+  const init = await mcpHttpRequest(url, headers, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "agentflow", version: "0.1.0" },
+    },
+  });
+  if (init.message?.error) throw new Error(init.message.error.message || "MCP initialize failed");
+  await mcpHttpRequest(url, headers, {
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  }, init.sessionId).catch(() => null);
+  const tools = await mcpHttpRequest(url, headers, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {},
+  }, init.sessionId);
+  if (tools.message?.error) throw new Error(tools.message.error.message || "MCP tools/list failed");
+  return Array.isArray(tools.message?.result?.tools) ? tools.message.result.tools : [];
+}
+
+async function checkMcpStdioServer(server) {
+  const command = String(server?.raw?.command || server?.command || "").trim();
+  if (!command) throw new Error("Missing MCP command");
+  const args = Array.isArray(server?.raw?.args) ? server.raw.args.map(String) : [];
+  const env = server?.raw?.env && typeof server.raw.env === "object" ? server.raw.env : {};
+  const child = spawn(command, args, {
+    cwd: os.homedir(),
+    env: { ...process.env, ...env },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let buffer = "";
+  let stderr = "";
+  let processError = null;
+  const pending = new Map();
+  let nextId = 1;
+  const cleanup = () => {
+    for (const [, request] of pending) clearTimeout(request.timer);
+    pending.clear();
+    if (!child.killed) child.kill("SIGTERM");
+  };
+  const rejectPending = (error) => {
+    for (const [, request] of pending) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    pending.clear();
+  };
+  child.on("error", (error) => {
+    processError = error;
+    rejectPending(error);
+  });
+  child.stdin.on("error", (error) => {
+    processError = error;
+    rejectPending(error);
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk || "");
+    if (stderr.length > 2000) stderr = stderr.slice(-2000);
+  });
+  child.stdout.on("data", (chunk) => {
+    buffer += String(chunk || "");
+    const lines = buffer.split(/\r?\n/g);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const text = line.trim();
+      if (!text) continue;
+      let message = null;
+      try {
+        message = JSON.parse(text);
+      } catch {
+        continue;
+      }
+      const request = pending.get(message.id);
+      if (request) {
+        pending.delete(message.id);
+        clearTimeout(request.timer);
+        request.resolve(message);
+      }
+    }
+  });
+  const send = (method, params = {}, timeoutMs = 8000) => new Promise((resolve, reject) => {
+    if (processError) {
+      reject(processError);
+      return;
+    }
+    const id = nextId++;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`${method} timed out${stderr.trim() ? `: ${stderr.trim().slice(-220)}` : ""}`));
+    }, timeoutMs);
+    pending.set(id, { resolve, reject, timer });
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n", (error) => {
+      if (!error) return;
+      pending.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+  const notify = (method, params = {}) => {
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+  };
+  try {
+    const init = await send("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "agentflow", version: "0.1.0" },
+    });
+    if (init?.error) throw new Error(init.error.message || "MCP initialize failed");
+    notify("notifications/initialized", {});
+    const tools = await send("tools/list", {}, 8000);
+    if (tools?.error) throw new Error(tools.error.message || "MCP tools/list failed");
+    return Array.isArray(tools?.result?.tools) ? tools.result.tools : [];
+  } finally {
+    cleanup();
+  }
+}
+
+async function checkMcpServer(server) {
+  const startedAt = Date.now();
+  try {
+    const tools = server?.type === "url" || server?.raw?.url
+      ? await checkMcpHttpServer(server)
+      : await checkMcpStdioServer(server);
+    return {
+      name: server.name,
+      ok: true,
+      status: "enabled",
+      toolCount: tools.length,
+      tools: tools.map((tool) => ({
+        name: String(tool?.name || ""),
+        description: String(tool?.description || ""),
+      })).filter((tool) => tool.name),
+      checkedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      name: server?.name || "",
+      ok: false,
+      status: "error",
+      error: compactErrorMessage(error),
+      toolCount: 0,
+      tools: [],
+      checkedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+}
+
+async function checkCursorMcpServers(name = "", userCtx = {}) {
+  const { servers } = readCursorMcpServers(userCtx);
+  const targetName = String(name || "").trim();
+  const targets = targetName ? servers.filter((server) => server.name === targetName) : servers;
+  if (targetName && targets.length === 0) throw new Error("MCP server not found");
+  const results = [];
+  for (const server of targets) {
+    results.push(await checkMcpServer(server));
+  }
+  return { results };
 }
 
 function readModelListsFromDisk(workspaceRoot) {
@@ -344,6 +797,8 @@ function readModelListsFromDisk(workspaceRoot) {
 }
 
 const SKILLHUB_TIMEOUT_MS = 60_000;
+const SKILLHUB_API_BASE = String(process.env.SKILLHUB_API_BASE || "https://skillhub.bigo.sg/api/v1").replace(/\/+$/, "");
+const skillhubCollectionInfoCache = new Map();
 
 function runSkillhub(args, opts = {}) {
   return new Promise((resolve) => {
@@ -367,6 +822,72 @@ function runSkillhub(args, opts = {}) {
       });
     });
   });
+}
+
+function readSkillhubAuthToken() {
+  try {
+    const p = path.join(os.homedir(), ".skillhub", "auth.json");
+    if (!fs.existsSync(p)) return "";
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return String(data?.token || data?.accessToken || data?.access_token || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSkillhubCollectionInfo(raw, collectionId) {
+  const data = raw?.data && typeof raw.data === "object"
+    ? raw.data
+    : raw?.collection && typeof raw.collection === "object"
+      ? raw.collection
+      : raw?.item && typeof raw.item === "object"
+        ? raw.item
+        : raw && typeof raw === "object"
+          ? raw
+          : {};
+  const id = String(data.id ?? collectionId ?? "").trim();
+  const name = String(data.name ?? data.displayName ?? data.display_name ?? data.title ?? "").trim();
+  const summary = String(data.description ?? data.summary ?? data.subtitle ?? "").trim();
+  const version = String(data.version ?? data.latestVersion ?? data.latest_version ?? "").trim();
+  const tags = Array.isArray(data.tags) ? data.tags.map(String).filter(Boolean) : [];
+  if (!id && !name) return null;
+  return {
+    id: id || String(collectionId || ""),
+    collection: id || String(collectionId || ""),
+    kind: "collection",
+    slug: "",
+    name: name || `Collection ${collectionId}`,
+    summary: summary || "按 Collection ID 安装该合集中的全部 Skills。",
+    version,
+    tags,
+  };
+}
+
+async function fetchSkillhubCollectionInfo(collectionId) {
+  const id = String(collectionId || "").trim();
+  if (!id) return null;
+  const cached = skillhubCollectionInfoCache.get(id);
+  if (cached) return cached;
+  if (typeof fetch !== "function") return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const token = readSkillhubAuthToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const r = await fetch(`${SKILLHUB_API_BASE}/collections/${encodeURIComponent(id)}`, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!r.ok) return null;
+    const raw = await r.json().catch(() => null);
+    const info = normalizeSkillhubCollectionInfo(raw, id);
+    if (info) skillhubCollectionInfoCache.set(id, info);
+    return info;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseJsonText(text, fallback = null) {
@@ -394,11 +915,13 @@ function normalizeSkillhubSearchPayload(raw) {
       const slug = String(x.slug ?? x.name ?? x.displayName ?? x.display_name ?? id ?? "").trim();
       return {
         id: String(id || slug),
+        skillId: String(id || ""),
         slug,
         name: String(x.displayName ?? x.display_name ?? x.name ?? slug),
         summary: String(x.summary ?? x.description ?? ""),
         version: String(x.version ?? x.latestVersion ?? x.latest_version ?? ""),
         tags: Array.isArray(x.tags) ? x.tags.map(String) : [],
+        kind: "skill",
       };
     }).filter((x) => x.slug || x.name),
   };
@@ -661,6 +1184,47 @@ function buildWorkspaceGeneratePrompt(payload) {
   ].filter(Boolean).join("\n");
 }
 
+function buildWorkspaceNodeChatPrompt(payload) {
+  const node = payload?.node && typeof payload.node === "object" ? payload.node : {};
+  const userMessage = String(payload?.message || "").trim();
+  const currentContent = String(payload?.currentContent || "").trim();
+  const nodeKind = String(payload?.nodeKind || payload?.kind || "markdown").trim().toLowerCase();
+  const history = Array.isArray(payload?.messages) ? payload.messages : [];
+  const historyBlock = history
+    .slice(-8)
+    .map((msg) => {
+      const role = String(msg?.role || "user").trim() === "assistant" ? "assistant" : "user";
+      const text = String(msg?.text || "").trim();
+      return text ? `${role}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const outputRule =
+    nodeKind === "html"
+      ? "只输出完整或片段 HTML，不要解释，不要包裹 Markdown 代码围栏。"
+      : nodeKind === "image"
+        ? "只输出新的图片 src，可以是 URL、data URL 或文件路径，不要解释。"
+        : nodeKind === "mermaid"
+          ? "只输出 Mermaid 源码，不要解释，不要包裹 Markdown 代码围栏。"
+          : nodeKind === "ascii"
+            ? "只输出 ASCII 正文，不要解释，不要包裹 Markdown 代码围栏。"
+            : "只输出新的 Markdown 正文，不要解释，不要包裹 Markdown 代码围栏。";
+  return [
+    "你正在微调 AgentFlow Workspace 画布中的单个展示节点。",
+    "根据用户 follow-up 和当前节点内容，生成一个可直接替换当前节点展示内容的候选版本。",
+    outputRule,
+    "",
+    "## 当前节点",
+    `- id: ${String(node.id || "").trim() || "(unknown)"}`,
+    `- label: ${String(node.label || "").trim() || "(unnamed)"}`,
+    `- definitionId: ${String(node.definitionId || "").trim() || "(unknown)"}`,
+    `- kind: ${nodeKind}`,
+    currentContent ? `\n## 当前展示内容\n\n${currentContent}` : "",
+    historyBlock ? `\n## 本节点对话历史\n\n${historyBlock}` : "",
+    `\n## 用户 follow-up\n\n${userMessage}`,
+  ].filter(Boolean).join("\n");
+}
+
 function workspaceSlotValue(slot) {
   if (!slot || typeof slot !== "object") return "";
   for (const key of ["value", "default"]) {
@@ -718,6 +1282,75 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_html") return "html";
   if (id === "display_image") return "image";
   return "";
+}
+
+function normalizeHtmlDisplayContent(content) {
+  let text = String(content || "").trim();
+  if (!text) return "";
+  const fenced = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*?)```/);
+  if (fenced && fenced[1]) text = fenced[1].trim();
+  else {
+    const openFence = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*)$/);
+    if (openFence && openFence[1]) text = openFence[1].trim();
+  }
+  text = text.replace(/^html\s*\n/i, "").replace(/```\s*$/g, "").trim();
+  const markerPatterns = [
+    /<!doctype\b/i,
+    /<html\b/i,
+    /<head\b/i,
+    /<body\b/i,
+    /<style\b/i,
+    /<script\b/i,
+    /<main\b/i,
+    /<section\b/i,
+    /<article\b/i,
+    /<div\b/i,
+    /<svg\b/i,
+    /<canvas\b/i,
+  ];
+  const firstHtmlIndex = markerPatterns.reduce((best, pattern) => {
+    const match = pattern.exec(text);
+    if (!match) return best;
+    return best < 0 ? match.index : Math.min(best, match.index);
+  }, -1);
+  if (firstHtmlIndex > 0) text = text.slice(firstHtmlIndex).trim();
+  return text;
+}
+
+function workspaceDownstreamDisplayRequirements(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const kinds = new Set();
+  for (const edge of edges) {
+    if (String(edge?.source || "") !== String(nodeId)) continue;
+    const target = instances[String(edge?.target || "")];
+    const kind = workspaceDisplayKind(target?.definitionId);
+    if (kind) kinds.add(kind);
+  }
+  if (kinds.size === 0) return "";
+  const rules = [];
+  if (kinds.has("html")) {
+    rules.push("- 下游连接了 HTML 展示节点：输出可直接放入 iframe 渲染的 HTML。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏；不要解释生成过程。");
+  }
+  if (kinds.has("markdown")) {
+    rules.push("- 下游连接了 Markdown 展示节点：输出 Markdown 正文；不要包裹在代码围栏中，除非正文确实需要代码块。");
+  }
+  if (kinds.has("mermaid")) {
+    rules.push("- 下游连接了 Mermaid 展示节点：只输出 Mermaid 图表代码，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏；不要附加解释。");
+  }
+  if (kinds.has("ascii")) {
+    rules.push("- 下游连接了 ASCII 展示节点：输出纯文本/ASCII 图或表格；不要输出 HTML 或 Markdown 装饰。");
+  }
+  if (kinds.has("image")) {
+    rules.push("- 下游连接了图片展示节点：输出可作为 img src 使用的图片地址、data URL 或 base64 data URL；不要输出 Markdown 图片语法或解释文字。");
+  }
+  return [
+    "## 下游输出要求",
+    "",
+    ...rules,
+    "",
+    "如果用户任务与下游展示格式没有冲突，优先满足上述格式要求；如果用户明确指定了其他格式，以用户任务为准。",
+  ].join("\n");
 }
 
 function workspaceRunPlan(graph, runNodeId) {
@@ -786,6 +1419,37 @@ function workspaceUpstreamText(graph, nodeId, outputs) {
   return workspaceInstanceText(instances[sourceId]);
 }
 
+function workspaceHandleIndex(handle, prefix) {
+  const match = String(handle || "").match(new RegExp(`^${prefix}-(\\d+)$`));
+  return match ? Number(match[1]) : 0;
+}
+
+function workspaceTargetSlotForEdge(graph, edge) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const target = instances[String(edge?.target || "")];
+  const input = Array.isArray(target?.input) ? target.input : [];
+  return input[workspaceHandleIndex(edge?.targetHandle, "input")] || null;
+}
+
+function isWorkspaceSemanticInputSlot(slot) {
+  const name = String(slot?.name || "");
+  const type = String(slot?.type || "");
+  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "workspaceContext" || name === "gitContext";
+}
+
+function workspaceTaskUpstreamText(graph, nodeId, outputs) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
+  const contentEdges = incoming.filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
+  const contentEdge = contentEdges.find((edge) => String(edge?.targetHandle || "") === "input-1") || contentEdges[0];
+  if (!contentEdge) return "";
+  const sourceId = String(contentEdge.source || "");
+  const out = outputs.get(sourceId);
+  if (out != null && String(out).trim()) return String(out);
+  return workspaceInstanceText(instances[sourceId]);
+}
+
 function parseWorkspaceSkillKeys(raw) {
   const text = String(raw || "").trim();
   if (!text) return [];
@@ -808,17 +1472,56 @@ function selectedSkillKeysFromInstance(instance) {
 
 function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  return edges
+  const blocks = edges
     .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .filter((edge) => {
+      const slot = workspaceTargetSlotForEdge(graph, edge);
+      return String(slot?.name || "") === "skillsContext";
+    })
     .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
-    .filter((text) => text.includes("##") || text.includes("Skill"))
-    .join("\n\n---\n\n");
+    .filter((text) => text.includes("Skill") || text.includes("skill"))
+    .flatMap((text) => text.split(/\n\s*---\s*\n/g))
+    .map((text) => text.trim())
+    .filter(Boolean);
+  return Array.from(new Set(blocks)).join("\n\n---\n\n");
+}
+
+function mergeWorkspaceSkillBlocks(...values) {
+  const blocks = values
+    .map((value) => String(value || ""))
+    .filter(Boolean)
+    .flatMap((text) => text.split(/\n\s*---\s*\n/g))
+    .map((text) => text.trim())
+    .filter(Boolean);
+  return Array.from(new Set(blocks)).join("\n\n---\n\n");
+}
+
+function buildWorkspaceSkillManifestBlock(skills, selectedKeys = []) {
+  const normalizedKeys = Array.from(new Set((selectedKeys || []).map((x) => String(x || "").trim()).filter(Boolean)));
+  const rows = (Array.isArray(skills) ? skills : []).map((skill) => {
+    const id = String(skill?.id || "").trim();
+    const absPath = String(skill?.absPath || "").trim();
+    if (!id && !absPath) return "";
+    return `- \`${id || path.basename(absPath)}\`${absPath ? `: ${absPath}` : ""}`;
+  }).filter(Boolean);
+  if (!rows.length && !normalizedKeys.length) return "";
+  return [
+    "### Workspace Skills Manifest",
+    "",
+    "这些 skills 已在当前 workspace 中可用。不要默认展开或复述其内容；仅当节点任务明确需要时，按路径 Read 对应 SKILL.md。",
+    "",
+    ...(
+      rows.length
+        ? rows
+        : normalizedKeys.map((key) => `- \`${key}\``)
+    ),
+  ].join("\n");
 }
 
 function workspaceWriteDisplayContent(instance, content) {
   const next = { ...(instance || {}) };
-  const text = String(content || "");
   const kind = workspaceDisplayKind(next.definitionId);
+  const text = kind === "html" ? normalizeHtmlDisplayContent(content) : String(content || "");
   const primaryName = kind === "image" ? "src" : "content";
   next.body = text;
   next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
@@ -853,11 +1556,13 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock) {
   const instance = graph.instances[nodeId] || {};
   const body = String(instance.body || "").trim();
   const label = String(instance.label || nodeId).trim();
+  const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
   return [
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
     "只输出该节点要传给下游展示/后续节点的正文，不要解释运行过程。",
-    skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
+    skillsBlock ? `\n## Available Skills\n\n${skillsBlock}` : "",
     upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
+    downstreamRequirements ? `\n${downstreamRequirements}` : "",
     `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
     `\n## 节点任务\n\n${body || upstreamText}`,
   ].filter(Boolean).join("\n");
@@ -879,7 +1584,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       ? loadResourcesForSkillKeys(normalized, PACKAGE_ROOT, scopedRoot)
       : { skills: [], references: [] };
     const block = normalized.length > 0
-      ? buildSkillCompactInjectionBlock(selectedSkillResources.skills, selectedSkillResources.references)
+      ? buildWorkspaceSkillManifestBlock(selectedSkillResources.skills, normalized)
       : "";
     skillsBlockCache.set(cacheKey, block);
     return block;
@@ -889,6 +1594,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   const emit = (event) => {
     events.push(event);
     if (typeof opts.onEvent === "function") opts.onEvent(event);
+  };
+  const emitTiming = (nodeId, label, startedAt, extra = {}) => {
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    emit({ type: "status", nodeId, line: `Timing ${label}: ${elapsedMs}ms`, timing: { label, elapsedMs, ...extra } });
   };
   let cwd = scopedRoot;
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
@@ -904,9 +1613,11 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
 
     if (defId === "control_load_skills") {
+      const skillStartedAt = Date.now();
       const nodeSkillKeys = selectedSkillKeysFromInstance(instance);
       const activeSkillKeys = nodeSkillKeys.length > 0 ? nodeSkillKeys : fallbackSelectedSkillKeys;
       const skillsBlock = loadSkillsBlockForKeys(activeSkillKeys);
+      emitTiming(nodeId, "load-skills", skillStartedAt, { skillCount: activeSkillKeys.length, charCount: skillsBlock.length });
       graph.instances[nodeId] = {
         ...instance,
         output: (Array.isArray(instance.output) ? instance.output : []).map((slot) => (
@@ -1154,18 +1865,24 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
-    const upstreamText = workspaceUpstreamText(graph, nodeId, outputs);
+    const prepareStartedAt = Date.now();
+    const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs);
     const body = String(instance.body || "").trim();
     if (defId === "agent_subAgent" && !body && !String(upstreamText || "").trim()) {
       throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
     }
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, upstreamSkillBlocks || loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
+    const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks, upstreamSkillBlocks ? "" : loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock);
+    emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length });
+    emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let attemptContent = "";
       try {
+        const spawnStartedAt = Date.now();
+        let firstAgentEventSeen = false;
         const handle = startComposerAgent({
           uiWorkspaceRoot: scopedRoot,
           cliWorkspace: cwd,
@@ -1173,14 +1890,22 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           modelKey,
           agentflowUserId: userCtx.userId || "",
           onStreamEvent: (ev) => {
+            if (!firstAgentEventSeen) {
+              firstAgentEventSeen = true;
+              emitTiming(nodeId, "agent-first-event", spawnStartedAt, { attempt, firstType: ev?.type || "" });
+            }
             emit({ ...ev, nodeId });
             if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
               attemptContent += (attemptContent ? "\n" : "") + ev.text;
-              const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, attemptContent);
-              if (updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
             }
           },
+          onToolCall: (subtype, toolName) => {
+            const sub = subtype ? String(subtype) : "";
+            const tool = toolName ? String(toolName) : "";
+            emit({ type: "status", nodeId, line: `工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
+          },
         });
+        emitTiming(nodeId, "spawn-agent", spawnStartedAt, { attempt });
         await handle.finished;
         content = attemptContent.trim();
         break;
@@ -2091,6 +2816,61 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/node-chat") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const message = String(payload?.message || "").trim();
+      if (!message) {
+        json(res, 400, { error: "Missing message" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const promptText = buildWorkspaceNodeChatPrompt(payload);
+        const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
+        let content = "";
+        const events = [];
+        const handle = startComposerAgent({
+          uiWorkspaceRoot: scoped.root,
+          cliWorkspace: scoped.root,
+          prompt: promptText,
+          modelKey,
+          agentflowUserId: userCtx.userId || "",
+          onStreamEvent: (ev) => {
+            events.push(ev);
+            if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
+              content += (content ? "\n" : "") + ev.text;
+            }
+          },
+        });
+        await handle.finished;
+        const candidateContent = content.trim();
+        json(res, 200, {
+          ok: true,
+          sessionId: String(payload?.sessionId || "") || `nodechat_${Date.now()}`,
+          reply: candidateContent,
+          candidateContent,
+          events,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/pipeline-files") {
       const flowId = url.searchParams.get("flowId");
       const flowSource = url.searchParams.get("flowSource") || "user";
@@ -2307,6 +3087,64 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/mcps") {
+      try {
+        json(res, 200, readCursorMcpServers(userCtx));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/mcps") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        json(res, 200, writeCursorMcpServer(payload, userCtx));
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/mcps/delete") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        json(res, 200, deleteCursorMcpServer(payload?.name, userCtx));
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/mcps/check") {
+      let payload;
+      try {
+        const raw = await readBody(req);
+        payload = raw && String(raw).trim() ? JSON.parse(raw) : {};
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        json(res, 200, await checkCursorMcpServers(payload?.name || "", userCtx));
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/user-env") {
       try {
         json(res, 200, { env: readUserEnvRows(userCtx.userId) });
@@ -2384,8 +3222,27 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/skillhub/search") {
       const q = (url.searchParams.get("q") || "").trim();
+      const mode = (url.searchParams.get("mode") || "keyword").trim();
       if (!q) {
         json(res, 200, { total: 0, items: [] });
+        return;
+      }
+      if (mode === "collectionId") {
+        const info = await fetchSkillhubCollectionInfo(q);
+        json(res, 200, {
+          total: 1,
+          mode,
+          items: [info || {
+            id: `collection:${q}`,
+            collection: q,
+            kind: "collection",
+            slug: "",
+            name: `Collection ${q}`,
+            summary: "按 Collection ID 安装该合集中的全部 Skills。",
+            version: "",
+            tags: [],
+          }],
+        });
         return;
       }
       const result = await runSkillhub(["search", "-q", q], { cwd: root });
@@ -2393,7 +3250,13 @@ export function startUiServer({
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
-      json(res, 200, normalizeSkillhubSearchPayload(parseJsonText(result.stdout, {})));
+      const payload = normalizeSkillhubSearchPayload(parseJsonText(result.stdout, {}));
+      if (mode === "skillId") {
+        const filtered = payload.items.filter((item) => item.skillId === q || item.id === q);
+        json(res, 200, { ...payload, mode, total: filtered.length, items: filtered });
+        return;
+      }
+      json(res, 200, { ...payload, mode });
       return;
     }
 
@@ -2410,12 +3273,19 @@ export function startUiServer({
         json(res, 400, { error: "Missing skill slug or collection" });
         return;
       }
+      const beforeSkills = payload?.collection ? listComposerSkills(PACKAGE_ROOT, root) : [];
       const result = await runSkillhub(args, { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
       if (!result.ok) {
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
-      json(res, 200, { ok: true, stdout: result.stdout });
+      let skillCollections = null;
+      if (payload?.collection) {
+        const afterSkills = listComposerSkills(PACKAGE_ROOT, root);
+        const collectionName = String(payload.collectionName || payload.name || "").trim();
+        skillCollections = upsertSkillhubCollectionGroup(userCtx, payload.collection, beforeSkills, afterSkills, collectionName);
+      }
+      json(res, 200, { ok: true, stdout: result.stdout, skillCollections });
       return;
     }
 
@@ -2437,7 +3307,8 @@ export function startUiServer({
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
-      json(res, 200, { ok: true, stdout: result.stdout });
+      const skillCollections = payload?.collection ? removeSkillhubCollectionGroup(userCtx, payload.collection, root) : null;
+      json(res, 200, { ok: true, stdout: result.stdout, skillCollections });
       return;
     }
 

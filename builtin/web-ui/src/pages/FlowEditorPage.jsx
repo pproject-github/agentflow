@@ -18,10 +18,10 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import { buildStableEdgeKey, reconcileFlowGraph } from "../flowDiff.js";
-import { buildInstancesForYaml, deserializeFromFlowYaml, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
+import { buildCanvasClipboard, buildInstancesForYaml, deserializeFromFlowYaml, pasteCanvasClipboard, serializeToFlowYaml, VALID_ROLES } from "../flowFormat.js";
 import { computeSlotEdgeWarnings } from "../flowSlotEdgeWarnings.js";
 import { normalizeImages } from "../imageAttachments.js";
-import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
+import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
 import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
 import {
@@ -1546,6 +1546,7 @@ export default function FlowEditorPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
+  const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
   const insertFlowSnippetRef = useRef(null);
@@ -2466,6 +2467,7 @@ export default function FlowEditorPage() {
         return;
       }
       setConnectionMenu(null);
+      setNodes((nds) => revealConnectedSlots(nds, params));
       setEdges((eds) => {
         // 同一个 input handle 只允许一条入边 — 替换旧连接
         const filtered = eds.filter(
@@ -2474,7 +2476,7 @@ export default function FlowEditorPage() {
         return addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
       });
     },
-    [setEdges],
+    [setEdges, setNodes],
   );
 
   const onConnectStart = useCallback((_, params) => {
@@ -2619,7 +2621,7 @@ export default function FlowEditorPage() {
               target: menu.draft.nodeId,
               targetHandle: menu.draft.handleId,
             };
-      setNodes((nds) => [...nds, newNode]);
+      setNodes((nds) => revealConnectedSlots([...nds, newNode], nextConnection));
       setEdges((eds) => {
         const filtered = eds.filter(
           (e) => !(e.target === nextConnection.target && e.targetHandle === nextConnection.targetHandle)
@@ -3084,6 +3086,30 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       }
 
       if (editable) return;
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
+        if (clip) {
+          e.preventDefault();
+          e.stopPropagation();
+          canvasClipboardRef.current = clip;
+          setSaveStatus(`Copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
+        }
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
+        const pasted = pasteCanvasClipboard(canvasClipboardRef.current, nodesRef.current, edgesRef.current, instancesRef.current);
+        if (pasted) {
+          e.preventDefault();
+          e.stopPropagation();
+          instancesRef.current = pasted.instances;
+          setNodes(pasted.nodes);
+          setEdges(pasted.edges);
+          setSaveStatus(`Pasted ${pasted.pastedNodeIds.length} node${pasted.pastedNodeIds.length > 1 ? "s" : ""}`);
+        }
+        return;
+      }
 
       if ((e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();

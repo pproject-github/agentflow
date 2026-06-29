@@ -10,6 +10,7 @@ export default function SkillHubPanel({ onChanged }) {
   });
   const [installed, setInstalled] = useState([]);
   const [query, setQuery] = useState("");
+  const [searchMode, setSearchMode] = useState("keyword");
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -51,7 +52,7 @@ export default function SkillHubPanel({ onChanged }) {
     setErr("");
     setMsg("");
     try {
-      const r = await fetch(`/api/skillhub/search?q=${encodeURIComponent(q)}`);
+      const r = await fetch(`/api/skillhub/search?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(searchMode)}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
       setResults(Array.isArray(j.items) ? j.items : []);
@@ -60,19 +61,31 @@ export default function SkillHubPanel({ onChanged }) {
     } finally {
       setBusy("");
     }
-  }, [query]);
+  }, [query, searchMode]);
 
-  const install = useCallback(async (slug, force = false) => {
-    const s = String(slug || "").trim();
+  const install = useCallback(async (itemOrSlug, force = false) => {
+    const item = itemOrSlug && typeof itemOrSlug === "object" ? itemOrSlug : null;
+    const s = String(item ? item.slug || item.name || item.collection || item.skillId || item.id : itemOrSlug || "").trim();
     if (!s) return;
     setBusy(`install:${s}`);
     setErr("");
     setMsg("");
     try {
+      const body = item
+        ? {
+            slug: item.slug || "",
+            skillId: item.skillId || "",
+            collection: item.collection || "",
+            collectionName: item.collection ? item.name || "" : "",
+            target: "global",
+            agent: "codex",
+            force,
+          }
+        : { slug: s, target: "global", agent: "codex", force };
       const r = await fetch("/api/skillhub/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug: s, target: "global", agent: "codex", force }),
+        body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
@@ -154,6 +167,18 @@ export default function SkillHubPanel({ onChanged }) {
       </div>
 
       <div className="af-set-skillhub-search">
+        <select
+          className="af-set-input af-set-input--sm af-set-skillhub-search-mode"
+          value={searchMode}
+          onChange={(e) => {
+            setSearchMode(e.target.value);
+            setResults([]);
+          }}
+        >
+          <option value="keyword">关键词</option>
+          <option value="skillId">Skill ID</option>
+          <option value="collectionId">Collection ID</option>
+        </select>
         <input
           className="af-set-input af-set-input--sm"
           value={query}
@@ -161,7 +186,13 @@ export default function SkillHubPanel({ onChanged }) {
           onKeyDown={(e) => {
             if (e.key === "Enter") void search();
           }}
-          placeholder="搜索 skill slug / 关键词，例如 android、issue-tracker"
+          placeholder={
+            searchMode === "collectionId"
+              ? "输入 collection id，例如 1"
+              : searchMode === "skillId"
+                ? "输入 skill id"
+                : "搜索 skill slug / 关键词，例如 android、issue-tracker"
+          }
         />
         <button
           type="button"
@@ -218,23 +249,24 @@ export default function SkillHubPanel({ onChanged }) {
             ) : (
               results.map((s) => {
                 const slug = s.slug || s.name;
-                const isInstalled = installed.some((x) => x.name === slug || x.name === s.name);
+                const isCollection = s.kind === "collection" || s.collection;
+                const isInstalled = !isCollection && installed.some((x) => x.name === slug || x.name === s.name);
                 return (
                   <div key={s.id || slug} className="af-set-skillhub-item">
                     <div>
                       <div className="af-set-skillhub-title">{s.name || slug}</div>
                       <div className="af-set-skillhub-meta">
-                        {slug}{s.version ? ` · ${s.version}` : ""}
+                        {isCollection ? `collection:${s.collection}` : slug}{s.skillId ? ` · id:${s.skillId}` : ""}{s.version ? ` · ${s.version}` : ""}
                       </div>
                       {s.summary ? <p className="af-set-skillhub-summary">{s.summary}</p> : null}
                     </div>
                     <button
                       type="button"
                       className={isInstalled ? "af-set-btn-mini" : "af-set-btn-add af-set-btn-add--compact"}
-                      onClick={() => install(slug, isInstalled)}
+                      onClick={() => install(s, isInstalled)}
                       disabled={Boolean(busy)}
                     >
-                      {isInstalled ? "更新" : "安装"}
+                      {isInstalled ? "更新" : isCollection ? "安装合集" : "安装"}
                     </button>
                   </div>
                 );

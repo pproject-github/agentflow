@@ -13,7 +13,11 @@
  */
 import fs from "fs";
 import path from "path";
-import { listSkills as registryListSkills, readSkillDetail as registryReadSkillDetail } from "./skill-registry.mjs";
+import {
+  listSkills as registryListSkills,
+  listUniqueSkills as registryListUniqueSkills,
+  readSkillDetail as registryReadSkillDetail,
+} from "./skill-registry.mjs";
 
 // ─── 意图模式定义 ─────────────────────────────────────────────────────────
 
@@ -126,7 +130,7 @@ function readFileCached(absPath) {
 }
 
 export function listComposerSkills(packageRoot, workspaceRoot) {
-  return registryListSkills(packageRoot, workspaceRoot).map(({ body, content, ...skill }) => skill);
+  return registryListUniqueSkills(packageRoot, workspaceRoot).map(({ body, content, ...skill }) => skill);
 }
 
 export function readComposerSkillDetail(packageRoot, workspaceRoot, keyOrName) {
@@ -140,9 +144,24 @@ export function loadResourcesForSkillKeys(skillKeys, packageRoot, workspaceRoot)
   const wanted = new Set(skillKeys.map((x) => String(x || "").trim()).filter(Boolean));
   if (wanted.size === 0) return { skills: [], references: [], skillsHint: "", hasContext: false };
 
-  const skills = [];
-  for (const item of registryListSkills(packageRoot, workspaceRoot)) {
+  const exactByKey = new Map(registryListSkills(packageRoot, workspaceRoot).map((item) => [item.key, item]));
+  const candidateItems = [];
+  const seenKeys = new Set();
+  for (const item of registryListUniqueSkills(packageRoot, workspaceRoot)) {
     if (!wanted.has(item.key) && !wanted.has(item.name)) continue;
+    candidateItems.push(item);
+    seenKeys.add(item.key);
+  }
+  for (const key of wanted) {
+    const exact = exactByKey.get(key);
+    if (exact && !seenKeys.has(exact.key)) {
+      candidateItems.push(exact);
+      seenKeys.add(exact.key);
+    }
+  }
+
+  const skills = [];
+  for (const item of candidateItems) {
     skills.push({
       id: item.name,
       content: item.body,

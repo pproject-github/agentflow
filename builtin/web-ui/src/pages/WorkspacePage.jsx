@@ -18,10 +18,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
-import { buildInstancesForYaml, VALID_ROLES } from "../flowFormat.js";
+import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
-import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette } from "../mergeFlowNodes.js";
+import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import {
@@ -60,7 +60,10 @@ const WORKSPACE_LOAD_SKILLS_DEFINITION = {
   label: "Load Skills",
   description: "Load the currently selected Workspace skill collection for downstream agent nodes.",
   type: "control",
-  inputs: [{ type: "node", name: "prev", default: "" }],
+  inputs: [
+    { type: "node", name: "prev", default: "" },
+    { type: "text", name: "skillKeys", default: "", showOnNode: false },
+  ],
   outputs: [
     { type: "node", name: "next", default: "" },
     { type: "text", name: "skillsContext", default: "" },
@@ -106,9 +109,85 @@ function isEditableShortcutTarget(target) {
   return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function isLowValueWorkspaceRunLog(text) {
+  const line = String(text || "").trim();
+  return (
+    !line ||
+    /^思考中/.test(line) ||
+    /^生成回复中/.test(line) ||
+    /^完成$/.test(line) ||
+    /^事件:\s*(system|user)$/i.test(line) ||
+    /^工具\s+\w+ToolCall\s+\((started|completed)\)$/i.test(line) ||
+    /^Started\s+\S+/.test(line) ||
+    /^Completed\s+\S+/.test(line) ||
+    /^Run started:/.test(line) ||
+    /^Run finished/.test(line) ||
+    /^Run paused/.test(line) ||
+    /^Workspace run paused/.test(line) ||
+    /^Paused at/.test(line)
+  );
+}
+
+function isLegacyWorkspaceRunLogText(text) {
+  const line = String(text || "").trim();
+  return (
+    isLowValueWorkspaceRunLog(line) ||
+    /^Run started:/.test(line) ||
+    /^Run finished/.test(line) ||
+    /^Run paused/.test(line) ||
+    /^Workspace run paused/.test(line) ||
+    /^Started\s+\S+/.test(line) ||
+    /^Completed\s+\S+/.test(line)
+  );
+}
+
+function workspaceRunActivityText(text) {
+  const line = String(text || "").trim();
+  if (!line) return "";
+  if (/^思考中/.test(line)) return "模型正在思考";
+  if (/^生成回复中/.test(line)) return "模型正在生成回复";
+  if (/^Timing\s+(.+?):\s+(\d+)ms/i.test(line)) {
+    const match = line.match(/^Timing\s+(.+?):\s+(\d+)ms/i);
+    return `耗时：${match?.[1] || "step"} ${match?.[2] || "0"}ms`;
+  }
+  if (/^工具\s+(.+?)(?:\s+\((started|completed)\))?$/i.test(line)) {
+    const match = line.match(/^工具\s+(.+?)(?:\s+\((started|completed)\))?$/i);
+    const tool = String(match?.[1] || "tool").trim();
+    const state = String(match?.[2] || "").toLowerCase();
+    if (tool === "thinking") return "模型正在思考";
+    const toolLabel = tool === "readToolCall"
+      ? "读取文件/上下文"
+      : tool === "grepToolCall"
+        ? "搜索代码"
+        : tool === "editToolCall"
+          ? "编辑文件"
+          : tool;
+    return state === "completed" ? `完成：${toolLabel}` : `执行：${toolLabel}`;
+  }
+  if (/^\[stderr\]/.test(line)) return line;
+  return "";
+}
+
+function extractThinkingDeltaFromRawTrace(event) {
+  if (String(event?.type || "") !== "raw") return "";
+  if (String(event?.eventType || "") !== "thinking") return "";
+  const rawText = String(event?.text || "").trim();
+  if (!rawText) return "";
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed?.type !== "thinking") return "";
+    const subtype = String(parsed?.subtype || "");
+    if (subtype && subtype !== "delta") return "";
+    return String(parsed?.text || parsed?.delta || parsed?.thinking || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 function normalizeWorkspaceComposerMessages(value) {
   return (Array.isArray(value) ? value : [])
     .filter((msg) => msg && (msg.role === "user" || msg.role === "assistant") && typeof msg.text === "string")
+    .filter((msg) => !(msg.role === "assistant" && isLegacyWorkspaceRunLogText(msg.text)))
     .map((msg) => ({
       role: msg.role,
       text: msg.text,
@@ -381,6 +460,39 @@ function displayContent(data) {
   return String(data?.body || contentSlot?.default || "");
 }
 
+function normalizeHtmlDisplayContent(content) {
+  let text = String(content || "").trim();
+  if (!text) return "";
+  const fenced = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*?)```/);
+  if (fenced && fenced[1]) text = fenced[1].trim();
+  else {
+    const openFence = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*)$/);
+    if (openFence && openFence[1]) text = openFence[1].trim();
+  }
+  text = text.replace(/^html\s*\n/i, "").replace(/```\s*$/g, "").trim();
+  const markerPatterns = [
+    /<!doctype\b/i,
+    /<html\b/i,
+    /<head\b/i,
+    /<body\b/i,
+    /<style\b/i,
+    /<script\b/i,
+    /<main\b/i,
+    /<section\b/i,
+    /<article\b/i,
+    /<div\b/i,
+    /<svg\b/i,
+    /<canvas\b/i,
+  ];
+  const firstHtmlIndex = markerPatterns.reduce((best, pattern) => {
+    const match = pattern.exec(text);
+    if (!match) return best;
+    return best < 0 ? match.index : Math.min(best, match.index);
+  }, -1);
+  if (firstHtmlIndex > 0) text = text.slice(firstHtmlIndex).trim();
+  return text;
+}
+
 function displayAltText(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
   const altSlot = slots.find((slot) => slot?.name === "alt");
@@ -581,42 +693,247 @@ function MermaidPreview({ code }) {
   );
 }
 
-function DisplayBody({ data }) {
+function VisibleScrollFrame({ className = "", children }) {
+  const scrollerRef = useRef(null);
+  const scrollbarTrackRef = useRef(null);
+  const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
+
+  const updateScrollbar = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const scrollHeight = Math.max(1, el.scrollHeight);
+    const clientHeight = Math.max(1, el.clientHeight);
+    const visible = scrollHeight > clientHeight + 1;
+    const height = visible ? Math.max(12, (clientHeight / scrollHeight) * 100) : 100;
+    const maxTop = Math.max(0, 100 - height);
+    const top = visible ? Math.min(maxTop, (el.scrollTop / Math.max(1, scrollHeight - clientHeight)) * maxTop) : 0;
+    setScrollbar({ visible, top, height });
+  }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(updateScrollbar);
+    const el = scrollerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      return () => cancelAnimationFrame(frame);
+    }
+    const observer = new ResizeObserver(updateScrollbar);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [children, updateScrollbar]);
+
+  const scrollToRatio = useCallback((ratio) => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(1, Math.max(0, ratio)) * maxScroll;
+    updateScrollbar();
+  }, [updateScrollbar]);
+
+  const pointerRatioFromTrack = useCallback((clientY, grabOffsetPx = 0) => {
+    const track = scrollbarTrackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const thumbPx = (scrollbar.height / 100) * rect.height;
+    const maxTopPx = Math.max(1, rect.height - thumbPx);
+    return (clientY - rect.top - grabOffsetPx) / maxTopPx;
+  }, [scrollbar.height]);
+
+  const handleScrollbarPointerDown = useCallback((event) => {
+    if (!scrollbar.visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = scrollbarTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const thumbTopPx = (scrollbar.top / 100) * rect.height;
+    const thumbHeightPx = (scrollbar.height / 100) * rect.height;
+    const insideThumb = event.clientY >= rect.top + thumbTopPx && event.clientY <= rect.top + thumbTopPx + thumbHeightPx;
+    const grabOffsetPx = insideThumb ? event.clientY - rect.top - thumbTopPx : thumbHeightPx / 2;
+    scrollToRatio(pointerRatioFromTrack(event.clientY, grabOffsetPx));
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture?.(pointerId);
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      scrollToRatio(pointerRatioFromTrack(moveEvent.clientY, grabOffsetPx));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [pointerRatioFromTrack, scrollToRatio, scrollbar.height, scrollbar.top, scrollbar.visible]);
+
+  return (
+    <div className={`af-visible-scroll-frame ${className}`}>
+      <div ref={scrollerRef} className={`af-visible-scroll-frame__scroller ${className}`} onScroll={updateScrollbar}>
+        {children}
+      </div>
+      <div
+        ref={scrollbarTrackRef}
+        className={"af-visible-scrollbar" + (scrollbar.visible ? " af-visible-scrollbar--visible" : "")}
+        onPointerDown={handleScrollbarPointerDown}
+        aria-hidden="true"
+      >
+        <span style={{ height: `${scrollbar.height}%`, top: `${scrollbar.top}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
   const kind = displayKind(data?.definitionId);
   if (!kind) return null;
-  const content = displayContent(data);
-  if (!content.trim()) return <div className="af-work-display-empty">No display content</div>;
+  const rawContent = displayContent(data);
+  const content = kind === "html" ? normalizeHtmlDisplayContent(rawContent) : rawContent;
+  if (!content.trim()) return <VisibleScrollFrame className="af-work-display-empty">No display content</VisibleScrollFrame>;
   if (kind === "html") {
     return (
-      <div className="af-work-display-body af-work-display-body--html">
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--html">
         <iframe
+          key={htmlFrameVersion}
+          ref={htmlFrameRef}
           className="af-work-display-html-frame"
           title={data?.label || "HTML preview"}
           sandbox=""
           srcDoc={content}
         />
-      </div>
+      </VisibleScrollFrame>
     );
   }
   if (kind === "image") {
     return (
-      <div className="af-work-display-body af-work-display-body--image">
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--image">
         <img className="af-work-display-image" src={content} alt={displayAltText(data)} loading="lazy" />
-      </div>
+      </VisibleScrollFrame>
     );
   }
   if (kind === "markdown") {
-    return <div className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} /></div>;
+    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} /></VisibleScrollFrame>;
   }
   if (kind === "mermaid") {
     return (
-      <div className="af-work-display-body">
+      <VisibleScrollFrame className="af-work-display-body">
         <MermaidPreview code={content} />
         <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
-      </div>
+      </VisibleScrollFrame>
     );
   }
-  return <pre className="af-work-display-body af-work-node__diagram af-work-node__diagram--ascii">{content}</pre>;
+  return <VisibleScrollFrame className="af-work-display-body"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
+}
+
+function MarkdownDisplayEditor({ value, onChange }) {
+  return (
+    <div className="af-work-display-editor nodrag nopan" onClick={(event) => event.stopPropagation()}>
+      <textarea
+        className="af-work-display-editor__textarea"
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") event.stopPropagation();
+        }}
+        placeholder="输入 Markdown 内容"
+        spellCheck={false}
+      />
+    </div>
+  );
+}
+
+function WorkspaceNodeChat({ nodeId, data }) {
+  const active = data?.nodeChatActive;
+  const chat = data?.nodeChat || {};
+  const messages = Array.isArray(chat.messages) ? chat.messages : [];
+  const draft = String(chat.draft || "");
+  const candidate = String(chat.candidateContent || "");
+  const running = Boolean(chat.running);
+  const error = String(chat.error || "");
+
+  if (!active) {
+    return (
+      <button
+        type="button"
+        className="af-work-node-chat-anchor nodrag nopan"
+        onClick={(event) => {
+          event.stopPropagation();
+          data?.onToggleNodeChat?.(nodeId);
+        }}
+        title="微调这个节点"
+        aria-label="微调这个节点"
+      >
+        <span className="material-symbols-outlined af-work-node-chat-anchor__plus" aria-hidden>add</span>
+        <span className="af-work-node-chat-anchor__label">继续微调这个展示</span>
+        <span className="material-symbols-outlined af-work-node-chat-anchor__expand" aria-hidden>open_in_full</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="af-work-node-chat nodrag nopan" onClick={(event) => event.stopPropagation()}>
+      <div className="af-work-node-chat__head">
+        <div>
+          <strong>继续微调</strong>
+          <span>{data?.label || nodeId}</span>
+        </div>
+        <button type="button" onClick={() => data?.onCloseNodeChat?.()} aria-label="关闭节点微调">
+          <span className="material-symbols-outlined" aria-hidden>close</span>
+        </button>
+      </div>
+      {(messages.length > 0 || running || error || candidate.trim()) ? (
+        <div className="af-work-node-chat__messages">
+          {messages.slice(-4).map((msg, index) => (
+            <div key={`${msg.at || index}-${index}`} className={`af-work-node-chat__msg af-work-node-chat__msg--${msg.role === "assistant" ? "assistant" : "user"}`}>
+              <span>{msg.role === "assistant" ? "AI" : "你"}</span>
+              <p>{msg.text}</p>
+            </div>
+          ))}
+          {running ? <div className="af-work-node-chat__pending">生成中...</div> : null}
+          {error ? <div className="af-work-node-chat__error">{error}</div> : null}
+        </div>
+      ) : null}
+      <div className="af-work-node-chat__composer">
+        <button type="button" className="af-work-node-chat__add" disabled={running} aria-label="添加上下文">
+          <span className="material-symbols-outlined" aria-hidden>add</span>
+        </button>
+        <textarea
+          className="af-work-node-chat__input"
+          rows={2}
+          value={draft}
+          disabled={running}
+          placeholder="描述你想怎么调整这个展示"
+          onChange={(event) => data?.onUpdateNodeChatDraft?.(nodeId, event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              data?.onSendNodeChat?.(nodeId);
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="af-work-node-chat__send"
+          disabled={running || !draft.trim()}
+          onClick={() => data?.onSendNodeChat?.(nodeId)}
+          aria-label="发送"
+        >
+          <span className="material-symbols-outlined" aria-hidden>arrow_upward</span>
+        </button>
+      </div>
+      <div className="af-work-node-chat__actions">
+        <button type="button" disabled={running || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "replace")}>
+          替换当前内容
+        </button>
+        <button type="button" disabled={running || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "append")}>
+          追加
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function displayFileExtension(kind) {
@@ -659,6 +976,14 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       return a.idx - b.idx;
     });
   const kind = displayKind(data?.definitionId);
+  const htmlFrameRef = useRef(null);
+  const [htmlFrameVersion, setHtmlFrameVersion] = useState(0);
+  const [markdownEditing, setMarkdownEditing] = useState(false);
+  const [markdownDraft, setMarkdownDraft] = useState("");
+  const markdownContent = kind === "markdown" ? displayContent(data) : "";
+  useEffect(() => {
+    if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
+  }, [markdownContent, markdownEditing]);
   const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : "Markdown");
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
@@ -727,6 +1052,96 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
           <strong>{title}</strong>
           <span>{data?.definitionId || "display"}</span>
         </div>
+        {kind === "html" ? (
+          <div className="af-work-display-card__html-controls nodrag" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="af-work-display-card__action"
+              onClick={() => {
+                try {
+                  htmlFrameRef.current?.contentWindow?.history?.back?.();
+                } catch {
+                  /* sandboxed iframe history may be inaccessible */
+                }
+              }}
+              aria-label="后退"
+              title="后退"
+            >
+              <span className="material-symbols-outlined">arrow_back</span>
+            </button>
+            <button
+              type="button"
+              className="af-work-display-card__action"
+              onClick={() => {
+                try {
+                  htmlFrameRef.current?.contentWindow?.history?.forward?.();
+                } catch {
+                  /* sandboxed iframe history may be inaccessible */
+                }
+              }}
+              aria-label="前进"
+              title="前进"
+            >
+              <span className="material-symbols-outlined">arrow_forward</span>
+            </button>
+            <button
+              type="button"
+              className="af-work-display-card__action"
+              onClick={() => setHtmlFrameVersion((value) => value + 1)}
+              aria-label="刷新"
+              title="刷新"
+            >
+              <span className="material-symbols-outlined">refresh</span>
+            </button>
+          </div>
+        ) : null}
+        {kind === "markdown" ? (
+          markdownEditing ? (
+            <div className="af-work-display-card__html-controls nodrag" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                className="af-work-display-card__action"
+                onClick={() => {
+                  data?.onSetDisplayNodeContent?.(id, markdownDraft, "replace", {
+                    logChat: false,
+                    statusMessage: "已更新 Markdown 内容",
+                  });
+                  setMarkdownEditing(false);
+                }}
+                aria-label="保存并预览"
+                title="保存并预览"
+              >
+                <span className="material-symbols-outlined">done</span>
+              </button>
+              <button
+                type="button"
+                className="af-work-display-card__action"
+                onClick={() => {
+                  setMarkdownDraft(String(markdownContent || ""));
+                  setMarkdownEditing(false);
+                }}
+                aria-label="取消编辑"
+                title="取消编辑"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="af-work-display-card__action nodrag"
+              onClick={(event) => {
+                event.stopPropagation();
+                setMarkdownDraft(String(markdownContent || ""));
+                setMarkdownEditing(true);
+              }}
+              aria-label="编辑 Markdown"
+              title="编辑 Markdown"
+            >
+              <span className="material-symbols-outlined">edit</span>
+            </button>
+          )
+        ) : null}
         <button
           type="button"
           className="af-work-display-card__action nodrag"
@@ -740,7 +1155,12 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
           <span className="material-symbols-outlined">close</span>
         </button>
       </div>
-      <DisplayBody data={data} />
+      {kind === "markdown" && markdownEditing ? (
+        <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} />
+      ) : (
+        <DisplayBody data={data} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
+      )}
+      <WorkspaceNodeChat nodeId={id} data={data} />
     </div>
   );
 }
@@ -822,13 +1242,15 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
 
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
+  const syncNodePropDraft = props.data?.onSyncNodePropDraft;
   const deleteNode = useCallback((nodeId) => {
     setNodes((list) => list.filter((node) => node.id !== nodeId));
     setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
   }, [setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
-  }, [setNodes]);
+    syncNodePropDraft?.(nodeId, { model });
+  }, [setNodes, syncNodePropDraft]);
   const onProvideValueChange = useCallback((nodeId, value) => {
     setNodes((list) => list.map((node) => {
       if (node.id !== nodeId) return node;
@@ -837,17 +1259,26 @@ function WorkspaceFlowNode(props) {
         : [{ type: "bool", name: "value", default: value, value }];
       return { ...node, data: { ...node.data, body: "", outputs } };
     }));
-  }, [setNodes]);
+    syncNodePropDraft?.(nodeId, (draft) => {
+      const outputs = Array.isArray(draft?.outputs) && draft.outputs.length
+        ? draft.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
+        : [{ type: "bool", name: "value", default: value, value }];
+      return { body: "", outputs };
+    });
+  }, [setNodes, syncNodePropDraft]);
   const onNodeBodyChange = useCallback((nodeId, body) => {
     setNodes((list) => list.map((node) => (
       node.id === nodeId ? { ...node, data: { ...node.data, body } } : node
     )));
-  }, [setNodes]);
+    syncNodePropDraft?.(nodeId, { body });
+  }, [setNodes, syncNodePropDraft]);
   const onNodeImagesChange = useCallback((nodeId, images) => {
+    const normalizedImages = normalizeImages(images);
     setNodes((list) => list.map((node) => (
-      node.id === nodeId ? { ...node, data: { ...node.data, images: normalizeImages(images) } } : node
+      node.id === nodeId ? { ...node, data: { ...node.data, images: normalizedImages } } : node
     )));
-  }, [setNodes]);
+    syncNodePropDraft?.(nodeId, { images: normalizedImages });
+  }, [setNodes, syncNodePropDraft]);
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
   }
@@ -938,27 +1369,56 @@ function FileTree({ items, onOpen, collapsedDirs, onToggleDir, onCreateFile, onC
   );
 }
 
-function WorkspaceComposerThread({ messages, running }) {
+function WorkspaceComposerThread({ messages, running, showRunningIndicator = true }) {
   const hasBody = messages.length > 0;
   return (
     <div className="af-composer-ai-stack af-composer-ai-stack--in-panel af-composer-thread-stack">
       {messages.map((msg, idx) => {
-        const role = msg.kind === "run-log" ? "reply" : msg.role === "user" ? "user-msg" : msg.error ? "error" : "reply";
-        const label = msg.kind === "run-log" ? "Run" : msg.role === "user" ? "You" : msg.error ? "Error" : "Reply";
+        const role = msg.kind === "run-log" || msg.kind === "run-summary" || msg.kind === "activity" || msg.kind === "prompt" || msg.kind === "raw" || msg.kind === "thinking" || msg.kind === "result" || msg.kind === "assistant"
+          ? "reply"
+          : msg.role === "user"
+            ? "user-msg"
+            : msg.error
+              ? "error"
+              : "reply";
+        const label = msg.kind === "run-summary"
+          ? "Steps"
+          : msg.kind === "run-log"
+            ? "Run"
+            : msg.kind === "activity"
+              ? "Activity"
+              : msg.kind === "prompt"
+                ? "Prompt"
+                : msg.kind === "raw"
+                  ? "Raw Trace"
+                  : msg.kind === "thinking"
+                    ? "Thinking"
+                    : msg.kind === "result"
+                      ? "Result"
+                      : msg.kind === "assistant"
+                        ? "Response"
+                        : msg.role === "user"
+                          ? "You"
+                          : msg.error
+                            ? "Error"
+                            : "Reply";
         return (
-          <section key={`${idx}-${msg.role}-${String(msg.text || "").slice(0, 24)}`} className={`af-composer-ai-block af-composer-ai-block--${role}`}>
+          <section
+            key={`${idx}-${msg.role}-${String(msg.text || "").slice(0, 24)}`}
+            className={`af-composer-ai-block af-composer-ai-block--${role}${msg.kind ? ` af-composer-ai-block--kind-${msg.kind}` : ""}`}
+          >
             <div className="af-composer-ai-block-label">{label}</div>
             <div className="af-composer-ai-block-body">{msg.text}</div>
           </section>
         );
       })}
-      {running && !hasBody ? (
+      {showRunningIndicator && running && !hasBody ? (
         <section className="af-composer-ai-block af-composer-ai-block--reply af-composer-ai-block--pending">
           <div className="af-composer-ai-block-label">Reply</div>
           <div className="af-composer-ai-block-body">Waiting...</div>
         </section>
       ) : null}
-      {running && hasBody ? (
+      {showRunningIndicator && running && hasBody ? (
         <section className="af-composer-ai-block af-composer-ai-block--thinking">
           <div className="af-composer-ai-block-label">Thinking</div>
           <div className="af-composer-ai-block-body">Workspace agent is running...</div>
@@ -983,9 +1443,8 @@ function selectedSkillKeysFromValue(rawValue) {
 function selectedSkillKeysFromNodeData(data) {
   const bodyKeys = selectedSkillKeysFromValue(data?.body || "");
   if (bodyKeys.length > 0) return bodyKeys;
-  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
-  const slot = [...outputs, ...inputs].find((item) => item?.name === "skillsContext" || item?.type === "text");
+  const slot = inputs.find((item) => item?.name === "skillsContext" || item?.name === "skillKeys" || item?.type === "text");
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
@@ -1007,6 +1466,8 @@ function WorkspaceLoadSkillsNode({
   const skillsList = Array.isArray(skills) ? skills : [];
   const collectionsList = Array.isArray(skillCollections) ? skillCollections : [];
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
   const menuRef = useRef(null);
   const scrollbarTrackRef = useRef(null);
   const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
@@ -1024,6 +1485,32 @@ function WorkspaceLoadSkillsNode({
     const ungrouped = skillsList.filter((skill) => !used.has(skill.key));
     return { collectionGroups, ungrouped };
   }, [byKey, collectionsList, skillsList]);
+  const filteredGroups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return groups;
+    const matchesSkill = (skill) => {
+      const haystack = [
+        skill?.key,
+        skill?.name,
+        skill?.description,
+      ].map((part) => String(part || "").toLowerCase()).join(" ");
+      return haystack.includes(q);
+    };
+    const collectionGroups = groups.collectionGroups
+      .map((group) => {
+        const groupMatches = [group?.id, group?.name, group?.description]
+          .map((part) => String(part || "").toLowerCase())
+          .join(" ")
+          .includes(q);
+        const groupSkills = groupMatches ? group.skills : group.skills.filter(matchesSkill);
+        return { ...group, skills: groupSkills };
+      })
+      .filter((group) => group.skills.length > 0);
+    return {
+      collectionGroups,
+      ungrouped: groups.ungrouped.filter(matchesSkill),
+    };
+  }, [groups, search]);
   const toggleKeys = useCallback((toggleKeysList, checked) => {
     const next = new Set(keys);
     for (const key of toggleKeysList) {
@@ -1032,6 +1519,14 @@ function WorkspaceLoadSkillsNode({
     }
     onChangeSkillKeys?.(id, Array.from(next));
   }, [id, keys, onChangeSkillKeys]);
+  const toggleCollapsedGroup = useCallback((groupId) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
   const updateMenuScrollbar = useCallback(() => {
     const el = menuRef.current;
     if (!el) return;
@@ -1048,7 +1543,7 @@ function WorkspaceLoadSkillsNode({
     if (!open) return;
     const frame = requestAnimationFrame(updateMenuScrollbar);
     return () => cancelAnimationFrame(frame);
-  }, [open, groups, keys.size, updateMenuScrollbar]);
+  }, [collapsedGroups, filteredGroups, keys.size, open, updateMenuScrollbar]);
   const scrollMenuToRatio = useCallback((ratio) => {
     const el = menuRef.current;
     if (!el) return;
@@ -1141,6 +1636,7 @@ function WorkspaceLoadSkillsNode({
       <div className="af-work-load-skills-card__body nodrag">
         <button type="button" className="af-work-load-skills-card__select" onClick={(event) => {
           event.stopPropagation();
+          if (!open) data?.onRefreshSkills?.();
           setOpen((v) => !v);
         }}>
           <span>{keys.size > 0 ? `${keys.size} skills selected` : "选择 Skills"}</span>
@@ -1148,37 +1644,77 @@ function WorkspaceLoadSkillsNode({
         </button>
         {open ? (
           <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="af-work-load-skills-search">
+              <span className="material-symbols-outlined" aria-hidden>search</span>
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索 Skills..."
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="搜索 Skills"
+              />
+              {search ? (
+                <button type="button" onClick={() => setSearch("")} aria-label="清空搜索">
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              ) : null}
+            </div>
             <div ref={menuRef} className="af-work-load-skills-menu" onScroll={updateMenuScrollbar}>
-              {groups.collectionGroups.map((group) => {
+              {filteredGroups.collectionGroups.map((group) => {
                 const groupKeys = group.skills.map((skill) => skill.key);
                 const checkedCount = groupKeys.filter((key) => keys.has(key)).length;
                 const allChecked = groupKeys.length > 0 && checkedCount === groupKeys.length;
+                const collapsed = collapsedGroups.has(group.id);
                 return (
-                  <section key={group.id} className="af-work-load-skills-menu__group">
-                    <label className="af-work-load-skills-menu__group-head">
-                      <input type="checkbox" checked={allChecked} onChange={(event) => toggleKeys(groupKeys, event.target.checked)} />
-                      <span>{group.name}</span>
+                  <section key={group.id} className={"af-work-load-skills-menu__group" + (collapsed ? " af-work-load-skills-menu__group--collapsed" : "")}>
+                    <div className="af-work-load-skills-menu__group-head">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        onChange={(event) => toggleKeys(groupKeys, event.target.checked)}
+                        aria-label={`选择 ${group.name}`}
+                      />
+                      <button
+                        type="button"
+                        className="af-work-load-skills-menu__group-toggle"
+                        onClick={() => toggleCollapsedGroup(group.id)}
+                        aria-expanded={!collapsed}
+                      >
+                        <span>{group.name}</span>
+                      </button>
                       <small>{checkedCount}/{groupKeys.length}</small>
-                    </label>
-                    <div className="af-work-load-skills-menu__options">
-                      {group.skills.map((skill) => (
-                        <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
-                          <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
-                          <span>{skill.name}</span>
-                        </label>
-                      ))}
+                      <button
+                        type="button"
+                        className="af-work-load-skills-menu__group-arrow"
+                        onClick={() => toggleCollapsedGroup(group.id)}
+                        aria-label={collapsed ? `展开 ${group.name}` : `收起 ${group.name}`}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>{collapsed ? "chevron_right" : "expand_more"}</span>
+                      </button>
                     </div>
+                    {!collapsed ? (
+                      <div className="af-work-load-skills-menu__options">
+                        {group.skills.map((skill) => (
+                          <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
+                            <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
+                            <span>{skill.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
                   </section>
                 );
               })}
-              {groups.ungrouped.length > 0 ? (
+              {filteredGroups.ungrouped.length > 0 ? (
                 <section className="af-work-load-skills-menu__group">
                   <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
                     <span>Ungrouped</span>
-                    <small>{groups.ungrouped.length}</small>
+                    <small>{filteredGroups.ungrouped.length}</small>
                   </div>
                   <div className="af-work-load-skills-menu__options">
-                    {groups.ungrouped.map((skill) => (
+                    {filteredGroups.ungrouped.map((skill) => (
                       <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
                         <input type="checkbox" checked={keys.has(skill.key)} onChange={(event) => toggleKeys([skill.key], event.target.checked)} />
                         <span>{skill.name}</span>
@@ -1186,6 +1722,9 @@ function WorkspaceLoadSkillsNode({
                     ))}
                   </div>
                 </section>
+              ) : null}
+              {filteredGroups.collectionGroups.length === 0 && filteredGroups.ungrouped.length === 0 ? (
+                <div className="af-work-load-skills-menu__empty">没有匹配的 Skills</div>
               ) : null}
               <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeSkillKeys?.(id, [])}>清空</button>
             </div>
@@ -1213,6 +1752,8 @@ function WorkspacePageInner() {
   const [nodes, setNodes] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
+  const edgesRef = useRef([]);
+  const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
   const [connectionMenu, setConnectionMenu] = useState(null);
@@ -1284,8 +1825,12 @@ function WorkspacePageInner() {
   const [composerText, setComposerText] = useState("");
   const [composerRunning, setComposerRunning] = useState(false);
   const [composerMessages, setComposerMessages] = useState([]);
+  const [composerRunSessions, setComposerRunSessions] = useState([]);
+  const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
   const [composerMinimized, setComposerMinimized] = useState(false);
+  const [activeNodeChatId, setActiveNodeChatId] = useState("");
+  const [nodeChatSessions, setNodeChatSessions] = useState({});
   const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState("pan");
@@ -1306,6 +1851,8 @@ function WorkspacePageInner() {
 
   useEffect(() => {
     composerLoadedRef.current = false;
+    setComposerRunSessions([]);
+    setActiveComposerSessionId("workspace");
     if (!composerStorageKey) {
       setComposerMessages([]);
       composerLoadedRef.current = true;
@@ -1431,17 +1978,34 @@ function WorkspacePageInner() {
     [flowParams, loadWorkspace],
   );
 
+  const openComposerLogPanel = useCallback((sessionId = "workspace") => {
+    setComposerSidebarOpen(true);
+    setComposerMinimized(false);
+    setNodePropDraft(null);
+    setActiveComposerSessionId(sessionId || "workspace");
+  }, []);
+
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!runNodeId || runningRunNodeId) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
+    const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
+    const runSessionLabel = `Run ${runNodeId}`;
     setRunningRunNodeId(runNodeId);
     setWorkspaceExecutingNodes(new Set([runNodeId]));
     setWorkspaceNodeRunStatus({ [runNodeId]: { status: "running" } });
     setStatus(`Running ${runNodeId}...`);
-    setComposerSidebarOpen(true);
-    setComposerMessages((list) => [
-      ...list,
-      { role: "assistant", kind: "run-log", text: `Run started: ${runNodeId}`, at: Date.now() },
+    setActiveComposerSessionId(runSessionId);
+    setComposerRunSessions((list) => [
+      ...list.slice(-7),
+      {
+        id: runSessionId,
+        label: runSessionLabel,
+        runNodeId,
+        status: "running",
+        startedAt: Date.now(),
+        steps: [],
+        messages: [{ role: "assistant", kind: "run-summary", text: "准备运行...", at: Date.now() }],
+      },
     ]);
     try {
       await saveGraph(nodes, edges);
@@ -1468,10 +2032,52 @@ function WorkspacePageInner() {
       let finalOrder = [];
       let finalPauseNodeIds = [];
       let activeNodeId = runNodeId;
-      const appendRunLog = (text) => {
-        const line = String(text || "").trim();
-        if (!line) return;
-        setComposerMessages((list) => [...list, { role: "assistant", kind: "run-log", text: line, at: Date.now() }]);
+      const nodeLabelForRun = (nodeId, definitionId) => {
+        const node = nodes.find((item) => item.id === nodeId);
+        const label = String(node?.data?.label || nodeId || "").trim();
+        const type = String(definitionId || node?.data?.definitionId || "").trim();
+        return type && type !== label ? `${label} (${type})` : label;
+      };
+      const updateRunStep = (nodeId, definitionId, stepStatus) => {
+        const id = String(nodeId || "").trim();
+        if (!id) return;
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const existingSteps = Array.isArray(session.steps) ? session.steps : [];
+          const nextSteps = [...existingSteps];
+          const existingIndex = nextSteps.findIndex((step) => step.id === id);
+          const nextStep = {
+            id,
+            label: nodeLabelForRun(id, definitionId),
+            status: stepStatus,
+          };
+          if (existingIndex >= 0) {
+            nextSteps[existingIndex] = { ...nextSteps[existingIndex], ...nextStep };
+          } else {
+            nextSteps.push(nextStep);
+          }
+          const summary = nextSteps
+            .map((step, index) => {
+              const prefix = step.status === "done" ? "[done]" : step.status === "failed" ? "[failed]" : "[running]";
+              return `${index + 1}. ${prefix} ${step.label}`;
+            })
+            .join("\n");
+          const currentMessages = Array.isArray(session.messages) ? session.messages : [];
+          const summaryIndex = currentMessages.findIndex((msg) => msg.kind === "run-summary");
+          const summaryMessage = {
+            role: "assistant",
+            kind: "run-summary",
+            text: summary || "准备运行...",
+            at: Date.now(),
+          };
+          const nextMessages = [...currentMessages];
+          if (summaryIndex >= 0) {
+            nextMessages[summaryIndex] = summaryMessage;
+          } else {
+            nextMessages.unshift(summaryMessage);
+          }
+          return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
+        }));
       };
       const markNodeStart = (nodeId) => {
         const id = String(nodeId || "").trim();
@@ -1495,19 +2101,125 @@ function WorkspacePageInner() {
         });
         setWorkspaceNodeRunStatus((current) => ({ ...current, [id]: { status: "success" } }));
       };
-      const appendAssistantText = (text) => {
+      const appendNaturalText = (kind, text) => {
         const chunk = String(text || "");
         if (!chunk.trim()) return;
-        setComposerMessages((list) => {
-          const next = [...list];
-          const last = next[next.length - 1];
-          if (last && last.role === "assistant" && !last.kind && !last.error) {
-            next[next.length - 1] = { ...last, text: `${last.text || ""}${last.text ? "\n" : ""}${chunk}` };
-          } else {
-            next.push({ role: "assistant", text: chunk, at: Date.now() });
+        const naturalKind = ["assistant", "thinking", "result", "error", "prompt"].includes(kind) ? kind : "assistant";
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          let currentMessages = Array.isArray(session.messages) ? session.messages : [];
+          if (naturalKind === "result") {
+            const lastAssistant = [...currentMessages].reverse().find((msg) => msg.kind === "assistant");
+            if (String(lastAssistant?.text || "").trim() === chunk.trim()) return session;
           }
-          return next;
-        });
+          if (naturalKind === "assistant") {
+            const lastResultIndex = currentMessages.findIndex((msg) => msg.kind === "result" && String(msg.text || "").trim() === chunk.trim());
+            if (lastResultIndex >= 0) {
+              currentMessages = currentMessages.filter((_, idx) => idx !== lastResultIndex);
+            }
+          }
+          const nextMessages = [...currentMessages];
+          const last = nextMessages[nextMessages.length - 1];
+          if (last && last.kind === naturalKind && !last.error) {
+            nextMessages[nextMessages.length - 1] = { ...last, text: `${last.text || ""}${last.text ? "\n" : ""}${chunk}` };
+          } else {
+            nextMessages.push({
+              role: "assistant",
+              kind: naturalKind,
+              text: chunk,
+              ...(naturalKind === "error" ? { error: true } : {}),
+              at: Date.now(),
+            });
+          }
+          return { ...session, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const appendThinkingText = (text) => {
+        const chunk = String(text || "");
+        if (!chunk.trim()) return;
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const currentMessages = Array.isArray(session.messages) ? session.messages : [];
+          const thinkingIndex = currentMessages.findIndex((msg) => msg.kind === "thinking");
+          const nextMessages = [...currentMessages];
+          if (thinkingIndex >= 0) {
+            const prev = String(nextMessages[thinkingIndex]?.text || "");
+            nextMessages[thinkingIndex] = {
+              ...nextMessages[thinkingIndex],
+              text: `${prev}${prev && !prev.endsWith("\n") ? "" : ""}${chunk}`,
+              at: Date.now(),
+            };
+          } else {
+            const activityIndex = nextMessages.findIndex((msg) => msg.kind === "activity");
+            nextMessages.splice(activityIndex >= 0 ? activityIndex + 1 : nextMessages.length, 0, {
+              role: "assistant",
+              kind: "thinking",
+              text: chunk,
+              at: Date.now(),
+            });
+          }
+          return { ...session, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const updateRunActivity = (text) => {
+        const activity = workspaceRunActivityText(text);
+        if (!activity) return;
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const currentActivities = Array.isArray(session.activities) ? session.activities : [];
+          const nextActivities = currentActivities[currentActivities.length - 1] === activity
+            ? currentActivities
+            : [...currentActivities, activity].slice(-8);
+          const currentMessages = Array.isArray(session.messages) ? session.messages : [];
+          const activityIndex = currentMessages.findIndex((msg) => msg.kind === "activity");
+          const activityMessage = {
+            role: "assistant",
+            kind: "activity",
+            text: nextActivities.map((item, index) => `${index + 1}. ${item}`).join("\n"),
+            at: Date.now(),
+          };
+          const nextMessages = [...currentMessages];
+          if (activityIndex >= 0) {
+            nextMessages[activityIndex] = activityMessage;
+          } else {
+            const summaryIndex = nextMessages.findIndex((msg) => msg.kind === "run-summary");
+            nextMessages.splice(summaryIndex >= 0 ? summaryIndex + 1 : 0, 0, activityMessage);
+          }
+          return { ...session, activities: nextActivities, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const appendRawTrace = (event) => {
+        const source = String(event?.source || "runner");
+        const stream = String(event?.stream || "");
+        const eventType = String(event?.eventType || "event");
+        const rawText = String(event?.text || "").trim();
+        if (!rawText) return;
+        const entry = `[${source}${stream ? `:${stream}` : ""}] ${eventType}\n${rawText}`;
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const currentRaw = Array.isArray(session.rawTrace) ? session.rawTrace : [];
+          const nextRaw = [...currentRaw, entry].slice(-80);
+          const currentMessages = Array.isArray(session.messages) ? session.messages : [];
+          const rawIndex = currentMessages.findIndex((msg) => msg.kind === "raw");
+          const rawMessage = {
+            role: "assistant",
+            kind: "raw",
+            text: nextRaw.join("\n\n---\n\n"),
+            at: Date.now(),
+          };
+          const nextMessages = [...currentMessages];
+          if (rawIndex >= 0) {
+            nextMessages[rawIndex] = rawMessage;
+          } else {
+            nextMessages.push(rawMessage);
+          }
+          return { ...session, rawTrace: nextRaw, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const markRunSessionStatus = (sessionStatus) => {
+        setComposerRunSessions((list) => list.map((session) => (
+          session.id === runSessionId ? { ...session, status: sessionStatus, endedAt: Date.now() } : session
+        )));
       };
       const applyGraph = (nextGraph) => {
         const flow = graphToFlow(nextGraph || graph, palette);
@@ -1529,33 +2241,32 @@ function WorkspacePageInner() {
           if (event.type === "node-start") {
             setStatus(`Running ${event.nodeId}...`);
             markNodeStart(event.nodeId);
-            appendRunLog(`Started ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+            updateRunStep(event.nodeId, event.definitionId, "running");
           }
           if (event.type === "node-done") {
             markNodeDone(event.nodeId);
-            appendRunLog(`Completed ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+            updateRunStep(event.nodeId, event.definitionId, "done");
           }
           if (event.type === "status") {
-            appendRunLog(event.line || event.message || "");
+            updateRunActivity(event.line || event.message || "");
           }
           if (event.type === "paused") {
             finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
-            appendRunLog(event.message || (finalPauseNodeIds.length ? `Paused at ${finalPauseNodeIds.join(", ")}` : "Paused"));
           }
-          if (event.type === "natural" && event.kind === "assistant") {
-            appendAssistantText(event.text || "");
+          if (event.type === "natural") {
+            if (event.kind === "thinking") appendThinkingText(event.text || "");
+            else appendNaturalText(event.kind, event.text || "");
+          }
+          if (event.type === "raw") {
+            const rawThinking = extractThinkingDeltaFromRawTrace(event);
+            if (rawThinking) appendThinkingText(rawThinking);
+            appendRawTrace(event);
           }
           if (event.type === "graph" && event.graph) applyGraph(event.graph);
           if (event.type === "done") {
             if (event.graph) applyGraph(event.graph);
             finalOrder = Array.isArray(event.order) ? event.order : [];
-            const hadPauseLog = finalPauseNodeIds.length > 0;
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
-            if (!finalPauseNodeIds.length) {
-              appendRunLog(`Run finished${finalOrder.length ? `: ${finalOrder.join(" -> ")}` : ""}`);
-            } else if (!hadPauseLog) {
-              appendRunLog(`Run paused at ${finalPauseNodeIds.join(", ")}`);
-            }
           }
         }
       }
@@ -1565,33 +2276,32 @@ function WorkspacePageInner() {
         if (event.type === "node-start") {
           setStatus(`Running ${event.nodeId}...`);
           markNodeStart(event.nodeId);
-          appendRunLog(`Started ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+          updateRunStep(event.nodeId, event.definitionId, "running");
         }
         if (event.type === "node-done") {
           markNodeDone(event.nodeId);
-          appendRunLog(`Completed ${event.nodeId}${event.definitionId ? ` (${event.definitionId})` : ""}`);
+          updateRunStep(event.nodeId, event.definitionId, "done");
         }
         if (event.type === "status") {
-          appendRunLog(event.line || event.message || "");
+          updateRunActivity(event.line || event.message || "");
         }
         if (event.type === "paused") {
           finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
-          appendRunLog(event.message || (finalPauseNodeIds.length ? `Paused at ${finalPauseNodeIds.join(", ")}` : "Paused"));
         }
-        if (event.type === "natural" && event.kind === "assistant") {
-          appendAssistantText(event.text || "");
+        if (event.type === "natural") {
+          if (event.kind === "thinking") appendThinkingText(event.text || "");
+          else appendNaturalText(event.kind, event.text || "");
+        }
+        if (event.type === "raw") {
+          const rawThinking = extractThinkingDeltaFromRawTrace(event);
+          if (rawThinking) appendThinkingText(rawThinking);
+          appendRawTrace(event);
         }
         if (event.type === "graph" && event.graph) applyGraph(event.graph);
         if (event.type === "done") {
           if (event.graph) applyGraph(event.graph);
           finalOrder = Array.isArray(event.order) ? event.order : [];
-          const hadPauseLog = finalPauseNodeIds.length > 0;
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
-          if (!finalPauseNodeIds.length) {
-            appendRunLog(`Run finished${finalOrder.length ? `: ${finalOrder.join(" -> ")}` : ""}`);
-          } else if (!hadPauseLog) {
-            appendRunLog(`Run paused at ${finalPauseNodeIds.join(", ")}`);
-          }
         }
       }
       setStatus(
@@ -1599,6 +2309,7 @@ function WorkspacePageInner() {
           ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
           : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
       );
+      markRunSessionStatus(finalPauseNodeIds.length ? "paused" : "done");
       await loadFiles();
     } catch (e) {
       setWorkspaceExecutingNodes(new Set());
@@ -1607,12 +2318,41 @@ function WorkspacePageInner() {
         return id ? { ...current, [id]: { status: "failed" } } : current;
       });
       setStatus(String(e.message || e));
-      setComposerMessages((list) => [...list, { role: "assistant", error: true, text: String(e.message || e), at: Date.now() }]);
+      setComposerRunSessions((list) => list.map((session) => (
+        session.id === runSessionId
+          ? {
+              ...session,
+              status: "failed",
+              endedAt: Date.now(),
+              messages: [
+                ...(Array.isArray(session.messages) ? session.messages : []),
+                { role: "assistant", error: true, text: String(e.message || e), at: Date.now() },
+              ].slice(-160),
+            }
+          : session
+      )));
     } finally {
       setRunningRunNodeId("");
       setWorkspaceExecutingNodes(new Set());
     }
   }, [composerModel, edges, flowParams, loadFiles, nodes, palette, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes]);
+
+  const refreshSkills = useCallback(async () => {
+    try {
+      const r = await fetch("/api/skills");
+      const j = await r.json().catch(() => ({}));
+      const list = Array.isArray(j.skills) ? j.skills.map((s) => ({
+        key: String(s.key),
+        name: String(s.name || s.id || s.key),
+        description: s.description ? String(s.description) : "",
+        sourceLabel: s.sourceLabel ? String(s.sourceLabel) : "",
+      })) : [];
+      setSkills(list);
+      setSkillsLoaded(true);
+    } catch {
+      setSkillsLoaded(true);
+    }
+  }, []);
 
   useEffect(() => {
     loadWorkspace().catch((e) => setStatus(String(e.message || e)));
@@ -1622,16 +2362,7 @@ function WorkspacePageInner() {
       opencode: Array.isArray(j.opencode) ? j.opencode.map(String) : [],
       claudeCode: Array.isArray(j.claudeCode) ? j.claudeCode.map(String) : [],
     })).catch(() => {});
-    fetch("/api/skills").then((r) => r.json()).then((j) => {
-      const list = Array.isArray(j.skills) ? j.skills.map((s) => ({
-        key: String(s.key),
-        name: String(s.name || s.id || s.key),
-        description: s.description ? String(s.description) : "",
-        sourceLabel: s.sourceLabel ? String(s.sourceLabel) : "",
-      })) : [];
-      setSkills(list);
-      setSkillsLoaded(true);
-    }).catch(() => {});
+    void refreshSkills();
     fetch("/api/skill-collections").then((r) => r.json()).then((j) => {
       setSkillCollections(normalizeSkillCollections(j));
       setSkillCollectionsLoaded(true);
@@ -1640,7 +2371,7 @@ function WorkspacePageInner() {
       .then((r) => r.json())
       .then((j) => setAuthUser(j.user || null))
       .catch(() => setAuthUser(null));
-  }, [loadWorkspace, loadFlowSnippets, skillsStorageKey]);
+  }, [loadWorkspace, loadFlowSnippets, refreshSkills, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -1669,6 +2400,9 @@ function WorkspacePageInner() {
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
 
   useEffect(() => {
     connectionMenuRef.current = connectionMenu;
@@ -1704,8 +2438,8 @@ function WorkspacePageInner() {
 
   const changeLoadSkillKeys = useCallback((nodeId, keys) => {
     const serialized = serializeSkillKeys(keys);
-    const patchSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
-      if (slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
+    const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
       return { ...slot, default: serialized, value: serialized };
     }) : []);
     const nextNodes = nodes.map((node) => {
@@ -1715,8 +2449,7 @@ function WorkspacePageInner() {
         data: {
           ...node.data,
           body: serialized,
-          inputs: patchSlots(node.data?.inputs),
-          outputs: patchSlots(node.data?.outputs),
+          inputs: patchInputSlots(node.data?.inputs),
         },
       };
     });
@@ -1727,8 +2460,7 @@ function WorkspacePageInner() {
       [nodeId]: {
         ...base,
         body: serialized,
-        input: patchSlots(base.input),
-        output: patchSlots(base.output),
+        input: patchInputSlots(base.input),
       },
     };
     instancesRef.current = nextInstances;
@@ -1736,6 +2468,182 @@ function WorkspacePageInner() {
     setInstances(nextInstances);
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes]);
+
+  const toggleNodeChat = useCallback((nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    setActiveNodeChatId((current) => (current === id ? "" : id));
+    setNodeChatSessions((sessions) => ({
+      ...sessions,
+      [id]: sessions[id] || {
+        sessionId: `nodechat_${Date.now()}_${id.replace(/[^a-z0-9_-]+/gi, "_")}`,
+        messages: [],
+        draft: "",
+        candidateContent: "",
+        running: false,
+        error: "",
+      },
+    }));
+  }, []);
+
+  const updateNodeChatDraft = useCallback((nodeId, draft) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    setNodeChatSessions((sessions) => ({
+      ...sessions,
+      [id]: {
+        ...(sessions[id] || { sessionId: `nodechat_${Date.now()}_${id.replace(/[^a-z0-9_-]+/gi, "_")}`, messages: [] }),
+        draft: String(draft || ""),
+        error: "",
+      },
+    }));
+  }, []);
+
+  const setDisplayNodeContent = useCallback((nodeId, content, mode = "replace", options = {}) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    const currentNode = nodesRef.current.find((node) => node.id === id);
+    const kind = displayKind(currentNode?.data?.definitionId);
+    const text = kind === "html" ? normalizeHtmlDisplayContent(content) : String(content || "");
+    const currentContent = currentNode ? displayContent(currentNode.data) : "";
+    const nextText = mode === "append" && String(currentContent || "").trim()
+      ? `${String(currentContent).replace(/\s+$/g, "")}\n\n${text.trim()}`
+      : text;
+    const primaryName = kind === "image" ? "src" : "content";
+    const patchSlots = (slots) => {
+      let patched = false;
+      const nextSlots = (Array.isArray(slots) ? slots : []).map((slot) => {
+        const name = String(slot?.name || "");
+        const type = String(slot?.type || "");
+        if (!patched && (name === primaryName || name === "filePath" || type === "text")) {
+          patched = true;
+          return { ...slot, default: nextText, value: nextText };
+        }
+        return slot;
+      });
+      return nextSlots;
+    };
+    const nextNodes = nodesRef.current.map((node) => {
+      if (node.id !== id) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          body: nextText,
+          inputs: patchSlots(node.data?.inputs),
+          outputs: patchSlots(node.data?.outputs),
+        },
+      };
+    });
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[id] && typeof currentInstances[id] === "object" ? currentInstances[id] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [id]: {
+        ...base,
+        body: nextText,
+        input: patchSlots(base.input),
+        output: patchSlots(base.output),
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    setNodePropDraft((draft) => (draft?.id === id ? { ...draft, body: nextText } : draft));
+    if (options?.logChat !== false) {
+      setNodeChatSessions((sessions) => ({
+        ...sessions,
+        [id]: {
+          ...(sessions[id] || {}),
+          candidateContent: "",
+          messages: [
+            ...((sessions[id]?.messages && Array.isArray(sessions[id].messages)) ? sessions[id].messages : []),
+            { role: "assistant", text: mode === "append" ? "已追加到当前节点内容。" : "已替换当前节点内容。", at: Date.now() },
+          ],
+        },
+      }));
+    }
+    saveGraph(nextNodes, edgesRef.current).catch((e) => setStatus(String(e.message || e)));
+    setStatus(String(options?.statusMessage || "") || (mode === "append" ? "已追加节点内容" : "已替换节点内容"));
+  }, [saveGraph, setNodes]);
+
+  const applyNodeChatCandidate = useCallback((nodeId, mode = "replace") => {
+    const id = String(nodeId || "").trim();
+    const candidate = String(nodeChatSessions[id]?.candidateContent || "").trim();
+    if (!id || !candidate) return;
+    setDisplayNodeContent(id, candidate, mode);
+  }, [nodeChatSessions, setDisplayNodeContent]);
+
+  const sendNodeChat = useCallback(async (nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    const session = nodeChatSessions[id] || {};
+    const message = String(session.draft || "").trim();
+    if (!message || session.running) return;
+    const node = nodesRef.current.find((item) => item.id === id);
+    if (!node) return;
+    const userMessage = { role: "user", text: message, at: Date.now() };
+    const previousMessages = Array.isArray(session.messages) ? session.messages : [];
+    const nextSessionId = session.sessionId || `nodechat_${Date.now()}_${id.replace(/[^a-z0-9_-]+/gi, "_")}`;
+    setNodeChatSessions((sessions) => ({
+      ...sessions,
+      [id]: {
+        ...session,
+        sessionId: nextSessionId,
+        messages: [...previousMessages, userMessage],
+        draft: "",
+        running: true,
+        error: "",
+      },
+    }));
+    try {
+      const res = await fetch("/api/workspace/node-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          sessionId: nextSessionId,
+          node: {
+            id,
+            label: node.data?.label || id,
+            definitionId: node.data?.definitionId || "",
+          },
+          nodeKind: displayKind(node.data?.definitionId) || "markdown",
+          currentContent: displayContent(node.data),
+          messages: previousMessages,
+          message,
+          model: composerModel,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "节点微调失败");
+      const candidateContent = String(json.candidateContent || json.reply || "").trim();
+      setNodeChatSessions((sessions) => ({
+        ...sessions,
+        [id]: {
+          ...(sessions[id] || {}),
+          sessionId: String(json.sessionId || nextSessionId),
+          running: false,
+          candidateContent,
+          messages: [
+            ...(((sessions[id]?.messages && Array.isArray(sessions[id].messages)) ? sessions[id].messages : [...previousMessages, userMessage])),
+            { role: "assistant", text: candidateContent || "已生成候选内容。", at: Date.now() },
+          ],
+        },
+      }));
+    } catch (e) {
+      const err = String(e.message || e);
+      setNodeChatSessions((sessions) => ({
+        ...sessions,
+        [id]: {
+          ...(sessions[id] || {}),
+          running: false,
+          error: err,
+        },
+      }));
+      setStatus(err);
+    }
+  }, [composerModel, flowParams, nodeChatSessions]);
 
   const saveDisplayNodeToFile = useCallback(async (nodeId, data) => {
     const content = displayContent(data);
@@ -1761,6 +2669,17 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles]);
 
+  const syncNodePropDraft = useCallback((nodeId, patchOrUpdater) => {
+    const id = String(nodeId || "");
+    if (!id) return;
+    setNodePropDraft((draft) => {
+      if (!draft || draft.id !== id) return draft;
+      const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(draft) : patchOrUpdater;
+      if (!patch || typeof patch !== "object") return draft;
+      return { ...draft, ...patch };
+    });
+  }, []);
+
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -1775,9 +2694,19 @@ function WorkspacePageInner() {
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
+      onRefreshSkills: refreshSkills,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
+      nodeChatActive: activeNodeChatId === node.id,
+      nodeChat: nodeChatSessions[node.id] || null,
+      onSetDisplayNodeContent: setDisplayNodeContent,
+      onToggleNodeChat: toggleNodeChat,
+      onCloseNodeChat: () => setActiveNodeChatId(""),
+      onUpdateNodeChatDraft: updateNodeChatDraft,
+      onSendNodeChat: sendNodeChat,
+      onApplyNodeChatCandidate: applyNodeChatCandidate,
+      onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [changeLoadSkillKeys, modelLists, nodes, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, skillCollections, skills, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadSkillKeys, modelLists, nodeChatSessions, nodes, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -2334,13 +3263,14 @@ function WorkspacePageInner() {
       return;
     }
     setConnectionMenu(null);
+    setNodes((current) => revealConnectedSlots(current, params));
     setEdges((current) => {
       const filtered = current.filter(
         (edge) => !(edge.target === params.target && edge.targetHandle === params.targetHandle)
       );
       return addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
     });
-  }, [setEdges]);
+  }, [setEdges, setNodes]);
 
   const handleConnectStart = useCallback((_, params) => {
     connectionStartRef.current = buildWorkspaceConnectionDraft(params, nodesRef.current);
@@ -2396,6 +3326,7 @@ function WorkspacePageInner() {
             target: menu.draft.nodeId,
             targetHandle: menu.draft.handleId,
           };
+    setNodes((current) => revealConnectedSlots(current, nextConnection));
     setEdges((current) => {
       const filtered = current.filter(
         (edge) => !(edge.target === nextConnection.target && edge.targetHandle === nextConnection.targetHandle)
@@ -2436,6 +3367,30 @@ function WorkspacePageInner() {
         return;
       }
       if (editable) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
+        const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
+        if (clip) {
+          event.preventDefault();
+          event.stopPropagation();
+          canvasClipboardRef.current = clip;
+          setStatus(`Copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
+        }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+        const pasted = pasteCanvasClipboard(canvasClipboardRef.current, nodesRef.current, edgesRef.current, instancesRef.current);
+        if (pasted) {
+          event.preventDefault();
+          event.stopPropagation();
+          instancesRef.current = pasted.instances;
+          setInstances(pasted.instances);
+          setNodes(pasted.nodes);
+          setEdges(pasted.edges);
+          setSelectedNodeId(pasted.pastedNodeIds[0] || "");
+          setStatus(`Pasted ${pasted.pastedNodeIds.length} node${pasted.pastedNodeIds.length > 1 ? "s" : ""}`);
+        }
+        return;
+      }
       if (isQuestionMarkShortcut(event) && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         setShortcutsOpen(true);
@@ -2636,7 +3591,7 @@ function WorkspacePageInner() {
     const graph = flowToGraph(nodes, edges, instancesRef.current);
     setComposerText("");
     setComposerRunning(true);
-    setComposerSidebarOpen(true);
+    openComposerLogPanel("workspace");
     setComposerMessages((list) => [...list, { role: "user", text: prompt, at: Date.now() }]);
     try {
       await saveGraph(nodes, edges);
@@ -2667,7 +3622,24 @@ function WorkspacePageInner() {
     } finally {
       setComposerRunning(false);
     }
-  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills]);
+  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, openComposerLogPanel, saveGraph, selectedCanvasNodeIds, selectedSkills]);
+
+  const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
+  const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
+  const activeComposerRunning = activeRunSession ? activeRunSession.status === "running" : composerRunning;
+  const activeComposerStatus = activeRunSession
+    ? activeRunSession.status === "running"
+      ? `${activeRunSession.label} running`
+      : activeRunSession.status === "paused"
+        ? `${activeRunSession.label} paused`
+        : activeRunSession.status === "failed"
+          ? `${activeRunSession.label} failed`
+          : `${activeRunSession.label} done`
+    : composerRunning
+      ? "Workspace agent running"
+      : composerMessages.length > 0
+        ? "Workspace conversation"
+        : "Ready";
 
   return (
     <div className="af-workspace-page">
@@ -3333,19 +4305,42 @@ function WorkspacePageInner() {
                 </button>
               </div>
               <div className="af-composer-session-tabs">
-                <button type="button" className="af-composer-session-tab af-composer-session-tab--active">
+                <button
+                  type="button"
+                  className={"af-composer-session-tab" + (activeComposerSessionId === "workspace" ? " af-composer-session-tab--active" : "")}
+                  onClick={() => setActiveComposerSessionId("workspace")}
+                >
                   <span className="af-composer-session-label">Workspace</span>
                 </button>
+                {composerRunSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className={
+                      "af-composer-session-tab" +
+                      (activeComposerSessionId === session.id ? " af-composer-session-tab--active" : "") +
+                      (session.status === "running" ? " af-composer-session-tab--running" : "")
+                    }
+                    onClick={() => setActiveComposerSessionId(session.id)}
+                    title={session.runNodeId || session.label}
+                  >
+                    <span className="af-composer-session-label">{session.label}</span>
+                  </button>
+                ))}
               </div>
               <div
-                className={"af-composer-sidebar-status" + (composerRunning ? " af-composer-sidebar-status--running" : "")}
+                className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
                 role="status"
                 aria-live="polite"
               >
-                {composerRunning ? "Workspace agent running" : composerMessages.length > 0 ? "Workspace conversation" : "Ready"}
+                {activeComposerStatus}
               </div>
               <div className="af-composer-sidebar-thread">
-                <WorkspaceComposerThread messages={composerMessages} running={composerRunning} />
+                <WorkspaceComposerThread
+                  messages={activeComposerMessages}
+                  running={activeComposerRunning}
+                  showRunningIndicator={!activeRunSession}
+                />
               </div>
             </div>
           </aside>

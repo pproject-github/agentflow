@@ -5,6 +5,7 @@ import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import McpPage from "./pages/McpPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
 
@@ -52,6 +53,7 @@ function RoutedContent() {
   if (path === "/my-nodes") return <ProjectsPage resourceKind="my-nodes" />;
   if (path === "/my-flows") return <ProjectsPage resourceKind="my-flows" />;
   if (path === "/skills") return <ProjectsPage resourceKind="skills" />;
+  if (path === "/mcps") return <McpPage />;
   if (path === "/flow") return <FlowEditorPage />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path === "/settings") return <SettingsPage />;

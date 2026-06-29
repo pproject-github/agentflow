@@ -106,6 +106,7 @@ export function buildScriptContentBlockForInstances(flowYamlAbs, instanceIds) {
  * @param {string} [opts.modelKey]
  * @param {boolean} [opts.force]
  * @param {(ev: object) => void} [opts.onStreamEvent]
+ * @param {(subtype: string, toolName: string) => void} [opts.onToolCall]
  * @returns {{ child: import('child_process').ChildProcess, finished: Promise<void> }}
  */
 export function startComposerAgent(opts) {
@@ -123,6 +124,7 @@ export function startComposerAgent(opts) {
 
   const common = {
     onStreamEvent: opts.onStreamEvent,
+    onToolCall: opts.onToolCall,
     force: Boolean(opts.force),
     env,
   };
