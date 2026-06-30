@@ -930,15 +930,26 @@ function replaceFlowUrl(flow) {
   window.history.replaceState({}, "", "/flow?" + q.toString());
 }
 
-/** 保存 flow.yaml 的 API flowSource：builtin 写入工作区副本 */
+/** 保存 flow.yaml 的 API flowSource：内置来源写入工作区副本 */
 function flowSourceForWrite(source) {
-  return source === "builtin" ? "workspace" : source ?? "user";
+  return source === "builtin" || source === "admin" ? "workspace" : source ?? "user";
+}
+
+function isReadonlyBuiltinFlowSource(source) {
+  return source === "builtin" || source === "admin";
 }
 
 function flowSourceLabelZh(source, t) {
-  if (source === "builtin") return t("flow:settings.builtin");
+  if (source === "builtin" || source === "admin") return t("flow:settings.builtin");
   if (source === "workspace") return t("flow:palette.workspace");
   return t("flow:palette.userDir");
+}
+
+function persistedFlowNodeSize(node) {
+  const width = Number(node?.data?.displaySize?.width || node?.width || 0);
+  const height = Number(node?.data?.displaySize?.height || node?.height || 0);
+  if (width > 0 && height > 0) return { width: Math.round(width), height: Math.round(height) };
+  return null;
 }
 
 const RUN_CONSOLE_HEIGHT_STORAGE_KEY = "af:run-console-height";
@@ -2707,7 +2718,7 @@ export default function FlowEditorPage() {
 if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFailed"));
         lastPersistedYamlRef.current = yaml;
         setSaveStatus(t("flow:status.saved"));
-        if (selected.source === "builtin" && writeSource === "workspace") {
+        if (isReadonlyBuiltinFlowSource(selected.source) && writeSource === "workspace") {
           const next = { id: selected.id, source: "workspace", path: undefined };
           setSelected(next);
           replaceFlowUrl(next);
@@ -3995,6 +4006,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       const positions = snippet.ui?.nodePositions && typeof snippet.ui.nodePositions === "object"
         ? snippet.ui.nodePositions
         : {};
+      const sourceSizes = snippet.ui?.nodeSizes && typeof snippet.ui.nodeSizes === "object"
+        ? snippet.ui.nodeSizes
+        : {};
       const sourcePositions = oldIds.map((id) => {
         const p = positions[id];
         return {
@@ -4025,6 +4039,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       const nextNodes = oldIds.map((oldId) => {
         const inst = instances[oldId] || {};
         const pos = sourcePositions.find((p) => p.id === oldId) || { x: 0, y: 0 };
+        const size = sourceSizes[oldId] && typeof sourceSizes[oldId].width === "number" && typeof sourceSizes[oldId].height === "number"
+          ? { width: sourceSizes[oldId].width, height: sourceSizes[oldId].height }
+          : null;
         const rawNode = {
           id: idMap[oldId],
           type: "flowNode",
@@ -4033,12 +4050,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             x: insertAt.x + (pos.x - minX),
             y: insertAt.y + (pos.y - minY),
           },
+          ...(size ? { width: size.width, height: size.height } : {}),
           data: {
             label: inst.label || idMap[oldId],
             definitionId: inst.definitionId || oldId,
             role: inst.role || "normal",
             body: inst.body || "",
             script: inst.script || "",
+            ...(size ? { displaySize: size } : {}),
           },
         };
         return mergeNodeWithPalette(rawNode, instancesRef.current, palette, {}, selected.id);
@@ -4094,8 +4113,11 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     }
     const instances = buildInstancesForYaml(selectedCanvasNodes, instancesRef.current);
     const nodePositions = {};
+    const nodeSizes = {};
     for (const node of selectedCanvasNodes) {
       nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
+      const size = persistedFlowNodeSize(node);
+      if (size) nodeSizes[node.id] = size;
     }
     const snippetEdges = selectedCanvasInternalEdges.map((edge) => ({
       source: edge.source,
@@ -4118,7 +4140,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           snippet: {
             instances,
             edges: snippetEdges,
-            ui: { nodePositions },
+            ui: { nodePositions, nodeSizes },
           },
         }),
       });
@@ -4633,7 +4655,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   const renderPipelineSettingsPage = () => {
     if (!selected) return null;
-    const scheduleReadOnly = scheduleSaving || selected.archived || selected.source === "builtin";
+    const scheduleReadOnly = scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source);
     const scheduleRuntimeLabel = scheduleRuntimeStatus?.running
       ? t("flow:schedule.running")
       : scheduleDraft.enabled
@@ -4645,7 +4667,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         ? "waiting"
         : "disabled";
     const marketplacePreview = marketplaceCatalogNodes.slice(0, 12);
-    const marketReadOnly = selected.archived || selected.source === "builtin";
+    const marketReadOnly = selected.archived || isReadonlyBuiltinFlowSource(selected.source);
     return (
       <section className="af-pipeline-settings-page" aria-label={t("flow:settings.title")}>
         <aside className="af-pipeline-settings-nav" aria-label={t("flow:settings.sectionNav")}>
@@ -5017,7 +5039,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     {scheduleRuntimeStatus?.lastError || scheduleState.lastError}
                   </p>
                 ) : null}
-                {selected.archived || selected.source === "builtin" ? (
+                {selected.archived || isReadonlyBuiltinFlowSource(selected.source) ? (
                   <p className="af-pipeline-drawer-muted">{t("flow:schedule.readonlyNote")}</p>
                 ) : null}
                 {scheduleError ? <p className="af-err af-pipeline-drawer-err">{scheduleError}</p> : null}
@@ -5335,7 +5357,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   title={t("flow:topbar.deletePipeline")}
                   disabled={
                     !selected ||
-                    selected.source === "builtin" ||
+                    isReadonlyBuiltinFlowSource(selected.source) ||
                     (selected.source !== "user" && selected.source !== "workspace")
                   }
                   onClick={() => setDeleteModalOpen(true)}
@@ -5347,7 +5369,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   className="af-btn-pipeline-archive"
                   disabled={
                     !selected ||
-                    selected.source === "builtin" ||
+                    isReadonlyBuiltinFlowSource(selected.source) ||
                     selected.archived ||
                     (selected.source !== "user" && selected.source !== "workspace")
                   }
@@ -6959,7 +6981,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                 <input
                                   type="checkbox"
                                   checked={Boolean(scheduleDraft.enabled)}
-                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  disabled={scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source)}
                                   onChange={(e) =>
                                     updateScheduleDraft((prev) => ({ ...prev, enabled: e.target.checked }))
                                   }
@@ -6972,7 +6994,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   type="text"
                                   className="af-pipeline-rename-input"
                                   value={scheduleDraft.cron || ""}
-                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  disabled={scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source)}
                                   onChange={(e) =>
                                     updateScheduleDraft((prev) => ({ ...prev, cron: e.target.value }))
                                   }
@@ -6986,7 +7008,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   type="text"
                                   className="af-pipeline-rename-input"
                                   value={scheduleDraft.timezone || ""}
-                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  disabled={scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source)}
                                   onChange={(e) =>
                                     updateScheduleDraft((prev) => ({ ...prev, timezone: e.target.value }))
                                   }
@@ -6999,7 +7021,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                 <select
                                   className="af-pipeline-flow-select"
                                   value={scheduleDraft.preset || ""}
-                                  disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                  disabled={scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source)}
                                   onChange={(e) =>
                                     updateScheduleDraft((prev) => ({ ...prev, preset: e.target.value }))
                                   }
@@ -7072,7 +7094,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                                   {scheduleRuntimeStatus?.lastError || scheduleState.lastError}
                                 </p>
                               ) : null}
-                              {selected.archived || selected.source === "builtin" ? (
+                              {selected.archived || isReadonlyBuiltinFlowSource(selected.source) ? (
                                 <p className="af-pipeline-drawer-muted">{t("flow:schedule.readonlyNote")}</p>
                               ) : null}
                               {scheduleError ? <p className="af-err af-pipeline-drawer-err">{scheduleError}</p> : null}
@@ -7080,7 +7102,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                               <button
                                 type="button"
                                 className="af-btn-secondary"
-                                disabled={scheduleSaving || selected.archived || selected.source === "builtin"}
+                                disabled={scheduleSaving || selected.archived || isReadonlyBuiltinFlowSource(selected.source)}
                                 onClick={handleSaveSchedule}
                               >
                                 {scheduleSaving ? t("flow:schedule.saving") : t("flow:schedule.save")}

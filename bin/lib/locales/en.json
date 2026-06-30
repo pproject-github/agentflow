@@ -333,6 +333,10 @@
       "displayName": "Chart Display",
       "description": "Render ChartSpec/ECharts JSON on the Workspace canvas and pass the JSON downstream"
     },
+    "display_table": {
+      "displayName": "Table Display",
+      "description": "Render JSON, Markdown, CSV, or TSV table data on the Workspace canvas and pass the text downstream"
+    },
     "provide_str": {
       "displayName": "Text",
       "description": "Provide a text value directly, value will be passed to downstream as-is"

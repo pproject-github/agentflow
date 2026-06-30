@@ -26,6 +26,7 @@ function activityIconKind(kind) {
 
 function sourceBadgeMeta(source, t) {
   if (source === "builtin") return { label: t("project:sourceBadge.builtin"), tone: "muted" };
+  if (source === "admin") return { label: t("project:sourceBadge.builtin"), tone: "muted" };
   if (source === "workspace") return { label: t("project:sourceBadge.workspace"), tone: "secondary" };
   return { label: t("project:sourceBadge.user"), tone: "primary" };
 }
@@ -34,6 +35,7 @@ function sourceBadgeMeta(source, t) {
 function sourcePathHint(f) {
   const s = f.source ?? "user";
   if (s === "builtin") return `builtin/pipelines / ${f.id}`;
+  if (s === "admin") return `admin builtin / ${f.ownerUserId || "-"} / ${f.id}`;
   if (s === "workspace")
     return f.archived
       ? `.workspace/agentflow/pipelines/_archived / ${f.id}`
@@ -131,6 +133,25 @@ function flowSnippetPathHint(snippet) {
 
 const NODE_FILTERS = ["all", "agent", "control", "provide", "marketplace"];
 const MY_NODE_FILTERS = ["all", "agent", "control", "provide"];
+const ACTIVITY_PANEL_OPEN_STORAGE_KEY = "agentflow.projects.activityPanelOpen";
+const ACTIVITY_SELECTED_STORAGE_KEY = "agentflow.projects.activitySelected";
+
+function loadActivityPanelOpen() {
+  if (typeof localStorage === "undefined") return true;
+  const value = localStorage.getItem(ACTIVITY_PANEL_OPEN_STORAGE_KEY);
+  if (value === "0") return false;
+  if (value === "1") return true;
+  return true;
+}
+
+function activitySelectionKey(row) {
+  return `${row?.flowSource || "user"}:${row?.flowId || ""}`;
+}
+
+function loadActivitySelectionKey() {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(ACTIVITY_SELECTED_STORAGE_KEY) || "";
+}
 
 function slotsToRows(slots) {
   if (!slots || typeof slots !== "object") return [];
@@ -148,7 +169,73 @@ function flowSnippetKey(item) {
   return `${item?.id || ""}:${item?.version || ""}:${item?.packageDir || ""}`;
 }
 
-export default function ProjectsPage({ resourceKind = "" }) {
+function flowSnippetInstances(snippet) {
+  const raw = snippet?.snippet?.instances;
+  if (Array.isArray(raw)) return raw.filter((item) => item && typeof item === "object");
+  if (raw && typeof raw === "object") {
+    return Object.entries(raw).map(([instanceId, item]) => ({
+      ...(item && typeof item === "object" ? item : {}),
+      instanceId: item?.instanceId || instanceId,
+    }));
+  }
+  return [];
+}
+
+function flowSnippetEdges(snippet) {
+  const raw = snippet?.snippet?.edges;
+  return Array.isArray(raw) ? raw.filter((item) => item && typeof item === "object") : [];
+}
+
+function flowSnippetNodeId(node, index) {
+  return String(node?.instanceId || node?.id || node?.nodeId || `node_${index + 1}`);
+}
+
+function flowSnippetNodeTitle(node, index) {
+  return String(node?.label || node?.displayName || node?.name || flowSnippetNodeId(node, index));
+}
+
+function flowSnippetNodeMeta(node) {
+  return String(node?.definitionId || node?.type || node?.runtimeType || "").replace(/^marketplace:/, "");
+}
+
+function flowSnippetEdgeEndpoint(edge, side) {
+  if (side === "source") {
+    return String(edge?.source || edge?.from || edge?.sourceId || edge?.fromNode || edge?.fromInstanceId || "");
+  }
+  return String(edge?.target || edge?.to || edge?.targetId || edge?.toNode || edge?.toInstanceId || "");
+}
+
+function flowSnippetEdgeLabel(edge) {
+  const out = edge?.sourceHandle || edge?.fromHandle || edge?.output || edge?.outputName;
+  const input = edge?.targetHandle || edge?.toHandle || edge?.input || edge?.inputName;
+  if (out && input) return `${out} -> ${input}`;
+  return String(out || input || "");
+}
+
+function flowSnippetPreview(snippet) {
+  const instances = flowSnippetInstances(snippet);
+  const edges = flowSnippetEdges(snippet);
+  const idToTitle = new Map(instances.map((node, index) => [flowSnippetNodeId(node, index), flowSnippetNodeTitle(node, index)]));
+  return {
+    nodes: instances.map((node, index) => ({
+      id: flowSnippetNodeId(node, index),
+      title: flowSnippetNodeTitle(node, index),
+      meta: flowSnippetNodeMeta(node),
+    })),
+    edges: edges.map((edge, index) => {
+      const source = flowSnippetEdgeEndpoint(edge, "source");
+      const target = flowSnippetEdgeEndpoint(edge, "target");
+      return {
+        key: edge?.id || `${source}-${target}-${index}`,
+        source: idToTitle.get(source) || source || "?",
+        target: idToTitle.get(target) || target || "?",
+        label: flowSnippetEdgeLabel(edge),
+      };
+    }),
+  };
+}
+
+export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const { t } = useTranslation();
   const { navigate, path } = useRoute();
   const [filter, setFilter] = useState(resourceKind || "all");
@@ -168,7 +255,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const [pendingImportFile, setPendingImportFile] = useState(/** @type {File | null} */ (null));
   const [dropHighlight, setDropHighlight] = useState(false);
   const [pipelineSearch, setPipelineSearch] = useState("");
-  const [activityPanelOpen, setActivityPanelOpen] = useState(true);
+  const [activityPanelOpen, setActivityPanelOpen] = useState(loadActivityPanelOpen);
+  const [selectedActivityKey, setSelectedActivityKey] = useState(loadActivitySelectionKey);
   const [resourceFilter, setResourceFilter] = useState("all");
   const [selectedResourceKey, setSelectedResourceKey] = useState("");
   const [resourceDetailTab, setResourceDetailTab] = useState("overview");
@@ -182,6 +270,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const [nodeDeleteBusy, setNodeDeleteBusy] = useState("");
   const [nodeDeleteMessage, setNodeDeleteMessage] = useState("");
   const [hideCommunityLinks, setHideCommunityLinks] = useState(false);
+  const [adminBuiltinBusy, setAdminBuiltinBusy] = useState("");
+  const [adminBuiltinConfig, setAdminBuiltinConfig] = useState({ hiddenBuiltins: [], promoted: [] });
   const dragDepthRef = useRef(0);
   const mountIdRef = useRef(0);
 
@@ -214,8 +304,51 @@ export default function ProjectsPage({ resourceKind = "" }) {
       if (myId !== mountIdRef.current) return;
       setRecentRuns([]);
     }
+    if (authUser?.isAdmin) {
+      try {
+        const rAdmin = await fetch("/api/admin/builtin-flows");
+        if (myId !== mountIdRef.current) return;
+        const jAdmin = await rAdmin.json().catch(() => ({}));
+        if (rAdmin.ok) {
+          setAdminBuiltinConfig({
+            hiddenBuiltins: Array.isArray(jAdmin?.config?.hiddenBuiltins) ? jAdmin.config.hiddenBuiltins : [],
+            promoted: Array.isArray(jAdmin?.config?.promoted) ? jAdmin.config.promoted : [],
+          });
+        }
+      } catch {
+        if (myId !== mountIdRef.current) return;
+        setAdminBuiltinConfig({ hiddenBuiltins: [], promoted: [] });
+      }
+    } else {
+      setAdminBuiltinConfig({ hiddenBuiltins: [], promoted: [] });
+    }
     setLoaded(true);
-  }, []);
+  }, [authUser?.isAdmin]);
+
+  const updateAdminBuiltinFlow = useCallback(async (flow, action) => {
+    if (!authUser?.isAdmin || !flow?.id) return;
+    const busyKey = `${action}:${flow.source}:${flow.id}`;
+    setAdminBuiltinBusy(busyKey);
+    setListError("");
+    try {
+      const res = await fetch("/api/admin/builtin-flows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          flowId: flow.id,
+          ownerUserId: flow.ownerUserId || authUser.userId,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "更新内置配置失败");
+      await loadFlows();
+    } catch (e) {
+      setListError(String(e.message || e));
+    } finally {
+      setAdminBuiltinBusy("");
+    }
+  }, [authUser?.isAdmin, authUser?.userId, loadFlows]);
 
   const loadResources = useCallback(async () => {
     setResourceError("");
@@ -255,6 +388,23 @@ export default function ProjectsPage({ resourceKind = "" }) {
     loadFlows();
     loadResources();
   }, [loadFlows, loadResources]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVITY_PANEL_OPEN_STORAGE_KEY, activityPanelOpen ? "1" : "0");
+    } catch {
+      /* ignore storage failures */
+    }
+  }, [activityPanelOpen]);
+
+  useEffect(() => {
+    try {
+      if (selectedActivityKey) localStorage.setItem(ACTIVITY_SELECTED_STORAGE_KEY, selectedActivityKey);
+      else localStorage.removeItem(ACTIVITY_SELECTED_STORAGE_KEY);
+    } catch {
+      /* ignore storage failures */
+    }
+  }, [selectedActivityKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -436,6 +586,16 @@ export default function ProjectsPage({ resourceKind = "" }) {
   const filteredFlows = useMemo(
     () => displayedFlows.filter((f) => flowMatchesSearch(f, searchNorm, t)),
     [displayedFlows, searchNorm, t],
+  );
+
+  const promotedAdminFlowIds = useMemo(
+    () => new Set((adminBuiltinConfig.promoted || []).map((item) => String(item?.id || "").trim()).filter(Boolean)),
+    [adminBuiltinConfig.promoted],
+  );
+
+  const hiddenBuiltinFlows = useMemo(
+    () => (adminBuiltinConfig.hiddenBuiltins || []).map((id) => String(id || "").trim()).filter(Boolean),
+    [adminBuiltinConfig.hiddenBuiltins],
   );
 
   const isNodeResourceTab = filter === "nodes" || filter === "my-nodes";
@@ -629,6 +789,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
   };
 
   const openActivityRow = (row) => {
+    setSelectedActivityKey(activitySelectionKey(row));
     navigate(preferredFlowUrl({
       id: row.flowId,
       source: row.flowSource,
@@ -940,8 +1101,8 @@ export default function ProjectsPage({ resourceKind = "" }) {
             <div className="af-resource-grid">
               {filteredFlowSnippets.length > 0 ? (
                 filteredFlowSnippets.map((snippet) => {
-                  const instances = snippet.snippet && Array.isArray(snippet.snippet.instances) ? snippet.snippet.instances : [];
-                  const edges = snippet.snippet && Array.isArray(snippet.snippet.edges) ? snippet.snippet.edges : [];
+                  const instances = flowSnippetInstances(snippet);
+                  const edges = flowSnippetEdges(snippet);
                   const nodeCount = Number.isFinite(Number(snippet.nodeCount)) ? Number(snippet.nodeCount) : instances.length;
                   const edgeCount = Number.isFinite(Number(snippet.edgeCount)) ? Number(snippet.edgeCount) : edges.length;
                   return (
@@ -1041,14 +1202,51 @@ export default function ProjectsPage({ resourceKind = "" }) {
               )}
             </div>
           ) : (
+            <>
+            {authUser?.isAdmin && filter === "all" && hiddenBuiltinFlows.length > 0 ? (
+              <div className="af-project-admin-panel">
+                <div>
+                  <strong>已隐藏内置</strong>
+                  <span>这些包内置流水线不会出现在普通项目列表中。</span>
+                </div>
+                <div className="af-project-admin-hidden-list">
+                  {hiddenBuiltinFlows.map((flowId) => {
+                    const busy = adminBuiltinBusy === `show-builtin:builtin:${flowId}`;
+                    return (
+                      <button
+                        key={flowId}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => updateAdminBuiltinFlow({ id: flowId, source: "builtin" }, "show-builtin")}
+                      >
+                        <span>{flowId}</span>
+                        <em>{busy ? "恢复中" : "恢复"}</em>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <div className="af-project-grid">
               {filteredFlows.length > 0 ? (
-                filteredFlows.map((f) => (
-                  <button
+                filteredFlows.map((f) => {
+                  const canPromote = authUser?.isAdmin && f.source === "user" && !f.archived && !promotedAdminFlowIds.has(f.id);
+                  const canUnpromote = authUser?.isAdmin && f.source === "admin";
+                  const canHideBuiltin = authUser?.isAdmin && f.source === "builtin";
+                  const busyAction = adminBuiltinBusy.endsWith(`:${f.source}:${f.id}`);
+                  return (
+                  <div
                     key={`${f.id}:${f.source ?? "user"}:${f.archived ? "a" : ""}`}
-                    type="button"
                     className="af-project-card"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => openFlow(f)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openFlow(f);
+                      }
+                    }}
                   >
                     <div className="af-project-card-body">
                       <span className={badgeClass(sourceBadgeMeta(f.source, t).tone)}>
@@ -1071,9 +1269,32 @@ export default function ProjectsPage({ resourceKind = "" }) {
                           <HighlightMatch query={pipelineSearch}>{sourcePathHint(f)}</HighlightMatch>
                         </span>
                       </div>
+                      {authUser?.isAdmin ? (
+                        <div
+                          className="af-project-admin-actions"
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {canPromote ? (
+                            <button type="button" disabled={busyAction} onClick={() => updateAdminBuiltinFlow(f, "promote")}>
+                              设为内置
+                            </button>
+                          ) : null}
+                          {canUnpromote ? (
+                            <button type="button" disabled={busyAction} onClick={() => updateAdminBuiltinFlow(f, "unpromote")}>
+                              取消内置
+                            </button>
+                          ) : null}
+                          {canHideBuiltin ? (
+                            <button type="button" disabled={busyAction} onClick={() => updateAdminBuiltinFlow(f, "hide-builtin")}>
+                              隐藏内置
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                  </button>
-                ))
+                  </div>
+                );})
               ) : !loaded ? (
                 <div className="af-projects-empty-block">
                   <p className="af-projects-empty">{t("project:loadingPipelines")}</p>
@@ -1133,6 +1354,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
                 </a>
               ) : null}
             </div>
+            </>
           )}
         </section>
 
@@ -1289,6 +1511,9 @@ export default function ProjectsPage({ resourceKind = "" }) {
                 )}
               </>
             ) : isMyFlowsTab && selectedFlowSnippet ? (
+              (() => {
+                const preview = flowSnippetPreview(selectedFlowSnippet);
+                return (
               <>
                 <div className="af-resource-detail-head">
                   <span className="material-symbols-outlined">schema</span>
@@ -1307,14 +1532,10 @@ export default function ProjectsPage({ resourceKind = "" }) {
                       {t("project:flowSnippetNodes", {
                         nodes: Number.isFinite(Number(selectedFlowSnippet.nodeCount))
                           ? Number(selectedFlowSnippet.nodeCount)
-                          : Array.isArray(selectedFlowSnippet.snippet?.instances)
-                            ? selectedFlowSnippet.snippet.instances.length
-                            : 0,
+                          : preview.nodes.length,
                         edges: Number.isFinite(Number(selectedFlowSnippet.edgeCount))
                           ? Number(selectedFlowSnippet.edgeCount)
-                          : Array.isArray(selectedFlowSnippet.snippet?.edges)
-                            ? selectedFlowSnippet.snippet.edges.length
-                            : 0,
+                          : preview.edges.length,
                       })}
                     </dd>
                   </div>
@@ -1325,11 +1546,51 @@ export default function ProjectsPage({ resourceKind = "" }) {
                 </div>
                 <div className="af-resource-detail-section">
                   <h4>{t("project:flowSnippetPreview")}</h4>
-                  <pre className="af-resource-skill-preview">
-                    {JSON.stringify(selectedFlowSnippet.snippet || {}, null, 2)}
-                  </pre>
+                  <div className="af-flow-snippet-preview">
+                    <div className="af-flow-snippet-preview__nodes">
+                      {preview.nodes.length > 0 ? (
+                        preview.nodes.map((node, index) => (
+                          <div key={`${node.id}-${index}`} className="af-flow-snippet-preview-node">
+                            <span className="af-flow-snippet-preview-node__index">{index + 1}</span>
+                            <div>
+                              <strong>{node.title}</strong>
+                              <span>{node.meta || node.id}</span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="af-resource-detail-desc">{t("project:noFlowSnippetPreview")}</p>
+                      )}
+                    </div>
+                    {preview.edges.length > 0 ? (
+                      <div className="af-flow-snippet-preview__edges">
+                        <h5>{t("project:flowSnippetEdges")}</h5>
+                        {preview.edges.slice(0, 12).map((edge) => (
+                          <div key={edge.key} className="af-flow-snippet-preview-edge">
+                            <span>{edge.source}</span>
+                            <i className="material-symbols-outlined" aria-hidden>arrow_forward</i>
+                            <span>{edge.target}</span>
+                            {edge.label ? <em>{edge.label}</em> : null}
+                          </div>
+                        ))}
+                        {preview.edges.length > 12 ? (
+                          <p className="af-flow-snippet-preview-more">
+                            {t("project:flowSnippetMoreEdges", { count: preview.edges.length - 12 })}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                  <details className="af-flow-snippet-json">
+                    <summary>{t("project:flowSnippetJson")}</summary>
+                    <pre className="af-resource-skill-preview">
+                      {JSON.stringify(selectedFlowSnippet.snippet || {}, null, 2)}
+                    </pre>
+                  </details>
                 </div>
               </>
+                );
+              })()
             ) : filter === "skills" && selectedSkill ? (
               <>
                 <div className="af-resource-detail-head">
@@ -1405,11 +1666,14 @@ export default function ProjectsPage({ resourceKind = "" }) {
                   {recentActivity.length === 0 ? t("project:noRecentActivity") : t("project:noMatchRecent")}
                 </p>
               ) : (
-                filteredRecentActivity.map((row) => (
+                filteredRecentActivity.map((row) => {
+                  const active = selectedActivityKey === activitySelectionKey(row);
+                  return (
                   <button
                     key={`${row.kind}-${row.flowId}-${row.flowSource}-${row.at}`}
                     type="button"
-                    className="af-activity-row af-activity-row--action"
+                    className={"af-activity-row af-activity-row--action" + (active ? " af-activity-row--active" : "")}
+                    aria-current={active ? "page" : undefined}
                     onClick={() => openActivityRow(row)}
                   >
                     <div className="af-activity-row-top">
@@ -1425,7 +1689,7 @@ export default function ProjectsPage({ resourceKind = "" }) {
                       </p>
                     </div>
                   </button>
-                ))
+                );})
               )}
             </div>
           </aside>

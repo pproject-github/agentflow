@@ -9,6 +9,7 @@ import fs from "fs";
 import http from "http";
 import os from "os";
 import path from "path";
+import crypto from "crypto";
 import { execFile, spawn } from "child_process";
 import busboy from "busboy";
 import { log } from "./log.mjs";
@@ -40,6 +41,7 @@ import {
 import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
+  getAgentflowDataRoot,
   getAgentflowUserConfigAbs,
   getAgentflowUserDataRoot,
   getModelListsAbs,
@@ -95,6 +97,10 @@ import {
   readUserAllowlist,
 } from "./auth.mjs";
 import { readUserEnvObject, readUserEnvRows, writeUserEnvRows } from "./user-env.mjs";
+import {
+  readAdminBuiltinPipelineConfig,
+  updateAdminBuiltinPipelineConfig,
+} from "./admin-builtin-pipelines.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -157,6 +163,48 @@ function json(res, status, obj) {
     "Content-Length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function feedbackStorePath() {
+  return path.join(getAgentflowDataRoot(), "feedback", "feedback.json");
+}
+
+function readFeedbackItems() {
+  try {
+    const p = feedbackStorePath();
+    if (!fs.existsSync(p)) return [];
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return Array.isArray(data) ? data.filter((item) => item && typeof item === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFeedbackItems(items) {
+  const p = feedbackStorePath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(Array.isArray(items) ? items : [], null, 2) + "\n", "utf-8");
+}
+
+function createFeedbackItem(payload, user) {
+  const title = String(payload?.title || "").trim().slice(0, 120);
+  const content = String(payload?.content || "").trim().slice(0, 5000);
+  const contact = String(payload?.contact || "").trim().slice(0, 160);
+  const pageUrl = String(payload?.pageUrl || "").trim().slice(0, 500);
+  if (!title) return { error: "Missing feedback title" };
+  if (!content) return { error: "Missing feedback content" };
+  return {
+    item: {
+      id: `fb_${Date.now().toString(36)}_${crypto.randomBytes(5).toString("hex")}`,
+      title,
+      content,
+      contact,
+      pageUrl,
+      userId: String(user?.userId || ""),
+      username: String(user?.username || user?.userId || ""),
+      createdAt: new Date().toISOString(),
+    },
+  };
 }
 
 function skillCollectionsAbs(userCtx = {}) {
@@ -959,13 +1007,38 @@ function normalizeSkillhubSearchPayload(raw) {
 
 function normalizeSkillhubListPayload(raw) {
   const arr = Array.isArray(raw) ? raw : [];
-  return arr.map((x) => ({
-    name: String(x?.name ?? ""),
-    baseDir: String(x?.baseDir ?? ""),
-    path: String(x?.path ?? ""),
-    kind: String(x?.kind ?? ""),
-    agent: String(x?.agent ?? ""),
-  })).filter((x) => x.name);
+  return arr.map((x) => {
+    const pathValue = String(x?.path ?? "");
+    const targetPath = String(x?.targetPath ?? x?.target ?? "");
+    const metaPaths = [
+      pathValue ? path.join(pathValue, "_meta.json") : "",
+      targetPath ? path.join(targetPath, "_meta.json") : "",
+    ];
+    try {
+      if (pathValue) metaPaths.push(path.join(fs.realpathSync(pathValue), "_meta.json"));
+    } catch {}
+    let meta = {};
+    for (const metaPath of metaPaths) {
+      if (!metaPath || !fs.existsSync(metaPath)) continue;
+      try {
+        meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        break;
+      } catch {}
+    }
+    return {
+      name: String(x?.name ?? meta?.slug ?? ""),
+      displayName: String(meta?.displayName ?? ""),
+      summary: String(meta?.summary ?? ""),
+      version: String(meta?.version ?? ""),
+      baseDir: String(x?.baseDir ?? ""),
+      path: pathValue,
+      targetPath,
+      kind: String(x?.kind ?? ""),
+      agent: String(x?.agent ?? ""),
+      userName: String(meta?.userName ?? ""),
+      generatedAt: String(meta?.generatedAt ?? ""),
+    };
+  }).filter((x) => x.name);
 }
 
 function skillhubInstallArgs(payload, { uninstall = false } = {}) {
@@ -1217,7 +1290,7 @@ function buildWorkspaceGeneratePrompt(payload) {
     "Workspace 是当前 pipeline 的临时工作区，用于分析、试验、生成中间文件和展示结果。",
     "Workspace 与 Pipeline 各自有独立的 Skill collection；此处只使用当前 Workspace Composer 选择的 collections / skills 作为本次行为规则与编辑依据。",
     "当 Skills 提到修改 flow.yaml / instances / edges / ui 时，在 Workspace 视图下应映射为修改当前工作区的 workspace.graph.json，除非用户显式勾选并要求修改正式 flow.yaml。",
-    "workspace.graph.json 使用 JSON：{ version, instances, edges, ui: { nodePositions, nodeSizes } }。instances 的结构与 flow.yaml instances 一致；edges 使用 source/target/sourceHandle/targetHandle；ui.nodePositions 记录节点坐标。",
+    "workspace.graph.json 使用 JSON：{ version, instances, edges, ui: { nodePositions, nodeSizes } }。instances 的结构与 flow.yaml instances 一致；edges 使用 source/target/sourceHandle/targetHandle；ui.nodePositions 记录节点坐标，ui.nodeSizes 记录用户调整过的节点宽高。",
     allowFlowYaml
       ? "用户已允许你考虑正式 flow.yaml；如需修改仍必须明确说明影响。"
       : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.graph.json 或回复内容中完成任务。",
@@ -1329,6 +1402,7 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_html") return "html";
   if (id === "display_image") return "image";
   if (id === "display_chart") return "chart";
+  if (id === "display_table") return "table";
   return "";
 }
 
@@ -1394,6 +1468,9 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   }
   if (kinds.has("chart")) {
     rules.push('- 下游连接了 Chart 展示节点：只输出 ChartSpec JSON 对象，不要 Markdown 代码围栏，不要解释文字。格式必须包含 `"type":"chart"`、`"version":"1.0"`、`"renderer":"echarts"`、`"option"`；`option.series[].type` 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。');
+  }
+  if (kinds.has("table")) {
+    rules.push('- 下游连接了表格展示节点：优先只输出表格 JSON，不要解释文字。推荐格式：`{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}`；也可输出对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。');
   }
   return [
     "## 下游输出要求",
@@ -2199,7 +2276,11 @@ function parseFlowsImportForm(req) {
 
 /** GET 读 flow / nodes / SSE 等 */
 function isValidFlowSourceRead(s) {
-  return s === "builtin" || s === "user" || s === "workspace";
+  return s === "builtin" || s === "admin" || s === "user" || s === "workspace";
+}
+
+function isReadonlyBuiltinFlowSource(s) {
+  return s === "builtin" || s === "admin";
 }
 
 /** POST 写 flow */
@@ -2251,9 +2332,9 @@ function composerCliWorkspaceForFlowDir(workspaceRoot, _flowDir) {
  * @param {object} p
  * @param {string} p.flowYamlAbs
  * @param {string} p.flowId
- * @param {"builtin" | "user" | "workspace"} p.flowSource
- * @param {string} [p.workspaceWriteDirAbs] builtin 时可写副本根目录（…/pipelines/<flowId>）
- * @param {"user" | "workspace"} [p.editorSyncFlowSource] flow-editor-sync 使用的 flowSource（builtin 时为 workspace）
+ * @param {"builtin" | "admin" | "user" | "workspace"} p.flowSource
+ * @param {string} [p.workspaceWriteDirAbs] 内置来源的可写副本根目录（…/pipelines/<flowId>）
+ * @param {"user" | "workspace"} [p.editorSyncFlowSource] flow-editor-sync 使用的 flowSource（内置来源时为 workspace）
  * @param {string[]} p.instanceIds
  * @param {string} p.userPrompt
  * @param {number} p.uiPort 本地 Web UI 端口（用于 flow 保存后通知浏览器刷新）
@@ -2285,9 +2366,9 @@ function buildComposerPromptWithFlowContext(p) {
   const idsLine =
     p.instanceIds.length > 0 ? p.instanceIds.map(String).join(", ") : "（无，可能为全局修改或新增节点）";
   const builtinExtra =
-    p.flowSource === "builtin" && p.workspaceWriteDirAbs
+    isReadonlyBuiltinFlowSource(p.flowSource) && p.workspaceWriteDirAbs
       ? [
-          `- 包内 builtin 模板为只读；若保存修改请写入工作区副本目录：${p.workspaceWriteDirAbs}（flow.yaml 与同 id）`,
+          `- 内置模板为只读；若保存修改请写入工作区副本目录：${p.workspaceWriteDirAbs}（flow.yaml 与同 id）`,
           "- 保存后刷新 Web 画布时，flow-editor-sync 的 JSON 须使用 flowSource: workspace（与上方 curl 一致）。",
         ]
       : [];
@@ -2432,6 +2513,63 @@ export function startUiServer({
     if (url.pathname.startsWith("/api/") && authUser && !isAuthUserAllowed(authUser)) {
       json(res, 403, { error: "用户不在白名单中，请联系管理员开通访问权限" });
       return;
+    }
+
+    if (url.pathname === "/api/feedback") {
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const created = createFeedbackItem(payload, authUser);
+        if (created.error) {
+          json(res, 400, { error: created.error });
+          return;
+        }
+        const items = readFeedbackItems();
+        items.unshift(created.item);
+        writeFeedbackItems(items.slice(0, 1000));
+        json(res, 200, { ok: true, feedback: created.item });
+        return;
+      }
+      if (req.method === "GET") {
+        if (!authUser?.isAdmin) {
+          json(res, 403, { error: "Admin permission required" });
+          return;
+        }
+        json(res, 200, { feedback: readFeedbackItems() });
+        return;
+      }
+    }
+
+    if (url.pathname === "/api/admin/builtin-flows") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        json(res, 200, { config: readAdminBuiltinPipelineConfig() });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const result = updateAdminBuiltinPipelineConfig(payload?.action, payload, authUser);
+        if (!result.ok) {
+          json(res, 400, { error: result.error || "Update failed" });
+          return;
+        }
+        json(res, 200, { ok: true, config: result.config });
+        return;
+      }
     }
 
     if (url.pathname === "/api/flows") {
@@ -2705,7 +2843,7 @@ export function startUiServer({
           flowId: scoped.flowId,
           flowSource: scoped.flowSource,
           archived: scoped.archived,
-          writable: !(scoped.archived || scoped.flowSource === "builtin"),
+          writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -2731,7 +2869,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || scoped.flowSource === "builtin") {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
           json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
           return;
         }
@@ -2763,7 +2901,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || scoped.flowSource === "builtin") {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
           json(res, 400, { error: "Cannot run workspace graph for builtin or archived pipeline" });
           return;
         }
@@ -2921,7 +3059,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || scoped.flowSource === "builtin") {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -2957,7 +3095,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || scoped.flowSource === "builtin") {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -2992,7 +3130,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || scoped.flowSource === "builtin") {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -4646,7 +4784,7 @@ finishedAt: "${new Date().toISOString()}"
         let workspaceWriteDirAbs;
         let editorSyncFlowSource = flowSource;
         let flowDirForCli = path.dirname(flowYamlAbs);
-        if (flowSource === "builtin") {
+        if (isReadonlyBuiltinFlowSource(flowSource)) {
           const w = resolveFlowDirForWrite(root, flowId, "workspace", userCtx);
           if (w.error || !w.flowDir) {
             json(res, 400, { error: w.error || "Could not resolve workspace flow directory" });

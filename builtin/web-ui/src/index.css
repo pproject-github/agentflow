@@ -704,6 +704,98 @@ button.af-project-card {
   background: var(--af-surface-highest);
 }
 
+.af-project-card:focus-visible {
+  outline: 2px solid var(--af-primary);
+  outline-offset: 3px;
+}
+
+.af-project-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+}
+
+.af-project-admin-actions button {
+  border: 1px solid rgba(124, 77, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.12);
+  color: var(--af-primary);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.38rem 0.65rem;
+  cursor: pointer;
+}
+
+.af-project-admin-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.af-project-admin-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(124, 77, 255, 0.22);
+  border-radius: 0.9rem;
+  background: rgba(124, 77, 255, 0.08);
+}
+
+.af-project-admin-panel strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--af-on-surface);
+}
+
+.af-project-admin-panel span {
+  color: var(--af-on-surface-variant);
+  font-size: 0.78rem;
+}
+
+.af-project-admin-hidden-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.af-project-admin-hidden-list button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 18rem;
+  border: 1px solid rgba(202, 195, 216, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--af-on-surface);
+  font: inherit;
+  padding: 0.4rem 0.65rem;
+  cursor: pointer;
+}
+
+.af-project-admin-hidden-list button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.af-project-admin-hidden-list button em {
+  color: var(--af-primary);
+  font-style: normal;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.af-project-admin-hidden-list button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .af-resource-grid {
   display: grid;
   grid-template-columns: repeat(1, minmax(0, 1fr));
@@ -1162,6 +1254,130 @@ button.af-project-card {
   font-size: 0.72rem;
 }
 
+.af-flow-snippet-preview {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.7rem;
+}
+
+.af-flow-snippet-preview__nodes {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.af-flow-snippet-preview-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.58rem;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.af-flow-snippet-preview-node__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.18);
+  color: var(--af-primary);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.af-flow-snippet-preview-node div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.af-flow-snippet-preview-node strong {
+  overflow: hidden;
+  color: rgba(229, 226, 225, 0.9);
+  font-size: 0.78rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-snippet-preview-node span:last-child {
+  overflow: hidden;
+  color: rgba(202, 195, 216, 0.48);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.64rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-snippet-preview__edges {
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.2rem;
+}
+
+.af-flow-snippet-preview__edges h5 {
+  margin: 0 0 0.15rem;
+  color: rgba(202, 195, 216, 0.48);
+  font-family: var(--af-headline);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.af-flow-snippet-preview-edge {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.45rem;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(229, 226, 225, 0.72);
+  font-size: 0.68rem;
+}
+
+.af-flow-snippet-preview-edge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-snippet-preview-edge i {
+  color: var(--af-primary);
+  font-size: 0.95rem !important;
+}
+
+.af-flow-snippet-preview-edge em {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: rgba(202, 195, 216, 0.42);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.62rem;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-flow-snippet-preview-more {
+  margin-top: 0.25rem !important;
+  color: rgba(202, 195, 216, 0.48) !important;
+}
+
+.af-flow-snippet-json {
+  margin-top: 0.8rem;
+}
+
+.af-flow-snippet-json summary {
+  color: rgba(202, 195, 216, 0.58);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .af-resource-skill-preview {
   max-height: 20rem;
   overflow: auto;
@@ -1588,6 +1804,16 @@ button.af-project-card {
 
 .af-activity-row:hover {
   background: var(--af-surface-high);
+}
+
+.af-activity-row--active {
+  background: rgba(124, 77, 255, 0.14);
+  box-shadow: inset 3px 0 0 var(--af-primary);
+}
+
+.af-activity-row--active .af-activity-name,
+.af-activity-row--active:hover .af-activity-name {
+  color: var(--af-primary);
 }
 
 .af-activity-empty {
@@ -2126,6 +2352,269 @@ button.af-project-card {
   cursor: not-allowed;
 }
 
+.af-set-btn-outline--compact {
+  width: auto;
+  min-width: 5.5rem;
+  margin-top: 0;
+  padding-inline: 0.85rem;
+}
+
+.af-set-card--feedback {
+  grid-column: 1 / -1;
+  background: var(--af-surface-high);
+}
+
+.af-feedback-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: 34rem;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.af-feedback-item {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.9rem;
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.af-feedback-item__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.af-feedback-item__head h3 {
+  margin: 0 0 0.22rem;
+  color: var(--af-on-surface);
+  font-size: 0.95rem;
+}
+
+.af-feedback-item__head p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  color: rgba(229, 226, 225, 0.46);
+  font-size: 0.72rem;
+}
+
+.af-feedback-item__contact {
+  flex-shrink: 0;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(158, 202, 255, 0.12);
+  color: rgba(190, 219, 255, 0.86);
+  font-size: 0.72rem;
+}
+
+.af-feedback-item__content {
+  margin: 0;
+  white-space: pre-wrap;
+  color: rgba(229, 226, 225, 0.82);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.af-feedback-item__url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(202, 195, 216, 0.65);
+  font-size: 0.68rem;
+}
+
+.af-feedback-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: rgba(229, 226, 225, 0.45);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.af-feedback-page {
+  min-height: 100%;
+  overflow: auto;
+  padding: 2rem;
+  background:
+    radial-gradient(circle at 24% 18%, rgba(124, 77, 255, 0.16), transparent 28rem),
+    var(--af-bg);
+}
+
+.af-feedback-panel {
+  width: min(48rem, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: rgba(28, 27, 31, 0.96);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.36);
+}
+
+.af-feedback-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.af-feedback-eyebrow {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--af-primary);
+  font-family: var(--af-headline);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.af-feedback-head h1 {
+  margin: 0 0 0.45rem;
+  color: var(--af-on-surface);
+  font-size: 1.6rem;
+}
+
+.af-feedback-head p {
+  max-width: 34rem;
+  margin: 0;
+  color: rgba(229, 226, 225, 0.62);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.af-feedback-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(229, 226, 225, 0.78);
+  cursor: pointer;
+}
+
+.af-feedback-back .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-feedback-back:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.af-feedback-success {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.65rem;
+  background: rgba(0, 228, 117, 0.1);
+  color: rgba(203, 255, 222, 0.95);
+}
+
+.af-feedback-success .material-symbols-outlined {
+  color: var(--af-tertiary);
+}
+
+.af-feedback-success div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.af-feedback-success span:last-child {
+  color: rgba(203, 255, 222, 0.68);
+  font-size: 0.78rem;
+}
+
+.af-feedback-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.af-feedback-field {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.af-feedback-field > span {
+  color: rgba(229, 226, 225, 0.72);
+  font-family: var(--af-headline);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.af-feedback-field input,
+.af-feedback-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  outline: none;
+  padding: 0.78rem 0.85rem;
+}
+
+.af-feedback-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.af-feedback-field input:focus,
+.af-feedback-field textarea:focus {
+  border-color: rgba(124, 77, 255, 0.62);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
+}
+
+.af-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.af-feedback-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.55rem;
+  padding: 0 1.15rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--af-primary);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.af-feedback-submit:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.af-feedback-submit .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-feedback-error {
+  margin: 0;
+}
+
 .af-set-env-head {
   display: flex;
   flex-wrap: wrap;
@@ -2474,6 +2963,46 @@ button.af-project-card {
   color: rgba(229, 226, 225, 0.55);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.af-set-skillhub-version-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.af-set-skillhub-version {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  max-width: 100%;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(202, 195, 216, 0.62);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.af-set-skillhub-version--ok {
+  background: rgba(0, 228, 117, 0.1);
+  color: rgba(147, 255, 191, 0.88);
+}
+
+.af-set-skillhub-version--warn {
+  background: rgba(255, 204, 77, 0.12);
+  color: rgba(255, 219, 126, 0.92);
+}
+
+.af-set-skillhub-version--err {
+  background: rgba(255, 180, 171, 0.1);
+  color: rgba(255, 180, 171, 0.88);
+}
+
+.af-set-skillhub-version--muted {
+  color: rgba(202, 195, 216, 0.5);
 }
 
 .af-set-skillhub-actions {
@@ -3584,8 +4113,8 @@ button.af-project-card {
   background: rgba(22, 22, 23, 0.96);
   padding: 1rem;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(16rem, 1fr);
-  gap: 1rem;
+  grid-template-rows: minmax(9rem, var(--af-work-files-pane-height, 22rem)) 0.9rem minmax(13rem, 1fr);
+  gap: 0;
 }
 
 .af-workspace-body--sidebar-collapsed .af-workspace-sidebar {
@@ -3701,8 +4230,44 @@ button.af-project-card {
 .af-workspace-nodes-section {
   min-height: 0;
   overflow: auto;
-  padding-top: 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 0.8rem;
+}
+
+.af-workspace-sidebar-resizer {
+  position: relative;
+  min-height: 0.9rem;
+  margin: 0.25rem 0 0.45rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.af-workspace-sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: height 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.af-workspace-sidebar-resizer:hover::before,
+.af-workspace-sidebar--resizing .af-workspace-sidebar-resizer::before {
+  height: 3px;
+  background: rgba(124, 77, 255, 0.72);
+  box-shadow: 0 0 14px rgba(124, 77, 255, 0.35);
+}
+
+.af-workspace-sidebar--resizing,
+.af-workspace-sidebar--resizing * {
+  cursor: row-resize !important;
+  user-select: none;
 }
 
 .af-workspace-sidebar h2 {
@@ -4607,6 +5172,7 @@ button.af-project-card {
 .af-work-display-body--html,
 .af-work-display-body--image,
 .af-work-display-body--chart,
+.af-work-display-body--table,
 .af-work-display-body--ascii {
   padding: 0;
   overflow: hidden;
@@ -4698,6 +5264,11 @@ button.af-project-card {
   margin: 0.85rem 0;
 }
 
+.af-work-display-table-wrap--standalone {
+  min-width: 100%;
+  margin: 0;
+}
+
 .af-work-display-table {
   width: 100%;
   min-width: max-content;
@@ -4714,9 +5285,35 @@ button.af-project-card {
 }
 
 .af-work-display-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.92);
   font-weight: 700;
+}
+
+.af-work-display-body--table .af-work-display-table th,
+.af-work-display-body--table .af-work-display-table td {
+  max-width: 18rem;
+  min-width: 5rem;
+  white-space: nowrap;
+}
+
+.af-work-display-table-empty {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  color: rgba(255, 180, 171, 0.9);
+}
+
+.af-work-display-table-empty strong {
+  font-size: 0.82rem;
+}
+
+.af-work-display-table-empty span {
+  color: rgba(255, 180, 171, 0.68);
+  font-size: 0.72rem;
 }
 
 .af-work-display-table td code,

@@ -50,6 +50,7 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   display_mermaid: ["Mermaid Display"],
   display_ascii: ["ASCII Display"],
   display_chart: ["Chart Display"],
+  display_table: ["Table Display"],
 };
 
 function displayLabelForNode(definitionId, label, def) {
@@ -221,7 +222,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
   }
   if (
-    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart") &&
+    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
     !outputs.some((slot) => slot?.name === "next")
   ) {
     const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");

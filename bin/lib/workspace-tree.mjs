@@ -11,6 +11,7 @@ import {
   PACKAGE_BUILTIN_PIPELINES_DIR,
 } from "./paths.mjs";
 import { listAllRunDirs } from "./workspace.mjs";
+import { resolveAdminBuiltinPipelineDir } from "./admin-builtin-pipelines.mjs";
 
 /**
  * 获取目录下的子目录列表
@@ -239,6 +240,8 @@ export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = f
   } else {
     if (flowSource === "builtin") {
       pipelineDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
+    } else if (flowSource === "admin") {
+      pipelineDir = resolveAdminBuiltinPipelineDir(flowId);
     } else if (flowSource === "user") {
       pipelineDir = path.join(userPipelinesRoot, flowId);
       if (!fs.existsSync(pipelineDir)) {

@@ -84,7 +84,7 @@ function formatFetchedAt(iso, lang = "zh") {
   }
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ authUser }) {
   const { t, i18n } = useTranslation(["common", "settings"]);
   const currentLang = i18n.language || "zh";
   
@@ -110,6 +110,9 @@ export default function SettingsPage() {
   const [draftKey, setDraftKey] = useState("");
   const [draftVal, setDraftVal] = useState("");
   const [opcodeDraft, setOpcodeDraft] = useState("");
+  const [feedbackItems, setFeedbackItems] = useState([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackErr, setFeedbackErr] = useState("");
   /** 与服务器（或首次加载的本地回退）已同步的 Provider，用于防抖保存时去重 */
   const lastSyncedOpencode = useRef(/** @type {string | null} */ (null));
   const opencodeConfigReady = useRef(false);
@@ -161,6 +164,22 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadFeedback = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setFeedbackLoading(true);
+    setFeedbackErr("");
+    try {
+      const r = await fetch("/api/feedback");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      setFeedbackItems(Array.isArray(j.feedback) ? j.feedback : []);
+    } catch (e) {
+      setFeedbackErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [authUser?.isAdmin]);
+
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
     setEnvSaving(true);
@@ -207,6 +226,7 @@ export default function SettingsPage() {
     loadContext();
     loadLists();
     loadUserEnv();
+    if (authUser?.isAdmin) void loadFeedback();
     (async () => {
       try {
         const r = await fetch("/api/agentflow-config");
@@ -231,7 +251,7 @@ export default function SettingsPage() {
         opencodeConfigReady.current = true;
       }
     })();
-  }, [loadContext, loadLists, loadUserEnv]);
+  }, [authUser?.isAdmin, loadContext, loadFeedback, loadLists, loadUserEnv]);
 
   useEffect(() => {
     if (!envConfigReady.current) return;
@@ -316,6 +336,11 @@ export default function SettingsPage() {
     const formatted = formatFetchedAt(iso, currentLang);
     if (!formatted) return t("settings:cursor.modelList.never");
     return t("settings:cursor.modelList.fetchedAt", { time: formatted });
+  };
+
+  const formatFeedbackTime = (iso) => {
+    const formatted = formatFetchedAt(iso, currentLang);
+    return formatted || String(iso || "");
   };
 
   return (
@@ -613,6 +638,50 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </section>
+
+              {authUser?.isAdmin ? (
+                <section className="af-set-card af-set-card--wide af-set-card--feedback">
+                  <div className="af-set-env-head">
+                    <div className="af-set-card-head">
+                      <div className="af-set-env-icon-wrap">
+                        <span className="material-symbols-outlined af-set-icon--primary">rate_review</span>
+                      </div>
+                      <h2 className="af-set-h2">意见反馈</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="af-set-btn-outline af-set-btn-outline--compact"
+                      onClick={() => void loadFeedback()}
+                      disabled={feedbackLoading}
+                    >
+                      {feedbackLoading ? "刷新中..." : "刷新"}
+                    </button>
+                  </div>
+                  {feedbackErr ? <p className="af-err af-set-hint af-set-hint--inline">{feedbackErr}</p> : null}
+                  <div className="af-feedback-list">
+                    {feedbackItems.length > 0 ? feedbackItems.map((item) => (
+                      <article key={item.id} className="af-feedback-item">
+                        <header className="af-feedback-item__head">
+                          <div>
+                            <h3>{item.title || "未命名反馈"}</h3>
+                            <p>
+                              <span>{item.username || item.userId || "unknown"}</span>
+                              <span>{formatFeedbackTime(item.createdAt)}</span>
+                            </p>
+                          </div>
+                          {item.contact ? <span className="af-feedback-item__contact">{item.contact}</span> : null}
+                        </header>
+                        <p className="af-feedback-item__content">{item.content}</p>
+                        {item.pageUrl ? <code className="af-feedback-item__url">{item.pageUrl}</code> : null}
+                      </article>
+                    )) : (
+                      <div className="af-feedback-empty">
+                        {feedbackLoading ? "正在加载反馈..." : "暂无反馈"}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              ) : null}
             </div>
 
             <aside className="af-settings-rail" aria-label={t("settings:title")}>

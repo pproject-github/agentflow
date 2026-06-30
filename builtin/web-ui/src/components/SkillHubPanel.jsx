@@ -1,5 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
 
+function compareVersions(a, b) {
+  const pa = String(a || "").split(/[.-]/).map((x) => Number.parseInt(x, 10));
+  const pb = String(b || "").split(/[.-]/).map((x) => Number.parseInt(x, 10));
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const av = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const bv = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (av !== bv) return av > bv ? 1 : -1;
+  }
+  return 0;
+}
+
+function installedSkillVersion(s) {
+  return String(s?.version || "").trim();
+}
+
+function installedSkillMeta(s) {
+  const version = installedSkillVersion(s);
+  const parts = [s?.agent || "codex", s?.kind || "skill"];
+  if (version) parts.push(`v${version}`);
+  return parts.join(" · ");
+}
+
 export default function SkillHubPanel({ onChanged }) {
   const [status, setStatus] = useState({
     available: false,
@@ -12,6 +35,7 @@ export default function SkillHubPanel({ onChanged }) {
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState("keyword");
   const [results, setResults] = useState([]);
+  const [updateState, setUpdateState] = useState({});
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -36,6 +60,7 @@ export default function SkillHubPanel({ onChanged }) {
       const listJson = await listRes.json().catch(() => ({}));
       if (!listRes.ok) throw new Error(typeof listJson.error === "string" ? listJson.error : "HTTP " + listRes.status);
       setInstalled(Array.isArray(listJson.skills) ? listJson.skills : []);
+      setUpdateState({});
     } catch (e) {
       setErr(String(e.message || e));
     }
@@ -99,6 +124,49 @@ export default function SkillHubPanel({ onChanged }) {
     }
   }, [load, onChanged]);
 
+  const checkUpdates = useCallback(async () => {
+    if (installed.length === 0) return;
+    setBusy("check-updates");
+    setErr("");
+    setMsg("");
+    try {
+      const entries = await Promise.all(installed.map(async (skill) => {
+        const slug = String(skill.name || "").trim();
+        if (!slug) return null;
+        try {
+          const r = await fetch(`/api/skillhub/search?q=${encodeURIComponent(slug)}&mode=keyword`);
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+          const items = Array.isArray(j.items) ? j.items : [];
+          const exact = items.find((item) => item.slug === slug || item.name === slug || item.id === slug) || items[0];
+          const installedVersion = installedSkillVersion(skill);
+          const latestVersion = String(exact?.version || "").trim();
+          let state = "unknown";
+          if (!exact) state = "missing";
+          else if (installedVersion && latestVersion) state = compareVersions(installedVersion, latestVersion) < 0 ? "update" : "current";
+          else if (latestVersion) state = "remote-only";
+          return [slug, {
+            state,
+            latestVersion,
+            installedVersion,
+            summary: exact?.summary || "",
+          }];
+        } catch (e) {
+          return [slug, { state: "error", error: String(e.message || e), installedVersion: installedSkillVersion(skill) }];
+        }
+      }));
+      const next = {};
+      for (const entry of entries) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setUpdateState(next);
+      const count = Object.values(next).filter((item) => item.state === "update").length;
+      setMsg(count > 0 ? `发现 ${count} 个可更新 skill` : "已检查，暂无明确可更新项");
+    } finally {
+      setBusy("");
+    }
+  }, [installed]);
+
   const uninstall = useCallback(async (slug) => {
     const s = String(slug || "").trim();
     if (!s) return;
@@ -159,6 +227,9 @@ export default function SkillHubPanel({ onChanged }) {
             <button type="button" className="af-set-btn-mini" onClick={load} disabled={Boolean(busy)}>
               刷新
             </button>
+            <button type="button" className="af-set-btn-mini" onClick={checkUpdates} disabled={Boolean(busy) || installed.length === 0}>
+              {busy === "check-updates" ? "检查中…" : "检查更新"}
+            </button>
             <button type="button" className="af-set-btn-mini" onClick={updateCli} disabled={Boolean(busy)}>
               {busy === "update-cli" ? "更新中…" : "更新 CLI"}
             </button>
@@ -218,22 +289,51 @@ export default function SkillHubPanel({ onChanged }) {
             {installed.length === 0 ? (
               <div className="af-set-skillhub-empty">暂无 Codex 全局 skills</div>
             ) : (
-              installed.map((s) => (
-                <div key={`${s.agent}:${s.path}:${s.name}`} className="af-set-skillhub-item">
-                  <div>
-                    <div className="af-set-skillhub-title">{s.name}</div>
-                    <div className="af-set-skillhub-meta">{s.agent || "codex"} · {s.kind || "skill"}</div>
+              installed.map((s) => {
+                const update = updateState[s.name];
+                const canUpdate = !update || update.state === "update" || update.state === "remote-only" || update.state === "unknown" || update.state === "error";
+                const updateLabel =
+                  busy === `install:${s.name}` ? "更新中…"
+                    : update?.state === "current" ? "已最新"
+                    : update?.state === "update" && update.latestVersion ? `更新到 v${update.latestVersion}`
+                    : update?.state === "remote-only" && update.latestVersion ? `安装 v${update.latestVersion}`
+                    : "重装";
+                return (
+                  <div key={`${s.agent}:${s.path}:${s.name}`} className="af-set-skillhub-item">
+                    <div>
+                      <div className="af-set-skillhub-title">{s.displayName || s.name}</div>
+                      <div className="af-set-skillhub-meta">{installedSkillMeta(s)}</div>
+                      <div className="af-set-skillhub-version-row">
+                        {!update ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--muted">未检查远端版本</span>
+                        ) : update.state === "update" ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--warn">
+                            可更新 {update.installedVersion ? `v${update.installedVersion} -> ` : ""}v{update.latestVersion}
+                          </span>
+                        ) : update.state === "current" ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--ok">已最新 v{update.latestVersion || update.installedVersion}</span>
+                        ) : update.state === "remote-only" ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--muted">远端 v{update.latestVersion}，本地版本未知</span>
+                        ) : update.state === "missing" ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--muted">未找到远端匹配项</span>
+                        ) : update.state === "error" ? (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--err">检查失败</span>
+                        ) : (
+                          <span className="af-set-skillhub-version af-set-skillhub-version--muted">状态未知</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="af-set-skillhub-actions">
+                      <button type="button" className="af-set-btn-mini" onClick={() => install(s.name, true)} disabled={Boolean(busy) || !canUpdate}>
+                        {updateLabel}
+                      </button>
+                      <button type="button" className="af-set-btn-mini af-set-btn-mini--danger" onClick={() => uninstall(s.name)} disabled={Boolean(busy)}>
+                        卸载
+                      </button>
+                    </div>
                   </div>
-                  <div className="af-set-skillhub-actions">
-                    <button type="button" className="af-set-btn-mini" onClick={() => install(s.name, true)} disabled={Boolean(busy)}>
-                      更新
-                    </button>
-                    <button type="button" className="af-set-btn-mini af-set-btn-mini--danger" onClick={() => uninstall(s.name)} disabled={Boolean(busy)}>
-                      卸载
-                    </button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

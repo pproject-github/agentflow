@@ -5,6 +5,7 @@ import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
@@ -46,17 +47,18 @@ class UiErrorBoundary extends Component {
   }
 }
 
-function RoutedContent() {
+function RoutedContent({ authUser }) {
   const { path } = useRoute();
-  if (path === "/projects" || path === "/") return <ProjectsPage />;
-  if (path === "/nodes") return <ProjectsPage resourceKind="nodes" />;
-  if (path === "/my-nodes") return <ProjectsPage resourceKind="my-nodes" />;
-  if (path === "/my-flows") return <ProjectsPage resourceKind="my-flows" />;
-  if (path === "/skills") return <ProjectsPage resourceKind="skills" />;
+  if (path === "/projects" || path === "/") return <ProjectsPage authUser={authUser} />;
+  if (path === "/nodes") return <ProjectsPage authUser={authUser} resourceKind="nodes" />;
+  if (path === "/my-nodes") return <ProjectsPage authUser={authUser} resourceKind="my-nodes" />;
+  if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
+  if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/flow") return <FlowEditorPage />;
   if (path === "/workspace") return <WorkspacePage />;
-  if (path === "/settings") return <SettingsPage />;
+  if (path === "/settings") return <SettingsPage authUser={authUser} />;
+  if (path === "/feedback") return <FeedbackPage />;
   return <ProjectsPage />;
 }
 
@@ -152,7 +154,7 @@ function AppShell({ authUser, onLogout }) {
       {path !== "/settings" ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
       {!pipelineFullBleed ? <Sidebar authUser={authUser} onLogout={onLogout} /> : null}
       <div className={pipelineFullBleed ? "af-main af-main--pipeline" : "af-main"}>
-        <RoutedContent />
+        <RoutedContent authUser={authUser} />
       </div>
       <RunningIndicator />
     </div>
