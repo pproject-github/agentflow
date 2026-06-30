@@ -1,0 +1,43 @@
+builtin/web-ui/dist/assets/index-Bn_pNmXr.js
+  s_f9aac8d65f926e::t_d53c02c64d552f 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-95,97-98,102-104,106,109-110,123,126-136,139,141,143-148,152-153,155,157,161,169,171,175,183-188,192,218
+builtin/web-ui/dist/assets/index-B7-hwwU7.css
+  s_f9aac8d65f926e::t_d53c02c64d552f 1
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_d53c02c64d552f 18-19
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_201a63b3c72e94 1257-1258,1260-1264,1267-1271,1274-1275,1278-1283,1286-1287,1289-1292,1295-1298,1301-1323,1325
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_276d4f4e8f1753 80,3846-3861
+  s_f9aac8d65f926e::t_5d178c5092c8b2 3862-3864
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_f9aac8d65f926e::t_6aeba19a377042 215-265,268,270-313,315-318,320-327,329-336,620
+  s_f9aac8d65f926e::t_fb48ee23de7d20 374-375
+  s_f9aac8d65f926e::t_acbeaa150ef8e0 1675,1677,1680
+  s_f9aac8d65f926e::t_2c8ed28439cf91 1676,1678-1679,1681-1687,1691-1728,1730-1732
+  s_f9aac8d65f926e::t_96c66f98e85d45 623-643,646
+  s_f9aac8d65f926e::t_adbb807cc7fbd3 644-645
+  s_f9aac8d65f926e::t_f32fa27676c864 1688
+builtin/web-ui/src/i18n/locales/zh/project.json
+  s_f9aac8d65f926e::t_b1cec8287465d9 83-88
+bin/lib/marketplace.mjs
+  s_f9aac8d65f926e::t_6683ff2d6a192e 452-469
+builtin/web-ui/src/i18n/locales/en/project.json
+  s_f9aac8d65f926e::t_de9be45de3fe7c 83-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "ca927e5ed09ecddfa7b6a2290e24c273d3261ad7",
+  "prompts": {},
+  "logical_commit_id": "ca927e5ed09ecddfa7b6a2290e24c273d3261ad7",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
