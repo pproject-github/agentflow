@@ -23,7 +23,7 @@ import { formatDuration } from "./terminal.mjs";
 import { printEntryAndFlowFiles, printNodeStatusTable, runValidateFlowAndExitIfInvalid } from "./ui-print.mjs";
 import { clearApplyActiveLock, writeApplyActiveLock } from "./run-apply-active-lock.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, getRunDir } from "./workspace.mjs";
-import { readUserEnvObject } from "./user-env.mjs";
+import { readMergedEnvObject } from "./user-env.mjs";
 
 const PARALLEL_PREFIX_COLORS = [
   (s) => chalk.cyan(s),
@@ -347,7 +347,7 @@ ${currentContent}
                     
 	                    const result = spawnSync(opencodeCmd, ["--prompt-file", tmpPromptFile, "--print"], {
 	                      cwd: workspaceRoot,
-	                      env: { ...process.env, ...readUserEnvObject(process.env.AGENTFLOW_USER_ID || ""), OPENCODE_NON_INTERACTIVE: "1" },
+	                      env: { ...process.env, ...readMergedEnvObject(process.env.AGENTFLOW_USER_ID || ""), OPENCODE_NON_INTERACTIVE: "1" },
 	                      stdio: ["ignore", "pipe", "pipe"],
 	                    });
                     

@@ -5,7 +5,6 @@ export default function FeedbackPage() {
   const { navigate } = useRoute();
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [contact, setContact] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
@@ -22,7 +21,6 @@ export default function FeedbackPage() {
         body: JSON.stringify({
           title,
           content,
-          contact,
           pageUrl: window.location.href,
         }),
       });
@@ -31,7 +29,6 @@ export default function FeedbackPage() {
       setSubmitted(true);
       setTitle("");
       setContent("");
-      setContact("");
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -84,15 +81,6 @@ export default function FeedbackPage() {
               maxLength={5000}
               rows={9}
               required
-            />
-          </label>
-          <label className="af-feedback-field">
-            <span>联系方式</span>
-            <input
-              value={contact}
-              onChange={(event) => setContact(event.target.value)}
-              placeholder="可选，方便后续沟通"
-              maxLength={160}
             />
           </label>
           {error ? <p className="af-err af-feedback-error">{error}</p> : null}

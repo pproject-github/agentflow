@@ -9,7 +9,7 @@ import { normalizeCursorModelForCli } from "./model-config.mjs";
 import { appendRunLogLine } from "./run-events.mjs";
 import { writeWithPrefix } from "./terminal.mjs";
 import { t } from "./i18n.mjs";
-import { readUserEnvObject } from "./user-env.mjs";
+import { readMergedEnvObject } from "./user-env.mjs";
 import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 function shouldPassCursorModelArg(model) {
@@ -20,7 +20,7 @@ function shouldPassCursorModelArg(model) {
 function childEnv(options = {}, extra = {}) {
   const optEnv = options && options.env && typeof options.env === "object" ? options.env : {};
   const userId = optEnv.AGENTFLOW_USER_ID || process.env.AGENTFLOW_USER_ID || "";
-  return { ...process.env, ...readUserEnvObject(userId), ...optEnv, ...extra };
+  return { ...process.env, ...readMergedEnvObject(userId), ...optEnv, ...extra };
 }
 
 function writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, text) {

@@ -19,7 +19,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { getRunDir } from "../lib/paths.mjs";
-import { readUserEnvObject } from "../lib/user-env.mjs";
+import { readMergedEnvObject } from "../lib/user-env.mjs";
 import { validateAndParse } from "./validate-script-output.mjs";
 import { writeResult } from "./write-result.mjs";
 import { loadExecId, outputNodeBasename, outputDirForNode } from "./get-exec-id.mjs";
@@ -31,7 +31,7 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
 function runtimeEnv() {
-  return { ...process.env, ...readUserEnvObject(process.env.AGENTFLOW_USER_ID || "") };
+  return { ...process.env, ...readMergedEnvObject(process.env.AGENTFLOW_USER_ID || "") };
 }
 
 function runOnce(workspaceRoot, flowName, uuid, instanceId, execId, scriptArgs) {

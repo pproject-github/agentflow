@@ -28,7 +28,7 @@ function normalizeModelListsPayload(ml) {
   };
 }
 
-/** @typedef {{ id: string, key: string, value: string }} EnvRow */
+/** @typedef {{ id: string, key: string, value: string, scope?: "user" | "global" }} EnvRow */
 
 function newId() {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -38,8 +38,8 @@ function isValidEnvKey(key) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key || "").trim());
 }
 
-/** @param {unknown} raw */
-function parseEnvRows(raw) {
+/** @param {unknown} raw @param {"user" | "global"} fallbackScope */
+function parseEnvRows(raw, fallbackScope = "user") {
   if (!Array.isArray(raw)) return [];
   const out = [];
   for (const x of raw) {
@@ -47,10 +47,16 @@ function parseEnvRows(raw) {
     const k = String(/** @type {{ key?: unknown }} */ (x).key ?? "").trim();
     const v = String(/** @type {{ value?: unknown }} */ (x).value ?? "");
     const id = String(/** @type {{ id?: unknown }} */ (x).id ?? "").trim() || newId();
+    const rawScope = String(/** @type {{ scope?: unknown }} */ (x).scope ?? fallbackScope).trim();
+    const scope = rawScope === "global" ? "global" : "user";
     if (!k && !v) continue;
-    out.push({ id, key: k, value: v });
+    out.push({ id, key: k, value: v, scope });
   }
   return out;
+}
+
+function stripEnvRowsForSave(rows) {
+  return parseEnvRows(rows).map(({ key, value }) => ({ key, value }));
 }
 
 function loadOpcodePlan() {
@@ -109,6 +115,7 @@ export default function SettingsPage({ authUser }) {
   const [envSaving, setEnvSaving] = useState(false);
   const [draftKey, setDraftKey] = useState("");
   const [draftVal, setDraftVal] = useState("");
+  const [draftGlobal, setDraftGlobal] = useState(false);
   const [opcodeDraft, setOpcodeDraft] = useState("");
   const [feedbackItems, setFeedbackItems] = useState([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
@@ -153,7 +160,11 @@ export default function SettingsPage({ authUser }) {
       const r = await fetch("/api/user-env");
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
-      const rows = parseEnvRows(Array.isArray(j.env) ? j.env : []);
+      const personalRows = parseEnvRows(Array.isArray(j.env) ? j.env : [], "user").map((row) => ({ ...row, scope: "user" }));
+      const globalRows = authUser?.isAdmin
+        ? parseEnvRows(Array.isArray(j.globalEnv) ? j.globalEnv : [], "global").map((row) => ({ ...row, scope: "global" }))
+        : [];
+      const rows = [...globalRows, ...personalRows];
       lastSyncedEnv.current = JSON.stringify(rows);
       setEnvRows(rows);
     } catch (e) {
@@ -162,7 +173,7 @@ export default function SettingsPage({ authUser }) {
     } finally {
       envConfigReady.current = true;
     }
-  }, []);
+  }, [authUser?.isAdmin]);
 
   const loadFeedback = useCallback(async () => {
     if (!authUser?.isAdmin) return;
@@ -182,17 +193,26 @@ export default function SettingsPage({ authUser }) {
 
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
+    const personalRows = normalized.filter((row) => row.scope !== "global");
+    const globalRows = normalized.filter((row) => row.scope === "global");
     setEnvSaving(true);
     setEnvErr("");
     try {
       const r = await fetch("/api/user-env", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ env: normalized }),
+        body: JSON.stringify({
+          env: stripEnvRowsForSave(personalRows),
+          ...(authUser?.isAdmin ? { globalEnv: stripEnvRowsForSave(globalRows) } : {}),
+        }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
-      const nextRows = parseEnvRows(Array.isArray(j.env) ? j.env : []);
+      const nextPersonalRows = parseEnvRows(Array.isArray(j.env) ? j.env : [], "user").map((row) => ({ ...row, scope: "user" }));
+      const nextGlobalRows = authUser?.isAdmin
+        ? parseEnvRows(Array.isArray(j.globalEnv) ? j.globalEnv : [], "global").map((row) => ({ ...row, scope: "global" }))
+        : [];
+      const nextRows = [...nextGlobalRows, ...nextPersonalRows];
       lastSyncedEnv.current = JSON.stringify(nextRows);
       setEnvRows(nextRows);
     } catch (e) {
@@ -200,7 +220,7 @@ export default function SettingsPage({ authUser }) {
     } finally {
       setEnvSaving(false);
     }
-  }, []);
+  }, [authUser?.isAdmin]);
 
   /** 重新执行 Cursor/OpenCode CLI 写入 model-lists.json */
   const refreshModelLists = useCallback(async () => {
@@ -316,10 +336,10 @@ export default function SettingsPage({ authUser }) {
       setEnvErr(t("settings:env.invalidKey"));
       return;
     }
-    setEnvRows((rows) => [...rows, { id: newId(), key: k, value: v }]);
+    setEnvRows((rows) => [...rows, { id: newId(), key: k, value: v, scope: authUser?.isAdmin && draftGlobal ? "global" : "user" }]);
     setDraftKey("");
     setDraftVal("");
-  }, [draftKey, draftVal, t]);
+  }, [authUser?.isAdmin, draftGlobal, draftKey, draftVal, t]);
 
   const removeEnvRow = useCallback((id) => {
     setEnvRows((rows) => rows.filter((r) => r.id !== id));
@@ -576,17 +596,25 @@ export default function SettingsPage({ authUser }) {
                     <h2 className="af-set-h2">{t("settings:env.title")}</h2>
                   </div>
                   <span className="af-set-env-note">
-                    {envSaving ? t("settings:env.saving") : t("settings:env.note")}
+                    {envSaving ? t("settings:env.saving") : authUser?.isAdmin ? t("settings:env.noteAdmin") : t("settings:env.note")}
                   </span>
                 </div>
 
                 <div className="af-set-env-rows">
                   {envRows.map((row) => (
-                    <div key={row.id} className="af-set-env-row">
+                    <div key={row.id} className={"af-set-env-row" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                       <div className="af-set-env-cell">
                         <span className="af-set-env-k">{t("settings:env.key")}</span>
                         <code className="af-set-code-key">{row.key || "—"}</code>
                       </div>
+                      {authUser?.isAdmin ? (
+                        <div className="af-set-env-cell af-set-env-cell--scope">
+                          <span className="af-set-env-k">{t("settings:env.scope")}</span>
+                          <span className={"af-set-env-scope-badge af-set-env-scope-badge--" + (row.scope === "global" ? "global" : "user")}>
+                            {row.scope === "global" ? t("settings:env.global") : t("settings:env.personal")}
+                          </span>
+                        </div>
+                      ) : null}
                       <div className="af-set-env-cell af-set-env-cell--grow">
                         <span className="af-set-env-k">{t("settings:env.value")}</span>
                         <code className="af-set-code-val">{maskValue(row.value)}</code>
@@ -604,7 +632,7 @@ export default function SettingsPage({ authUser }) {
                     </div>
                   ))}
 
-                  <div className="af-set-env-row af-set-env-row--draft">
+                  <div className={"af-set-env-row af-set-env-row--draft" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                     <div className="af-set-env-cell">
                       <input
                         className="af-set-input af-set-input--dashed af-set-input--mono"
@@ -614,6 +642,19 @@ export default function SettingsPage({ authUser }) {
                         aria-label={t("settings:env.newKey")}
                       />
                     </div>
+                    {authUser?.isAdmin ? (
+                      <label className="af-set-env-cell af-set-env-cell--scope af-set-env-global-toggle">
+                        <span className="af-set-env-k">{t("settings:env.scope")}</span>
+                        <span>
+                          <input
+                            type="checkbox"
+                            checked={draftGlobal}
+                            onChange={(e) => setDraftGlobal(e.target.checked)}
+                          />
+                          {t("settings:env.global")}
+                        </span>
+                      </label>
+                    ) : null}
                     <div className="af-set-env-cell af-set-env-cell--grow">
                       <input
                         className="af-set-input af-set-input--dashed af-set-input--mono"

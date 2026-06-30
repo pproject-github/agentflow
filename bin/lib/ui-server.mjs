@@ -97,7 +97,7 @@ import {
   logoutRequest,
   readUserAllowlist,
 } from "./auth.mjs";
-import { readUserEnvObject, readUserEnvRows, writeUserEnvRows } from "./user-env.mjs";
+import { readGlobalEnvRows, readMergedEnvObject, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
 import {
   readAdminBuiltinPipelineConfig,
   updateAdminBuiltinPipelineConfig,
@@ -190,7 +190,6 @@ function writeFeedbackItems(items) {
 function createFeedbackItem(payload, user) {
   const title = String(payload?.title || "").trim().slice(0, 120);
   const content = String(payload?.content || "").trim().slice(0, 5000);
-  const contact = String(payload?.contact || "").trim().slice(0, 160);
   const pageUrl = String(payload?.pageUrl || "").trim().slice(0, 500);
   if (!title) return { error: "Missing feedback title" };
   if (!content) return { error: "Missing feedback content" };
@@ -199,7 +198,6 @@ function createFeedbackItem(payload, user) {
       id: `fb_${Date.now().toString(36)}_${crypto.randomBytes(5).toString("hex")}`,
       title,
       content,
-      contact,
       pageUrl,
       userId: String(user?.userId || ""),
       username: String(user?.username || user?.userId || ""),
@@ -390,7 +388,7 @@ function removeSkillhubCollectionGroup(userCtx = {}, collectionId = "", root = p
 function runtimeEnvForUser(userCtx = {}, extra = {}) {
   return {
     ...process.env,
-    ...readUserEnvObject(userCtx.userId),
+    ...readMergedEnvObject(userCtx.userId),
     ...extra,
     AGENTFLOW_USER_ID: userCtx.userId || "",
   };
@@ -3716,7 +3714,11 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/user-env") {
       try {
-        json(res, 200, { env: readUserEnvRows(userCtx.userId) });
+        json(res, 200, {
+          env: readUserEnvRows(userCtx.userId),
+          globalEnv: authUser?.isAdmin ? readGlobalEnvRows() : [],
+          canEditGlobalEnv: Boolean(authUser?.isAdmin),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -3732,8 +3734,20 @@ export function startUiServer({
         return;
       }
       try {
+        if (Object.prototype.hasOwnProperty.call(payload || {}, "globalEnv") && !authUser?.isAdmin) {
+          json(res, 403, { error: "Admin permission required" });
+          return;
+        }
         const envRows = writeUserEnvRows(userCtx.userId, payload?.env || []);
-        json(res, 200, { success: true, env: envRows });
+        const globalEnvRows = authUser?.isAdmin && Object.prototype.hasOwnProperty.call(payload || {}, "globalEnv")
+          ? writeGlobalEnvRows(payload?.globalEnv || [])
+          : readGlobalEnvRows();
+        json(res, 200, {
+          success: true,
+          env: envRows,
+          globalEnv: authUser?.isAdmin ? globalEnvRows : [],
+          canEditGlobalEnv: Boolean(authUser?.isAdmin),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }

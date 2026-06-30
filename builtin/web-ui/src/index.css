@@ -236,7 +236,7 @@ body {
 .af-sidebar-user {
   width: 100%;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 0.4rem;
   color: var(--af-on-surface-variant);
@@ -250,6 +250,18 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.af-sidebar-admin-badge {
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  background: rgba(124, 77, 255, 0.18);
+  color: var(--af-primary);
+  font-family: var(--af-headline);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .af-sidebar-logout {
@@ -2613,8 +2625,13 @@ button.af-project-card {
   align-items: stretch;
 }
 
+.af-set-env-row--scoped {
+  grid-template-columns: minmax(0, 1fr) 7.5rem minmax(0, 1.35fr) auto;
+}
+
 @media (max-width: 640px) {
-  .af-set-env-row {
+  .af-set-env-row,
+  .af-set-env-row--scoped {
     grid-template-columns: 1fr;
   }
 
@@ -2634,6 +2651,10 @@ button.af-project-card {
 }
 
 .af-set-env-cell--grow {
+  min-width: 0;
+}
+
+.af-set-env-cell--scope {
   min-width: 0;
 }
 
@@ -2661,6 +2682,42 @@ button.af-project-card {
   font-size: 0.75rem;
   color: rgba(229, 226, 225, 0.55);
   word-break: break-all;
+}
+
+.af-set-env-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  border-radius: 999px;
+  padding: 0 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: rgba(229, 226, 225, 0.78);
+  background: rgba(229, 226, 225, 0.08);
+}
+
+.af-set-env-scope-badge--global {
+  color: #9ff2b2;
+  background: rgba(65, 194, 106, 0.16);
+}
+
+.af-set-env-global-toggle {
+  cursor: pointer;
+}
+
+.af-set-env-global-toggle span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: rgba(229, 226, 225, 0.78);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.af-set-env-global-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--af-primary);
 }
 
 .af-set-env-actions {

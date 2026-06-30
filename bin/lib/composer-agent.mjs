@@ -8,7 +8,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { getAgentflowDataRoot, getAgentflowUserDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
-import { readUserEnvObject } from "./user-env.mjs";
+import { readMergedEnvObject } from "./user-env.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
 import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { planComposerTasks, hasPlannerApiAvailable, shouldUsePhased, classifyComplexity, classifyTaskComplexity, PHASED_DEFINITIONS } from "./composer-planner.mjs";
@@ -86,7 +86,7 @@ function pruneCursorMcpPrivateEnvPlaceholders() {
 function agentflowUserEnv(userId) {
   const safe = sanitizeAgentflowUserId(userId);
   pruneCursorMcpPrivateEnvPlaceholders();
-  return safe ? { ...readUserEnvObject(safe), ...readUserMcpPrivateEnvObject(safe), AGENTFLOW_USER_ID: safe } : {};
+  return { ...readMergedEnvObject(safe), ...(safe ? readUserMcpPrivateEnvObject(safe) : {}), AGENTFLOW_USER_ID: safe };
 }
 
 // ─── script 内容注入辅助 ─────────────────────────────────────────────────
