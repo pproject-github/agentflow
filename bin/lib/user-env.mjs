@@ -2,7 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-import { getAgentflowUserEnvAbs, sanitizeAgentflowUserId } from "./paths.mjs";
+import { getAgentflowDataRoot, getAgentflowUserEnvAbs, sanitizeAgentflowUserId } from "./paths.mjs";
 
 function normalizeEnvKey(key) {
   return String(key || "").trim();
@@ -60,6 +60,35 @@ export function readUserEnvObject(userId) {
   return out;
 }
 
+function getGlobalEnvAbs() {
+  return path.join(getAgentflowDataRoot(), "admin", "env.json");
+}
+
+export function readGlobalEnvRows() {
+  const data = readJsonObject(getGlobalEnvAbs());
+  return normalizeUserEnvRows(Array.isArray(data.env) ? data.env : []);
+}
+
+export function readGlobalEnvObject() {
+  const out = {};
+  for (const row of readGlobalEnvRows()) {
+    out[row.key] = row.value;
+  }
+  return out;
+}
+
+export function writeGlobalEnvRows(rows) {
+  const normalized = normalizeUserEnvRows(rows);
+  const filePath = getGlobalEnvAbs();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ version: 1, env: normalized }, null, 2) + "\n", "utf-8");
+  return normalized;
+}
+
+export function readMergedEnvObject(userId) {
+  return { ...readGlobalEnvObject(), ...readUserEnvObject(userId) };
+}
+
 export function writeUserEnvRows(userId, rows) {
   const normalized = normalizeUserEnvRows(rows);
   const safeUserId = sanitizeAgentflowUserId(userId);
@@ -74,10 +103,11 @@ export function resolveUserEnvValue(key, userId) {
   if (!keyStr) return "";
   const userEnv = readUserEnvObject(userId);
   if (Object.prototype.hasOwnProperty.call(userEnv, keyStr)) return String(userEnv[keyStr] ?? "");
+  const globalEnv = readGlobalEnvObject();
+  if (Object.prototype.hasOwnProperty.call(globalEnv, keyStr)) return String(globalEnv[keyStr] ?? "");
   const processValue = process.env[keyStr];
   if (processValue != null && processValue !== "") return String(processValue);
   const configPath = path.join(os.homedir(), ".cursor", "config.json");
   const fromConfig = getFromConfig(readJsonObject(configPath), keyStr);
   return fromConfig !== undefined ? fromConfig : "";
 }
-

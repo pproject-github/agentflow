@@ -76,6 +76,7 @@ export default function Sidebar({ authUser, onLogout }) {
         <div className="af-sidebar-user" title={authUser?.username || authUser?.userId || ""}>
           <span className="material-symbols-outlined">person</span>
           <span>{authUser?.username || authUser?.userId || ""}</span>
+          {authUser?.isAdmin ? <span className="af-sidebar-admin-badge">Admin</span> : null}
           <button type="button" className="af-sidebar-logout" onClick={onLogout} aria-label="Logout" title="Logout">
             <span className="material-symbols-outlined">logout</span>
           </button>
