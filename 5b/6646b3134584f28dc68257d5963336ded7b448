@@ -1,0 +1,57 @@
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_5a518dcd5d45c1 19
+  s_f9aac8d65f926e::t_d13d46c1e146b1 18
+bin/lib/composer-agent.mjs
+  s_f9aac8d65f926e::t_3cd9fe0ef8c086 8,10,28-85,88-89
+builtin/web-ui/dist/assets/index-eKGEP40S.js
+  s_f9aac8d65f926e::t_d13d46c1e146b1 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-73,75,78-95,97-98,102-104,106,109-110,123,126-136,139,141,143-148,152-153,155,157,161,169,171,175,183-188,192,218
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_5889baece6e8b8 1691,1719
+  s_f9aac8d65f926e::t_7f898b9364957f 1573,1576,1579,1582,1585,1588,1591
+  s_f9aac8d65f926e::t_b4ff5c52e1e65c 1602,1611-1613,1615,1617-1618,1620,1622-1627
+  s_f9aac8d65f926e::t_92280ba739ff25 1870,1879-1880
+  s_f9aac8d65f926e::t_a3163ee403c3b6 1410-1437,1441-1445,1448,1464-1465,1476-1477
+  s_f9aac8d65f926e::t_5f1714ed48782e 1370-1409,1438-1440,1446-1447,1449-1463,1466-1475,1478-1488,1600
+  s_f9aac8d65f926e::t_b1c9971b8c0006 1603-1610,1614,1616,1619,1621,1630
+  s_f9aac8d65f926e::t_7c85e3e2ad6397 1891,1894,1900
+  s_f9aac8d65f926e::t_211f3a638c376a 1990,2010,2315-2316,2318
+  s_f9aac8d65f926e::t_b1b2361f5b5d85 2312-2314,2317
+  s_f9aac8d65f926e::t_fea6c0f4cf0860 1628-1629
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f9aac8d65f926e::t_af097e35fe8787 3216-3221,3223-3236
+  s_f9aac8d65f926e::t_210aad5f4ea48f 3613-3632
+  s_f9aac8d65f926e::t_1cc63e70441882 2969-2973,2980-2984
+  s_f9aac8d65f926e::t_cd66286d0d8d1d 381-392
+  s_f9aac8d65f926e::t_79dbea09771b92 3222
+  s_f9aac8d65f926e::t_1e77b30a7f4344 393-402
+  s_f9aac8d65f926e::t_93096b6e0e6e09 2383,2450-2452
+  s_f9aac8d65f926e::t_f9defdb8da4ecd 2384
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_f9aac8d65f926e::t_ef7ee3679f2594 1003,1068-1070
+  s_f9aac8d65f926e::t_e799c8e7b9535c 1818-1834,1836
+  s_f9aac8d65f926e::t_2b79209b2328e8 233-244
+  s_f9aac8d65f926e::t_f3e87868e7aef5 1817
+  s_f9aac8d65f926e::t_243c92edfb31dd 1835
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_a1834d291124fe 4473,5455,6151
+  s_f9aac8d65f926e::t_1b9d32188e9353 4458,4466,11821
+builtin/web-ui/dist/assets/index-D6CzSJ7n.css
+  s_f9aac8d65f926e::t_5a518dcd5d45c1 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "5b6646b3134584f28dc68257d5963336ded7b448",
+  "prompts": {},
+  "logical_commit_id": "5b6646b3134584f28dc68257d5963336ded7b448",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
