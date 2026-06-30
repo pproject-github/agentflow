@@ -1,0 +1,54 @@
+builtin/web-ui/dist/assets/index-Bueyl56P.js
+  s_f9aac8d65f926e::t_4680a664e5bd5d 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-88,90-95,98,103,109-110,123,126-136,139,141,143-148,152-153,155,157,161,169,171,175,183-188,192,218
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_f9aac8d65f926e::t_c11dee2e236f1a 79
+bin/pipeline/run-tool-nodejs.mjs
+  s_f9aac8d65f926e::t_a4a67ed0b62944 22,34
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_6b25d694edc410 239,255-264
+  s_f9aac8d65f926e::t_486e4b5ac7e974 265,2626,2628-2629,2631,2633-2634,2654-2657,2660,2685-2720
+  s_f9aac8d65f926e::t_417edc7c271a09 266
+  s_f9aac8d65f926e::t_75ab531b60c2d3 2630
+  s_f9aac8d65f926e::t_2cdb94fa4db76f 2658-2659
+  s_f9aac8d65f926e::t_060120b7ac7331 2721-2722
+builtin/web-ui/src/i18n/locales/en/settings.json
+  s_f9aac8d65f926e::t_6b379571e1ad55 55,59-61
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_1c16533ae6163c 100,391,3717-3721,3737-3740,3742-3750
+builtin/web-ui/dist/assets/index-YXZNOj6z.css
+  s_f9aac8d65f926e::t_4680a664e5bd5d 1
+builtin/web-ui/src/i18n/locales/zh/settings.json
+  s_f9aac8d65f926e::t_6b379571e1ad55 55,59-61
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_4680a664e5bd5d 18-19
+bin/lib/composer-agent.mjs
+  s_f9aac8d65f926e::t_a4a67ed0b62944 11,89
+bin/lib/user-env.mjs
+  s_f9aac8d65f926e::t_6bdb1fa6f30273 5,63-91,106-107
+bin/lib/apply.mjs
+  s_f9aac8d65f926e::t_a4a67ed0b62944 26,350
+bin/lib/agent-runners.mjs
+  s_f9aac8d65f926e::t_a4a67ed0b62944 12,23
+bin/lib/scheduler.mjs
+  s_f9aac8d65f926e::t_a4a67ed0b62944 15,261,334
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_f9aac8d65f926e::t_7fae9f39038b04 599,605,610-617,635,645-657
+  s_f9aac8d65f926e::t_38284b8b82ad4c 31,41-42,50-51,53,58-61,118,163-167,176,196-197,204-207,211-215,223,339,342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "52257f82f5b387e43553cdc623b9ac8960928f7a",
+  "prompts": {},
+  "logical_commit_id": "52257f82f5b387e43553cdc623b9ac8960928f7a",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
