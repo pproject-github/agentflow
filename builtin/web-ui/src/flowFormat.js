@@ -59,6 +59,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
         : [];
     const ui = data.ui && typeof data.ui === "object" ? data.ui : {};
     const nodePositions = ui.nodePositions && typeof ui.nodePositions === "object" ? ui.nodePositions : {};
+    const nodeSizes = ui.nodeSizes && typeof ui.nodeSizes === "object" ? ui.nodeSizes : {};
     const description =
       typeof ui.description === "string" && ui.description.trim() ? ui.description.trim() : undefined;
 
@@ -74,6 +75,10 @@ export function deserializeFromFlowYaml(flowYamlContent) {
         nodePositions[id] && typeof nodePositions[id].x === "number" && typeof nodePositions[id].y === "number"
           ? { x: nodePositions[id].x, y: nodePositions[id].y }
           : { x: 0, y: 0 };
+      const size =
+        nodeSizes[id] && typeof nodeSizes[id].width === "number" && typeof nodeSizes[id].height === "number"
+          ? { width: nodeSizes[id].width, height: nodeSizes[id].height }
+          : null;
       const definitionId = inst?.definitionId ?? id;
       const type = definitionIdToType(definitionId);
       const label = inst?.label != null ? String(inst.label) : id;
@@ -88,6 +93,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
         id,
         type: normalizeNodeType(type),
         position,
+        ...(size ? { width: size.width, height: size.height } : {}),
         data: {
           label,
           definitionId,
@@ -96,6 +102,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
           model: model || undefined,
           body,
           images,
+          ...(size ? { displaySize: size } : {}),
           ...(script.trim() !== "" ? { script } : {}),
         },
       };
@@ -351,11 +358,18 @@ export function serializeToFlowYaml(nodes, edges, instancesMap, options) {
     targetHandle: e.targetHandle ?? null,
   }));
   const nodePositions = {};
+  const nodeSizes = {};
   for (const n of nodes) {
     const p = n.position ?? { x: 0, y: 0 };
     nodePositions[n.id] = { x: p.x, y: p.y };
+    const width = Number(n.data?.displaySize?.width || n.width || 0);
+    const height = Number(n.data?.displaySize?.height || n.height || 0);
+    if (width > 0 && height > 0) {
+      nodeSizes[n.id] = { width: Math.round(width), height: Math.round(height) };
+    }
   }
   const ui = { nodePositions };
+  if (Object.keys(nodeSizes).length > 0) ui.nodeSizes = nodeSizes;
   if (options?.description != null && String(options.description).trim() !== "") {
     ui.description = String(options.description).trim();
   }

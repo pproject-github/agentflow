@@ -22,7 +22,7 @@ export function loadOpenedEntries() {
     (e) =>
       e &&
       typeof e.flowId === "string" &&
-      (e.flowSource === "user" || e.flowSource === "builtin" || e.flowSource === "workspace") &&
+      (e.flowSource === "user" || e.flowSource === "builtin" || e.flowSource === "admin" || e.flowSource === "workspace") &&
       e.kind === "opened" &&
       typeof e.at === "number",
   );
@@ -30,7 +30,7 @@ export function loadOpenedEntries() {
 
 /**
  * @param {string} flowId
- * @param {'user'|'builtin'|'workspace'} flowSource
+ * @param {'user'|'builtin'|'admin'|'workspace'} flowSource
  */
 export function recordPipelineOpened(flowId, flowSource) {
   if (typeof localStorage === "undefined") return;
@@ -48,13 +48,14 @@ export function recordPipelineOpened(flowId, flowSource) {
 /**
  * @param {Array<{ id: string, source: string }>} flowsFromApi
  * @param {string} flowId
- * @returns {'user'|'builtin'|'workspace'}
+ * @returns {'user'|'builtin'|'admin'|'workspace'}
  */
 export function resolveFlowSource(flowsFromApi, flowId) {
   const matches = flowsFromApi.filter((f) => f.id === flowId);
   if (matches.length === 0) return "user";
   if (matches.some((f) => (f.source ?? "user") === "user")) return "user";
   if (matches.some((f) => f.source === "workspace")) return "workspace";
+  if (matches.some((f) => f.source === "admin")) return "admin";
   if (matches.some((f) => f.source === "builtin")) return "builtin";
   return matches[0].source ?? "user";
 }

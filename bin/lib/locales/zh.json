@@ -333,6 +333,10 @@
       "displayName": "图表展示",
       "description": "在 Workspace 画布中渲染 ChartSpec/ECharts JSON，并将 JSON 继续传给下游"
     },
+    "display_table": {
+      "displayName": "表格展示",
+      "description": "在 Workspace 画布中渲染 JSON、Markdown、CSV 或 TSV 表格，并将文本继续传给下游"
+    },
     "provide_str": {
       "displayName": "文本",
       "description": "直接提供一段文本，value 会原样供下游引用"

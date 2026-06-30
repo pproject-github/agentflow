@@ -10,6 +10,7 @@ const ITEMS = [
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
+  { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
 

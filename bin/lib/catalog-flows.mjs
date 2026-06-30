@@ -15,6 +15,10 @@ import {
   USER_AGENTFLOW_PIPELINES_LABEL,
   getUserPipelinesRoot,
 } from "./paths.mjs";
+import {
+  readAdminBuiltinPipelineConfig,
+  resolveAdminBuiltinPipelineDir,
+} from "./admin-builtin-pipelines.mjs";
 import { Table } from "./table.mjs";
 import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
 
@@ -53,11 +57,26 @@ export function readPipelineListDescription(flowDir) {
 export function listFlowsJson(workspaceRoot, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const out = [];
+  const adminBuiltinConfig = readAdminBuiltinPipelineConfig();
+  const hiddenBuiltins = new Set(adminBuiltinConfig.hiddenBuiltins);
   const fromBuiltin = collectPipelineNamesFromDir(PACKAGE_BUILTIN_PIPELINES_DIR);
   for (const name of fromBuiltin) {
+    if (hiddenBuiltins.has(name)) continue;
     const dir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, name);
     const description = readPipelineListDescription(dir);
     out.push({ id: name, path: dir, source: "builtin", ...(description ? { description } : {}) });
+  }
+  for (const item of adminBuiltinConfig.promoted) {
+    const dir = resolveAdminBuiltinPipelineDir(item.id);
+    if (!dir) continue;
+    const description = readPipelineListDescription(dir);
+    out.push({
+      id: item.id,
+      path: dir,
+      source: "admin",
+      ownerUserId: item.ownerUserId,
+      ...(description ? { description } : {}),
+    });
   }
   const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
   const fromUserData = collectPipelineNamesFromDir(userPipelinesRoot);
@@ -108,7 +127,7 @@ export function listFlowsJson(workspaceRoot, opts = {}) {
     out.push({ id: name, path: dir, source: "workspace", archived: true, ...(description ? { description } : {}) });
     workspaceArchivedIds.add(name);
   }
-  const sourceRank = (s) => (s === "builtin" ? 0 : s === "user" ? 1 : 2);
+  const sourceRank = (s) => (s === "builtin" ? 0 : s === "admin" ? 1 : s === "user" ? 2 : 3);
   const archRank = (a) => (a.archived ? 1 : 0);
   out.sort(
     (a, b) =>
@@ -302,6 +321,9 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
           }
         }
       } catch (_) {}
+    } else if (flowSource === "admin") {
+      const flowDir = resolveAdminBuiltinPipelineDir(flowId);
+      if (flowDir) addFromDir(path.join(flowDir, "nodes"), "flow", flowId);
     } else if (flowSource === "user") {
       if (archived) {
         addFromDir(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes"), "flow", flowId);
@@ -384,6 +406,8 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
 
   if (flowSource === "builtin") {
     flowDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
+  } else if (flowSource === "admin") {
+    flowDir = resolveAdminBuiltinPipelineDir(flowId);
   } else if (flowSource === "user") {
     flowDir = path.join(userPipelinesRoot, flowId);
   } else if (flowSource === "workspace") {
@@ -455,6 +479,9 @@ export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) 
 
   if (flowSource === "builtin") {
     yamlPath = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "flow.yaml");
+  } else if (flowSource === "admin") {
+    const flowDir = resolveAdminBuiltinPipelineDir(flowId);
+    yamlPath = flowDir ? path.join(flowDir, "flow.yaml") : "";
   } else if (flowSource === "user") {
     yamlPath = path.join(userPipelinesRoot, flowId, "flow.yaml");
     if (!fs.existsSync(yamlPath)) {
@@ -523,6 +550,9 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
   if (flowId && flowSource) {
     if (flowSource === "builtin") {
       pathsToTry.push(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes", fileName));
+    } else if (flowSource === "admin") {
+      const flowDir = resolveAdminBuiltinPipelineDir(flowId);
+      if (flowDir) pathsToTry.push(path.join(flowDir, "nodes", fileName));
     } else if (flowSource === "user") {
       if (archived) {
         pathsToTry.push(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
@@ -637,6 +667,9 @@ function resolveMarkdownNodeFile(workspaceRoot, nodeId, flowId, flowSource, opts
   if (flowId && flowSource) {
     if (flowSource === "builtin") {
       pathsToTry.push(path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "nodes", fileName));
+    } else if (flowSource === "admin") {
+      const flowDir = resolveAdminBuiltinPipelineDir(flowId);
+      if (flowDir) pathsToTry.push(path.join(flowDir, "nodes", fileName));
     } else if (flowSource === "user") {
       if (archived) {
         pathsToTry.push(path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "nodes", fileName));
@@ -797,7 +830,7 @@ export function listPipelines(workspaceRoot) {
     style: { head: [], border: ["grey"] },
   });
   for (const row of rows) {
-    const sourceLabel = row.source === "builtin" ? "builtin" : row.source === "workspace" ? "workspace" : "user";
+    const sourceLabel = row.source === "builtin" || row.source === "admin" ? "builtin" : row.source === "workspace" ? "workspace" : "user";
     table.push([row.id, sourceLabel, `agentflow apply ${row.id}`]);
   }
   log.info("\n" + chalk.bold("Pipelines"));

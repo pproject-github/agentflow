@@ -340,6 +340,8 @@ function iconForFile(fileName, isDir = false) {
   if (isDir) return "folder";
   const ext = String(fileName || "").toLowerCase().split(".").pop();
   if (ext === "md" || ext === "markdown") return "article";
+  if (ext === "html") return "web";
+  if (["csv", "tsv"].includes(ext)) return "table";
   if (["js", "jsx", "ts", "tsx", "mjs", "cjs"].includes(ext)) return "code";
   if (["yaml", "yml", "json"].includes(ext)) return "data_object";
   return "draft";
@@ -435,6 +437,14 @@ function graphToFlow(graph, palette) {
   return { nodes: merged, edges: filterValidEdges(edges, merged), instances };
 }
 
+function persistedWorkspaceNodeSize(node) {
+  const isDisplay = Boolean(displayKind(node?.data?.definitionId));
+  const width = Number(node?.data?.displaySize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
+  const height = Number(node?.data?.displaySize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
+  if (width > 0 && height > 0) return { width: Math.round(width), height: Math.round(height) };
+  return null;
+}
+
 function flowToGraph(nodes, edges, instances) {
   const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(nodes, instances || {}));
   const graphEdges = edges.map((edge) => ({
@@ -447,12 +457,8 @@ function flowToGraph(nodes, edges, instances) {
   const nodeSizes = {};
   for (const node of nodes) {
     nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
-    const isDisplay = Boolean(displayKind(node.data?.definitionId));
-    const width = Number(node.data?.displaySize?.width || node.width || (isDisplay ? node.measured?.width : 0) || 0);
-    const height = Number(node.data?.displaySize?.height || node.height || (isDisplay ? node.measured?.height : 0) || 0);
-    if (width > 0 && height > 0) {
-      nodeSizes[node.id] = { width, height };
-    }
+    const size = persistedWorkspaceNodeSize(node);
+    if (size) nodeSizes[node.id] = size;
   }
   return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes } };
 }
@@ -486,6 +492,7 @@ function displayKind(definitionId) {
   if (id === "display_html") return "html";
   if (id === "display_image") return "image";
   if (id === "display_chart") return "chart";
+  if (id === "display_table") return "table";
   return "";
 }
 
@@ -547,6 +554,7 @@ function displayIcon(kind) {
   if (kind === "html") return "html";
   if (kind === "image") return "image";
   if (kind === "chart") return "bar_chart";
+  if (kind === "table") return "table";
   return "article";
 }
 
@@ -650,6 +658,180 @@ function MarkdownDisplayContent({ content }) {
         );
       })}
     </>
+  );
+}
+
+function parseDelimitedTable(text, delimiter = ",") {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  const source = String(text || "").replace(/\r\n/g, "\n");
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (quoted) {
+      if (ch === '"' && next === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      quoted = true;
+    } else if (ch === delimiter) {
+      row.push(cell.trim());
+      cell = "";
+    } else if (ch === "\n") {
+      row.push(cell.trim());
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell.trim());
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((value) => String(value || "").trim()));
+}
+
+function normalizeTableValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeTableSpec(raw) {
+  if (Array.isArray(raw)) {
+    if (raw.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+      const columns = Array.from(new Set(raw.flatMap((row) => Object.keys(row))));
+      return {
+        columns: columns.map((key) => ({ key, label: key, align: "left" })),
+        rows: raw.map((row) => columns.map((key) => normalizeTableValue(row[key]))),
+      };
+    }
+    if (raw.every(Array.isArray) && raw.length > 0) {
+      const headers = raw[0].map((cell, idx) => normalizeTableValue(cell) || `Column ${idx + 1}`);
+      return {
+        columns: headers.map((label, idx) => ({ key: String(idx), label, align: "left" })),
+        rows: raw.slice(1).map((row) => headers.map((_, idx) => normalizeTableValue(row[idx]))),
+      };
+    }
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const rawColumns = Array.isArray(raw.columns) ? raw.columns : Array.isArray(raw.headers) ? raw.headers : [];
+  const rawRows = Array.isArray(raw.rows) ? raw.rows : Array.isArray(raw.data) ? raw.data : [];
+  let columns = rawColumns.map((column, idx) => {
+    if (column && typeof column === "object") {
+      const key = String(column.key || column.name || column.field || idx);
+      return {
+        key,
+        label: String(column.label || column.title || column.name || column.key || `Column ${idx + 1}`),
+        align: ["left", "center", "right"].includes(column.align) ? column.align : "left",
+      };
+    }
+    return { key: String(idx), label: normalizeTableValue(column) || `Column ${idx + 1}`, align: "left" };
+  });
+  if (columns.length === 0 && rawRows.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+    columns = Array.from(new Set(rawRows.flatMap((row) => Object.keys(row)))).map((key) => ({ key, label: key, align: "left" }));
+  }
+  if (columns.length === 0 && rawRows.every(Array.isArray) && rawRows.length > 0) {
+    columns = rawRows[0].map((cell, idx) => ({ key: String(idx), label: normalizeTableValue(cell) || `Column ${idx + 1}`, align: "left" }));
+    return {
+      columns,
+      rows: rawRows.slice(1).map((row) => columns.map((_, idx) => normalizeTableValue(row[idx]))),
+    };
+  }
+  return {
+    columns,
+    rows: rawRows.map((row) => {
+      if (Array.isArray(row)) return columns.map((_, idx) => normalizeTableValue(row[idx]));
+      if (row && typeof row === "object") return columns.map((column) => normalizeTableValue(row[column.key]));
+      return columns.map((_, idx) => (idx === 0 ? normalizeTableValue(row) : ""));
+    }),
+  };
+}
+
+function parseTableDisplayContent(content) {
+  const text = String(content || "").trim();
+  if (!text) return { columns: [], rows: [], error: "" };
+  const fenced = text.match(/^```(?:json|table|csv|tsv|markdown|md)?\s*\n?([\s\S]*?)```\s*$/i);
+  const body = fenced ? fenced[1].trim() : text;
+  try {
+    const normalized = normalizeTableSpec(JSON.parse(body));
+    if (normalized && normalized.columns.length) return { ...normalized, error: "" };
+  } catch {
+    /* try non-JSON formats */
+  }
+  const lines = body.replace(/\r\n/g, "\n").split("\n").filter((line) => line.trim());
+  if (lines.length >= 2 && splitMarkdownTableRow(lines[0]).length > 1 && isMarkdownTableSeparator(lines[1])) {
+    const headers = splitMarkdownTableRow(lines[0]);
+    const align = markdownTableAlignments(lines[1]);
+    return {
+      columns: headers.map((label, idx) => ({ key: String(idx), label, align: align[idx] || "left" })),
+      rows: lines.slice(2).map((line) => splitMarkdownTableRow(line)),
+      error: "",
+    };
+  }
+  const delimiter = body.includes("\t") ? "\t" : ",";
+  const delimited = parseDelimitedTable(body, delimiter);
+  if (delimited.length > 0 && delimited[0].length > 1) {
+    const headers = delimited[0].map((cell, idx) => cell || `Column ${idx + 1}`);
+    return {
+      columns: headers.map((label, idx) => ({ key: String(idx), label, align: "left" })),
+      rows: delimited.slice(1),
+      error: "",
+    };
+  }
+  return { columns: [], rows: [], error: "No table data detected" };
+}
+
+function TableDisplayContent({ content }) {
+  const table = useMemo(() => parseTableDisplayContent(content), [content]);
+  if (table.error || table.columns.length === 0) {
+    return (
+      <div className="af-work-display-table-empty">
+        <strong>Table data error</strong>
+        <span>{table.error || "No columns found"}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="af-work-display-table-wrap af-work-display-table-wrap--standalone">
+      <table className="af-work-display-table">
+        <thead>
+          <tr>
+            {table.columns.map((column, idx) => (
+              <th key={`${column.key}-${idx}`} style={{ textAlign: column.align || "left" }}>
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, rowIdx) => (
+            <tr key={rowIdx}>
+              {table.columns.map((column, cellIdx) => (
+                <td key={`${column.key}-${cellIdx}`} style={{ textAlign: column.align || "left" }}>
+                  {normalizeTableValue(row[cellIdx])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -920,6 +1102,9 @@ function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (kind === "chart") {
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--chart"><ChartDisplayContent content={content} /></VisibleScrollFrame>;
   }
+  if (kind === "table") {
+    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--table"><TableDisplayContent content={content} /></VisibleScrollFrame>;
+  }
   if (kind === "mermaid") {
     return (
       <VisibleScrollFrame className="af-work-display-body">
@@ -1068,6 +1253,7 @@ function displayFileExtension(kind) {
   if (kind === "html") return "html";
   if (kind === "image") return "txt";
   if (kind === "chart") return "json";
+  if (kind === "table") return "json";
   return "md";
 }
 
@@ -1126,7 +1312,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : "Markdown");
+  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
@@ -1489,6 +1675,56 @@ function parentDirectoryPaths(relPath) {
     dirs.push(parts.slice(0, i).join("/"));
   }
   return dirs;
+}
+
+function sortWorkspaceFileItems(items) {
+  return [...(items || [])].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function upsertWorkspaceFile(items, relPath, size = 0) {
+  const parts = String(relPath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  if (parts.length === 0) return items;
+  const visit = (list, index, prefix) => {
+    const name = parts[index];
+    const itemPath = prefix ? `${prefix}/${name}` : name;
+    const isLeaf = index === parts.length - 1;
+    let found = false;
+    const next = (Array.isArray(list) ? list : []).map((item) => {
+      if (item.name !== name) return item;
+      found = true;
+      if (isLeaf) {
+        return {
+          ...item,
+          type: "file",
+          name,
+          path: itemPath,
+          icon: iconForFile(name),
+          size,
+        };
+      }
+      return {
+        ...item,
+        type: "directory",
+        name,
+        path: itemPath,
+        icon: iconForFile(name, true),
+        children: visit(item.children || [], index + 1, itemPath),
+      };
+    });
+    if (!found) {
+      next.push(isLeaf
+        ? { type: "file", name, path: itemPath, icon: iconForFile(name), size }
+        : { type: "directory", name, path: itemPath, icon: iconForFile(name, true), children: visit([], index + 1, itemPath) });
+    }
+    return sortWorkspaceFileItems(next);
+  };
+  return visit(items || [], 0, "");
 }
 
 function FileTree({ items, onOpen, collapsedDirs, onToggleDir, onCreateFile, onCreateFolder, onDelete, onFileDragStart }) {
@@ -2153,6 +2389,17 @@ function WorkspacePageInner() {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [fileFilter, setFileFilter] = useState("");
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set());
+  const workspaceSidebarRef = useRef(null);
+  const [workspaceFilesPaneHeight, setWorkspaceFilesPaneHeight] = useState(() => {
+    try {
+      const saved = Number(window.localStorage.getItem("agentflow.workspace.filesPaneHeight") || 0);
+      if (Number.isFinite(saved) && saved >= 160) return saved;
+    } catch {
+      /* ignore storage */
+    }
+    return 360;
+  });
+  const [workspaceSidebarResizing, setWorkspaceSidebarResizing] = useState(false);
   const [modelLists, setModelLists] = useState({ cursor: [], opencode: [], claudeCode: [] });
   const [composerModel, setComposerModel] = useState("");
   const [skills, setSkills] = useState([]);
@@ -2180,6 +2427,48 @@ function WorkspacePageInner() {
       updateNodeInternals(id);
     });
   }, [updateNodeInternals]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("agentflow.workspace.filesPaneHeight", String(Math.round(workspaceFilesPaneHeight)));
+    } catch {
+      /* ignore storage */
+    }
+  }, [workspaceFilesPaneHeight]);
+
+  const setWorkspaceFilesPaneFromPointer = useCallback((clientY) => {
+    const sidebar = workspaceSidebarRef.current;
+    if (!sidebar) return;
+    const rect = sidebar.getBoundingClientRect();
+    const padding = 16;
+    const minFiles = 150;
+    const minPalette = 230;
+    const contentTop = rect.top + padding;
+    const contentBottom = rect.bottom - padding;
+    const maxFiles = Math.max(minFiles, contentBottom - contentTop - minPalette);
+    const next = Math.min(Math.max(clientY - contentTop, minFiles), maxFiles);
+    setWorkspaceFilesPaneHeight(next);
+  }, []);
+
+  const startWorkspaceSidebarResize = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setWorkspaceSidebarResizing(true);
+    setWorkspaceFilesPaneFromPointer(event.clientY);
+    const onPointerMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      setWorkspaceFilesPaneFromPointer(moveEvent.clientY);
+    };
+    const onPointerUp = () => {
+      setWorkspaceSidebarResizing(false);
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+    };
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+  }, [setWorkspaceFilesPaneFromPointer]);
 
   useEffect(() => () => {
     if (flowSnippetToastTimerRef.current) {
@@ -3213,6 +3502,7 @@ function WorkspacePageInner() {
         throw new Error(verifyJson.error || `保存后读取失败：${savedPath}`);
       }
       await loadFiles();
+      setFiles((current) => upsertWorkspaceFile(current, savedPath, String(content || "").length));
       setCollapsedDirs((prev) => {
         const next = new Set(prev);
         for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
@@ -3578,6 +3868,9 @@ function WorkspacePageInner() {
     const sourcePositions = snippet.ui?.nodePositions && typeof snippet.ui.nodePositions === "object"
       ? snippet.ui.nodePositions
       : {};
+    const sourceSizes = snippet.ui?.nodeSizes && typeof snippet.ui.nodeSizes === "object"
+      ? snippet.ui.nodeSizes
+      : {};
     const points = oldIds.map((id) => {
       const pos = sourcePositions[id];
       return {
@@ -3602,6 +3895,7 @@ function WorkspacePageInner() {
 
     const nextInstances = {};
     const nodePositions = {};
+    const nodeSizes = {};
     for (const point of points) {
       const nextId = idMap[point.id];
       nextInstances[nextId] = { ...(sourceInstances[point.id] || {}) };
@@ -3609,6 +3903,10 @@ function WorkspacePageInner() {
         x: insertAt.x + (point.x - minX),
         y: insertAt.y + (point.y - minY),
       };
+      const size = sourceSizes[point.id];
+      if (typeof size?.width === "number" && typeof size?.height === "number") {
+        nodeSizes[nextId] = { width: size.width, height: size.height };
+      }
     }
 
     const oldIdSet = new Set(oldIds);
@@ -3621,7 +3919,7 @@ function WorkspacePageInner() {
         targetHandle: edge.targetHandle ?? null,
       }));
 
-    const flow = graphToFlow({ instances: nextInstances, edges: nextEdges, ui: { nodePositions } }, palette);
+    const flow = graphToFlow({ instances: nextInstances, edges: nextEdges, ui: { nodePositions, nodeSizes } }, palette);
     const insertedNodes = flow.nodes.map((node) => ({ ...node, selected: true }));
     instancesRef.current = { ...instancesRef.current, ...flow.instances };
     setInstances(instancesRef.current);
@@ -3659,8 +3957,11 @@ function WorkspacePageInner() {
       return;
     }
     const nodePositions = {};
+    const nodeSizes = {};
     for (const node of selectedCanvasNodes) {
       nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
+      const size = persistedWorkspaceNodeSize(node);
+      if (size) nodeSizes[node.id] = size;
     }
     const snippetEdges = selectedCanvasInternalEdges.map((edge) => ({
       source: edge.source,
@@ -3683,7 +3984,7 @@ function WorkspacePageInner() {
           snippet: {
             instances: buildInstancesForYaml(selectedCanvasNodes, instancesRef.current),
             edges: snippetEdges,
-            ui: { nodePositions },
+            ui: { nodePositions, nodeSizes },
           },
         }),
       });
@@ -4049,9 +4350,12 @@ function WorkspacePageInner() {
   }, []);
 
   const addDisplayFromFile = useCallback(async (item, position) => {
-    const ext = String(item?.name || item?.path || "").toLowerCase().split(".").pop();
+    const fileName = String(item?.name || item?.path || "").toLowerCase();
+    const ext = fileName.split(".").pop();
     const displayDefinitionId = ext === "html"
       ? "display_html"
+      : ext === "csv" || ext === "tsv" || (ext === "json" && /\b(table|data|rows|report)\b/i.test(fileName))
+        ? "display_table"
       : ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
         ? "display_image"
         : "display_markdown";
@@ -4352,7 +4656,12 @@ function WorkspacePageInner() {
             </div>
           </nav>
         ) : null}
-        <aside className="af-workspace-sidebar" aria-hidden={workspaceSidebarCollapsed}>
+        <aside
+          ref={workspaceSidebarRef}
+          className={"af-workspace-sidebar" + (workspaceSidebarResizing ? " af-workspace-sidebar--resizing" : "")}
+          aria-hidden={workspaceSidebarCollapsed}
+          style={{ "--af-work-files-pane-height": `${Math.round(workspaceFilesPaneHeight)}px` }}
+        >
           <section className="af-workspace-files-section">
             <div className="af-workspace-sidebar-head">
               <h2>Files</h2>
@@ -4376,6 +4685,16 @@ function WorkspacePageInner() {
               <FileTree items={filteredFiles} onOpen={openFileNode} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onCreateFile={createWorkspaceFile} onCreateFolder={createWorkspaceFolder} onDelete={deleteWorkspacePath} onFileDragStart={handleFileDragStart} />
             </div>
           </section>
+
+          <button
+            type="button"
+            className="af-workspace-sidebar-resizer"
+            onPointerDown={startWorkspaceSidebarResize}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="调整 Files 和 Palette 区域大小"
+            title="拖动调整 Files / Palette 高度"
+          />
 
           <section className="af-workspace-nodes-section">
             <div className="af-node-palette-head af-workspace-node-palette-head">
