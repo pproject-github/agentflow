@@ -126,9 +126,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     const el = bodyTextareaRef.current;
     if (!el) return;
     const desiredHeight = promptEditorHeightForText(el, bodyDraft);
-    el.style.height = `${desiredHeight}px`;
+    el.style.minHeight = `${desiredHeight}px`;
+    el.style.height = "";
     if (bodyBackdropRef.current) {
-      bodyBackdropRef.current.style.height = `${desiredHeight}px`;
+      bodyBackdropRef.current.style.minHeight = `${desiredHeight}px`;
+      bodyBackdropRef.current.style.height = "";
     }
   }, [bodyDraft]);
 
@@ -321,6 +323,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         (nodeStatus === "failed" ? " af-flow-node--failed" : "") +
         (nodeStatus === "running" && !isExecuting ? " af-flow-node--running-disk" : "") +
         (isDim ? " af-flow-node--dim" : "") +
+        (hasInlineBodyEditor ? " af-flow-node--inline-body-editor" : "") +
         " af-flow-node--" + schemaType.replace(/[^a-z0-9_-]/g, "")
       }
       data-schema={schemaType}

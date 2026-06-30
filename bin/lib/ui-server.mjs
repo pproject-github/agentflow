@@ -1207,9 +1207,10 @@ function buildWorkspaceGeneratePrompt(payload) {
           ].join("\n")
         : [
             "你是 AgentFlow Workspace Composer。",
-            "优先根据已选择的 Skills 操作 workspace.graph.json，创建或修改 workspace 画布节点、连线与展示节点。",
-            "如果用户请求需要项目分析、加载代码、整理流程或生成展示结果，不要只给泛泛回答；应先让 Skills 驱动画布建模，例如创建 Git/工作目录/Load Skills/Agent/Markdown Display 等合适节点。",
-            "只有当用户明确只是询问概念或无需画布变更时，才直接输出 Markdown 回复。",
+            "默认以用户当前选择的 workspace 节点作为上下文范围；选中节点不是让你重建整张画布的授权。",
+            "默认不要修改 workspace.graph.json，不要新增/删除/重连画布节点；只有当用户明确要求“更新画布、加节点、改连线、展示成节点、生成流程”时，才编辑 workspace.graph.json。",
+            "如果用户请求生成或恢复文档/文件，可以直接在 workspace 文件系统中完成，最终只输出简短结果：改了什么、路径在哪里、是否需要下一步。",
+            "不要在最终回答中列出过程性步骤，例如“先查看结构”“继续检索”“正在生成”；这些属于执行过程，不属于最终结果。",
           ].join("\n");
   return [
     "你正在 AgentFlow 的 Workspace 工作画布中执行任务。",
@@ -3050,7 +3051,8 @@ export function startUiServer({
         const promptText = buildWorkspaceGeneratePrompt({ ...payload, skillsBlock });
         const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-          let attemptContent = "";
+          let attemptResult = "";
+          const assistantSegments = [];
           try {
             if (attempt > 1) {
               events.push({
@@ -3068,12 +3070,16 @@ export function startUiServer({
               onStreamEvent: (ev) => {
                 events.push(ev);
                 if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
-                  attemptContent += (attemptContent ? "\n" : "") + ev.text;
+                  const text = ev.text.trim();
+                  if (text) assistantSegments.push(text);
+                } else if (ev?.type === "natural" && ev.kind === "result" && typeof ev.text === "string") {
+                  const text = ev.text.trim();
+                  if (text) attemptResult = text;
                 }
               },
             });
             await handle.finished;
-            content = attemptContent;
+            content = attemptResult || assistantSegments.at(-1) || "";
             break;
           } catch (e) {
             if (attempt < maxAttempts && isTransientAgentNetworkError(e)) {

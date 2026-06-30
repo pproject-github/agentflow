@@ -3933,10 +3933,15 @@ button.af-project-card {
 
 .af-work-flow-node {
   width: max-content;
+  height: max-content;
+  min-width: 100%;
+  min-height: 100%;
 }
 
 .af-work-flow-node .af-flow-node {
   margin: 0;
+  width: 100%;
+  min-height: 100%;
 }
 
 .af-work-display-card {
@@ -4016,6 +4021,10 @@ button.af-project-card {
 
 .af-work-display-resize .material-symbols-outlined {
   font-size: 0.9rem;
+}
+
+.af-work-display-card--resizing .af-work-display-html-frame {
+  pointer-events: none;
 }
 
 .af-work-display-card__head {
@@ -11255,6 +11264,8 @@ button.af-exec-history-card {
   color: var(--af-on-surface);
   font-size: 12px;
   position: relative;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   transition: box-shadow 0.2s, background 0.2s;
 }
@@ -11443,9 +11454,11 @@ button.af-exec-history-card {
   position: relative;
   z-index: 0;
   display: flex;
+  flex: 1 1 auto;
   align-items: stretch;
   padding: 0.65rem 0.35rem 0.65rem 0.5rem;
   gap: 0.25rem;
+  min-height: 0;
 }
 
 .af-flow-node__ports {
@@ -11524,6 +11537,11 @@ button.af-exec-history-card {
   padding: 0.2rem 0.35rem;
   min-height: 2.25rem;
   min-width: 0;
+}
+
+.af-flow-node--inline-body-editor .af-flow-node__title-wrap {
+  justify-content: flex-start;
+  min-height: 0;
 }
 
 .af-flow-node__title {
@@ -11704,6 +11722,13 @@ button.af-exec-history-card {
   max-height: 24rem;
   resize: both;
   overflow: hidden;
+}
+
+.af-flow-node--inline-body-editor .af-flow-node__prompt-stack {
+  flex: 1 1 auto;
+  width: calc(100% - 0.5rem);
+  max-width: none;
+  max-height: none;
 }
 
 .af-flow-node__prompt-stack .af-flow-node__prompt-editor {

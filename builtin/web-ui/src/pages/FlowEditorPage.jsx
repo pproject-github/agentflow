@@ -24,6 +24,7 @@ import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { formatDurationMs, formatRelativeTime, recordPipelineOpened } from "../pipelineRecent.js";
 import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
+import { useCanvasHistory } from "../useCanvasHistory.js";
 import {
   addSkillKeys,
   collectionSelectionState,
@@ -1551,6 +1552,26 @@ export default function FlowEditorPage() {
   const connectionMenuRef = useRef(null);
   const insertFlowSnippetRef = useRef(null);
   const [connectionMenu, setConnectionMenu] = useState(null);
+  const restoreCanvasSnapshot = useCallback((snapshot) => {
+    instancesRef.current = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
+      ? snapshot.extra.instances
+      : {};
+    setNodes(Array.isArray(snapshot?.nodes) ? snapshot.nodes : []);
+    setEdges(Array.isArray(snapshot?.edges) ? snapshot.edges : []);
+    setConnectionMenu(null);
+  }, [setEdges, setNodes]);
+  const canvasHistoryExtra = useMemo(() => ({ instances: instancesRef.current }), [edges, nodes]);
+  const {
+    resetHistory: resetCanvasHistory,
+    undo: undoCanvas,
+    redo: redoCanvas,
+  } = useCanvasHistory({
+    nodes,
+    edges,
+    extra: canvasHistoryExtra,
+    enabled: Boolean(selected) && hasLoadedRef.current && runMode === "edit",
+    onRestore: restoreCanvasSnapshot,
+  });
 
   const provideNodes = useMemo(
     () => nodes.filter((n) => (n.data?.definitionId || "").startsWith("provide_")),
@@ -2118,6 +2139,7 @@ export default function FlowEditorPage() {
 
         recordPipelineOpened(flow.id, nextGraph.flowSource);
         setNodePropsFlowEpoch((x) => x + 1);
+        resetCanvasHistory(nextGraph.nodes, nextGraph.edges, { instances: nextGraph.instances });
         // 以加载快照作为 lastPersistedYaml 基线，开启自动保存；
         // 若无用户改动，首次自动保存 debounce 结束时的 serialize 结果与基线一致 → 跳过 POST
         try {
@@ -2135,7 +2157,7 @@ export default function FlowEditorPage() {
         setLoadError(String(e.message || e));
       }
     },
-    [fetchFlowGraphData, setNodes, setEdges],
+    [fetchFlowGraphData, resetCanvasHistory, setNodes, setEdges],
   );
 
   const reloadPaletteForSelectedFlow = useCallback(async () => {
@@ -3087,6 +3109,19 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
       if (editable) return;
 
+      const shortcutKey = e.key.toLowerCase();
+      const wantsUndo = (e.metaKey || e.ctrlKey) && !e.shiftKey && shortcutKey === "z";
+      const wantsRedo =
+        (e.metaKey || e.ctrlKey) &&
+        ((e.shiftKey && shortcutKey === "z") || shortcutKey === "y");
+      if (wantsUndo || wantsRedo) {
+        e.preventDefault();
+        e.stopPropagation();
+        const changed = wantsUndo ? undoCanvas() : redoCanvas();
+        setSaveStatus(changed ? (wantsUndo ? "Undo canvas change" : "Redo canvas change") : (wantsUndo ? "Nothing to undo" : "Nothing to redo"));
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
         const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
         if (clip) {
@@ -3154,6 +3189,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     nodePropDraft,
     applyNodeProperties,
     runMode,
+    undoCanvas,
+    redoCanvas,
   ]);
 
   // ── Run timer tick ──
