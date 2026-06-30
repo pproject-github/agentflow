@@ -4455,6 +4455,7 @@ button.af-project-card {
 }
 
 .af-work-flow-node {
+  box-sizing: border-box;
   width: max-content;
   height: max-content;
   min-width: 100%;
@@ -4462,12 +4463,14 @@ button.af-project-card {
 }
 
 .af-work-flow-node .af-flow-node {
+  box-sizing: border-box;
   margin: 0;
   width: 100%;
   min-height: 100%;
 }
 
 .af-work-display-card {
+  box-sizing: border-box;
   position: relative;
   width: 31rem;
   overflow: visible;
@@ -5449,6 +5452,7 @@ button.af-project-card {
 }
 
 .af-work-run-card {
+  box-sizing: border-box;
   width: 16rem;
   overflow: hidden;
   border: 1px solid rgba(124, 77, 255, 0.28);
@@ -6144,6 +6148,7 @@ button.af-project-card {
 }
 
 .af-work-node {
+  box-sizing: border-box;
   width: 21rem;
   max-width: 21rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -11813,6 +11818,7 @@ button.af-exec-history-card {
 
 /* —— Flow 节点（深色画布） —— */
 .af-flow-node {
+  box-sizing: border-box;
   min-width: 10rem;
   border-radius: 1rem;
   background: var(--af-surface-high);

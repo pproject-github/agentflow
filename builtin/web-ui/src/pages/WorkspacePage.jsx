@@ -378,6 +378,28 @@ function cloneSlots(slots) {
   }));
 }
 
+function nodeHandleSignature(node) {
+  const data = node?.data || {};
+  const encodeSlots = (slots) => (Array.isArray(slots) ? slots : [])
+    .map((slot, index) => {
+      if (slot?.showOnNode === false) return "";
+      return [index, String(slot?.type || ""), String(slot?.name || ""), slot?.required ? "1" : "0"].join(":");
+    })
+    .filter(Boolean)
+    .join("|");
+  return `${encodeSlots(data.inputs)}=>${encodeSlots(data.outputs)}`;
+}
+
+function workspaceNodeLayoutSignature(node) {
+  const data = node?.data || {};
+  return [
+    nodeHandleSignature(node),
+    data?.isExecuting ? "executing" : "",
+    data?.nodeStatus || "",
+    data?.runningRunNodeId || "",
+  ].join("::");
+}
+
 function graphToFlow(graph, palette) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const instances = sanitizeWorkspaceRuntimeOutputs(rawInstances);
@@ -2358,6 +2380,8 @@ function WorkspacePageInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const nodeHandleSignaturesRef = useRef(new Map());
+  const renderedNodeLayoutSignaturesRef = useRef(new Map());
   const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
@@ -2423,9 +2447,9 @@ function WorkspacePageInner() {
   const refreshNodeInternals = useCallback((nodeId) => {
     const id = String(nodeId || "").trim();
     if (!id) return;
-    window.requestAnimationFrame(() => {
-      updateNodeInternals(id);
-    });
+    const refresh = () => updateNodeInternals(id);
+    window.requestAnimationFrame(refresh);
+    window.setTimeout(refresh, 80);
   }, [updateNodeInternals]);
 
   useEffect(() => {
@@ -2942,15 +2966,22 @@ function WorkspacePageInner() {
           for (const [instanceId, instance] of Object.entries(incomingInstances)) {
             if (!currentIds.has(instanceId)) continue;
             const currentInstance = nextInstances[instanceId];
-            if (!displayKind(instance?.definitionId || currentInstance?.definitionId)) continue;
-            nextInstances[instanceId] = instance;
+            if (displayKind(instance?.definitionId || currentInstance?.definitionId)) {
+              nextInstances[instanceId] = instance;
+            } else if (Array.isArray(instance?.output)) {
+              nextInstances[instanceId] = { ...(currentInstance || instance), output: instance.output };
+            }
           }
           instancesRef.current = nextInstances;
           setInstances(nextInstances);
           return currentNodes.map((node) => {
             const incomingNode = incomingNodesById.get(node.id);
             if (!incomingNode) return node;
-            if (!displayKind(incomingNode.data?.definitionId || node.data?.definitionId)) return node;
+            if (!displayKind(incomingNode.data?.definitionId || node.data?.definitionId)) {
+              return Array.isArray(incomingNode.data?.outputs)
+                ? { ...node, data: { ...node.data, outputs: incomingNode.data.outputs } }
+                : node;
+            }
             return {
               ...node,
               data: {
@@ -3182,6 +3213,27 @@ function WorkspacePageInner() {
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+
+  useEffect(() => {
+    const prev = nodeHandleSignaturesRef.current;
+    const next = new Map();
+    const changedIds = [];
+    for (const node of nodes) {
+      const signature = nodeHandleSignature(node);
+      next.set(node.id, signature);
+      if (prev.get(node.id) !== signature) changedIds.push(node.id);
+    }
+    nodeHandleSignaturesRef.current = next;
+    if (changedIds.length === 0) return undefined;
+    const refresh = () => changedIds.forEach((id) => updateNodeInternals(id));
+    const raf = window.requestAnimationFrame(refresh);
+    const timer = window.setTimeout(refresh, 80);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [nodes, updateNodeInternals]);
+
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
@@ -3557,6 +3609,26 @@ function WorkspacePageInner() {
       onSyncNodePropDraft: syncNodePropDraft,
     },
   })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, workspaceExecutingNodes, workspaceNodeRunStatus]);
+
+  useEffect(() => {
+    const prev = renderedNodeLayoutSignaturesRef.current;
+    const next = new Map();
+    const changedIds = [];
+    for (const node of hydratedNodes) {
+      const signature = workspaceNodeLayoutSignature(node);
+      next.set(node.id, signature);
+      if (prev.get(node.id) !== signature) changedIds.push(node.id);
+    }
+    renderedNodeLayoutSignaturesRef.current = next;
+    if (changedIds.length === 0) return undefined;
+    const refresh = () => changedIds.forEach((id) => updateNodeInternals(id));
+    const raf = window.requestAnimationFrame(refresh);
+    const timer = window.setTimeout(refresh, 80);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [hydratedNodes, updateNodeInternals]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
