@@ -4613,6 +4613,18 @@ button.af-project-card {
   box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.32), 0 18px 44px rgba(0, 0, 0, 0.36);
 }
 
+.af-work-display-card--image-drop {
+  border-color: rgba(124, 156, 255, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(124, 156, 255, 0.4),
+    0 0 28px rgba(124, 156, 255, 0.22),
+    0 18px 44px rgba(0, 0, 0, 0.36);
+}
+
+.af-hidden-file-input {
+  display: none;
+}
+
 .af-work-display-card--executing,
 .af-work-run-card--executing {
   border-color: rgba(0, 228, 117, 0.72);

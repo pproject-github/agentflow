@@ -108,8 +108,13 @@ const MIME = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
 };
 
 const RUN_CONFIG_FILENAME = "run-config.json";
@@ -1125,6 +1130,7 @@ const WORKSPACE_TEXT_EXTS = new Set([
   ".mjs",
   ".cjs",
 ]);
+const WORKSPACE_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 
 function resolveWorkspaceFilePath(workspaceRoot, relPath) {
   const root = path.resolve(workspaceRoot);
@@ -1144,7 +1150,31 @@ function workspaceFileIcon(fileName, isDir = false) {
   if ([".yaml", ".yml", ".json"].includes(ext)) return "data_object";
   if (ext === ".css") return "palette";
   if (ext === ".html") return "web";
+  if (WORKSPACE_IMAGE_EXTS.has(ext)) return "image";
   return "draft";
+}
+
+function sanitizeWorkspaceUploadName(filename) {
+  const parsed = path.parse(String(filename || "image").replace(/\\/g, "/").split("/").pop() || "image");
+  const stem = (parsed.name || "image")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "image";
+  const ext = String(parsed.ext || "").toLowerCase();
+  return `${stem}${WORKSPACE_IMAGE_EXTS.has(ext) ? ext : ".png"}`;
+}
+
+function uniqueWorkspaceRelPath(workspaceRoot, relPath) {
+  let { abs, rel } = resolveWorkspaceFilePath(workspaceRoot, relPath);
+  if (!fs.existsSync(abs)) return { abs, rel };
+  const parsed = path.parse(rel);
+  for (let i = 1; i < 1000; i += 1) {
+    const candidate = path.posix.join(parsed.dir, `${parsed.name}-${i}${parsed.ext}`);
+    const resolved = resolveWorkspaceFilePath(workspaceRoot, candidate);
+    if (!fs.existsSync(resolved.abs)) return resolved;
+  }
+  return { abs, rel };
 }
 
 function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget = { count: 0 }) {
@@ -1174,7 +1204,7 @@ function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget 
     } else if (entry.isFile()) {
       if (WORKSPACE_FILE_SKIP_FILES.has(entry.name)) continue;
       const ext = path.extname(entry.name).toLowerCase();
-      if (!WORKSPACE_TEXT_EXTS.has(ext)) continue;
+      if (!WORKSPACE_TEXT_EXTS.has(ext) && !WORKSPACE_IMAGE_EXTS.has(ext)) continue;
       let size = 0;
       try { size = fs.statSync(abs).size; } catch {}
       budget.count++;
@@ -2655,6 +2685,47 @@ function parseFlowsImportForm(req) {
   });
 }
 
+function parseWorkspaceUploadForm(req) {
+  return new Promise((resolve, reject) => {
+    const bb = busboy({
+      headers: req.headers,
+      limits: { files: 1, fileSize: 10 * 1024 * 1024, parts: 32 },
+    });
+    const fields = {};
+    const chunks = [];
+    let filename = "";
+    let mimeType = "";
+    let gotFile = false;
+    bb.on("field", (name, val) => {
+      fields[String(name || "")] = String(val || "");
+    });
+    bb.on("file", (name, file, info) => {
+      if (name !== "file") {
+        file.resume();
+        return;
+      }
+      gotFile = true;
+      filename = info.filename || "";
+      mimeType = info.mimeType || "";
+      file.on("data", (d) => chunks.push(d));
+      file.on("limit", () => {
+        reject(new Error("FILE_TOO_LARGE"));
+      });
+    });
+    bb.on("finish", () => {
+      resolve({
+        fields,
+        file: Buffer.concat(chunks),
+        filename,
+        mimeType,
+        gotFile,
+      });
+    });
+    bb.on("error", reject);
+    req.pipe(bb);
+  });
+}
+
 /** GET 读 flow / nodes / SSE 等 */
 function isValidFlowSourceRead(s) {
   return s === "builtin" || s === "admin" || s === "user" || s === "workspace";
@@ -3422,6 +3493,37 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/workspace/file/raw") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const { abs } = resolveWorkspaceFilePath(scoped.root, url.searchParams.get("path") || "");
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+          json(res, 404, { error: "File not found" });
+          return;
+        }
+        const ext = path.extname(abs).toLowerCase();
+        const type = MIME[ext] || "application/octet-stream";
+        const data = fs.readFileSync(abs);
+        res.writeHead(200, {
+          "Content-Type": type,
+          "Content-Length": data.length,
+          "Cache-Control": "no-store",
+        });
+        res.end(data);
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/workspace/file") {
       let payload;
       try {
@@ -3452,6 +3554,54 @@ export function startUiServer({
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, String(payload.content ?? ""), "utf-8");
         json(res, 200, { ok: true, path: rel });
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/upload") {
+      let parsed;
+      try {
+        parsed = await parseWorkspaceUploadForm(req);
+      } catch (e) {
+        json(res, /FILE_TOO_LARGE/.test(String(e.message || e)) ? 413 : 400, { error: (e && e.message) || String(e) });
+        return;
+      }
+      try {
+        if (!parsed.gotFile || !parsed.file.length) {
+          json(res, 400, { error: "Missing upload file" });
+          return;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: parsed.fields.flowId || "",
+          flowSource: parsed.fields.flowSource || "user",
+          archived: parsed.fields.archived === "1" || parsed.fields.archived === "true" || parsed.fields.flowArchived === "true",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+          json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
+          return;
+        }
+        const safeName = sanitizeWorkspaceUploadName(parsed.filename);
+        const ext = path.extname(safeName).toLowerCase();
+        if (!WORKSPACE_IMAGE_EXTS.has(ext) || (parsed.mimeType && !/^image\//i.test(parsed.mimeType))) {
+          json(res, 400, { error: "Only image uploads are supported" });
+          return;
+        }
+        const targetDir = String(parsed.fields.dir || "img").trim().replace(/^[/\\]+/, "") || "img";
+        const target = uniqueWorkspaceRelPath(scoped.root, path.posix.join(targetDir.replace(/\\/g, "/"), safeName));
+        fs.mkdirSync(path.dirname(target.abs), { recursive: true });
+        fs.writeFileSync(target.abs, parsed.file);
+        json(res, 200, {
+          ok: true,
+          path: target.rel,
+          size: parsed.file.length,
+          mimeType: parsed.mimeType,
+        });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
       }

@@ -87,6 +87,8 @@ const WORKSPACE_LOAD_MCP_DEFINITION = {
   ],
 };
 
+const WORKSPACE_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
 
@@ -105,6 +107,23 @@ function flowParamsQuery(params) {
   if (params.flowSource) q.set("flowSource", params.flowSource);
   if (params.archived) q.set("archived", "1");
   return q;
+}
+
+function isWorkspaceImageFile(file) {
+  if (!file) return false;
+  const type = String(file.type || "");
+  if (type && /^image\//i.test(type)) return true;
+  const ext = String(file.name || "").toLowerCase().split(".").pop();
+  return WORKSPACE_IMAGE_EXTENSIONS.has(ext);
+}
+
+function workspaceRawFileUrl(src, flowParams) {
+  const text = String(src || "").trim();
+  if (!text) return "";
+  if (/^(?:https?:|data:|blob:|file:)/i.test(text) || text.startsWith("/")) return text;
+  const q = flowParamsQuery(flowParams || {});
+  q.set("path", text);
+  return `/api/workspace/file/raw?${q.toString()}`;
 }
 
 function workspaceSkillsStorageKey(params) {
@@ -1102,7 +1121,7 @@ function ChartDisplayContent({ content }) {
   );
 }
 
-function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
+function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   const kind = displayKind(data?.definitionId);
   if (!kind) return null;
   const rawContent = displayContent(data);
@@ -1123,9 +1142,10 @@ function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
     );
   }
   if (kind === "image") {
+    const imageSrc = workspaceRawFileUrl(content, flowParams);
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--image">
-        <img className="af-work-display-image" src={content} alt={displayAltText(data)} loading="lazy" />
+        <img className="af-work-display-image" src={imageSrc} alt={displayAltText(data)} loading="lazy" />
       </VisibleScrollFrame>
     );
   }
@@ -1327,6 +1347,8 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const [resizingDisplay, setResizingDisplay] = useState(false);
   const [markdownEditing, setMarkdownEditing] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState("");
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const imageUploadInputRef = useRef(null);
   const markdownContent = kind === "markdown" ? displayContent(data) : "";
   useEffect(() => {
     if (!resizingDisplay) return undefined;
@@ -1349,6 +1371,34 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
+  const uploadImageFile = useCallback((file) => {
+    if (!file || kind !== "image") return;
+    data?.onUploadImageToDisplayNode?.(id, file);
+  }, [data, id, kind]);
+  const handleImageDragOver = useCallback((event) => {
+    if (kind !== "image") return;
+    const files = Array.from(event.dataTransfer?.files || []);
+    const hasImageFile = files.some(isWorkspaceImageFile) || Array.from(event.dataTransfer?.items || []).some((item) => String(item?.type || "").startsWith("image/"));
+    if (!hasImageFile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setImageDragActive(true);
+  }, [kind]);
+  const handleImageDragLeave = useCallback((event) => {
+    if (kind !== "image") return;
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setImageDragActive(false);
+  }, [kind]);
+  const handleImageDrop = useCallback((event) => {
+    if (kind !== "image") return;
+    const file = Array.from(event.dataTransfer?.files || []).find(isWorkspaceImageFile);
+    if (!file) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setImageDragActive(false);
+    uploadImageFile(file);
+  }, [kind, uploadImageFile]);
   return (
     <div
       className={
@@ -1356,11 +1406,15 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         (displaySize ? " af-work-display-card--sized" : "") +
         (selected ? " af-work-display-card--selected" : "") +
         (resizingDisplay ? " af-work-display-card--resizing" : "") +
+        (imageDragActive ? " af-work-display-card--image-drop" : "") +
         (data?.isExecuting ? " af-work-display-card--executing" : "") +
         (data?.nodeStatus === "success" ? " af-work-display-card--done" : "") +
         (data?.nodeStatus === "failed" ? " af-work-display-card--failed" : "")
       }
       style={displaySize ? { width: displaySize.width, height: displaySize.height } : undefined}
+      onDragOver={handleImageDragOver}
+      onDragLeave={handleImageDragLeave}
+      onDrop={handleImageDrop}
     >
       <NodeResizeControl
         className="af-work-display-resize nodrag"
@@ -1506,6 +1560,33 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             </button>
           )
         ) : null}
+        {kind === "image" ? (
+          <>
+            <input
+              ref={imageUploadInputRef}
+              className="af-hidden-file-input"
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) uploadImageFile(file);
+              }}
+            />
+            <button
+              type="button"
+              className="af-work-display-card__action nodrag"
+              onClick={(event) => {
+                event.stopPropagation();
+                imageUploadInputRef.current?.click();
+              }}
+              aria-label="上传图片"
+              title="上传图片"
+            >
+              <span className="material-symbols-outlined">upload</span>
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
           className="af-work-display-card__action nodrag"
@@ -1522,7 +1603,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       {kind === "markdown" && markdownEditing ? (
         <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} />
       ) : (
-        <DisplayBody data={data} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
+        <DisplayBody data={data} flowParams={data?.flowParams} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
       )}
       <WorkspaceNodeChat nodeId={id} data={data} />
     </div>
@@ -3464,6 +3545,42 @@ function WorkspacePageInner() {
     setStatus(String(options?.statusMessage || "") || (mode === "append" ? "已追加节点内容" : "已替换节点内容"));
   }, [saveGraph, setNodes]);
 
+  const uploadImageToDisplayNode = useCallback(async (nodeId, file) => {
+    const id = String(nodeId || "").trim();
+    if (!id || !isWorkspaceImageFile(file)) {
+      setStatus("请选择图片文件");
+      return;
+    }
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      form.set("dir", "img");
+      if (flowParams.flowId) form.set("flowId", flowParams.flowId);
+      if (flowParams.flowSource) form.set("flowSource", flowParams.flowSource);
+      if (flowParams.archived) form.set("archived", "1");
+      const res = await fetch("/api/workspace/upload", {
+        method: "POST",
+        body: form,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "上传图片失败");
+      const savedPath = String(json.path || "").trim();
+      if (!savedPath) throw new Error("上传图片失败：未返回路径");
+      setDisplayNodeContent(id, savedPath, "replace", {
+        logChat: false,
+        statusMessage: `已上传图片 ${savedPath}`,
+      });
+      await loadFiles();
+      setCollapsedDirs((prev) => {
+        const next = new Set(prev);
+        for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
+        return next;
+      });
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }, [flowParams, loadFiles, setDisplayNodeContent]);
+
   const applyNodeChatCandidate = useCallback((nodeId, mode = "replace") => {
     const id = String(nodeId || "").trim();
     const candidate = String(nodeChatSessions[id]?.candidateContent || "").trim();
@@ -3601,6 +3718,7 @@ function WorkspacePageInner() {
       isExecuting: workspaceExecutingNodes.has(node.id),
       nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
       nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
+      flowParams,
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
       runningRunNodeId,
@@ -3612,6 +3730,7 @@ function WorkspacePageInner() {
       onChangeLoadMcpNames: changeLoadMcpNames,
       onRefreshMcps: refreshMcps,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
+      onUploadImageToDisplayNode: uploadImageToDisplayNode,
       nodeChatActive: activeNodeChatId === node.id,
       nodeChat: nodeChatSessions[node.id] || null,
       onSetDisplayNodeContent: setDisplayNodeContent,
@@ -3622,7 +3741,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
@@ -4461,12 +4580,16 @@ function WorkspacePageInner() {
       setStatus("展示节点不可用");
       return;
     }
-    const q = flowParamsQuery(flowParams);
-    q.set("path", item.path);
-    const res = await fetch(`/api/workspace/file?${q.toString()}`);
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "读取文件失败");
-    const content = String(json.content || "");
+    const isImageDisplay = displayDefinitionId === "display_image";
+    let content = String(item.path || "");
+    if (!isImageDisplay) {
+      const q = flowParamsQuery(flowParams);
+      q.set("path", item.path);
+      const res = await fetch(`/api/workspace/file?${q.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "读取文件失败");
+      content = String(json.content || "");
+    }
     const primaryName = displayDefinitionId === "display_image" ? "src" : "content";
     const inputs = cloneSlots(def.inputs).map((slot) => (
       slot.name === primaryName ? { ...slot, default: content, value: content } : slot
