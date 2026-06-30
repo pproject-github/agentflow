@@ -1410,10 +1410,68 @@ function workspaceStringifyOutputValue(value) {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+function workspaceUnescapeLooseJsonString(value) {
+  return String(value ?? "")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function workspaceExtractLooseOutParams(raw) {
+  const text = String(raw || "");
+  const out = {};
+  const startMatch = /["']outParams["']\s*:\s*\{/i.exec(text);
+  if (!startMatch) return out;
+  const start = startMatch.index + startMatch[0].length;
+  const end = text.indexOf("}", start);
+  const block = end >= start ? text.slice(start, end) : text.slice(start);
+  const pairRe = /["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,\n\r}]+))/g;
+  let match;
+  while ((match = pairRe.exec(block))) {
+    const key = String(match[1] || "").trim();
+    const value = match[2] ?? match[3] ?? match[4] ?? "";
+    if (key) out[key] = workspaceUnescapeLooseJsonString(value).replace(/^["'`]|["'`]$/g, "").trim();
+  }
+  return out;
+}
+
+function workspaceExtractLooseResult(raw) {
+  const text = String(raw || "").trim();
+  const resultMatch = /["']result["']\s*:\s*(["'])/i.exec(text);
+  if (!resultMatch) return "";
+  const quote = resultMatch[1];
+  const start = resultMatch.index + resultMatch[0].length;
+  const outParamsMatch = /,\s*["']outParams["']\s*:/i.exec(text.slice(start));
+  if (outParamsMatch) {
+    const end = start + outParamsMatch.index;
+    let value = text.slice(start, end).trim();
+    if (value.endsWith(quote)) value = value.slice(0, -1);
+    return workspaceUnescapeLooseJsonString(value);
+  }
+  const end = text.lastIndexOf(quote);
+  if (end > start) return workspaceUnescapeLooseJsonString(text.slice(start, end));
+  return "";
+}
+
 function workspaceStructuredAgentOutput(content) {
   const raw = String(content || "").trim();
   const parsed = workspaceParseJsonObjectFromText(raw);
-  if (!parsed) return { result: raw, outParams: {}, structured: false, parsed: null };
+  if (!parsed) {
+    const looseResult = workspaceExtractLooseResult(raw);
+    const looseOutParams = workspaceExtractLooseOutParams(raw);
+    if (looseResult || Object.keys(looseOutParams).length) {
+      return {
+        result: looseResult || raw,
+        outParams: looseOutParams,
+        structured: true,
+        parsed: null,
+      };
+    }
+    return { result: raw, outParams: {}, structured: false, parsed: null };
+  }
   const hasEnvelope = Object.prototype.hasOwnProperty.call(parsed, "result") ||
     Object.prototype.hasOwnProperty.call(parsed, "outParams");
   if (!hasEnvelope) return { result: raw, outParams: {}, structured: false, parsed };
@@ -1446,7 +1504,12 @@ function workspaceExtractNamedOutputValue(content, slotName) {
     return workspaceStringifyOutputValue(value);
   }
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const looseOutParams = workspaceExtractLooseOutParams(content);
+  if (Object.prototype.hasOwnProperty.call(looseOutParams, name)) {
+    return String(looseOutParams[name] ?? "").trim();
+  }
   const patterns = [
+    new RegExp(`["']?${escaped}["']?\\s*:\\s*["']?([^"',}\\n\\r]+)`, "i"),
     new RegExp(`(?:\\$\\{${escaped}\\}|\\$${escaped})\\s*[=:：]\\s*([^\\n\\r]+)`, "i"),
     new RegExp(`(?:^|[\\n\\r])\\s*${escaped}\\s*[=:：]\\s*([^\\n\\r]+)`, "i"),
   ];
@@ -1522,6 +1585,60 @@ function workspaceDisplayKind(definitionId) {
   return "";
 }
 
+function workspaceOutputFieldForSlot(slot, index = 0) {
+  const name = String(slot?.name || "").trim();
+  if (!name || name === "result" || name === "content" || index === 0) return "result";
+  return `outParams.${name}`;
+}
+
+function workspaceDisplayKindExample(kind, field) {
+  if (kind === "table") return { columns: ["列名1", "列名2"], rows: [["值1", "值2"]] };
+  if (kind === "chart") return { type: "chart", version: "1.0", renderer: "echarts", option: { xAxis: { type: "category", data: [] }, yAxis: { type: "value" }, series: [{ type: "bar", data: [] }] } };
+  if (kind === "html") return "<可直接渲染的 HTML>";
+  if (kind === "mermaid") return "flowchart TD\n  A[开始] --> B[结束]";
+  if (kind === "ascii") return "+---+\n|   |\n+---+";
+  if (kind === "image") return "<图片 URL 或 data URL>";
+  if (kind === "markdown") return field === "result" ? "<给用户看的完整 Markdown 正文>" : "<Markdown 正文>";
+  return `<${field} 的值>`;
+}
+
+function workspaceDisplayFieldRule(kind, field, slotName = "") {
+  const slotText = field === "result" ? "`result` 字段" : `\`${field}\``;
+  const prefix = slotName ? `- 输出引脚 \`${slotName}\` 连接了 ${kind} 展示节点：` : `- 下游连接了 ${kind} 展示节点：`;
+  if (kind === "html") return `${prefix}将可直接放入 iframe 渲染的 HTML 放在 ${slotText} 中。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏。`;
+  if (kind === "markdown") return `${prefix}将 Markdown 正文放在 ${slotText} 中；除非正文确实需要代码块，否则不要额外包裹代码围栏。`;
+  if (kind === "mermaid") return `${prefix}将 Mermaid 图表代码放在 ${slotText} 中，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。`;
+  if (kind === "ascii") return `${prefix}将纯文本/ASCII 图或表格放在 ${slotText} 中；不要输出 HTML 或 Markdown 装饰。`;
+  if (kind === "image") return `${prefix}将可作为 img src 使用的图片地址、data URL 或 base64 data URL 放在 ${slotText} 中；不要输出 Markdown 图片语法。`;
+  if (kind === "chart") return `${prefix}将 ChartSpec JSON 对象放在 ${slotText} 中。ChartSpec 必须包含 "type":"chart"、"version":"1.0"、"renderer":"echarts"、"option"；option.series[].type 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。`;
+  if (kind === "table") return `${prefix}将表格数据放在 ${slotText} 中。推荐格式：{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}；也可使用对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。`;
+  return `${prefix}将展示内容放在 ${slotText} 中。`;
+}
+
+function workspaceDownstreamOutputDisplayBindings(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const source = instances[String(nodeId || "")] || {};
+  const output = Array.isArray(source.output) ? source.output : [];
+  const bindings = [];
+  for (const edge of edges) {
+    if (String(edge?.source || "") !== String(nodeId)) continue;
+    const target = instances[String(edge?.target || "")];
+    const kind = workspaceDisplayKind(target?.definitionId);
+    if (!kind) continue;
+    const index = workspaceHandleIndex(edge?.sourceHandle, "output");
+    const slot = output[index] || null;
+    const name = String(slot?.name || "").trim() || (index === 0 ? "result" : `output-${index}`);
+    bindings.push({
+      kind,
+      index,
+      name,
+      field: workspaceOutputFieldForSlot(slot, index),
+    });
+  }
+  return bindings;
+}
+
 function normalizeHtmlDisplayContent(content) {
   let text = String(content || "").trim();
   if (!text) return "";
@@ -1556,50 +1673,35 @@ function normalizeHtmlDisplayContent(content) {
 }
 
 function workspaceDownstreamDisplayRequirements(graph, nodeId) {
-  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const kinds = new Set();
-  for (const edge of edges) {
-    if (String(edge?.source || "") !== String(nodeId)) continue;
-    const target = instances[String(edge?.target || "")];
-    const kind = workspaceDisplayKind(target?.definitionId);
-    if (kind) kinds.add(kind);
-  }
-  if (kinds.size === 0) return "";
+  const bindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  if (bindings.length === 0) return "";
+  const seen = new Set();
   const rules = [];
-  if (kinds.has("html")) {
-    rules.push("- 下游连接了 HTML 展示节点：将可直接放入 iframe 渲染的 HTML 放在输出协议的 `result` 字段中。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏。");
-  }
-  if (kinds.has("markdown")) {
-    rules.push("- 下游连接了 Markdown 展示节点：将 Markdown 正文放在输出协议的 `result` 字段中；除非正文确实需要代码块，否则不要额外包裹代码围栏。");
-  }
-  if (kinds.has("mermaid")) {
-    rules.push("- 下游连接了 Mermaid 展示节点：将 Mermaid 图表代码放在输出协议的 `result` 字段中，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。");
-  }
-  if (kinds.has("ascii")) {
-    rules.push("- 下游连接了 ASCII 展示节点：将纯文本/ASCII 图或表格放在输出协议的 `result` 字段中；不要输出 HTML 或 Markdown 装饰。");
-  }
-  if (kinds.has("image")) {
-    rules.push("- 下游连接了图片展示节点：将可作为 img src 使用的图片地址、data URL 或 base64 data URL 放在输出协议的 `result` 字段中；不要输出 Markdown 图片语法。");
-  }
-  if (kinds.has("chart")) {
-    rules.push('- 下游连接了 Chart 展示节点：将 ChartSpec JSON 对象放在输出协议的 `result` 字段中。ChartSpec 必须包含 `"type":"chart"`、`"version":"1.0"`、`"renderer":"echarts"`、`"option"`；`option.series[].type` 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。');
-  }
-  if (kinds.has("table")) {
-    rules.push('- 下游连接了表格展示节点：将表格数据放在输出协议的 `result` 字段中。推荐格式：`{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}`；也可使用对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。');
+  for (const binding of bindings) {
+    const key = `${binding.field}:${binding.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(workspaceDisplayFieldRule(binding.kind, binding.field, binding.name));
   }
   return [
     "## 下游输出要求",
     "",
     ...rules,
     "",
+    "这些要求按输出引脚分别生效：不要把非 `result` 引脚连接的展示内容误写到 `result`；具名引脚应写入 `outParams.<引脚名>`。",
     "如果用户任务与下游展示格式没有冲突，优先满足上述格式要求；如果用户明确指定了其他格式，以用户任务为准。",
   ].join("\n");
 }
 
 function workspaceOutputProtocolRequirements(graph, nodeId) {
   const instance = graph?.instances?.[nodeId] || {};
-  const slots = (Array.isArray(instance.output) ? instance.output : [])
+  const outputSlots = Array.isArray(instance.output) ? instance.output : [];
+  const displayBindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  const displayByField = new Map();
+  for (const binding of displayBindings) {
+    if (!displayByField.has(binding.field)) displayByField.set(binding.field, binding.kind);
+  }
+  const slots = outputSlots
     .filter((slot) => {
       const name = String(slot?.name || "").trim();
       const type = String(slot?.type || "");
@@ -1607,18 +1709,24 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     })
     .map((slot) => String(slot.name).trim());
   const outParamsExample = slots.length
-    ? Object.fromEntries(slots.map((name) => [name, `<${name} 的值>`]))
+    ? Object.fromEntries(slots.map((name) => [name, workspaceDisplayKindExample(displayByField.get(`outParams.${name}`) || "", name)]))
     : {};
+  const resultExample = workspaceDisplayKindExample(displayByField.get("result") || "markdown", "result");
+  const slotDisplayRules = displayBindings
+    .map((binding) => `- 输出引脚 \`${binding.name}\` -> ${binding.kind} 展示节点：写入 \`${binding.field}\`。`)
+    .filter((line, index, arr) => arr.indexOf(line) === index);
   return [
     "## Workspace 输出协议",
     "",
-    "最终回复必须是一个 JSON 对象，不要使用 Markdown 代码围栏，不要在 JSON 外追加解释文字。",
+    "最终回复必须是一个 JSON 对象，必须直接以 `{` 开头并以 `}` 结尾；不要使用 Markdown 代码围栏，不要在 JSON 外追加解释文字、进度说明或自然语言前后缀。",
+    "JSON 必须可被 `JSON.parse` 解析；如果 `result` 是多行 Markdown，必须在 JSON 字符串里使用 `\\n` 转义换行，不能把裸 Markdown 直接塞进未转义的字符串。",
     "固定格式：",
     "",
-    JSON.stringify({ result: "<给用户看的完整正文>", outParams: outParamsExample }, null, 2),
+    JSON.stringify({ result: resultExample, outParams: outParamsExample }, null, 2),
     "",
     "- `result`：完整正文，写入 `result` / `content` 输出口，直连默认展示节点时展示它。",
     "- `outParams`：具名输出参数，只写入同名输出引脚。",
+    ...(slotDisplayRules.length ? ["- 当前输出引脚与展示节点映射：", ...slotDisplayRules] : []),
     ...(slots.length
       ? [`- 当前节点具名输出槽：${slots.map((name) => `\`${name}\``).join("、")}。例如任务要求写入 \`${slots[0]}\` 时，放到 \`outParams.${slots[0]}\`。`]
       : ["- 当前节点没有额外具名输出槽，`outParams` 返回空对象即可。"]),
