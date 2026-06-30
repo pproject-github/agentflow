@@ -212,26 +212,128 @@ function flowSnippetEdgeLabel(edge) {
   return String(out || input || "");
 }
 
+function compactDiagramLabel(value, max = 16) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+function numericPoint(value) {
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function autoFlowSnippetPositions(nodes, edges) {
+  const ids = nodes.map((node) => node.id);
+  const idSet = new Set(ids);
+  const incoming = new Map(ids.map((id) => [id, 0]));
+  const outgoing = new Map(ids.map((id) => [id, []]));
+  edges.forEach((edge) => {
+    if (!idSet.has(edge.sourceId) || !idSet.has(edge.targetId)) return;
+    incoming.set(edge.targetId, (incoming.get(edge.targetId) || 0) + 1);
+    outgoing.get(edge.sourceId)?.push(edge.targetId);
+  });
+  const level = new Map();
+  const queue = ids.filter((id) => (incoming.get(id) || 0) === 0);
+  if (queue.length === 0 && ids[0]) queue.push(ids[0]);
+  queue.forEach((id) => level.set(id, 0));
+  for (let i = 0; i < queue.length; i += 1) {
+    const id = queue[i];
+    const nextLevel = (level.get(id) || 0) + 1;
+    for (const target of outgoing.get(id) || []) {
+      if (!level.has(target) || nextLevel > level.get(target)) {
+        level.set(target, nextLevel);
+        queue.push(target);
+      }
+    }
+  }
+  ids.forEach((id, index) => {
+    if (!level.has(id)) level.set(id, index % 3);
+  });
+  const lanes = new Map();
+  const positions = new Map();
+  ids.forEach((id) => {
+    const col = level.get(id) || 0;
+    const row = lanes.get(col) || 0;
+    lanes.set(col, row + 1);
+    positions.set(id, { x: col * 190, y: row * 86 });
+  });
+  return positions;
+}
+
 function flowSnippetPreview(snippet) {
   const instances = flowSnippetInstances(snippet);
-  const edges = flowSnippetEdges(snippet);
+  const rawEdges = flowSnippetEdges(snippet);
   const idToTitle = new Map(instances.map((node, index) => [flowSnippetNodeId(node, index), flowSnippetNodeTitle(node, index)]));
-  return {
-    nodes: instances.map((node, index) => ({
-      id: flowSnippetNodeId(node, index),
-      title: flowSnippetNodeTitle(node, index),
-      meta: flowSnippetNodeMeta(node),
-    })),
-    edges: edges.map((edge, index) => {
-      const source = flowSnippetEdgeEndpoint(edge, "source");
-      const target = flowSnippetEdgeEndpoint(edge, "target");
+  const nodes = instances.map((node, index) => ({
+    id: flowSnippetNodeId(node, index),
+    title: flowSnippetNodeTitle(node, index),
+    meta: flowSnippetNodeMeta(node),
+  }));
+  const edges = rawEdges.map((edge, index) => {
+    const source = flowSnippetEdgeEndpoint(edge, "source");
+    const target = flowSnippetEdgeEndpoint(edge, "target");
+    return {
+      key: edge?.id || `${source}-${target}-${index}`,
+      sourceId: source,
+      targetId: target,
+      source: idToTitle.get(source) || source || "?",
+      target: idToTitle.get(target) || target || "?",
+      label: flowSnippetEdgeLabel(edge),
+    };
+  });
+  const rawPositions = snippet?.snippet?.ui?.nodePositions && typeof snippet.snippet.ui.nodePositions === "object"
+    ? snippet.snippet.ui.nodePositions
+    : {};
+  const rawSizes = snippet?.snippet?.ui?.nodeSizes && typeof snippet.snippet.ui.nodeSizes === "object"
+    ? snippet.snippet.ui.nodeSizes
+    : {};
+  const fallbackPositions = autoFlowSnippetPositions(nodes, edges);
+  const diagramNodes = nodes.map((node) => {
+    const position = numericPoint(rawPositions[node.id]) || fallbackPositions.get(node.id) || { x: 0, y: 0 };
+    const size = rawSizes[node.id] && typeof rawSizes[node.id] === "object" ? rawSizes[node.id] : {};
+    const rawWidth = Number(size.width);
+    const rawHeight = Number(size.height);
+    const width = Math.max(132, Math.min(210, Number.isFinite(rawWidth) ? rawWidth * 0.62 : 150));
+    const height = Math.max(48, Math.min(76, Number.isFinite(rawHeight) ? rawHeight * 0.46 : 54));
+    return { ...node, x: position.x, y: position.y, width, height };
+  });
+  const nodeById = new Map(diagramNodes.map((node) => [node.id, node]));
+  const diagramEdges = edges
+    .map((edge) => {
+      const sourceNode = nodeById.get(edge.sourceId);
+      const targetNode = nodeById.get(edge.targetId);
+      if (!sourceNode || !targetNode) return null;
+      const sx = sourceNode.x + sourceNode.width;
+      const sy = sourceNode.y + sourceNode.height / 2;
+      const tx = targetNode.x;
+      const ty = targetNode.y + targetNode.height / 2;
+      const curve = Math.max(48, Math.abs(tx - sx) * 0.45);
       return {
-        key: edge?.id || `${source}-${target}-${index}`,
-        source: idToTitle.get(source) || source || "?",
-        target: idToTitle.get(target) || target || "?",
-        label: flowSnippetEdgeLabel(edge),
+        ...edge,
+        path: `M ${sx} ${sy} C ${sx + curve} ${sy}, ${tx - curve} ${ty}, ${tx} ${ty}`,
+        labelX: (sx + tx) / 2,
+        labelY: (sy + ty) / 2,
       };
+    })
+    .filter(Boolean);
+  const bounds = diagramNodes.reduce(
+    (acc, node) => ({
+      minX: Math.min(acc.minX, node.x),
+      minY: Math.min(acc.minY, node.y),
+      maxX: Math.max(acc.maxX, node.x + node.width),
+      maxY: Math.max(acc.maxY, node.y + node.height),
     }),
+    { minX: 0, minY: 0, maxX: 420, maxY: 220 },
+  );
+  const pad = 36;
+  const viewBox = `${bounds.minX - pad} ${bounds.minY - pad} ${Math.max(360, bounds.maxX - bounds.minX + pad * 2)} ${Math.max(180, bounds.maxY - bounds.minY + pad * 2)}`;
+  return {
+    nodes,
+    edges,
+    diagram: { nodes: diagramNodes, edges: diagramEdges, viewBox },
   };
 }
 
@@ -269,6 +371,8 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const [nodeFileLoading, setNodeFileLoading] = useState("");
   const [nodeDeleteBusy, setNodeDeleteBusy] = useState("");
   const [nodeDeleteMessage, setNodeDeleteMessage] = useState("");
+  const [flowSnippetDeleteBusy, setFlowSnippetDeleteBusy] = useState("");
+  const [flowSnippetDeleteMessage, setFlowSnippetDeleteMessage] = useState("");
   const [hideCommunityLinks, setHideCommunityLinks] = useState(false);
   const [adminBuiltinBusy, setAdminBuiltinBusy] = useState("");
   const [adminBuiltinConfig, setAdminBuiltinConfig] = useState({ hiddenBuiltins: [], promoted: [] });
@@ -513,6 +617,30 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       setNodeDeleteMessage(String(e.message || e));
     } finally {
       setNodeDeleteBusy("");
+    }
+  }, [loadResources, t]);
+
+  const deleteFlowSnippet = useCallback(async (snippet) => {
+    const id = snippet?.id;
+    const version = snippet?.version || "1.0.0";
+    if (!id || !version) return;
+    if (!window.confirm(t("project:deleteMyFlowConfirm", { id, version }))) return;
+    const key = flowSnippetKey(snippet);
+    setFlowSnippetDeleteBusy(key);
+    setFlowSnippetDeleteMessage("");
+    setResourceError("");
+    try {
+      const params = new URLSearchParams({ id, version });
+      const res = await fetch(`/api/marketplace/flow-snippet?${params.toString()}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) throw new Error(json?.error || "Delete failed");
+      setFlowSnippetDeleteMessage(t("project:deleteMyFlowSuccess", { id, version }));
+      setSelectedResourceKey("");
+      await loadResources();
+    } catch (e) {
+      setFlowSnippetDeleteMessage(String(e.message || e));
+    } finally {
+      setFlowSnippetDeleteBusy("");
     }
   }, [loadResources, t]);
 
@@ -1544,43 +1672,64 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   <h4>{t("project:resourceMeaning")}</h4>
                   <p>{t("project:myFlowsMeaning")}</p>
                 </div>
+                <div className="af-resource-detail-section af-resource-danger-zone">
+                  <h4>{t("project:myFlowManagement")}</h4>
+                  <p>{t("project:deleteMyFlowHint")}</p>
+                  <button
+                    type="button"
+                    className="af-btn-secondary af-btn-danger"
+                    disabled={flowSnippetDeleteBusy === flowSnippetKey(selectedFlowSnippet)}
+                    onClick={() => deleteFlowSnippet(selectedFlowSnippet)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>delete</span>
+                    {flowSnippetDeleteBusy === flowSnippetKey(selectedFlowSnippet) ? t("project:deletingMyFlow") : t("project:deleteMyFlow")}
+                  </button>
+                  {flowSnippetDeleteMessage ? <p className="af-resource-action-message">{flowSnippetDeleteMessage}</p> : null}
+                </div>
                 <div className="af-resource-detail-section">
                   <h4>{t("project:flowSnippetPreview")}</h4>
-                  <div className="af-flow-snippet-preview">
-                    <div className="af-flow-snippet-preview__nodes">
-                      {preview.nodes.length > 0 ? (
-                        preview.nodes.map((node, index) => (
-                          <div key={`${node.id}-${index}`} className="af-flow-snippet-preview-node">
-                            <span className="af-flow-snippet-preview-node__index">{index + 1}</span>
-                            <div>
-                              <strong>{node.title}</strong>
-                              <span>{node.meta || node.id}</span>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="af-resource-detail-desc">{t("project:noFlowSnippetPreview")}</p>
-                      )}
+                  {preview.diagram.nodes.length > 0 ? (
+                    <div className="af-flow-snippet-map">
+                      <svg viewBox={preview.diagram.viewBox} role="img" aria-label={t("project:flowSnippetPreview")}>
+                        <defs>
+                          <marker id="af-flow-snippet-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                            <path d="M 0 0 L 8 4 L 0 8 z" />
+                          </marker>
+                        </defs>
+                        <g className="af-flow-snippet-map__edges">
+                          {preview.diagram.edges.map((edge) => (
+                            <g key={edge.key}>
+                              <path d={edge.path} />
+                              {edge.label ? (
+                                <text x={edge.labelX} y={edge.labelY - 5} textAnchor="middle">
+                                  {compactDiagramLabel(edge.label, 18)}
+                                </text>
+                              ) : null}
+                            </g>
+                          ))}
+                        </g>
+                        <g className="af-flow-snippet-map__nodes">
+                          {preview.diagram.nodes.map((node, index) => (
+                            <g key={node.id} transform={`translate(${node.x} ${node.y})`}>
+                              <rect width={node.width} height={node.height} rx="10" />
+                              <circle cx="19" cy={node.height / 2} r="12" />
+                              <text className="af-flow-snippet-map__node-index" x="19" y={node.height / 2 + 4} textAnchor="middle">
+                                {index + 1}
+                              </text>
+                              <text className="af-flow-snippet-map__node-title" x="40" y={node.height / 2 - 3}>
+                                {compactDiagramLabel(node.title)}
+                              </text>
+                              <text className="af-flow-snippet-map__node-meta" x="40" y={node.height / 2 + 16}>
+                                {compactDiagramLabel(node.meta || node.id, 20)}
+                              </text>
+                            </g>
+                          ))}
+                        </g>
+                      </svg>
                     </div>
-                    {preview.edges.length > 0 ? (
-                      <div className="af-flow-snippet-preview__edges">
-                        <h5>{t("project:flowSnippetEdges")}</h5>
-                        {preview.edges.slice(0, 12).map((edge) => (
-                          <div key={edge.key} className="af-flow-snippet-preview-edge">
-                            <span>{edge.source}</span>
-                            <i className="material-symbols-outlined" aria-hidden>arrow_forward</i>
-                            <span>{edge.target}</span>
-                            {edge.label ? <em>{edge.label}</em> : null}
-                          </div>
-                        ))}
-                        {preview.edges.length > 12 ? (
-                          <p className="af-flow-snippet-preview-more">
-                            {t("project:flowSnippetMoreEdges", { count: preview.edges.length - 12 })}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
+                  ) : (
+                    <p className="af-resource-detail-desc">{t("project:noFlowSnippetPreview")}</p>
+                  )}
                   <details className="af-flow-snippet-json">
                     <summary>{t("project:flowSnippetJson")}</summary>
                     <pre className="af-resource-skill-preview">

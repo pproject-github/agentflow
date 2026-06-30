@@ -1254,117 +1254,75 @@ button.af-project-card {
   font-size: 0.72rem;
 }
 
-.af-flow-snippet-preview {
-  display: grid;
-  gap: 0.8rem;
+.af-flow-snippet-map {
+  overflow: hidden;
   margin-top: 0.7rem;
+  border: 1px solid rgba(205, 189, 255, 0.12);
+  border-radius: 0.7rem;
+  background:
+    radial-gradient(circle at 16px 16px, rgba(205, 189, 255, 0.12) 1px, transparent 1px) 0 0 / 20px 20px,
+    rgba(0, 0, 0, 0.18);
 }
 
-.af-flow-snippet-preview__nodes {
-  display: grid;
-  gap: 0.45rem;
+.af-flow-snippet-map svg {
+  display: block;
+  width: 100%;
+  min-height: 15rem;
+  max-height: 20rem;
 }
 
-.af-flow-snippet-preview-node {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.55rem;
-  min-width: 0;
-  padding: 0.58rem;
-  border-radius: 0.55rem;
-  background: rgba(255, 255, 255, 0.045);
+.af-flow-snippet-map marker path {
+  fill: rgba(173, 143, 255, 0.78);
 }
 
-.af-flow-snippet-preview-node__index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.35rem;
-  height: 1.35rem;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: rgba(124, 77, 255, 0.18);
-  color: var(--af-primary);
-  font-size: 0.68rem;
+.af-flow-snippet-map__edges path {
+  fill: none;
+  stroke: rgba(173, 143, 255, 0.72);
+  stroke-linecap: round;
+  stroke-width: 2.5;
+  marker-end: url("#af-flow-snippet-arrow");
+}
+
+.af-flow-snippet-map__edges text {
+  fill: rgba(202, 195, 216, 0.52);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  paint-order: stroke;
+  stroke: rgba(15, 14, 18, 0.92);
+  stroke-width: 4px;
+}
+
+.af-flow-snippet-map__nodes rect {
+  fill: rgba(42, 39, 47, 0.96);
+  stroke: rgba(205, 189, 255, 0.28);
+  stroke-width: 1.4;
+}
+
+.af-flow-snippet-map__nodes circle {
+  fill: rgba(124, 77, 255, 0.28);
+  stroke: rgba(205, 189, 255, 0.16);
+}
+
+.af-flow-snippet-map__nodes text {
+  pointer-events: none;
+}
+
+.af-flow-snippet-map__node-index {
+  fill: rgba(229, 226, 225, 0.82);
+  font-size: 11px;
   font-weight: 800;
 }
 
-.af-flow-snippet-preview-node div {
-  display: grid;
-  gap: 0.12rem;
-  min-width: 0;
+.af-flow-snippet-map__node-title {
+  fill: rgba(229, 226, 225, 0.92);
+  font-size: 12px;
+  font-weight: 780;
 }
 
-.af-flow-snippet-preview-node strong {
-  overflow: hidden;
-  color: rgba(229, 226, 225, 0.9);
-  font-size: 0.78rem;
-  font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-flow-snippet-preview-node span:last-child {
-  overflow: hidden;
-  color: rgba(202, 195, 216, 0.48);
+.af-flow-snippet-map__node-meta {
+  fill: rgba(202, 195, 216, 0.48);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.64rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-flow-snippet-preview__edges {
-  display: grid;
-  gap: 0.35rem;
-  padding-top: 0.2rem;
-}
-
-.af-flow-snippet-preview__edges h5 {
-  margin: 0 0 0.15rem;
-  color: rgba(202, 195, 216, 0.48);
-  font-family: var(--af-headline);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.af-flow-snippet-preview-edge {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.42rem 0.5rem;
-  border-radius: 0.45rem;
-  background: rgba(0, 0, 0, 0.16);
-  color: rgba(229, 226, 225, 0.72);
-  font-size: 0.68rem;
-}
-
-.af-flow-snippet-preview-edge span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-flow-snippet-preview-edge i {
-  color: var(--af-primary);
-  font-size: 0.95rem !important;
-}
-
-.af-flow-snippet-preview-edge em {
-  grid-column: 1 / -1;
-  overflow: hidden;
-  color: rgba(202, 195, 216, 0.42);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.62rem;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-flow-snippet-preview-more {
-  margin-top: 0.25rem !important;
-  color: rgba(202, 195, 216, 0.48) !important;
+  font-size: 9px;
 }
 
 .af-flow-snippet-json {
