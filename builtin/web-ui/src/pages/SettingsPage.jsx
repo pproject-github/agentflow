@@ -116,6 +116,7 @@ export default function SettingsPage({ authUser }) {
   const [draftKey, setDraftKey] = useState("");
   const [draftVal, setDraftVal] = useState("");
   const [draftGlobal, setDraftGlobal] = useState(false);
+  const [visibleEnvIds, setVisibleEnvIds] = useState(() => new Set());
   const [opcodeDraft, setOpcodeDraft] = useState("");
   const [feedbackItems, setFeedbackItems] = useState([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
@@ -343,6 +344,19 @@ export default function SettingsPage({ authUser }) {
 
   const removeEnvRow = useCallback((id) => {
     setEnvRows((rows) => rows.filter((r) => r.id !== id));
+  }, []);
+
+  const updateEnvRow = useCallback((id, patch) => {
+    setEnvRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  }, []);
+
+  const toggleEnvValueVisible = useCallback((id) => {
+    setVisibleEnvIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }, []);
 
   const handleLanguageChange = useCallback((e) => {
@@ -600,24 +614,61 @@ export default function SettingsPage({ authUser }) {
                   </span>
                 </div>
 
-                <div className="af-set-env-rows">
+                <div className={"af-set-env-rows" + (authUser?.isAdmin ? " af-set-env-rows--admin" : "")}>
+                  <div className="af-set-env-row af-set-env-row--header" aria-hidden>
+                    <span>{t("settings:env.key")}</span>
+                    {authUser?.isAdmin ? <span>{t("settings:env.scope")}</span> : null}
+                    <span>{t("settings:env.value")}</span>
+                    <span></span>
+                  </div>
                   {envRows.map((row) => (
                     <div key={row.id} className={"af-set-env-row" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                       <div className="af-set-env-cell">
-                        <span className="af-set-env-k">{t("settings:env.key")}</span>
-                        <code className="af-set-code-key">{row.key || "—"}</code>
+                        <input
+                          className="af-set-env-inline af-set-env-inline--key"
+                          value={row.key}
+                          onChange={(e) => updateEnvRow(row.id, { key: e.target.value })}
+                          aria-label={t("settings:env.key")}
+                          spellCheck={false}
+                        />
                       </div>
                       {authUser?.isAdmin ? (
                         <div className="af-set-env-cell af-set-env-cell--scope">
-                          <span className="af-set-env-k">{t("settings:env.scope")}</span>
-                          <span className={"af-set-env-scope-badge af-set-env-scope-badge--" + (row.scope === "global" ? "global" : "user")}>
-                            {row.scope === "global" ? t("settings:env.global") : t("settings:env.personal")}
-                          </span>
+                          <div className="af-set-env-scope-switch" role="group" aria-label={t("settings:env.scope")}>
+                            <button
+                              type="button"
+                              className={row.scope !== "global" ? "is-active" : ""}
+                              onClick={() => updateEnvRow(row.id, { scope: "user" })}
+                            >
+                              {t("settings:env.personal")}
+                            </button>
+                            <button
+                              type="button"
+                              className={row.scope === "global" ? "is-active" : ""}
+                              onClick={() => updateEnvRow(row.id, { scope: "global" })}
+                            >
+                              {t("settings:env.global")}
+                            </button>
+                          </div>
                         </div>
                       ) : null}
-                      <div className="af-set-env-cell af-set-env-cell--grow">
-                        <span className="af-set-env-k">{t("settings:env.value")}</span>
-                        <code className="af-set-code-val">{maskValue(row.value)}</code>
+                      <div className="af-set-env-cell af-set-env-cell--grow af-set-env-cell--value">
+                        <input
+                          className="af-set-env-inline af-set-env-inline--value"
+                          type={visibleEnvIds.has(row.id) ? "text" : "password"}
+                          value={row.value}
+                          onChange={(e) => updateEnvRow(row.id, { value: e.target.value })}
+                          placeholder={maskValue(row.value) || t("settings:env.newValue")}
+                          aria-label={t("settings:env.value")}
+                        />
+                        <button
+                          type="button"
+                          className="af-set-env-value-toggle"
+                          onClick={() => toggleEnvValueVisible(row.id)}
+                          aria-label={visibleEnvIds.has(row.id) ? "Hide value" : "Show value"}
+                        >
+                          <span className="material-symbols-outlined">{visibleEnvIds.has(row.id) ? "visibility_off" : "visibility"}</span>
+                        </button>
                       </div>
                       <div className="af-set-env-actions">
                         <button
@@ -635,7 +686,7 @@ export default function SettingsPage({ authUser }) {
                   <div className={"af-set-env-row af-set-env-row--draft" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                     <div className="af-set-env-cell">
                       <input
-                        className="af-set-input af-set-input--dashed af-set-input--mono"
+                        className="af-set-env-inline af-set-env-inline--key"
                         placeholder="KEY_NAME"
                         value={draftKey}
                         onChange={(e) => setDraftKey(e.target.value)}
@@ -643,21 +694,28 @@ export default function SettingsPage({ authUser }) {
                       />
                     </div>
                     {authUser?.isAdmin ? (
-                      <label className="af-set-env-cell af-set-env-cell--scope af-set-env-global-toggle">
-                        <span className="af-set-env-k">{t("settings:env.scope")}</span>
-                        <span>
-                          <input
-                            type="checkbox"
-                            checked={draftGlobal}
-                            onChange={(e) => setDraftGlobal(e.target.checked)}
-                          />
-                          {t("settings:env.global")}
-                        </span>
-                      </label>
+                      <div className="af-set-env-cell af-set-env-cell--scope">
+                        <div className="af-set-env-scope-switch" role="group" aria-label={t("settings:env.scope")}>
+                          <button
+                            type="button"
+                            className={!draftGlobal ? "is-active" : ""}
+                            onClick={() => setDraftGlobal(false)}
+                          >
+                            {t("settings:env.personal")}
+                          </button>
+                          <button
+                            type="button"
+                            className={draftGlobal ? "is-active" : ""}
+                            onClick={() => setDraftGlobal(true)}
+                          >
+                            {t("settings:env.global")}
+                          </button>
+                        </div>
+                      </div>
                     ) : null}
-                    <div className="af-set-env-cell af-set-env-cell--grow">
+                    <div className="af-set-env-cell af-set-env-cell--grow af-set-env-cell--value">
                       <input
-                        className="af-set-input af-set-input--dashed af-set-input--mono"
+                        className="af-set-env-inline af-set-env-inline--value"
                         type="password"
                         placeholder={t("settings:env.newValue")}
                         value={draftVal}
