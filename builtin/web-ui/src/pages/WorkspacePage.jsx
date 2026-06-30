@@ -25,6 +25,7 @@ import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
+import { useCanvasHistory } from "../useCanvasHistory.js";
 import {
   areSlotsCompatible,
   getHandleColor,
@@ -404,7 +405,7 @@ function graphToFlow(graph, palette) {
       id,
       type: FLOW_NODE_TYPE,
       position: pos,
-      ...(isDisplay && size ? { width: size.width, height: size.height } : {}),
+      ...(size ? { width: size.width, height: size.height } : {}),
       data: {
         label: inst.label || labelForDefinition(def) || labelForDefinition(runtimeDef) || id,
         definitionId: runtimeDefinitionId,
@@ -446,12 +447,11 @@ function flowToGraph(nodes, edges, instances) {
   const nodeSizes = {};
   for (const node of nodes) {
     nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
-    if (displayKind(node.data?.definitionId)) {
-      const width = Number(node.data?.displaySize?.width || node.width || node.measured?.width || 0);
-      const height = Number(node.data?.displaySize?.height || node.height || node.measured?.height || 0);
-      if (width > 0 && height > 0) {
-        nodeSizes[node.id] = { width, height };
-      }
+    const isDisplay = Boolean(displayKind(node.data?.definitionId));
+    const width = Number(node.data?.displaySize?.width || node.width || (isDisplay ? node.measured?.width : 0) || 0);
+    const height = Number(node.data?.displaySize?.height || node.height || (isDisplay ? node.measured?.height : 0) || 0);
+    if (width > 0 && height > 0) {
+      nodeSizes[node.id] = { width, height };
     }
   }
   return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes } };
@@ -493,11 +493,13 @@ function displayContent(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
   const kind = displayKind(data?.definitionId);
   const primaryName = kind === "image" ? "src" : "content";
+  const slotText = (slot) => String(slot?.value ?? slot?.default ?? "");
+  const hasSlotText = (slot) => slotText(slot).trim();
   const contentSlot =
-    slots.find((slot) => slot?.name === primaryName && String(slot?.default || "").trim()) ||
-    slots.find((slot) => slot?.name === "filePath" && String(slot?.default || "").trim()) ||
-    slots.find((slot) => slot?.type === "text" && String(slot?.default || "").trim());
-  return String(data?.body || contentSlot?.default || "");
+    slots.find((slot) => slot?.name === primaryName && hasSlotText(slot)) ||
+    slots.find((slot) => slot?.name === "filePath" && hasSlotText(slot)) ||
+    slots.find((slot) => slot?.type === "text" && hasSlotText(slot));
+  return String(data?.body || (contentSlot ? slotText(contentSlot) : ""));
 }
 
 function normalizeHtmlDisplayContent(content) {
@@ -536,7 +538,7 @@ function normalizeHtmlDisplayContent(content) {
 function displayAltText(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
   const altSlot = slots.find((slot) => slot?.name === "alt");
-  return String(altSlot?.default || data?.label || "Image preview");
+  return String(altSlot?.value || altSlot?.default || data?.label || "Image preview");
 }
 
 function displayIcon(kind) {
@@ -899,7 +901,7 @@ function DisplayBody({ data, htmlFrameRef, htmlFrameVersion = 0 }) {
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
           title={data?.label || "HTML preview"}
-          sandbox=""
+          sandbox="allow-scripts allow-forms allow-modals"
           srcDoc={content}
         />
       </VisibleScrollFrame>
@@ -952,9 +954,15 @@ function WorkspaceNodeChat({ nodeId, data }) {
   const chat = data?.nodeChat || {};
   const messages = Array.isArray(chat.messages) ? chat.messages : [];
   const draft = String(chat.draft || "");
+  const [localDraft, setLocalDraft] = useState(draft);
+  const composingDraftRef = useRef(false);
   const candidate = String(chat.candidateContent || "");
   const running = Boolean(chat.running);
   const error = String(chat.error || "");
+
+  useEffect(() => {
+    if (!composingDraftRef.current) setLocalDraft(draft);
+  }, [draft]);
 
   if (!active && !selected) return null;
 
@@ -1007,22 +1015,36 @@ function WorkspaceNodeChat({ nodeId, data }) {
         <textarea
           className="af-work-node-chat__input"
           rows={2}
-          value={draft}
+          value={localDraft}
           disabled={running}
           placeholder="描述你想怎么调整这个展示"
-          onChange={(event) => data?.onUpdateNodeChatDraft?.(nodeId, event.target.value)}
+          onCompositionStart={() => {
+            composingDraftRef.current = true;
+          }}
+          onCompositionEnd={(event) => {
+            composingDraftRef.current = false;
+            const next = event.currentTarget.value;
+            setLocalDraft(next);
+            data?.onUpdateNodeChatDraft?.(nodeId, next);
+          }}
+          onChange={(event) => {
+            const next = event.target.value;
+            setLocalDraft(next);
+            if (!composingDraftRef.current) data?.onUpdateNodeChatDraft?.(nodeId, next);
+          }}
           onKeyDown={(event) => {
+            if (event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229) return;
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.preventDefault();
-              data?.onSendNodeChat?.(nodeId);
+              data?.onSendNodeChat?.(nodeId, localDraft);
             }
           }}
         />
         <button
           type="button"
           className="af-work-node-chat__send"
-          disabled={running || !draft.trim()}
-          onClick={() => data?.onSendNodeChat?.(nodeId)}
+          disabled={running || !localDraft.trim()}
+          onClick={() => data?.onSendNodeChat?.(nodeId, localDraft)}
           aria-label="发送"
         >
           <span className="material-symbols-outlined" aria-hidden>arrow_upward</span>
@@ -1083,9 +1105,24 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const kind = displayKind(data?.definitionId);
   const htmlFrameRef = useRef(null);
   const [htmlFrameVersion, setHtmlFrameVersion] = useState(0);
+  const [resizingDisplay, setResizingDisplay] = useState(false);
   const [markdownEditing, setMarkdownEditing] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState("");
   const markdownContent = kind === "markdown" ? displayContent(data) : "";
+  useEffect(() => {
+    if (!resizingDisplay) return undefined;
+    const stop = () => setResizingDisplay(false);
+    window.addEventListener("pointerup", stop, true);
+    window.addEventListener("pointercancel", stop, true);
+    window.addEventListener("mouseup", stop, true);
+    window.addEventListener("blur", stop);
+    return () => {
+      window.removeEventListener("pointerup", stop, true);
+      window.removeEventListener("pointercancel", stop, true);
+      window.removeEventListener("mouseup", stop, true);
+      window.removeEventListener("blur", stop);
+    };
+  }, [resizingDisplay]);
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
@@ -1099,6 +1136,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         "af-work-display-card" +
         (displaySize ? " af-work-display-card--sized" : "") +
         (selected ? " af-work-display-card--selected" : "") +
+        (resizingDisplay ? " af-work-display-card--resizing" : "") +
         (data?.isExecuting ? " af-work-display-card--executing" : "") +
         (data?.nodeStatus === "success" ? " af-work-display-card--done" : "") +
         (data?.nodeStatus === "failed" ? " af-work-display-card--failed" : "")
@@ -1112,6 +1150,8 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         minHeight={180}
         maxWidth={1200}
         maxHeight={1000}
+        onResizeStart={() => setResizingDisplay(true)}
+        onResizeEnd={() => setResizingDisplay(false)}
       >
         <span className="material-symbols-outlined" aria-hidden>open_in_full</span>
       </NodeResizeControl>
@@ -1437,6 +1477,18 @@ function collectDirectoryPaths(files, out = []) {
     if (Array.isArray(item.children)) collectDirectoryPaths(item.children, out);
   }
   return out;
+}
+
+function parentDirectoryPaths(relPath) {
+  const parts = String(relPath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+  const dirs = [];
+  for (let i = 1; i < parts.length; i++) {
+    dirs.push(parts.slice(0, i).join("/"));
+  }
+  return dirs;
 }
 
 function FileTree({ items, onOpen, collapsedDirs, onToggleDir, onCreateFile, onCreateFolder, onDelete, onFileDragStart }) {
@@ -2146,7 +2198,7 @@ function WorkspacePageInner() {
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
-  const [composerMinimized, setComposerMinimized] = useState(false);
+  const [composerMinimized, setComposerMinimized] = useState(true);
   const [activeNodeChatId, setActiveNodeChatId] = useState("");
   const [nodeChatSessions, setNodeChatSessions] = useState({});
   const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(false);
@@ -2171,6 +2223,7 @@ function WorkspacePageInner() {
     setComposerMessages([]);
     setComposerRunSessions([]);
     setActiveComposerSessionId("workspace");
+    setComposerMinimized(true);
   }, [flowParams]);
 
   const loadFiles = useCallback(async () => {
@@ -2215,6 +2268,32 @@ function WorkspacePageInner() {
     setStatus("Workspace graph saved");
   }, [edges, flowParams, nodes]);
 
+  const restoreCanvasSnapshot = useCallback((snapshot) => {
+    const nextInstances = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
+      ? snapshot.extra.instances
+      : {};
+    instancesRef.current = nextInstances;
+    setInstances(nextInstances);
+    setNodes(Array.isArray(snapshot?.nodes) ? snapshot.nodes : []);
+    setEdges(Array.isArray(snapshot?.edges) ? snapshot.edges : []);
+    setSelectedNodeId("");
+    setConnectionMenu(null);
+  }, [setEdges, setNodes]);
+
+  const canvasHistoryExtra = useMemo(() => ({ instances }), [instances]);
+  const canvasHistory = useCanvasHistory({
+    nodes,
+    edges,
+    extra: canvasHistoryExtra,
+    enabled: loadedRef.current,
+    onRestore: restoreCanvasSnapshot,
+  });
+  const {
+    resetHistory: resetCanvasHistory,
+    undo: undoCanvas,
+    redo: redoCanvas,
+  } = canvasHistory;
+
   const loadWorkspace = useCallback(async () => {
     loadedRef.current = false;
     const q = flowParamsQuery(flowParams);
@@ -2242,9 +2321,10 @@ function WorkspacePageInner() {
     setInstances(flow.instances);
     setNodes(flow.nodes);
     setEdges(flow.edges);
+    resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     setStatus(graphJson.writable ? "Workspace ready" : "Readonly workspace");
     loadedRef.current = true;
-  }, [flowParams, i18n.language, loadFiles, setEdges, setNodes]);
+  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes]);
 
   const publishNodeToMarketplace = useCallback(
     async (draft, definitionId) => {
@@ -2277,7 +2357,6 @@ function WorkspacePageInner() {
 
   const openComposerLogPanel = useCallback((sessionId = "workspace") => {
     setComposerSidebarOpen(true);
-    setComposerMinimized(false);
     setNodePropDraft(null);
     setActiveComposerSessionId(sessionId || "workspace");
   }, []);
@@ -3037,11 +3116,11 @@ function WorkspacePageInner() {
     setDisplayNodeContent(id, candidate, mode);
   }, [nodeChatSessions, setDisplayNodeContent]);
 
-  const sendNodeChat = useCallback(async (nodeId) => {
+  const sendNodeChat = useCallback(async (nodeId, messageOverride = undefined) => {
     const id = String(nodeId || "").trim();
     if (!id) return;
     const session = nodeChatSessions[id] || {};
-    const message = String(session.draft || "").trim();
+    const message = String(messageOverride !== undefined ? messageOverride : session.draft || "").trim();
     if (!message || session.running) return;
     const node = nodesRef.current.find((item) => item.id === id);
     if (!node) return;
@@ -3125,8 +3204,21 @@ function WorkspacePageInner() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "保存文件失败");
-      setStatus(`已保存 ${json.path || relPath}`);
+      const savedPath = json.path || relPath;
+      const verifyQuery = flowParamsQuery(flowParams);
+      verifyQuery.set("path", savedPath);
+      const verifyRes = await fetch(`/api/workspace/file?${verifyQuery.toString()}`);
+      if (!verifyRes.ok) {
+        const verifyJson = await verifyRes.json().catch(() => ({}));
+        throw new Error(verifyJson.error || `保存后读取失败：${savedPath}`);
+      }
       await loadFiles();
+      setCollapsedDirs((prev) => {
+        const next = new Set(prev);
+        for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
+        return next;
+      });
+      setStatus(`已保存 ${savedPath}`);
     } catch (e) {
       setStatus(String(e.message || e));
     }
@@ -3669,9 +3761,18 @@ function WorkspacePageInner() {
     }
     setNodes((current) => applyNodeChanges(changes, current).map((node) => {
       const size = resized.get(node.id);
-      if (!size || !displayKind(node.data?.definitionId)) return node;
+      if (!size) return node;
+      if (!displayKind(node.data?.definitionId)) {
+        return {
+          ...node,
+          width: size.width,
+          height: size.height,
+        };
+      }
       return {
         ...node,
+        width: size.width,
+        height: size.height,
         data: {
           ...node.data,
           displaySize: size,
@@ -3856,6 +3957,18 @@ function WorkspacePageInner() {
         return;
       }
       if (editable) return;
+      const shortcutKey = event.key.toLowerCase();
+      const wantsUndo = (event.metaKey || event.ctrlKey) && !event.shiftKey && shortcutKey === "z";
+      const wantsRedo =
+        (event.metaKey || event.ctrlKey) &&
+        ((event.shiftKey && shortcutKey === "z") || shortcutKey === "y");
+      if (wantsUndo || wantsRedo) {
+        event.preventDefault();
+        event.stopPropagation();
+        const changed = wantsUndo ? undoCanvas() : redoCanvas();
+        setStatus(changed ? (wantsUndo ? "Undo canvas change" : "Redo canvas change") : (wantsUndo ? "Nothing to undo" : "Nothing to redo"));
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
         const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
         if (clip) {
@@ -3908,7 +4021,7 @@ function WorkspacePageInner() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [saveGraph, shortcutsOpen, setEdges, setNodes]);
+  }, [redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas]);
 
   const toggleDir = useCallback((dirPath) => {
     setCollapsedDirs((prev) => {
@@ -3935,10 +4048,16 @@ function WorkspacePageInner() {
     event.dataTransfer.setData("text/plain", def.id);
   }, []);
 
-  const addMarkdownDisplayFromFile = useCallback(async (item, position) => {
-    const def = palette.find((node) => node.id === "display_markdown");
+  const addDisplayFromFile = useCallback(async (item, position) => {
+    const ext = String(item?.name || item?.path || "").toLowerCase().split(".").pop();
+    const displayDefinitionId = ext === "html"
+      ? "display_html"
+      : ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
+        ? "display_image"
+        : "display_markdown";
+    const def = palette.find((node) => node.id === displayDefinitionId);
     if (!def) {
-      setStatus("Markdown Display 节点不可用");
+      setStatus("展示节点不可用");
       return;
     }
     const q = flowParamsQuery(flowParams);
@@ -3947,25 +4066,26 @@ function WorkspacePageInner() {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "读取文件失败");
     const content = String(json.content || "");
+    const primaryName = displayDefinitionId === "display_image" ? "src" : "content";
     const inputs = cloneSlots(def.inputs).map((slot) => (
-      slot.name === "content" ? { ...slot, default: content } : slot
+      slot.name === primaryName ? { ...slot, default: content, value: content } : slot
     ));
     const outputs = cloneSlots(def.outputs).map((slot) => (
-      slot.name === "content" ? { ...slot, default: content } : slot
+      slot.name === primaryName ? { ...slot, default: content, value: content } : slot
     ));
     addNodeFromDefinition(def, {
-      label: item.name || "Markdown",
+      label: item.name || "Display",
       body: content,
       inputs,
       outputs,
       position,
     });
-    setStatus(`已创建 Markdown 展示：${item.path}`);
+    setStatus(`已创建展示：${item.path}`);
   }, [addNodeFromDefinition, flowParams, palette]);
 
   const openFileNode = useCallback((item) => {
-    addMarkdownDisplayFromFile(item, defaultWorkspaceNodePosition()).catch((e) => setStatus(String(e.message || e)));
-  }, [addMarkdownDisplayFromFile, defaultWorkspaceNodePosition]);
+    addDisplayFromFile(item, defaultWorkspaceNodePosition()).catch((e) => setStatus(String(e.message || e)));
+  }, [addDisplayFromFile, defaultWorkspaceNodePosition]);
 
   const handleWorkspaceDrop = useCallback((event) => {
     const raw = event.dataTransfer.getData("application/x-agentflow-workspace-file");
@@ -3979,7 +4099,7 @@ function WorkspacePageInner() {
       }
       if (!item?.path) return;
       const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addMarkdownDisplayFromFile(item, position).catch((e) => setStatus(String(e.message || e)));
+      addDisplayFromFile(item, position).catch((e) => setStatus(String(e.message || e)));
       return;
     }
 
@@ -4000,7 +4120,7 @@ function WorkspacePageInner() {
     event.preventDefault();
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     addNodeFromDefinition(def, { position });
-  }, [addMarkdownDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow]);
+  }, [addDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow]);
 
   const handleWorkspaceDragOver = useCallback((event) => {
     const types = Array.from(event.dataTransfer.types || []);
@@ -4025,8 +4145,13 @@ function WorkspacePageInner() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "创建文件失败");
-      setStatus(`已创建 ${json.path}`);
       await loadFiles();
+      setCollapsedDirs((prev) => {
+        const next = new Set(prev);
+        for (const dir of parentDirectoryPaths(json.path || relPath)) next.delete(dir);
+        return next;
+      });
+      setStatus(`已创建 ${json.path}`);
     } catch (e) {
       setStatus(String(e.message || e));
     }
@@ -4044,13 +4169,14 @@ function WorkspacePageInner() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "创建文件夹失败");
+      await loadFiles();
       setCollapsedDirs((prev) => {
         const next = new Set(prev);
-        if (baseDir) next.delete(baseDir);
+        for (const dir of parentDirectoryPaths(json.path || relPath)) next.delete(dir);
+        if (json.path) next.delete(json.path);
         return next;
       });
       setStatus(`已创建 ${json.path}`);
-      await loadFiles();
     } catch (e) {
       setStatus(String(e.message || e));
     }

@@ -107,6 +107,14 @@ export function KeyboardShortcutsModal({ open, onClose }) {
                 <span className="af-shortcuts-row__label">{t("flow:shortcuts.selectAll")}</span>
                 <KeyCombo keys={[mod, "A"]} />
               </li>
+              <li className="af-shortcuts-row">
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.undo")}</span>
+                <KeyCombo keys={[mod, "Z"]} />
+              </li>
+              <li className="af-shortcuts-row">
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.redo")}</span>
+                <KeyCombo keys={[mod, "Shift", "Z"]} />
+              </li>
             </ul>
           </section>
         </div>

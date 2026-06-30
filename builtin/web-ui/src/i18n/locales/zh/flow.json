@@ -178,7 +178,9 @@
     "selectTool": "选择工具",
     "panTool": "平移工具",
     "holdSpacePan": "按住空格临时平移",
-    "selectAll": "全选所有节点"
+    "selectAll": "全选所有节点",
+    "undo": "撤销画布修改",
+    "redo": "重做画布修改"
   },
   "jumpPalette": {
     "title": "跳转到节点",
