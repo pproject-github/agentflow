@@ -449,6 +449,24 @@ export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = 
   return { ok: true, id, version, packageDir };
 }
 
+export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version) {
+  const packageDir = resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version);
+  if (!packageDir) return { ok: false, error: "Invalid flow snippet id or version" };
+  if (!fs.existsSync(path.join(packageDir, FLOW_SNIPPET_MANIFEST))) {
+    return { ok: false, error: `Flow snippet package not found: ${id}@${version}` };
+  }
+  fs.rmSync(packageDir, { recursive: true, force: true });
+  const versionRoot = path.dirname(packageDir);
+  try {
+    if (fs.existsSync(versionRoot) && fs.readdirSync(versionRoot).length === 0) {
+      fs.rmdirSync(versionRoot);
+    }
+  } catch {
+    /* keep non-empty or unreadable parent */
+  }
+  return { ok: true, id, version, packageDir };
+}
+
 export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData) {
   if (!flowData || !flowData.instances || typeof flowData.instances !== "object") return null;
   const nodes = {};

@@ -77,6 +77,7 @@ import { runNodeScript } from "./pipeline-scripts.mjs";
 import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
 import {
+  deleteMarketplaceFlowSnippetPackage,
   deleteMarketplaceNodePackage,
   installFlowDependency,
   listMarketplaceFlowSnippets,
@@ -3842,6 +3843,22 @@ export function startUiServer({
       }
       try {
         const result = deleteMarketplaceNodePackage(root, id, version, userCtx);
+        json(res, result.ok ? 200 : 400, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/marketplace/flow-snippet") {
+      const id = url.searchParams.get("id") || "";
+      const version = url.searchParams.get("version") || "";
+      if (!id || !version) {
+        json(res, 400, { ok: false, error: "Missing flow snippet id or version" });
+        return;
+      }
+      try {
+        const result = deleteMarketplaceFlowSnippetPackage(root, id, version);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
