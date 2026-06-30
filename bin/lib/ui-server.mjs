@@ -136,11 +136,22 @@ const BUILTIN_SKILL_COLLECTIONS = [
       "agentflow-workspace-markdown",
       "agentflow-workspace-mermaid",
       "agentflow-workspace-ascii",
+      "agentflow-workspace-chart",
+      "agentflow-workspace-table",
       "agentflow-node-reference",
       "agentflow-placeholder-reference",
       "agentflow-runtime-reference",
     ],
     legacyDefaultKeys: [
+      [
+        "agentflow-workspace-graph",
+        "agentflow-workspace-markdown",
+        "agentflow-workspace-mermaid",
+        "agentflow-workspace-ascii",
+        "agentflow-node-reference",
+        "agentflow-placeholder-reference",
+        "agentflow-runtime-reference",
+      ],
       [
         "agentflow-flow-add-instances",
         "agentflow-flow-edit-node-fields",
@@ -1420,20 +1431,123 @@ function workspaceUnescapeLooseJsonString(value) {
     .trim();
 }
 
+function workspaceFindMatchingDelimiter(text, openIndex, openChar = "{", closeChar = "}") {
+  const raw = String(text || "");
+  if (raw[openIndex] !== openChar) return -1;
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let i = openIndex; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === openChar) depth += 1;
+    if (ch === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function workspaceParseLooseJsonValue(text, startIndex, limitIndex = String(text || "").length) {
+  const raw = String(text || "");
+  let i = startIndex;
+  while (i < limitIndex && /\s/.test(raw[i])) i += 1;
+  if (i >= limitIndex) return { value: "", end: i };
+  const ch = raw[i];
+  if (ch === "{" || ch === "[") {
+    const close = workspaceFindMatchingDelimiter(raw, i, ch, ch === "{" ? "}" : "]");
+    const end = close >= 0 ? close + 1 : limitIndex;
+    const slice = raw.slice(i, end).trim();
+    try {
+      return { value: workspaceStringifyOutputValue(JSON.parse(slice)), end };
+    } catch {
+      return { value: slice, end };
+    }
+  }
+  if (ch === '"' || ch === "'") {
+    const quote = ch;
+    let escaped = false;
+    let end = i + 1;
+    for (; end < limitIndex; end += 1) {
+      const c = raw[end];
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === quote) {
+        break;
+      }
+    }
+    const body = raw.slice(i + 1, end < limitIndex ? end : limitIndex);
+    return { value: workspaceUnescapeLooseJsonString(body), end: Math.min(end + 1, limitIndex) };
+  }
+  let end = i;
+  while (end < limitIndex && raw[end] !== "," && raw[end] !== "\n" && raw[end] !== "\r" && raw[end] !== "}") end += 1;
+  const slice = raw.slice(i, end).trim().replace(/^["'`]|["'`]$/g, "");
+  return { value: workspaceUnescapeLooseJsonString(slice), end };
+}
+
 function workspaceExtractLooseOutParams(raw) {
   const text = String(raw || "");
   const out = {};
   const startMatch = /["']outParams["']\s*:\s*\{/i.exec(text);
   if (!startMatch) return out;
-  const start = startMatch.index + startMatch[0].length;
-  const end = text.indexOf("}", start);
-  const block = end >= start ? text.slice(start, end) : text.slice(start);
-  const pairRe = /["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,\n\r}]+))/g;
-  let match;
-  while ((match = pairRe.exec(block))) {
-    const key = String(match[1] || "").trim();
-    const value = match[2] ?? match[3] ?? match[4] ?? "";
-    if (key) out[key] = workspaceUnescapeLooseJsonString(value).replace(/^["'`]|["'`]$/g, "").trim();
+  const openIndex = text.indexOf("{", startMatch.index);
+  const closeIndex = workspaceFindMatchingDelimiter(text, openIndex);
+  const endLimit = closeIndex >= 0 ? closeIndex : text.length;
+  const block = text.slice(openIndex, closeIndex >= 0 ? closeIndex + 1 : text.length);
+  try {
+    const parsed = JSON.parse(block);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        const name = String(key || "").trim();
+        if (name) out[name] = workspaceStringifyOutputValue(value);
+      }
+      return out;
+    }
+  } catch {
+    /* fall through to loose top-level scanning */
+  }
+  let i = openIndex + 1;
+  while (i < endLimit) {
+    while (i < endLimit && /[\s,]/.test(text[i])) i += 1;
+    if (i >= endLimit) break;
+    let key = "";
+    if (text[i] === '"' || text[i] === "'") {
+      const quote = text[i];
+      const keyStart = i + 1;
+      i = keyStart;
+      while (i < endLimit && text[i] !== quote) i += 1;
+      key = text.slice(keyStart, i).trim();
+      i += 1;
+    } else {
+      const keyStart = i;
+      while (i < endLimit && /[A-Za-z0-9_-]/.test(text[i])) i += 1;
+      key = text.slice(keyStart, i).trim();
+    }
+    while (i < endLimit && /\s/.test(text[i])) i += 1;
+    if (text[i] !== ":") {
+      i += 1;
+      continue;
+    }
+    i += 1;
+    const parsedValue = workspaceParseLooseJsonValue(text, i, endLimit);
+    if (key) out[key] = String(parsedValue.value ?? "").trim();
+    i = parsedValue.end;
   }
   return out;
 }

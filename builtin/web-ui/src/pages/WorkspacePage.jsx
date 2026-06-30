@@ -392,8 +392,18 @@ function nodeHandleSignature(node) {
 
 function workspaceNodeLayoutSignature(node) {
   const data = node?.data || {};
+  const displaySize = data?.displaySize && typeof data.displaySize === "object" ? data.displaySize : {};
+  const nodeSize = data?.nodeSize && typeof data.nodeSize === "object" ? data.nodeSize : {};
   return [
     nodeHandleSignature(node),
+    Number(node?.width || 0) || "",
+    Number(node?.height || 0) || "",
+    Number(node?.measured?.width || 0) || "",
+    Number(node?.measured?.height || 0) || "",
+    Number(nodeSize.width || 0) || "",
+    Number(nodeSize.height || 0) || "",
+    Number(displaySize.width || 0) || "",
+    Number(displaySize.height || 0) || "",
     data?.isExecuting ? "executing" : "",
     data?.nodeStatus || "",
     data?.runningRunNodeId || "",
@@ -441,6 +451,7 @@ function graphToFlow(graph, palette) {
         model: inst.model || undefined,
         body: inst.body || "",
         script: inst.script || "",
+        ...(size ? { nodeSize: size } : {}),
         ...(isDisplay && size ? { displaySize: size } : {}),
       },
     };
@@ -461,8 +472,8 @@ function graphToFlow(graph, palette) {
 
 function persistedWorkspaceNodeSize(node) {
   const isDisplay = Boolean(displayKind(node?.data?.definitionId));
-  const width = Number(node?.data?.displaySize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
-  const height = Number(node?.data?.displaySize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
+  const width = Number(node?.data?.displaySize?.width || node?.data?.nodeSize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
+  const height = Number(node?.data?.displaySize?.height || node?.data?.nodeSize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
   if (width > 0 && height > 0) return { width: Math.round(width), height: Math.round(height) };
   return null;
 }
@@ -1598,6 +1609,9 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
+  const nodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
+    ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
+    : null;
   const deleteNode = useCallback((nodeId) => {
     setNodes((list) => list.filter((node) => node.id !== nodeId));
     setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
@@ -1662,7 +1676,7 @@ function WorkspaceFlowNode(props) {
     );
   }
   return (
-    <div className="af-work-flow-node">
+    <div className="af-work-flow-node" style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}>
       <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} onProvideValueChange={onProvideValueChange} onNodeBodyChange={onNodeBodyChange} onNodeImagesChange={onNodeImagesChange} />
     </div>
   );
@@ -4132,6 +4146,7 @@ function WorkspacePageInner() {
         });
       }
     }
+    const resizedIds = Array.from(resized.keys());
     setNodes((current) => applyNodeChanges(changes, current).map((node) => {
       const size = resized.get(node.id);
       if (!size) return node;
@@ -4140,6 +4155,10 @@ function WorkspacePageInner() {
           ...node,
           width: size.width,
           height: size.height,
+          data: {
+            ...node.data,
+            nodeSize: size,
+          },
         };
       }
       return {
@@ -4148,11 +4167,17 @@ function WorkspacePageInner() {
         height: size.height,
         data: {
           ...node.data,
+          nodeSize: size,
           displaySize: size,
         },
       };
     }));
-  }, [setNodes]);
+    if (resizedIds.length > 0) {
+      const refresh = () => resizedIds.forEach((id) => updateNodeInternals(id));
+      window.requestAnimationFrame(refresh);
+      window.setTimeout(refresh, 80);
+    }
+  }, [setNodes, updateNodeInternals]);
 
   const defaultWorkspaceNodePosition = useCallback(() => {
     const wrap = document.querySelector(".af-workspace-canvas .react-flow");
