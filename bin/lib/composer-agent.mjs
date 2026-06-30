@@ -5,8 +5,9 @@
  *   用户 prompt → planner 分解 → [script 直执 | agent 子调用(按复杂度选模型)] → sync UI
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
-import { getAgentflowDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
+import { getAgentflowDataRoot, getAgentflowUserDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
 import { readUserEnvObject } from "./user-env.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
 import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
@@ -24,9 +25,68 @@ const MAX_PROMPT_CHARS = 500_000;
 const MAX_COMPOSER_VALIDATION_REPAIR = 5;
 const MAX_SCRIPT_INJECT_BYTES = 30_000;
 
+function readJsonObject(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function readUserMcpPrivateEnvObject(userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  const data = readJsonObject(path.join(getAgentflowUserDataRoot(safe), "mcp-private.json"));
+  const servers = data?.servers && typeof data.servers === "object" && !Array.isArray(data.servers) ? data.servers : {};
+  const env = {};
+  for (const server of Object.values(servers)) {
+    const serverEnv = server?.env && typeof server.env === "object" && !Array.isArray(server.env) ? server.env : {};
+    for (const [key, value] of Object.entries(serverEnv)) {
+      const envKey = String(key || "").trim();
+      if (envKey) env[envKey] = String(value ?? "");
+    }
+  }
+  return env;
+}
+
+function pruneCursorMcpPrivateEnvPlaceholders() {
+  const filePath = path.join(os.homedir(), ".cursor", "mcp.json");
+  const config = readJsonObject(filePath);
+  const servers = config?.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
+    ? config.mcpServers
+    : null;
+  if (!servers) return;
+  let changed = false;
+  const nextServers = {};
+  for (const [name, raw] of Object.entries(servers)) {
+    const server = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : raw;
+    const privateEnvKeys = Array.isArray(server?.__agentflowPrivateKeys?.env)
+      ? server.__agentflowPrivateKeys.env.map((key) => String(key || "").trim()).filter(Boolean)
+      : [];
+    if (!privateEnvKeys.length || !server?.env || typeof server.env !== "object" || Array.isArray(server.env)) {
+      nextServers[name] = server;
+      continue;
+    }
+    const nextEnv = { ...server.env };
+    for (const key of privateEnvKeys) {
+      if (Object.prototype.hasOwnProperty.call(nextEnv, key) && String(nextEnv[key] ?? "") === "") {
+        delete nextEnv[key];
+        changed = true;
+      }
+    }
+    nextServers[name] = { ...server, env: nextEnv };
+    if (Object.keys(nextEnv).length === 0) delete nextServers[name].env;
+  }
+  if (!changed) return;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ ...config, mcpServers: nextServers }, null, 2) + "\n", "utf-8");
+}
+
 function agentflowUserEnv(userId) {
   const safe = sanitizeAgentflowUserId(userId);
-  return safe ? { ...readUserEnvObject(safe), AGENTFLOW_USER_ID: safe } : {};
+  pruneCursorMcpPrivateEnvPlaceholders();
+  return safe ? { ...readUserEnvObject(safe), ...readUserMcpPrivateEnvObject(safe), AGENTFLOW_USER_ID: safe } : {};
 }
 
 // ─── script 内容注入辅助 ─────────────────────────────────────────────────

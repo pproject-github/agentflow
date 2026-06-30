@@ -230,6 +230,18 @@ function buildPaletteNode(def, id, position, instances, palette) {
   return mergeNodeWithPalette(raw, instances, palette);
 }
 
+function nodeHandleSignature(node) {
+  const data = node?.data || {};
+  const encodeSlots = (slots) => (Array.isArray(slots) ? slots : [])
+    .map((slot, index) => {
+      if (slot?.showOnNode === false) return "";
+      return [index, String(slot?.type || ""), String(slot?.name || ""), slot?.required ? "1" : "0"].join(":");
+    })
+    .filter(Boolean)
+    .join("|");
+  return `${encodeSlots(data.inputs)}=>${encodeSlots(data.outputs)}`;
+}
+
 function isConnectionTypeCompatible(connection, nodes) {
   const source = String(connection?.source || "");
   const target = String(connection?.target || "");
@@ -988,6 +1000,7 @@ export default function FlowEditorPage() {
   const { t, i18n } = useTranslation();
   const { navigate, path } = useRoute();
   const updateNodeInternalsRef = useRef(null);
+  const nodeHandleSignaturesRef = useRef(new Map());
   const handleNodeInternalsRefreshReady = useCallback((fn) => {
     updateNodeInternalsRef.current = typeof fn === "function" ? fn : null;
   }, []);
@@ -1052,9 +1065,9 @@ export default function FlowEditorPage() {
   const refreshNodeInternals = useCallback((nodeId) => {
     const id = String(nodeId || "").trim();
     if (!id) return;
-    window.requestAnimationFrame(() => {
-      updateNodeInternalsRef.current?.(id);
-    });
+    const refresh = () => updateNodeInternalsRef.current?.(id);
+    window.requestAnimationFrame(refresh);
+    window.setTimeout(refresh, 80);
   }, []);
 
   useEffect(() => () => {
@@ -1799,6 +1812,26 @@ export default function FlowEditorPage() {
 
   useEffect(() => {
     nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    const prev = nodeHandleSignaturesRef.current;
+    const next = new Map();
+    const changedIds = [];
+    for (const node of nodes) {
+      const signature = nodeHandleSignature(node);
+      next.set(node.id, signature);
+      if (prev.get(node.id) !== signature) changedIds.push(node.id);
+    }
+    nodeHandleSignaturesRef.current = next;
+    if (changedIds.length === 0) return undefined;
+    const refresh = () => changedIds.forEach((id) => updateNodeInternalsRef.current?.(id));
+    const raf = window.requestAnimationFrame(refresh);
+    const timer = window.setTimeout(refresh, 80);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
   }, [nodes]);
 
   useEffect(() => {

@@ -565,8 +565,6 @@ function writeCursorMcpServer(payload = {}, userCtx = {}) {
     env: omitObjectKeys(server.env || {}, privateEnvKeys),
     headers: omitObjectKeys(server.headers || {}, privateHeaderKeys),
   };
-  publicServer.env = withPrivatePlaceholders(publicServer.env, privateEnvKeys);
-  publicServer.headers = withPrivatePlaceholders(publicServer.headers, privateHeaderKeys);
   if (privateEnvKeys.size || privateHeaderKeys.size) {
     publicServer.__agentflowPrivateKeys = {
       ...(privateEnvKeys.size ? { env: Array.from(privateEnvKeys) } : {}),
@@ -1369,6 +1367,125 @@ function workspaceSetOutputSlot(instance, name, value) {
   };
 }
 
+function workspaceSourceSlotForEdge(graph, edge) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const source = instances[String(edge?.source || "")];
+  const output = Array.isArray(source?.output) ? source.output : [];
+  return output[workspaceHandleIndex(edge?.sourceHandle, "output")] || null;
+}
+
+function workspaceOutputSlotValueForEdge(graph, outputs, edge) {
+  const sourceId = String(edge?.source || "");
+  const slot = workspaceSourceSlotForEdge(graph, edge);
+  if (slot && String(slot?.type || "") !== "node") {
+    const value = workspaceSlotValue(slot);
+    if (value.trim()) return value;
+  }
+  const out = outputs.get(sourceId);
+  if (out != null && String(out).trim()) return String(out);
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  return workspaceInstanceText(instances[sourceId]);
+}
+
+function workspaceParseJsonObjectFromText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const candidates = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.unshift(fenced[1].trim());
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.unshift(raw.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+function workspaceStringifyOutputValue(value) {
+  if (value == null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function workspaceStructuredAgentOutput(content) {
+  const raw = String(content || "").trim();
+  const parsed = workspaceParseJsonObjectFromText(raw);
+  if (!parsed) return { result: raw, outParams: {}, structured: false, parsed: null };
+  const hasEnvelope = Object.prototype.hasOwnProperty.call(parsed, "result") ||
+    Object.prototype.hasOwnProperty.call(parsed, "outParams");
+  if (!hasEnvelope) return { result: raw, outParams: {}, structured: false, parsed };
+  const outParamsRaw = parsed.outParams && typeof parsed.outParams === "object" && !Array.isArray(parsed.outParams)
+    ? parsed.outParams
+    : {};
+  const outParams = {};
+  for (const [key, value] of Object.entries(outParamsRaw)) {
+    const name = String(key || "").trim();
+    if (name) outParams[name] = workspaceStringifyOutputValue(value);
+  }
+  return {
+    result: workspaceStringifyOutputValue(parsed.result ?? ""),
+    outParams,
+    structured: true,
+    parsed,
+  };
+}
+
+function workspaceExtractNamedOutputValue(content, slotName) {
+  const name = String(slotName || "").trim();
+  if (!name) return "";
+  const structured = workspaceStructuredAgentOutput(content);
+  if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
+    return String(structured.outParams[name] ?? "");
+  }
+  const parsed = structured.parsed || workspaceParseJsonObjectFromText(content);
+  if (parsed && Object.prototype.hasOwnProperty.call(parsed, name)) {
+    const value = parsed[name];
+    return workspaceStringifyOutputValue(value);
+  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`(?:\\$\\{${escaped}\\}|\\$${escaped})\\s*[=:：]\\s*([^\\n\\r]+)`, "i"),
+    new RegExp(`(?:^|[\\n\\r])\\s*${escaped}\\s*[=:：]\\s*([^\\n\\r]+)`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(String(content || ""));
+    if (!match?.[1]) continue;
+    return match[1].replace(/^["'`]|["'`]$/g, "").trim();
+  }
+  return "";
+}
+
+function workspaceApplyAgentOutputSlots(instance, content) {
+  const structured = workspaceStructuredAgentOutput(content);
+  const text = String(structured.result || "").trim();
+  let changed = false;
+  const next = {
+    ...(instance || {}),
+    output: (Array.isArray(instance?.output) ? instance.output : []).map((slot, index) => {
+      const name = String(slot?.name || "").trim();
+      const type = String(slot?.type || "");
+      if (type === "node" || name === "next" || !name) return slot;
+      let value = "";
+      if (name === "result" || name === "content" || index === 0) {
+        value = text;
+      } else if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
+        value = structured.outParams[name];
+      } else {
+        value = workspaceExtractNamedOutputValue(text, name);
+      }
+      if (!value) return slot;
+      changed = true;
+      return { ...slot, default: value, value };
+    }),
+  };
+  return { instance: changed ? next : instance, changed };
+}
+
 function workspaceResolvePath(baseCwd, raw) {
   const text = String(raw || "").trim();
   if (!text) return "";
@@ -1453,25 +1570,25 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   if (kinds.size === 0) return "";
   const rules = [];
   if (kinds.has("html")) {
-    rules.push("- 下游连接了 HTML 展示节点：输出可直接放入 iframe 渲染的 HTML。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏；不要解释生成过程。");
+    rules.push("- 下游连接了 HTML 展示节点：将可直接放入 iframe 渲染的 HTML 放在输出协议的 `result` 字段中。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏。");
   }
   if (kinds.has("markdown")) {
-    rules.push("- 下游连接了 Markdown 展示节点：输出 Markdown 正文；不要包裹在代码围栏中，除非正文确实需要代码块。");
+    rules.push("- 下游连接了 Markdown 展示节点：将 Markdown 正文放在输出协议的 `result` 字段中；除非正文确实需要代码块，否则不要额外包裹代码围栏。");
   }
   if (kinds.has("mermaid")) {
-    rules.push("- 下游连接了 Mermaid 展示节点：只输出 Mermaid 图表代码，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏；不要附加解释。");
+    rules.push("- 下游连接了 Mermaid 展示节点：将 Mermaid 图表代码放在输出协议的 `result` 字段中，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。");
   }
   if (kinds.has("ascii")) {
-    rules.push("- 下游连接了 ASCII 展示节点：输出纯文本/ASCII 图或表格；不要输出 HTML 或 Markdown 装饰。");
+    rules.push("- 下游连接了 ASCII 展示节点：将纯文本/ASCII 图或表格放在输出协议的 `result` 字段中；不要输出 HTML 或 Markdown 装饰。");
   }
   if (kinds.has("image")) {
-    rules.push("- 下游连接了图片展示节点：输出可作为 img src 使用的图片地址、data URL 或 base64 data URL；不要输出 Markdown 图片语法或解释文字。");
+    rules.push("- 下游连接了图片展示节点：将可作为 img src 使用的图片地址、data URL 或 base64 data URL 放在输出协议的 `result` 字段中；不要输出 Markdown 图片语法。");
   }
   if (kinds.has("chart")) {
-    rules.push('- 下游连接了 Chart 展示节点：只输出 ChartSpec JSON 对象，不要 Markdown 代码围栏，不要解释文字。格式必须包含 `"type":"chart"`、`"version":"1.0"`、`"renderer":"echarts"`、`"option"`；`option.series[].type` 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。');
+    rules.push('- 下游连接了 Chart 展示节点：将 ChartSpec JSON 对象放在输出协议的 `result` 字段中。ChartSpec 必须包含 `"type":"chart"`、`"version":"1.0"`、`"renderer":"echarts"`、`"option"`；`option.series[].type` 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。');
   }
   if (kinds.has("table")) {
-    rules.push('- 下游连接了表格展示节点：优先只输出表格 JSON，不要解释文字。推荐格式：`{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}`；也可输出对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。');
+    rules.push('- 下游连接了表格展示节点：将表格数据放在输出协议的 `result` 字段中。推荐格式：`{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}`；也可使用对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。');
   }
   return [
     "## 下游输出要求",
@@ -1479,6 +1596,35 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
     ...rules,
     "",
     "如果用户任务与下游展示格式没有冲突，优先满足上述格式要求；如果用户明确指定了其他格式，以用户任务为准。",
+  ].join("\n");
+}
+
+function workspaceOutputProtocolRequirements(graph, nodeId) {
+  const instance = graph?.instances?.[nodeId] || {};
+  const slots = (Array.isArray(instance.output) ? instance.output : [])
+    .filter((slot) => {
+      const name = String(slot?.name || "").trim();
+      const type = String(slot?.type || "");
+      return name && type !== "node" && name !== "next" && name !== "result" && name !== "content";
+    })
+    .map((slot) => String(slot.name).trim());
+  const outParamsExample = slots.length
+    ? Object.fromEntries(slots.map((name) => [name, `<${name} 的值>`]))
+    : {};
+  return [
+    "## Workspace 输出协议",
+    "",
+    "最终回复必须是一个 JSON 对象，不要使用 Markdown 代码围栏，不要在 JSON 外追加解释文字。",
+    "固定格式：",
+    "",
+    JSON.stringify({ result: "<给用户看的完整正文>", outParams: outParamsExample }, null, 2),
+    "",
+    "- `result`：完整正文，写入 `result` / `content` 输出口，直连默认展示节点时展示它。",
+    "- `outParams`：具名输出参数，只写入同名输出引脚。",
+    ...(slots.length
+      ? [`- 当前节点具名输出槽：${slots.map((name) => `\`${name}\``).join("、")}。例如任务要求写入 \`${slots[0]}\` 时，放到 \`outParams.${slots[0]}\`。`]
+      : ["- 当前节点没有额外具名输出槽，`outParams` 返回空对象即可。"]),
+    "- 如果 `result` 需要承载表格、ChartSpec、HTML 等结构化内容，可把对象或字符串放入 `result`；系统会把它转换给下游展示节点。",
   ].join("\n");
 }
 
@@ -1542,10 +1688,7 @@ function workspaceUpstreamText(graph, nodeId, outputs) {
   const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
   const contentEdge = incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0];
   if (!contentEdge) return "";
-  const sourceId = String(contentEdge.source || "");
-  const out = outputs.get(sourceId);
-  if (out != null && String(out).trim()) return String(out);
-  return workspaceInstanceText(instances[sourceId]);
+  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
 }
 
 function workspaceHandleIndex(handle, prefix) {
@@ -1573,10 +1716,7 @@ function workspaceTaskUpstreamText(graph, nodeId, outputs) {
   const contentEdges = incoming.filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
   const contentEdge = contentEdges.find((edge) => String(edge?.targetHandle || "") === "input-1") || contentEdges[0];
   if (!contentEdge) return "";
-  const sourceId = String(contentEdge.source || "");
-  const out = outputs.get(sourceId);
-  if (out != null && String(out).trim()) return String(out);
-  return workspaceInstanceText(instances[sourceId]);
+  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
 }
 
 function parseWorkspaceSkillKeys(raw) {
@@ -1727,7 +1867,7 @@ function workspaceWriteDisplayContent(instance, content) {
   return next;
 }
 
-function workspaceUpdateDirectDisplays(graph, sourceId, content) {
+function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const updated = [];
@@ -1736,7 +1876,8 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content) {
     const targetId = String(edge?.target || "");
     const target = instances[targetId];
     if (!target || !workspaceDisplayKind(target.definitionId)) continue;
-    instances[targetId] = workspaceWriteDisplayContent(target, content);
+    const value = outputs ? workspaceOutputSlotValueForEdge(graph, outputs, edge) : String(content || "");
+    instances[targetId] = workspaceWriteDisplayContent(target, value || content);
     updated.push(targetId);
   }
   return updated;
@@ -1747,14 +1888,16 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const body = String(instance.body || "").trim();
   const label = String(instance.label || nodeId).trim();
   const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
+  const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
-    "只输出该节点要传给下游展示/后续节点的正文，不要解释运行过程。",
+    "按 Workspace 输出协议返回该节点要传给下游展示/后续节点的数据。",
     workspaceSearchGuardrailsBlock(),
     skillsBlock ? `\n## Available Skills\n\n${skillsBlock}` : "",
     mcpBlock ? `\n## Available MCP\n\n${mcpBlock}` : "",
     upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
     downstreamRequirements ? `\n${downstreamRequirements}` : "",
+    outputProtocolRequirements ? `\n${outputProtocolRequirements}` : "",
     `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
     `\n## 节点任务\n\n${body || upstreamText}`,
   ].filter(Boolean).join("\n");
@@ -1844,7 +1987,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         )),
       };
       outputs.set(nodeId, skillsBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock);
+      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock, outputs);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -1864,7 +2007,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         )),
       };
       outputs.set(nodeId, mcpBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock);
+      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock, outputs);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -2166,9 +2309,13 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         throw e;
       }
     }
-    outputs.set(nodeId, content);
-    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, content);
-    if (updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+    const normalizedAgentOutput = workspaceStructuredAgentOutput(content);
+    const resultContent = normalizedAgentOutput.result || content;
+    outputs.set(nodeId, resultContent);
+    const slotUpdate = workspaceApplyAgentOutputSlots(instance, content);
+    if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
+    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
+    if (slotUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
   if (pauseNodeIds.length > 0) {
