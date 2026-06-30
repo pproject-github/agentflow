@@ -47,6 +47,10 @@ description: >-
 - 用 `display_markdown` 展示 Markdown 正文、分析报告、会议纪要、代码结构说明。
 - 用 `display_mermaid` 展示 Mermaid 图源码。
 - 用 `display_ascii` 展示 ASCII 图。
+- 用 `display_html` 展示可交互 HTML 原型或富 UI 片段。
+- 用 `display_image` 展示图片 URL、data URL 或图片路径。
+- 用 `display_chart` 展示 ChartSpec JSON 图表。
+- 用 `display_table` 展示结构化表格数据。
 - 用普通 pipeline 节点作为上下文节点时，保持 `instances` 结构与 flow.yaml instance 一致，但它只属于 workspace graph。
 - 每个新增 instance 必须有 `ui.nodePositions`。
 - 展示节点建议写 `ui.nodeSizes`，避免内容区域过小。
