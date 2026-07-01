@@ -96,6 +96,7 @@ import {
   loginOrCreateUser,
   logoutRequest,
   readUserAllowlist,
+  writeUserAllowlist,
 } from "./auth.mjs";
 import { readGlobalEnvRows, readMergedEnvObject, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
 import {
@@ -3200,6 +3201,33 @@ export function startUiServer({
           return;
         }
         json(res, 200, { ok: true, config: result.config });
+        return;
+      }
+    }
+
+    if (url.pathname === "/api/admin/user-allowlist") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        json(res, 200, { allowlist: readUserAllowlist() });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        try {
+          const allowlist = writeUserAllowlist(payload?.users || payload?.fileUsers || []);
+          json(res, 200, { ok: true, allowlist });
+        } catch (e) {
+          json(res, 400, { error: (e && e.message) || String(e) });
+        }
         return;
       }
     }

@@ -121,6 +121,13 @@ export default function SettingsPage({ authUser }) {
   const [feedbackItems, setFeedbackItems] = useState([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackErr, setFeedbackErr] = useState("");
+  const [allowlistFileUsers, setAllowlistFileUsers] = useState([]);
+  const [allowlistEnvUsers, setAllowlistEnvUsers] = useState([]);
+  const [allowlistPath, setAllowlistPath] = useState("");
+  const [allowlistDraft, setAllowlistDraft] = useState("");
+  const [allowlistLoading, setAllowlistLoading] = useState(false);
+  const [allowlistSaving, setAllowlistSaving] = useState(false);
+  const [allowlistErr, setAllowlistErr] = useState("");
   /** 与服务器（或首次加载的本地回退）已同步的 Provider，用于防抖保存时去重 */
   const lastSyncedOpencode = useRef(/** @type {string | null} */ (null));
   const opencodeConfigReady = useRef(false);
@@ -192,6 +199,48 @@ export default function SettingsPage({ authUser }) {
     }
   }, [authUser?.isAdmin]);
 
+  const loadUserAllowlist = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setAllowlistLoading(true);
+    setAllowlistErr("");
+    try {
+      const r = await fetch("/api/admin/user-allowlist");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const allowlist = j.allowlist && typeof j.allowlist === "object" ? j.allowlist : {};
+      setAllowlistFileUsers(Array.isArray(allowlist.fileUsers) ? allowlist.fileUsers.map(String) : []);
+      setAllowlistEnvUsers(Array.isArray(allowlist.envUsers) ? allowlist.envUsers.map(String) : []);
+      setAllowlistPath(typeof allowlist.path === "string" ? allowlist.path : "");
+    } catch (e) {
+      setAllowlistErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setAllowlistLoading(false);
+    }
+  }, [authUser?.isAdmin]);
+
+  const saveUserAllowlist = useCallback(async (users) => {
+    if (!authUser?.isAdmin) return;
+    setAllowlistSaving(true);
+    setAllowlistErr("");
+    try {
+      const r = await fetch("/api/admin/user-allowlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ users }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const allowlist = j.allowlist && typeof j.allowlist === "object" ? j.allowlist : {};
+      setAllowlistFileUsers(Array.isArray(allowlist.fileUsers) ? allowlist.fileUsers.map(String) : []);
+      setAllowlistEnvUsers(Array.isArray(allowlist.envUsers) ? allowlist.envUsers.map(String) : []);
+      setAllowlistPath(typeof allowlist.path === "string" ? allowlist.path : "");
+    } catch (e) {
+      setAllowlistErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setAllowlistSaving(false);
+    }
+  }, [authUser?.isAdmin]);
+
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
     const personalRows = normalized.filter((row) => row.scope !== "global");
@@ -247,7 +296,10 @@ export default function SettingsPage({ authUser }) {
     loadContext();
     loadLists();
     loadUserEnv();
-    if (authUser?.isAdmin) void loadFeedback();
+    if (authUser?.isAdmin) {
+      void loadFeedback();
+      void loadUserAllowlist();
+    }
     (async () => {
       try {
         const r = await fetch("/api/agentflow-config");
@@ -272,7 +324,7 @@ export default function SettingsPage({ authUser }) {
         opencodeConfigReady.current = true;
       }
     })();
-  }, [authUser?.isAdmin, loadContext, loadFeedback, loadLists, loadUserEnv]);
+  }, [authUser?.isAdmin, loadContext, loadFeedback, loadLists, loadUserAllowlist, loadUserEnv]);
 
   useEffect(() => {
     if (!envConfigReady.current) return;
@@ -358,6 +410,28 @@ export default function SettingsPage({ authUser }) {
       return next;
     });
   }, []);
+
+  const addAllowlistUser = useCallback(() => {
+    const username = allowlistDraft.trim();
+    if (!username) return;
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(username)) {
+      setAllowlistErr("用户名须以字母开头，仅可使用字母、数字、下划线与连字符，最多 64 字符");
+      return;
+    }
+    const exists = new Set(allowlistFileUsers.map((item) => String(item || "").trim().toLowerCase()));
+    if (exists.has(username.toLowerCase())) {
+      setAllowlistDraft("");
+      return;
+    }
+    setAllowlistDraft("");
+    void saveUserAllowlist([...allowlistFileUsers, username]);
+  }, [allowlistDraft, allowlistFileUsers, saveUserAllowlist]);
+
+  const removeAllowlistUser = useCallback((username) => {
+    const target = String(username || "").trim().toLowerCase();
+    if (!target) return;
+    void saveUserAllowlist(allowlistFileUsers.filter((item) => String(item || "").trim().toLowerCase() !== target));
+  }, [allowlistFileUsers, saveUserAllowlist]);
 
   const handleLanguageChange = useCallback((e) => {
     const newLang = e.target.value;
@@ -737,6 +811,92 @@ export default function SettingsPage({ authUser }) {
                   </div>
                 </div>
               </section>
+
+              {authUser?.isAdmin ? (
+                <section className="af-set-card af-set-card--wide af-set-card--allowlist">
+                  <div className="af-set-env-head">
+                    <div className="af-set-card-head">
+                      <div className="af-set-env-icon-wrap">
+                        <span className="material-symbols-outlined af-set-icon--primary">manage_accounts</span>
+                      </div>
+                      <div>
+                        <h2 className="af-set-h2">用户白名单</h2>
+                        <p className="af-set-card-subtitle">只控制 username 是否允许注册或登录，密码由用户首次登录时自行设置。</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="af-set-btn-outline af-set-btn-outline--compact"
+                      onClick={() => void loadUserAllowlist()}
+                      disabled={allowlistLoading}
+                    >
+                      {allowlistLoading ? "刷新中..." : "刷新"}
+                    </button>
+                  </div>
+                  {allowlistErr ? <p className="af-err af-set-hint af-set-hint--inline">{allowlistErr}</p> : null}
+                  {allowlistPath ? <p className="af-set-hint af-set-hint--inline">文件：<code>{allowlistPath}</code></p> : null}
+                  <div className="af-allowlist-grid">
+                    <div className="af-allowlist-main">
+                      <div className="af-allowlist-head">
+                        <span>文件白名单</span>
+                        <span>{allowlistSaving ? "保存中..." : `${allowlistFileUsers.length} 个用户`}</span>
+                      </div>
+                      <div className="af-allowlist-list">
+                        {allowlistFileUsers.length > 0 ? allowlistFileUsers.map((username) => (
+                          <div key={username} className="af-allowlist-row">
+                            <span className="af-allowlist-name">{username}</span>
+                            <button
+                              type="button"
+                              className="af-set-env-del"
+                              onClick={() => removeAllowlistUser(username)}
+                              aria-label={`删除 ${username}`}
+                              disabled={allowlistSaving}
+                            >
+                              <span className="material-symbols-outlined">delete_outline</span>
+                            </button>
+                          </div>
+                        )) : (
+                          <div className="af-allowlist-empty">未配置文件白名单；如果环境变量也为空，则所有用户可注册。</div>
+                        )}
+                      </div>
+                      <div className="af-allowlist-add">
+                        <input
+                          className="af-set-input af-set-input--sm af-set-input--mono"
+                          value={allowlistDraft}
+                          onChange={(e) => setAllowlistDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") addAllowlistUser();
+                          }}
+                          placeholder="username"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="af-set-btn-add"
+                          onClick={addAllowlistUser}
+                          disabled={allowlistSaving || !allowlistDraft.trim()}
+                        >
+                          <span className="material-symbols-outlined">add</span>
+                          添加
+                        </button>
+                      </div>
+                    </div>
+                    <div className="af-allowlist-side">
+                      <div className="af-allowlist-head">
+                        <span>环境变量白名单</span>
+                        <span>只读</span>
+                      </div>
+                      <div className="af-allowlist-env-list">
+                        {allowlistEnvUsers.length > 0 ? allowlistEnvUsers.map((username) => (
+                          <code key={username}>{username}</code>
+                        )) : (
+                          <span>未配置 AGENTFLOW_USER_WHITELIST / AGENTFLOW_ALLOWED_USERS</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
 
               {authUser?.isAdmin ? (
                 <section className="af-set-card af-set-card--wide af-set-card--feedback">
