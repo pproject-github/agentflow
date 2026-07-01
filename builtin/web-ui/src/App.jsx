@@ -12,6 +12,10 @@ import LikeeContextPage from "./pages/LikeeContextPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
 
+function isLikeeContextPath(path) {
+  return path === "/likee-context" || path === "/likee_context";
+}
+
 class UiErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -62,7 +66,7 @@ function RoutedContent({ authUser }) {
   if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage />;
-  if (path === "/likee-context") return <LikeeContextPage />;
+  if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;
 }
 
@@ -178,7 +182,7 @@ export default function App() {
 function PublicOrAuthedApp() {
   const { path } = useRoute();
   if (path.startsWith("/display")) return <DisplayPage />;
-  if (path === "/likee-context") return <LikeeContextPage />;
+  if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return (
     <AuthGate>
       {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}

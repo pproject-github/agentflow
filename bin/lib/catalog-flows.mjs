@@ -274,7 +274,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   addFromDir(PACKAGE_BUILTIN_NODES_DIR, "project");
   addFromDir(path.join(root, LEGACY_NODES_DIR), "project");
   addFromDir(path.join(root, PROJECT_NODES_DIR), "project");
-  for (const manifest of listMarketplaceNodes(root, marketplaceFlowData)) {
+  for (const manifest of listMarketplaceNodes(root, marketplaceFlowData, opts)) {
     let type = "agent";
     const runtimeType = String(manifest.baseDefinitionId || manifest.runtime?.type || manifest.type || "").toLowerCase();
     if (runtimeType.startsWith("control")) type = "control";
@@ -524,7 +524,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
         } catch (_) {}
       }
     }
-    const resolved = resolveMarketplaceNodePackage(root, flowDir, nodeId, opts.flowData || null);
+    const resolved = resolveMarketplaceNodePackage(root, flowDir, nodeId, opts.flowData || null, opts);
     if (!resolved) return { error: "Node not found: " + nodeId };
     const readmePath = path.join(resolved.packageDir, "README.md");
     let type = "agent";
@@ -751,7 +751,7 @@ function resolveNodeFileScope(workspaceRoot, nodeId, flowId, flowSource, opts = 
         } catch (_) {}
       }
     }
-    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, nodeId, flowData);
+    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, nodeId, flowData, opts);
     if (!resolved) return null;
     return { baseDir: resolved.packageDir, allowAllFiles: true, primaryFilePath: path.join(resolved.packageDir, "node.yaml"), manifest: resolved };
   }

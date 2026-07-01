@@ -4911,7 +4911,7 @@ export function startUiServer({
           json(res, 400, { error: resolved.error || "Could not resolve flow directory" });
           return;
         }
-        const result = installFlowDependency(root, resolved.flowDir, nodeSpec);
+        const result = installFlowDependency(root, resolved.flowDir, nodeSpec, userCtx);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -4935,7 +4935,7 @@ export function startUiServer({
           const resolved = resolveFlowDirForWrite(root, flowId, flowSource, userCtx);
           if (!resolved.error && resolved.flowDir) flowDir = resolved.flowDir;
         }
-        const result = publishNodeFromInstance(root, payload || {}, { flowDir });
+        const result = publishNodeFromInstance(root, payload || {}, { flowDir, ...userCtx });
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
