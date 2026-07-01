@@ -2,7 +2,7 @@
   min-height: 100vh;
   background: #070b13;
   color: #f7f8ff;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .likee-page a {
@@ -475,6 +475,7 @@
 }
 
 .likee-usecase-layout .likee-section-copy {
+  position: sticky;
   align-self: start;
   max-width: 30rem;
   top: 5rem;
