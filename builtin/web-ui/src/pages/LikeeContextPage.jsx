@@ -348,7 +348,7 @@ export default function LikeeContextPage() {
       </section>
 
       <section id="likee-usecases" className="likee-section likee-section-muted">
-        <div className="likee-section-inner likee-two-column">
+        <div className="likee-section-inner likee-two-column likee-usecase-layout">
           <SectionHeader kicker="USE CASES" title="沉淀 Likee 业务流水线">
             这里展示的是平台里实际可跑的工作流：加载流程片段，在子 Agent 或 Run 节点输入业务问题，执行当前 line，最终在 Display、TAPD 和 Git 中拿到结果。
           </SectionHeader>

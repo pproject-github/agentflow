@@ -99,13 +99,13 @@
 }
 
 .likee-hero h1 {
-  max-width: 64rem;
+  max-width: 58rem;
   margin: 1rem 0 0;
   color: #fff;
   font-family: var(--af-headline);
-  font-size: clamp(4rem, 8vw, 7.8rem);
+  font-size: clamp(3.5rem, 5.8vw, 6rem);
   font-weight: 900;
-  line-height: 0.96;
+  line-height: 1.02;
   letter-spacing: 0;
 }
 
@@ -470,6 +470,17 @@
   top: 2.5rem;
 }
 
+.likee-usecase-layout {
+  grid-template-columns: minmax(18rem, 0.72fr) minmax(0, 1.28fr);
+}
+
+.likee-usecase-layout .likee-section-copy {
+  align-self: start;
+  max-width: 30rem;
+  top: 5rem;
+  z-index: 3;
+}
+
 .likee-two-column-skills,
 .likee-capability-layout {
   grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
@@ -797,12 +808,32 @@
     position: static;
   }
 
+  .likee-usecase-layout {
+    grid-template-columns: minmax(17rem, 0.7fr) minmax(0, 1.3fr);
+  }
+
+  .likee-usecase-layout .likee-section-copy {
+    position: sticky;
+    top: 4.5rem;
+  }
+
   .likee-capability-row {
     grid-template-columns: 5rem 1fr;
   }
 
   .likee-capability-row p {
     grid-column: 2;
+  }
+}
+
+@media (max-width: 900px) {
+  .likee-usecase-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .likee-usecase-layout .likee-section-copy {
+    position: static;
+    max-width: 48rem;
   }
 }
 
@@ -829,7 +860,7 @@
   }
 
   .likee-hero h1 {
-    font-size: clamp(3.1rem, 17vw, 4.4rem);
+    font-size: clamp(2.8rem, 14vw, 3.9rem);
   }
 
   .likee-workspace-scene {
