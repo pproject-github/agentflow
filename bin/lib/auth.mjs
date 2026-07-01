@@ -152,6 +152,7 @@ function userAllowlistMatchSet(users) {
 }
 
 export function isAuthUserAllowed(user) {
+  if (user?.isAdmin) return true;
   const allowlist = readUserAllowlist();
   if (!allowlist.enabled) return true;
   const allowed = userAllowlistMatchSet(allowlist.users);
@@ -266,15 +267,15 @@ export function loginOrCreateUser(username, password) {
   if (!userId) {
     return { ok: false, error: "用户名须以字母开头，仅可使用字母、数字、下划线与连字符，最多 64 字符" };
   }
-  if (!isAuthUserAllowed({ userId, username: String(username || "").trim() })) {
-    return { ok: false, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
-  }
   const pwd = String(password || "");
   if (pwd.length < 4) return { ok: false, error: "密码至少 4 位" };
 
   const users = readAuthUsers();
   const firstUser = Object.keys(users).length === 0;
   let user = users[userId];
+  if (!isAuthUserAllowed({ userId, username: String(username || "").trim(), isAdmin: Boolean(user?.isAdmin) })) {
+    return { ok: false, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
+  }
   if (!user) {
     const hashed = hashPassword(pwd);
     user = {

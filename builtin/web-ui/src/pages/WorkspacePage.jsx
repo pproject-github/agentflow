@@ -154,6 +154,22 @@ function isEditableShortcutTarget(target) {
   return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function hasEditableTextSelection(target) {
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    return Number(target.selectionStart ?? 0) !== Number(target.selectionEnd ?? 0);
+  }
+  if (target instanceof Element && target.closest('[contenteditable="true"]')) {
+    const selection = window.getSelection?.();
+    return Boolean(selection && !selection.isCollapsed);
+  }
+  return false;
+}
+
+function shouldUseCanvasCopyFromEditable(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return Boolean(target.closest(".af-flow-node__prompt-stack")) && !hasEditableTextSelection(target);
+}
+
 function isLowValueWorkspaceRunLog(text) {
   const line = String(text || "").trim();
   return (
@@ -2689,6 +2705,7 @@ function WorkspacePageInner() {
   const [quickAddSearch, setQuickAddSearch] = useState("");
   const [quickAddActiveIndex, setQuickAddActiveIndex] = useState(0);
   const [selectedNodeId, setSelectedNodeId] = useState("");
+  const selectedNodeIdRef = useRef("");
   const [nodePropDraft, setNodePropDraft] = useState(null);
   const nodePropDraftRef = useRef(null);
   const [nodePropsError, setNodePropsError] = useState("");
@@ -3617,6 +3634,10 @@ function WorkspacePageInner() {
   useEffect(() => {
     nodePropDraftRef.current = nodePropDraft;
   }, [nodePropDraft]);
+
+  useEffect(() => {
+    selectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId]);
 
   useEffect(() => {
     connectionMenuRef.current = connectionMenu;
@@ -5186,8 +5207,11 @@ function WorkspacePageInner() {
         }
         return;
       }
-      if (editable) return;
       const shortcutKey = event.key.toLowerCase();
+      const copyShortcut = (event.metaKey || event.ctrlKey) && shortcutKey === "c";
+      const pasteShortcut = (event.metaKey || event.ctrlKey) && shortcutKey === "v";
+      const useCanvasCopyFromEditable = editable && copyShortcut && shouldUseCanvasCopyFromEditable(event.target);
+      if (editable && !useCanvasCopyFromEditable) return;
       const wantsUndo = (event.metaKey || event.ctrlKey) && !event.shiftKey && shortcutKey === "z";
       const wantsRedo =
         (event.metaKey || event.ctrlKey) &&
@@ -5210,18 +5234,25 @@ function WorkspacePageInner() {
         setStatus(changed ? (wantsUndo ? "Undo canvas change" : "Redo canvas change") : (wantsUndo ? "Nothing to undo" : "Nothing to redo"));
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
+      if (copyShortcut) {
         if (isDisplayMode) return;
-        const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
+        const selectedId = selectedNodeIdRef.current;
+        const sourceNodes = (nodesRef.current || []).some((node) => node?.selected)
+          ? nodesRef.current
+          : (nodesRef.current || []).map((node) => (
+              selectedId && node.id === selectedId ? { ...node, selected: true } : node
+            ));
+        const clip = buildCanvasClipboard(sourceNodes, edgesRef.current, instancesRef.current);
         if (clip) {
           event.preventDefault();
           event.stopPropagation();
           canvasClipboardRef.current = clip;
+          if (useCanvasCopyFromEditable && typeof event.target?.blur === "function") event.target.blur();
           setStatus(`Copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
         }
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+      if (pasteShortcut) {
         if (isDisplayMode) {
           event.preventDefault();
           event.stopPropagation();
