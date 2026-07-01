@@ -39,7 +39,7 @@ function definitionIdToType(definitionId) {
 
 /**
  * @param {string} flowYamlContent
- * @returns {{ nodes: import('@xyflow/react').Node[], edges: import('@xyflow/react').Edge[], instances: Record<string, any>, description?: string } | { error: string }}
+ * @returns {{ nodes: import('@xyflow/react').Node[], edges: import('@xyflow/react').Edge[], instances: Record<string, any>, description?: string, viewport?: { x: number, y: number, zoom: number } } | { error: string }}
  */
 export function deserializeFromFlowYaml(flowYamlContent) {
   if (!flowYamlContent?.trim()) {
@@ -60,6 +60,18 @@ export function deserializeFromFlowYaml(flowYamlContent) {
     const ui = data.ui && typeof data.ui === "object" ? data.ui : {};
     const nodePositions = ui.nodePositions && typeof ui.nodePositions === "object" ? ui.nodePositions : {};
     const nodeSizes = ui.nodeSizes && typeof ui.nodeSizes === "object" ? ui.nodeSizes : {};
+    const rawViewport = ui.viewport && typeof ui.viewport === "object" ? ui.viewport : null;
+    const viewport =
+      rawViewport &&
+      Number.isFinite(Number(rawViewport.x)) &&
+      Number.isFinite(Number(rawViewport.y)) &&
+      Number.isFinite(Number(rawViewport.zoom))
+        ? {
+            x: Number(rawViewport.x),
+            y: Number(rawViewport.y),
+            zoom: Math.min(Math.max(Number(rawViewport.zoom), 0.1), 4),
+          }
+        : undefined;
     const description =
       typeof ui.description === "string" && ui.description.trim() ? ui.description.trim() : undefined;
 
@@ -119,7 +131,7 @@ export function deserializeFromFlowYaml(flowYamlContent) {
         markerEnd: { type: MarkerType.ArrowClosed },
       }));
 
-    return { nodes, edges, instances, description };
+    return { nodes, edges, instances, description, ...(viewport ? { viewport } : {}) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     let hint = "";
@@ -347,7 +359,7 @@ export function pasteCanvasClipboard(clipboard, nodes, edges, instancesMap, opti
  * @param {import('@xyflow/react').Node[]} nodes
  * @param {import('@xyflow/react').Edge[]} edges
  * @param {Record<string, any>} instancesMap
- * @param {{ description?: string }} [options]
+ * @param {{ description?: string, viewport?: { x: number, y: number, zoom: number } | null }} [options]
  */
 export function serializeToFlowYaml(nodes, edges, instancesMap, options) {
   const instances = buildInstancesForYaml(nodes, instancesMap);
@@ -370,6 +382,18 @@ export function serializeToFlowYaml(nodes, edges, instancesMap, options) {
   }
   const ui = { nodePositions };
   if (Object.keys(nodeSizes).length > 0) ui.nodeSizes = nodeSizes;
+  if (
+    options?.viewport &&
+    Number.isFinite(Number(options.viewport.x)) &&
+    Number.isFinite(Number(options.viewport.y)) &&
+    Number.isFinite(Number(options.viewport.zoom))
+  ) {
+    ui.viewport = {
+      x: Number(options.viewport.x),
+      y: Number(options.viewport.y),
+      zoom: Math.min(Math.max(Number(options.viewport.zoom), 0.1), 4),
+    };
+  }
   if (options?.description != null && String(options.description).trim() !== "") {
     ui.description = String(options.description).trim();
   }

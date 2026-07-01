@@ -761,6 +761,15 @@ function clampFocusZoom(zoom) {
   return Math.min(Math.max(n, 0.75), 1);
 }
 
+function normalizeFlowViewport(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const x = Number(raw.x);
+  const y = Number(raw.y);
+  const zoom = Number(raw.zoom);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom)) return null;
+  return { x, y, zoom: Math.min(Math.max(zoom, 0.1), 4) };
+}
+
 // 长时间运行的 flow 会累积数万条 cli-raw / agent-stdout 日志。
 // 不限制数量会让 DOM 节点膨胀 + 每次 append 触发全量重渲 + smoothScroll 动画 → 页面肉眼可见卡顿。
 const MAX_RUN_LOGS = 1500;
@@ -1689,6 +1698,7 @@ export default function FlowEditorPage() {
   const instancesRef = useRef({});
   const urlLoadedRef = useRef(false);
   const reactFlowInstanceRef = useRef(null);
+  const flowViewportRef = useRef(null);
   const syncHighlightTimerRef = useRef(/** @type {ReturnType<typeof setTimeout> | null} */ (null));
   // 自动保存用：hasLoadedRef 在 loadFlow 成功尾部置 true，期间禁止写盘防覆盖；
   // loadEpochRef 每次进入 loadFlow 自增，in-flight debounce 定时器捕获旧 epoch 时主动放弃，
@@ -2193,6 +2203,7 @@ export default function FlowEditorPage() {
       paletteList,
       instances,
       flowDescriptionText: result.description ?? "",
+      viewport: normalizeFlowViewport(result.viewport),
       nodes: mergedNodes,
       edges: validEdges,
     };
@@ -2308,7 +2319,19 @@ export default function FlowEditorPage() {
         } else {
           setNodes(nextGraph.nodes);
           setEdges(nextGraph.edges);
-          setFitViewEpoch((x) => x + 1);
+          flowViewportRef.current = nextGraph.viewport || null;
+          if (nextGraph.viewport) {
+            const applyViewport = () => {
+              try {
+                reactFlowInstanceRef.current?.setViewport(nextGraph.viewport, { duration: 0 });
+              } catch {
+                /* React Flow may not be mounted yet during route transitions. */
+              }
+            };
+            requestAnimationFrame(() => requestAnimationFrame(applyViewport));
+          } else {
+            setFitViewEpoch((x) => x + 1);
+          }
         }
 
         recordPipelineOpened(flow.id, nextGraph.flowSource);
@@ -2321,7 +2344,7 @@ export default function FlowEditorPage() {
             nextGraph.nodes,
             nextGraph.edges,
             nextGraph.instances,
-            { description: nextGraph.flowDescriptionText },
+            { description: nextGraph.flowDescriptionText, viewport: flowViewportRef.current },
           );
         } catch {
           lastPersistedYamlRef.current = "";
@@ -2861,6 +2884,7 @@ export default function FlowEditorPage() {
       if (!selected) return;
       const yaml = serializeToFlowYaml(nodelist, edgelist, instancesRef.current, {
         description: flowDescription,
+        viewport: flowViewportRef.current,
       });
       // 与上次成功写入完全一致时跳过，避免 loadFlow 后首次自动保存的冗余 POST
       if (yaml === lastPersistedYamlRef.current) return;
@@ -3035,6 +3059,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   const handleSave = useCallback(() => {
     persistFlowToServer(nodes, edges);
   }, [persistFlowToServer, nodes, edges]);
+
+  const lockPipelineViewport = useCallback(() => {
+    if (!selected) return;
+    const viewport = normalizeFlowViewport(reactFlowInstanceRef.current?.getViewport?.());
+    if (!viewport) return;
+    flowViewportRef.current = viewport;
+    setSaveStatus("已固定 Pipeline 进入视角");
+    persistFlowToServer(nodesRef.current, edgesRef.current);
+  }, [persistFlowToServer, selected]);
 
   const handleNodeModelChange = useCallback(
     (nodeId, newModel) => {
@@ -3351,11 +3384,17 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         setCanvasTool("pan");
         return;
       }
+      if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        lockPipelineViewport();
+        return;
+      }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [
     handleSave,
+    lockPipelineViewport,
     shortcutsOpen,
     jumpPaletteOpen,
     rightPanel,
@@ -5425,6 +5464,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             <div className="af-view-switch" aria-label="视图切换">
               <button type="button" className="af-view-switch__active">Pipeline</button>
               <button type="button" onClick={() => navigate(flowUrlForView(selected, "workspace"))}>Workspace</button>
+              <button type="button" onClick={() => navigate(flowUrlForView(selected, "display"))}>Display</button>
             </div>
           </div>
           <div className="af-pipeline-top-right af-flow-toolbar-actions">

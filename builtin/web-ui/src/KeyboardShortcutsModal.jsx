@@ -104,6 +104,10 @@ export function KeyboardShortcutsModal({ open, onClose }) {
                 <KeyCombo keys={["Space"]} />
               </li>
               <li className="af-shortcuts-row">
+                <span className="af-shortcuts-row__label">{t("flow:shortcuts.saveViewport")}</span>
+                <KeyCombo keys={["F"]} />
+              </li>
+              <li className="af-shortcuts-row">
                 <span className="af-shortcuts-row__label">{t("flow:shortcuts.selectAll")}</span>
                 <KeyCombo keys={[mod, "A"]} />
               </li>

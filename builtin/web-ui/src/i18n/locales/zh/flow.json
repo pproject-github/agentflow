@@ -178,6 +178,7 @@
     "selectTool": "选择工具",
     "panTool": "平移工具",
     "holdSpacePan": "按住空格临时平移",
+    "saveViewport": "保存当前进入视角",
     "selectAll": "全选所有节点",
     "undo": "撤销画布修改",
     "redo": "重做画布修改"

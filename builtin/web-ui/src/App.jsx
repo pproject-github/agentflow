@@ -4,6 +4,7 @@ import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
+import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
@@ -57,6 +58,7 @@ function RoutedContent({ authUser }) {
   if (path === "/mcps") return <McpPage />;
   if (path === "/flow") return <FlowEditorPage />;
   if (path === "/workspace") return <WorkspacePage />;
+  if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage />;
   return <ProjectsPage />;
@@ -165,10 +167,18 @@ export default function App() {
   return (
     <UiErrorBoundary>
       <RouteProvider>
-        <AuthGate>
-          {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}
-        </AuthGate>
+        <PublicOrAuthedApp />
       </RouteProvider>
     </UiErrorBoundary>
+  );
+}
+
+function PublicOrAuthedApp() {
+  const { path } = useRoute();
+  if (path.startsWith("/display")) return <DisplayPage />;
+  return (
+    <AuthGate>
+      {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}
+    </AuthGate>
   );
 }

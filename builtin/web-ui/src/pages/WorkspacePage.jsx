@@ -25,6 +25,7 @@ import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
+import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import { useCanvasHistory } from "../useCanvasHistory.js";
 import {
@@ -94,6 +95,7 @@ const MIN_WORKSPACE_NODE_WIDTH = 180;
 const MAX_WORKSPACE_NODE_WIDTH = 960;
 const MIN_WORKSPACE_NODE_HEIGHT = 96;
 const MAX_WORKSPACE_NODE_HEIGHT = 900;
+const DISPLAY_REF_PREFIX = "display-ref:";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -505,6 +507,64 @@ function graphToFlow(graph, palette) {
   return { nodes: merged, edges: filterValidEdges(edges, merged), instances };
 }
 
+function displayRefNodeId(sourceId) {
+  return `${DISPLAY_REF_PREFIX}${sourceId}`;
+}
+
+function sourceIdFromDisplayRefId(nodeId) {
+  const text = String(nodeId || "");
+  return text.startsWith(DISPLAY_REF_PREFIX) ? text.slice(DISPLAY_REF_PREFIX.length) : text;
+}
+
+function normalizeCanvasViewport(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const x = Number(raw.x);
+  const y = Number(raw.y);
+  const zoom = Number(raw.zoom);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom)) return null;
+  return { x, y, zoom: Math.min(Math.max(zoom, 0.1), 4) };
+}
+
+function normalizeDisplayPageState(raw, workspaceNodes = []) {
+  const sourceNodes = new Map((Array.isArray(workspaceNodes) ? workspaceNodes : [])
+    .filter((node) => displayKind(node?.data?.definitionId))
+    .map((node) => [node.id, node]));
+  const rawIds = Array.isArray(raw?.nodeIds) ? raw.nodeIds : [];
+  const nodeIds = [];
+  const seen = new Set();
+  for (const rawId of rawIds) {
+    const id = String(rawId || "").trim();
+    if (!id || seen.has(id) || !sourceNodes.has(id)) continue;
+    seen.add(id);
+    nodeIds.push(id);
+  }
+  const nodePositions = {};
+  const positions = raw?.nodePositions && typeof raw.nodePositions === "object" ? raw.nodePositions : {};
+  nodeIds.forEach((id, index) => {
+    const pos = positions[id];
+    nodePositions[id] = pos && typeof pos.x === "number" && typeof pos.y === "number"
+      ? { x: pos.x, y: pos.y }
+      : { x: 180 + index * 36, y: 120 + index * 28 };
+  });
+  const nodeSizes = {};
+  const sizes = raw?.nodeSizes && typeof raw.nodeSizes === "object" ? raw.nodeSizes : {};
+  nodeIds.forEach((id) => {
+    const size = normalizeWorkspaceNodeSize(sizes[id], { display: true });
+    if (size) nodeSizes[id] = size;
+  });
+  const viewport = normalizeCanvasViewport(raw?.viewport);
+  return { nodeIds, nodePositions, nodeSizes, ...(viewport ? { viewport } : {}) };
+}
+
+function displayPageForGraph(displayPage, workspaceNodes = []) {
+  return normalizeDisplayPageState(displayPage, workspaceNodes);
+}
+
+function clampWorkspaceFocusZoom(zoom) {
+  const n = Number.isFinite(zoom) ? zoom : 1;
+  return Math.min(Math.max(n, 0.75), 1);
+}
+
 function clampNumber(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return 0;
@@ -629,6 +689,104 @@ function normalizeHtmlDisplayContent(content) {
   return text;
 }
 
+function htmlDisplaySrcDoc(content) {
+  const html = normalizeHtmlDisplayContent(content);
+  if (!html.trim()) return "";
+  if (/<base\s+[^>]*target\s*=/i.test(html)) return html;
+  const base = '<base target="_blank">';
+  if (/<head\b[^>]*>/i.test(html)) {
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${base}`);
+  }
+  if (/<html\b[^>]*>/i.test(html)) {
+    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${base}</head>`);
+  }
+  return `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+}
+
+function safeDownloadFilename(name, extension) {
+  const base = String(name || "html-render")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "") || "html-render";
+  const ext = String(extension || "png").replace(/^\.+/, "") || "png";
+  return `${base}.${ext}`;
+}
+
+function triggerDownloadUrl(url, filename) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  try {
+    triggerDownloadUrl(url, filename);
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+function htmlSnapshotMarkup(content) {
+  const raw = normalizeHtmlDisplayContent(content);
+  const doc = new DOMParser().parseFromString(raw || "<body></body>", "text/html");
+  const serializer = new XMLSerializer();
+  const styles = Array.from(doc.querySelectorAll("style"))
+    .map((node) => serializer.serializeToString(node))
+    .join("\n");
+  const bodyHtml = doc.body
+    ? Array.from(doc.body.childNodes).map((node) => serializer.serializeToString(node)).join("")
+    : raw;
+  return `
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: transparent; }
+      .af-html-snapshot-root { width: 100%; min-height: 100%; overflow: hidden; }
+    </style>
+    ${styles}
+    <div xmlns="http://www.w3.org/1999/xhtml" class="af-html-snapshot-root">${bodyHtml}</div>
+  `;
+}
+
+async function saveHtmlDisplayAsImage({ content, width, height, filename }) {
+  const w = Math.max(1, Math.round(Number(width) || 960));
+  const h = Math.max(1, Math.round(Number(height) || 640));
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <foreignObject width="100%" height="100%">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="width:${w}px;height:${h}px;overflow:hidden;background:#ffffff;">
+      ${htmlSnapshotMarkup(content)}
+    </div>
+  </foreignObject>
+</svg>`;
+  const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const svgUrl = URL.createObjectURL(svgBlob);
+  try {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = svgUrl;
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas is unavailable");
+    ctx.drawImage(img, 0, 0, w, h);
+    const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!pngBlob) throw new Error("Could not encode PNG");
+    downloadBlob(pngBlob, filename);
+  } catch (error) {
+    downloadBlob(svgBlob, filename.replace(/\.png$/i, ".svg"));
+    throw error;
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
 function displayAltText(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
   const altSlot = slots.find((slot) => slot?.name === "alt");
@@ -710,6 +868,9 @@ function markdownComponents(flowParams, inline = false) {
     ...(inline ? { p: ({ children: pChildren }) => <>{pChildren}</> } : {}),
     img: ({ src, alt }) => (
       <img src={workspaceRawFileUrl(src, flowParams)} alt={alt || ""} loading="lazy" />
+    ),
+    a: ({ href, children }) => (
+      <a href={href || ""} target="_blank" rel="noopener noreferrer">{children}</a>
     ),
   };
 }
@@ -1180,8 +1341,8 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
           title={data?.label || "HTML preview"}
-          sandbox="allow-scripts allow-forms allow-modals"
-          srcDoc={content}
+          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
+          srcDoc={htmlDisplaySrcDoc(content)}
         />
       </VisibleScrollFrame>
     );
@@ -1212,6 +1373,37 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     );
   }
   return <VisibleScrollFrame className="af-work-display-body af-work-display-body--ascii"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
+}
+
+function DisplayPickerPreview({ node }) {
+  const kind = displayKind(node?.data?.definitionId);
+  const rawContent = displayContent(node?.data);
+  const content = kind === "html" ? normalizeHtmlDisplayContent(rawContent) : rawContent;
+  if (!content.trim()) return <div className="af-display-picker-preview__empty">No content</div>;
+  if (kind === "html") {
+    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={htmlDisplaySrcDoc(content)} />;
+  }
+  if (kind === "image") {
+    return <img src={workspaceRawFileUrl(content, node?.data?.flowParams)} alt={node?.data?.label || node?.id} loading="lazy" />;
+  }
+  if (kind === "markdown") {
+    return <div className="af-display-picker-preview__markdown"><MarkdownDisplayContent content={content} flowParams={node?.data?.flowParams} /></div>;
+  }
+  if (kind === "chart") {
+    return <ChartDisplayContent content={content} />;
+  }
+  if (kind === "table") {
+    return <TableDisplayContent content={content} />;
+  }
+  if (kind === "mermaid") {
+    return (
+      <div className="af-display-picker-preview__diagram">
+        <MermaidPreview code={content} />
+        <pre>{content}</pre>
+      </div>
+    );
+  }
+  return <pre className="af-display-picker-preview__pre">{content}</pre>;
 }
 
 function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = false }) {
@@ -1465,6 +1657,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const kind = displayKind(data?.definitionId);
   const htmlFrameRef = useRef(null);
   const [htmlFrameVersion, setHtmlFrameVersion] = useState(0);
+  const [savingHtmlImage, setSavingHtmlImage] = useState(false);
   const [resizingDisplay, setResizingDisplay] = useState(false);
   const [markdownEditing, setMarkdownEditing] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState("");
@@ -1472,6 +1665,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const imageUploadInputRef = useRef(null);
   const markdownContent = kind === "markdown" ? displayContent(data) : "";
   const readOnly = Boolean(data?.readOnly);
+  const presentationMode = Boolean(data?.displayPageMode);
   useEffect(() => {
     if (!resizingDisplay) return undefined;
     const stop = () => setResizingDisplay(false);
@@ -1493,6 +1687,27 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
+  const saveHtmlImage = useCallback(async () => {
+    if (kind !== "html" || savingHtmlImage) return;
+    const content = normalizeHtmlDisplayContent(displayContent(data));
+    if (!content.trim()) return;
+    const rect = htmlFrameRef.current?.getBoundingClientRect?.();
+    const width = Math.round(rect?.width || Math.max(320, Number(displaySize?.width || 960) - 2));
+    const height = Math.round(rect?.height || Math.max(180, Number(displaySize?.height || 640) - 46));
+    setSavingHtmlImage(true);
+    try {
+      await saveHtmlDisplayAsImage({
+        content,
+        width,
+        height,
+        filename: safeDownloadFilename(data?.label || id || "html-render", "png"),
+      });
+    } catch (error) {
+      console.warn("Failed to save HTML display as PNG; downloaded SVG fallback.", error);
+    } finally {
+      setSavingHtmlImage(false);
+    }
+  }, [data, displaySize?.height, displaySize?.width, id, kind, savingHtmlImage]);
   const uploadImageFile = useCallback((file) => {
     if (readOnly) return;
     if (!file || kind !== "image") return;
@@ -1531,6 +1746,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         (selected ? " af-work-display-card--selected" : "") +
         (resizingDisplay ? " af-work-display-card--resizing" : "") +
         (imageDragActive ? " af-work-display-card--image-drop" : "") +
+        (presentationMode ? " af-work-display-card--presentation" : "") +
         (data?.isExecuting ? " af-work-display-card--executing" : "") +
         (data?.nodeStatus === "success" ? " af-work-display-card--done" : "") +
         (data?.nodeStatus === "failed" ? " af-work-display-card--failed" : "")
@@ -1545,8 +1761,6 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         position="bottom-right"
         minWidth={320}
         minHeight={180}
-        maxWidth={1200}
-        maxHeight={1000}
         onResizeStart={() => setResizingDisplay(true)}
         onResizeEnd={() => setResizingDisplay(false)}
       >
@@ -1634,6 +1848,16 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
               title="刷新"
             >
               <span className="material-symbols-outlined">refresh</span>
+            </button>
+            <button
+              type="button"
+              className="af-work-display-card__action"
+              disabled={savingHtmlImage}
+              onClick={saveHtmlImage}
+              aria-label="截图另存为图片"
+              title="截图另存为图片"
+            >
+              <span className="material-symbols-outlined">{savingHtmlImage ? "hourglass_empty" : "photo_camera"}</span>
             </button>
           </div>
         ) : null}
@@ -2181,6 +2405,85 @@ function nodeToPropDraft(node) {
   };
 }
 
+function normalizeWorkspacePropIoSlots(slots) {
+  return (Array.isArray(slots) ? slots : []).map((slot) => ({
+    type: String(slot?.type ?? "node").trim() || "node",
+    name: String(slot?.name ?? ""),
+    default: String(slot?.default ?? ""),
+    required: Boolean(slot?.required),
+    showOnNode: slot?.showOnNode != null
+      ? slot.showOnNode !== false
+      : Boolean(slot?.required) || String(slot?.type ?? "node").trim().toLowerCase() === "node",
+  }));
+}
+
+function workspaceNodeDataFromPropDraft(selectedNode, draft, nextId) {
+  const defId = String(selectedNode?.data?.definitionId ?? nextId);
+  const isProvideDef = defId.startsWith("provide_");
+  const roleStr = String(draft?.role || "").trim();
+  const role = VALID_ROLES.includes(roleStr) ? roleStr : "normal";
+  const modelTrim = String(draft?.model || "").trim();
+  const nextData = {
+    ...selectedNode.data,
+    label: String(draft?.label || "").trim() || nextId,
+    role,
+    model: modelTrim === "" || modelTrim === "default" ? undefined : modelTrim,
+    body: isProvideDef ? "" : String(draft?.body ?? ""),
+    images: isProvideDef ? [] : normalizeImages(draft?.images),
+    inputs: normalizeWorkspacePropIoSlots(draft?.inputs),
+    outputs: isProvideDef && Array.isArray(selectedNode.data?.outputs)
+      ? selectedNode.data.outputs
+      : normalizeWorkspacePropIoSlots(draft?.outputs),
+  };
+  const scriptTrim = String(draft?.script ?? "").trim();
+  if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
+  else delete nextData.script;
+  return nextData;
+}
+
+function workspaceApplyNodePropDraftToCanvasState({ nodes, edges, instances, selectedNode, draft, allowRename = false }) {
+  if (!draft || !selectedNode) return { ok: false, error: "" };
+  const oldId = selectedNode.id;
+  const trimmedNew = String(draft.newId || "").trim();
+  const nextId = allowRename ? trimmedNew : oldId;
+  if (allowRename) {
+    if (!NODE_INSTANCE_ID_RE.test(nextId)) return { ok: false, error: "Invalid instance id" };
+    if (nodes.some((node) => node.id === nextId && node.id !== oldId)) return { ok: false, error: "Duplicate instance id" };
+  }
+  const nextData = workspaceNodeDataFromPropDraft(selectedNode, draft, nextId);
+  const prevData = selectedNode.data || {};
+  const changed =
+    nextId !== oldId ||
+    prevData.label !== nextData.label ||
+    prevData.role !== nextData.role ||
+    prevData.model !== nextData.model ||
+    prevData.body !== nextData.body ||
+    JSON.stringify(normalizeImages(prevData.images)) !== JSON.stringify(nextData.images) ||
+    (prevData.script ?? undefined) !== (nextData.script ?? undefined) ||
+    JSON.stringify(prevData.inputs || []) !== JSON.stringify(nextData.inputs || []) ||
+    JSON.stringify(prevData.outputs || []) !== JSON.stringify(nextData.outputs || []);
+  if (!changed) return { ok: true, changed: false, nextId, nodes, edges, instances };
+
+  const nextNodes = nodes.map((node) => (
+    node.id === oldId ? { ...node, id: nextId, selected: true, data: nextData } : node
+  ));
+  let nextEdges = edges;
+  let nextInstances = instances;
+  if (nextId !== oldId) {
+    nextInstances = { ...(instances || {}) };
+    const base = { ...(nextInstances[oldId] || {}) };
+    delete nextInstances[oldId];
+    nextInstances[nextId] = base;
+    nextEdges = edges.map((edge, index) => ({
+      ...edge,
+      source: edge.source === oldId ? nextId : edge.source,
+      target: edge.target === oldId ? nextId : edge.target,
+      id: `we-${edge.source === oldId ? nextId : edge.source}-${edge.target === oldId ? nextId : edge.target}-${index}`,
+    }));
+  }
+  return { ok: true, changed: true, nextId, nodes: nextNodes, edges: nextEdges, instances: nextInstances };
+}
+
 function draftValueEquals(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
@@ -2649,10 +2952,18 @@ function WorkspacePageInner() {
   const reactFlow = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
+  const [workspaceMode, setWorkspaceMode] = useState(() => (
+    new URLSearchParams(window.location.search).get("view") === "display" ? "display" : "workspace"
+  ));
   const [nodes, setNodes] = useNodesState([]);
   const [edges, setEdges, rawOnEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const [displayPage, setDisplayPage] = useState(() => normalizeDisplayPageState(null, []));
+  const displayPageRef = useRef(displayPage);
+  const [workspaceViewport, setWorkspaceViewport] = useState(null);
+  const workspaceViewportRef = useRef(null);
+  const [selectedDisplayNodeIds, setSelectedDisplayNodeIds] = useState([]);
   const nodeHandleSignaturesRef = useRef(new Map());
   const renderedNodeLayoutSignaturesRef = useRef(new Map());
   const canvasClipboardRef = useRef(null);
@@ -2675,12 +2986,21 @@ function WorkspacePageInner() {
   const [publishSnippetError, setPublishSnippetError] = useState("");
   const [flowSnippetToast, setFlowSnippetToast] = useState("");
   const flowSnippetToastTimerRef = useRef(null);
+  const [displayShareOpen, setDisplayShareOpen] = useState(false);
+  const [displayShareBusy, setDisplayShareBusy] = useState(false);
+  const [displayShareError, setDisplayShareError] = useState("");
+  const [displayShareResult, setDisplayShareResult] = useState(null);
+  const [displayShareDraft, setDisplayShareDraft] = useState({ title: "", layout: "gallery", nodeIds: [] });
+  const [displayLinkOpen, setDisplayLinkOpen] = useState(false);
+  const [displayPickerOpen, setDisplayPickerOpen] = useState(false);
+  const [displayPickerSearch, setDisplayPickerSearch] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddMode, setQuickAddMode] = useState("nodes");
   const [quickAddSearch, setQuickAddSearch] = useState("");
   const [quickAddActiveIndex, setQuickAddActiveIndex] = useState(0);
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [nodePropDraft, setNodePropDraft] = useState(null);
+  const nodePropDraftRef = useRef(null);
   const [nodePropsError, setNodePropsError] = useState("");
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
@@ -2790,6 +3110,7 @@ function WorkspacePageInner() {
   const [nodeChatSessions, setNodeChatSessions] = useState({});
   const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [jumpPaletteOpen, setJumpPaletteOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState("pan");
   const [authUser, setAuthUser] = useState(null);
   const [runningRunNodeId, setRunningRunNodeId] = useState("");
@@ -2805,6 +3126,14 @@ function WorkspacePageInner() {
     if (!flowParams.flowId) return;
     recordPipelineView(flowParams.flowId, flowParams.flowSource || "user", "workspace", Boolean(flowParams.archived));
   }, [flowParams]);
+
+  useEffect(() => {
+    const syncWorkspaceModeFromUrl = () => {
+      setWorkspaceMode(new URLSearchParams(window.location.search).get("view") === "display" ? "display" : "workspace");
+    };
+    window.addEventListener("popstate", syncWorkspaceModeFromUrl);
+    return () => window.removeEventListener("popstate", syncWorkspaceModeFromUrl);
+  }, []);
 
   useEffect(() => {
     setComposerMessages([]);
@@ -2847,6 +3176,11 @@ function WorkspacePageInner() {
       throw new Error("Readonly workspace");
     }
     const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current);
+    graph.ui = {
+      ...(graph.ui || {}),
+      ...(workspaceViewportRef.current ? { viewport: workspaceViewportRef.current } : {}),
+      displayPage: displayPageForGraph(displayPageRef.current, nextNodes),
+    };
     const res = await fetch("/api/workspace/graph", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2908,10 +3242,17 @@ function WorkspacePageInner() {
     setPalette(paletteList);
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
     const flow = graphToFlow(graph, paletteList);
+    const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
+    const nextWorkspaceViewport = normalizeCanvasViewport(graph?.ui?.viewport);
     instancesRef.current = flow.instances;
     setInstances(flow.instances);
     setNodes(flow.nodes);
     setEdges(flow.edges);
+    setDisplayPage(nextDisplayPage);
+    displayPageRef.current = nextDisplayPage;
+    setWorkspaceViewport(nextWorkspaceViewport);
+    workspaceViewportRef.current = nextWorkspaceViewport;
+    setSelectedDisplayNodeIds([]);
     resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     const writable = graphJson.writable !== false;
     setWorkspaceWritable(writable);
@@ -3001,7 +3342,37 @@ function WorkspacePageInner() {
       return;
     }
     if (!runNodeId || runningRunNodeId) return;
-    const graph = flowToGraph(nodes, edges, instancesRef.current);
+    let runNodes = nodes;
+    let runEdges = edges;
+    let runInstances = instancesRef.current;
+    const draft = nodePropDraftRef.current;
+    if (draft?.id) {
+      const draftSelectedNode = runNodes.find((node) => node.id === draft.id);
+      const applied = workspaceApplyNodePropDraftToCanvasState({
+        nodes: runNodes,
+        edges: runEdges,
+        instances: runInstances,
+        selectedNode: draftSelectedNode,
+        draft,
+        allowRename: false,
+      });
+      if (applied?.error) {
+        setNodePropsError(applied.error);
+        setStatus(applied.error);
+        return;
+      }
+      if (applied?.ok && applied.changed) {
+        runNodes = applied.nodes;
+        runEdges = applied.edges;
+        runInstances = applied.instances;
+        instancesRef.current = runInstances;
+        setInstances(runInstances);
+        setNodes(runNodes);
+        setEdges(runEdges);
+        refreshNodeInternals(applied.nextId || draft.id);
+      }
+    }
+    const graph = flowToGraph(runNodes, runEdges, runInstances);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
     const runSessionLabel = `Run ${runNodeId}`;
     const abortController = new AbortController();
@@ -3025,7 +3396,7 @@ function WorkspacePageInner() {
       },
     ]);
     try {
-      await saveGraph(nodes, edges);
+      await saveGraph(runNodes, runEdges);
       const res = await fetch("/api/workspace/run", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
@@ -3436,7 +3807,7 @@ function WorkspacePageInner() {
       setRunningRunNodeId("");
       setWorkspaceExecutingNodes(new Set());
     }
-  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes, workspaceWritable]);
+  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes, workspaceWritable]);
 
   const refreshSkills = useCallback(async () => {
     try {
@@ -3546,6 +3917,18 @@ function WorkspacePageInner() {
   }, [edges]);
 
   useEffect(() => {
+    displayPageRef.current = displayPage;
+  }, [displayPage]);
+
+  useEffect(() => {
+    workspaceViewportRef.current = workspaceViewport;
+  }, [workspaceViewport]);
+
+  useEffect(() => {
+    nodePropDraftRef.current = nodePropDraft;
+  }, [nodePropDraft]);
+
+  useEffect(() => {
     connectionMenuRef.current = connectionMenu;
   }, [connectionMenu]);
 
@@ -3576,7 +3959,7 @@ function WorkspacePageInner() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [nodes, edges, saveGraph, workspaceWritable]);
+  }, [nodes, edges, displayPage, saveGraph, workspaceWritable]);
 
   const changeLoadSkillKeys = useCallback((nodeId, keys) => {
     if (!workspaceWritable) {
@@ -3992,11 +4375,81 @@ function WorkspacePageInner() {
     },
   })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
+  const hydratedNodeById = useMemo(
+    () => new Map(hydratedNodes.map((node) => [node.id, node])),
+    [hydratedNodes],
+  );
+
+  const displayCanvasNodes = useMemo(() => {
+    const selected = new Set(selectedDisplayNodeIds);
+    return displayPage.nodeIds
+      .map((sourceId, index) => {
+        const sourceNode = hydratedNodeById.get(sourceId);
+        if (!sourceNode || !displayKind(sourceNode.data?.definitionId)) return null;
+        const fallbackSize = persistedWorkspaceNodeSize(sourceNode) || { width: 520, height: 320 };
+        const size = normalizeWorkspaceNodeSize(displayPage.nodeSizes[sourceId] || fallbackSize, { display: true }) || fallbackSize;
+        const position = displayPage.nodePositions[sourceId] || { x: 180 + index * 36, y: 120 + index * 28 };
+        return {
+          ...sourceNode,
+          id: displayRefNodeId(sourceId),
+          position,
+          selected: selected.has(sourceId),
+          width: size.width,
+          height: size.height,
+          data: {
+            ...sourceNode.data,
+            sourceNodeId: sourceId,
+            displayPageMode: true,
+            readOnly: true,
+            selected: selected.has(sourceId),
+            displaySize: size,
+            nodeSize: size,
+          },
+        };
+      })
+      .filter(Boolean);
+  }, [displayPage, hydratedNodeById, selectedDisplayNodeIds]);
+
+  const availableDisplayNodes = useMemo(
+    () => hydratedNodes.filter((node) => displayKind(node?.data?.definitionId)),
+    [hydratedNodes],
+  );
+
+  const isDisplayMode = workspaceMode === "display";
+
+  useEffect(() => {
+    if (!isDisplayMode || !displayPage.viewport) return undefined;
+    const viewport = displayPage.viewport;
+    const apply = () => {
+      try {
+        reactFlow.setViewport(viewport, { duration: 0 });
+      } catch {
+        /* React Flow may not be mounted yet during route transitions. */
+      }
+    };
+    const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(apply));
+    return () => window.cancelAnimationFrame(raf);
+  }, [displayPage.viewport, isDisplayMode, reactFlow]);
+
+  useEffect(() => {
+    if (isDisplayMode || !workspaceViewport) return undefined;
+    const viewport = workspaceViewport;
+    const apply = () => {
+      try {
+        reactFlow.setViewport(viewport, { duration: 0 });
+      } catch {
+        /* React Flow may not be mounted yet during route transitions. */
+      }
+    };
+    const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(apply));
+    return () => window.cancelAnimationFrame(raf);
+  }, [isDisplayMode, reactFlow, workspaceViewport]);
+
   useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
-    for (const node of hydratedNodes) {
+    for (const node of [...hydratedNodes, ...displayCanvasNodes]) {
       const signature = workspaceNodeLayoutSignature(node);
       next.set(node.id, signature);
       if (prev.get(node.id) !== signature) changedIds.push(node.id);
@@ -4010,7 +4463,7 @@ function WorkspacePageInner() {
       window.cancelAnimationFrame(raf);
       window.clearTimeout(timer);
     };
-  }, [hydratedNodes, updateNodeInternals]);
+  }, [displayCanvasNodes, hydratedNodes, updateNodeInternals]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -4047,83 +4500,26 @@ function WorkspacePageInner() {
       setStatus("Readonly workspace");
       return false;
     }
-    const oldId = selectedNode.id;
-    const trimmedNew = String(nodePropDraft.newId || "").trim();
-    const nextId = allowRename ? trimmedNew : oldId;
     setNodePropsError("");
-    if (allowRename) {
-      if (!NODE_INSTANCE_ID_RE.test(nextId)) {
-        setNodePropsError("Invalid instance id");
-        return false;
-      }
-      if (nodes.some((node) => node.id === nextId && node.id !== oldId)) {
-        setNodePropsError("Duplicate instance id");
-        return false;
-      }
+    const applied = workspaceApplyNodePropDraftToCanvasState({
+      nodes,
+      edges,
+      instances: instancesRef.current,
+      selectedNode,
+      draft: nodePropDraft,
+      allowRename,
+    });
+    if (applied?.error) {
+      setNodePropsError(applied.error);
+      return false;
     }
-    const roleStr = String(nodePropDraft.role || "").trim();
-    const role = VALID_ROLES.includes(roleStr) ? roleStr : "normal";
-    const modelTrim = String(nodePropDraft.model || "").trim();
-    const normIo = (arr) => (Array.isArray(arr) ? arr : []).map((slot) => ({
-      type: String(slot?.type ?? "node").trim() || "node",
-      name: String(slot?.name ?? ""),
-      default: String(slot?.default ?? ""),
-      required: Boolean(slot?.required),
-      showOnNode: slot?.showOnNode != null
-        ? slot.showOnNode !== false
-        : Boolean(slot?.required) || String(slot?.type ?? "node").trim().toLowerCase() === "node",
-    }));
-    const defId = String(selectedNode.data?.definitionId ?? nextId);
-    const isProvideDef = defId.startsWith("provide_");
-    const nextData = {
-      ...selectedNode.data,
-      label: String(nodePropDraft.label || "").trim() || nextId,
-      role,
-      model: modelTrim === "" || modelTrim === "default" ? undefined : modelTrim,
-      body: isProvideDef ? "" : String(nodePropDraft.body ?? ""),
-      images: isProvideDef ? [] : normalizeImages(nodePropDraft.images),
-      inputs: normIo(nodePropDraft.inputs),
-      outputs: isProvideDef && Array.isArray(selectedNode.data?.outputs) ? selectedNode.data.outputs : normIo(nodePropDraft.outputs),
-    };
-    const scriptTrim = String(nodePropDraft.script ?? "").trim();
-    if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(nodePropDraft.script ?? "");
-    else delete nextData.script;
-
-    const prevData = selectedNode.data || {};
-    const changed =
-      nextId !== oldId ||
-      prevData.label !== nextData.label ||
-      prevData.role !== nextData.role ||
-      prevData.model !== nextData.model ||
-      prevData.body !== nextData.body ||
-      JSON.stringify(normalizeImages(prevData.images)) !== JSON.stringify(nextData.images) ||
-      (prevData.script ?? undefined) !== (nextData.script ?? undefined) ||
-      JSON.stringify(prevData.inputs || []) !== JSON.stringify(nextData.inputs || []) ||
-      JSON.stringify(prevData.outputs || []) !== JSON.stringify(nextData.outputs || []);
-    if (!changed) return true;
-
-    let nextNodes = nodes.map((node) => (
-      node.id === oldId ? { ...node, id: nextId, selected: true, data: nextData } : node
-    ));
-    let nextEdges = edges;
-    if (nextId !== oldId) {
-      const nextInstances = { ...instancesRef.current };
-      const base = { ...(nextInstances[oldId] || {}) };
-      delete nextInstances[oldId];
-      nextInstances[nextId] = base;
-      instancesRef.current = nextInstances;
-      setInstances(nextInstances);
-      nextEdges = edges.map((edge, index) => ({
-        ...edge,
-        source: edge.source === oldId ? nextId : edge.source,
-        target: edge.target === oldId ? nextId : edge.target,
-        id: `we-${edge.source === oldId ? nextId : edge.source}-${edge.target === oldId ? nextId : edge.target}-${index}`,
-      }));
-      setSelectedNodeId(nextId);
-    }
-    setNodes(nextNodes);
-    setEdges(nextEdges);
-    refreshNodeInternals(nextId);
+    if (!applied?.ok || !applied.changed) return true;
+    instancesRef.current = applied.instances;
+    setInstances(applied.instances);
+    setNodes(applied.nodes);
+    setEdges(applied.edges);
+    if (applied.nextId !== selectedNode.id) setSelectedNodeId(applied.nextId);
+    refreshNodeInternals(applied.nextId);
     return true;
   }, [edges, nodePropDraft, nodes, selectedNode, setEdges, setNodes, refreshNodeInternals, workspaceWritable]);
 
@@ -4166,6 +4562,63 @@ function WorkspacePageInner() {
       };
     });
   }, [edges, hydratedNodes]);
+
+  const canvasNodes = isDisplayMode ? displayCanvasNodes : hydratedNodes;
+  const canvasEdges = isDisplayMode ? [] : coloredEdges;
+  const jumpPaletteNodes = useMemo(() => (
+    isDisplayMode
+      ? displayCanvasNodes.map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
+      : hydratedNodes
+  ), [displayCanvasNodes, hydratedNodes, isDisplayMode]);
+
+  const jumpToWorkspaceNodeById = useCallback((nodeId) => {
+    const sourceId = String(nodeId || "").trim();
+    if (!sourceId) return;
+    const flowNodeId = isDisplayMode ? displayRefNodeId(sourceId) : sourceId;
+    if (isDisplayMode) {
+      setSelectedDisplayNodeIds([sourceId]);
+    } else {
+      setNodes((list) => list.map((node) => ({ ...node, selected: node.id === flowNodeId })));
+      setEdges((list) => list.map((edge) => ({ ...edge, selected: false })));
+      setSelectedNodeId(flowNodeId);
+    }
+    const center = () => {
+      const userNode = reactFlow.getNode(flowNodeId);
+      if (!userNode) return;
+      const internal = reactFlow.getInternalNode?.(flowNodeId);
+      const width = internal?.measured?.width ?? internal?.width ?? userNode.width ?? 260;
+      const height = internal?.measured?.height ?? internal?.height ?? userNode.height ?? 120;
+      const { zoom } = reactFlow.getViewport();
+      void reactFlow.setCenter(userNode.position.x + width / 2, userNode.position.y + height / 2, {
+        zoom: clampWorkspaceFocusZoom(zoom),
+        duration: 240,
+      });
+    };
+    window.requestAnimationFrame(() => window.requestAnimationFrame(center));
+  }, [isDisplayMode, reactFlow, setEdges, setNodes]);
+
+  const lockCurrentViewport = useCallback(() => {
+    const viewport = reactFlow.getViewport();
+    const normalized = {
+      x: Number(viewport.x) || 0,
+      y: Number(viewport.y) || 0,
+      zoom: Math.min(Math.max(Number(viewport.zoom) || 1, 0.1), 4),
+    };
+    if (isDisplayMode) {
+      const next = {
+        ...displayPageRef.current,
+        viewport: normalized,
+      };
+      displayPageRef.current = next;
+      setDisplayPage(next);
+      setStatus("已固定 Display 进入视角");
+    } else {
+      workspaceViewportRef.current = normalized;
+      setWorkspaceViewport(normalized);
+      setStatus("已固定 Workspace 进入视角");
+    }
+    saveGraph(nodesRef.current, edgesRef.current).catch((e) => setStatus(String(e.message || e)));
+  }, [isDisplayMode, reactFlow, saveGraph]);
 
   const groupedPalette = useMemo(() => {
     const q = paletteSearch.trim().toLowerCase();
@@ -4272,6 +4725,16 @@ function WorkspacePageInner() {
 
   const selectedCanvasNodeIds = useMemo(() => selectedCanvasNodes.map((node) => node.id), [selectedCanvasNodes]);
 
+  const workspaceDisplayNodes = useMemo(
+    () => nodes.filter((node) => displayKind(node?.data?.definitionId)),
+    [nodes],
+  );
+
+  const selectedWorkspaceDisplayNodeIds = useMemo(
+    () => selectedCanvasNodes.filter((node) => displayKind(node?.data?.definitionId)).map((node) => node.id),
+    [selectedCanvasNodes],
+  );
+
   const authInitial = useMemo(() => {
     const name = String(authUser?.username || authUser?.userId || "").trim();
     return name ? name.slice(0, 1).toUpperCase() : "?";
@@ -4283,6 +4746,78 @@ function WorkspacePageInner() {
     () => edges.filter((edge) => selectedCanvasNodeIdSet.has(edge.source) && selectedCanvasNodeIdSet.has(edge.target)),
     [edges, selectedCanvasNodeIdSet],
   );
+
+  const switchWorkspaceMode = useCallback((mode) => {
+    const nextMode = mode === "display" ? "display" : "workspace";
+    setWorkspaceMode(nextMode);
+    setSelectedNodeId("");
+    setSelectedDisplayNodeIds([]);
+    setConnectionMenu(null);
+    setQuickAddOpen(false);
+    setDisplayPickerOpen(false);
+    const q = flowParamsQuery(flowParams);
+    if (nextMode === "display") q.set("view", "display");
+    const url = `/workspace${q.toString() ? `?${q.toString()}` : ""}`;
+    window.history.pushState({}, "", url);
+  }, [flowParams]);
+
+  const addDisplayPageNode = useCallback((sourceId) => {
+    const id = String(sourceId || "").trim();
+    if (!id) return;
+    const sourceNode = nodesRef.current.find((node) => node.id === id);
+    if (!sourceNode || !displayKind(sourceNode.data?.definitionId)) {
+      setStatus("展示节点不可用");
+      return;
+    }
+    setDisplayPage((prev) => {
+      if (prev.nodeIds.includes(id)) return prev;
+      const nextIndex = prev.nodeIds.length;
+      const sourceSize = persistedWorkspaceNodeSize(sourceNode);
+      return {
+        nodeIds: [...prev.nodeIds, id],
+        nodePositions: {
+          ...prev.nodePositions,
+          [id]: { x: 180 + nextIndex * 36, y: 120 + nextIndex * 28 },
+        },
+        nodeSizes: {
+          ...prev.nodeSizes,
+          ...(sourceSize ? { [id]: sourceSize } : {}),
+        },
+      };
+    });
+    setSelectedDisplayNodeIds([id]);
+  }, []);
+
+  const removeDisplayPageNode = useCallback((sourceId) => {
+    const id = String(sourceId || "").trim();
+    if (!id) return;
+    setDisplayPage((prev) => {
+      const nodeIds = prev.nodeIds.filter((item) => item !== id);
+      const nodePositions = { ...prev.nodePositions };
+      const nodeSizes = { ...prev.nodeSizes };
+      delete nodePositions[id];
+      delete nodeSizes[id];
+      return { nodeIds, nodePositions, nodeSizes };
+    });
+    setSelectedDisplayNodeIds((ids) => ids.filter((item) => item !== id));
+  }, []);
+
+  const toggleDisplayPageNode = useCallback((sourceId) => {
+    const id = String(sourceId || "").trim();
+    if (!id) return;
+    if (displayPageRef.current.nodeIds.includes(id)) removeDisplayPageNode(id);
+    else addDisplayPageNode(id);
+  }, [addDisplayPageNode, removeDisplayPageNode]);
+
+  const filteredAvailableDisplayNodes = useMemo(() => {
+    const q = displayPickerSearch.trim().toLowerCase();
+    if (!q) return availableDisplayNodes;
+    return availableDisplayNodes.filter((node) =>
+      [node.id, node.data?.label, node.data?.definitionId]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q))
+    );
+  }, [availableDisplayNodes, displayPickerSearch]);
 
   const filteredFlowSnippets = useMemo(() => {
     const q = paletteSearch.trim().toLowerCase();
@@ -4467,6 +5002,100 @@ function WorkspacePageInner() {
     }
   }, [loadFlowSnippets, publishSnippetDraft, selectedCanvasInternalEdges, selectedCanvasNodes, showFlowSnippetToast]);
 
+  const openDisplayShareDialog = useCallback(() => {
+    if (workspaceDisplayNodes.length === 0) {
+      setStatus("当前 workspace 没有 display 节点");
+      return;
+    }
+    const defaultNodeIds = selectedWorkspaceDisplayNodeIds.length > 0 ? selectedWorkspaceDisplayNodeIds : workspaceDisplayNodes.map((node) => node.id);
+    const title = flowParams.flowId ? `${flowParams.flowId} 展示页` : "AgentFlow Display";
+    setDisplayShareDraft({ title, layout: "gallery", nodeIds: defaultNodeIds });
+    setDisplayShareError("");
+    setDisplayShareResult(null);
+    setDisplayShareOpen(true);
+  }, [flowParams.flowId, selectedWorkspaceDisplayNodeIds, workspaceDisplayNodes]);
+
+  const toggleDisplayShareNode = useCallback((nodeId) => {
+    setDisplayShareDraft((prev) => {
+      const current = Array.isArray(prev.nodeIds) ? prev.nodeIds : [];
+      return current.includes(nodeId)
+        ? { ...prev, nodeIds: current.filter((id) => id !== nodeId) }
+        : { ...prev, nodeIds: [...current, nodeId] };
+    });
+  }, []);
+
+  const publishDisplayShare = useCallback(async () => {
+    const title = displayShareDraft.title.trim();
+    const nodeIds = Array.isArray(displayShareDraft.nodeIds) ? displayShareDraft.nodeIds : [];
+    if (nodeIds.length === 0) {
+      setDisplayShareError("请选择至少一个 display 节点。");
+      return;
+    }
+    setDisplayShareBusy(true);
+    setDisplayShareError("");
+    setDisplayShareResult(null);
+    try {
+      await saveGraph(nodes, edges);
+      const res = await fetch("/api/display/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          title,
+          layout: displayShareDraft.layout,
+          nodeIds,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "发布展示页失败");
+      const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
+      setDisplayShareResult({ ...json, absoluteUrl });
+      setStatus("展示页已生成");
+    } catch (e) {
+      setDisplayShareError(String(e.message || e));
+    } finally {
+      setDisplayShareBusy(false);
+    }
+  }, [displayShareDraft, edges, flowParams, nodes, saveGraph]);
+
+  const publishCurrentDisplayPage = useCallback(async () => {
+    const nodeIds = Array.isArray(displayPage.nodeIds) ? displayPage.nodeIds : [];
+    if (nodeIds.length === 0) {
+      setDisplayShareError("请先添加至少一个展示节点。");
+      setStatus("请先添加至少一个展示节点");
+      setDisplayPickerOpen(true);
+      return;
+    }
+    setDisplayShareBusy(true);
+    setDisplayShareError("");
+    try {
+      await saveGraph(nodes, edges);
+      const title = flowParams.flowId ? `${flowParams.flowId} 展示页` : "AgentFlow Display";
+      const res = await fetch("/api/display/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          title,
+          layout: "canvas",
+          nodeIds,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "生成展示链接失败");
+      const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
+      setDisplayShareResult({ ...json, absoluteUrl });
+      setDisplayLinkOpen(true);
+      setStatus("展示链接已生成");
+    } catch (e) {
+      const message = String(e.message || e);
+      setDisplayShareError(message);
+      setStatus(message);
+    } finally {
+      setDisplayShareBusy(false);
+    }
+  }, [displayPage.nodeIds, edges, flowParams, nodes, saveGraph]);
+
   const dismissSelectedNode = useCallback((nodeId) => {
     setNodes((list) => list.map((node) => (
       node.id === nodeId ? { ...node, selected: false } : node
@@ -4516,6 +5145,42 @@ function WorkspacePageInner() {
   }, [skillsOpen, updateSkillsMenuPosition]);
 
   const handleNodesChange = useCallback((changes) => {
+    if (workspaceMode === "display") {
+      const nextSelected = [];
+      let shouldUpdateLayout = false;
+      setDisplayPage((prev) => {
+        const nodePositions = { ...prev.nodePositions };
+        const nodeSizes = { ...prev.nodeSizes };
+        for (const change of changes || []) {
+          const sourceId = sourceIdFromDisplayRefId(change?.id);
+          if (!sourceId || !prev.nodeIds.includes(sourceId)) continue;
+          if (change.type === "select") {
+            if (change.selected) nextSelected.push(sourceId);
+            continue;
+          }
+          if (change.type === "position" && change.position) {
+            nodePositions[sourceId] = { x: change.position.x, y: change.position.y };
+            shouldUpdateLayout = true;
+            continue;
+          }
+          if (change.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
+            const size = normalizeWorkspaceNodeSize({
+              width: Math.round(Number(change.dimensions.width)),
+              height: Math.round(Number(change.dimensions.height)),
+            }, { display: true });
+            if (size) {
+              nodeSizes[sourceId] = size;
+              shouldUpdateLayout = true;
+            }
+          }
+        }
+        return shouldUpdateLayout ? { ...prev, nodePositions, nodeSizes } : prev;
+      });
+      if ((changes || []).some((change) => change?.type === "select")) {
+        setSelectedDisplayNodeIds(nextSelected);
+      }
+      return;
+    }
     if (!workspaceWritable) {
       const selectionChanges = (changes || []).filter((change) => change?.type === "select");
       if (selectionChanges.length > 0) {
@@ -4566,9 +5231,10 @@ function WorkspacePageInner() {
       window.requestAnimationFrame(refresh);
       window.setTimeout(refresh, 80);
     }
-  }, [nodes, setNodes, updateNodeInternals, workspaceWritable]);
+  }, [nodes, setNodes, updateNodeInternals, workspaceMode, workspaceWritable]);
 
   const handleEdgesChange = useCallback((changes) => {
+    if (workspaceMode === "display") return;
     if (!workspaceWritable) {
       const selectionChanges = (changes || []).filter((change) => change?.type === "select");
       if (selectionChanges.length > 0) {
@@ -4577,7 +5243,7 @@ function WorkspacePageInner() {
       return;
     }
     rawOnEdgesChange(changes);
-  }, [rawOnEdgesChange, setEdges, workspaceWritable]);
+  }, [rawOnEdgesChange, setEdges, workspaceMode, workspaceWritable]);
 
   const defaultWorkspaceNodePosition = useCallback(() => {
     const wrap = document.querySelector(".af-workspace-canvas .react-flow");
@@ -4762,6 +5428,13 @@ function WorkspacePageInner() {
         saveGraph().catch((e) => setStatus(String(e.message || e)));
         return;
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        event.stopPropagation();
+        setJumpPaletteOpen((open) => !open);
+        return;
+      }
+      if (jumpPaletteOpen) return;
       if (shortcutsOpen) {
         if (event.key === "Escape" || isQuestionMarkShortcut(event)) {
           event.preventDefault();
@@ -4776,6 +5449,12 @@ function WorkspacePageInner() {
         (event.metaKey || event.ctrlKey) &&
         ((event.shiftKey && shortcutKey === "z") || shortcutKey === "y");
       if (wantsUndo || wantsRedo) {
+        if (isDisplayMode) {
+          event.preventDefault();
+          event.stopPropagation();
+          setStatus("展示页布局会自动保存");
+          return;
+        }
         if (!workspaceWritable) {
           event.preventDefault();
           setStatus("Readonly workspace");
@@ -4788,6 +5467,7 @@ function WorkspacePageInner() {
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
+        if (isDisplayMode) return;
         const clip = buildCanvasClipboard(nodesRef.current, edgesRef.current, instancesRef.current);
         if (clip) {
           event.preventDefault();
@@ -4798,6 +5478,11 @@ function WorkspacePageInner() {
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+        if (isDisplayMode) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (!workspaceWritable) {
           event.preventDefault();
           setStatus("Readonly workspace");
@@ -4823,11 +5508,20 @@ function WorkspacePageInner() {
       if (event.key === "a" || event.key === "A") {
         if (event.metaKey || event.ctrlKey) {
           event.preventDefault();
-          setNodes((list) => list.map((node) => ({ ...node, selected: true })));
-          setEdges((list) => list.map((edge) => ({ ...edge, selected: false })));
+          if (isDisplayMode) {
+            setSelectedDisplayNodeIds(displayPageRef.current.nodeIds);
+          } else {
+            setNodes((list) => list.map((node) => ({ ...node, selected: true })));
+            setEdges((list) => list.map((edge) => ({ ...edge, selected: false })));
+          }
           return;
         }
         if (event.altKey) return;
+        if (isDisplayMode) {
+          event.preventDefault();
+          setDisplayPickerOpen(true);
+          return;
+        }
         if (!workspaceWritable) {
           event.preventDefault();
           setStatus("Readonly workspace");
@@ -4845,11 +5539,16 @@ function WorkspacePageInner() {
       if ((event.key === "h" || event.key === "H") && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         setCanvasTool("pan");
+        return;
+      }
+      if ((event.key === "f" || event.key === "F") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        lockCurrentViewport();
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas, workspaceWritable]);
+  }, [isDisplayMode, jumpPaletteOpen, lockCurrentViewport, redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas, workspaceWritable]);
 
   const toggleDir = useCallback((dirPath) => {
     setCollapsedDirs((prev) => {
@@ -5135,11 +5834,51 @@ function WorkspacePageInner() {
                 archived: Boolean(flowParams.archived),
               }, "pipeline"));
             }}>Pipeline</button>
-            <button type="button" className="af-view-switch__active">Workspace</button>
+            <button
+              type="button"
+              className={workspaceMode === "workspace" ? "af-view-switch__active" : ""}
+              onClick={() => switchWorkspaceMode("workspace")}
+            >
+              Workspace
+            </button>
+            <button
+              type="button"
+              className={workspaceMode === "display" ? "af-view-switch__active" : ""}
+              onClick={() => switchWorkspaceMode("display")}
+            >
+              Display
+            </button>
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
           <span className="af-workspace-save-status">{status}</span>
+          {isDisplayMode ? (
+            <>
+              <button
+                type="button"
+                className="af-workspace-display-share-btn"
+                disabled={displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
+                onClick={() => {
+                  if (displayShareResult?.absoluteUrl) setDisplayLinkOpen(true);
+                  else void publishCurrentDisplayPage();
+                }}
+                title={displayShareResult?.absoluteUrl ? "查看展示链接" : displayPage.nodeIds.length === 0 ? "先添加展示节点" : "生成展示链接"}
+              >
+                <span className="material-symbols-outlined" aria-hidden>{displayShareBusy ? "hourglass_empty" : "ios_share"}</span>
+                {displayShareBusy ? "生成中" : displayShareResult?.absoluteUrl ? "展示链接" : "生成链接"}
+              </button>
+              <button
+                type="button"
+                className="af-workspace-display-share-btn"
+                disabled={availableDisplayNodes.length === 0}
+                onClick={() => setDisplayPickerOpen(true)}
+                title={availableDisplayNodes.length === 0 ? "当前 workspace 没有 display 节点" : "选择展示节点 (A)"}
+              >
+                <span className="material-symbols-outlined" aria-hidden>add_to_photos</span>
+                添加展示
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="af-icon-btn"
@@ -5152,6 +5891,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
+            disabled={isDisplayMode}
             onClick={() => setComposerSidebarOpen((v) => !v)}
           >
             AI
@@ -5174,11 +5914,12 @@ function WorkspacePageInner() {
       <div
         className={
           "af-workspace-body" +
-          (composerSidebarOpen || nodePropDraft ? " af-workspace-body--drawer" : "") +
-          (workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "")
+          (!isDisplayMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
+          (!isDisplayMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
+          (isDisplayMode ? " af-workspace-body--display-mode" : "")
         }
       >
-        {workspaceSidebarCollapsed ? (
+        {!isDisplayMode && workspaceSidebarCollapsed ? (
           <nav className="af-workspace-rail" aria-label="Workspace sidebar">
             <div className="af-workspace-rail__stack">
               <button
@@ -5213,7 +5954,7 @@ function WorkspacePageInner() {
             </div>
           </nav>
         ) : null}
-        <aside
+        {!isDisplayMode ? <aside
           ref={workspaceSidebarRef}
           className={"af-workspace-sidebar" + (workspaceSidebarResizing ? " af-workspace-sidebar--resizing" : "")}
           aria-hidden={workspaceSidebarCollapsed}
@@ -5443,39 +6184,51 @@ function WorkspacePageInner() {
             </div>
           </section>
 
-        </aside>
+        </aside> : null}
 
         <main className="af-workspace-canvas">
           <ReactFlow
-            className={"af-flow-canvas af-workspace-flow" + (canvasTool === "pan" ? " af-flow-canvas--tool-pan" : " af-flow-canvas--tool-select")}
-            nodes={hydratedNodes}
-            edges={coloredEdges}
+            className={
+              "af-flow-canvas af-workspace-flow" +
+              (canvasTool === "pan" ? " af-flow-canvas--tool-pan" : " af-flow-canvas--tool-select") +
+              (isDisplayMode ? " af-workspace-flow--display-mode" : "")
+            }
+            nodes={canvasNodes}
+            edges={canvasEdges}
             nodeTypes={nodeTypes}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
-            onConnect={handleConnect}
-            onConnectStart={handleConnectStart}
-            onConnectEnd={handleConnectEnd}
-            isValidConnection={isValidConnection}
+            onConnect={isDisplayMode ? undefined : handleConnect}
+            onConnectStart={isDisplayMode ? undefined : handleConnectStart}
+            onConnectEnd={isDisplayMode ? undefined : handleConnectEnd}
+            isValidConnection={isDisplayMode ? undefined : isValidConnection}
             onNodeClick={(_, node) => {
+              if (isDisplayMode) {
+                setSelectedDisplayNodeIds([sourceIdFromDisplayRefId(node.id)]);
+                return;
+              }
               // React Flow handles selection on click. If the properties drawer is already open,
               // keep it in sync with the clicked node; otherwise opening requires double click.
               if (selectedNodeId) setSelectedNodeId(node.id);
             }}
             onNodeDoubleClick={(event, node) => {
               event.preventDefault();
+              if (isDisplayMode) return;
               setComposerSidebarOpen(false);
               setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
               setEdges((list) => list.map((item) => ({ ...item, selected: false })));
               setSelectedNodeId(node.id);
             }}
-            onPaneClick={() => setSelectedNodeId("")}
-            onDrop={handleWorkspaceDrop}
-            onDragOver={handleWorkspaceDragOver}
-            nodesDraggable={workspaceWritable}
-            nodesConnectable={workspaceWritable}
-            edgesReconnectable={workspaceWritable}
-            deleteKeyCode={workspaceWritable ? ["Backspace", "Delete"] : null}
+            onPaneClick={() => {
+              if (isDisplayMode) setSelectedDisplayNodeIds([]);
+              else setSelectedNodeId("");
+            }}
+            onDrop={isDisplayMode ? undefined : handleWorkspaceDrop}
+            onDragOver={isDisplayMode ? undefined : handleWorkspaceDragOver}
+            nodesDraggable={isDisplayMode ? true : workspaceWritable}
+            nodesConnectable={isDisplayMode ? false : workspaceWritable}
+            edgesReconnectable={isDisplayMode ? false : workspaceWritable}
+            deleteKeyCode={isDisplayMode ? null : workspaceWritable ? ["Backspace", "Delete"] : null}
             selectionOnDrag={canvasTool === "select"}
             panOnDrag={canvasTool === "pan" ? true : [1, 2]}
             panActivationKeyCode="Space"
@@ -5486,7 +6239,7 @@ function WorkspacePageInner() {
           >
             <Background color="rgba(255,255,255,0.12)" gap={22} size={1} />
           </ReactFlow>
-          {connectionMenu ? (() => {
+          {!isDisplayMode && connectionMenu ? (() => {
             const q = String(connectionMenu.query || "").trim().toLowerCase();
             const visibleCandidates = q
               ? connectionMenu.candidates.filter((candidate) =>
@@ -5577,7 +6330,7 @@ function WorkspacePageInner() {
             );
           })() : null}
 
-          {!composerMinimized ? (
+          {!isDisplayMode && !composerMinimized ? (
           <div className="af-workspace-composer af-bottom-composer-stack af-flow-bottom-composer">
             <div className="af-pipeline-composer-inner">
               <button
@@ -5773,7 +6526,7 @@ function WorkspacePageInner() {
               </div>
             </div>
           </div>
-          ) : (
+          ) : !isDisplayMode ? (
             <button
               type="button"
               className="af-workspace-composer-fab"
@@ -5783,9 +6536,9 @@ function WorkspacePageInner() {
             >
               <span className="material-symbols-outlined" aria-hidden>auto_awesome</span>
             </button>
-          )}
+          ) : null}
         </main>
-        {composerSidebarOpen ? (
+        {!isDisplayMode && composerSidebarOpen ? (
           <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workspace-composer-drawer" aria-label="Workspace AI Composer">
             <div className="af-composer-sidebar">
               <div className="af-pipeline-drawer-head">
@@ -5839,7 +6592,7 @@ function WorkspacePageInner() {
               </div>
             </div>
           </aside>
-        ) : nodePropDraft && selectedNode ? (
+        ) : !isDisplayMode && nodePropDraft && selectedNode ? (
           <aside className="af-pipeline-drawer af-workspace-node-drawer" aria-label="Workspace Node Properties">
             <NodePropertiesPanel
               draft={nodePropDraft}
@@ -5860,6 +6613,12 @@ function WorkspacePageInner() {
           </aside>
         ) : null}
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <NodeJumpPalette
+          open={jumpPaletteOpen}
+          onClose={() => setJumpPaletteOpen(false)}
+          onJump={jumpToWorkspaceNodeById}
+          nodes={jumpPaletteNodes}
+        />
         {publishSnippetOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
             <div className="af-flow-snippet-modal" role="dialog" aria-modal="true" aria-label="发布流程片段">
@@ -5939,7 +6698,232 @@ function WorkspacePageInner() {
           </div>,
           document.body,
         ) : null}
-        {quickAddOpen ? createPortal(
+        {displayShareOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="发布展示页">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>present_to_all</span>
+                  发布展示页
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setDisplayShareOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <label className="af-flow-snippet-field">
+                  <span>标题</span>
+                  <input
+                    type="text"
+                    value={displayShareDraft.title}
+                    onChange={(event) => setDisplayShareDraft((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="展示页标题"
+                    autoFocus
+                  />
+                </label>
+                <label className="af-flow-snippet-field">
+                  <span>布局</span>
+                  <select
+                    className="af-display-share-select"
+                    value={displayShareDraft.layout}
+                    onChange={(event) => setDisplayShareDraft((prev) => ({ ...prev, layout: event.target.value }))}
+                  >
+                    <option value="gallery">Gallery</option>
+                    <option value="document">Document</option>
+                    <option value="slides">Slides</option>
+                  </select>
+                </label>
+                <div className="af-display-share-node-list" role="group" aria-label="选择展示节点">
+                  {workspaceDisplayNodes.map((node) => {
+                    const checked = Array.isArray(displayShareDraft.nodeIds) && displayShareDraft.nodeIds.includes(node.id);
+                    return (
+                      <label key={node.id} className="af-display-share-node-row">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDisplayShareNode(node.id)}
+                        />
+                        <span className="af-display-share-node-row__main">
+                          <strong>{node.data?.label || node.id}</strong>
+                          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {displayShareResult?.absoluteUrl ? (
+                  <div className="af-display-share-result">
+                    <input type="text" readOnly value={displayShareResult.absoluteUrl} onFocus={(event) => event.target.select()} />
+                    <button type="button" onClick={() => window.open(displayShareResult.absoluteUrl, "_blank", "noopener,noreferrer")}>
+                      打开
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(displayShareResult.absoluteUrl).catch(() => {})}
+                    >
+                      复制
+                    </button>
+                  </div>
+                ) : null}
+                {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  onClick={() => setDisplayShareOpen(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  disabled={displayShareBusy || !Array.isArray(displayShareDraft.nodeIds) || displayShareDraft.nodeIds.length === 0}
+                  onClick={() => void publishDisplayShare()}
+                >
+                  {displayShareBusy ? "生成中..." : "生成链接"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {displayLinkOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-display-link-modal" role="dialog" aria-modal="true" aria-label="展示链接">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>link</span>
+                  展示链接
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setDisplayLinkOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                {displayShareResult?.absoluteUrl ? (
+                  <div className="af-display-link-modal__url">
+                    <input type="text" readOnly value={displayShareResult.absoluteUrl} onFocus={(event) => event.target.select()} autoFocus />
+                    <button type="button" onClick={() => window.open(displayShareResult.absoluteUrl, "_blank", "noopener,noreferrer")}>
+                      <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                      打开
+                    </button>
+                    <button type="button" onClick={() => navigator.clipboard?.writeText(displayShareResult.absoluteUrl).catch(() => {})}>
+                      <span className="material-symbols-outlined" aria-hidden>content_copy</span>
+                      复制
+                    </button>
+                  </div>
+                ) : (
+                  <div className="af-display-link-modal__empty">还没有生成展示链接</div>
+                )}
+                {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  onClick={() => setDisplayLinkOpen(false)}
+                >
+                  关闭
+                </button>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  disabled={displayShareBusy || displayPage.nodeIds.length === 0}
+                  onClick={() => void publishCurrentDisplayPage()}
+                >
+                  {displayShareBusy ? "生成中..." : displayShareResult?.absoluteUrl ? "更新链接" : "生成链接"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {displayPickerOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-display-picker-modal" role="dialog" aria-modal="true" aria-label="选择展示节点">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>add_to_photos</span>
+                  选择展示节点
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setDisplayPickerOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <label className="af-display-picker-search">
+                  <span className="material-symbols-outlined" aria-hidden>search</span>
+                  <input
+                    type="search"
+                    value={displayPickerSearch}
+                    onChange={(event) => setDisplayPickerSearch(event.target.value)}
+                    placeholder="搜索展示节点..."
+                    autoFocus
+                  />
+                </label>
+                <div className="af-display-picker-grid" role="group" aria-label="选择展示节点">
+                  {filteredAvailableDisplayNodes.length > 0 ? filteredAvailableDisplayNodes.map((node) => {
+                    const checked = displayPage.nodeIds.includes(node.id);
+                    const previewSize = persistedWorkspaceNodeSize(node) || { width: 420, height: 260 };
+                    const previewWidth = Math.max(1, Math.round(Number(previewSize.width) || 420));
+                    const previewHeight = Math.max(1, Math.round(Number(previewSize.height) || 260));
+                    return (
+                      <button
+                        key={node.id}
+                        type="button"
+                        className={"af-display-picker-card" + (checked ? " af-display-picker-card--selected" : "")}
+                        style={{ "--af-display-picker-card-ratio": `${previewWidth} / ${previewHeight}` }}
+                        onClick={() => toggleDisplayPageNode(node.id)}
+                      >
+                        <span className="af-display-picker-card__check" aria-hidden>
+                          <input type="checkbox" checked={checked} readOnly tabIndex={-1} />
+                        </span>
+                        <span className="af-display-picker-card__preview">
+                          <DisplayPickerPreview node={node} />
+                        </span>
+                        <span className="af-display-picker-card__meta">
+                          <strong>{node.data?.label || node.id}</strong>
+                          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
+                        </span>
+                      </button>
+                    );
+                  }) : (
+                    <div className="af-display-picker-empty">
+                      {availableDisplayNodes.length === 0 ? "当前 Workspace 没有 display 节点" : "没有匹配的展示节点"}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  onClick={() => setDisplayPickerOpen(false)}
+                >
+                  完成
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {!isDisplayMode && quickAddOpen ? createPortal(
           <div className="af-workspace-quick-add-backdrop" onMouseDown={() => setQuickAddOpen(false)}>
             <div className="af-workspace-quick-add" role="dialog" aria-modal="true" aria-label="Add workspace node" onMouseDown={(event) => event.stopPropagation()}>
               <div className="af-workspace-quick-add__tabs" role="tablist" aria-label="选择添加类型">

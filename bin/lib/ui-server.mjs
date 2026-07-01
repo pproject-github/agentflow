@@ -1279,6 +1279,108 @@ function readWorkspaceGraph(workspaceRoot) {
   };
 }
 
+const DISPLAY_SHARE_FILENAME = "display-shares.json";
+
+function displaySharesPath() {
+  return path.join(getAgentflowDataRoot(), DISPLAY_SHARE_FILENAME);
+}
+
+function readDisplayShares() {
+  const file = displaySharesPath();
+  if (!fs.existsSync(file)) return {};
+  const raw = fs.readFileSync(file, "utf-8");
+  if (!raw.trim()) return {};
+  const parsed = JSON.parse(raw);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function writeDisplayShares(shares) {
+  const file = displaySharesPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(shares && typeof shares === "object" ? shares : {}, null, 2) + "\n", "utf-8");
+}
+
+function createDisplayShareId() {
+  return crypto.randomBytes(12).toString("base64url");
+}
+
+function normalizeDisplayShareNodeIds(ids, graph) {
+  const out = [];
+  const seen = new Set();
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  for (const rawId of Array.isArray(ids) ? ids : []) {
+    const id = String(rawId || "").trim();
+    if (!id || seen.has(id)) continue;
+    const instance = instances[id];
+    if (!workspaceDisplayKind(instance?.definitionId)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function publicDisplayPayloadFromShare(root, share) {
+  const scoped = resolveWorkspaceScopeRoot(root, {
+    flowId: share.flowId || "",
+    flowSource: share.flowSource || "user",
+    archived: share.archived === true,
+  }, { userId: share.userId || "" });
+  if (scoped.error) return { error: scoped.error };
+  const { graph } = readWorkspaceGraph(scoped.root);
+  const nodeIds = normalizeDisplayShareNodeIds(share.nodeIds, graph);
+  const instances = graph.instances || {};
+  const displayPage = graph.ui && typeof graph.ui === "object" && graph.ui.displayPage && typeof graph.ui.displayPage === "object"
+    ? graph.ui.displayPage
+    : {};
+  const displayPageSizes = displayPage.nodeSizes && typeof displayPage.nodeSizes === "object" ? displayPage.nodeSizes : {};
+  const displayPagePositions = displayPage.nodePositions && typeof displayPage.nodePositions === "object" ? displayPage.nodePositions : {};
+  const displayPageViewport = displayPage.viewport && typeof displayPage.viewport === "object"
+    ? displayPage.viewport
+    : null;
+  const workspaceSizes = graph.ui && typeof graph.ui === "object" && graph.ui.nodeSizes && typeof graph.ui.nodeSizes === "object"
+    ? graph.ui.nodeSizes
+    : {};
+  const workspacePositions = graph.ui && typeof graph.ui === "object" && graph.ui.nodePositions && typeof graph.ui.nodePositions === "object"
+    ? graph.ui.nodePositions
+    : {};
+  const nodes = nodeIds.map((id) => {
+    const instance = instances[id] || {};
+    const definitionId = String(instance.definitionId || "");
+    return {
+      id,
+      definitionId,
+      kind: workspaceDisplayKind(definitionId),
+      label: String(instance.label || instance.displayName || id),
+      body: String(instance.body || ""),
+      inputs: Array.isArray(instance.input) ? instance.input : [],
+      outputs: Array.isArray(instance.output) ? instance.output : [],
+      size: displayPageSizes[id] || workspaceSizes[id] || null,
+      position: displayPagePositions[id] || workspacePositions[id] || null,
+    };
+  });
+  return {
+    ok: true,
+    share: {
+      id: share.id,
+      title: share.title || "AgentFlow Display",
+      layout: share.layout || "gallery",
+      flowId: share.flowId || "",
+      flowSource: share.flowSource || "user",
+      archived: share.archived === true,
+      nodeIds,
+      viewport: displayPageViewport &&
+        Number.isFinite(Number(displayPageViewport.x)) &&
+        Number.isFinite(Number(displayPageViewport.y)) &&
+        Number.isFinite(Number(displayPageViewport.zoom))
+        ? { x: Number(displayPageViewport.x), y: Number(displayPageViewport.y), zoom: Number(displayPageViewport.zoom) }
+        : null,
+      createdAt: share.createdAt || "",
+      updatedAt: share.updatedAt || "",
+    },
+    nodes,
+  };
+}
+
 function normalizeWorkspaceGraphPayload(payload) {
   const graph = payload?.graph && typeof payload.graph === "object" ? payload.graph : payload;
   return {
@@ -3139,6 +3241,75 @@ export function startUiServer({
 
     const authUser = getAuthUserFromRequest(req);
     const userCtx = authUser ? { userId: authUser.userId } : {};
+    if (req.method === "GET" && url.pathname === "/api/display/share") {
+      try {
+        const id = String(url.searchParams.get("id") || "").trim();
+        if (!id) {
+          json(res, 400, { error: "Missing display share id" });
+          return;
+        }
+        const share = readDisplayShares()[id];
+        if (!share) {
+          json(res, 404, { error: "Display share not found" });
+          return;
+        }
+        const payload = publicDisplayPayloadFromShare(root, share);
+        if (payload.error) {
+          json(res, 404, { error: payload.error });
+          return;
+        }
+        json(res, 200, payload);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/display/file/raw") {
+      try {
+        const id = String(url.searchParams.get("id") || "").trim();
+        if (!id) {
+          json(res, 400, { error: "Missing display share id" });
+          return;
+        }
+        const share = readDisplayShares()[id];
+        if (!share) {
+          json(res, 404, { error: "Display share not found" });
+          return;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: share.flowId || "",
+          flowSource: share.flowSource || "user",
+          archived: share.archived === true,
+        }, { userId: share.userId || "" });
+        if (scoped.error) {
+          json(res, 404, { error: scoped.error });
+          return;
+        }
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, url.searchParams.get("path") || "");
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+          json(res, 404, { error: "File not found" });
+          return;
+        }
+        const ext = path.extname(abs).toLowerCase();
+        const type = MIME[ext] || "application/octet-stream";
+        const data = fs.readFileSync(abs);
+        const headers = {
+          "Content-Type": type,
+          "Content-Length": data.length,
+          "Cache-Control": "public, max-age=300",
+        };
+        if (url.searchParams.get("download") === "1") {
+          headers["Content-Disposition"] = workspaceDownloadContentDisposition(rel);
+        }
+        res.writeHead(200, headers);
+        res.end(data);
+      } catch (e) {
+        json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (url.pathname.startsWith("/api/") && !authUser) {
       json(res, 401, { error: "Authentication required", setupRequired: authSetupRequired() });
       return;
@@ -3505,6 +3676,55 @@ export function startUiServer({
           archived: scoped.archived,
           writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)),
         });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/display/share") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const { graph } = readWorkspaceGraph(scoped.root);
+        const nodeIds = normalizeDisplayShareNodeIds(payload.nodeIds, graph);
+        if (nodeIds.length === 0) {
+          json(res, 400, { error: "请选择至少一个 display 节点" });
+          return;
+        }
+        const shares = readDisplayShares();
+        let id = createDisplayShareId();
+        while (shares[id]) id = createDisplayShareId();
+        const now = new Date().toISOString();
+        const share = {
+          id,
+          userId: authUser.userId,
+          flowId: scoped.flowId || "",
+          flowSource: scoped.flowSource || "user",
+          archived: scoped.archived === true,
+          title: String(payload.title || "").trim() || "AgentFlow Display",
+          layout: ["canvas", "gallery", "slides", "document"].includes(String(payload.layout || "")) ? String(payload.layout) : "canvas",
+          nodeIds,
+          createdAt: now,
+          updatedAt: now,
+        };
+        shares[id] = share;
+        writeDisplayShares(shares);
+        json(res, 200, { ok: true, share, url: `/display/${encodeURIComponent(id)}` });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
