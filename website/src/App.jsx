@@ -4,10 +4,12 @@ import Home from './pages/Home.jsx';
 import Docs from './pages/Docs.jsx';
 import DocDetail from './pages/DocDetail.jsx';
 import Demo from './pages/Demo.jsx';
+import LikeeContext from './pages/LikeeContext.jsx';
 
 export default function App() {
   return (
     <Routes>
+      <Route path="/likee-context" element={<LikeeContext />} />
       <Route path="/" element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="docs" element={<Docs />} />
