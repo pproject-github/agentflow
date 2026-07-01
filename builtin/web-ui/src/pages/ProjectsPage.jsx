@@ -378,6 +378,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const [adminBuiltinConfig, setAdminBuiltinConfig] = useState({ hiddenBuiltins: [], promoted: [] });
   const dragDepthRef = useRef(0);
   const mountIdRef = useRef(0);
+  const resourceLoadIdRef = useRef(0);
 
   const loadFlows = useCallback(async () => {
     const myId = ++mountIdRef.current;
@@ -455,10 +456,14 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   }, [authUser?.isAdmin, authUser?.userId, loadFlows]);
 
   const loadResources = useCallback(async () => {
+    const loadId = ++resourceLoadIdRef.current;
     setResourceError("");
     setResourcesLoaded(false);
     const nodesUrl = resourceKind === "my-nodes" ? "/api/nodes?scope=owned" : "/api/nodes";
     const flowSnippetsUrl = resourceKind === "my-flows" ? "/api/marketplace/flow-snippets?scope=owned" : "/api/marketplace/flow-snippets";
+    setGlobalNodes([]);
+    setFlowSnippets([]);
+    setSelectedResourceKey("");
     try {
       const [nodesRes, skillsRes, collectionsRes, flowSnippetsRes] = await Promise.all([
         fetch(nodesUrl),
@@ -474,17 +479,20 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       if (!skillsRes.ok) throw new Error(skillsJson.error || "Skills HTTP " + skillsRes.status);
       if (!collectionsRes.ok) throw new Error(collectionsJson.error || "Collections HTTP " + collectionsRes.status);
       if (!flowSnippetsRes.ok) throw new Error(flowSnippetsJson.error || "Flow snippets HTTP " + flowSnippetsRes.status);
+      if (loadId !== resourceLoadIdRef.current) return;
       setGlobalNodes(Array.isArray(nodesJson.nodes) ? nodesJson.nodes : Array.isArray(nodesJson) ? nodesJson : []);
       setGlobalSkills(Array.isArray(skillsJson.skills) ? skillsJson.skills : []);
       setSkillCollections(normalizeSkillCollections(collectionsJson));
       setFlowSnippets(Array.isArray(flowSnippetsJson.snippets) ? flowSnippetsJson.snippets : []);
     } catch (e) {
+      if (loadId !== resourceLoadIdRef.current) return;
       setGlobalNodes([]);
       setGlobalSkills([]);
       setFlowSnippets([]);
       setSkillCollections([]);
       setResourceError(String(e.message || e));
     } finally {
+      if (loadId !== resourceLoadIdRef.current) return;
       setResourcesLoaded(true);
     }
   }, [resourceKind]);
