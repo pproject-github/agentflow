@@ -90,6 +90,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const typeLabel = getNodeTypeLabel(data);
   const typeShortLabel = getNodeTypeShortLabel(typeLabel);
   const isRunMode = data?.isRunMode ?? false;
+  const readOnly = Boolean(data?.readOnly);
   const isExecuting = data?.isExecuting ?? false;
   const isDim = data?.isDim ?? false;
   const nodeStatus = data?.nodeStatus ?? null;
@@ -109,6 +110,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const images = normalizeImages(data?.images);
   const provideComposingRef = useRef(false);
   const bodyComposingRef = useRef(false);
+  const bodyPromptStackRef = useRef(null);
   const bodyTextareaRef = useRef(null);
   const bodyBackdropRef = useRef(null);
   const [provideDraft, setProvideDraft] = useState(provideValue);
@@ -133,6 +135,24 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
       bodyBackdropRef.current.style.height = "";
     }
   }, [bodyDraft]);
+
+  useEffect(() => {
+    const el = bodyPromptStackRef.current;
+    const notifyResize = data?.onNodeContentResize;
+    if (!hasInlineBodyEditor || !el || !notifyResize || typeof ResizeObserver === "undefined") return undefined;
+    let raf = 0;
+    const notify = () => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => notifyResize(id));
+    };
+    const observer = new ResizeObserver(notify);
+    observer.observe(el);
+    notify();
+    return () => {
+      window.cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [data?.onNodeContentResize, hasInlineBodyEditor, id]);
 
   const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
   const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
@@ -175,6 +195,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         : rawModel;
 
   const handleModelChange = (e) => {
+    if (readOnly) return;
     const newModel = e.target.value;
     if (onModelChange) {
       onModelChange(id, newModel);
@@ -183,6 +204,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleDelete = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     if (deleteNode) {
       deleteNode(id);
     }
@@ -197,11 +219,13 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleProvideBoolChange = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     onProvideValueChange?.(id, e.target.value === "true" ? "true" : "false");
   };
 
   const handleProvideValueChange = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     const next = e.target.value;
     setProvideDraft(next);
     if (!provideComposingRef.current) {
@@ -216,6 +240,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleProvideCompositionEnd = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     provideComposingRef.current = false;
     const next = e.currentTarget.value;
     setProvideDraft(next);
@@ -223,11 +248,13 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   };
 
   const handleProvideValueBlur = () => {
+    if (readOnly) return;
     onProvideValueChange?.(id, provideDraft);
   };
 
   const handleProvideFilePick = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     const next = window.prompt("文件路径", provideDraft);
     if (next != null) {
       setProvideDraft(next);
@@ -248,6 +275,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleNodeBodyChange = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     const next = e.target.value;
     if (bodyComposingRef.current) {
       setBodyDraft(next);
@@ -258,21 +286,25 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleNodeBodyCompositionStart = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     bodyComposingRef.current = true;
   };
 
   const handleNodeBodyCompositionEnd = (e) => {
     e.stopPropagation();
+    if (readOnly) return;
     bodyComposingRef.current = false;
     const next = e.currentTarget.value;
     commitNodeBody(next);
   };
 
   const handleNodeBodyBlur = () => {
+    if (readOnly) return;
     commitNodeBody(bodyDraft);
   };
 
   const attachImages = async (files) => {
+    if (readOnly) return;
     const next = await addImageFiles({ files, body: bodyDraft, images });
     if (!next) return;
     setBodyDraft(next.body);
@@ -282,6 +314,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
 
   const handleRemoveImage = (e, image) => {
     e.stopPropagation();
+    if (readOnly) return;
     const nextImages = images.filter((item) => item.id !== image.id);
     const nextBody = removeImageToken(bodyDraft, image.label);
     setBodyDraft(nextBody);
@@ -290,6 +323,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   };
 
   const handlePromptPaste = (e) => {
+    if (readOnly) return;
     const files = imageFilesFromClipboardEvent(e);
     if (files.length === 0) return;
     e.preventDefault();
@@ -298,6 +332,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   };
 
   const handlePromptDrop = (e) => {
+    if (readOnly) return;
     const files = imageFilesFromDropEvent(e);
     if (files.length === 0) return;
     e.preventDefault();
@@ -343,6 +378,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               onClick={stopInteractiveEvent}
               aria-label={t("flow:node.model")}
               title={displayModel || t("flow:node.defaultModel")}
+              disabled={readOnly}
             >
               <option value="">{t("flow:node.defaultModel")}</option>
               {modelNotInLists && (
@@ -416,6 +452,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           <button
             type="button"
             className="af-flow-node__delete"
+            disabled={readOnly}
             onClick={handleDelete}
             aria-label={t("flow:node.deleteNode")}
             title={t("flow:node.deleteNode")}
@@ -465,6 +502,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               onClick={stopInteractiveEvent}
               aria-label="Boolean value"
               title={provideBoolValue ? "true" : "false"}
+              disabled={readOnly}
             >
               <option value="false">false</option>
               <option value="true">true</option>
@@ -482,6 +520,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               onClick={stopInteractiveEvent}
               placeholder="输入文本"
               rows={2}
+              readOnly={readOnly}
             />
           ) : isProvideFile ? (
             <div className="af-flow-node__file-value nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
@@ -494,10 +533,12 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 onBlur={handleProvideValueBlur}
                 placeholder="选择或输入文件路径"
                 title={provideDraft || "选择或输入文件路径"}
+                readOnly={readOnly}
               />
               <button
                 type="button"
                 className="af-flow-node__file-picker nodrag"
+                disabled={readOnly}
                 onClick={handleProvideFilePick}
                 aria-label="选择文件"
                 title="选择文件"
@@ -506,7 +547,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               </button>
             </div>
           ) : isSubAgent && !isRunMode ? (
-            <div className="af-flow-node__prompt-stack nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+            <div ref={bodyPromptStackRef} className="af-flow-node__prompt-stack nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
               <pre
                 ref={bodyBackdropRef}
                 className="af-flow-node__prompt-backdrop"
@@ -529,6 +570,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 }}
                 placeholder="输入 prompt"
                 rows={2}
+                readOnly={readOnly}
               />
             </div>
           ) : null}
@@ -541,6 +583,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                   <button
                     type="button"
                     className="af-flow-node__image-remove nodrag"
+                    disabled={readOnly}
                     onClick={(e) => handleRemoveImage(e, img)}
                     onPointerDown={stopInteractiveEvent}
                     onMouseDown={stopInteractiveEvent}

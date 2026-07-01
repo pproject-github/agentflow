@@ -1177,6 +1177,32 @@ function uniqueWorkspaceRelPath(workspaceRoot, relPath) {
   return { abs, rel };
 }
 
+function workspaceDownloadContentDisposition(relPath) {
+  const fallbackName = path.basename(String(relPath || "download")) || "download";
+  const quotedName = fallbackName.replace(/[\r\n"\\]/g, "_");
+  return `attachment; filename="${quotedName}"; filename*=UTF-8''${encodeURIComponent(fallbackName)}`;
+}
+
+const WORKSPACE_FILE_SKIP_REL_PREFIXES = [
+  ".workspace/agentflow/worktrees",
+  ".workspace/agentflow/git-repos",
+  ".workspace/agentflow/runBuild",
+  ".workspace/agentflow/composer-logs",
+];
+
+function workspacePathInside(parent, candidate) {
+  const base = path.resolve(parent);
+  const target = path.resolve(candidate);
+  return target === base || target.startsWith(base + path.sep);
+}
+
+function shouldSkipWorkspaceFileRelPath(relPath) {
+  const normalized = String(relPath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  return WORKSPACE_FILE_SKIP_REL_PREFIXES.some((prefix) => (
+    normalized === prefix || normalized.startsWith(`${prefix}/`)
+  ));
+}
+
 function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget = { count: 0 }) {
   if (depth > maxDepth || budget.count > 500) return [];
   let entries;
@@ -1191,6 +1217,7 @@ function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget 
     if (entry.name.startsWith(".") && entry.name !== ".agents" && entry.name !== ".codex") continue;
     const abs = path.join(dir, entry.name);
     const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (shouldSkipWorkspaceFileRelPath(rel)) continue;
     if (entry.isDirectory()) {
       if (WORKSPACE_FILE_SKIP_DIRS.has(entry.name)) continue;
       budget.count++;
@@ -1258,6 +1285,43 @@ function normalizeWorkspaceGraphPayload(payload) {
     instances: graph?.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
     edges: Array.isArray(graph?.edges) ? graph.edges : [],
     ui: graph?.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function workspaceRunTouchedNodeIds(result) {
+  const ids = new Set();
+  for (const id of Array.isArray(result?.order) ? result.order : []) {
+    const text = String(id || "").trim();
+    if (text) ids.add(text);
+  }
+  for (const event of Array.isArray(result?.events) ? result.events : []) {
+    const nodeId = String(event?.nodeId || "").trim();
+    if (nodeId) ids.add(nodeId);
+    for (const displayId of Array.isArray(event?.displayNodeIds) ? event.displayNodeIds : []) {
+      const text = String(displayId || "").trim();
+      if (text) ids.add(text);
+    }
+  }
+  return ids;
+}
+
+function mergeWorkspaceRunGraph(currentGraph, runGraph, touchedIds) {
+  const current = normalizeWorkspaceGraphPayload(currentGraph || {});
+  const run = normalizeWorkspaceGraphPayload(runGraph || {});
+  const ids = touchedIds instanceof Set ? touchedIds : new Set(touchedIds || []);
+  const instances = { ...(current.instances || {}) };
+  for (const id of ids) {
+    if (run.instances && Object.prototype.hasOwnProperty.call(run.instances, id)) {
+      instances[id] = run.instances[id];
+    }
+  }
+  return {
+    ...current,
+    version: 1,
+    instances,
+    edges: Array.isArray(current.edges) ? current.edges : [],
+    ui: current.ui && typeof current.ui === "object" ? current.ui : { nodePositions: {} },
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1982,6 +2046,39 @@ function workspaceTaskUpstreamText(graph, nodeId, outputs) {
   return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
 }
 
+function workspaceInputValues(graph, nodeId, outputs) {
+  const values = {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const target = instances[String(nodeId || "")] || {};
+  const inputSlots = Array.isArray(target.input) ? target.input : [];
+  for (const edge of edges) {
+    if (String(edge?.target || "") !== String(nodeId)) continue;
+    const index = workspaceHandleIndex(edge?.targetHandle, "input");
+    const slot = inputSlots[index] || null;
+    const name = String(slot?.name || "").trim();
+    if (!name || isWorkspaceSemanticInputSlot(slot)) continue;
+    const value = workspaceOutputSlotValueForEdge(graph, outputs, edge);
+    if (String(value || "").trim()) values[name] = String(value);
+  }
+  for (const slot of inputSlots) {
+    const name = String(slot?.name || "").trim();
+    if (!name || isWorkspaceSemanticInputSlot(slot) || Object.prototype.hasOwnProperty.call(values, name)) continue;
+    const value = workspaceSlotValue(slot);
+    if (String(value || "").trim()) values[name] = String(value);
+  }
+  return values;
+}
+
+function workspaceResolveBodyPlaceholders(body, inputValues = {}) {
+  const raw = String(body || "");
+  if (!raw.includes("${")) return raw;
+  return raw.replace(/\$\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (match, name) => {
+    if (!Object.prototype.hasOwnProperty.call(inputValues, name)) return match;
+    return String(inputValues[name] ?? "");
+  });
+}
+
 function parseWorkspaceSkillKeys(raw) {
   const text = String(raw || "").trim();
   if (!text) return [];
@@ -2146,9 +2243,9 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null)
   return updated;
 }
 
-function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "") {
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}) {
   const instance = graph.instances[nodeId] || {};
-  const body = String(instance.body || "").trim();
+  const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const label = String(instance.label || nodeId).trim();
   const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
@@ -2164,6 +2261,72 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
     `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
     `\n## 节点任务\n\n${body || upstreamText}`,
   ].filter(Boolean).join("\n");
+}
+
+function workspaceDefaultWorktreeRoot(scopedRoot) {
+  return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "worktrees");
+}
+
+function workspaceShouldAutoCleanupWorktree(scopedRoot, worktreePath, hasExplicitWorktreePath) {
+  if (hasExplicitWorktreePath || !worktreePath) return false;
+  return workspacePathInside(workspaceDefaultWorktreeRoot(scopedRoot), worktreePath);
+}
+
+function workspaceTrackAutoCleanupWorktree(list, item) {
+  const rawTarget = String(item?.worktreePath || "").trim();
+  if (!rawTarget) return;
+  const target = path.resolve(rawTarget);
+  if (list.some((entry) => path.resolve(entry.worktreePath) === target)) return;
+  list.push({ ...item, worktreePath: target });
+}
+
+function workspaceUntrackAutoCleanupWorktree(list, worktreePath) {
+  const rawTarget = String(worktreePath || "").trim();
+  if (!rawTarget) return;
+  const target = path.resolve(rawTarget);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (path.resolve(list[i].worktreePath) === target) list.splice(i, 1);
+  }
+}
+
+function workspaceMarkAutoWorktreeCleaned(graph, entry) {
+  const instance = graph?.instances?.[entry.nodeId];
+  if (!instance) return false;
+  let nextInstance = workspaceSetOutputSlot(instance, "worktreePath", "");
+  nextInstance = workspaceSetOutputSlot(nextInstance, "gitContext", "");
+  nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", "");
+  graph.instances[entry.nodeId] = nextInstance;
+  return true;
+}
+
+function workspaceCleanupAutoWorktrees(list, graph, emit) {
+  for (const entry of [...list].reverse()) {
+    try {
+      const result = unloadGitWorktree({
+        repoPath: entry.repoPath,
+        worktreePath: entry.worktreePath,
+        force: false,
+        prune: true,
+      });
+      emit({
+        type: "natural",
+        kind: "status",
+        nodeId: entry.nodeId,
+        text: `已清理临时 worktree：${result.worktreePath}`,
+      });
+      if (workspaceMarkAutoWorktreeCleaned(graph, entry)) {
+        emit({ type: "graph", nodeId: entry.nodeId, graph });
+      }
+    } catch (e) {
+      emit({
+        type: "natural",
+        kind: "warning",
+        nodeId: entry.nodeId,
+        text: `临时 worktree 未自动清理：${entry.worktreePath}\n原因：${e?.message || String(e)}`,
+      });
+    }
+  }
+  list.splice(0, list.length);
 }
 
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
@@ -2223,7 +2386,9 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   };
   let cwd = scopedRoot;
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
+  const autoCleanupWorktrees = [];
 
+  try {
   for (const nodeId of order) {
     throwIfAborted();
     const instance = graph.instances[nodeId];
@@ -2408,13 +2573,23 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         (gitContext?.repoPath ? path.resolve(gitContext.repoPath) : "");
       if (!repoPath) throw new Error("Load Worktree requires repoPath");
       const branch = workspaceSlotValue(workspaceSlotByName(instance, "branch")).trim();
-      const rawWorktreePath = workspaceSlotValue(workspaceSlotByName(instance, "worktreePath")).trim();
+      const worktreeInputSlot = (Array.isArray(instance.input) ? instance.input : [])
+        .find((slot) => String(slot?.name || "") === "worktreePath") || null;
+      const rawWorktreePath = workspaceSlotValue(worktreeInputSlot || workspaceSlotByName(instance, "worktreePath")).trim();
       const worktreePath = rawWorktreePath ? workspaceResolvePath(cwd, rawWorktreePath) : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+      const hasExplicitWorktreePath = Boolean(rawWorktreePath) || Boolean(gitContext?.worktreePath);
       const previousCwd = cwd;
       const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
       const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
       const pruneMissing = pruneMissingRaw !== "false";
       const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot, force, pruneMissing });
+      if (workspaceShouldAutoCleanupWorktree(scopedRoot, result.worktreePath, hasExplicitWorktreePath)) {
+        workspaceTrackAutoCleanupWorktree(autoCleanupWorktrees, {
+          nodeId,
+          repoPath: result.repoRoot,
+          worktreePath: result.worktreePath,
+        });
+      }
       const outGitContext = buildGitContext({
         repoPath: result.repoRoot,
         worktreePath: result.worktreePath,
@@ -2457,6 +2632,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const pruneRaw = workspaceSlotValue(workspaceSlotByName(instance, "prune")).trim().toLowerCase();
       const prune = pruneRaw !== "false";
       const result = unloadGitWorktree({ repoPath, worktreePath, force, prune });
+      workspaceUntrackAutoCleanupWorktree(autoCleanupWorktrees, result.worktreePath);
       const previousContext = workspaceContext?.previous && typeof workspaceContext.previous === "object" ? workspaceContext.previous : null;
       cwd = previousContext?.cwd ? path.resolve(String(previousContext.cwd)) : scopedRoot;
       let nextInstance = workspaceSetOutputSlot(instance, "removed", "true");
@@ -2513,14 +2689,15 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
 
     const prepareStartedAt = Date.now();
     const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs);
-    const body = String(instance.body || "").trim();
+    const inputValues = workspaceInputValues(graph, nodeId, outputs);
+    const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
     if (defId === "agent_subAgent" && !body && !String(upstreamText || "").trim()) {
       throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
     }
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks, upstreamSkillBlocks ? "" : loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock);
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues);
     emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length, mcpChars: promptMcpBlock.length });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
@@ -2580,6 +2757,9 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
     if (slotUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
+  }
+  } finally {
+    workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
   }
   if (pauseNodeIds.length > 0) {
     emit({ type: "paused", nodeIds: pauseNodeIds, message: `Workspace run paused at ${pauseNodeIds.join(", ")}` });
@@ -3402,8 +3582,11 @@ export function startUiServer({
               signal: controller.signal,
               onActiveChild: setActiveChild,
             });
-            fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
-            writeEvent({ type: "done", ok: true, path: graphPath, graph: result.graph, order: result.order, pauseNodeIds: result.pauseNodeIds || [] });
+            const currentGraph = readWorkspaceGraph(scoped.root).graph;
+            const touchedIds = workspaceRunTouchedNodeIds(result);
+            const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+            fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+            writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
             if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
@@ -3423,8 +3606,11 @@ export function startUiServer({
             onActiveChild: setActiveChild,
           });
           const graphPath = workspaceGraphPath(scoped.root);
-          fs.writeFileSync(graphPath, JSON.stringify(result.graph, null, 2) + "\n", "utf-8");
-          json(res, 200, { ok: true, path: graphPath, ...result });
+          const currentGraph = readWorkspaceGraph(scoped.root).graph;
+          const touchedIds = workspaceRunTouchedNodeIds(result);
+          const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+          fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+          json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, touchedNodeIds: Array.from(touchedIds) });
         } catch (e) {
           if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
             json(res, 200, { ok: false, stopped: true, message: "Workspace run stopped" });
@@ -3504,7 +3690,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        const { abs } = resolveWorkspaceFilePath(scoped.root, url.searchParams.get("path") || "");
+        const { abs, rel } = resolveWorkspaceFilePath(scoped.root, url.searchParams.get("path") || "");
         if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
           json(res, 404, { error: "File not found" });
           return;
@@ -3512,11 +3698,15 @@ export function startUiServer({
         const ext = path.extname(abs).toLowerCase();
         const type = MIME[ext] || "application/octet-stream";
         const data = fs.readFileSync(abs);
-        res.writeHead(200, {
+        const headers = {
           "Content-Type": type,
           "Content-Length": data.length,
           "Cache-Control": "no-store",
-        });
+        };
+        if (url.searchParams.get("download") === "1") {
+          headers["Content-Disposition"] = workspaceDownloadContentDisposition(rel);
+        }
+        res.writeHead(200, headers);
         res.end(data);
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });

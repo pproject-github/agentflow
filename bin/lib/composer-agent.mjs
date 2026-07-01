@@ -50,6 +50,13 @@ function readUserMcpPrivateEnvObject(userId) {
   return env;
 }
 
+function readUserMcpPrivateServers(userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  if (!safe) return {};
+  const data = readJsonObject(path.join(getAgentflowUserDataRoot(safe), "mcp-private.json"));
+  return data?.servers && typeof data.servers === "object" && !Array.isArray(data.servers) ? data.servers : {};
+}
+
 function pruneCursorMcpPrivateEnvPlaceholders() {
   const filePath = path.join(os.homedir(), ".cursor", "mcp.json");
   const config = readJsonObject(filePath);
@@ -83,10 +90,96 @@ function pruneCursorMcpPrivateEnvPlaceholders() {
   fs.writeFileSync(filePath, JSON.stringify({ ...config, mcpServers: nextServers }, null, 2) + "\n", "utf-8");
 }
 
+function cursorMcpServersFromFile(filePath) {
+  const config = readJsonObject(filePath);
+  return config?.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)
+    ? config.mcpServers
+    : {};
+}
+
+function materializeWorkspaceCursorMcpPrivateConfig(workspaceRoot, userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  if (!safe) return () => {};
+  const privateServers = readUserMcpPrivateServers(safe);
+  if (!Object.keys(privateServers).length) return () => {};
+
+  const workspace = path.resolve(workspaceRoot || process.cwd());
+  const filePath = path.join(workspace, ".cursor", "mcp.json");
+  const globalFilePath = path.join(os.homedir(), ".cursor", "mcp.json");
+  const existed = fs.existsSync(filePath);
+  const original = existed ? fs.readFileSync(filePath, "utf-8") : "";
+  const config = readJsonObject(filePath);
+  const localServers = cursorMcpServersFromFile(filePath);
+  const globalServers = cursorMcpServersFromFile(globalFilePath);
+  const nextServers = { ...localServers };
+  let changed = false;
+
+  for (const [name, privateServer] of Object.entries(privateServers)) {
+    const current = nextServers[name] || globalServers[name];
+    if (!current || typeof current !== "object" || Array.isArray(current)) continue;
+    const privateEnv = privateServer?.env && typeof privateServer.env === "object" && !Array.isArray(privateServer.env) ? privateServer.env : {};
+    const privateHeaders = privateServer?.headers && typeof privateServer.headers === "object" && !Array.isArray(privateServer.headers) ? privateServer.headers : {};
+    if (!Object.keys(privateEnv).length && !Object.keys(privateHeaders).length) continue;
+
+    const next = { ...current };
+    if (Object.keys(privateEnv).length) {
+      const currentEnv = current.env && typeof current.env === "object" && !Array.isArray(current.env) ? current.env : {};
+      next.env = { ...currentEnv, ...privateEnv };
+      changed = true;
+    }
+    if (Object.keys(privateHeaders).length) {
+      const currentHeaders = current.headers && typeof current.headers === "object" && !Array.isArray(current.headers) ? current.headers : {};
+      next.headers = { ...currentHeaders, ...privateHeaders };
+      changed = true;
+    }
+    nextServers[name] = next;
+  }
+
+  if (!changed) return () => {};
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ ...config, mcpServers: nextServers }, null, 2) + "\n", "utf-8");
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    try {
+      if (existed) fs.writeFileSync(filePath, original, "utf-8");
+      else if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+    } catch {
+      // Best-effort restore; do not fail an already-running agent on cleanup.
+    }
+  };
+}
+
 function agentflowUserEnv(userId) {
   const safe = sanitizeAgentflowUserId(userId);
   pruneCursorMcpPrivateEnvPlaceholders();
   return { ...readMergedEnvObject(safe), ...(safe ? readUserMcpPrivateEnvObject(safe) : {}), AGENTFLOW_USER_ID: safe };
+}
+
+function runCursorAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
+  const restore = materializeWorkspaceCursorMcpPrivateConfig(cliWorkspace, userId);
+  let handle;
+  try {
+    handle = runCursorAgentWithPrompt(cliWorkspace, prompt, options);
+  } catch (e) {
+    restore();
+    throw e;
+  }
+
+  let restored = false;
+  const safeRestore = () => {
+    if (restored) return;
+    restored = true;
+    restore();
+  };
+  if (handle?.child?.once) {
+    handle.child.once("exit", safeRestore);
+    handle.child.once("error", safeRestore);
+  }
+  const finished = Promise.resolve(handle.finished).finally(safeRestore);
+  return { ...handle, finished };
 }
 
 // ─── script 内容注入辅助 ─────────────────────────────────────────────────
@@ -203,10 +296,10 @@ export function startComposerAgent(opts) {
     });
   }
 
-  return runCursorAgentWithPrompt(cliWs, prompt, {
+  return runCursorAgentWithPrivateMcp(cliWs, prompt, {
     ...common,
     model: model || undefined,
-  });
+  }, opts.agentflowUserId);
 }
 
 // ─── 为单个 agent 步骤构建 prompt ──────────────────────────────────────────
@@ -496,12 +589,12 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
         setChild(handle.child);
         await handle.finished;
       } else {
-        const handle = runCursorAgentWithPrompt(cliWs, agentPrompt, {
+        const handle = runCursorAgentWithPrivateMcp(cliWs, agentPrompt, {
           onStreamEvent: stepEmit,
           model: model || undefined,
           force: Boolean(opts.force),
           env,
-        });
+        }, opts.agentflowUserId || opts.flowContext?.userId);
         setChild(handle.child);
         await handle.finished;
       }
@@ -769,12 +862,12 @@ export function startComposerMultiStep(opts) {
               currentChild = handle.child;
               await handle.finished;
             } else {
-              const handle = runCursorAgentWithPrompt(cliWs, agentPrompt, {
+              const handle = runCursorAgentWithPrivateMcp(cliWs, agentPrompt, {
                 onStreamEvent: stepEmit,
                 model: model || undefined,
                 force: Boolean(opts.force),
                 env,
-              });
+              }, opts.agentflowUserId || opts.flowContext?.userId);
               currentChild = handle.child;
               await handle.finished;
             }
