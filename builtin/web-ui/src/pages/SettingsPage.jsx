@@ -375,6 +375,7 @@ export default function SettingsPage({ authUser }) {
   const cursorReady = modelLists.cursor.length > 0;
   const opencodeReady = modelLists.opencode.length > 0;
   const claudeCodeReady = modelLists.claudeCode.length > 0;
+  const allowlistEnabled = allowlistFileUsers.length > 0 || allowlistEnvUsers.length > 0;
 
   const copyWorkspace = useCallback(() => {
     if (!workspaceRoot) return;
@@ -820,26 +821,29 @@ export default function SettingsPage({ authUser }) {
                         <span className="material-symbols-outlined af-set-icon--primary">manage_accounts</span>
                       </div>
                       <div>
-                        <h2 className="af-set-h2">用户白名单</h2>
-                        <p className="af-set-card-subtitle">只控制 username 是否允许注册或登录，密码由用户首次登录时自行设置。</p>
+                        <h2 className="af-set-h2">{t("settings:allowlist.title")}</h2>
+                        <p className="af-set-card-subtitle">{t("settings:allowlist.description")}</p>
                       </div>
                     </div>
+                    <span className={"af-set-badge" + (allowlistEnabled ? " af-set-badge--ok" : " af-set-badge--muted")}>
+                      {allowlistEnabled ? t("settings:allowlist.enabled") : t("settings:allowlist.open")}
+                    </span>
                     <button
                       type="button"
                       className="af-set-btn-outline af-set-btn-outline--compact"
                       onClick={() => void loadUserAllowlist()}
                       disabled={allowlistLoading}
                     >
-                      {allowlistLoading ? "刷新中..." : "刷新"}
+                      {allowlistLoading ? t("settings:allowlist.refreshing") : t("common:common.refresh")}
                     </button>
                   </div>
                   {allowlistErr ? <p className="af-err af-set-hint af-set-hint--inline">{allowlistErr}</p> : null}
-                  {allowlistPath ? <p className="af-set-hint af-set-hint--inline">文件：<code>{allowlistPath}</code></p> : null}
+                  {allowlistPath ? <p className="af-set-hint af-set-hint--inline">{t("settings:allowlist.file")}：<code>{allowlistPath}</code></p> : null}
                   <div className="af-allowlist-grid">
                     <div className="af-allowlist-main">
                       <div className="af-allowlist-head">
-                        <span>文件白名单</span>
-                        <span>{allowlistSaving ? "保存中..." : `${allowlistFileUsers.length} 个用户`}</span>
+                        <span>{t("settings:allowlist.fileList")}</span>
+                        <span>{allowlistSaving ? t("settings:allowlist.saving") : t("settings:allowlist.userCount", { count: allowlistFileUsers.length })}</span>
                       </div>
                       <div className="af-allowlist-list">
                         {allowlistFileUsers.length > 0 ? allowlistFileUsers.map((username) => (
@@ -849,14 +853,14 @@ export default function SettingsPage({ authUser }) {
                               type="button"
                               className="af-set-env-del"
                               onClick={() => removeAllowlistUser(username)}
-                              aria-label={`删除 ${username}`}
+                              aria-label={t("settings:allowlist.remove", { username })}
                               disabled={allowlistSaving}
                             >
                               <span className="material-symbols-outlined">delete_outline</span>
                             </button>
                           </div>
                         )) : (
-                          <div className="af-allowlist-empty">未配置文件白名单；如果环境变量也为空，则所有用户可注册。</div>
+                          <div className="af-allowlist-empty">{t("settings:allowlist.emptyFile")}</div>
                         )}
                       </div>
                       <div className="af-allowlist-add">
@@ -877,22 +881,23 @@ export default function SettingsPage({ authUser }) {
                           disabled={allowlistSaving || !allowlistDraft.trim()}
                         >
                           <span className="material-symbols-outlined">add</span>
-                          添加
+                          {t("settings:allowlist.add")}
                         </button>
                       </div>
                     </div>
                     <div className="af-allowlist-side">
                       <div className="af-allowlist-head">
-                        <span>环境变量白名单</span>
-                        <span>只读</span>
+                        <span>{t("settings:allowlist.envList")}</span>
+                        <span>{t("settings:allowlist.readonly")}</span>
                       </div>
                       <div className="af-allowlist-env-list">
                         {allowlistEnvUsers.length > 0 ? allowlistEnvUsers.map((username) => (
                           <code key={username}>{username}</code>
                         )) : (
-                          <span>未配置 AGENTFLOW_USER_WHITELIST / AGENTFLOW_ALLOWED_USERS</span>
+                          <span>{t("settings:allowlist.emptyEnv")}</span>
                         )}
                       </div>
+                      <p className="af-set-hint af-set-hint--inline">{t("settings:allowlist.unionHint")}</p>
                     </div>
                   </div>
                 </section>
