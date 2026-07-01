@@ -5,8 +5,8 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import ReactMarkdown from "react-markdown";
 import { parseChartSpec } from "../chartSpec.js";
+import { MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { useRoute } from "../routeContext.jsx";
 
 function displayContent(node) {
@@ -92,64 +92,6 @@ function markdownImageSrc(src, shareId) {
   const text = String(src || "").trim();
   if (!text) return "";
   return displayFileUrl(text, shareId);
-}
-
-function MarkdownDisplay({ content, shareId }) {
-  return (
-    <div className="af-public-display-markdown">
-      <ReactMarkdown
-        components={{
-          img({ src = "", alt = "" }) {
-            return <img src={markdownImageSrc(src, shareId)} alt={alt} loading="lazy" />;
-          },
-          a({ href = "", children }) {
-            return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function parseTableRows(content) {
-  const text = String(content || "").trim();
-  if (!text) return [];
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed) && parsed.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
-      const columns = Array.from(new Set(parsed.flatMap((row) => Object.keys(row))));
-      return [columns, ...parsed.map((row) => columns.map((col) => row[col] ?? ""))];
-    }
-    if (Array.isArray(parsed) && parsed.every(Array.isArray)) return parsed;
-  } catch (_) {}
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line))
-    .map((line) => line.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()));
-}
-
-function TableDisplay({ content }) {
-  const rows = parseTableRows(content);
-  if (!rows.length) return <pre>{content}</pre>;
-  const [head, ...body] = rows;
-  return (
-    <div className="af-public-display-table-wrap">
-      <table className="af-public-display-table">
-        <thead>
-          <tr>{head.map((cell, idx) => <th key={idx}>{String(cell)}</th>)}</tr>
-        </thead>
-        <tbody>
-          {body.map((row, rowIdx) => (
-            <tr key={rowIdx}>{head.map((_, cellIdx) => <td key={cellIdx}>{String(row[cellIdx] ?? "")}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }
 
 function ChartDisplay({ content }) {
@@ -305,9 +247,13 @@ function DisplayNode({ node, shareId, style }) {
           <>
             {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
             {node.kind === "image" ? <img src={displayFileUrl(content, shareId)} alt={node.label || node.id} loading="lazy" /> : null}
-            {node.kind === "markdown" ? <MarkdownDisplay content={content} shareId={shareId} /> : null}
+            {node.kind === "markdown" ? (
+              <div className="af-public-display-markdown">
+                <MarkdownDisplayContent content={content} resolveSrc={(src) => markdownImageSrc(src, shareId)} />
+              </div>
+            ) : null}
             {node.kind === "chart" ? <ChartDisplay content={content} /> : null}
-            {node.kind === "table" ? <TableDisplay content={content} /> : null}
+            {node.kind === "table" ? <TableDisplayContent content={content} /> : null}
             {node.kind === "mermaid" || node.kind === "ascii" ? <pre>{content}</pre> : null}
           </>
         ) : (
