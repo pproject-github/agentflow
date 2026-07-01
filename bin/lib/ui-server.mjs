@@ -3271,7 +3271,7 @@ export function startUiServer({
     }
 
     const authUser = getAuthUserFromRequest(req);
-    const userCtx = authUser ? { userId: authUser.userId } : {};
+    const userCtx = authUser ? { userId: authUser.userId, isAdmin: Boolean(authUser.isAdmin) } : {};
     if (req.method === "GET" && url.pathname === "/api/display/share") {
       try {
         const id = String(url.searchParams.get("id") || "").trim();

@@ -113,11 +113,27 @@ function manifestOwnerUserId(manifest) {
   return String(manifest?.ownerUserId || manifest?.createdBy || "").trim();
 }
 
-function canAccessMarketplaceNode(manifest, opts = {}) {
+function isAdminRequest(opts = {}) {
+  return Boolean(opts?.isAdmin);
+}
+
+function canAccessMarketplaceOwner(ownerUserId, opts = {}) {
   const requestedUserId = String(opts.userId || "").trim();
   if (!requestedUserId) return true;
+  if (isAdminRequest(opts)) return true;
+  return Boolean(ownerUserId) && ownerUserId === requestedUserId;
+}
+
+function canManageMarketplaceOwner(ownerUserId, opts = {}) {
+  const requestedUserId = String(opts.userId || "").trim();
+  if (!requestedUserId) return false;
+  if (isAdminRequest(opts)) return true;
+  return Boolean(ownerUserId) && ownerUserId === requestedUserId;
+}
+
+function canAccessMarketplaceNode(manifest, opts = {}) {
   if ((manifest?.source || "marketplace") !== "marketplace") return true;
-  return manifestOwnerUserId(manifest) === requestedUserId;
+  return canAccessMarketplaceOwner(manifestOwnerUserId(manifest), opts);
 }
 
 function sortVersionsDesc(versions) {
@@ -422,7 +438,7 @@ export function listMarketplaceFlowSnippets(workspaceRoot, opts = {}) {
       if (!manifest) continue;
       const snippet = manifest.snippet && typeof manifest.snippet === "object" ? manifest.snippet : {};
       const ownerUserId = String(manifest.ownerUserId || manifest.createdBy || "").trim();
-      if (requestedUserId && ownerUserId !== requestedUserId) continue;
+      if (requestedUserId && !canAccessMarketplaceOwner(ownerUserId, opts)) continue;
       snippets.push({
         id: manifest.id || entry.name,
         version: manifest.version || version,
@@ -454,8 +470,7 @@ export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = 
     return { ok: false, error: `Marketplace node package not found: ${id}@${version}` };
   }
   const manifest = normalizeManifest(readYamlObject(manifestPath), packageDir, "marketplace");
-  const requestedUserId = String(opts.userId || "").trim();
-  if (!requestedUserId || !manifest || manifestOwnerUserId(manifest) !== requestedUserId) {
+  if (!manifest || !canManageMarketplaceOwner(manifestOwnerUserId(manifest), opts)) {
     return { ok: false, error: "Marketplace node permission denied" };
   }
   const usage = listMarketplaceNodeUsages(workspaceRoot, id, version, opts);
@@ -483,8 +498,7 @@ export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version, 
   }
   const manifest = readYamlObject(manifestPath) || {};
   const ownerUserId = String(manifest.ownerUserId || manifest.createdBy || "").trim();
-  const requestedUserId = String(opts.userId || "").trim();
-  if (!requestedUserId || ownerUserId !== requestedUserId) {
+  if (!canManageMarketplaceOwner(ownerUserId, opts)) {
     return { ok: false, error: "Flow snippet permission denied" };
   }
   fs.rmSync(packageDir, { recursive: true, force: true });
@@ -719,7 +733,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   const existingManifest = readYamlObject(path.join(dest, NODE_MANIFEST));
   if (existingManifest) {
     const existingOwner = manifestOwnerUserId(existingManifest);
-    if (existingOwner !== ownerUserId) return { ok: false, error: "Marketplace node permission denied" };
+    if (!canManageMarketplaceOwner(existingOwner, options)) return { ok: false, error: "Marketplace node permission denied" };
   }
   const now = new Date().toISOString();
   fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -797,7 +811,7 @@ export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
   const existingManifest = readYamlObject(path.join(dest, FLOW_SNIPPET_MANIFEST));
   if (existingManifest) {
     const existingOwner = String(existingManifest.ownerUserId || existingManifest.createdBy || "").trim();
-    if (existingOwner !== ownerUserId) return { ok: false, error: "Flow snippet permission denied" };
+    if (!canManageMarketplaceOwner(existingOwner, opts)) return { ok: false, error: "Flow snippet permission denied" };
   }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
