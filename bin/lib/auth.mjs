@@ -97,8 +97,11 @@ function normalizeUserAllowlistInput(value) {
   return [];
 }
 
-export function readUserAllowlist() {
-  const fromEnv = normalizeUserAllowlistInput(process.env.AGENTFLOW_USER_WHITELIST || process.env.AGENTFLOW_ALLOWED_USERS || "");
+function readUserAllowlistEnvUsers() {
+  return normalizeUserAllowlistInput(process.env.AGENTFLOW_USER_WHITELIST || process.env.AGENTFLOW_ALLOWED_USERS || "");
+}
+
+function readUserAllowlistFileUsers() {
   let fromFile = [];
   try {
     const p = userAllowlistPath();
@@ -109,8 +112,32 @@ export function readUserAllowlist() {
   } catch {
     fromFile = [];
   }
+  return fromFile;
+}
+
+export function readUserAllowlist() {
+  const fromEnv = readUserAllowlistEnvUsers();
+  const fromFile = readUserAllowlistFileUsers();
   const users = Array.from(new Set([...fromFile, ...fromEnv].map((item) => String(item || "").trim()).filter(Boolean)));
-  return { enabled: users.length > 0, users, path: userAllowlistPath() };
+  return { enabled: users.length > 0, users, fileUsers: fromFile, envUsers: fromEnv, path: userAllowlistPath() };
+}
+
+export function writeUserAllowlist(users) {
+  const normalized = [];
+  const seen = new Set();
+  for (const item of normalizeUserAllowlistInput(users)) {
+    const user = String(item || "").trim();
+    const safe = sanitizeAgentflowUserId(user);
+    if (!safe) {
+      throw new Error(`invalid username: ${user}`);
+    }
+    const key = safe.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(user);
+  }
+  writeJsonObject(userAllowlistPath(), { users: normalized, updatedAt: new Date().toISOString() });
+  return readUserAllowlist();
 }
 
 function userAllowlistMatchSet(users) {

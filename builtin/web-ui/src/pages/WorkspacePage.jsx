@@ -89,6 +89,11 @@ const WORKSPACE_LOAD_MCP_DEFINITION = {
 };
 
 const WORKSPACE_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+const DEFAULT_WORKSPACE_NODE_WIDTH = 320;
+const MIN_WORKSPACE_NODE_WIDTH = 180;
+const MAX_WORKSPACE_NODE_WIDTH = 960;
+const MIN_WORKSPACE_NODE_HEIGHT = 96;
+const MAX_WORKSPACE_NODE_HEIGHT = 900;
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -460,10 +465,11 @@ function graphToFlow(graph, palette) {
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
       : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
-    const size = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
+    const isDisplay = Boolean(displayKind(runtimeDefinitionId));
+    const rawSize = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
-    const isDisplay = Boolean(displayKind(runtimeDefinitionId));
+    const size = normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
     return {
       id,
       type: FLOW_NODE_TYPE,
@@ -499,12 +505,31 @@ function graphToFlow(graph, palette) {
   return { nodes: merged, edges: filterValidEdges(edges, merged), instances };
 }
 
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
+  if (!size || typeof size !== "object") return null;
+  const rawWidth = Number(size.width);
+  const rawHeight = Number(size.height);
+  if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || rawWidth <= 0 || rawHeight <= 0) return null;
+  if (display) {
+    return { width: Math.round(rawWidth), height: Math.round(rawHeight) };
+  }
+  return {
+    width: clampNumber(rawWidth, MIN_WORKSPACE_NODE_WIDTH, MAX_WORKSPACE_NODE_WIDTH) || DEFAULT_WORKSPACE_NODE_WIDTH,
+    height: clampNumber(rawHeight, MIN_WORKSPACE_NODE_HEIGHT, MAX_WORKSPACE_NODE_HEIGHT) || MIN_WORKSPACE_NODE_HEIGHT,
+  };
+}
+
 function persistedWorkspaceNodeSize(node) {
   const isDisplay = Boolean(displayKind(node?.data?.definitionId));
   const width = Number(node?.data?.displaySize?.width || node?.data?.nodeSize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
   const height = Number(node?.data?.displaySize?.height || node?.data?.nodeSize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
-  if (width > 0 && height > 0) return { width: Math.round(width), height: Math.round(height) };
-  return null;
+  return normalizeWorkspaceNodeSize({ width, height }, { display: isDisplay });
 }
 
 function flowToGraph(nodes, edges, instances) {
@@ -1847,15 +1872,16 @@ function WorkspaceFlowNode(props) {
     const el = wrapperRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const size = {
-      width: Math.ceil(Math.max(el.scrollWidth, rect.width)),
-      height: Math.ceil(Math.max(el.scrollHeight, rect.height)),
-    };
-    if (!size.width || !size.height) return;
     setNodes((list) => list.map((node) => {
       if (node.id !== nodeId) return node;
       const currentWidth = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
       const currentHeight = Number(node.data?.nodeSize?.height || node.height || node.measured?.height || 0);
+      const nextWidth = currentWidth > 0
+        ? currentWidth
+        : Math.ceil(rect.width || DEFAULT_WORKSPACE_NODE_WIDTH);
+      const nextHeight = Math.ceil(Math.max(el.scrollHeight, rect.height, MIN_WORKSPACE_NODE_HEIGHT));
+      const size = normalizeWorkspaceNodeSize({ width: nextWidth, height: nextHeight }, { display: false });
+      if (!size) return node;
       if (Math.abs(currentWidth - size.width) < 2 && Math.abs(currentHeight - size.height) < 2) return node;
       return {
         ...node,
@@ -4511,10 +4537,13 @@ function WorkspacePageInner() {
     const resized = new Map();
     for (const change of changes || []) {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
-        resized.set(change.id, {
+        const node = nodes.find((item) => item.id === change.id);
+        const isDisplay = Boolean(displayKind(node?.data?.definitionId));
+        const size = normalizeWorkspaceNodeSize({
           width: Math.round(Number(change.dimensions.width)),
           height: Math.round(Number(change.dimensions.height)),
-        });
+        }, { display: isDisplay });
+        if (size) resized.set(change.id, size);
       }
     }
     const resizedIds = Array.from(resized.keys());
@@ -4548,7 +4577,7 @@ function WorkspacePageInner() {
       window.requestAnimationFrame(refresh);
       window.setTimeout(refresh, 80);
     }
-  }, [setNodes, updateNodeInternals, workspaceWritable]);
+  }, [nodes, setNodes, updateNodeInternals, workspaceWritable]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (!workspaceWritable) {
