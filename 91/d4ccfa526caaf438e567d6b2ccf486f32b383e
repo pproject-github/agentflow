@@ -1,0 +1,28 @@
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_b875738d2d60b6::t_d3af6b3b363bb5 460-461,464,467,490
+bin/lib/marketplace.mjs
+  s_b875738d2d60b6::t_2e35a0bacfaf72 120-123,125
+builtin/web-ui/dist/assets/index-Cv_KRyEA.js
+  s_b875738d2d60b6::t_0f0bc6ec89b872 1,17,33,37-38,40,42,44,60,65-67,69,79,86-88,94,123,126-127,132-136,141,143,163-168,172-173,175,203-206,208,212,238
+bin/lib/ui-server.mjs
+  s_b875738d2d60b6::t_185aaff4ebd568 4766,4775,4837-4838,4847-4848
+builtin/web-ui/dist/index.html
+  s_b875738d2d60b6::t_0f0bc6ec89b872 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "91d4ccfa526caaf438e567d6b2ccf486f32b383e",
+  "prompts": {},
+  "logical_commit_id": "91d4ccfa526caaf438e567d6b2ccf486f32b383e",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
