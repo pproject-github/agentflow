@@ -1,0 +1,23 @@
+bin/lib/marketplace.mjs
+  s_b875738d2d60b6::t_cdb2ac7408d2fe 764-768
+  s_b875738d2d60b6::t_aa16aec0ac180d 395,399,409-410,421,456,459-460,463-468,746,751-752,780-781
+bin/lib/ui-server.mjs
+  s_b875738d2d60b6::t_447a55e4ba6f73 4845,4876,4955
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "d7b2cb872d5156aaea67854738aeadc19afd0ebf",
+  "prompts": {},
+  "logical_commit_id": "d7b2cb872d5156aaea67854738aeadc19afd0ebf",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
