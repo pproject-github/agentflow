@@ -4819,6 +4819,52 @@ function WorkspacePageInner() {
     );
   }, [availableDisplayNodes, displayPickerSearch]);
 
+  const displayPickerColumns = useMemo(() => {
+    const count = filteredAvailableDisplayNodes.length;
+    const columnCount = count <= 1 ? 1 : count <= 4 ? 2 : 3;
+    const columns = Array.from({ length: columnCount }, () => ({ height: 0, nodes: [] }));
+    for (const node of filteredAvailableDisplayNodes) {
+      const previewSize = persistedWorkspaceNodeSize(node) || { width: 420, height: 260 };
+      const width = Math.max(1, Number(previewSize.width) || 420);
+      const height = Math.max(1, Number(previewSize.height) || 260);
+      const estimatedHeight = Math.min(26, Math.max(5.5, (height / width) * 16)) + 3.2;
+      let target = columns[0];
+      for (const column of columns) {
+        if (column.height < target.height) target = column;
+      }
+      target.nodes.push(node);
+      target.height += estimatedHeight;
+    }
+    return columns.map((column) => column.nodes);
+  }, [filteredAvailableDisplayNodes]);
+
+  const renderDisplayPickerCard = useCallback((node) => {
+    const checked = displayPage.nodeIds.includes(node.id);
+    const previewSize = persistedWorkspaceNodeSize(node) || { width: 420, height: 260 };
+    const previewWidth = Math.max(1, Math.round(Number(previewSize.width) || 420));
+    const previewHeight = Math.max(1, Math.round(Number(previewSize.height) || 260));
+    return (
+      <button
+        key={node.id}
+        type="button"
+        className={"af-display-picker-card" + (checked ? " af-display-picker-card--selected" : "")}
+        style={{ "--af-display-picker-card-ratio": `${previewWidth} / ${previewHeight}` }}
+        onClick={() => toggleDisplayPageNode(node.id)}
+      >
+        <span className="af-display-picker-card__check" aria-hidden>
+          <input type="checkbox" checked={checked} readOnly tabIndex={-1} />
+        </span>
+        <span className="af-display-picker-card__preview">
+          <DisplayPickerPreview node={node} />
+        </span>
+        <span className="af-display-picker-card__meta">
+          <strong>{node.data?.label || node.id}</strong>
+          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
+        </span>
+      </button>
+    );
+  }, [displayPage.nodeIds, toggleDisplayPageNode]);
+
   const filteredFlowSnippets = useMemo(() => {
     const q = paletteSearch.trim().toLowerCase();
     if (!q) return flowSnippets;
@@ -6877,33 +6923,17 @@ function WorkspacePageInner() {
                     autoFocus
                   />
                 </label>
-                <div className="af-display-picker-grid" role="group" aria-label="选择展示节点">
-                  {filteredAvailableDisplayNodes.length > 0 ? filteredAvailableDisplayNodes.map((node) => {
-                    const checked = displayPage.nodeIds.includes(node.id);
-                    const previewSize = persistedWorkspaceNodeSize(node) || { width: 420, height: 260 };
-                    const previewWidth = Math.max(1, Math.round(Number(previewSize.width) || 420));
-                    const previewHeight = Math.max(1, Math.round(Number(previewSize.height) || 260));
-                    return (
-                      <button
-                        key={node.id}
-                        type="button"
-                        className={"af-display-picker-card" + (checked ? " af-display-picker-card--selected" : "")}
-                        style={{ "--af-display-picker-card-ratio": `${previewWidth} / ${previewHeight}` }}
-                        onClick={() => toggleDisplayPageNode(node.id)}
-                      >
-                        <span className="af-display-picker-card__check" aria-hidden>
-                          <input type="checkbox" checked={checked} readOnly tabIndex={-1} />
-                        </span>
-                        <span className="af-display-picker-card__preview">
-                          <DisplayPickerPreview node={node} />
-                        </span>
-                        <span className="af-display-picker-card__meta">
-                          <strong>{node.data?.label || node.id}</strong>
-                          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
-                        </span>
-                      </button>
-                    );
-                  }) : (
+                <div
+                  className="af-display-picker-grid"
+                  role="group"
+                  aria-label="选择展示节点"
+                  style={{ "--af-display-picker-columns": displayPickerColumns.length || 1 }}
+                >
+                  {filteredAvailableDisplayNodes.length > 0 ? displayPickerColumns.map((column, columnIndex) => (
+                    <div key={`display-picker-column-${columnIndex}`} className="af-display-picker-column">
+                      {column.map(renderDisplayPickerCard)}
+                    </div>
+                  )) : (
                     <div className="af-display-picker-empty">
                       {availableDisplayNodes.length === 0 ? "当前 Workspace 没有 display 节点" : "没有匹配的展示节点"}
                     </div>
