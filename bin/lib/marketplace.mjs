@@ -392,10 +392,11 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
   return { nodes, collections };
 }
 
-export function listMarketplaceFlowSnippets(workspaceRoot) {
+export function listMarketplaceFlowSnippets(workspaceRoot, opts = {}) {
   const root = workspacePackageRoot(workspaceRoot);
   const snippetsRoot = path.join(root, "flow-snippets");
   const snippets = [];
+  const requestedUserId = String(opts.userId || "").trim();
   if (!fs.existsSync(snippetsRoot)) return { snippets };
   for (const entry of fs.readdirSync(snippetsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -405,6 +406,8 @@ export function listMarketplaceFlowSnippets(workspaceRoot) {
       const manifest = readYamlObject(path.join(dir, FLOW_SNIPPET_MANIFEST));
       if (!manifest) continue;
       const snippet = manifest.snippet && typeof manifest.snippet === "object" ? manifest.snippet : {};
+      const ownerUserId = String(manifest.ownerUserId || manifest.createdBy || "").trim();
+      if (requestedUserId && ownerUserId !== requestedUserId) continue;
       snippets.push({
         id: manifest.id || entry.name,
         version: manifest.version || version,
@@ -415,6 +418,7 @@ export function listMarketplaceFlowSnippets(workspaceRoot) {
         edgeCount: Number(manifest.edgeCount) || (Array.isArray(snippet.edges) ? snippet.edges.length : 0),
         createdAt: manifest.createdAt || "",
         updatedAt: manifest.updatedAt || "",
+        ownerUserId,
         packageDir: dir,
         snippet,
       });
@@ -449,11 +453,18 @@ export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = 
   return { ok: true, id, version, packageDir };
 }
 
-export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version) {
+export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version, opts = {}) {
   const packageDir = resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version);
   if (!packageDir) return { ok: false, error: "Invalid flow snippet id or version" };
-  if (!fs.existsSync(path.join(packageDir, FLOW_SNIPPET_MANIFEST))) {
+  const manifestPath = path.join(packageDir, FLOW_SNIPPET_MANIFEST);
+  if (!fs.existsSync(manifestPath)) {
     return { ok: false, error: `Flow snippet package not found: ${id}@${version}` };
+  }
+  const manifest = readYamlObject(manifestPath) || {};
+  const ownerUserId = String(manifest.ownerUserId || manifest.createdBy || "").trim();
+  const requestedUserId = String(opts.userId || "").trim();
+  if (!requestedUserId || ownerUserId !== requestedUserId) {
+    return { ok: false, error: "Flow snippet permission denied" };
   }
   fs.rmSync(packageDir, { recursive: true, force: true });
   const versionRoot = path.dirname(packageDir);
@@ -732,11 +743,13 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   };
 }
 
-export function publishFlowSnippet(workspaceRoot, payload = {}) {
+export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
   const label = String(payload.displayName || payload.name || payload.id || "flow snippet").trim();
   const id = safePackageId(payload.id || payload.packageId || label);
   const version = normalizeVersion(payload.version || "1.0.0");
   if (!id) return { ok: false, error: "Invalid snippet id" };
+  const ownerUserId = String(opts.userId || "").trim();
+  if (!ownerUserId) return { ok: false, error: "Authentication required" };
 
   const rawSnippet = payload.snippet && typeof payload.snippet === "object" ? payload.snippet : {};
   const instances = rawSnippet.instances && typeof rawSnippet.instances === "object" ? rawSnippet.instances : {};
@@ -748,6 +761,11 @@ export function publishFlowSnippet(workspaceRoot, payload = {}) {
   const now = new Date().toISOString();
   const dest = resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version);
   if (!dest) return { ok: false, error: "Invalid snippet id or version" };
+  const existingManifest = readYamlObject(path.join(dest, FLOW_SNIPPET_MANIFEST));
+  if (existingManifest) {
+    const existingOwner = String(existingManifest.ownerUserId || existingManifest.createdBy || "").trim();
+    if (existingOwner !== ownerUserId) return { ok: false, error: "Flow snippet permission denied" };
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
@@ -759,6 +777,8 @@ export function publishFlowSnippet(workspaceRoot, payload = {}) {
     displayName: label,
     description: String(payload.description || "").trim(),
     tags: Array.isArray(payload.tags) ? payload.tags.map((x) => String(x).trim()).filter(Boolean) : [],
+    ownerUserId,
+    createdBy: ownerUserId,
     nodeCount,
     edgeCount: edges.length,
     createdAt: now,
