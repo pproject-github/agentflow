@@ -4457,7 +4457,7 @@ function WorkspacePageInner() {
       node.id === nodeId ? { ...node, selected: false } : node
     )));
     setSelectedNodeId((current) => (current === nodeId ? "" : current));
-  }, [readOnly, setNodes]);
+  }, [setNodes]);
 
   const updateSkillsMenuPosition = useCallback(() => {
     const btn = skillsButtonRef.current;
