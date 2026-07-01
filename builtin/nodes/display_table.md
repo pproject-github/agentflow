@@ -23,7 +23,7 @@ output:
   - type: text
     name: content
     default: ""
-    showOnNode: false
+    showOnNode: true
   - type: node
     name: next
     default: ""

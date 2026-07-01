@@ -15,6 +15,7 @@ output:
   - type: text
     name: content
     default: ""
+    showOnNode: true
   - type: node
     name: next
     default: ""

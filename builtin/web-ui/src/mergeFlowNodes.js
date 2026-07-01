@@ -102,6 +102,22 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
   ]),
 };
 
+const DISPLAY_DEFINITION_IDS = new Set([
+  "display_markdown",
+  "display_mermaid",
+  "display_ascii",
+  "display_html",
+  "display_image",
+  "display_chart",
+  "display_table",
+]);
+
+function isDisplayPrimarySlot(definitionId, slot) {
+  if (!DISPLAY_DEFINITION_IDS.has(String(definitionId || ""))) return false;
+  const name = String(slot?.name || "");
+  return name === "content" || name === "src";
+}
+
 function marketplaceRefForDefinition(def) {
   const id = String(def?.marketplaceDefinitionId || def?.id || "").trim();
   return id.startsWith("marketplace:") ? id : "";
@@ -133,6 +149,7 @@ function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
       ...(wasLegacyAutoHidden ? { showOnNode: true } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode == null ? { showOnNode: Boolean(slot.required) || String(slot.type || "").trim().toLowerCase() === "node" } : {}),
+      ...(isDisplayPrimarySlot(definitionId, slot) ? { showOnNode: true } : {}),
       ...(CANVAS_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: false } : {}),
     };
   });

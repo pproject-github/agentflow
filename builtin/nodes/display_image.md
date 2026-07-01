@@ -27,7 +27,7 @@ output:
   - type: text
     name: src
     default: ""
-    showOnNode: false
+    showOnNode: true
   - type: node
     name: next
     default: ""

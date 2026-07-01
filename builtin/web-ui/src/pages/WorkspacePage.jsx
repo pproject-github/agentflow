@@ -7,6 +7,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   addEdge,
+  applyEdgeChanges,
   applyNodeChanges,
   useEdgesState,
   useNodesState,
@@ -123,6 +124,15 @@ function workspaceRawFileUrl(src, flowParams) {
   if (/^(?:https?:|data:|blob:|file:)/i.test(text) || text.startsWith("/")) return text;
   const q = flowParamsQuery(flowParams || {});
   q.set("path", text);
+  return `/api/workspace/file/raw?${q.toString()}`;
+}
+
+function workspaceDownloadFileUrl(src, flowParams) {
+  const text = String(src || "").trim();
+  if (!text) return "";
+  const q = flowParamsQuery(flowParams || {});
+  q.set("path", text);
+  q.set("download", "1");
   return `/api/workspace/file/raw?${q.toString()}`;
 }
 
@@ -670,17 +680,27 @@ function parseMarkdownDisplayBlocks(markdown) {
   return blocks;
 }
 
-function MarkdownInline({ children }) {
-  return <ReactMarkdown components={{ p: ({ children: pChildren }) => <>{pChildren}</> }}>{String(children || "")}</ReactMarkdown>;
+function markdownComponents(flowParams, inline = false) {
+  return {
+    ...(inline ? { p: ({ children: pChildren }) => <>{pChildren}</> } : {}),
+    img: ({ src, alt }) => (
+      <img src={workspaceRawFileUrl(src, flowParams)} alt={alt || ""} loading="lazy" />
+    ),
+  };
 }
 
-function MarkdownDisplayContent({ content }) {
+function MarkdownInline({ children, flowParams }) {
+  return <ReactMarkdown components={markdownComponents(flowParams, true)}>{String(children || "")}</ReactMarkdown>;
+}
+
+function MarkdownDisplayContent({ content, flowParams }) {
   const blocks = useMemo(() => parseMarkdownDisplayBlocks(content), [content]);
+  const components = useMemo(() => markdownComponents(flowParams), [flowParams]);
   return (
     <>
       {blocks.map((block, idx) => {
         if (block.type !== "table") {
-          return <ReactMarkdown key={`md-${idx}`}>{block.text}</ReactMarkdown>;
+          return <ReactMarkdown key={`md-${idx}`} components={components}>{block.text}</ReactMarkdown>;
         }
         return (
           <div className="af-work-display-table-wrap" key={`table-${idx}`}>
@@ -689,7 +709,7 @@ function MarkdownDisplayContent({ content }) {
                 <tr>
                   {block.headers.map((cell, cellIdx) => (
                     <th key={cellIdx} style={{ textAlign: block.align[cellIdx] || "left" }}>
-                      <MarkdownInline>{cell}</MarkdownInline>
+                      <MarkdownInline flowParams={flowParams}>{cell}</MarkdownInline>
                     </th>
                   ))}
                 </tr>
@@ -699,7 +719,7 @@ function MarkdownDisplayContent({ content }) {
                   <tr key={rowIdx}>
                     {block.headers.map((_, cellIdx) => (
                       <td key={cellIdx} style={{ textAlign: block.align[cellIdx] || "left" }}>
-                        <MarkdownInline>{row[cellIdx] || ""}</MarkdownInline>
+                        <MarkdownInline flowParams={flowParams}>{row[cellIdx] || ""}</MarkdownInline>
                       </td>
                     ))}
                   </tr>
@@ -1150,7 +1170,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     );
   }
   if (kind === "markdown") {
-    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} /></VisibleScrollFrame>;
+    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} flowParams={flowParams} /></VisibleScrollFrame>;
   }
   if (kind === "chart") {
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--chart"><ChartDisplayContent content={content} /></VisibleScrollFrame>;
@@ -1169,10 +1189,84 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   return <VisibleScrollFrame className="af-work-display-body af-work-display-body--ascii"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
 }
 
-function MarkdownDisplayEditor({ value, onChange }) {
+function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = false }) {
+  const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const insertText = useCallback((text) => {
+    const current = String(value || "");
+    const textarea = textareaRef.current;
+    const start = Number(textarea?.selectionStart ?? current.length);
+    const end = Number(textarea?.selectionEnd ?? start);
+    const prefix = current.slice(0, start);
+    const suffix = current.slice(end);
+    const spacerBefore = prefix && !prefix.endsWith("\n") ? "\n" : "";
+    const spacerAfter = suffix && !suffix.startsWith("\n") ? "\n" : "";
+    const next = `${prefix}${spacerBefore}${text}${spacerAfter}${suffix}`;
+    onChange?.(next);
+    window.requestAnimationFrame(() => {
+      const pos = prefix.length + spacerBefore.length + text.length;
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
+  }, [onChange, value]);
+  const uploadAndInsert = useCallback(async (file) => {
+    if (readOnly) return;
+    if (!file || uploading) return;
+    setUploading(true);
+    try {
+      const path = await onUploadImage?.(file);
+      const imagePath = String(path || "").trim();
+      if (imagePath) {
+        const alt = String(file.name || "image").replace(/\.[^.]+$/g, "").trim() || "image";
+        insertText(`![${alt}](${imagePath})`);
+      }
+    } finally {
+      setUploading(false);
+    }
+  }, [insertText, onUploadImage, readOnly, uploading]);
   return (
-    <div className="af-work-display-editor nodrag nopan" onClick={(event) => event.stopPropagation()}>
+    <div
+      className="af-work-display-editor nodrag nopan"
+      onClick={(event) => event.stopPropagation()}
+      onDragOver={(event) => {
+        const hasImage = Array.from(event.dataTransfer?.items || []).some((item) => String(item?.type || "").startsWith("image/"));
+        if (!hasImage) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(event) => {
+        const file = Array.from(event.dataTransfer?.files || []).find(isWorkspaceImageFile);
+        if (!file) return;
+        event.preventDefault();
+        uploadAndInsert(file);
+      }}
+    >
+      <div className="af-work-display-editor__toolbar">
+        <button
+          type="button"
+          className="af-work-display-card__action"
+          disabled={uploading || readOnly}
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="上传图片"
+          title="上传图片"
+        >
+          <span className="material-symbols-outlined">{uploading ? "hourglass_top" : "add_photo_alternate"}</span>
+        </button>
+        <input
+          ref={fileInputRef}
+          className="af-hidden-file-input"
+          type="file"
+          accept="image/*"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) uploadAndInsert(file);
+          }}
+        />
+      </div>
       <textarea
+        ref={textareaRef}
         className="af-work-display-editor__textarea"
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
@@ -1181,6 +1275,7 @@ function MarkdownDisplayEditor({ value, onChange }) {
         }}
         placeholder="输入 Markdown 内容"
         spellCheck={false}
+        readOnly={readOnly}
       />
     </div>
   );
@@ -1196,6 +1291,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
   const composingDraftRef = useRef(false);
   const candidate = String(chat.candidateContent || "");
   const running = Boolean(chat.running);
+  const readOnly = Boolean(data?.readOnly);
   const error = String(chat.error || "");
 
   useEffect(() => {
@@ -1247,14 +1343,14 @@ function WorkspaceNodeChat({ nodeId, data }) {
         </div>
       ) : null}
       <div className="af-work-node-chat__composer">
-        <button type="button" className="af-work-node-chat__add" disabled={running} aria-label="添加上下文">
+        <button type="button" className="af-work-node-chat__add" disabled={running || readOnly} aria-label="添加上下文">
           <span className="material-symbols-outlined" aria-hidden>add</span>
         </button>
         <textarea
           className="af-work-node-chat__input"
           rows={2}
           value={localDraft}
-          disabled={running}
+          disabled={running || readOnly}
           placeholder="描述你想怎么调整这个展示"
           onCompositionStart={() => {
             composingDraftRef.current = true;
@@ -1281,7 +1377,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
         <button
           type="button"
           className="af-work-node-chat__send"
-          disabled={running || !localDraft.trim()}
+          disabled={running || readOnly || !localDraft.trim()}
           onClick={() => data?.onSendNodeChat?.(nodeId, localDraft)}
           aria-label="发送"
         >
@@ -1289,10 +1385,10 @@ function WorkspaceNodeChat({ nodeId, data }) {
         </button>
       </div>
       <div className="af-work-node-chat__actions">
-        <button type="button" disabled={running || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "replace")}>
+        <button type="button" disabled={running || readOnly || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "replace")}>
           替换当前内容
         </button>
-        <button type="button" disabled={running || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "append")}>
+        <button type="button" disabled={running || readOnly || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "append")}>
           追加
         </button>
       </div>
@@ -1350,6 +1446,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const [imageDragActive, setImageDragActive] = useState(false);
   const imageUploadInputRef = useRef(null);
   const markdownContent = kind === "markdown" ? displayContent(data) : "";
+  const readOnly = Boolean(data?.readOnly);
   useEffect(() => {
     if (!resizingDisplay) return undefined;
     const stop = () => setResizingDisplay(false);
@@ -1372,10 +1469,12 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
   const uploadImageFile = useCallback((file) => {
+    if (readOnly) return;
     if (!file || kind !== "image") return;
     data?.onUploadImageToDisplayNode?.(id, file);
-  }, [data, id, kind]);
+  }, [data, id, kind, readOnly]);
   const handleImageDragOver = useCallback((event) => {
+    if (readOnly) return;
     if (kind !== "image") return;
     const files = Array.from(event.dataTransfer?.files || []);
     const hasImageFile = files.some(isWorkspaceImageFile) || Array.from(event.dataTransfer?.items || []).some((item) => String(item?.type || "").startsWith("image/"));
@@ -1384,7 +1483,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
     setImageDragActive(true);
-  }, [kind]);
+  }, [kind, readOnly]);
   const handleImageDragLeave = useCallback((event) => {
     if (kind !== "image") return;
     if (event.currentTarget.contains(event.relatedTarget)) return;
@@ -1519,6 +1618,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
               <button
                 type="button"
                 className="af-work-display-card__action"
+                disabled={readOnly}
                 onClick={() => {
                   data?.onSetDisplayNodeContent?.(id, markdownDraft, "replace", {
                     logChat: false,
@@ -1548,6 +1648,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             <button
               type="button"
               className="af-work-display-card__action nodrag"
+              disabled={readOnly}
               onClick={(event) => {
                 event.stopPropagation();
                 setMarkdownDraft(String(markdownContent || ""));
@@ -1576,6 +1677,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             <button
               type="button"
               className="af-work-display-card__action nodrag"
+              disabled={readOnly}
               onClick={(event) => {
                 event.stopPropagation();
                 imageUploadInputRef.current?.click();
@@ -1590,18 +1692,19 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         <button
           type="button"
           className="af-work-display-card__action nodrag"
+          disabled={readOnly}
           onClick={() => data?.onSaveDisplayNodeToFile?.(id, data)}
           aria-label="另存为文件"
           title="另存为文件"
         >
           <span className="material-symbols-outlined">save</span>
         </button>
-        <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
+        <button type="button" className="af-work-display-card__close nodrag" disabled={readOnly} onClick={() => deleteNode?.(id)} aria-label="删除节点">
           <span className="material-symbols-outlined">close</span>
         </button>
       </div>
       {kind === "markdown" && markdownEditing ? (
-        <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} />
+        <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={data?.onUploadWorkspaceImage} readOnly={readOnly} />
       ) : (
         <DisplayBody data={data} flowParams={data?.flowParams} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
       )}
@@ -1615,6 +1718,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const running = data?.runningRunNodeId === id;
   const stopped = data?.nodeStatus === "stopped";
+  const readOnly = Boolean(data?.readOnly);
   return (
     <div
       className={
@@ -1667,13 +1771,14 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         <span className="material-symbols-outlined">play_circle</span>
         <strong>{data?.label || "Run"}</strong>
         <span>{data?.definitionId || "workspace_run"}</span>
-        <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
+        <button type="button" className="af-work-display-card__close nodrag" disabled={readOnly} onClick={() => deleteNode?.(id)} aria-label="删除节点">
           <span className="material-symbols-outlined">close</span>
         </button>
       </div>
       <button
         type="button"
         className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+        disabled={readOnly}
         onClick={(event) => {
           event.stopPropagation();
           if (running) data?.onStopWorkspaceNode?.(id);
@@ -1689,19 +1794,25 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
 
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const wrapperRef = useRef(null);
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
+  const readOnly = Boolean(props.data?.readOnly);
   const nodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
     ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
     : null;
   const deleteNode = useCallback((nodeId) => {
+    if (readOnly) return;
     setNodes((list) => list.filter((node) => node.id !== nodeId));
     setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
-  }, [setEdges, setNodes]);
+  }, [readOnly, setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
+    if (readOnly) return;
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
     syncNodePropDraft?.(nodeId, { model });
-  }, [setNodes, syncNodePropDraft]);
+  }, [readOnly, setNodes, syncNodePropDraft]);
   const onProvideValueChange = useCallback((nodeId, value) => {
+    if (readOnly) return;
     setNodes((list) => list.map((node) => {
       if (node.id !== nodeId) return node;
       const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
@@ -1715,20 +1826,51 @@ function WorkspaceFlowNode(props) {
         : [{ type: "bool", name: "value", default: value, value }];
       return { body: "", outputs };
     });
-  }, [setNodes, syncNodePropDraft]);
+  }, [readOnly, setNodes, syncNodePropDraft]);
   const onNodeBodyChange = useCallback((nodeId, body) => {
+    if (readOnly) return;
     setNodes((list) => list.map((node) => (
       node.id === nodeId ? { ...node, data: { ...node.data, body } } : node
     )));
     syncNodePropDraft?.(nodeId, { body });
-  }, [setNodes, syncNodePropDraft]);
+  }, [readOnly, setNodes, syncNodePropDraft]);
   const onNodeImagesChange = useCallback((nodeId, images) => {
+    if (readOnly) return;
     const normalizedImages = normalizeImages(images);
     setNodes((list) => list.map((node) => (
       node.id === nodeId ? { ...node, data: { ...node.data, images: normalizedImages } } : node
     )));
     syncNodePropDraft?.(nodeId, { images: normalizedImages });
-  }, [setNodes, syncNodePropDraft]);
+  }, [readOnly, setNodes, syncNodePropDraft]);
+  const onNodeContentResize = useCallback((nodeId) => {
+    if (readOnly) return;
+    const el = wrapperRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const size = {
+      width: Math.ceil(Math.max(el.scrollWidth, rect.width)),
+      height: Math.ceil(Math.max(el.scrollHeight, rect.height)),
+    };
+    if (!size.width || !size.height) return;
+    setNodes((list) => list.map((node) => {
+      if (node.id !== nodeId) return node;
+      const currentWidth = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
+      const currentHeight = Number(node.data?.nodeSize?.height || node.height || node.measured?.height || 0);
+      if (Math.abs(currentWidth - size.width) < 2 && Math.abs(currentHeight - size.height) < 2) return node;
+      return {
+        ...node,
+        width: size.width,
+        height: size.height,
+        data: {
+          ...node.data,
+          nodeSize: size,
+        },
+      };
+    }));
+    const refresh = () => updateNodeInternals(nodeId);
+    window.requestAnimationFrame(refresh);
+    window.setTimeout(refresh, 80);
+  }, [setNodes, updateNodeInternals]);
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
   }
@@ -1757,8 +1899,17 @@ function WorkspaceFlowNode(props) {
     );
   }
   return (
-    <div className="af-work-flow-node" style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}>
-      <FlowNode {...props} deleteNode={deleteNode} modelLists={props.data?.modelLists} onModelChange={onModelChange} onProvideValueChange={onProvideValueChange} onNodeBodyChange={onNodeBodyChange} onNodeImagesChange={onNodeImagesChange} />
+    <div ref={wrapperRef} className="af-work-flow-node" style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}>
+      <FlowNode
+        {...props}
+        data={{ ...props.data, onNodeContentResize }}
+        deleteNode={deleteNode}
+        modelLists={props.data?.modelLists}
+        onModelChange={onModelChange}
+        onProvideValueChange={onProvideValueChange}
+        onNodeBodyChange={onNodeBodyChange}
+        onNodeImagesChange={onNodeImagesChange}
+      />
     </div>
   );
 }
@@ -1844,7 +1995,7 @@ function upsertWorkspaceFile(items, relPath, size = 0) {
   return visit(items || [], 0, "");
 }
 
-function FileTree({ items, onOpen, collapsedDirs, onToggleDir, onCreateFile, onCreateFolder, onDelete, onFileDragStart }) {
+function FileTree({ items, flowParams, onOpen, collapsedDirs, onToggleDir, onCreateFile, onCreateFolder, onDelete, onFileDragStart }) {
   return (
     <ul className="af-work-files">
       {(items || []).map((item) => {
@@ -1877,12 +2028,24 @@ function FileTree({ items, onOpen, collapsedDirs, onToggleDir, onCreateFile, onC
                   </button>
                 </>
               ) : null}
+              {!isDir ? (
+                <a
+                  className="af-work-file-action"
+                  href={workspaceDownloadFileUrl(item.path, flowParams)}
+                  download={item.name}
+                  onClick={(event) => event.stopPropagation()}
+                  title="下载"
+                  aria-label={`下载 ${item.name}`}
+                >
+                  <span className="material-symbols-outlined">download</span>
+                </a>
+              ) : null}
               <button type="button" className="af-work-file-action af-work-file-action--danger" onClick={() => onDelete?.(item)} title="删除" aria-label={`删除 ${item.name}`}>
                 <span className="material-symbols-outlined">delete</span>
               </button>
             </div>
             {isDir && !collapsed && item.children?.length ? (
-              <FileTree items={item.children} onOpen={onOpen} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onCreateFile={onCreateFile} onCreateFolder={onCreateFolder} onDelete={onDelete} onFileDragStart={onFileDragStart} />
+              <FileTree items={item.children} flowParams={flowParams} onOpen={onOpen} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onCreateFile={onCreateFile} onCreateFolder={onCreateFolder} onDelete={onDelete} onFileDragStart={onFileDragStart} />
             ) : null}
           </li>
         );
@@ -2472,7 +2635,7 @@ function WorkspacePageInner() {
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const [nodes, setNodes] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [edges, setEdges, rawOnEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
   const nodeHandleSignaturesRef = useRef(new Map());
@@ -2506,6 +2669,7 @@ function WorkspacePageInner() {
   const [nodePropsError, setNodePropsError] = useState("");
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [workspaceWritable, setWorkspaceWritable] = useState(true);
   const [fileFilter, setFileFilter] = useState("");
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set());
   const workspaceSidebarRef = useRef(null);
@@ -2663,6 +2827,10 @@ function WorkspacePageInner() {
 
   const saveGraph = useCallback(async (nextNodes = nodes, nextEdges = edges) => {
     if (!loadedRef.current) return;
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      throw new Error("Readonly workspace");
+    }
     const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current);
     const res = await fetch("/api/workspace/graph", {
       method: "POST",
@@ -2674,7 +2842,7 @@ function WorkspacePageInner() {
     instancesRef.current = json.graph?.instances || graph.instances;
     setInstances(instancesRef.current);
     setStatus("Workspace graph saved");
-  }, [edges, flowParams, nodes]);
+  }, [edges, flowParams, nodes, workspaceWritable]);
 
   const restoreCanvasSnapshot = useCallback((snapshot) => {
     const nextInstances = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
@@ -2730,7 +2898,9 @@ function WorkspacePageInner() {
     setNodes(flow.nodes);
     setEdges(flow.edges);
     resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
-    setStatus(graphJson.writable ? "Workspace ready" : "Readonly workspace");
+    const writable = graphJson.writable !== false;
+    setWorkspaceWritable(writable);
+    setStatus(writable ? "Workspace ready" : "Readonly workspace");
     loadedRef.current = true;
   }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes]);
 
@@ -2811,6 +2981,10 @@ function WorkspacePageInner() {
   }, [flowParams, runningRunNodeId]);
 
   const runWorkspaceNode = useCallback(async (runNodeId) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     if (!runNodeId || runningRunNodeId) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
@@ -3050,15 +3224,37 @@ function WorkspacePageInner() {
           session.id === runSessionId ? { ...session, status: sessionStatus, endedAt: Date.now() } : session
         )));
       };
-      const applyGraph = (nextGraph) => {
+      const eventTouchedNodeIds = (event) => {
+        const ids = new Set();
+        const nodeId = String(event?.nodeId || "").trim();
+        if (nodeId) ids.add(nodeId);
+        for (const displayId of Array.isArray(event?.displayNodeIds) ? event.displayNodeIds : []) {
+          const text = String(displayId || "").trim();
+          if (text) ids.add(text);
+        }
+        for (const touchedId of Array.isArray(event?.touchedNodeIds) ? event.touchedNodeIds : []) {
+          const text = String(touchedId || "").trim();
+          if (text) ids.add(text);
+        }
+        if (ids.size === 0) {
+          for (const orderedId of Array.isArray(event?.order) ? event.order : []) {
+            const text = String(orderedId || "").trim();
+            if (text) ids.add(text);
+          }
+        }
+        return ids;
+      };
+      const applyGraph = (nextGraph, touchedNodeIds = null) => {
         const flow = graphToFlow(nextGraph || graph, palette);
         const incomingNodesById = new Map(flow.nodes.map((node) => [node.id, node]));
         const incomingInstances = flow.instances || {};
+        const scopedIds = touchedNodeIds instanceof Set ? touchedNodeIds : null;
         setNodes((currentNodes) => {
           const currentIds = new Set(currentNodes.map((node) => node.id));
           const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current);
           const nextInstances = { ...(currentGraph.instances || {}) };
           for (const [instanceId, instance] of Object.entries(incomingInstances)) {
+            if (scopedIds && !scopedIds.has(instanceId)) continue;
             if (!currentIds.has(instanceId)) continue;
             const currentInstance = nextInstances[instanceId];
             if (displayKind(instance?.definitionId || currentInstance?.definitionId)) {
@@ -3070,6 +3266,7 @@ function WorkspacePageInner() {
           instancesRef.current = nextInstances;
           setInstances(nextInstances);
           return currentNodes.map((node) => {
+            if (scopedIds && !scopedIds.has(node.id)) return node;
             const incomingNode = incomingNodesById.get(node.id);
             if (!incomingNode) return node;
             if (!displayKind(incomingNode.data?.definitionId || node.data?.definitionId)) {
@@ -3126,9 +3323,9 @@ function WorkspacePageInner() {
             if (rawThinking) appendThinkingText(rawThinking);
             appendRawTrace(event);
           }
-          if (event.type === "graph" && event.graph) applyGraph(event.graph);
+          if (event.type === "graph" && event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
           if (event.type === "done") {
-            if (event.graph) applyGraph(event.graph);
+            if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
             finalOrder = Array.isArray(event.order) ? event.order : [];
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
           }
@@ -3164,9 +3361,9 @@ function WorkspacePageInner() {
           if (rawThinking) appendThinkingText(rawThinking);
           appendRawTrace(event);
         }
-        if (event.type === "graph" && event.graph) applyGraph(event.graph);
+        if (event.type === "graph" && event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
         if (event.type === "done") {
-          if (event.graph) applyGraph(event.graph);
+          if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
           finalOrder = Array.isArray(event.order) ? event.order : [];
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
         }
@@ -3224,7 +3421,7 @@ function WorkspacePageInner() {
       setRunningRunNodeId("");
       setWorkspaceExecutingNodes(new Set());
     }
-  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes]);
+  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes, workspaceWritable]);
 
   const refreshSkills = useCallback(async () => {
     try {
@@ -3356,6 +3553,7 @@ function WorkspacePageInner() {
 
   useEffect(() => {
     if (!loadedRef.current) return;
+    if (!workspaceWritable) return;
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveGraph().catch((e) => setStatus(String(e.message || e)));
@@ -3363,9 +3561,13 @@ function WorkspacePageInner() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [nodes, edges, saveGraph]);
+  }, [nodes, edges, saveGraph, workspaceWritable]);
 
   const changeLoadSkillKeys = useCallback((nodeId, keys) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const serialized = serializeSkillKeys(keys);
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
       if (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
@@ -3404,9 +3606,13 @@ function WorkspacePageInner() {
       };
     });
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
-  }, [edges, nodes, saveGraph, setNodes]);
+  }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
 
   const changeLoadMcpNames = useCallback((nodeId, names) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const serialized = serializeMcpNames(names);
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
       if (slot?.name !== "serverNames" && slot?.name !== "mcpContext" && slot?.type !== "text") return slot;
@@ -3445,7 +3651,7 @@ function WorkspacePageInner() {
       };
     });
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
-  }, [edges, nodes, saveGraph, setNodes]);
+  }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
 
   const toggleNodeChat = useCallback((nodeId) => {
     const id = String(nodeId || "").trim();
@@ -3478,6 +3684,10 @@ function WorkspacePageInner() {
   }, []);
 
   const setDisplayNodeContent = useCallback((nodeId, content, mode = "replace", options = {}) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const id = String(nodeId || "").trim();
     if (!id) return;
     const currentNode = nodesRef.current.find((node) => node.id === id);
@@ -3543,13 +3753,16 @@ function WorkspacePageInner() {
     }
     saveGraph(nextNodes, edgesRef.current).catch((e) => setStatus(String(e.message || e)));
     setStatus(String(options?.statusMessage || "") || (mode === "append" ? "已追加节点内容" : "已替换节点内容"));
-  }, [saveGraph, setNodes]);
+  }, [saveGraph, setNodes, workspaceWritable]);
 
-  const uploadImageToDisplayNode = useCallback(async (nodeId, file) => {
-    const id = String(nodeId || "").trim();
-    if (!id || !isWorkspaceImageFile(file)) {
+  const uploadWorkspaceImage = useCallback(async (file) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return "";
+    }
+    if (!isWorkspaceImageFile(file)) {
       setStatus("请选择图片文件");
-      return;
+      return "";
     }
     try {
       const form = new FormData();
@@ -3566,20 +3779,31 @@ function WorkspacePageInner() {
       if (!res.ok) throw new Error(json.error || "上传图片失败");
       const savedPath = String(json.path || "").trim();
       if (!savedPath) throw new Error("上传图片失败：未返回路径");
-      setDisplayNodeContent(id, savedPath, "replace", {
-        logChat: false,
-        statusMessage: `已上传图片 ${savedPath}`,
-      });
       await loadFiles();
       setCollapsedDirs((prev) => {
         const next = new Set(prev);
         for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
         return next;
       });
+      setStatus(`已上传图片 ${savedPath}`);
+      return savedPath;
     } catch (e) {
       setStatus(String(e.message || e));
+      return "";
     }
-  }, [flowParams, loadFiles, setDisplayNodeContent]);
+  }, [flowParams, loadFiles, workspaceWritable]);
+
+  const uploadImageToDisplayNode = useCallback(async (nodeId, file) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    const savedPath = await uploadWorkspaceImage(file);
+    if (savedPath) {
+      setDisplayNodeContent(id, savedPath, "replace", {
+        logChat: false,
+        statusMessage: `已上传图片 ${savedPath}`,
+      });
+    }
+  }, [setDisplayNodeContent, uploadWorkspaceImage]);
 
   const applyNodeChatCandidate = useCallback((nodeId, mode = "replace") => {
     const id = String(nodeId || "").trim();
@@ -3589,6 +3813,10 @@ function WorkspacePageInner() {
   }, [nodeChatSessions, setDisplayNodeContent]);
 
   const sendNodeChat = useCallback(async (nodeId, messageOverride = undefined) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const id = String(nodeId || "").trim();
     if (!id) return;
     const session = nodeChatSessions[id] || {};
@@ -3657,9 +3885,13 @@ function WorkspacePageInner() {
       }));
       setStatus(err);
     }
-  }, [composerModel, flowParams, nodeChatSessions]);
+  }, [composerModel, flowParams, nodeChatSessions, workspaceWritable]);
 
   const saveDisplayNodeToFile = useCallback(async (nodeId, data) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const content = displayContent(data);
     if (!String(content || "").trim()) {
       setStatus("展示节点没有可保存内容");
@@ -3695,7 +3927,7 @@ function WorkspacePageInner() {
     } catch (e) {
       setStatus(String(e.message || e));
     }
-  }, [flowParams, loadFiles]);
+  }, [flowParams, loadFiles, workspaceWritable]);
 
   const syncNodePropDraft = useCallback((nodeId, patchOrUpdater) => {
     const id = String(nodeId || "");
@@ -3719,6 +3951,7 @@ function WorkspacePageInner() {
       nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
       nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
       flowParams,
+      readOnly: !workspaceWritable,
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
       runningRunNodeId,
@@ -3730,6 +3963,7 @@ function WorkspacePageInner() {
       onChangeLoadMcpNames: changeLoadMcpNames,
       onRefreshMcps: refreshMcps,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
+      onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
       nodeChatActive: activeNodeChatId === node.id,
       nodeChat: nodeChatSessions[node.id] || null,
@@ -3741,7 +3975,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
@@ -3793,6 +4027,11 @@ function WorkspacePageInner() {
 
   const applyNodeProperties = useCallback((allowRename = false) => {
     if (!nodePropDraft || !selectedNode) return false;
+    if (!workspaceWritable) {
+      setNodePropsError("Readonly workspace");
+      setStatus("Readonly workspace");
+      return false;
+    }
     const oldId = selectedNode.id;
     const trimmedNew = String(nodePropDraft.newId || "").trim();
     const nextId = allowRename ? trimmedNew : oldId;
@@ -3871,9 +4110,10 @@ function WorkspacePageInner() {
     setEdges(nextEdges);
     refreshNodeInternals(nextId);
     return true;
-  }, [edges, nodePropDraft, nodes, selectedNode, setEdges, setNodes, refreshNodeInternals]);
+  }, [edges, nodePropDraft, nodes, selectedNode, setEdges, setNodes, refreshNodeInternals, workspaceWritable]);
 
   useEffect(() => {
+    if (!workspaceWritable) return undefined;
     if (!nodePropDraft || !selectedNode) return;
     const timer = window.setTimeout(() => {
       applyNodeProperties(false);
@@ -3890,6 +4130,7 @@ function WorkspacePageInner() {
     JSON.stringify(nodePropDraft?.outputs || []),
     applyNodeProperties,
     selectedNode?.id,
+    workspaceWritable,
   ]);
 
   const coloredEdges = useMemo(() => {
@@ -4061,6 +4302,10 @@ function WorkspacePageInner() {
   }, []);
 
   const insertFlowSnippet = useCallback((snippetEntry, positionOverride) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const snippet = snippetEntry?.snippet && typeof snippetEntry.snippet === "object" ? snippetEntry.snippet : {};
     const sourceInstances = snippet.instances && typeof snippet.instances === "object" ? snippet.instances : {};
     const oldIds = Object.keys(sourceInstances);
@@ -4131,7 +4376,7 @@ function WorkspacePageInner() {
     setNodes((list) => [...list.map((node) => ({ ...node, selected: false })), ...insertedNodes]);
     setEdges((list) => [...list.map((edge) => ({ ...edge, selected: false })), ...flow.edges]);
     setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}`);
-  }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes]);
+  }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes, workspaceWritable]);
 
   const openPublishSnippetDialog = useCallback(() => {
     if (selectedCanvasNodes.length < 2) {
@@ -4212,7 +4457,7 @@ function WorkspacePageInner() {
       node.id === nodeId ? { ...node, selected: false } : node
     )));
     setSelectedNodeId((current) => (current === nodeId ? "" : current));
-  }, [setNodes]);
+  }, [readOnly, setNodes]);
 
   const updateSkillsMenuPosition = useCallback(() => {
     const btn = skillsButtonRef.current;
@@ -4256,6 +4501,13 @@ function WorkspacePageInner() {
   }, [skillsOpen, updateSkillsMenuPosition]);
 
   const handleNodesChange = useCallback((changes) => {
+    if (!workspaceWritable) {
+      const selectionChanges = (changes || []).filter((change) => change?.type === "select");
+      if (selectionChanges.length > 0) {
+        setNodes((current) => applyNodeChanges(selectionChanges, current));
+      }
+      return;
+    }
     const resized = new Map();
     for (const change of changes || []) {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
@@ -4296,7 +4548,18 @@ function WorkspacePageInner() {
       window.requestAnimationFrame(refresh);
       window.setTimeout(refresh, 80);
     }
-  }, [setNodes, updateNodeInternals]);
+  }, [setNodes, updateNodeInternals, workspaceWritable]);
+
+  const handleEdgesChange = useCallback((changes) => {
+    if (!workspaceWritable) {
+      const selectionChanges = (changes || []).filter((change) => change?.type === "select");
+      if (selectionChanges.length > 0) {
+        setEdges((current) => applyEdgeChanges(selectionChanges, current));
+      }
+      return;
+    }
+    rawOnEdgesChange(changes);
+  }, [rawOnEdgesChange, setEdges, workspaceWritable]);
 
   const defaultWorkspaceNodePosition = useCallback(() => {
     const wrap = document.querySelector(".af-workspace-canvas .react-flow");
@@ -4322,6 +4585,10 @@ function WorkspacePageInner() {
   }, [defaultWorkspaceNodePosition, selectedNode]);
 
   const addNodeFromDefinition = useCallback((def, overrides = {}) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return null;
+    }
     if (!def) return null;
     const runtimeDefinitionId = runtimeDefinitionIdForPalette(def) || def.id;
     const marketplaceRef = marketplaceRefForDefinition(def);
@@ -4360,11 +4627,15 @@ function WorkspacePageInner() {
     setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
     if (overrides.openProperties) setSelectedNodeId(id);
     return id;
-  }, [defaultWorkspaceNodePosition, nodes, palette, setNodes]);
+  }, [defaultWorkspaceNodePosition, nodes, palette, setNodes, workspaceWritable]);
 
   const isValidConnection = useCallback((params) => workspaceConnectionCompatible(params, nodesRef.current), []);
 
   const handleConnect = useCallback((params) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     if (!workspaceConnectionCompatible(params, nodesRef.current)) {
       setStatus("端口类型不匹配，已取消连线");
       return;
@@ -4377,14 +4648,16 @@ function WorkspacePageInner() {
       );
       return addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
     });
-  }, [setEdges, setNodes]);
+  }, [setEdges, setNodes, workspaceWritable]);
 
   const handleConnectStart = useCallback((_, params) => {
+    if (!workspaceWritable) return;
     connectionStartRef.current = buildWorkspaceConnectionDraft(params, nodesRef.current);
     setConnectionMenu(null);
-  }, []);
+  }, [workspaceWritable]);
 
   const handleConnectEnd = useCallback((event, connectionState) => {
+    if (!workspaceWritable) return;
     const draft = connectionStartRef.current;
     connectionStartRef.current = null;
     if (!draft) return;
@@ -4412,9 +4685,14 @@ function WorkspacePageInner() {
       candidates,
       query: "",
     });
-  }, [palette, reactFlow]);
+  }, [palette, reactFlow, workspaceWritable]);
 
   const handleConnectionMenuSelect = useCallback((candidate) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      setConnectionMenu(null);
+      return;
+    }
     const menu = connectionMenuRef.current;
     if (!menu || !candidate?.def) return;
     const newNodeId = addNodeFromDefinition(candidate.def, { position: menu.flowPosition });
@@ -4441,7 +4719,7 @@ function WorkspacePageInner() {
       return addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
     });
     setConnectionMenu(null);
-  }, [addNodeFromDefinition, setEdges]);
+  }, [addNodeFromDefinition, setEdges, workspaceWritable]);
 
   const addQuickNode = useCallback((def) => {
     if (!def) return;
@@ -4480,6 +4758,11 @@ function WorkspacePageInner() {
         (event.metaKey || event.ctrlKey) &&
         ((event.shiftKey && shortcutKey === "z") || shortcutKey === "y");
       if (wantsUndo || wantsRedo) {
+        if (!workspaceWritable) {
+          event.preventDefault();
+          setStatus("Readonly workspace");
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         const changed = wantsUndo ? undoCanvas() : redoCanvas();
@@ -4497,6 +4780,11 @@ function WorkspacePageInner() {
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+        if (!workspaceWritable) {
+          event.preventDefault();
+          setStatus("Readonly workspace");
+          return;
+        }
         const pasted = pasteCanvasClipboard(canvasClipboardRef.current, nodesRef.current, edgesRef.current, instancesRef.current);
         if (pasted) {
           event.preventDefault();
@@ -4522,6 +4810,11 @@ function WorkspacePageInner() {
           return;
         }
         if (event.altKey) return;
+        if (!workspaceWritable) {
+          event.preventDefault();
+          setStatus("Readonly workspace");
+          return;
+        }
         event.preventDefault();
         setQuickAddOpen(true);
         return;
@@ -4538,7 +4831,7 @@ function WorkspacePageInner() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas]);
+  }, [redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas, workspaceWritable]);
 
   const toggleDir = useCallback((dirPath) => {
     setCollapsedDirs((prev) => {
@@ -4608,10 +4901,19 @@ function WorkspacePageInner() {
   }, [addNodeFromDefinition, flowParams, palette]);
 
   const openFileNode = useCallback((item) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     addDisplayFromFile(item, defaultWorkspaceNodePosition()).catch((e) => setStatus(String(e.message || e)));
-  }, [addDisplayFromFile, defaultWorkspaceNodePosition]);
+  }, [addDisplayFromFile, defaultWorkspaceNodePosition, workspaceWritable]);
 
   const handleWorkspaceDrop = useCallback((event) => {
+    if (!workspaceWritable) {
+      event.preventDefault();
+      setStatus("Readonly workspace");
+      return;
+    }
     const raw = event.dataTransfer.getData("application/x-agentflow-workspace-file");
     if (raw) {
       event.preventDefault();
@@ -4644,9 +4946,10 @@ function WorkspacePageInner() {
     event.preventDefault();
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     addNodeFromDefinition(def, { position });
-  }, [addDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow]);
+  }, [addDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow, workspaceWritable]);
 
   const handleWorkspaceDragOver = useCallback((event) => {
+    if (!workspaceWritable) return;
     const types = Array.from(event.dataTransfer.types || []);
     if (
       !types.includes("application/x-agentflow-workspace-file") &&
@@ -4655,9 +4958,13 @@ function WorkspacePageInner() {
     ) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = types.includes("application/agentflow-node") || types.includes("application/agentflow-snippet") ? "move" : "copy";
-  }, []);
+  }, [workspaceWritable]);
 
   const createWorkspaceFile = useCallback(async (baseDir = "") => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const name = window.prompt("新文件名", baseDir ? `${baseDir}/notes.md` : "notes.md");
     if (!name) return;
     const relPath = baseDir && !name.includes("/") ? `${baseDir}/${name}` : name;
@@ -4679,9 +4986,13 @@ function WorkspacePageInner() {
     } catch (e) {
       setStatus(String(e.message || e));
     }
-  }, [flowParams, loadFiles]);
+  }, [flowParams, loadFiles, workspaceWritable]);
 
   const createWorkspaceFolder = useCallback(async (baseDir = "") => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const name = window.prompt("新文件夹名", baseDir ? `${baseDir}/docs` : "docs");
     if (!name) return;
     const relPath = baseDir && !name.includes("/") ? `${baseDir}/${name}` : name;
@@ -4704,9 +5015,13 @@ function WorkspacePageInner() {
     } catch (e) {
       setStatus(String(e.message || e));
     }
-  }, [flowParams, loadFiles]);
+  }, [flowParams, loadFiles, workspaceWritable]);
 
   const deleteWorkspacePath = useCallback(async (item) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     if (!item?.path || !window.confirm(`删除 ${item.path}？`)) return;
     try {
       const res = await fetch("/api/workspace/delete", {
@@ -4721,9 +5036,13 @@ function WorkspacePageInner() {
     } catch (e) {
       setStatus(String(e.message || e));
     }
-  }, [flowParams, loadFiles]);
+  }, [flowParams, loadFiles, workspaceWritable]);
 
   const submitWorkspaceAi = useCallback(async () => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
     const prompt = composerText.trim();
     if (!prompt || composerRunning) return;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
@@ -4760,7 +5079,7 @@ function WorkspacePageInner() {
     } finally {
       setComposerRunning(false);
     }
-  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, openComposerLogPanel, saveGraph, selectedCanvasNodeIds, selectedSkills]);
+  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, openComposerLogPanel, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
   const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
@@ -4819,7 +5138,7 @@ function WorkspacePageInner() {
           >
             AI
           </button>
-          <button type="button" className="af-btn-primary af-btn-primary--lg" onClick={() => saveGraph().catch((e) => setStatus(String(e.message || e)))}>
+          <button type="button" className="af-btn-primary af-btn-primary--lg" disabled={!workspaceWritable} onClick={() => saveGraph().catch((e) => setStatus(String(e.message || e)))}>
             Save
           </button>
         </div>
@@ -4889,10 +5208,10 @@ function WorkspacePageInner() {
                 <button type="button" className="af-icon-btn" onClick={() => setWorkspaceSidebarCollapsed(true)} aria-label="最小化侧边栏" title="最小化侧边栏">
                   <span className="material-symbols-outlined">keyboard_double_arrow_left</span>
                 </button>
-                <button type="button" className="af-icon-btn" onClick={() => createWorkspaceFile("")} aria-label="新增文件" title="新增文件">
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFile("")} aria-label="新增文件" title="新增文件">
                   <span className="material-symbols-outlined">note_add</span>
                 </button>
-                <button type="button" className="af-icon-btn" onClick={() => createWorkspaceFolder("")} aria-label="新增文件夹" title="新增文件夹">
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFolder("")} aria-label="新增文件夹" title="新增文件夹">
                   <span className="material-symbols-outlined">create_new_folder</span>
                 </button>
                 <button type="button" className="af-icon-btn" onClick={() => void loadFiles()} aria-label="刷新文件" title="刷新文件">
@@ -4902,7 +5221,7 @@ function WorkspacePageInner() {
             </div>
             <input className="af-workspace-search" value={fileFilter} onChange={(e) => setFileFilter(e.target.value)} placeholder="搜索文件..." />
             <div className="af-workspace-files-scroll">
-              <FileTree items={filteredFiles} onOpen={openFileNode} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onCreateFile={createWorkspaceFile} onCreateFolder={createWorkspaceFolder} onDelete={deleteWorkspacePath} onFileDragStart={handleFileDragStart} />
+              <FileTree items={filteredFiles} flowParams={flowParams} onOpen={openFileNode} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onCreateFile={createWorkspaceFile} onCreateFolder={createWorkspaceFolder} onDelete={deleteWorkspacePath} onFileDragStart={handleFileDragStart} />
             </div>
           </section>
 
@@ -5115,7 +5434,7 @@ function WorkspacePageInner() {
             edges={coloredEdges}
             nodeTypes={nodeTypes}
             onNodesChange={handleNodesChange}
-            onEdgesChange={onEdgesChange}
+            onEdgesChange={handleEdgesChange}
             onConnect={handleConnect}
             onConnectStart={handleConnectStart}
             onConnectEnd={handleConnectEnd}
@@ -5135,6 +5454,10 @@ function WorkspacePageInner() {
             onPaneClick={() => setSelectedNodeId("")}
             onDrop={handleWorkspaceDrop}
             onDragOver={handleWorkspaceDragOver}
+            nodesDraggable={workspaceWritable}
+            nodesConnectable={workspaceWritable}
+            edgesReconnectable={workspaceWritable}
+            deleteKeyCode={workspaceWritable ? ["Backspace", "Delete"] : null}
             selectionOnDrag={canvasTool === "select"}
             panOnDrag={canvasTool === "pan" ? true : [1, 2]}
             panActivationKeyCode="Space"
@@ -5291,6 +5614,7 @@ function WorkspacePageInner() {
                     placeholder="描述你想在 workspace 中生成、分析或展示的内容"
                     autoComplete="off"
                     spellCheck={false}
+                    disabled={!workspaceWritable}
                   />
                 </div>
                 <div className="af-composer-toolbar">
@@ -5299,7 +5623,7 @@ function WorkspacePageInner() {
                       ref={skillsButtonRef}
                       type="button"
                       className={"af-composer-skills-button" + (selectedSkills.length > 0 ? " af-composer-skills-button--active" : "")}
-                      disabled={composerRunning}
+                      disabled={composerRunning || !workspaceWritable}
                       aria-haspopup="listbox"
                       aria-expanded={skillsOpen}
                       onClick={() => setSkillsOpen((v) => !v)}
@@ -5421,7 +5745,7 @@ function WorkspacePageInner() {
                   <button
                     type="button"
                     className={"af-composer-send" + (composerText.trim() && !composerRunning ? " af-composer-send--active" : "") + (composerRunning ? " af-composer-send--stop" : "")}
-                    disabled={composerRunning || !composerText.trim()}
+                    disabled={composerRunning || !composerText.trim() || !workspaceWritable}
                     aria-label={composerRunning ? "Running" : "Send"}
                     onClick={() => void submitWorkspaceAi()}
                   >
@@ -5505,7 +5829,7 @@ function WorkspacePageInner() {
               definitionId={String(selectedNode.data?.definitionId || selectedNode.id)}
               systemPromptReadonly={String(selectedNode.data?.description || "")}
               modelLists={modelLists}
-              disabled={false}
+              disabled={!workspaceWritable}
               onIdBlur={() => applyNodeProperties(true)}
               onClose={() => setSelectedNodeId("")}
               onPublishToMarketplace={publishNodeToMarketplace}
