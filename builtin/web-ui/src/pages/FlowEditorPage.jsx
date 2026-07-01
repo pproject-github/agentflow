@@ -84,7 +84,88 @@ const FlowNodeContext = createContext({ modelLists: { cursor: [], opencode: [] }
 /** 包装 FlowNode 以注入 deleteNode 与 onProvideExpand 功能 */
 function FlowNodeWrapper(props) {
   const { setNodes } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   const { modelLists, onModelChange } = useContext(FlowNodeContext);
+  const wrapperRef = useRef(null);
+  const readOnly = Boolean(props.data?.readOnly);
+  const displaySize = props.data?.displaySize && Number(props.data.displaySize.width) > 0 && Number(props.data.displaySize.height) > 0
+    ? { width: Number(props.data.displaySize.width), height: Number(props.data.displaySize.height) }
+    : null;
+  const resizable = props.data?.definitionId === "agent_subAgent" && !props.data?.isRunMode && !readOnly;
+
+  const refreshNodeInternals = useCallback((nodeId) => {
+    const refresh = () => updateNodeInternals(nodeId);
+    window.requestAnimationFrame(refresh);
+    window.setTimeout(refresh, 80);
+  }, [updateNodeInternals]);
+
+  const applyNodeDisplaySize = useCallback((nodeId, nextSize) => {
+    const size = normalizeFlowNodeSize(nextSize);
+    if (!size) return;
+    setNodes((list) => list.map((node) => {
+      if (node.id !== nodeId) return node;
+      const currentWidth = Number(node.data?.displaySize?.width || node.width || node.measured?.width || 0);
+      const currentHeight = Number(node.data?.displaySize?.height || node.height || node.measured?.height || 0);
+      if (Math.abs(currentWidth - size.width) < 2 && Math.abs(currentHeight - size.height) < 2) return node;
+      return {
+        ...node,
+        width: size.width,
+        height: size.height,
+        data: {
+          ...node.data,
+          displaySize: size,
+        },
+      };
+    }));
+    refreshNodeInternals(nodeId);
+  }, [refreshNodeInternals, setNodes]);
+
+  const onNodeContentResize = useCallback((nodeId) => {
+    if (readOnly) return;
+    const el = wrapperRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    applyNodeDisplaySize(nodeId, {
+      width: Math.max(rect.width, el.scrollWidth),
+      height: Math.max(rect.height, el.scrollHeight),
+    });
+  }, [applyNodeDisplaySize, readOnly]);
+
+  const startNodeResize = useCallback((event) => {
+    if (!resizable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const el = wrapperRef.current;
+    const rect = el?.getBoundingClientRect();
+    const startWidth = Number(props.data?.displaySize?.width || props.width || props.measured?.width || rect?.width || DEFAULT_FLOW_NODE_WIDTH);
+    const startHeight = Number(props.data?.displaySize?.height || props.height || props.measured?.height || rect?.height || MIN_FLOW_NODE_HEIGHT);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const nodeId = props.id;
+    let raf = 0;
+
+    const move = (moveEvent) => {
+      const next = normalizeFlowNodeSize({
+        width: startWidth + moveEvent.clientX - startX,
+        height: startHeight + moveEvent.clientY - startY,
+      });
+      if (!next) return;
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => applyNodeDisplaySize(nodeId, next));
+    };
+    const stop = () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      refreshNodeInternals(nodeId);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+  }, [applyNodeDisplaySize, props.data?.displaySize?.height, props.data?.displaySize?.width, props.height, props.id, props.measured?.height, props.measured?.width, props.width, refreshNodeInternals, resizable]);
+
   const deleteNode = useCallback((nodeId) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
   }, [setNodes]);
@@ -114,7 +195,33 @@ function FlowNodeWrapper(props) {
       node.id === nodeId ? { ...node, data: { ...node.data, images: normalizeImages(images) } } : node
     )));
   }, [setNodes]);
-  return <FlowNode {...props} deleteNode={deleteNode} onProvideExpand={onProvideExpand} onProvideValueChange={onProvideValueChange} onNodeBodyChange={onNodeBodyChange} onNodeImagesChange={onNodeImagesChange} modelLists={modelLists} onModelChange={onModelChange} />;
+  return (
+    <div
+      ref={wrapperRef}
+      className={"af-flow-node-shell" + (resizable ? " af-flow-node-shell--resizable" : "")}
+      style={displaySize ? { width: displaySize.width, height: displaySize.height } : undefined}
+    >
+      <FlowNode
+        {...props}
+        data={{ ...props.data, onNodeContentResize }}
+        deleteNode={deleteNode}
+        onProvideExpand={onProvideExpand}
+        onProvideValueChange={onProvideValueChange}
+        onNodeBodyChange={onNodeBodyChange}
+        onNodeImagesChange={onNodeImagesChange}
+        modelLists={modelLists}
+        onModelChange={onModelChange}
+      />
+      {resizable ? (
+        <span
+          className="af-flow-node-shell__resize-grip nodrag"
+          aria-label={props.data?.resizeLabel || "Resize node"}
+          role="separator"
+          onPointerDown={startNodeResize}
+        />
+      ) : null}
+    </div>
+  );
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: FlowNodeWrapper };
@@ -228,6 +335,29 @@ function buildPaletteNode(def, id, position, instances, palette) {
     },
   };
   return mergeNodeWithPalette(raw, instances, palette);
+}
+
+const DEFAULT_FLOW_NODE_WIDTH = 320;
+const MIN_FLOW_NODE_WIDTH = 220;
+const MAX_FLOW_NODE_WIDTH = 1600;
+const MIN_FLOW_NODE_HEIGHT = 104;
+const MAX_FLOW_NODE_HEIGHT = 900;
+
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function normalizeFlowNodeSize(size) {
+  if (!size || typeof size !== "object") return null;
+  const rawWidth = Number(size.width);
+  const rawHeight = Number(size.height);
+  if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || rawWidth <= 0 || rawHeight <= 0) return null;
+  return {
+    width: clampNumber(rawWidth, MIN_FLOW_NODE_WIDTH, MAX_FLOW_NODE_WIDTH) || DEFAULT_FLOW_NODE_WIDTH,
+    height: clampNumber(rawHeight, MIN_FLOW_NODE_HEIGHT, MAX_FLOW_NODE_HEIGHT) || MIN_FLOW_NODE_HEIGHT,
+  };
 }
 
 function nodeHandleSignature(node) {

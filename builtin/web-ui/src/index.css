@@ -12089,6 +12089,55 @@ button.af-exec-history-card {
 }
 
 /* —— Flow 节点（深色画布） —— */
+.af-flow-node-shell {
+  box-sizing: border-box;
+  position: relative;
+  width: max-content;
+  height: max-content;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.af-flow-node-shell .af-flow-node {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
+.af-flow-node-shell__resize-grip {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 30;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-radius: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.af-flow-node-shell__resize-grip::before {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(232, 222, 255, 0.48);
+  border-bottom: 2px solid rgba(232, 222, 255, 0.48);
+}
+
+.af-flow-node-shell--resizable:hover .af-flow-node-shell__resize-grip,
+.af-flow-node-shell--resizable:focus-within .af-flow-node-shell__resize-grip {
+  opacity: 1;
+}
+
+.af-flow-node-shell__resize-grip:hover {
+  background: rgba(232, 222, 255, 0.12);
+}
+
 .af-flow-node {
   box-sizing: border-box;
   min-width: 10rem;
@@ -12510,7 +12559,7 @@ button.af-exec-history-card {
   min-width: 8.5rem;
   min-height: 2.5rem;
   box-sizing: border-box;
-  resize: both;
+  resize: none;
   overflow: auto;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
@@ -12553,13 +12602,13 @@ button.af-exec-history-card {
   min-height: 2.8rem;
   max-width: 38rem;
   max-height: 24rem;
-  resize: both;
   overflow: hidden;
 }
 
 .af-flow-node--inline-body-editor .af-flow-node__prompt-stack {
   flex: 1 1 auto;
   width: calc(100% - 0.5rem);
+  min-height: 0;
   max-width: none;
   max-height: none;
 }
