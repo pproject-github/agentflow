@@ -4706,6 +4706,7 @@ button.af-project-card {
 
 .af-work-flow-node {
   box-sizing: border-box;
+  position: relative;
   width: max-content;
   height: max-content;
   min-width: 100%;
@@ -4796,13 +4797,25 @@ button.af-project-card {
   border-radius: 0.38rem;
   background: rgba(24, 24, 26, 0.94);
   color: rgba(151, 209, 255, 0.72);
-  opacity: 0.68;
+  opacity: 0;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.38);
   cursor: nwse-resize;
 }
 
 .af-work-display-card:hover .af-work-display-resize,
-.af-work-display-card--selected .af-work-display-resize {
+.af-work-display-card--resizing .af-work-display-resize {
+  opacity: 1;
+  border-color: rgba(151, 209, 255, 0.62);
+  color: rgba(205, 231, 255, 0.95);
+}
+
+.af-work-flow-resize {
+  opacity: 0;
+}
+
+.af-work-flow-node:hover .af-work-flow-resize,
+.af-work-flow-node--selected .af-work-flow-resize,
+.af-work-flow-node--resizing .af-work-flow-resize {
   opacity: 1;
   border-color: rgba(151, 209, 255, 0.62);
   color: rgba(205, 231, 255, 0.95);

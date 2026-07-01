@@ -1819,10 +1819,9 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
 
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
-  const updateNodeInternals = useUpdateNodeInternals();
-  const wrapperRef = useRef(null);
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
   const readOnly = Boolean(props.data?.readOnly);
+  const [resizingFlowNode, setResizingFlowNode] = useState(false);
   const nodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
     ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
     : null;
@@ -1867,36 +1866,6 @@ function WorkspaceFlowNode(props) {
     )));
     syncNodePropDraft?.(nodeId, { images: normalizedImages });
   }, [readOnly, setNodes, syncNodePropDraft]);
-  const onNodeContentResize = useCallback((nodeId) => {
-    if (readOnly) return;
-    const el = wrapperRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setNodes((list) => list.map((node) => {
-      if (node.id !== nodeId) return node;
-      const currentWidth = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
-      const currentHeight = Number(node.data?.nodeSize?.height || node.height || node.measured?.height || 0);
-      const nextWidth = currentWidth > 0
-        ? currentWidth
-        : Math.ceil(rect.width || DEFAULT_WORKSPACE_NODE_WIDTH);
-      const nextHeight = Math.ceil(Math.max(el.scrollHeight, rect.height, MIN_WORKSPACE_NODE_HEIGHT));
-      const size = normalizeWorkspaceNodeSize({ width: nextWidth, height: nextHeight }, { display: false });
-      if (!size) return node;
-      if (Math.abs(currentWidth - size.width) < 2 && Math.abs(currentHeight - size.height) < 2) return node;
-      return {
-        ...node,
-        width: size.width,
-        height: size.height,
-        data: {
-          ...node.data,
-          nodeSize: size,
-        },
-      };
-    }));
-    const refresh = () => updateNodeInternals(nodeId);
-    window.requestAnimationFrame(refresh);
-    window.setTimeout(refresh, 80);
-  }, [setNodes, updateNodeInternals]);
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
   }
@@ -1925,10 +1894,30 @@ function WorkspaceFlowNode(props) {
     );
   }
   return (
-    <div ref={wrapperRef} className="af-work-flow-node" style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}>
+    <div
+      className={
+        "af-work-flow-node" +
+        (props.selected ? " af-work-flow-node--selected" : "") +
+        (resizingFlowNode ? " af-work-flow-node--resizing" : "")
+      }
+      style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
+    >
+      {!readOnly ? (
+        <NodeResizeControl
+          className="af-work-display-resize af-work-flow-resize nodrag"
+          position="bottom-right"
+          minWidth={MIN_WORKSPACE_NODE_WIDTH}
+          minHeight={MIN_WORKSPACE_NODE_HEIGHT}
+          maxWidth={MAX_WORKSPACE_NODE_WIDTH}
+          maxHeight={MAX_WORKSPACE_NODE_HEIGHT}
+          onResizeStart={() => setResizingFlowNode(true)}
+          onResizeEnd={() => setResizingFlowNode(false)}
+        >
+          <span className="material-symbols-outlined" aria-hidden>open_in_full</span>
+        </NodeResizeControl>
+      ) : null}
       <FlowNode
         {...props}
-        data={{ ...props.data, onNodeContentResize }}
         deleteNode={deleteNode}
         modelLists={props.data?.modelLists}
         onModelChange={onModelChange}
