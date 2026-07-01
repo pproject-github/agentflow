@@ -4842,7 +4842,7 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/marketplace/flow-snippets") {
       try {
-        json(res, 200, listMarketplaceFlowSnippets(root));
+        json(res, 200, listMarketplaceFlowSnippets(root, userCtx));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -4873,7 +4873,7 @@ export function startUiServer({
         return;
       }
       try {
-        const result = deleteMarketplaceFlowSnippetPackage(root, id, version);
+        const result = deleteMarketplaceFlowSnippetPackage(root, id, version, userCtx);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -4952,7 +4952,7 @@ export function startUiServer({
         return;
       }
       try {
-        const result = publishFlowSnippet(root, payload || {});
+        const result = publishFlowSnippet(root, payload || {}, userCtx);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
