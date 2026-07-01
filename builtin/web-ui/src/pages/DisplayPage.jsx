@@ -5,8 +5,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { parseChartSpec } from "../chartSpec.js";
-import { MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { useRoute } from "../routeContext.jsx";
 
 function displayContent(node) {
@@ -92,49 +91,6 @@ function markdownImageSrc(src, shareId) {
   const text = String(src || "").trim();
   if (!text) return "";
   return displayFileUrl(text, shareId);
-}
-
-function ChartDisplay({ content }) {
-  const hostRef = useRef(null);
-  const parsed = useMemo(() => parseChartSpec(content), [content]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let disposed = false;
-    let chart = null;
-    let resizeObserver = null;
-    if (!parsed.ok || !hostRef.current) return undefined;
-    setError("");
-    import("echarts")
-      .then((echarts) => {
-        if (disposed || !hostRef.current) return;
-        chart = echarts.init(hostRef.current, null, { renderer: "canvas" });
-        chart.setOption(parsed.option, true);
-        const resize = () => chart?.resize();
-        resizeObserver = new ResizeObserver(resize);
-        resizeObserver.observe(hostRef.current);
-        window.addEventListener("resize", resize);
-        window.requestAnimationFrame(resize);
-      })
-      .catch((err) => {
-        if (!disposed) setError(String(err?.message || err));
-      });
-    return () => {
-      disposed = true;
-      resizeObserver?.disconnect?.();
-      chart?.dispose?.();
-    };
-  }, [parsed]);
-
-  if (!parsed.ok || error) {
-    return (
-      <div className="af-public-display-error">
-        <strong>Chart configuration error</strong>
-        <span>{error || parsed.error}</span>
-      </div>
-    );
-  }
-  return <div ref={hostRef} className="af-public-display-chart" />;
 }
 
 function VisibleScrollFrame({ className = "", children }) {
@@ -252,7 +208,7 @@ function DisplayNode({ node, shareId, style }) {
                 <MarkdownDisplayContent content={content} resolveSrc={(src) => markdownImageSrc(src, shareId)} />
               </div>
             ) : null}
-            {node.kind === "chart" ? <ChartDisplay content={content} /> : null}
+            {node.kind === "chart" ? <ChartDisplayContent content={content} /> : null}
             {node.kind === "table" ? <TableDisplayContent content={content} /> : null}
             {node.kind === "mermaid" || node.kind === "ascii" ? <pre>{content}</pre> : null}
           </>

@@ -15921,8 +15921,13 @@ button.af-exec-history-card {
   max-height: none;
 }
 
-.af-public-display-page--canvas .af-public-display-chart {
+.af-public-display-page--canvas .af-public-display-chart,
+.af-public-display-page--canvas .af-public-display-node .af-work-display-chart {
   height: 100%;
+  min-height: 0;
+}
+
+.af-public-display-page--canvas .af-public-display-node .af-work-display-chart__canvas {
   min-height: 0;
 }
 

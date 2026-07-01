@@ -18,8 +18,7 @@ import "@xyflow/react/dist/style.css";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { parseChartSpec } from "../chartSpec.js";
-import { MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -1005,63 +1004,6 @@ function VisibleScrollFrame({ className = "", children }) {
       >
         <span style={{ height: `${scrollbar.height}%`, top: `${scrollbar.top}%` }} />
       </div>
-    </div>
-  );
-}
-
-function ChartDisplayContent({ content }) {
-  const hostRef = useRef(null);
-  const parsed = useMemo(() => parseChartSpec(content), [content]);
-  const [renderState, setRenderState] = useState({ loading: false, error: "" });
-
-  useEffect(() => {
-    if (!parsed.ok) {
-      setRenderState({ loading: false, error: parsed.error || "Invalid chart spec" });
-      return undefined;
-    }
-    let disposed = false;
-    let chart = null;
-    let resizeObserver = null;
-    let resize = null;
-    setRenderState({ loading: true, error: "" });
-    import("echarts")
-      .then((echarts) => {
-        if (disposed || !hostRef.current) return;
-        chart = echarts.init(hostRef.current, "dark", { renderer: "canvas" });
-        chart.setOption(parsed.spec.option, true);
-        resize = () => chart?.resize();
-        if (typeof ResizeObserver !== "undefined") {
-          resizeObserver = new ResizeObserver(resize);
-          resizeObserver.observe(hostRef.current);
-        }
-        window.addEventListener("resize", resize);
-        window.requestAnimationFrame(resize);
-        if (!disposed) setRenderState({ loading: false, error: "" });
-      })
-      .catch((error) => {
-        if (!disposed) setRenderState({ loading: false, error: String(error?.message || error) });
-      });
-    return () => {
-      disposed = true;
-      if (resize) window.removeEventListener("resize", resize);
-      resizeObserver?.disconnect?.();
-      chart?.dispose?.();
-    };
-  }, [parsed]);
-
-  if (!parsed.ok || renderState.error) {
-    return (
-      <div className="af-work-display-chart-error">
-        <strong>Chart configuration error</strong>
-        <span>{renderState.error || parsed.error}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="af-work-display-chart">
-      <div ref={hostRef} className="af-work-display-chart__canvas" />
-      {renderState.loading ? <div className="af-work-display-chart__loading">Loading chart...</div> : null}
     </div>
   );
 }
