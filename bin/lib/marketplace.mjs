@@ -117,7 +117,12 @@ function isAdminRequest(opts = {}) {
   return Boolean(opts?.isAdmin);
 }
 
+function shouldFilterMarketplaceOwner(opts = {}) {
+  return opts?.marketplaceScope === "owned";
+}
+
 function canAccessMarketplaceOwner(ownerUserId, opts = {}) {
+  if (!shouldFilterMarketplaceOwner(opts)) return true;
   const requestedUserId = String(opts.userId || "").trim();
   if (!requestedUserId) return true;
   if (isAdminRequest(opts)) return true;

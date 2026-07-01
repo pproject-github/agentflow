@@ -457,12 +457,14 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const loadResources = useCallback(async () => {
     setResourceError("");
     setResourcesLoaded(false);
+    const nodesUrl = resourceKind === "my-nodes" ? "/api/nodes?scope=owned" : "/api/nodes";
+    const flowSnippetsUrl = resourceKind === "my-flows" ? "/api/marketplace/flow-snippets?scope=owned" : "/api/marketplace/flow-snippets";
     try {
       const [nodesRes, skillsRes, collectionsRes, flowSnippetsRes] = await Promise.all([
-        fetch("/api/nodes"),
+        fetch(nodesUrl),
         fetch("/api/skills"),
         fetch("/api/skill-collections"),
-        fetch("/api/marketplace/flow-snippets"),
+        fetch(flowSnippetsUrl),
       ]);
       const nodesJson = await nodesRes.json().catch(() => ({}));
       const skillsJson = await skillsRes.json().catch(() => ({}));
@@ -485,7 +487,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     } finally {
       setResourcesLoaded(true);
     }
-  }, []);
+  }, [resourceKind]);
 
   useEffect(() => {
     setLoaded(false);

@@ -4763,6 +4763,7 @@ export function startUiServer({
       const flowId = url.searchParams.get("flowId");
       const flowSource = url.searchParams.get("flowSource") || "user";
       const lang = url.searchParams.get("lang") || "en";
+      const marketplaceScope = url.searchParams.get("scope") === "owned" ? "owned" : "all";
       if (flowId && !isValidFlowSourceRead(flowSource)) {
         json(res, 400, { error: "Invalid flowSource" });
         return;
@@ -4771,7 +4772,7 @@ export function startUiServer({
       try {
         const { setLanguage } = await import("./i18n.mjs");
         setLanguage(lang);
-        json(res, 200, listNodesJson(root, flowId || "", flowId ? flowSource : "", { archived: nodesArchived, ...userCtx }));
+        json(res, 200, listNodesJson(root, flowId || "", flowId ? flowSource : "", { archived: nodesArchived, ...userCtx, marketplaceScope }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -4833,7 +4834,8 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/marketplace/nodes") {
       try {
-        json(res, 200, listMarketplacePackages(root, userCtx));
+        const marketplaceScope = url.searchParams.get("scope") === "owned" ? "owned" : "all";
+        json(res, 200, listMarketplacePackages(root, { ...userCtx, marketplaceScope }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -4842,7 +4844,8 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/marketplace/flow-snippets") {
       try {
-        json(res, 200, listMarketplaceFlowSnippets(root, userCtx));
+        const marketplaceScope = url.searchParams.get("scope") === "owned" ? "owned" : "all";
+        json(res, 200, listMarketplaceFlowSnippets(root, { ...userCtx, marketplaceScope }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
