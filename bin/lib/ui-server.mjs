@@ -1327,11 +1327,16 @@ function publicDisplayPayloadFromShare(root, share) {
   }, { userId: share.userId || "" });
   if (scoped.error) return { error: scoped.error };
   const { graph } = readWorkspaceGraph(scoped.root);
-  const nodeIds = normalizeDisplayShareNodeIds(share.nodeIds, graph);
   const instances = graph.instances || {};
   const displayPage = graph.ui && typeof graph.ui === "object" && graph.ui.displayPage && typeof graph.ui.displayPage === "object"
     ? graph.ui.displayPage
     : {};
+  const sharedNodeIds = normalizeDisplayShareNodeIds(share.nodeIds, graph);
+  const hasDisplayPageNodeIds = Array.isArray(displayPage.nodeIds);
+  const displayPageNodeIds = normalizeDisplayShareNodeIds(displayPage.nodeIds, graph);
+  const nodeIds = share.layout === "canvas" && hasDisplayPageNodeIds
+    ? displayPageNodeIds
+    : sharedNodeIds;
   const displayPageSizes = displayPage.nodeSizes && typeof displayPage.nodeSizes === "object" ? displayPage.nodeSizes : {};
   const displayPagePositions = displayPage.nodePositions && typeof displayPage.nodePositions === "object" ? displayPage.nodePositions : {};
   const displayPageViewport = displayPage.viewport && typeof displayPage.viewport === "object"
