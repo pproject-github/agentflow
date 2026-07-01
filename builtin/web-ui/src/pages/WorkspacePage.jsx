@@ -18,8 +18,8 @@ import "@xyflow/react/dist/style.css";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
 import { parseChartSpec } from "../chartSpec.js";
+import { MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -565,6 +565,35 @@ function clampWorkspaceFocusZoom(zoom) {
   return Math.min(Math.max(n, 0.75), 1);
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function clampNumber(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return 0;
@@ -801,296 +830,6 @@ function displayIcon(kind) {
   if (kind === "chart") return "bar_chart";
   if (kind === "table") return "table";
   return "article";
-}
-
-function splitMarkdownTableRow(line) {
-  let text = String(line || "").trim();
-  if (!text.includes("|")) return [];
-  if (text.startsWith("|")) text = text.slice(1);
-  if (text.endsWith("|")) text = text.slice(0, -1);
-  return text.split("|").map((cell) => cell.trim());
-}
-
-function isMarkdownTableSeparator(line) {
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-}
-
-function markdownTableAlignments(separatorLine) {
-  return splitMarkdownTableRow(separatorLine).map((cell) => {
-    if (cell.startsWith(":") && cell.endsWith(":")) return "center";
-    if (cell.endsWith(":")) return "right";
-    return "left";
-  });
-}
-
-function parseMarkdownDisplayBlocks(markdown) {
-  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
-  const blocks = [];
-  let textLines = [];
-  let inFence = false;
-  const flushText = () => {
-    if (!textLines.length) return;
-    blocks.push({ type: "markdown", text: textLines.join("\n") });
-    textLines = [];
-  };
-
-  for (let i = 0; i < lines.length;) {
-    const line = lines[i] || "";
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      textLines.push(line);
-      i++;
-      continue;
-    }
-    if (!inFence && i + 1 < lines.length && splitMarkdownTableRow(line).length > 1 && isMarkdownTableSeparator(lines[i + 1])) {
-      flushText();
-      const headers = splitMarkdownTableRow(line);
-      const align = markdownTableAlignments(lines[i + 1]);
-      const rows = [];
-      i += 2;
-      while (i < lines.length && lines[i].trim() && splitMarkdownTableRow(lines[i]).length > 1) {
-        rows.push(splitMarkdownTableRow(lines[i]));
-        i++;
-      }
-      blocks.push({ type: "table", headers, align, rows });
-      continue;
-    }
-    textLines.push(line);
-    i++;
-  }
-  flushText();
-  return blocks;
-}
-
-function markdownComponents(flowParams, inline = false) {
-  return {
-    ...(inline ? { p: ({ children: pChildren }) => <>{pChildren}</> } : {}),
-    img: ({ src, alt }) => (
-      <img src={workspaceRawFileUrl(src, flowParams)} alt={alt || ""} loading="lazy" />
-    ),
-    a: ({ href, children }) => (
-      <a href={href || ""} target="_blank" rel="noopener noreferrer">{children}</a>
-    ),
-  };
-}
-
-function MarkdownInline({ children, flowParams }) {
-  return <ReactMarkdown components={markdownComponents(flowParams, true)}>{String(children || "")}</ReactMarkdown>;
-}
-
-function MarkdownDisplayContent({ content, flowParams }) {
-  const blocks = useMemo(() => parseMarkdownDisplayBlocks(content), [content]);
-  const components = useMemo(() => markdownComponents(flowParams), [flowParams]);
-  return (
-    <>
-      {blocks.map((block, idx) => {
-        if (block.type !== "table") {
-          return <ReactMarkdown key={`md-${idx}`} components={components}>{block.text}</ReactMarkdown>;
-        }
-        return (
-          <div className="af-work-display-table-wrap" key={`table-${idx}`}>
-            <table className="af-work-display-table">
-              <thead>
-                <tr>
-                  {block.headers.map((cell, cellIdx) => (
-                    <th key={cellIdx} style={{ textAlign: block.align[cellIdx] || "left" }}>
-                      <MarkdownInline flowParams={flowParams}>{cell}</MarkdownInline>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {block.rows.map((row, rowIdx) => (
-                  <tr key={rowIdx}>
-                    {block.headers.map((_, cellIdx) => (
-                      <td key={cellIdx} style={{ textAlign: block.align[cellIdx] || "left" }}>
-                        <MarkdownInline flowParams={flowParams}>{row[cellIdx] || ""}</MarkdownInline>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function parseDelimitedTable(text, delimiter = ",") {
-  const rows = [];
-  let row = [];
-  let cell = "";
-  let quoted = false;
-  const source = String(text || "").replace(/\r\n/g, "\n");
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (quoted) {
-      if (ch === '"' && next === '"') {
-        cell += '"';
-        i += 1;
-      } else if (ch === '"') {
-        quoted = false;
-      } else {
-        cell += ch;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      quoted = true;
-    } else if (ch === delimiter) {
-      row.push(cell.trim());
-      cell = "";
-    } else if (ch === "\n") {
-      row.push(cell.trim());
-      rows.push(row);
-      row = [];
-      cell = "";
-    } else {
-      cell += ch;
-    }
-  }
-  if (cell || row.length) {
-    row.push(cell.trim());
-    rows.push(row);
-  }
-  return rows.filter((r) => r.some((value) => String(value || "").trim()));
-}
-
-function normalizeTableValue(value) {
-  if (value == null) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function normalizeTableSpec(raw) {
-  if (Array.isArray(raw)) {
-    if (raw.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
-      const columns = Array.from(new Set(raw.flatMap((row) => Object.keys(row))));
-      return {
-        columns: columns.map((key) => ({ key, label: key, align: "left" })),
-        rows: raw.map((row) => columns.map((key) => normalizeTableValue(row[key]))),
-      };
-    }
-    if (raw.every(Array.isArray) && raw.length > 0) {
-      const headers = raw[0].map((cell, idx) => normalizeTableValue(cell) || `Column ${idx + 1}`);
-      return {
-        columns: headers.map((label, idx) => ({ key: String(idx), label, align: "left" })),
-        rows: raw.slice(1).map((row) => headers.map((_, idx) => normalizeTableValue(row[idx]))),
-      };
-    }
-  }
-  if (!raw || typeof raw !== "object") return null;
-  const rawColumns = Array.isArray(raw.columns) ? raw.columns : Array.isArray(raw.headers) ? raw.headers : [];
-  const rawRows = Array.isArray(raw.rows) ? raw.rows : Array.isArray(raw.data) ? raw.data : [];
-  let columns = rawColumns.map((column, idx) => {
-    if (column && typeof column === "object") {
-      const key = String(column.key || column.name || column.field || idx);
-      return {
-        key,
-        label: String(column.label || column.title || column.name || column.key || `Column ${idx + 1}`),
-        align: ["left", "center", "right"].includes(column.align) ? column.align : "left",
-      };
-    }
-    return { key: String(idx), label: normalizeTableValue(column) || `Column ${idx + 1}`, align: "left" };
-  });
-  if (columns.length === 0 && rawRows.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
-    columns = Array.from(new Set(rawRows.flatMap((row) => Object.keys(row)))).map((key) => ({ key, label: key, align: "left" }));
-  }
-  if (columns.length === 0 && rawRows.every(Array.isArray) && rawRows.length > 0) {
-    columns = rawRows[0].map((cell, idx) => ({ key: String(idx), label: normalizeTableValue(cell) || `Column ${idx + 1}`, align: "left" }));
-    return {
-      columns,
-      rows: rawRows.slice(1).map((row) => columns.map((_, idx) => normalizeTableValue(row[idx]))),
-    };
-  }
-  return {
-    columns,
-    rows: rawRows.map((row) => {
-      if (Array.isArray(row)) return columns.map((_, idx) => normalizeTableValue(row[idx]));
-      if (row && typeof row === "object") return columns.map((column) => normalizeTableValue(row[column.key]));
-      return columns.map((_, idx) => (idx === 0 ? normalizeTableValue(row) : ""));
-    }),
-  };
-}
-
-function parseTableDisplayContent(content) {
-  const text = String(content || "").trim();
-  if (!text) return { columns: [], rows: [], error: "" };
-  const fenced = text.match(/^```(?:json|table|csv|tsv|markdown|md)?\s*\n?([\s\S]*?)```\s*$/i);
-  const body = fenced ? fenced[1].trim() : text;
-  try {
-    const normalized = normalizeTableSpec(JSON.parse(body));
-    if (normalized && normalized.columns.length) return { ...normalized, error: "" };
-  } catch {
-    /* try non-JSON formats */
-  }
-  const lines = body.replace(/\r\n/g, "\n").split("\n").filter((line) => line.trim());
-  if (lines.length >= 2 && splitMarkdownTableRow(lines[0]).length > 1 && isMarkdownTableSeparator(lines[1])) {
-    const headers = splitMarkdownTableRow(lines[0]);
-    const align = markdownTableAlignments(lines[1]);
-    return {
-      columns: headers.map((label, idx) => ({ key: String(idx), label, align: align[idx] || "left" })),
-      rows: lines.slice(2).map((line) => splitMarkdownTableRow(line)),
-      error: "",
-    };
-  }
-  const delimiter = body.includes("\t") ? "\t" : ",";
-  const delimited = parseDelimitedTable(body, delimiter);
-  if (delimited.length > 0 && delimited[0].length > 1) {
-    const headers = delimited[0].map((cell, idx) => cell || `Column ${idx + 1}`);
-    return {
-      columns: headers.map((label, idx) => ({ key: String(idx), label, align: "left" })),
-      rows: delimited.slice(1),
-      error: "",
-    };
-  }
-  return { columns: [], rows: [], error: "No table data detected" };
-}
-
-function TableDisplayContent({ content }) {
-  const table = useMemo(() => parseTableDisplayContent(content), [content]);
-  if (table.error || table.columns.length === 0) {
-    return (
-      <div className="af-work-display-table-empty">
-        <strong>Table data error</strong>
-        <span>{table.error || "No columns found"}</span>
-      </div>
-    );
-  }
-  return (
-    <div className="af-work-display-table-wrap af-work-display-table-wrap--standalone">
-      <table className="af-work-display-table">
-        <thead>
-          <tr>
-            {table.columns.map((column, idx) => (
-              <th key={`${column.key}-${idx}`} style={{ textAlign: column.align || "left" }}>
-                {column.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {table.rows.map((row, rowIdx) => (
-            <tr key={rowIdx}>
-              {table.columns.map((column, cellIdx) => (
-                <td key={`${column.key}-${cellIdx}`} style={{ textAlign: column.align || "left" }}>
-                  {normalizeTableValue(row[cellIdx])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }
 
 function parseMermaidFlowchart(code) {
@@ -1356,7 +1095,11 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     );
   }
   if (kind === "markdown") {
-    return <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown"><MarkdownDisplayContent content={content} flowParams={flowParams} /></VisibleScrollFrame>;
+    return (
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown">
+        <MarkdownDisplayContent content={content} resolveSrc={(src) => workspaceRawFileUrl(src, flowParams)} />
+      </VisibleScrollFrame>
+    );
   }
   if (kind === "chart") {
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--chart"><ChartDisplayContent content={content} /></VisibleScrollFrame>;
@@ -1387,7 +1130,11 @@ function DisplayPickerPreview({ node }) {
     return <img src={workspaceRawFileUrl(content, node?.data?.flowParams)} alt={node?.data?.label || node?.id} loading="lazy" />;
   }
   if (kind === "markdown") {
-    return <div className="af-display-picker-preview__markdown"><MarkdownDisplayContent content={content} flowParams={node?.data?.flowParams} /></div>;
+    return (
+      <div className="af-display-picker-preview__markdown">
+        <MarkdownDisplayContent content={content} resolveSrc={(src) => workspaceRawFileUrl(src, node?.data?.flowParams)} />
+      </div>
+    );
   }
   if (kind === "chart") {
     return <ChartDisplayContent content={content} />;
@@ -2992,6 +2739,7 @@ function WorkspacePageInner() {
   const [displayShareResult, setDisplayShareResult] = useState(null);
   const [displayShareDraft, setDisplayShareDraft] = useState({ title: "", layout: "gallery", nodeIds: [] });
   const [displayLinkOpen, setDisplayLinkOpen] = useState(false);
+  const [displayLinkCopyState, setDisplayLinkCopyState] = useState("");
   const [displayPickerOpen, setDisplayPickerOpen] = useState(false);
   const [displayPickerSearch, setDisplayPickerSearch] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -5142,6 +4890,14 @@ function WorkspacePageInner() {
     }
   }, [displayPage.nodeIds, edges, flowParams, nodes, saveGraph]);
 
+  const copyDisplayShareUrl = useCallback(async () => {
+    const url = displayShareResult?.absoluteUrl;
+    if (!url) return;
+    const ok = await copyTextToClipboard(url);
+    setDisplayLinkCopyState(ok ? "copied" : "failed");
+    window.setTimeout(() => setDisplayLinkCopyState(""), 1600);
+  }, [displayShareResult?.absoluteUrl]);
+
   const dismissSelectedNode = useCallback((nodeId) => {
     setNodes((list) => list.map((node) => (
       node.id === nodeId ? { ...node, selected: false } : node
@@ -5905,6 +5661,7 @@ function WorkspacePageInner() {
                 className="af-workspace-display-share-btn"
                 disabled={displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
                 onClick={() => {
+                  setDisplayLinkCopyState("");
                   if (displayShareResult?.absoluteUrl) setDisplayLinkOpen(true);
                   else void publishCurrentDisplayPage();
                 }}
@@ -6810,9 +6567,9 @@ function WorkspacePageInner() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => navigator.clipboard?.writeText(displayShareResult.absoluteUrl).catch(() => {})}
+                      onClick={() => void copyDisplayShareUrl()}
                     >
-                      复制
+                      {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
                   </div>
                 ) : null}
@@ -6850,7 +6607,10 @@ function WorkspacePageInner() {
                 <button
                   type="button"
                   className="af-flow-snippet-modal__close"
-                  onClick={() => setDisplayLinkOpen(false)}
+                  onClick={() => {
+                    setDisplayLinkCopyState("");
+                    setDisplayLinkOpen(false);
+                  }}
                   aria-label="关闭"
                 >
                   <span className="material-symbols-outlined" aria-hidden>close</span>
@@ -6864,9 +6624,9 @@ function WorkspacePageInner() {
                       <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
                       打开
                     </button>
-                    <button type="button" onClick={() => navigator.clipboard?.writeText(displayShareResult.absoluteUrl).catch(() => {})}>
-                      <span className="material-symbols-outlined" aria-hidden>content_copy</span>
-                      复制
+                    <button type="button" onClick={() => void copyDisplayShareUrl()}>
+                      <span className="material-symbols-outlined" aria-hidden>{displayLinkCopyState === "copied" ? "check" : "content_copy"}</span>
+                      {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
                   </div>
                 ) : (
@@ -6878,7 +6638,10 @@ function WorkspacePageInner() {
                 <button
                   type="button"
                   className="af-flow-snippet-modal__btn"
-                  onClick={() => setDisplayLinkOpen(false)}
+                  onClick={() => {
+                    setDisplayLinkCopyState("");
+                    setDisplayLinkOpen(false);
+                  }}
                 >
                   关闭
                 </button>
