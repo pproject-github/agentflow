@@ -547,7 +547,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               </button>
             </div>
           ) : isSubAgent && !isRunMode ? (
-            <div ref={bodyPromptStackRef} className="af-flow-node__prompt-stack nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+            <div ref={bodyPromptStackRef} className="af-flow-node__prompt-stack nodrag">
               <pre
                 ref={bodyBackdropRef}
                 className="af-flow-node__prompt-backdrop"

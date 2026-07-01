@@ -1601,11 +1601,15 @@ function workspaceSourceSlotForEdge(graph, edge) {
 function workspaceOutputSlotValueForEdge(graph, outputs, edge) {
   const sourceId = String(edge?.source || "");
   const slot = workspaceSourceSlotForEdge(graph, edge);
+  const out = outputs.get(sourceId);
+  const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
+  const slotName = String(slot?.name || "").trim();
+  const isPrimaryOutput = !slot || slotName === "result" || slotName === "content" || sourceIndex === 0;
+  if (isPrimaryOutput && out != null && String(out).trim()) return String(out);
   if (slot && String(slot?.type || "") !== "node") {
     const value = workspaceSlotValue(slot);
     if (value.trim()) return value;
   }
-  const out = outputs.get(sourceId);
   if (out != null && String(out).trim()) return String(out);
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   return workspaceInstanceText(instances[sourceId]);
@@ -2022,6 +2026,26 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   ].join("\n");
 }
 
+function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const directInputEdges = edges
+    .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
+  const upstreamNodeIds = Array.from(new Set(directInputEdges.map((edge) => String(edge?.source || "").trim()).filter(Boolean)));
+  const inputNames = Object.keys(inputValues || {}).filter(Boolean);
+  return [
+    "## 当前节点上下文边界",
+    "",
+    "你只负责执行当前节点；`上游上下文`、已解析输入槽和节点任务就是本节点的业务上下文边界。",
+    upstreamNodeIds.length ? `当前直接上游节点：${upstreamNodeIds.map((id) => `\`${id}\``).join("、")}。` : "当前没有直接业务上游节点。",
+    inputNames.length ? `当前已解析输入槽：${inputNames.map((name) => `\`${name}\``).join("、")}。` : "当前没有已解析的具名业务输入槽。",
+    "不要为了理解本节点而读取或搜索整张 workspace、`workspace.graph.json`、正式 `flow.yaml`、历史 run/log 或其它未连接节点。",
+    "不要把下游展示节点已有内容、下游错误信息、其它分支节点内容当作本节点输入；下游输出要求只用于决定最终 JSON 的字段和格式。",
+    "只有当当前节点任务文本或上游输入明确要求读取/修改 `workspace.graph.json`、`flow.yaml` 或某个具体文件路径时，才可以打开对应文件。",
+    "如果完成任务所需信息不在当前节点任务、输入槽或上游上下文中，应明确说明缺少哪个上游输入，而不是扫描整张 workspace 猜测。",
+  ].join("\n");
+}
+
 function workspaceOutputProtocolRequirements(graph, nodeId) {
   const instance = graph?.instances?.[nodeId] || {};
   const outputSlots = Array.isArray(instance.output) ? instance.output : [];
@@ -2355,11 +2379,13 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const label = String(instance.label || nodeId).trim();
+  const scopeGuardrails = workspaceNodeScopeGuardrails(graph, nodeId, inputValues);
   const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
     "按 Workspace 输出协议返回该节点要传给下游展示/后续节点的数据。",
+    scopeGuardrails,
     workspaceSearchGuardrailsBlock(),
     skillsBlock ? `\n## Available Skills\n\n${skillsBlock}` : "",
     mcpBlock ? `\n## Available MCP\n\n${mcpBlock}` : "",
