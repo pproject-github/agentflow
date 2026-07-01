@@ -178,6 +178,7 @@
     "selectTool": "Select Tool",
     "panTool": "Pan Tool",
     "holdSpacePan": "Hold Space to temporarily pan",
+    "saveViewport": "Save current entry view",
     "selectAll": "Select all nodes",
     "undo": "Undo canvas change",
     "redo": "Redo canvas change"

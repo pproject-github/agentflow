@@ -149,7 +149,7 @@ function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
       ...(wasLegacyAutoHidden ? { showOnNode: true } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode == null ? { showOnNode: Boolean(slot.required) || String(slot.type || "").trim().toLowerCase() === "node" } : {}),
-      ...(isDisplayPrimarySlot(definitionId, slot) ? { showOnNode: true } : {}),
+      ...(!slot._showOnNodeExplicit && isDisplayPrimarySlot(definitionId, slot) ? { showOnNode: true } : {}),
       ...(CANVAS_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: false } : {}),
     };
   });
