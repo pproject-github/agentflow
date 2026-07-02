@@ -1948,13 +1948,23 @@ function workspaceExtractLooseResult(raw) {
   return "";
 }
 
+function workspaceNormalizeAgentflowEnvelopeBody(body) {
+  let text = String(body || "").replace(/\r\n/g, "\n").trim();
+  if (!text.includes("\n")) {
+    text = text
+      .replace(/\s+(resultFile|result|outParams|outParams\.[A-Za-z_][A-Za-z0-9_-]*)\s*:/g, "\n$1:")
+      .replace(/(^|\n)outParams:\s+([A-Za-z_][A-Za-z0-9_-]*\s*:)/g, "$1outParams:\n  $2");
+  }
+  return text;
+}
+
 function workspaceExtractAgentflowEnvelope(raw) {
   const text = String(raw || "");
-  const match = text.match(/(?:^|\n)---agentflow\s*\n([\s\S]*?)\n---end(?:\n|$)/i);
+  const match = text.match(/---agentflow\b([\s\S]*?)---end/i);
   if (!match) return null;
-  const envelope = match[1] || "";
+  const envelope = workspaceNormalizeAgentflowEnvelopeBody(match[1] || "");
   const outside = `${text.slice(0, match.index || 0)}\n${text.slice((match.index || 0) + match[0].length)}`.trim();
-  const lines = envelope.replace(/\r\n/g, "\n").split("\n");
+  const lines = envelope.split("\n");
   const outParams = {};
   let result = "";
   let resultFile = "";
@@ -1986,7 +1996,7 @@ function workspaceExtractAgentflowEnvelope(raw) {
       i += 1;
       continue;
     }
-    const top = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+    const top = line.match(/^([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(.*)$/);
     if (!top) {
       i += 1;
       continue;
@@ -2002,7 +2012,7 @@ function workspaceExtractAgentflowEnvelope(raw) {
           continue;
         }
         if (lineIndent(childLine) === 0) break;
-        const child = childLine.match(/^\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+        const child = childLine.match(/^\s+([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(.*)$/);
         if (!child) {
           i += 1;
           continue;
@@ -2017,6 +2027,7 @@ function workspaceExtractAgentflowEnvelope(raw) {
     const parsed = parseValue(rawValue, i, 0);
     if (key === "result") result = String(parsed.value || "");
     else if (key === "resultFile") resultFile = String(parsed.value || "").trim();
+    else if (key.startsWith("outParams.")) outParams[key.slice("outParams.".length)] = String(parsed.value || "").trim();
     else if (key) outParams[key] = String(parsed.value || "").trim();
     i = parsed.nextIndex;
   }
@@ -2031,8 +2042,8 @@ function workspaceExtractAgentflowEnvelope(raw) {
 
 function workspaceCanonicalAgentOutput(content) {
   const raw = String(content || "").trim();
-  const match = raw.match(/(?:^|\n)(---agentflow\s*\n[\s\S]*?\n---end)(?:\n|$)/i);
-  if (match?.[1]) return match[1].trim();
+  const match = raw.match(/---agentflow\b[\s\S]*?---end/i);
+  if (match?.[0]) return match[0].trim();
   return raw;
 }
 
@@ -2361,7 +2372,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     "如果需要多个输出，或需要返回文件路径，最后输出一个轻量 envelope；不要把大段 HTML/Markdown/SQL 包进 JSON 字符串。",
     "长内容、HTML、Markdown、SQL、CSV、图片等 artifact 优先写入当前 workspace 的 `outputs/` 目录，然后在 `resultFile` 或 `outParams.<name>File` 返回相对路径。",
     "普通 assistant 文本会被当作本节点输出内容；执行过程中不要发送进度说明、解释或寒暄，例如“正在读取/正在生成/准备输出”。需要思考时只使用内部 thinking，最终只发送正文或 envelope。",
-    "envelope 格式：",
+    "envelope 格式必须按下面这样独占多行输出；不要把 `---agentflow`、字段和 `---end` 写在同一行：",
     "",
     envelopeExample,
     "",
