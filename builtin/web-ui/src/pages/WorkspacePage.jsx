@@ -1262,7 +1262,8 @@ function VisibleScrollFrame({ className = "", children }) {
 function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   const kind = displayKind(data?.definitionId);
   const rawContent = displayContent(data);
-  const filePath = kind === "image" ? "" : displayTextFilePath(rawContent, kind);
+  const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
+  const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
   const [fileContent, setFileContent] = useState("");
   const [fileError, setFileError] = useState("");
   const [fileLoading, setFileLoading] = useState(false);
@@ -1290,7 +1291,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     return () => { cancelled = true; };
   }, [filePath, flowParams?.flowId, flowParams?.flowSource, flowParams?.archived, data?.displayReloadKey]);
   if (!kind) return null;
-  const resolvedContent = filePath ? fileContent : rawContent;
+  const resolvedContent = filePath ? fileContent : unwrappedRawContent;
   const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
   const contentProblem = validateDisplayContentForWrite(kind, content);
   if (fileLoading) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
@@ -1346,7 +1347,8 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
 function DisplayPickerPreview({ node }) {
   const kind = displayKind(node?.data?.definitionId);
   const rawContent = displayContent(node?.data);
-  const filePath = kind === "image" ? "" : displayTextFilePath(rawContent, kind);
+  const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
+  const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
   const [fileContent, setFileContent] = useState("");
   const [fileLoading, setFileLoading] = useState(false);
   useEffect(() => {
@@ -1370,7 +1372,7 @@ function DisplayPickerPreview({ node }) {
       });
     return () => { cancelled = true; };
   }, [filePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
-  const resolvedContent = filePath ? fileContent : rawContent;
+  const resolvedContent = filePath ? fileContent : unwrappedRawContent;
   const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
   const contentProblem = validateDisplayContentForWrite(kind, content);
   if (fileLoading) return <div className="af-display-picker-preview__empty">Loading</div>;
@@ -1662,12 +1664,39 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const [resizingDisplay, setResizingDisplay] = useState(false);
   const [markdownEditing, setMarkdownEditing] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState("");
+  const [markdownFileContent, setMarkdownFileContent] = useState("");
+  const [markdownFileLoading, setMarkdownFileLoading] = useState(false);
   const [imageDragActive, setImageDragActive] = useState(false);
   const imageUploadInputRef = useRef(null);
   const currentDisplayContent = displayContent(data);
-  const markdownContent = kind === "markdown" ? currentDisplayContent : "";
+  const markdownSourceContent = kind === "markdown" ? displayOutputEnvelopeContent(currentDisplayContent) : "";
+  const markdownFilePath = kind === "markdown" ? displayTextFilePath(markdownSourceContent, "markdown") : "";
+  const markdownContent = kind === "markdown" ? (markdownFilePath ? markdownFileContent : markdownSourceContent) : "";
   const readOnly = Boolean(data?.readOnly);
   const presentationMode = Boolean(data?.displayPageMode);
+  useEffect(() => {
+    let cancelled = false;
+    if (kind !== "markdown" || !markdownFilePath) {
+      setMarkdownFileContent("");
+      setMarkdownFileLoading(false);
+      return () => { cancelled = true; };
+    }
+    setMarkdownFileLoading(true);
+    readWorkspaceTextFile(data?.flowParams || {}, markdownFilePath)
+      .then((text) => {
+        if (!cancelled) setMarkdownFileContent(text);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setMarkdownFileContent("");
+          data?.onStatus?.(String(error.message || error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMarkdownFileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [kind, markdownFilePath, data?.flowParams?.flowId, data?.flowParams?.flowSource, data?.flowParams?.archived, data?.displayReloadKey]);
   useEffect(() => {
     if (!resizingDisplay) return undefined;
     const stop = () => setResizingDisplay(false);
@@ -1928,8 +1957,23 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
               <button
                 type="button"
                 className="af-work-display-card__action"
-                disabled={readOnly}
-                onClick={() => {
+                disabled={readOnly || markdownFileLoading}
+                onClick={async () => {
+                  if (markdownFilePath) {
+                    try {
+                      const savedPath = await writeWorkspaceTextFile(data?.flowParams || {}, markdownFilePath, markdownDraft);
+                      setMarkdownFileContent(markdownDraft);
+                      data?.onSetDisplayNodeContent?.(id, savedPath, "replace", {
+                        logChat: false,
+                        reloadDisplay: true,
+                        statusMessage: `已更新 ${savedPath}`,
+                      });
+                      setMarkdownEditing(false);
+                    } catch (error) {
+                      data?.onStatus?.(String(error.message || error));
+                    }
+                    return;
+                  }
                   data?.onSetDisplayNodeContent?.(id, markdownDraft, "replace", {
                     logChat: false,
                     statusMessage: "已更新 Markdown 内容",
@@ -1958,7 +2002,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             <button
               type="button"
               className="af-work-display-card__action nodrag"
-              disabled={readOnly}
+              disabled={readOnly || markdownFileLoading}
               onClick={(event) => {
                 event.stopPropagation();
                 setMarkdownDraft(String(markdownContent || ""));
