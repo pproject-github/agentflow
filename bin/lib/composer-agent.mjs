@@ -257,6 +257,7 @@ export function buildScriptContentBlockForInstances(flowYamlAbs, instanceIds) {
  * @param {string} [opts.cliWorkspace]
  * @param {string} opts.prompt
  * @param {string} [opts.modelKey]
+ * @param {Record<string, string>} [opts.extraEnv]
  * @param {boolean} [opts.force]
  * @param {(ev: object) => void} [opts.onStreamEvent]
  * @param {(subtype: string, toolName: string) => void} [opts.onToolCall]
@@ -273,7 +274,8 @@ export function startComposerAgent(opts) {
   const cliWs = opts.cliWorkspace ? String(opts.cliWorkspace) : getAgentflowDataRoot();
   const modelKey = opts.modelKey != null ? String(opts.modelKey).trim() : "";
   const { cli, model } = resolveCliAndModel(uiRoot, modelKey || null, null);
-  const env = agentflowUserEnv(opts.agentflowUserId);
+  const extraEnv = opts.extraEnv && typeof opts.extraEnv === "object" && !Array.isArray(opts.extraEnv) ? opts.extraEnv : {};
+  const env = { ...agentflowUserEnv(opts.agentflowUserId), ...extraEnv };
 
   const common = {
     onStreamEvent: opts.onStreamEvent,

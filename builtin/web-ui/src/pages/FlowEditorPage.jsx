@@ -1073,11 +1073,13 @@ function replaceFlowUrl(flow) {
     window.history.replaceState({}, "", "/flow");
     return;
   }
+  const current = new URLSearchParams(window.location.search);
   const q = new URLSearchParams({
     flowId: flow.id,
     flowSource: flow.source ?? "user",
   });
   if (flow.archived) q.set("flowArchived", "1");
+  if (current.get("panel") === "settings") q.set("panel", "settings");
   window.history.replaceState({}, "", "/flow?" + q.toString());
 }
 
@@ -2090,6 +2092,12 @@ export default function FlowEditorPage() {
       navigate("/projects?new=1");
     }
   }, [path, navigate]);
+
+  useEffect(() => {
+    if (path !== "/flow" || !selected) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("panel") === "settings") setRightPanel("settings");
+  }, [path, selected?.id, selected?.source]);
 
   useEffect(() => {
     let cancelled = false;

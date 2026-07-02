@@ -354,6 +354,10 @@ body {
 
 /* —— Buttons —— */
 .af-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   padding: 0.5rem 1.25rem;
   border: none;
   border-radius: 999px;
@@ -398,6 +402,10 @@ body {
 }
 
 .af-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   padding: 0.5rem 1.25rem;
   border: 1px solid rgba(148, 142, 161, 0.25);
   border-radius: 999px;
@@ -5669,6 +5677,34 @@ button.af-project-card {
   font-size: 0.95rem;
 }
 
+.af-work-display-body--markdown a,
+.af-work-display-table a,
+.af-display-picker-preview__markdown a,
+.af-public-display-markdown a {
+  color: #8fd8ff;
+  text-decoration: underline;
+  text-decoration-color: rgba(143, 216, 255, 0.72);
+  text-underline-offset: 0.16em;
+  font-weight: 700;
+}
+
+.af-work-display-body--markdown a:visited,
+.af-work-display-table a:visited,
+.af-display-picker-preview__markdown a:visited,
+.af-public-display-markdown a:visited {
+  color: #cdbdff;
+  text-decoration-color: rgba(205, 189, 255, 0.72);
+}
+
+.af-work-display-body--markdown a:hover,
+.af-work-display-table a:hover,
+.af-display-picker-preview__markdown a:hover,
+.af-public-display-markdown a:hover {
+  color: #d7f2ff;
+  text-decoration-color: #d7f2ff;
+  background: rgba(143, 216, 255, 0.12);
+}
+
 .af-work-display-table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -8790,6 +8826,7 @@ button.af-project-card {
 .af-pipeline-settings-side-action .material-symbols-outlined,
 .af-pipeline-settings-save-schedule .material-symbols-outlined {
   font-size: 1rem;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 1180px) {
@@ -16159,10 +16196,6 @@ button.af-exec-history-card {
 
 .af-public-display-markdown :last-child {
   margin-bottom: 0;
-}
-
-.af-public-display-markdown a {
-  color: rgba(151, 209, 255, 0.95);
 }
 
 .af-public-display-markdown code {
