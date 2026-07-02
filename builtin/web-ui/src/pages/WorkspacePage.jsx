@@ -702,8 +702,115 @@ function displayContent(data) {
   return String(data?.body || (contentSlot ? slotText(contentSlot) : ""));
 }
 
+function displayTextFilePath(value, kind = "") {
+  const text = String(value || "").trim();
+  if (!text || text.length > 260) return "";
+  if (/[\r\n<>]/.test(text)) return "";
+  if (/^(?:https?:|data:|blob:|file:|javascript:|mailto:|tel:)/i.test(text)) return "";
+  const clean = text.replace(/^\/+/, "");
+  if (clean.includes("..") || clean.startsWith(".")) return "";
+  const ext = clean.split("?")[0].split("#")[0].toLowerCase().split(".").pop() || "";
+  const allowedByKind = {
+    html: new Set(["html", "htm"]),
+    markdown: new Set(["md", "markdown", "txt"]),
+    mermaid: new Set(["mmd", "mermaid", "txt"]),
+    ascii: new Set(["txt", "log"]),
+    chart: new Set(["json"]),
+    table: new Set(["json", "csv", "tsv"]),
+  };
+  const allowed = allowedByKind[kind] || new Set(["html", "htm", "md", "markdown", "txt", "json", "csv", "tsv"]);
+  return allowed.has(ext) ? clean : "";
+}
+
+function displayOutputEnvelopeContent(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return String(value || "");
+  const agentflow = raw.match(/(?:^|\n)---agentflow\s*\n([\s\S]*?)\n---end(?:\n|$)/i);
+  if (agentflow?.[1]) {
+    const block = agentflow[1];
+    const fileMatch = block.match(/^resultFile\s*:\s*["']?([^"'\n]+)["']?/m);
+    if (fileMatch?.[1]) return fileMatch[1].trim();
+    const inlineMatch = block.match(/^result\s*:\s*(.*)$/m);
+    if (inlineMatch) {
+      const valueText = String(inlineMatch[1] || "").trim();
+      if (valueText === "|" || valueText === ">") {
+        const after = block.slice((inlineMatch.index || 0) + inlineMatch[0].length).split("\n");
+        return after
+          .filter((line) => /^\s+/.test(line) || !line.trim())
+          .map((line) => line.replace(/^\s{2}/, ""))
+          .join("\n")
+          .replace(/\s+$/g, "");
+      }
+      return valueText.replace(/^["']|["']$/g, "");
+    }
+    const outside = raw.replace(agentflow[0], "").trim();
+    if (outside) return outside;
+  }
+  if (!/["']result["']\s*:|["']outParams["']\s*:|["']resultFile["']\s*:/i.test(raw)) return String(value || "");
+  const candidates = [raw];
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.unshift(raw.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && (Object.prototype.hasOwnProperty.call(parsed, "result") || Object.prototype.hasOwnProperty.call(parsed, "resultFile"))) {
+        const result = parsed.resultFile || parsed.result;
+        return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return String(value || "");
+}
+
+async function readWorkspaceTextFile(flowParams, filePath) {
+  const q = flowParamsQuery(flowParams);
+  q.set("path", filePath);
+  const res = await fetch(`/api/workspace/file?${q.toString()}`);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `读取文件失败：${filePath}`);
+  return String(json.content || "");
+}
+
+async function writeWorkspaceTextFile(flowParams, filePath, content) {
+  const res = await fetch("/api/workspace/file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...flowParams, path: filePath, content: String(content || "") }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `写入文件失败：${filePath}`);
+  return json.path || filePath;
+}
+
+function displayRefineSourceContext(nodeId, nodes = [], edges = []) {
+  const id = String(nodeId || "");
+  if (!id) return "";
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return (Array.isArray(edges) ? edges : [])
+    .filter((edge) => String(edge?.target || "") === id)
+    .slice(0, 4)
+    .map((edge) => {
+      const source = byId.get(String(edge?.source || ""));
+      if (!source) return "";
+      const data = source.data || {};
+      const body = String(data.body || "").trim();
+      const lines = [
+        `- upstreamId: ${source.id}`,
+        `  label: ${String(data.label || source.id).trim()}`,
+        `  definitionId: ${String(data.definitionId || "").trim()}`,
+      ];
+      if (body) lines.push(`  task: ${body.slice(0, 4000)}`);
+      return lines.join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function normalizeHtmlDisplayContent(content) {
-  let text = String(content || "").trim();
+  let text = displayOutputEnvelopeContent(content).trim();
   if (!text) return "";
   const fenced = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*?)```/);
   if (fenced && fenced[1]) text = fenced[1].trim();
@@ -735,18 +842,45 @@ function normalizeHtmlDisplayContent(content) {
   return text;
 }
 
+function htmlContentProblem(content) {
+  const text = normalizeHtmlDisplayContent(content);
+  if (!text.trim()) return "";
+  if (/<[^>]*$/g.test(text)) return "HTML 内容末尾存在未闭合标签，可能是生成或保存时被截断。";
+  if (/^(?:<!doctype\b|<html\b)/i.test(text) && !/<\/html\s*>/i.test(text)) {
+    return "完整 HTML 文档缺少 </html> 结束标签，可能是生成或保存时被截断。";
+  }
+  return "";
+}
+
+function validateDisplayContentForWrite(kind, content) {
+  if (kind === "html") return htmlContentProblem(content);
+  return "";
+}
+
 function htmlDisplaySrcDoc(content) {
   const html = normalizeHtmlDisplayContent(content);
   if (!html.trim()) return "";
-  if (/<base\s+[^>]*target\s*=/i.test(html)) return html;
-  const base = '<base target="_blank">';
+  const guard = `<base target="_self"><script>
+(() => {
+  document.addEventListener("click", (event) => {
+    const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!link) return;
+    const rawHref = String(link.getAttribute("href") || "").trim();
+    if (!rawHref || rawHref.startsWith("#")) return;
+    if (/^(?:javascript|mailto|tel):/i.test(rawHref)) return;
+    event.preventDefault();
+    window.location.href = link.href;
+  }, true);
+})();
+</script>`;
+  if (/<script\b[^>]*>\s*\(\(\)\s*=>\s*\{\s*document\.addEventListener\("click"/i.test(html)) return html;
   if (/<head\b[^>]*>/i.test(html)) {
-    return html.replace(/<head\b([^>]*)>/i, `<head$1>${base}`);
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${guard}`);
   }
   if (/<html\b[^>]*>/i.test(html)) {
-    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${base}</head>`);
+    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${guard}</head>`);
   }
-  return `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+  return `<!doctype html><html><head>${guard}</head><body>${html}</body></html>`;
 }
 
 function safeDownloadFilename(name, extension) {
@@ -777,60 +911,149 @@ function downloadBlob(blob, filename) {
   }
 }
 
-function htmlSnapshotMarkup(content) {
-  const raw = normalizeHtmlDisplayContent(content);
-  const doc = new DOMParser().parseFromString(raw || "<body></body>", "text/html");
+function htmlSnapshotMarkupFromDocument(doc, width, height) {
   const serializer = new XMLSerializer();
-  const styles = Array.from(doc.querySelectorAll("style"))
+  const styles = Array.from(doc.head?.querySelectorAll("style") || [])
     .map((node) => serializer.serializeToString(node))
     .join("\n");
   const bodyHtml = doc.body
     ? Array.from(doc.body.childNodes).map((node) => serializer.serializeToString(node)).join("")
-    : raw;
+    : "";
+  const view = doc.defaultView || window;
+  const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
+  const htmlStyle = doc.documentElement ? view.getComputedStyle(doc.documentElement) : null;
+  const background = bodyStyle?.backgroundColor && bodyStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+    ? bodyStyle.backgroundColor
+    : htmlStyle?.backgroundColor && htmlStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+      ? htmlStyle.backgroundColor
+      : "#ffffff";
   return `
     <style>
       * { box-sizing: border-box; }
-      html, body { margin: 0; min-height: 100%; background: transparent; }
-      .af-html-snapshot-root { width: 100%; min-height: 100%; overflow: hidden; }
+      html, body { margin: 0; width: ${width}px; min-height: ${height}px; background: ${background}; overflow: hidden; }
+      .af-html-snapshot-root { width: ${width}px; min-height: ${height}px; overflow: hidden; background: ${background}; }
     </style>
     ${styles}
     <div xmlns="http://www.w3.org/1999/xhtml" class="af-html-snapshot-root">${bodyHtml}</div>
   `;
 }
 
-async function saveHtmlDisplayAsImage({ content, width, height, filename }) {
-  const w = Math.max(1, Math.round(Number(width) || 960));
-  const h = Math.max(1, Math.round(Number(height) || 640));
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-  <foreignObject width="100%" height="100%">
-    <div xmlns="http://www.w3.org/1999/xhtml" style="width:${w}px;height:${h}px;overflow:hidden;background:#ffffff;">
-      ${htmlSnapshotMarkup(content)}
-    </div>
-  </foreignObject>
-</svg>`;
-  const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const svgUrl = URL.createObjectURL(svgBlob);
+function htmlSnapshotMarkup(content, width, height) {
+  const raw = normalizeHtmlDisplayContent(content);
+  const doc = new DOMParser().parseFromString(raw || "<body></body>", "text/html");
+  return htmlSnapshotMarkupFromDocument(doc, width, height);
+}
+
+function htmlFrameDocument(iframe) {
   try {
-    const img = new Image();
-    img.decoding = "async";
-    img.src = svgUrl;
-    await img.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas is unavailable");
-    ctx.drawImage(img, 0, 0, w, h);
-    const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-    if (!pngBlob) throw new Error("Could not encode PNG");
-    downloadBlob(pngBlob, filename);
-  } catch (error) {
-    downloadBlob(svgBlob, filename.replace(/\.png$/i, ".svg"));
-    throw error;
-  } finally {
-    URL.revokeObjectURL(svgUrl);
+    return iframe?.contentDocument || iframe?.contentWindow?.document || null;
+  } catch {
+    return null;
   }
+}
+
+function htmlFrameDocumentHtml(iframe) {
+  const doc = htmlFrameDocument(iframe);
+  if (!doc?.documentElement) return "";
+  const doctype = doc.doctype
+    ? `<!DOCTYPE ${doc.doctype.name}${doc.doctype.publicId ? ` PUBLIC "${doc.doctype.publicId}"` : ""}${doc.doctype.systemId ? ` "${doc.doctype.systemId}"` : ""}>`
+    : "<!DOCTYPE html>";
+  return `${doctype}\n${doc.documentElement.outerHTML}`;
+}
+
+function elementSnapshotDebug(element) {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect?.();
+  return {
+    rectWidth: rect?.width ? Math.round(rect.width) : null,
+    rectHeight: rect?.height ? Math.round(rect.height) : null,
+    clientWidth: element.clientWidth || null,
+    clientHeight: element.clientHeight || null,
+    scrollWidth: element.scrollWidth || null,
+    scrollHeight: element.scrollHeight || null,
+    offsetWidth: element.offsetWidth || null,
+    offsetHeight: element.offsetHeight || null,
+  };
+}
+
+function htmlFrameSnapshotMetrics(iframe, fallbackWidth, fallbackHeight, extra = {}) {
+  const rect = iframe?.getBoundingClientRect?.();
+  const doc = htmlFrameDocument(iframe);
+  const docEl = doc?.documentElement;
+  const body = doc?.body;
+  const card = extra?.card || null;
+  const displayBody = extra?.displayBody || null;
+  const scroller = extra?.scroller || null;
+  const displaySize = extra?.displaySize || null;
+  const debug = {
+    fallbackWidth: Number(fallbackWidth) || null,
+    fallbackHeight: Number(fallbackHeight) || null,
+    displaySizeWidth: Number(displaySize?.width || 0) || null,
+    displaySizeHeight: Number(displaySize?.height || 0) || null,
+    rectWidth: rect?.width ? Math.round(rect.width) : null,
+    rectHeight: rect?.height ? Math.round(rect.height) : null,
+    iframeClientWidth: iframe?.clientWidth || null,
+    iframeClientHeight: iframe?.clientHeight || null,
+    docScrollWidth: docEl?.scrollWidth || null,
+    docScrollHeight: docEl?.scrollHeight || null,
+    bodyScrollWidth: body?.scrollWidth || null,
+    bodyScrollHeight: body?.scrollHeight || null,
+    docOffsetWidth: docEl?.offsetWidth || null,
+    bodyOffsetWidth: body?.offsetWidth || null,
+    card: elementSnapshotDebug(card),
+    displayBody: elementSnapshotDebug(displayBody),
+    scroller: elementSnapshotDebug(scroller),
+  };
+  const widthCandidates = [
+    Number(fallbackWidth) || 0,
+    Number(displaySize?.width || 0),
+    Number(card?.clientWidth || 0),
+    Number(card?.scrollWidth || 0),
+    Number(displayBody?.clientWidth || 0),
+    Number(displayBody?.scrollWidth || 0),
+    Number(scroller?.clientWidth || 0),
+    Number(scroller?.scrollWidth || 0),
+    Number(rect?.width) || 0,
+    Number(iframe?.clientWidth) || 0,
+    Number(docEl?.scrollWidth || 0),
+    Number(body?.scrollWidth || 0),
+    Number(docEl?.offsetWidth || 0),
+    Number(body?.offsetWidth || 0),
+  ].map((value) => Math.ceil(value)).filter((value) => value > 0);
+  const width = Math.max(1, ...(widthCandidates.length ? widthCandidates : [960]));
+  const height = Math.max(
+    1,
+    Math.round(Number(fallbackHeight) || rect?.height || iframe?.clientHeight || 640),
+    Math.ceil(Number(docEl?.scrollHeight || 0)),
+    Math.ceil(Number(body?.scrollHeight || 0)),
+  );
+  return { width, height, debug };
+}
+
+async function saveHtmlDisplayAsImage({ flowParams, content, sourceFilePath, iframe, width, height, filename, snapshotElements, displaySize }) {
+  const metrics = htmlFrameSnapshotMetrics(iframe, width, height, {
+    ...(snapshotElements || {}),
+    displaySize,
+  });
+  const renderedHtml = htmlFrameDocumentHtml(iframe);
+  const res = await fetch("/api/workspace/html-screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...flowParams,
+      content: renderedHtml || content,
+      sourceFilePath: sourceFilePath || "",
+      width: metrics.width,
+      height: metrics.height,
+      filename,
+    }),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.error || "截图失败");
+  }
+  const blob = await res.blob();
+  downloadBlob(blob, filename);
 }
 
 function displayAltText(data) {
@@ -1028,9 +1251,41 @@ function VisibleScrollFrame({ className = "", children }) {
 
 function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   const kind = displayKind(data?.definitionId);
-  if (!kind) return null;
   const rawContent = displayContent(data);
-  const content = kind === "html" ? normalizeHtmlDisplayContent(rawContent) : rawContent;
+  const filePath = kind === "image" ? "" : displayTextFilePath(rawContent, kind);
+  const [fileContent, setFileContent] = useState("");
+  const [fileError, setFileError] = useState("");
+  const [fileLoading, setFileLoading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!filePath) {
+      setFileContent("");
+      setFileError("");
+      setFileLoading(false);
+      return () => { cancelled = true; };
+    }
+    setFileLoading(true);
+    setFileError("");
+    setFileContent("");
+    readWorkspaceTextFile(flowParams, filePath)
+      .then((text) => {
+        if (!cancelled) setFileContent(text);
+      })
+      .catch((error) => {
+        if (!cancelled) setFileError(String(error.message || error));
+      })
+      .finally(() => {
+        if (!cancelled) setFileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [filePath, flowParams?.flowId, flowParams?.flowSource, flowParams?.archived, data?.displayReloadKey]);
+  if (!kind) return null;
+  const resolvedContent = filePath ? fileContent : rawContent;
+  const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
+  const contentProblem = validateDisplayContentForWrite(kind, content);
+  if (fileLoading) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
+  if (fileError) return <VisibleScrollFrame className="af-work-display-empty">{fileError}</VisibleScrollFrame>;
+  if (contentProblem) return <VisibleScrollFrame className="af-work-display-empty">{contentProblem}</VisibleScrollFrame>;
   if (!content.trim()) return <VisibleScrollFrame className="af-work-display-empty">No display content</VisibleScrollFrame>;
   if (kind === "html") {
     return (
@@ -1040,7 +1295,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
           title={data?.label || "HTML preview"}
-          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-scripts allow-forms allow-modals"
           srcDoc={htmlDisplaySrcDoc(content)}
         />
       </VisibleScrollFrame>
@@ -1081,10 +1336,38 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
 function DisplayPickerPreview({ node }) {
   const kind = displayKind(node?.data?.definitionId);
   const rawContent = displayContent(node?.data);
-  const content = kind === "html" ? normalizeHtmlDisplayContent(rawContent) : rawContent;
+  const filePath = kind === "image" ? "" : displayTextFilePath(rawContent, kind);
+  const [fileContent, setFileContent] = useState("");
+  const [fileLoading, setFileLoading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!filePath) {
+      setFileContent("");
+      setFileLoading(false);
+      return () => { cancelled = true; };
+    }
+    setFileLoading(true);
+    setFileContent("");
+    readWorkspaceTextFile(node?.data?.flowParams || {}, filePath)
+      .then((text) => {
+        if (!cancelled) setFileContent(text);
+      })
+      .catch(() => {
+        if (!cancelled) setFileContent("");
+      })
+      .finally(() => {
+        if (!cancelled) setFileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [filePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
+  const resolvedContent = filePath ? fileContent : rawContent;
+  const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
+  const contentProblem = validateDisplayContentForWrite(kind, content);
+  if (fileLoading) return <div className="af-display-picker-preview__empty">Loading</div>;
+  if (contentProblem) return <div className="af-display-picker-preview__empty">{contentProblem}</div>;
   if (!content.trim()) return <div className="af-display-picker-preview__empty">No content</div>;
   if (kind === "html") {
-    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={htmlDisplaySrcDoc(content)} />;
+    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={htmlDisplaySrcDoc(content)} />;
   }
   if (kind === "image") {
     return <img src={workspaceRawFileUrl(content, node?.data?.flowParams)} alt={node?.data?.label || node?.id} loading="lazy" />;
@@ -1362,6 +1645,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       return a.idx - b.idx;
     });
   const kind = displayKind(data?.definitionId);
+  const displayCardRef = useRef(null);
   const htmlFrameRef = useRef(null);
   const [htmlFrameVersion, setHtmlFrameVersion] = useState(0);
   const [savingHtmlImage, setSavingHtmlImage] = useState(false);
@@ -1397,21 +1681,66 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     : null;
   const saveHtmlImage = useCallback(async () => {
     if (kind !== "html" || savingHtmlImage) return;
-    const content = normalizeHtmlDisplayContent(displayContent(data));
+    const rawContent = displayContent(data);
+    const filePath = displayTextFilePath(rawContent, kind);
+    let sourceContent = rawContent;
+    if (filePath) {
+      try {
+        sourceContent = await readWorkspaceTextFile(data?.flowParams || {}, filePath);
+      } catch (error) {
+        setSavingHtmlImage(false);
+        console.warn("Failed to read HTML display file before saving image.", error);
+        return;
+      }
+    }
+    const content = normalizeHtmlDisplayContent(sourceContent);
     if (!content.trim()) return;
+    const problem = validateDisplayContentForWrite(kind, content);
+    if (problem) {
+      console.warn(problem);
+      return;
+    }
     const rect = htmlFrameRef.current?.getBoundingClientRect?.();
-    const width = Math.round(rect?.width || Math.max(320, Number(displaySize?.width || 960) - 2));
-    const height = Math.round(rect?.height || Math.max(180, Number(displaySize?.height || 640) - 46));
+    const displayBodyEl = displayCardRef.current?.querySelector?.(".af-work-display-body");
+    const scrollerEl = displayCardRef.current?.querySelector?.(".af-visible-scroll-frame__scroller");
+    const width = Math.round(Math.max(
+      Number(rect?.width || 0),
+      Number(displaySize?.width || 0),
+      Number(displayCardRef.current?.clientWidth || 0),
+      Number(displayBodyEl?.clientWidth || 0),
+      Number(scrollerEl?.clientWidth || 0),
+      Math.max(320, Number(displaySize?.width || 960) - 2),
+    ));
+    const height = Math.round(Math.max(
+      Number(rect?.height || 0),
+      Number(displaySize?.height || 0),
+      Number(displayCardRef.current?.clientHeight || 0),
+      Number(displayBodyEl?.clientHeight || 0),
+      Number(scrollerEl?.clientHeight || 0),
+      Math.max(180, Number(displaySize?.height || 640) - 46),
+    ));
     setSavingHtmlImage(true);
     try {
       await saveHtmlDisplayAsImage({
+        flowParams: data?.flowParams || {},
         content,
+        sourceFilePath: filePath,
+        iframe: htmlFrameRef.current,
         width,
         height,
         filename: safeDownloadFilename(data?.label || id || "html-render", "png"),
+        snapshotElements: {
+          card: displayCardRef.current,
+          displayBody: displayBodyEl,
+          scroller: scrollerEl,
+        },
+        displaySize,
       });
+      data?.onStatus?.("已导出 HTML 展示截图");
     } catch (error) {
-      console.warn("Failed to save HTML display as PNG; downloaded SVG fallback.", error);
+      const message = String(error?.message || error || "截图失败");
+      data?.onStatus?.(`HTML 截图失败：${message}`);
+      console.warn("Failed to save HTML display as PNG.", error);
     } finally {
       setSavingHtmlImage(false);
     }
@@ -1426,6 +1755,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     if (readOnly) return;
     data?.onSetDisplayNodeContent?.(id, "", "replace", {
       logChat: false,
+      reloadDisplay: true,
       statusMessage: "已清空 Display 内容",
     });
     if (kind === "markdown") {
@@ -1472,6 +1802,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
         (data?.nodeStatus === "failed" ? " af-work-display-card--failed" : "")
       }
       style={displaySize ? { width: displaySize.width, height: displaySize.height } : undefined}
+      ref={displayCardRef}
       onDragOver={handleImageDragOver}
       onDragLeave={handleImageDragLeave}
       onDrop={handleImageDrop}
@@ -3884,22 +4215,28 @@ function WorkspacePageInner() {
     if (!id) return;
     const currentNode = nodesRef.current.find((node) => node.id === id);
     const kind = displayKind(currentNode?.data?.definitionId);
-    const text = kind === "html" ? normalizeHtmlDisplayContent(content) : String(content || "");
+    const unwrappedContent = displayOutputEnvelopeContent(content);
+    const text = kind === "html" ? normalizeHtmlDisplayContent(unwrappedContent) : String(unwrappedContent || "");
     const currentContent = currentNode ? displayContent(currentNode.data) : "";
     const nextText = mode === "append" && String(currentContent || "").trim()
       ? `${String(currentContent).replace(/\s+$/g, "")}\n\n${text.trim()}`
       : text;
     const primaryName = kind === "image" ? "src" : "content";
+    const displayReloadKey = options?.reloadDisplay ? Date.now() : currentNode?.data?.displayReloadKey;
     const patchSlots = (slots) => {
       let patched = false;
       const nextSlots = (Array.isArray(slots) ? slots : []).map((slot) => {
         const name = String(slot?.name || "");
         const type = String(slot?.type || "");
-        if (!patched && (name === primaryName || name === "filePath" || type === "text")) {
+        const isDisplayContentSlot = name === primaryName || name === "filePath" || type === "text";
+        if (!isDisplayContentSlot) {
+          return slot;
+        }
+        if (!patched) {
           patched = true;
           return { ...slot, default: nextText, value: nextText };
         }
-        return slot;
+        return { ...slot, default: "", value: "" };
       });
       return nextSlots;
     };
@@ -3910,6 +4247,7 @@ function WorkspacePageInner() {
         data: {
           ...node.data,
           body: nextText,
+          ...(displayReloadKey ? { displayReloadKey } : {}),
           inputs: patchSlots(node.data?.inputs),
           outputs: patchSlots(node.data?.outputs),
         },
@@ -4016,6 +4354,38 @@ function WorkspacePageInner() {
     if (!message || session.running) return;
     const node = nodesRef.current.find((item) => item.id === id);
     if (!node) return;
+    const nodeKind = displayKind(node.data?.definitionId) || "markdown";
+    const rawDisplayContent = displayContent(node.data);
+    let targetFilePath = displayTextFilePath(rawDisplayContent, nodeKind);
+    let currentContent = displayOutputEnvelopeContent(rawDisplayContent);
+    if (targetFilePath) {
+      try {
+        currentContent = await readWorkspaceTextFile(flowParams, targetFilePath);
+      } catch (error) {
+        setStatus(String(error.message || error));
+      }
+    } else if (nodeKind !== "image" && String(currentContent || "").trim()) {
+      const problem = validateDisplayContentForWrite(nodeKind, currentContent);
+      if (problem) {
+        setStatus(`${problem} 未进入微调。`);
+        return;
+      }
+      try {
+        const materializedPath = await writeWorkspaceTextFile(flowParams, suggestDisplayFilePath(id, node.data), currentContent);
+        await loadFiles();
+        setDisplayNodeContent(id, materializedPath, "replace", {
+          logChat: false,
+          reloadDisplay: true,
+          statusMessage: `已将展示保存为 ${materializedPath}`,
+        });
+        targetFilePath = materializedPath;
+        currentContent = "";
+      } catch (error) {
+        setStatus(String(error.message || error));
+        return;
+      }
+    }
+    const sourceContext = displayRefineSourceContext(id, nodesRef.current, edgesRef.current);
     const userMessage = { role: "user", text: message, at: Date.now() };
     const previousMessages = Array.isArray(session.messages) ? session.messages : [];
     const nextSessionId = session.sessionId || `nodechat_${Date.now()}_${id.replace(/[^a-z0-9_-]+/gi, "_")}`;
@@ -4042,8 +4412,10 @@ function WorkspacePageInner() {
             label: node.data?.label || id,
             definitionId: node.data?.definitionId || "",
           },
-          nodeKind: displayKind(node.data?.definitionId) || "markdown",
-          currentContent: displayContent(node.data),
+          nodeKind,
+          currentContent: targetFilePath ? "" : currentContent,
+          sourceContext,
+          targetFilePath,
           messages: previousMessages,
           message,
           model: composerModel,
@@ -4052,16 +4424,44 @@ function WorkspacePageInner() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "节点微调失败");
       const candidateContent = String(json.candidateContent || json.reply || "").trim();
+      const directFileEdit = Boolean(json.directFileEdit);
+      const artifactPath = String(json.artifactPath || targetFilePath || "").trim();
+      if (directFileEdit && artifactPath) {
+        const problem = validateDisplayContentForWrite(nodeKind, candidateContent);
+        if (problem) throw new Error(`${problem} 文件已由 agent 修改，请检查 ${artifactPath}。`);
+        await loadFiles();
+        setDisplayNodeContent(id, artifactPath, "replace", {
+          logChat: false,
+          reloadDisplay: true,
+          statusMessage: `已按微调描述更新 ${artifactPath}`,
+        });
+      } else if (candidateContent) {
+        const problem = validateDisplayContentForWrite(nodeKind, candidateContent);
+        if (problem) throw new Error(`${problem} 已取消写入，避免覆盖当前展示文件。`);
+        if (targetFilePath) {
+          const savedPath = await writeWorkspaceTextFile(flowParams, targetFilePath, candidateContent);
+          await loadFiles();
+          setDisplayNodeContent(id, savedPath, "replace", {
+            logChat: false,
+            statusMessage: `已按微调描述更新 ${savedPath}`,
+          });
+        } else {
+          setDisplayNodeContent(id, candidateContent, "replace", {
+            logChat: false,
+            statusMessage: "已按微调描述更新展示内容",
+          });
+        }
+      }
       setNodeChatSessions((sessions) => ({
         ...sessions,
         [id]: {
           ...(sessions[id] || {}),
           sessionId: String(json.sessionId || nextSessionId),
           running: false,
-          candidateContent,
+          candidateContent: "",
           messages: [
             ...(((sessions[id]?.messages && Array.isArray(sessions[id].messages)) ? sessions[id].messages : [...previousMessages, userMessage])),
-            { role: "assistant", text: candidateContent || "已生成候选内容。", at: Date.now() },
+            { role: "assistant", text: (candidateContent || directFileEdit) ? (artifactPath ? `已更新文件 ${artifactPath}。` : "已按你的描述更新当前展示。") : "没有生成可更新的内容。", at: Date.now() },
           ],
         },
       }));
@@ -4077,16 +4477,32 @@ function WorkspacePageInner() {
       }));
       setStatus(err);
     }
-  }, [composerModel, flowParams, nodeChatSessions, workspaceWritable]);
+  }, [composerModel, flowParams, loadFiles, nodeChatSessions, setDisplayNodeContent, workspaceWritable]);
 
   const saveDisplayNodeToFile = useCallback(async (nodeId, data) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
     }
-    const content = displayContent(data);
+    const kind = displayKind(data?.definitionId) || "markdown";
+    const rawContent = displayContent(data);
+    const sourceFilePath = displayTextFilePath(rawContent, kind);
+    let content = displayOutputEnvelopeContent(rawContent);
+    if (sourceFilePath) {
+      try {
+        content = await readWorkspaceTextFile(flowParams, sourceFilePath);
+      } catch (e) {
+        setStatus(String(e.message || e));
+        return;
+      }
+    }
     if (!String(content || "").trim()) {
       setStatus("展示节点没有可保存内容");
+      return;
+    }
+    const problem = validateDisplayContentForWrite(kind, content);
+    if (problem) {
+      setStatus(`${problem} 未保存文件。`);
       return;
     }
     const defaultPath = suggestDisplayFilePath(nodeId, data);
@@ -4115,11 +4531,15 @@ function WorkspacePageInner() {
         for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
         return next;
       });
+      setDisplayNodeContent(nodeId, savedPath, "replace", {
+        logChat: false,
+        statusMessage: `已保存并引用 ${savedPath}`,
+      });
       setStatus(`已保存 ${savedPath}`);
     } catch (e) {
       setStatus(String(e.message || e));
     }
-  }, [flowParams, loadFiles, workspaceWritable]);
+  }, [flowParams, loadFiles, setDisplayNodeContent, workspaceWritable]);
 
   const syncNodePropDraft = useCallback((nodeId, patchOrUpdater) => {
     const id = String(nodeId || "");
@@ -4157,6 +4577,7 @@ function WorkspacePageInner() {
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
+      onStatus: setStatus,
       nodeChatActive: activeNodeChatId === node.id,
       nodeChat: nodeChatSessions[node.id] || null,
       onSetDisplayNodeContent: setDisplayNodeContent,

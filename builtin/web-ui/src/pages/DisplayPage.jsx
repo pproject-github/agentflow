@@ -30,8 +30,51 @@ function displayIcon(kind) {
   return "article";
 }
 
+function displayOutputEnvelopeContent(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return String(value || "");
+  const agentflow = raw.match(/(?:^|\n)---agentflow\s*\n([\s\S]*?)\n---end(?:\n|$)/i);
+  if (agentflow?.[1]) {
+    const block = agentflow[1];
+    const fileMatch = block.match(/^resultFile\s*:\s*["']?([^"'\n]+)["']?/m);
+    if (fileMatch?.[1]) return fileMatch[1].trim();
+    const inlineMatch = block.match(/^result\s*:\s*(.*)$/m);
+    if (inlineMatch) {
+      const valueText = String(inlineMatch[1] || "").trim();
+      if (valueText === "|" || valueText === ">") {
+        const after = block.slice((inlineMatch.index || 0) + inlineMatch[0].length).split("\n");
+        return after
+          .filter((line) => /^\s+/.test(line) || !line.trim())
+          .map((line) => line.replace(/^\s{2}/, ""))
+          .join("\n")
+          .replace(/\s+$/g, "");
+      }
+      return valueText.replace(/^["']|["']$/g, "");
+    }
+    const outside = raw.replace(agentflow[0], "").trim();
+    if (outside) return outside;
+  }
+  if (!/["']result["']\s*:|["']outParams["']\s*:|["']resultFile["']\s*:/i.test(raw)) return String(value || "");
+  const candidates = [raw];
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.unshift(raw.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && (Object.prototype.hasOwnProperty.call(parsed, "result") || Object.prototype.hasOwnProperty.call(parsed, "resultFile"))) {
+        const result = parsed.resultFile || parsed.result;
+        return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return String(value || "");
+}
+
 function normalizeHtmlDisplayContent(content) {
-  let text = String(content || "").trim();
+  let text = displayOutputEnvelopeContent(content).trim();
   if (!text) return "";
   const fenced = text.match(/```(?:html|HTML)?\s*\n?([\s\S]*?)```/);
   if (fenced && fenced[1]) text = fenced[1].trim();
@@ -63,18 +106,40 @@ function normalizeHtmlDisplayContent(content) {
   return text;
 }
 
+function htmlContentProblem(content) {
+  const text = normalizeHtmlDisplayContent(content);
+  if (!text.trim()) return "";
+  if (/<[^>]*$/g.test(text)) return "HTML 内容末尾存在未闭合标签，可能是生成或保存时被截断。";
+  if (/^(?:<!doctype\b|<html\b)/i.test(text) && !/<\/html\s*>/i.test(text)) {
+    return "完整 HTML 文档缺少 </html> 结束标签，可能是生成或保存时被截断。";
+  }
+  return "";
+}
+
 function htmlDisplaySrcDoc(content) {
   const html = normalizeHtmlDisplayContent(content);
   if (!html.trim()) return "";
-  if (/<base\s+[^>]*target\s*=/i.test(html)) return html;
-  const base = '<base target="_blank">';
+  const guard = `<base target="_self"><script>
+(() => {
+  document.addEventListener("click", (event) => {
+    const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!link) return;
+    const rawHref = String(link.getAttribute("href") || "").trim();
+    if (!rawHref || rawHref.startsWith("#")) return;
+    if (/^(?:javascript|mailto|tel):/i.test(rawHref)) return;
+    event.preventDefault();
+    window.location.href = link.href;
+  }, true);
+})();
+</script>`;
+  if (/<script\b[^>]*>\s*\(\(\)\s*=>\s*\{\s*document\.addEventListener\("click"/i.test(html)) return html;
   if (/<head\b[^>]*>/i.test(html)) {
-    return html.replace(/<head\b([^>]*)>/i, `<head$1>${base}`);
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${guard}`);
   }
   if (/<html\b[^>]*>/i.test(html)) {
-    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${base}</head>`);
+    return html.replace(/<html\b([^>]*)>/i, `<html$1><head>${guard}</head>`);
   }
-  return `<!doctype html><html><head>${base}</head><body>${html}</body></html>`;
+  return `<!doctype html><html><head>${guard}</head><body>${html}</body></html>`;
 }
 
 function displayFileUrl(src, shareId) {
@@ -187,7 +252,8 @@ function VisibleScrollFrame({ className = "", children }) {
 
 function DisplayNode({ node, shareId, style }) {
   const raw = displayContent(node);
-  const content = node.kind === "html" ? normalizeHtmlDisplayContent(raw) : raw;
+  const content = node.kind === "html" ? normalizeHtmlDisplayContent(raw) : displayOutputEnvelopeContent(raw);
+  const contentProblem = node.kind === "html" ? htmlContentProblem(content) : "";
   const bodyClassName = `af-public-display-node__body--${node.kind || "unknown"}`;
   return (
     <section className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}`} style={style}>
@@ -199,9 +265,11 @@ function DisplayNode({ node, shareId, style }) {
         </div>
       </div>
       <VisibleScrollFrame className={bodyClassName}>
-        {content.trim() ? (
+        {contentProblem ? (
+          <div className="af-public-display-empty">{contentProblem}</div>
+        ) : content.trim() ? (
           <>
-            {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
+            {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
             {node.kind === "image" ? <img src={displayFileUrl(content, shareId)} alt={node.label || node.id} loading="lazy" /> : null}
             {node.kind === "markdown" ? (
               <div className="af-public-display-markdown">

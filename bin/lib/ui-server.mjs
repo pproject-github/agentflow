@@ -10,8 +10,10 @@ import http from "http";
 import os from "os";
 import path from "path";
 import crypto from "crypto";
+import { pathToFileURL } from "url";
 import { execFile, spawn } from "child_process";
 import busboy from "busboy";
+import sharp from "sharp";
 import { log } from "./log.mjs";
 import {
   getFlowYamlAbs,
@@ -117,6 +119,25 @@ const MIME = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
 };
+
+function execFileBuffered(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      timeout: Number(options.timeout || 30000),
+      maxBuffer: Number(options.maxBuffer || 2 * 1024 * 1024),
+      cwd: options.cwd || process.cwd(),
+      env: options.env || process.env,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
 
 const RUN_CONFIG_FILENAME = "run-config.json";
 const SKILL_COLLECTIONS_FILENAME = "skill-collections.json";
@@ -1184,6 +1205,113 @@ function workspaceDownloadContentDisposition(relPath) {
   return `attachment; filename="${quotedName}"; filename*=UTF-8''${encodeURIComponent(fallbackName)}`;
 }
 
+function htmlEscapeAttribute(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function fileUrlFromPath(absPath) {
+  return pathToFileURL(path.resolve(absPath)).href;
+}
+
+function injectHtmlBaseHref(html, baseHref) {
+  const raw = String(html || "");
+  const base = `<base href="${htmlEscapeAttribute(baseHref)}">`;
+  if (/<base\b/i.test(raw)) return raw;
+  if (/<head\b[^>]*>/i.test(raw)) return raw.replace(/<head\b([^>]*)>/i, `<head$1>${base}`);
+  if (/<html\b[^>]*>/i.test(raw)) return raw.replace(/<html\b([^>]*)>/i, `<html$1><head>${base}</head>`);
+  return `<!doctype html><html><head>${base}</head><body>${raw}</body></html>`;
+}
+
+function chromeScreenshotCandidates() {
+  const candidates = [];
+  if (process.env.AGENTFLOW_CHROME_PATH) candidates.push(process.env.AGENTFLOW_CHROME_PATH);
+  if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    );
+  } else if (process.platform === "win32") {
+    candidates.push(
+      path.join(process.env.PROGRAMFILES || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
+    );
+  }
+  candidates.push("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "msedge");
+  return candidates.filter(Boolean);
+}
+
+async function renderHtmlScreenshotWithChrome({ html, workspaceRoot, baseDir, width, height }) {
+  const w = Math.max(240, Math.min(4096, Math.round(Number(width) || 390)));
+  const h = Math.max(240, Math.min(12000, Math.round(Number(height) || 844)));
+  const debug = {
+    requestedWidth: Number(width) || null,
+    requestedHeight: Number(height) || null,
+    viewportWidth: w,
+    viewportHeight: h,
+    htmlChars: String(html || "").length,
+    baseDir: path.resolve(baseDir || workspaceRoot),
+    tried: [],
+    usedCommand: "",
+    pngBytes: 0,
+    pngWidth: null,
+    pngHeight: null,
+  };
+  const tmpDir = path.join(path.resolve(workspaceRoot), ".workspace", "agentflow", "tmp", `html-screenshot-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const htmlPath = path.join(tmpDir, "snapshot.html");
+  const pngPath = path.join(tmpDir, "snapshot.png");
+  const baseHref = `${fileUrlFromPath(baseDir || workspaceRoot).replace(/\/?$/, "/")}`;
+  fs.writeFileSync(htmlPath, injectHtmlBaseHref(html, baseHref), "utf-8");
+  const args = [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--allow-file-access-from-files",
+    "--hide-scrollbars",
+    "--force-device-scale-factor=1",
+    `--window-size=${w},${h}`,
+    `--screenshot=${pngPath}`,
+    fileUrlFromPath(htmlPath),
+  ];
+  let lastError = null;
+  try {
+    for (const command of chromeScreenshotCandidates()) {
+      if (path.isAbsolute(command) && !fs.existsSync(command)) continue;
+      debug.tried.push(command);
+      try {
+        await execFileBuffered(command, args, { timeout: 45000, cwd: workspaceRoot });
+        if (fs.existsSync(pngPath) && fs.statSync(pngPath).size > 0) {
+          const png = fs.readFileSync(pngPath);
+          debug.usedCommand = command;
+          debug.pngBytes = png.length;
+          try {
+            const meta = await sharp(png).metadata();
+            debug.pngWidth = meta.width || null;
+            debug.pngHeight = meta.height || null;
+          } catch (_) {}
+          return { png, debug };
+        }
+        lastError = new Error(`${command} did not produce a screenshot`);
+      } catch (error) {
+        lastError = error;
+        debug.lastError = String(error?.message || error);
+      }
+    }
+    throw new Error(`无法使用 Chrome 生成截图${lastError?.message ? `：${lastError.message}` : ""}`);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 const WORKSPACE_FILE_SKIP_REL_PREFIXES = [
   ".workspace/agentflow/worktrees",
   ".workspace/agentflow/git-repos",
@@ -1351,12 +1479,22 @@ function publicDisplayPayloadFromShare(root, share) {
   const nodes = nodeIds.map((id) => {
     const instance = instances[id] || {};
     const definitionId = String(instance.definitionId || "");
+    const kind = workspaceDisplayKind(definitionId);
+    const rawBody = String(instance.body || "");
+    const filePath = workspaceDisplayTextFilePath(rawBody, kind);
+    let body = rawBody;
+    if (filePath) {
+      const resolved = resolveWorkspaceFilePath(scoped.root, filePath);
+      if (resolved.rel && fs.existsSync(resolved.abs) && fs.statSync(resolved.abs).isFile()) {
+        body = fs.readFileSync(resolved.abs, "utf-8");
+      }
+    }
     return {
       id,
       definitionId,
-      kind: workspaceDisplayKind(definitionId),
+      kind,
       label: String(instance.label || instance.displayName || id),
-      body: String(instance.body || ""),
+      body,
       inputs: Array.isArray(instance.input) ? instance.input : [],
       outputs: Array.isArray(instance.output) ? instance.output : [],
       size: displayPageSizes[id] || workspaceSizes[id] || null,
@@ -1532,6 +1670,9 @@ function buildWorkspaceNodeChatPrompt(payload) {
   const userMessage = String(payload?.message || "").trim();
   const currentContent = String(payload?.currentContent || "").trim();
   const nodeKind = String(payload?.nodeKind || payload?.kind || "markdown").trim().toLowerCase();
+  const sourceContext = String(payload?.sourceContext || "").trim();
+  const targetFilePath = String(payload?.targetFilePath || "").trim();
+  const directFileEdit = Boolean(targetFilePath);
   const history = Array.isArray(payload?.messages) ? payload.messages : [];
   const historyBlock = history
     .slice(-8)
@@ -1542,8 +1683,14 @@ function buildWorkspaceNodeChatPrompt(payload) {
     })
     .filter(Boolean)
     .join("\n\n");
-  const outputRule =
-    nodeKind === "html"
+  const outputRule = directFileEdit
+    ? [
+        `直接修改当前 workspace 内的文件：${targetFilePath}`,
+        "必须使用可用的文件编辑工具实际写入该文件；不要只描述改法。",
+        "不要把完整文件内容输出到聊天回复。",
+        "完成后只输出一句简短中文确认；如果无法完成，只输出原因，且说明文件未修改。",
+      ].join("\n")
+    : nodeKind === "html"
       ? "只输出完整或片段 HTML，不要解释，不要包裹 Markdown 代码围栏。"
       : nodeKind === "image"
         ? "只输出新的图片 src，可以是 URL、data URL 或文件路径，不要解释。"
@@ -1554,7 +1701,10 @@ function buildWorkspaceNodeChatPrompt(payload) {
             : "只输出新的 Markdown 正文，不要解释，不要包裹 Markdown 代码围栏。";
   return [
     "你正在微调 AgentFlow Workspace 画布中的单个展示节点。",
-    "根据用户 follow-up 和当前节点内容，生成一个可直接替换当前节点展示内容的候选版本。",
+    directFileEdit
+      ? "根据用户 follow-up 直接编辑该展示节点引用的 artifact 文件。"
+      : "根据用户 follow-up 和当前节点内容，生成一个可直接替换当前节点展示内容的候选版本。",
+    "上下文只来自当前展示内容、直接上游节点任务和本节点对话历史；不要引用或复述 thinking、运行日志、下游展示内容。",
     outputRule,
     "",
     "## 当前节点",
@@ -1562,7 +1712,9 @@ function buildWorkspaceNodeChatPrompt(payload) {
     `- label: ${String(node.label || "").trim() || "(unnamed)"}`,
     `- definitionId: ${String(node.definitionId || "").trim() || "(unknown)"}`,
     `- kind: ${nodeKind}`,
-    currentContent ? `\n## 当前展示内容\n\n${currentContent}` : "",
+    targetFilePath ? `- artifactFile: ${targetFilePath}` : "",
+    sourceContext ? `\n## 生成该展示的直接上游上下文（不含 thinking/log）\n\n${sourceContext}` : "",
+    !directFileEdit && currentContent ? `\n## 当前展示内容\n\n${currentContent}` : "",
     historyBlock ? `\n## 本节点对话历史\n\n${historyBlock}` : "",
     `\n## 用户 follow-up\n\n${userMessage}`,
   ].filter(Boolean).join("\n");
@@ -1598,9 +1750,16 @@ function workspaceSourceSlotForEdge(graph, edge) {
   return output[workspaceHandleIndex(edge?.sourceHandle, "output")] || null;
 }
 
+function isWorkspaceSemanticOutputSlot(slot) {
+  const name = String(slot?.name || "");
+  const type = String(slot?.type || "");
+  return type === "node" || name === "prev" || name === "next";
+}
+
 function workspaceOutputSlotValueForEdge(graph, outputs, edge) {
   const sourceId = String(edge?.source || "");
   const slot = workspaceSourceSlotForEdge(graph, edge);
+  if (isWorkspaceSemanticOutputSlot(slot)) return "";
   const out = outputs.get(sourceId);
   const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
   const slotName = String(slot?.name || "").trim();
@@ -1789,8 +1948,98 @@ function workspaceExtractLooseResult(raw) {
   return "";
 }
 
-function workspaceStructuredAgentOutput(content) {
+function workspaceExtractAgentflowEnvelope(raw) {
+  const text = String(raw || "");
+  const match = text.match(/(?:^|\n)---agentflow\s*\n([\s\S]*?)\n---end(?:\n|$)/i);
+  if (!match) return null;
+  const envelope = match[1] || "";
+  const outside = `${text.slice(0, match.index || 0)}\n${text.slice((match.index || 0) + match[0].length)}`.trim();
+  const lines = envelope.replace(/\r\n/g, "\n").split("\n");
+  const outParams = {};
+  let result = "";
+  let resultFile = "";
+
+  const lineIndent = (line) => {
+    const m = String(line || "").match(/^(\s*)/);
+    return m ? m[1].length : 0;
+  };
+  const cleanScalar = (value) => String(value || "").trim().replace(/^["']|["']$/g, "");
+  const collectBlock = (startIndex, baseIndent) => {
+    const collected = [];
+    let i = startIndex;
+    for (; i < lines.length; i += 1) {
+      const line = lines[i] || "";
+      if (line.trim() && lineIndent(line) <= baseIndent) break;
+      collected.push(line.slice(Math.min(line.length, baseIndent + 2)));
+    }
+    return { value: collected.join("\n").replace(/\s+$/g, ""), nextIndex: i };
+  };
+  const parseValue = (rawValue, currentIndex, baseIndent) => {
+    const value = String(rawValue || "").trim();
+    if (value === "|" || value === ">") return collectBlock(currentIndex + 1, baseIndent);
+    return { value: cleanScalar(value), nextIndex: currentIndex + 1 };
+  };
+
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i] || "";
+    if (!line.trim() || /^\s*#/.test(line)) {
+      i += 1;
+      continue;
+    }
+    const top = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+    if (!top) {
+      i += 1;
+      continue;
+    }
+    const key = top[1];
+    const rawValue = top[2] || "";
+    if (key === "outParams") {
+      i += 1;
+      while (i < lines.length) {
+        const childLine = lines[i] || "";
+        if (!childLine.trim()) {
+          i += 1;
+          continue;
+        }
+        if (lineIndent(childLine) === 0) break;
+        const child = childLine.match(/^\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+        if (!child) {
+          i += 1;
+          continue;
+        }
+        const childKey = child[1];
+        const parsed = parseValue(child[2] || "", i, lineIndent(childLine));
+        if (childKey) outParams[childKey] = String(parsed.value || "").trim();
+        i = parsed.nextIndex;
+      }
+      continue;
+    }
+    const parsed = parseValue(rawValue, i, 0);
+    if (key === "result") result = String(parsed.value || "");
+    else if (key === "resultFile") resultFile = String(parsed.value || "").trim();
+    else if (key) outParams[key] = String(parsed.value || "").trim();
+    i = parsed.nextIndex;
+  }
+  return {
+    result: resultFile || result || outside,
+    resultFile,
+    outParams,
+    structured: true,
+    parsed: { result, resultFile, outParams },
+  };
+}
+
+function workspaceCanonicalAgentOutput(content) {
   const raw = String(content || "").trim();
+  const match = raw.match(/(?:^|\n)(---agentflow\s*\n[\s\S]*?\n---end)(?:\n|$)/i);
+  if (match?.[1]) return match[1].trim();
+  return raw;
+}
+
+function workspaceStructuredAgentOutput(content) {
+  const raw = workspaceCanonicalAgentOutput(content);
+  const agentflowEnvelope = workspaceExtractAgentflowEnvelope(raw);
+  if (agentflowEnvelope) return agentflowEnvelope;
   const parsed = workspaceParseJsonObjectFromText(raw);
   if (!parsed) {
     const looseResult = workspaceExtractLooseResult(raw);
@@ -1816,8 +2065,10 @@ function workspaceStructuredAgentOutput(content) {
     const name = String(key || "").trim();
     if (name) outParams[name] = workspaceStringifyOutputValue(value);
   }
+  const resultFile = workspaceStringifyOutputValue(parsed.resultFile ?? "").trim();
   return {
-    result: workspaceStringifyOutputValue(parsed.result ?? ""),
+    result: resultFile || workspaceStringifyOutputValue(parsed.result ?? ""),
+    resultFile,
     outParams,
     structured: true,
     parsed,
@@ -1830,6 +2081,10 @@ function workspaceExtractNamedOutputValue(content, slotName) {
   const structured = workspaceStructuredAgentOutput(content);
   if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
     return String(structured.outParams[name] ?? "");
+  }
+  const fileName = `${name}File`;
+  if (Object.prototype.hasOwnProperty.call(structured.outParams, fileName)) {
+    return String(structured.outParams[fileName] ?? "");
   }
   const parsed = structured.parsed || workspaceParseJsonObjectFromText(content);
   if (parsed && Object.prototype.hasOwnProperty.call(parsed, name)) {
@@ -1869,6 +2124,8 @@ function workspaceApplyAgentOutputSlots(instance, content) {
         value = text;
       } else if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
         value = structured.outParams[name];
+      } else if (Object.prototype.hasOwnProperty.call(structured.outParams, `${name}File`)) {
+        value = structured.outParams[`${name}File`];
       } else {
         value = workspaceExtractNamedOutputValue(text, name);
       }
@@ -1918,6 +2175,26 @@ function workspaceDisplayKind(definitionId) {
   return "";
 }
 
+function workspaceDisplayTextFilePath(value, kind = "") {
+  const text = String(value || "").trim();
+  if (!text || text.length > 260) return "";
+  if (/[\r\n<>]/.test(text)) return "";
+  if (/^(?:https?:|data:|blob:|file:|javascript:|mailto:|tel:)/i.test(text)) return "";
+  const clean = text.replace(/^\/+/, "");
+  if (clean.includes("..") || clean.startsWith(".")) return "";
+  const ext = clean.split("?")[0].split("#")[0].toLowerCase().split(".").pop() || "";
+  const allowedByKind = {
+    html: new Set(["html", "htm"]),
+    markdown: new Set(["md", "markdown", "txt"]),
+    mermaid: new Set(["mmd", "mermaid", "txt"]),
+    ascii: new Set(["txt", "log"]),
+    chart: new Set(["json"]),
+    table: new Set(["json", "csv", "tsv"]),
+  };
+  const allowed = allowedByKind[kind] || new Set(["html", "htm", "md", "markdown", "txt", "json", "csv", "tsv"]);
+  return allowed.has(ext) ? clean : "";
+}
+
 function workspaceOutputFieldForSlot(slot, index = 0) {
   const name = String(slot?.name || "").trim();
   if (!name || name === "result" || name === "content" || index === 0) return "result";
@@ -1936,10 +2213,10 @@ function workspaceDisplayKindExample(kind, field) {
 }
 
 function workspaceDisplayFieldRule(kind, field, slotName = "") {
-  const slotText = field === "result" ? "`result` 字段" : `\`${field}\``;
+  const slotText = field === "result" ? "`result` 或 `resultFile`" : `\`${field}\` 或 \`${field}File\``;
   const prefix = slotName ? `- 输出引脚 \`${slotName}\` 连接了 ${kind} 展示节点：` : `- 下游连接了 ${kind} 展示节点：`;
-  if (kind === "html") return `${prefix}将可直接放入 iframe 渲染的 HTML 放在 ${slotText} 中。可以是完整 HTML 文档或 HTML fragment；不要使用 Markdown 代码围栏。`;
-  if (kind === "markdown") return `${prefix}将 Markdown 正文放在 ${slotText} 中；除非正文确实需要代码块，否则不要额外包裹代码围栏。`;
+  if (kind === "html") return `${prefix}将可直接放入 iframe 渲染的 HTML 放在 ${slotText} 中；内容较长时优先写入 outputs/*.html 并返回文件路径。不要使用 Markdown 代码围栏。`;
+  if (kind === "markdown") return `${prefix}将 Markdown 正文放在 ${slotText} 中；内容较长时优先写入 outputs/*.md 并返回文件路径。除非正文确实需要代码块，否则不要额外包裹代码围栏。`;
   if (kind === "mermaid") return `${prefix}将 Mermaid 图表代码放在 ${slotText} 中，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。`;
   if (kind === "ascii") return `${prefix}将纯文本/ASCII 图或表格放在 ${slotText} 中；不要输出 HTML 或 Markdown 装饰。`;
   if (kind === "image") return `${prefix}将可作为 img src 使用的图片地址、data URL 或 base64 data URL 放在 ${slotText} 中；不要输出 Markdown 图片语法。`;
@@ -1956,11 +2233,13 @@ function workspaceDownstreamOutputDisplayBindings(graph, nodeId) {
   const bindings = [];
   for (const edge of edges) {
     if (String(edge?.source || "") !== String(nodeId)) continue;
+    if (isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge))) continue;
     const target = instances[String(edge?.target || "")];
     const kind = workspaceDisplayKind(target?.definitionId);
     if (!kind) continue;
     const index = workspaceHandleIndex(edge?.sourceHandle, "output");
     const slot = output[index] || null;
+    if (isWorkspaceSemanticOutputSlot(slot)) continue;
     const name = String(slot?.name || "").trim() || (index === 0 ? "result" : `output-${index}`);
     bindings.push({
       kind,
@@ -2040,7 +2319,7 @@ function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}) {
     upstreamNodeIds.length ? `当前直接上游节点：${upstreamNodeIds.map((id) => `\`${id}\``).join("、")}。` : "当前没有直接业务上游节点。",
     inputNames.length ? `当前已解析输入槽：${inputNames.map((name) => `\`${name}\``).join("、")}。` : "当前没有已解析的具名业务输入槽。",
     "不要为了理解本节点而读取或搜索整张 workspace、`workspace.graph.json`、正式 `flow.yaml`、历史 run/log 或其它未连接节点。",
-    "不要把下游展示节点已有内容、下游错误信息、其它分支节点内容当作本节点输入；下游输出要求只用于决定最终 JSON 的字段和格式。",
+    "不要把下游展示节点已有内容、下游错误信息、其它分支节点内容当作本节点输入；下游输出要求只用于决定输出字段和格式。",
     "只有当当前节点任务文本或上游输入明确要求读取/修改 `workspace.graph.json`、`flow.yaml` 或某个具体文件路径时，才可以打开对应文件。",
     "如果完成任务所需信息不在当前节点任务、输入槽或上游上下文中，应明确说明缺少哪个上游输入，而不是扫描整张 workspace 猜测。",
   ].join("\n");
@@ -2068,23 +2347,32 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   const slotDisplayRules = displayBindings
     .map((binding) => `- 输出引脚 \`${binding.name}\` -> ${binding.kind} 展示节点：写入 \`${binding.field}\`。`)
     .filter((line, index, arr) => arr.indexOf(line) === index);
+  const envelopeExample = [
+    "---agentflow",
+    "resultFile: outputs/result.html",
+    slots.length ? "outParams:" : "",
+    ...slots.slice(0, 3).map((name) => `  ${name}: <${name} 的短值>`),
+    "---end",
+  ].filter(Boolean).join("\n");
   return [
     "## Workspace 输出协议",
     "",
-    "最终回复必须是一个 JSON 对象，必须直接以 `{` 开头并以 `}` 结尾；不要使用 Markdown 代码围栏，不要在 JSON 外追加解释文字、进度说明或自然语言前后缀。",
-    "执行过程中不要发送 assistant 进度说明，例如“正在读取/正在生成/准备输出”；需要思考时使用内部 thinking，最终只发送一个 JSON 对象。",
-    "JSON 必须可被 `JSON.parse` 解析；如果 `result` 是多行 Markdown，必须在 JSON 字符串里使用 `\\n` 转义换行，不能把裸 Markdown 直接塞进未转义的字符串。",
-    "固定格式：",
+    "如果只有一个默认输出，直接输出正文即可，系统会写入 `result` / `content` 输出口。",
+    "如果需要多个输出，或需要返回文件路径，最后输出一个轻量 envelope；不要把大段 HTML/Markdown/SQL 包进 JSON 字符串。",
+    "长内容、HTML、Markdown、SQL、CSV、图片等 artifact 优先写入当前 workspace 的 `outputs/` 目录，然后在 `resultFile` 或 `outParams.<name>File` 返回相对路径。",
+    "普通 assistant 文本会被当作本节点输出内容；执行过程中不要发送进度说明、解释或寒暄，例如“正在读取/正在生成/准备输出”。需要思考时只使用内部 thinking，最终只发送正文或 envelope。",
+    "envelope 格式：",
     "",
-    JSON.stringify({ result: resultExample, outParams: outParamsExample }, null, 2),
+    envelopeExample,
     "",
-    "- `result`：完整正文，写入 `result` / `content` 输出口，直连默认展示节点时展示它。",
-    "- `outParams`：具名输出参数，只写入同名输出引脚。",
+    "- `result`：默认输出正文；`resultFile`：默认输出对应的 workspace 相对文件路径。",
+    "- `outParams`：具名输出参数；`outParams.<name>File`：具名输出对应的 workspace 相对文件路径。",
+    "- 旧格式 `{ \"result\": ..., \"outParams\": ... }` 仍兼容，但新输出优先使用正文或 envelope。",
     ...(slotDisplayRules.length ? ["- 当前输出引脚与展示节点映射：", ...slotDisplayRules] : []),
     ...(slots.length
-      ? [`- 当前节点具名输出槽：${slots.map((name) => `\`${name}\``).join("、")}。例如任务要求写入 \`${slots[0]}\` 时，放到 \`outParams.${slots[0]}\`。`]
-      : ["- 当前节点没有额外具名输出槽，`outParams` 返回空对象即可。"]),
-    "- 如果 `result` 需要承载表格、ChartSpec、HTML 等结构化内容，可把对象或字符串放入 `result`；系统会把它转换给下游展示节点。",
+      ? [`- 当前节点具名输出槽：${slots.map((name) => `\`${name}\``).join("、")}。例如任务要求写入 \`${slots[0]}\` 时，放到 \`outParams.${slots[0]}\`；如果写成文件，放到 \`outParams.${slots[0]}File\`。`]
+      : ["- 当前节点没有额外具名输出槽；只有默认输出时不需要 envelope。"]),
+    "- 如果 `result` 需要承载表格、ChartSpec 等短结构化内容，可以直接输出对象或正文；系统会转换给下游展示节点。",
   ].join("\n");
 }
 
@@ -2144,8 +2432,9 @@ function workspaceRunPlan(graph, runNodeId) {
 
 function workspaceUpstreamText(graph, nodeId, outputs) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
+  const incoming = edges
+    .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
   const contentEdge = incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0];
   if (!contentEdge) return "";
   return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
@@ -2233,7 +2522,7 @@ function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
     "- 如果确实需要创建中间文件，只能写入该目录，路径也可通过环境变量 `AGENTFLOW_NODE_TMP_DIR` 获取。",
     "- 不要在 workspace 根目录、业务仓库根目录或当前 cwd 下创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除该目录或其中的最终待读文件；AgentFlow 会在节点运行结束后统一清理。",
-    "- 纯生成类任务应直接在最终 JSON 中返回结果；不要为了输出而写文件、cat 文件再粘贴。",
+    "- 短文本结果可直接输出；长 HTML/Markdown/SQL 等正式 artifact 应写入 workspace 的 `outputs/` 目录并返回相对路径，不要为了输出而写临时文件、cat 文件再粘贴。",
   ].join("\n");
 }
 
@@ -2410,7 +2699,8 @@ function buildWorkspaceMcpManifestBlock(results, servers = [], selectedNames = [
 function workspaceWriteDisplayContent(instance, content) {
   const next = { ...(instance || {}) };
   const kind = workspaceDisplayKind(next.definitionId);
-  const text = kind === "html" ? normalizeHtmlDisplayContent(content) : String(content || "");
+  const unwrapped = workspaceUnwrapOutputEnvelopeForDisplay(content);
+  const text = kind === "html" ? normalizeHtmlDisplayContent(unwrapped) : String(unwrapped || "");
   const primaryName = kind === "image" ? "src" : "content";
   next.body = text;
   next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
@@ -2426,12 +2716,21 @@ function workspaceWriteDisplayContent(instance, content) {
   return next;
 }
 
+function workspaceUnwrapOutputEnvelopeForDisplay(content) {
+  const raw = String(content || "").trim();
+  if (!raw) return "";
+  if (!/---agentflow\b|["']result["']\s*:|["']outParams["']\s*:|["']resultFile["']\s*:/i.test(raw)) return raw;
+  const structured = workspaceStructuredAgentOutput(raw);
+  return structured.structured ? String(structured.result || "") : raw;
+}
+
 function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const updated = [];
   for (const edge of edges) {
     if (String(edge?.source || "") !== String(sourceId)) continue;
+    if (isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge))) continue;
     const targetId = String(edge?.target || "");
     const target = instances[targetId];
     if (!target || !workspaceDisplayKind(target.definitionId)) continue;
@@ -2969,7 +3268,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
               firstAgentEventSeen = true;
               emitTiming(nodeId, "agent-first-event", spawnStartedAt, { attempt, firstType: ev?.type || "" });
             }
-            emit({ ...ev, nodeId });
+            const eventToEmit = (ev?.type === "natural" && (ev.kind === "result" || ev.kind === "assistant") && typeof ev.text === "string")
+              ? { ...ev, text: workspaceCanonicalAgentOutput(ev.text), nodeId }
+              : { ...ev, nodeId };
+            emit(eventToEmit);
             if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
               attemptContent += (attemptContent ? "\n" : "") + ev.text;
             }
@@ -2988,7 +3290,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           if (typeof opts.onActiveChild === "function") opts.onActiveChild(null);
         }
         throwIfAborted();
-        content = attemptContent.trim();
+        content = workspaceCanonicalAgentOutput(attemptContent);
         break;
       } catch (e) {
         if (signal?.aborted || e?.code === "WORKSPACE_RUN_ABORTED") throwIfAborted();
@@ -4140,6 +4442,67 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/html-screenshot") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const sourceFilePath = String(payload.sourceFilePath || payload.path || "").trim();
+        let html = String(payload.content || "");
+        let baseDir = scoped.root;
+        if (sourceFilePath) {
+          const { abs } = resolveWorkspaceFilePath(scoped.root, sourceFilePath);
+          if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+            json(res, 404, { error: "HTML file not found" });
+            return;
+          }
+          const stat = fs.statSync(abs);
+          if (stat.size > 5 * 1024 * 1024) {
+            json(res, 413, { error: "HTML file too large" });
+            return;
+          }
+          if (!html.trim()) html = fs.readFileSync(abs, "utf-8");
+          baseDir = path.dirname(abs);
+        }
+        if (!html.trim()) {
+          json(res, 400, { error: "Missing HTML content" });
+          return;
+        }
+        const screenshot = await renderHtmlScreenshotWithChrome({
+          html,
+          workspaceRoot: scoped.root,
+          baseDir,
+          width: payload.width,
+          height: payload.height,
+        });
+        const png = screenshot.png;
+        const filename = sanitizeWorkspaceUploadName(payload.filename || "html-render.png").replace(/\.[^.]+$/i, ".png");
+        res.writeHead(200, {
+          "Content-Type": "image/png",
+          "Content-Length": png.length,
+          "Cache-Control": "no-store",
+          "Content-Disposition": workspaceDownloadContentDisposition(filename),
+        });
+        res.end(png);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/workspace/file") {
       let payload;
       try {
@@ -4407,6 +4770,22 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
+        const targetFilePath = String(payload?.targetFilePath || "").trim();
+        let targetFile = null;
+        if (targetFilePath) {
+          if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+            json(res, 400, { error: "Cannot edit builtin or archived pipeline workspace" });
+            return;
+          }
+          targetFile = resolveWorkspaceFilePath(scoped.root, targetFilePath);
+          if (!targetFile.rel) {
+            json(res, 400, { error: "Missing artifact file path" });
+            return;
+          }
+        }
+        const beforeTargetContent = targetFile && fs.existsSync(targetFile.abs) && fs.statSync(targetFile.abs).isFile()
+          ? fs.readFileSync(targetFile.abs, "utf-8")
+          : null;
         const promptText = buildWorkspaceNodeChatPrompt(payload);
         const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
         let content = "";
@@ -4425,12 +4804,29 @@ export function startUiServer({
           },
         });
         await handle.finished;
-        const candidateContent = content.trim();
+        let candidateContent = targetFile
+          ? (fs.existsSync(targetFile.abs) && fs.statSync(targetFile.abs).isFile()
+              ? fs.readFileSync(targetFile.abs, "utf-8")
+              : "")
+          : content.trim();
+        if (targetFile) {
+          const unwrappedTargetContent = workspaceUnwrapOutputEnvelopeForDisplay(candidateContent);
+          if (unwrappedTargetContent && unwrappedTargetContent !== candidateContent) {
+            fs.writeFileSync(targetFile.abs, unwrappedTargetContent, "utf-8");
+            candidateContent = unwrappedTargetContent;
+          }
+        }
+        if (targetFile && beforeTargetContent != null && candidateContent === beforeTargetContent) {
+          json(res, 500, { error: "Agent 未修改目标展示文件，请换一种更明确的描述后重试。" });
+          return;
+        }
         json(res, 200, {
           ok: true,
           sessionId: String(payload?.sessionId || "") || `nodechat_${Date.now()}`,
-          reply: candidateContent,
+          reply: targetFile ? content.trim() : candidateContent,
           candidateContent,
+          directFileEdit: Boolean(targetFile),
+          artifactPath: targetFile?.rel || "",
           events,
         });
       } catch (e) {
