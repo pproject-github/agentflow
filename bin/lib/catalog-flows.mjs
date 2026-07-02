@@ -57,6 +57,7 @@ export function readPipelineListDescription(flowDir) {
 export function listFlowsJson(workspaceRoot, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const out = [];
+  const includeWorkspaceFlows = opts.includeWorkspaceFlows === true || !opts.userId;
   const adminBuiltinConfig = readAdminBuiltinPipelineConfig();
   const hiddenBuiltins = new Set(adminBuiltinConfig.hiddenBuiltins);
   const fromBuiltin = collectPipelineNamesFromDir(PACKAGE_BUILTIN_PIPELINES_DIR);
@@ -93,39 +94,41 @@ export function listFlowsJson(workspaceRoot, opts = {}) {
     const description = readPipelineListDescription(dir);
     out.push({ id: name, path: dir, source: "user", archived: true, ...(description ? { description } : {}) });
   }
-  const wsPrimary = path.join(root, PIPELINES_DIR);
-  const fromWorkspace = collectPipelineNamesFromDir(wsPrimary);
-  const workspaceIds = new Set(fromWorkspace);
-  for (const name of fromWorkspace) {
-    if (name === ARCHIVED_PIPELINES_DIR_NAME) continue;
-    const dir = path.join(wsPrimary, name);
-    const description = readPipelineListDescription(dir);
-    out.push({ id: name, path: dir, source: "workspace", ...(description ? { description } : {}) });
-  }
-  const wsArchivedPrimary = path.join(wsPrimary, ARCHIVED_PIPELINES_DIR_NAME);
-  const fromWsArchived = collectPipelineNamesFromDir(wsArchivedPrimary);
-  const workspaceArchivedIds = new Set(fromWsArchived);
-  for (const name of fromWsArchived) {
-    const dir = path.join(wsArchivedPrimary, name);
-    const description = readPipelineListDescription(dir);
-    out.push({ id: name, path: dir, source: "workspace", archived: true, ...(description ? { description } : {}) });
-  }
-  const fromLegacyWs = collectPipelineNamesFromDir(path.join(root, LEGACY_PIPELINES_DIR));
-  for (const name of fromLegacyWs) {
-    if (name === ARCHIVED_PIPELINES_DIR_NAME) continue;
-    if (workspaceIds.has(name)) continue;
-    const legDir = path.join(root, LEGACY_PIPELINES_DIR, name);
-    const description = readPipelineListDescription(legDir);
-    out.push({ id: name, path: legDir, source: "workspace", ...(description ? { description } : {}) });
-  }
-  const legArchivedRoot = path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME);
-  const fromLegArchived = collectPipelineNamesFromDir(legArchivedRoot);
-  for (const name of fromLegArchived) {
-    if (workspaceArchivedIds.has(name)) continue;
-    const dir = path.join(legArchivedRoot, name);
-    const description = readPipelineListDescription(dir);
-    out.push({ id: name, path: dir, source: "workspace", archived: true, ...(description ? { description } : {}) });
-    workspaceArchivedIds.add(name);
+  if (includeWorkspaceFlows) {
+    const wsPrimary = path.join(root, PIPELINES_DIR);
+    const fromWorkspace = collectPipelineNamesFromDir(wsPrimary);
+    const workspaceIds = new Set(fromWorkspace);
+    for (const name of fromWorkspace) {
+      if (name === ARCHIVED_PIPELINES_DIR_NAME) continue;
+      const dir = path.join(wsPrimary, name);
+      const description = readPipelineListDescription(dir);
+      out.push({ id: name, path: dir, source: "workspace", ...(description ? { description } : {}) });
+    }
+    const wsArchivedPrimary = path.join(wsPrimary, ARCHIVED_PIPELINES_DIR_NAME);
+    const fromWsArchived = collectPipelineNamesFromDir(wsArchivedPrimary);
+    const workspaceArchivedIds = new Set(fromWsArchived);
+    for (const name of fromWsArchived) {
+      const dir = path.join(wsArchivedPrimary, name);
+      const description = readPipelineListDescription(dir);
+      out.push({ id: name, path: dir, source: "workspace", archived: true, ...(description ? { description } : {}) });
+    }
+    const fromLegacyWs = collectPipelineNamesFromDir(path.join(root, LEGACY_PIPELINES_DIR));
+    for (const name of fromLegacyWs) {
+      if (name === ARCHIVED_PIPELINES_DIR_NAME) continue;
+      if (workspaceIds.has(name)) continue;
+      const legDir = path.join(root, LEGACY_PIPELINES_DIR, name);
+      const description = readPipelineListDescription(legDir);
+      out.push({ id: name, path: legDir, source: "workspace", ...(description ? { description } : {}) });
+    }
+    const legArchivedRoot = path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME);
+    const fromLegArchived = collectPipelineNamesFromDir(legArchivedRoot);
+    for (const name of fromLegArchived) {
+      if (workspaceArchivedIds.has(name)) continue;
+      const dir = path.join(legArchivedRoot, name);
+      const description = readPipelineListDescription(dir);
+      out.push({ id: name, path: dir, source: "workspace", archived: true, ...(description ? { description } : {}) });
+      workspaceArchivedIds.add(name);
+    }
   }
   const sourceRank = (s) => (s === "builtin" ? 0 : s === "admin" ? 1 : s === "user" ? 2 : 3);
   const archRank = (a) => (a.archived ? 1 : 0);
