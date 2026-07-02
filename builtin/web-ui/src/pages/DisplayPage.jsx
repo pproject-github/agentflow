@@ -30,12 +30,22 @@ function displayIcon(kind) {
   return "article";
 }
 
+function normalizeAgentflowEnvelopeBlock(block) {
+  let text = String(block || "").replace(/\r\n/g, "\n").trim();
+  if (!text.includes("\n")) {
+    text = text
+      .replace(/\s+(resultFile|result|outParams|outParams\.[A-Za-z_][A-Za-z0-9_-]*)\s*:/g, "\n$1:")
+      .replace(/(^|\n)outParams:\s+([A-Za-z_][A-Za-z0-9_-]*\s*:)/g, "$1outParams:\n  $2");
+  }
+  return text;
+}
+
 function displayOutputEnvelopeContent(value) {
   const raw = String(value || "").trim();
   if (!raw) return String(value || "");
-  const agentflow = raw.match(/(?:^|\n)---agentflow\s*\n([\s\S]*?)\n---end(?:\n|$)/i);
+  const agentflow = raw.match(/---agentflow\b([\s\S]*?)---end/i);
   if (agentflow?.[1]) {
-    const block = agentflow[1];
+    const block = normalizeAgentflowEnvelopeBlock(agentflow[1]);
     const fileMatch = block.match(/^resultFile\s*:\s*["']?([^"'\n]+)["']?/m);
     if (fileMatch?.[1]) return fileMatch[1].trim();
     const inlineMatch = block.match(/^result\s*:\s*(.*)$/m);
