@@ -28,6 +28,8 @@ export function listAllRunDirs(workspaceRoot, opts = {}) {
   const root = path.resolve(workspaceRoot);
   const out = [];
   const seen = new Set();
+  const includeWorkspaceRuns = opts.includeWorkspaceRuns === true || !opts.userId;
+  const includeLegacyUserRuns = opts.includeLegacyUserRuns === true || !opts.userId;
   const add = (flowName, uuid, runDir, source) => {
     const key = `${flowName}\t${uuid}`;
     if (seen.has(key)) return;
@@ -64,7 +66,7 @@ export function listAllRunDirs(workspaceRoot, opts = {}) {
 
   // 新位置（优先）
   scanPipelinesDir(getUserPipelinesRoot(opts.userId), "user");
-  scanPipelinesDir(path.join(root, PIPELINES_DIR), "workspace");
+  if (includeWorkspaceRuns) scanPipelinesDir(path.join(root, PIPELINES_DIR), "workspace");
 
   // 旧位置（兼容读）
   const scanLegacyRoot = (runBuildDir, source) => {
@@ -90,8 +92,8 @@ export function listAllRunDirs(workspaceRoot, opts = {}) {
       }
     }
   };
-  scanLegacyRoot(getWorkspaceRunBuildRoot(root), "legacyWorkspaceRoot");
-  scanLegacyRoot(getLegacyUserRunBuildRoot(), "legacyUserRoot");
+  if (includeWorkspaceRuns) scanLegacyRoot(getWorkspaceRunBuildRoot(root), "legacyWorkspaceRoot");
+  if (includeLegacyUserRuns) scanLegacyRoot(getLegacyUserRunBuildRoot(), "legacyUserRoot");
 
   return out;
 }

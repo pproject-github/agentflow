@@ -3589,7 +3589,10 @@ export function startUiServer({
         if (ts === "workspace" || ts === "user") {
           targetSpace = ts;
         }
-        const existing = listFlowsJson(root, userCtx);
+        const existing = listFlowsJson(root, {
+          ...userCtx,
+          includeWorkspaceFlows: targetSpace === "workspace",
+        });
         if (
           existing.some(
             (f) => f.id === flowId && (f.source ?? "user") === targetSpace && !f.archived,
@@ -3645,7 +3648,10 @@ export function startUiServer({
       }
       const flowId = idCheck.flowId;
       const targetSpace = parsed.targetSpace === "workspace" ? "workspace" : "user";
-      const existing = listFlowsJson(root, userCtx);
+      const existing = listFlowsJson(root, {
+        ...userCtx,
+        includeWorkspaceFlows: targetSpace === "workspace",
+      });
       if (
         existing.some(
           (f) => f.id === flowId && (f.source ?? "user") === targetSpace && !f.archived,
