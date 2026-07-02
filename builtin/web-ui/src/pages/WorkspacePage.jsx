@@ -26,6 +26,8 @@ import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealCo
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
+import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
+import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
 import { useCanvasHistory } from "../useCanvasHistory.js";
 import {
   areSlotsCompatible,
@@ -1368,7 +1370,8 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const [markdownDraft, setMarkdownDraft] = useState("");
   const [imageDragActive, setImageDragActive] = useState(false);
   const imageUploadInputRef = useRef(null);
-  const markdownContent = kind === "markdown" ? displayContent(data) : "";
+  const currentDisplayContent = displayContent(data);
+  const markdownContent = kind === "markdown" ? currentDisplayContent : "";
   const readOnly = Boolean(data?.readOnly);
   const presentationMode = Boolean(data?.displayPageMode);
   useEffect(() => {
@@ -1417,6 +1420,18 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     if (readOnly) return;
     if (!file || kind !== "image") return;
     data?.onUploadImageToDisplayNode?.(id, file);
+  }, [data, id, kind, readOnly]);
+  const clearDisplayContent = useCallback((event) => {
+    event?.stopPropagation?.();
+    if (readOnly) return;
+    data?.onSetDisplayNodeContent?.(id, "", "replace", {
+      logChat: false,
+      statusMessage: "已清空 Display 内容",
+    });
+    if (kind === "markdown") {
+      setMarkdownDraft("");
+      setMarkdownEditing(false);
+    }
   }, [data, id, kind, readOnly]);
   const handleImageDragOver = useCallback((event) => {
     if (readOnly) return;
@@ -1643,6 +1658,16 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             </button>
           </>
         ) : null}
+        <button
+          type="button"
+          className="af-work-display-card__action nodrag"
+          disabled={readOnly}
+          onClick={clearDisplayContent}
+          aria-label="清空内容"
+          title="清空内容"
+        >
+          <span className="material-symbols-outlined">delete_sweep</span>
+        </button>
         <button
           type="button"
           className="af-work-display-card__action nodrag"
@@ -2652,7 +2677,7 @@ function WorkspaceLoadMcpNode({ id, data, selected, deleteNode, servers = [], on
 }
 
 function WorkspacePageInner() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { navigate } = useRoute();
   const reactFlow = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -2660,6 +2685,8 @@ function WorkspacePageInner() {
   const [workspaceMode, setWorkspaceMode] = useState(() => (
     new URLSearchParams(window.location.search).get("view") === "display" ? "display" : "workspace"
   ));
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [nodes, setNodes] = useNodesState([]);
   const [edges, setEdges, rawOnEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
@@ -2828,6 +2855,24 @@ function WorkspacePageInner() {
   const [status, setStatus] = useState("");
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
+  const flowSource = flowParams.flowSource || "user";
+  const canManageCurrentFlow = Boolean(
+    flowParams.flowId &&
+    !flowParams.archived &&
+    (flowSource === "user" || flowSource === "workspace"),
+  );
+  const pipelineSettingsUrl = useMemo(() => {
+    if (!flowParams.flowId) return "/flow?panel=settings";
+    const url = flowUrlForView({
+      id: flowParams.flowId,
+      source: flowSource,
+      archived: Boolean(flowParams.archived),
+    }, "pipeline");
+    const [pathname, query = ""] = url.split("?");
+    const sp = new URLSearchParams(query);
+    sp.set("panel", "settings");
+    return `${pathname}?${sp.toString()}`;
+  }, [flowParams.archived, flowParams.flowId, flowSource]);
 
   useEffect(() => {
     if (!flowParams.flowId) return;
@@ -3004,7 +3049,6 @@ function WorkspacePageInner() {
 
   const stopWorkspaceRun = useCallback(async (runNodeId = "") => {
     const id = String(runNodeId || runningRunNodeId || "").trim();
-    if (!id) return;
     workspaceRunStoppedRef.current = true;
     if (workspaceRunAbortRef.current) {
       workspaceRunAbortRef.current.abort();
@@ -3017,12 +3061,12 @@ function WorkspacePageInner() {
       for (const [nodeId, item] of Object.entries(next)) {
         if (item?.status === "running") next[nodeId] = { status: "stopped" };
       }
-      next[id] = { status: "stopped" };
+      if (id) next[id] = { status: "stopped" };
       return next;
     });
-    setStatus(`Workspace run stopped: ${id}`);
+    setStatus(id ? `Workspace run stopped: ${id}` : "Workspace run stopped");
     setComposerRunSessions((list) => list.map((session) => (
-      session.runNodeId === id && session.status === "running"
+      (!id || session.runNodeId === id) && session.status === "running"
         ? {
             ...session,
             status: "stopped",
@@ -3042,6 +3086,44 @@ function WorkspacePageInner() {
       });
     } catch (_) {}
   }, [flowParams, runningRunNodeId]);
+
+  const refreshWorkspaceRunStatus = useCallback(async () => {
+    if (!flowParams.flowId) return;
+    try {
+      const q = flowParamsQuery(flowParams);
+      const res = await fetch(`/api/workspace/run/status?${q.toString()}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      if (!json.running) return;
+      const runNodeId = String(json.runNodeId || "").trim();
+      if (runNodeId) {
+        setRunningRunNodeId(runNodeId);
+        setWorkspaceExecutingNodes(new Set([runNodeId]));
+        setWorkspaceNodeRunStatus((current) => ({ ...current, [runNodeId]: { status: "running" } }));
+        setStatus(`Workspace run still running: ${runNodeId}`);
+      } else {
+        setStatus("Workspace run still running");
+      }
+      setComposerRunSessions((list) => {
+        if (list.some((session) => session.status === "running" && (!runNodeId || session.runNodeId === runNodeId))) return list;
+        const sessionId = `run-restored-${json.startedAt || Date.now()}`;
+        return [
+          ...list.slice(-7),
+          {
+            id: sessionId,
+            label: runNodeId ? `Run ${runNodeId}` : "Workspace Run",
+            runNodeId,
+            status: "running",
+            startedAt: json.startedAt || Date.now(),
+            steps: runNodeId ? [{ id: runNodeId, label: runNodeId, status: "running" }] : [],
+            messages: [{ role: "assistant", kind: "run-summary", text: "Workspace run is still running in the background.", at: Date.now() }],
+          },
+        ];
+      });
+    } catch {
+      /* status restore is best-effort */
+    }
+  }, [flowParams]);
 
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!workspaceWritable) {
@@ -3561,6 +3643,7 @@ function WorkspacePageInner() {
     })).catch(() => {});
     void refreshSkills();
     void refreshMcps();
+    void refreshWorkspaceRunStatus();
     fetch("/api/skill-collections").then((r) => r.json()).then((j) => {
       setSkillCollections(normalizeSkillCollections(j));
       setSkillCollectionsLoaded(true);
@@ -3569,7 +3652,7 @@ function WorkspacePageInner() {
       .then((r) => r.json())
       .then((j) => setAuthUser(j.user || null))
       .catch(() => setAuthUser(null));
-  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, skillsStorageKey]);
+  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -5658,6 +5741,35 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-icon-btn"
+            onClick={() => navigate(pipelineSettingsUrl)}
+            aria-label={t("flow:topbar.pipelineSettings")}
+            title={t("flow:topbar.pipelineSettings")}
+          >
+            <span className="material-symbols-outlined">settings</span>
+          </button>
+          <button
+            type="button"
+            className="af-icon-btn"
+            disabled={!canManageCurrentFlow}
+            onClick={() => setArchiveModalOpen(true)}
+            aria-label={t("project:archiveModal.title")}
+            title={t("project:archiveModal.title")}
+          >
+            <span className="material-symbols-outlined">archive</span>
+          </button>
+          <button
+            type="button"
+            className="af-icon-btn af-icon-btn--danger"
+            disabled={!canManageCurrentFlow}
+            onClick={() => setDeleteModalOpen(true)}
+            aria-label={t("flow:topbar.deletePipeline")}
+            title={t("flow:topbar.deletePipeline")}
+          >
+            <span className="material-symbols-outlined">delete_forever</span>
+          </button>
+          <button
+            type="button"
+            className="af-icon-btn"
             onClick={() => setShortcutsOpen(true)}
             aria-label="快捷键"
             title="快捷键 (?)"
@@ -6394,6 +6506,27 @@ function WorkspacePageInner() {
           onClose={() => setJumpPaletteOpen(false)}
           onJump={jumpToWorkspaceNodeById}
           nodes={jumpPaletteNodes}
+        />
+        <ArchivePipelineModal
+          open={archiveModalOpen}
+          onClose={() => setArchiveModalOpen(false)}
+          flowId={flowParams.flowId || ""}
+          flowSource={flowSource}
+          onArchived={() => {
+            setArchiveModalOpen(false);
+            navigate("/projects?tab=archived");
+          }}
+        />
+        <DeletePipelineModal
+          open={deleteModalOpen && Boolean(flowParams.flowId)}
+          onClose={() => setDeleteModalOpen(false)}
+          flowId={flowParams.flowId || ""}
+          flowSource={flowSource}
+          flowArchived={Boolean(flowParams.archived)}
+          onDeleted={async () => {
+            setDeleteModalOpen(false);
+            navigate("/projects");
+          }}
         />
         {publishSnippetOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">

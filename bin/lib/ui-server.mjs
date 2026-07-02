@@ -2072,6 +2072,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     "## Workspace 输出协议",
     "",
     "最终回复必须是一个 JSON 对象，必须直接以 `{` 开头并以 `}` 结尾；不要使用 Markdown 代码围栏，不要在 JSON 外追加解释文字、进度说明或自然语言前后缀。",
+    "执行过程中不要发送 assistant 进度说明，例如“正在读取/正在生成/准备输出”；需要思考时使用内部 thinking，最终只发送一个 JSON 对象。",
     "JSON 必须可被 `JSON.parse` 解析；如果 `result` 是多行 Markdown，必须在 JSON 字符串里使用 `\\n` 转义换行，不能把裸 Markdown 直接塞进未转义的字符串。",
     "固定格式：",
     "",
@@ -2168,6 +2169,74 @@ function isWorkspaceSemanticInputSlot(slot) {
   return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "workspaceContext" || name === "gitContext";
 }
 
+function workspaceNodeBrief(graph, nodeId) {
+  const instance = graph?.instances?.[String(nodeId || "")] || {};
+  const label = String(instance?.label || nodeId || "").trim();
+  const defId = String(instance?.definitionId || "").trim();
+  return defId && defId !== label ? `${label || nodeId} (${defId})` : (label || nodeId);
+}
+
+function workspaceSlotBrief(slot, fallback) {
+  const name = String(slot?.name || "").trim();
+  const type = String(slot?.type || "").trim();
+  return `${name || fallback}${type ? `:${type}` : ""}`;
+}
+
+function workspaceNodeConnectionContextBlock(graph, nodeId) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
+  const outgoing = edges.filter((edge) => String(edge?.source || "") === String(nodeId));
+  const inputLines = incoming.map((edge) => {
+    const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
+    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+    const targetName = String(targetSlot?.name || "").trim();
+    const semantic = isWorkspaceSemanticInputSlot(targetSlot) ? "上下文输入" : "业务输入";
+    return `- ${workspaceNodeBrief(graph, edge.source)} \`${workspaceSlotBrief(sourceSlot, edge.sourceHandle || "output")}\` -> 当前 \`${workspaceSlotBrief(targetSlot, edge.targetHandle || "input")}\`（${semantic}${targetName ? `：${targetName}` : ""}）`;
+  });
+  const outputLines = outgoing.map((edge) => {
+    const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
+    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+    const targetKind = workspaceDisplayKind(graph?.instances?.[String(edge?.target || "")]?.definitionId);
+    return `- 当前 \`${workspaceSlotBrief(sourceSlot, edge.sourceHandle || "output")}\` -> ${workspaceNodeBrief(graph, edge.target)} \`${workspaceSlotBrief(targetSlot, edge.targetHandle || "input")}\`${targetKind ? `（${targetKind} 展示）` : ""}`;
+  });
+  if (!inputLines.length && !outputLines.length) return "";
+  return [
+    "## 当前节点连线",
+    "",
+    inputLines.length ? "### 直接上游" : "",
+    ...inputLines,
+    outputLines.length ? "\n### 直接下游" : "",
+    ...outputLines,
+    "",
+    "只把直接上游的业务输入和上下文输入当作本节点依据；直接下游只用于确定输出字段和格式。",
+  ].filter(Boolean).join("\n");
+}
+
+function workspaceResolvedInputValuesBlock(inputValues = {}) {
+  const entries = Object.entries(inputValues || {}).filter(([name, value]) => String(name || "").trim() && String(value || "").trim());
+  if (!entries.length) return "";
+  const lines = entries.map(([name, value]) => {
+    const text = String(value || "");
+    const clipped = text.length > 6000 ? `${text.slice(0, 6000)}\n...[已截断 ${text.length - 6000} 字]` : text;
+    return `### ${name}\n\n${clipped}`;
+  });
+  return ["## 已解析业务输入槽", "", ...lines].join("\n");
+}
+
+function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
+  const dir = String(nodeTmpDir || "").trim();
+  if (!dir) return "";
+  return [
+    "## 临时文件目录",
+    "",
+    `- 本节点专用临时目录：\`${dir}\``,
+    "- 如果确实需要创建中间文件，只能写入该目录，路径也可通过环境变量 `AGENTFLOW_NODE_TMP_DIR` 获取。",
+    "- 不要在 workspace 根目录、业务仓库根目录或当前 cwd 下创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
+    "- 不要自行删除该目录或其中的最终待读文件；AgentFlow 会在节点运行结束后统一清理。",
+    "- 纯生成类任务应直接在最终 JSON 中返回结果；不要为了输出而写文件、cat 文件再粘贴。",
+  ].join("\n");
+}
+
 function workspaceTaskUpstreamText(graph, nodeId, outputs) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
@@ -2247,8 +2316,7 @@ function workspaceUpstreamSkillBlocks(graph, nodeId, outputs) {
       const slot = workspaceTargetSlotForEdge(graph, edge);
       return String(slot?.name || "") === "skillsContext";
     })
-    .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
-    .filter((text) => text.includes("Skill") || text.includes("skill"))
+    .map((edge) => workspaceOutputSlotValueForEdge(graph, outputs, edge))
     .flatMap((text) => text.split(/\n\s*---\s*\n/g))
     .map((text) => text.trim())
     .filter(Boolean);
@@ -2263,8 +2331,7 @@ function workspaceUpstreamMcpBlocks(graph, nodeId, outputs) {
       const slot = workspaceTargetSlotForEdge(graph, edge);
       return String(slot?.name || "") === "mcpContext";
     })
-    .map((edge) => String(outputs.get(String(edge.source || "")) || ""))
-    .filter((text) => text.includes("MCP") || text.includes("mcp"))
+    .map((edge) => workspaceOutputSlotValueForEdge(graph, outputs, edge))
     .flatMap((text) => text.split(/\n\s*---\s*\n/g))
     .map((text) => text.trim())
     .filter(Boolean);
@@ -2291,9 +2358,9 @@ function buildWorkspaceSkillManifestBlock(skills, selectedKeys = []) {
   }).filter(Boolean);
   if (!rows.length && !normalizedKeys.length) return "";
   return [
-    "### Workspace Skills Manifest",
+    "### 已加载 Skills",
     "",
-    "这些 skills 已在当前 workspace 中可用。不要默认展开或复述其内容；仅当节点任务明确需要时，按路径 Read 对应 SKILL.md。",
+    "这些 skills 来自当前 Workspace 中已连接的 Load Skills 节点。只有节点任务需要对应能力时，才按路径 Read 对应 SKILL.md；不要展开未连接或未加载的 skills。",
     "",
     ...(
       rows.length
@@ -2375,20 +2442,26 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null)
   return updated;
 }
 
-function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}) {
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "") {
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const label = String(instance.label || nodeId).trim();
   const scopeGuardrails = workspaceNodeScopeGuardrails(graph, nodeId, inputValues);
+  const connectionContext = workspaceNodeConnectionContextBlock(graph, nodeId);
+  const resolvedInputs = workspaceResolvedInputValuesBlock(inputValues);
+  const tmpDirectory = workspaceNodeTmpDirectoryBlock(nodeTmpDir);
   const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
     "按 Workspace 输出协议返回该节点要传给下游展示/后续节点的数据。",
     scopeGuardrails,
+    connectionContext ? `\n${connectionContext}` : "",
+    tmpDirectory ? `\n${tmpDirectory}` : "",
     workspaceSearchGuardrailsBlock(),
-    skillsBlock ? `\n## Available Skills\n\n${skillsBlock}` : "",
-    mcpBlock ? `\n## Available MCP\n\n${mcpBlock}` : "",
+    resolvedInputs ? `\n${resolvedInputs}` : "",
+    skillsBlock ? `\n## 上游已加载 Skills\n\n${skillsBlock}` : "",
+    mcpBlock ? `\n## 上游已加载 MCP\n\n${mcpBlock}` : "",
     upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
     downstreamRequirements ? `\n${downstreamRequirements}` : "",
     outputProtocolRequirements ? `\n${outputProtocolRequirements}` : "",
@@ -2463,6 +2536,48 @@ function workspaceCleanupAutoWorktrees(list, graph, emit) {
   list.splice(0, list.length);
 }
 
+function workspaceSanitizeTmpSegment(value, fallback = "node") {
+  return String(value || fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120) || fallback;
+}
+
+function workspaceCreateRunTmpRoot(scopedRoot, runNodeId) {
+  const runPart = workspaceSanitizeTmpSegment(runNodeId || "run", "run");
+  const id = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const dir = path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "tmp", `workspace-run-${Date.now()}-${runPart}-${id}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
+  const dir = path.join(path.resolve(runTmpRoot), workspaceSanitizeTmpSegment(nodeId, "node"));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function workspaceShouldKeepTmp(userCtx = {}) {
+  const env = { ...process.env, ...readMergedEnvObject(userCtx.userId) };
+  const value = String(env.AGENTFLOW_KEEP_TMP || env.AGENTFLOW_KEEP_WORKSPACE_TMP || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function workspaceCleanupTmpRoot(runTmpRoot, userCtx = {}, emit = () => {}) {
+  const dir = String(runTmpRoot || "").trim();
+  if (!dir) return;
+  if (workspaceShouldKeepTmp(userCtx)) {
+    emit({ type: "status", line: `Workspace tmp kept: ${dir}` });
+    return;
+  }
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    emit({ type: "natural", kind: "warning", text: `Workspace tmp cleanup failed: ${dir}\n原因：${e?.message || String(e)}` });
+  }
+}
+
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
   const runNodeId = String(payload?.runNodeId || "").trim();
@@ -2475,9 +2590,6 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       throw err;
     }
   };
-  const fallbackSelectedSkillKeys = Array.isArray(payload?.selectedSkills)
-    ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean)
-    : [];
   const skillsBlockCache = new Map();
   const loadSkillsBlockForKeys = (keys) => {
     const normalized = Array.from(new Set((keys || []).map((x) => String(x || "").trim()).filter(Boolean)));
@@ -2521,6 +2633,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   let cwd = scopedRoot;
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
   const autoCleanupWorktrees = [];
+  const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
 
   try {
   for (const nodeId of order) {
@@ -2537,9 +2650,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     if (defId === "control_load_skills") {
       const skillStartedAt = Date.now();
       const nodeSkillKeys = selectedSkillKeysFromInstance(instance);
-      const activeSkillKeys = nodeSkillKeys.length > 0 ? nodeSkillKeys : fallbackSelectedSkillKeys;
-      const skillsBlock = loadSkillsBlockForKeys(activeSkillKeys);
-      emitTiming(nodeId, "load-skills", skillStartedAt, { skillCount: activeSkillKeys.length, charCount: skillsBlock.length });
+      const skillsBlock = loadSkillsBlockForKeys(nodeSkillKeys);
+      emitTiming(nodeId, "load-skills", skillStartedAt, { skillCount: nodeSkillKeys.length, charCount: skillsBlock.length });
       graph.instances[nodeId] = {
         ...instance,
         output: (Array.isArray(instance.output) ? instance.output : []).map((slot) => (
@@ -2829,9 +2941,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
     }
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
-    const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks, upstreamSkillBlocks ? "" : loadSkillsBlockForKeys(fallbackSelectedSkillKeys));
+    const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues);
+    const nodeTmpDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues, nodeTmpDir);
     emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length, mcpChars: promptMcpBlock.length });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
@@ -2847,6 +2960,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           prompt,
           modelKey,
           agentflowUserId: userCtx.userId || "",
+          extraEnv: {
+            AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
+            AGENTFLOW_NODE_TMP_DIR: nodeTmpDir,
+          },
           onStreamEvent: (ev) => {
             if (!firstAgentEventSeen) {
               firstAgentEventSeen = true;
@@ -2894,6 +3011,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   }
   } finally {
     workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
+    workspaceCleanupTmpRoot(runTmpRoot, userCtx, emit);
   }
   if (pauseNodeIds.length > 0) {
     emit({ type: "paused", nodeIds: pauseNodeIds, message: `Workspace run paused at ${pauseNodeIds.join(", ")}` });
@@ -3082,7 +3200,7 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 
 /** 正在执行的 flow run（flowId → { child, runUuid }）；同一 flow 只允许一个 run */
 const activeFlowRuns = new Map();
-/** 正在执行的 Workspace 临时 run（flowId → { controller, child }）；同一 flow 只允许一个 run */
+/** 正在执行的 Workspace 临时 run（flowId → { controller, child, runNodeId, startedAt }）；同一 flow 只允许一个 run */
 const activeWorkspaceRuns = new Map();
 
 function workspaceRunKey(userCtx, flowSource, flowId) {
@@ -3831,6 +3949,10 @@ export function startUiServer({
         const runEntry = {
           controller,
           child: null,
+          runNodeId: String(payload.runNodeId || "").trim(),
+          flowId,
+          flowSource: scoped.flowSource || payload.flowSource || "user",
+          startedAt: Date.now(),
           stopChild() {
             if (this.child && !this.child.killed) {
               try { this.child.kill("SIGTERM"); } catch (_) {}
@@ -3902,6 +4024,25 @@ export function startUiServer({
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/run/status") {
+      const flowId = typeof url.searchParams.get("flowId") === "string" ? url.searchParams.get("flowId").trim() : "";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
+      const entry = activeWorkspaceRuns.get(runKey);
+      json(res, 200, {
+        running: Boolean(entry),
+        flowId,
+        flowSource,
+        runNodeId: entry?.runNodeId || "",
+        startedAt: entry?.startedAt || null,
+      });
       return;
     }
 
