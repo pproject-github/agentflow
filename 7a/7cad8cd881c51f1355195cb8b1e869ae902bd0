@@ -1,0 +1,59 @@
+builtin/web-ui/dist/assets/index-Db5Z0V8r.css
+  s_b875738d2d60b6::t_78ad760c2b0e8a 1
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b875738d2d60b6::t_7ead4c97b419ac 6509-6529
+  s_b875738d2d60b6::t_53258407cc03c9 1373-1374,1424-1434
+  s_b875738d2d60b6::t_dbc1bcf8cd9353 5741-5769
+  s_b875738d2d60b6::t_b7b06ace2676d7 3646,3655
+  s_b875738d2d60b6::t_389cde35c07236 1665-1670
+  s_b875738d2d60b6::t_29575f80965537 29-30,2680,2688-2689
+  s_b875738d2d60b6::t_752bb362b155b4 2858-2875,3064,3067,3069,3089-3126
+  s_b875738d2d60b6::t_8975bd1c4f81c6 1435
+  s_b875738d2d60b6::t_8d369f1292c011 1662-1664
+  s_b875738d2d60b6::t_686b6762daaa01 3127
+  s_b875738d2d60b6::t_4837fb793d8eb9 6530
+bin/lib/ui-server.mjs
+  s_b875738d2d60b6::t_648cd433469dad 2075
+  s_b875738d2d60b6::t_4eed9c6c079732 2226-2239
+  s_b875738d2d60b6::t_d13cac674433d2 2445,2452,2460
+  s_b875738d2d60b6::t_63163743353ec5 2653-2654,2944
+  s_b875738d2d60b6::t_68f42072de4ba1 2537,2539-2578,2580
+  s_b875738d2d60b6::t_3033acbd15b31b 2636,2946-2947,2963-2966,3014
+  s_b875738d2d60b6::t_3a9f5afd1b1fe4 3203,3952-3955,4026-4034,4036-4045
+  s_b875738d2d60b6::t_61f9624aebd65c 2172-2225,2319,2334,2361,2363
+  s_b875738d2d60b6::t_1c9889a8bd2085 2450-2451,2459,2462-2464
+  s_b875738d2d60b6::t_7210c3b58096d6 2579
+  s_b875738d2d60b6::t_d77f9ed49497a9 4035
+  s_b875738d2d60b6::t_438e24fcd391e6 4046-4048
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_b875738d2d60b6::t_492a019863b3a3 1076,1082,2095-2100
+  s_b875738d2d60b6::t_d07d431055900a 2101
+builtin/web-ui/dist/assets/index-CVcAvXl_.js
+  s_b875738d2d60b6::t_b971c55974a947 1,9,17,25,33-34,36-38,40-44,52,60,65-67,69-73,75,78-82,84-95,97-98,102-110,123,126-128,130-136,139-141,143,159,161,163-168,172-173,175,203-208,212,238
+bin/lib/composer-agent.mjs
+  s_b875738d2d60b6::t_25d05ae1b6c3ba 260,277-278
+builtin/web-ui/src/index.css
+  s_b875738d2d60b6::t_ac714799e69c29 5678,5680-5696,5698-5707
+  s_b875738d2d60b6::t_833e397af712d1 357-360,405-408,8829
+  s_b875738d2d60b6::t_cbd8e6bce76ecc 5697
+builtin/web-ui/dist/index.html
+  s_b875738d2d60b6::t_78ad760c2b0e8a 19
+  s_b875738d2d60b6::t_b971c55974a947 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "7a7cad8cd881c51f1355195cb8b1e869ae902bd0",
+  "prompts": {},
+  "logical_commit_id": "7a7cad8cd881c51f1355195cb8b1e869ae902bd0",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
