@@ -2316,13 +2316,18 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   ].join("\n");
 }
 
-function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}) {
+function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}, relevantInputNames = null) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const inputNames = Object.keys(inputValues || {}).filter(Boolean);
+  const inputNameSet = relevantInputNames && relevantInputNames.size ? relevantInputNames : new Set(inputNames);
   const directInputEdges = edges
     .filter((edge) => String(edge?.target || "") === String(nodeId))
-    .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
+    .filter((edge) => {
+      const slot = workspaceTargetSlotForEdge(graph, edge);
+      if (isWorkspaceSemanticInputSlot(slot)) return false;
+      return !inputNameSet.size || inputNameSet.has(String(slot?.name || "").trim());
+    });
   const upstreamNodeIds = Array.from(new Set(directInputEdges.map((edge) => String(edge?.source || "").trim()).filter(Boolean)));
-  const inputNames = Object.keys(inputValues || {}).filter(Boolean);
   return [
     "## 当前节点上下文边界",
     "",
@@ -2334,6 +2339,26 @@ function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}) {
     "只有当当前节点任务文本或上游输入明确要求读取/修改 `workspace.graph.json`、`flow.yaml` 或某个具体文件路径时，才可以打开对应文件。",
     "如果完成任务所需信息不在当前节点任务、输入槽或上游上下文中，应明确说明缺少哪个上游输入，而不是扫描整张 workspace 猜测。",
   ].join("\n");
+}
+
+function workspaceBodyPlaceholderNames(body) {
+  const names = new Set();
+  const raw = String(body || "");
+  raw.replace(/\$\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (_match, name) => {
+    if (name) names.add(String(name));
+    return _match;
+  });
+  return names;
+}
+
+function workspaceRelevantInputValues(body, inputValues = {}) {
+  const placeholders = workspaceBodyPlaceholderNames(body);
+  if (!placeholders.size) return { values: inputValues || {}, placeholders };
+  const values = {};
+  for (const [name, value] of Object.entries(inputValues || {})) {
+    if (placeholders.has(name)) values[name] = value;
+  }
+  return { values, placeholders };
 }
 
 function workspaceOutputProtocolRequirements(graph, nodeId) {
@@ -2482,9 +2507,16 @@ function workspaceSlotBrief(slot, fallback) {
   return `${name || fallback}${type ? `:${type}` : ""}`;
 }
 
-function workspaceNodeConnectionContextBlock(graph, nodeId) {
+function workspaceNodeConnectionContextBlock(graph, nodeId, relevantInputNames = null) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
+  const incoming = edges
+    .filter((edge) => String(edge?.target || "") === String(nodeId))
+    .filter((edge) => {
+      if (!relevantInputNames || !relevantInputNames.size) return true;
+      const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+      if (isWorkspaceSemanticInputSlot(targetSlot)) return true;
+      return relevantInputNames.has(String(targetSlot?.name || "").trim());
+    });
   const outgoing = edges.filter((edge) => String(edge?.source || "") === String(nodeId));
   const inputLines = incoming.map((edge) => {
     const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
@@ -2537,11 +2569,17 @@ function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
   ].join("\n");
 }
 
-function workspaceTaskUpstreamText(graph, nodeId, outputs) {
+function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = null) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
-  const contentEdges = incoming.filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
+  let contentEdges = incoming.filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
+  if (relevantInputNames && relevantInputNames.size) {
+    contentEdges = contentEdges.filter((edge) => {
+      const slot = workspaceTargetSlotForEdge(graph, edge);
+      return relevantInputNames.has(String(slot?.name || "").trim());
+    });
+  }
   const contentEdge = contentEdges.find((edge) => String(edge?.targetHandle || "") === "input-1") || contentEdges[0];
   if (!contentEdge) return "";
   return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
@@ -2755,10 +2793,11 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null)
 function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "") {
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
+  const { values: relevantInputValues, placeholders } = workspaceRelevantInputValues(instance.body || "", inputValues);
   const label = String(instance.label || nodeId).trim();
-  const scopeGuardrails = workspaceNodeScopeGuardrails(graph, nodeId, inputValues);
-  const connectionContext = workspaceNodeConnectionContextBlock(graph, nodeId);
-  const resolvedInputs = workspaceResolvedInputValuesBlock(inputValues);
+  const scopeGuardrails = workspaceNodeScopeGuardrails(graph, nodeId, relevantInputValues, placeholders);
+  const connectionContext = workspaceNodeConnectionContextBlock(graph, nodeId, placeholders);
+  const resolvedInputs = workspaceResolvedInputValuesBlock(relevantInputValues);
   const tmpDirectory = workspaceNodeTmpDirectoryBlock(nodeTmpDir);
   const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
@@ -2766,6 +2805,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
     "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
     "按 Workspace 输出协议返回该节点要传给下游展示/后续节点的数据。",
     scopeGuardrails,
+    placeholders.size ? "当前节点任务只显式引用了上述已解析输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为本节点分析依据。" : "",
     connectionContext ? `\n${connectionContext}` : "",
     tmpDirectory ? `\n${tmpDirectory}` : "",
     workspaceSearchGuardrailsBlock(),
@@ -3244,8 +3284,9 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
 
     const prepareStartedAt = Date.now();
-    const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs);
     const inputValues = workspaceInputValues(graph, nodeId, outputs);
+    const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
+    const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders);
     const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
     if (defId === "agent_subAgent" && !body && !String(upstreamText || "").trim()) {
       throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
