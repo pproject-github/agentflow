@@ -2316,6 +2316,20 @@ function workspaceDownstreamDisplayRequirements(graph, nodeId) {
   ].join("\n");
 }
 
+function workspaceDisplayRequirementsSummary(graph, nodeId) {
+  const bindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  if (bindings.length === 0) return "";
+  const seen = new Set();
+  const rules = [];
+  for (const binding of bindings) {
+    const key = `${binding.field}:${binding.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(workspaceDisplayFieldRule(binding.kind, binding.field, binding.name));
+  }
+  return rules.join("\n");
+}
+
 function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}, relevantInputNames = null) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const inputNames = Object.keys(inputValues || {}).filter(Boolean);
@@ -2555,6 +2569,17 @@ function workspaceResolvedInputValuesBlock(inputValues = {}) {
   return ["## 已解析业务输入槽", "", ...lines].join("\n");
 }
 
+function workspaceAgentInputBlock(inputValues = {}) {
+  const entries = Object.entries(inputValues || {}).filter(([name, value]) => String(name || "").trim() && String(value || "").trim());
+  if (!entries.length) return "## 输入\n\n无。";
+  const lines = entries.map(([name, value]) => {
+    const text = String(value || "");
+    const clipped = text.length > 6000 ? `${text.slice(0, 6000)}\n...[已截断 ${text.length - 6000} 字]` : text;
+    return `### ${name}\n\n${clipped}`;
+  });
+  return ["## 输入", "", ...lines].join("\n");
+}
+
 function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
   const dir = String(nodeTmpDir || "").trim();
   if (!dir) return "";
@@ -2567,6 +2592,26 @@ function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
     "- 不要自行删除该目录或其中的最终待读文件；AgentFlow 会在节点运行结束后统一清理。",
     "- 短文本结果可直接输出；长 HTML/Markdown/SQL 等正式 artifact 应写入 workspace 的 `outputs/` 目录并返回相对路径，不要为了输出而写临时文件、cat 文件再粘贴。",
   ].join("\n");
+}
+
+function workspaceNodeFileBoundaryBlock(runPackage = {}) {
+  const nodeRunDir = String(runPackage?.nodeRunDir || "").trim();
+  const nodeTmpDir = String(runPackage?.nodeTmpDir || "").trim();
+  const outputsRel = String(runPackage?.outputsRel || "outputs").trim() || "outputs";
+  const workspaceLink = String(runPackage?.workspaceLink || "").trim();
+  const pipelineLink = String(runPackage?.pipelineLink || "").trim();
+  if (!nodeRunDir && !nodeTmpDir) return "";
+  return [
+    "## 文件边界",
+    "",
+    nodeRunDir ? `- 当前执行目录是本节点 run package：\`${nodeRunDir}\`。` : "",
+    nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
+    `- 正式产物写入 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时使用 workspace 相对路径。`,
+    workspaceLink ? `- 如任务明确需要读取业务工作目录，可从 \`${workspaceLink}\` 进入；不要扫描未明确要求的图文件、历史 run/log。` : "",
+    pipelineLink && pipelineLink !== workspaceLink ? `- 当前 pipeline workspace 可从 \`${pipelineLink}\` 进入。` : "",
+    "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
+    "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
+  ].filter(Boolean).join("\n");
 }
 
 function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = null) {
@@ -2794,29 +2839,24 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const { values: relevantInputValues, placeholders } = workspaceRelevantInputValues(instance.body || "", inputValues);
-  const label = String(instance.label || nodeId).trim();
-  const scopeGuardrails = workspaceNodeScopeGuardrails(graph, nodeId, relevantInputValues, placeholders);
-  const connectionContext = workspaceNodeConnectionContextBlock(graph, nodeId, placeholders);
-  const resolvedInputs = workspaceResolvedInputValuesBlock(relevantInputValues);
-  const tmpDirectory = workspaceNodeTmpDirectoryBlock(nodeTmpDir);
-  const downstreamRequirements = workspaceDownstreamDisplayRequirements(graph, nodeId);
+  const runPackage = typeof nodeTmpDir === "object" && nodeTmpDir ? nodeTmpDir : { nodeTmpDir: String(nodeTmpDir || "") };
+  const inputBlock = workspaceAgentInputBlock(relevantInputValues);
+  const fileBoundary = workspaceNodeFileBoundaryBlock(runPackage);
+  const downstreamRequirements = workspaceDisplayRequirementsSummary(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
-    "你正在执行 AgentFlow Workspace 画布中的一个临时节点。",
-    "按 Workspace 输出协议返回该节点要传给下游展示/后续节点的数据。",
-    scopeGuardrails,
-    placeholders.size ? "当前节点任务只显式引用了上述已解析输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为本节点分析依据。" : "",
-    connectionContext ? `\n${connectionContext}` : "",
-    tmpDirectory ? `\n${tmpDirectory}` : "",
+    "你正在执行一个独立任务。只使用本提示中的任务、输入、已加载能力和文件边界；不要根据整张 workspace 图、其它未连接节点、历史 run/log 或下游展示内容补全业务事实。",
+    "执行过程中不要发送 assistant 进度说明或寒暄；最终只输出正文或 agentflow envelope。",
     workspaceSearchGuardrailsBlock(),
-    resolvedInputs ? `\n${resolvedInputs}` : "",
-    skillsBlock ? `\n## 上游已加载 Skills\n\n${skillsBlock}` : "",
-    mcpBlock ? `\n## 上游已加载 MCP\n\n${mcpBlock}` : "",
-    upstreamText ? `\n## 上游上下文\n\n${upstreamText}` : "",
-    downstreamRequirements ? `\n${downstreamRequirements}` : "",
+    fileBoundary ? `\n${fileBoundary}` : "",
+    inputBlock ? `\n${inputBlock}` : "",
+    placeholders.size ? "\n任务只显式引用了上面的输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为分析依据。" : "",
+    skillsBlock ? `\n## 已加载 Skills\n\n${skillsBlock}` : "",
+    mcpBlock ? `\n## 已加载 MCP\n\n${mcpBlock}` : "",
+    upstreamText ? `\n## 上游正文\n\n${upstreamText}` : "",
+    downstreamRequirements ? `\n## 输出展示要求\n\n${downstreamRequirements}` : "",
     outputProtocolRequirements ? `\n${outputProtocolRequirements}` : "",
-    `\n## 当前节点\n\n- id: ${nodeId}\n- label: ${label}\n- definitionId: ${instance.definitionId || ""}`,
-    `\n## 节点任务\n\n${body || upstreamText}`,
+    `\n## 任务\n\n${body || upstreamText}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -2906,6 +2946,55 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   const dir = path.join(path.resolve(runTmpRoot), workspaceSanitizeTmpSegment(nodeId, "node"));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function workspaceEnsureSymlink(target, linkPath) {
+  try {
+    if (fs.existsSync(linkPath)) return;
+    fs.symlinkSync(target, linkPath, "dir");
+  } catch {
+    // Symlinks are a convenience for the agent; env vars and absolute paths remain authoritative.
+  }
+}
+
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd, task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
+  const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
+  const nodeTmpDir = path.join(nodeRunDir, "tmp");
+  const outputsDir = path.join(path.resolve(scopedRoot), "outputs");
+  const workspaceRoot = path.resolve(cwd || scopedRoot);
+  const pipelineRoot = path.resolve(scopedRoot);
+  fs.mkdirSync(nodeTmpDir, { recursive: true });
+  fs.mkdirSync(outputsDir, { recursive: true });
+  workspaceEnsureSymlink(outputsDir, path.join(nodeRunDir, "outputs"));
+  workspaceEnsureSymlink(workspaceRoot, path.join(nodeRunDir, "workspace"));
+  if (workspaceRoot !== pipelineRoot) workspaceEnsureSymlink(pipelineRoot, path.join(nodeRunDir, "pipeline"));
+  const manifest = {
+    version: 1,
+    nodeId: String(nodeId || ""),
+    nodeRunDir,
+    nodeTmpDir,
+    outputsDir,
+    workspaceRoot,
+    pipelineRoot,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    fs.writeFileSync(path.join(nodeRunDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf-8");
+    fs.writeFileSync(path.join(nodeRunDir, "task.md"), String(task || "").trimEnd() + "\n", "utf-8");
+    if (Object.keys(inputValues || {}).length) {
+      fs.writeFileSync(path.join(nodeRunDir, "inputs.json"), JSON.stringify(inputValues, null, 2) + "\n", "utf-8");
+    }
+    if (skillsBlock) fs.writeFileSync(path.join(nodeRunDir, "skills.md"), String(skillsBlock).trimEnd() + "\n", "utf-8");
+    if (mcpBlock) fs.writeFileSync(path.join(nodeRunDir, "mcp.md"), String(mcpBlock).trimEnd() + "\n", "utf-8");
+  } catch {
+    // Runtime metadata is best-effort and should not block node execution.
+  }
+  return {
+    ...manifest,
+    outputsRel: "outputs",
+    workspaceLink: "workspace/",
+    pipelineLink: workspaceRoot !== pipelineRoot ? "pipeline/" : "workspace/",
+  };
 }
 
 function workspaceShouldKeepTmp(userCtx = {}) {
@@ -3294,9 +3383,27 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
-    const nodeTmpDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues, nodeTmpDir);
-    emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, { promptChars: prompt.length, upstreamChars: String(upstreamText || "").length, skillsChars: promptSkillsBlock.length, mcpChars: promptMcpBlock.length });
+    const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
+      scopedRoot,
+      cwd,
+      task: body || upstreamText,
+      inputValues: relevantInputs.values,
+      skillsBlock: promptSkillsBlock,
+      mcpBlock: promptMcpBlock,
+    });
+    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues, runPackage);
+    try {
+      fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
+    } catch {
+      // Best-effort debug artifact only.
+    }
+    emitTiming(nodeId, "prepare-agent-prompt", prepareStartedAt, {
+      promptChars: prompt.length,
+      upstreamChars: String(upstreamText || "").length,
+      skillsChars: promptSkillsBlock.length,
+      mcpChars: promptMcpBlock.length,
+      nodeRunDir: runPackage.nodeRunDir,
+    });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
     const maxAttempts = 3;
@@ -3305,15 +3412,21 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       try {
         const spawnStartedAt = Date.now();
         let firstAgentEventSeen = false;
+        let attemptResultContent = "";
+        let attemptLastAssistantContent = "";
         const handle = startComposerAgent({
           uiWorkspaceRoot: scopedRoot,
-          cliWorkspace: cwd,
+          cliWorkspace: runPackage.nodeRunDir,
           prompt,
           modelKey,
           agentflowUserId: userCtx.userId || "",
           extraEnv: {
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
-            AGENTFLOW_NODE_TMP_DIR: nodeTmpDir,
+            AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
+            AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
+            AGENTFLOW_WORKSPACE_ROOT: cwd,
+            AGENTFLOW_PIPELINE_WORKSPACE: scopedRoot,
+            AGENTFLOW_OUTPUTS_DIR: runPackage.outputsDir,
           },
           onStreamEvent: (ev) => {
             if (!firstAgentEventSeen) {
@@ -3325,7 +3438,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
               : { ...ev, nodeId };
             emit(eventToEmit);
             if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
+              attemptLastAssistantContent = ev.text;
               attemptContent += (attemptContent ? "\n" : "") + ev.text;
+            } else if (ev?.type === "natural" && ev.kind === "result" && typeof ev.text === "string") {
+              attemptResultContent = ev.text;
             }
           },
           onToolCall: (subtype, toolName) => {
@@ -3342,7 +3458,11 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           if (typeof opts.onActiveChild === "function") opts.onActiveChild(null);
         }
         throwIfAborted();
-        content = workspaceCanonicalAgentOutput(attemptContent);
+        const resultStructured = attemptResultContent ? workspaceStructuredAgentOutput(attemptResultContent) : null;
+        const assistantStructured = attemptLastAssistantContent ? workspaceStructuredAgentOutput(attemptLastAssistantContent) : null;
+        if (resultStructured?.structured) content = workspaceCanonicalAgentOutput(attemptResultContent);
+        else if (assistantStructured?.structured) content = workspaceCanonicalAgentOutput(attemptLastAssistantContent);
+        else content = workspaceCanonicalAgentOutput(attemptLastAssistantContent || attemptContent);
         break;
       } catch (e) {
         if (signal?.aborted || e?.code === "WORKSPACE_RUN_ABORTED") throwIfAborted();
