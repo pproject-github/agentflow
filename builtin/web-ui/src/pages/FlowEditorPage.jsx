@@ -3122,6 +3122,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const nextData = {
       ...soleSelectedNode.data,
       label: nodePropDraft.label.trim() || trimmedNew,
+      displayLabel: nodePropDraft.label.trim() || trimmedNew,
       role,
       model: modelTrim === "" || modelTrim === "default" ? undefined : modelTrim,
       body: isProvideDef ? "" : nodePropDraft.body,
@@ -3209,6 +3210,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const nextData = {
       ...soleSelectedNode.data,
       label: labelVal,
+      displayLabel: labelVal,
       role,
       model: modelVal,
       body: isProvideDef ? "" : nodePropDraft.body,
