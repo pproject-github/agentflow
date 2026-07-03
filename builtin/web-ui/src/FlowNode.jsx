@@ -359,6 +359,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         (nodeStatus === "running" && !isExecuting ? " af-flow-node--running-disk" : "") +
         (isDim ? " af-flow-node--dim" : "") +
         (hasInlineBodyEditor ? " af-flow-node--inline-body-editor" : "") +
+        (isProvideText ? " af-flow-node--provide-text" : "") +
         " af-flow-node--" + schemaType.replace(/[^a-z0-9_-]/g, "")
       }
       data-schema={schemaType}
