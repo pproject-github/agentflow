@@ -12647,6 +12647,12 @@ button.af-exec-history-card {
   min-height: 0;
 }
 
+.af-flow-node--provide-text .af-flow-node__title-wrap {
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 0;
+}
+
 .af-flow-node__title {
   font-family: var(--af-headline);
   font-size: 0.78rem;
@@ -12794,6 +12800,13 @@ button.af-exec-history-card {
   line-height: 1.35;
   padding: 0.45rem 0.55rem;
   outline: none;
+}
+
+.af-flow-node--provide-text .af-flow-node__inline-text {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .af-flow-node__inline-text::-webkit-scrollbar,
