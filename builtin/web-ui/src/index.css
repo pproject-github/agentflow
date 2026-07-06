@@ -16191,6 +16191,11 @@ button.af-exec-history-card {
   min-height: 0;
 }
 
+.af-public-display-page--single .af-public-display-node--bare iframe {
+  height: 100%;
+  min-height: 0;
+}
+
 .af-public-display-page--slides .af-public-display-node {
   min-height: min(72vh, 48rem);
 }
