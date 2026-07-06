@@ -261,20 +261,25 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayNode({ node, shareId, style }) {
+function DisplayNode({ node, shareId, style, bare = false }) {
   const raw = displayContent(node);
   const content = node.kind === "html" ? normalizeHtmlDisplayContent(raw) : displayOutputEnvelopeContent(raw);
   const contentProblem = node.kind === "html" ? htmlContentProblem(content) : "";
   const bodyClassName = `af-public-display-node__body--${node.kind || "unknown"}`;
   return (
-    <section className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}`} style={style}>
-      <div className="af-public-display-node__head">
-        <div className="af-public-display-node__title">
-          <span className="material-symbols-outlined" aria-hidden>{displayIcon(node.kind)}</span>
-          <strong>{node.label || node.id}</strong>
-          <em>{node.definitionId || node.kind || "display"}</em>
+    <section
+      className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}${bare ? " af-public-display-node--bare" : ""}`}
+      style={style}
+    >
+      {bare ? null : (
+        <div className="af-public-display-node__head">
+          <div className="af-public-display-node__title">
+            <span className="material-symbols-outlined" aria-hidden>{displayIcon(node.kind)}</span>
+            <strong>{node.label || node.id}</strong>
+            <em>{node.definitionId || node.kind || "display"}</em>
+          </div>
         </div>
-      </div>
+      )}
       <VisibleScrollFrame className={bodyClassName}>
         {contentProblem ? (
           <div className="af-public-display-empty">{contentProblem}</div>
@@ -397,13 +402,28 @@ export default function DisplayPage() {
 
   const layout = String(state.share?.layout || "").trim() || "gallery";
   if (layout !== "canvas") {
+    if (layout === "single") {
+      return (
+        <main className="af-public-display-page af-public-display-page--single">
+          <div className="af-public-display-grid">
+            {(state.nodes || []).map((node) => (
+              <DisplayNode
+                key={node.id}
+                node={node}
+                shareId={shareId}
+                style={publicDisplaySingleNodeStyle(node)}
+                bare
+              />
+            ))}
+          </div>
+        </main>
+      );
+    }
     const pageClass = layout === "slides"
       ? "af-public-display-page--slides"
       : layout === "document"
         ? "af-public-display-page--document"
-        : layout === "single"
-          ? "af-public-display-page--single"
-          : "af-public-display-page--gallery";
+        : "af-public-display-page--gallery";
     return (
       <main className={`af-public-display-page ${pageClass}`}>
         <header className="af-public-display-hero">
@@ -419,7 +439,6 @@ export default function DisplayPage() {
               key={node.id}
               node={node}
               shareId={shareId}
-              style={layout === "single" ? publicDisplaySingleNodeStyle(node) : undefined}
             />
           ))}
         </div>
