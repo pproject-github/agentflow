@@ -16169,11 +16169,13 @@ button.af-exec-history-card {
 }
 
 .af-public-display-page--single .af-public-display-grid {
-  grid-template-columns: minmax(0, 1fr);
-  width: min(1280px, 100%);
+  grid-template-columns: minmax(0, auto);
+  justify-content: center;
+  width: min(100%, 100%);
 }
 
 .af-public-display-page--single .af-public-display-node {
+  max-width: 100%;
   min-height: min(78vh, 56rem);
 }
 
