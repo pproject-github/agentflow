@@ -1,0 +1,28 @@
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_a65ae7045fcebe::t_f6d55c16aeb744 343,538,556,559,571,574,580,583,595
+  s_a65ae7045fcebe::t_453d420e89af6f 1136,1164,1786
+bin/lib/ui-server.mjs
+  s_a65ae7045fcebe::t_c2c259184242f2 261-262,264-266,270-294,416-421
+  s_a65ae7045fcebe::t_d7051a4a5ff03b 267-269
+  s_a65ae7045fcebe::t_805e40c2122d6a 100
+  s_a65ae7045fcebe::t_5d6bf9c6e6b6a1 5517-5520,5552-5555,6545-6548
+  s_a65ae7045fcebe::t_79c408325f54a1 263
+  s_a65ae7045fcebe::t_b914a4899400e8 5521-5522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "17dff26f87e7f693a02614412e764ab9055e1deb",
+  "prompts": {},
+  "logical_commit_id": "17dff26f87e7f693a02614412e764ab9055e1deb",
+  "sessions": {
+    "s_a65ae7045fcebe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f35b6-c15e-78c3-acc0-da40cb6cb285",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
