@@ -126,12 +126,13 @@ function isWorkspaceImageFile(file) {
   return WORKSPACE_IMAGE_EXTENSIONS.has(ext);
 }
 
-function workspaceRawFileUrl(src, flowParams) {
+function workspaceRawFileUrl(src, flowParams, opts = {}) {
   const text = String(src || "").trim();
   if (!text) return "";
   if (/^(?:https?:|data:|blob:|file:)/i.test(text) || text.startsWith("/")) return text;
   const q = flowParamsQuery(flowParams || {});
   q.set("path", text);
+  if (opts.download) q.set("download", "1");
   return `/api/workspace/file/raw?${q.toString()}`;
 }
 
@@ -1345,7 +1346,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (kind === "markdown") {
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown">
-        <MarkdownDisplayContent content={content} resolveSrc={(src) => workspaceRawFileUrl(src, flowParams)} />
+        <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
       </VisibleScrollFrame>
     );
   }
@@ -1409,7 +1410,7 @@ function DisplayPickerPreview({ node }) {
   if (kind === "markdown") {
     return (
       <div className="af-display-picker-preview__markdown">
-        <MarkdownDisplayContent content={content} resolveSrc={(src) => workspaceRawFileUrl(src, node?.data?.flowParams)} />
+        <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, node?.data?.flowParams, opts)} />
       </div>
     );
   }
@@ -1433,7 +1434,73 @@ function DisplayPickerPreview({ node }) {
 function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = false }) {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const scrollbarTrackRef = useRef(null);
   const [uploading, setUploading] = useState(false);
+  const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
+  const updateScrollbar = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const scrollHeight = Math.max(1, el.scrollHeight);
+    const clientHeight = Math.max(1, el.clientHeight);
+    const visible = scrollHeight > clientHeight + 1;
+    const height = visible ? Math.max(12, (clientHeight / scrollHeight) * 100) : 100;
+    const maxTop = Math.max(0, 100 - height);
+    const top = visible ? Math.min(maxTop, (el.scrollTop / Math.max(1, scrollHeight - clientHeight)) * maxTop) : 0;
+    setScrollbar({ visible, top, height });
+  }, []);
+  useEffect(() => {
+    const frame = requestAnimationFrame(updateScrollbar);
+    const textarea = textareaRef.current;
+    if (!textarea || typeof ResizeObserver === "undefined") {
+      return () => cancelAnimationFrame(frame);
+    }
+    const observer = new ResizeObserver(updateScrollbar);
+    observer.observe(textarea);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [updateScrollbar, value]);
+  const scrollToRatio = useCallback((ratio) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(1, Math.max(0, ratio)) * maxScroll;
+    updateScrollbar();
+  }, [updateScrollbar]);
+  const pointerRatioFromTrack = useCallback((clientY, grabOffsetPx = 0) => {
+    const track = scrollbarTrackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const thumbPx = (scrollbar.height / 100) * rect.height;
+    const maxTopPx = Math.max(1, rect.height - thumbPx);
+    return (clientY - rect.top - grabOffsetPx) / maxTopPx;
+  }, [scrollbar.height]);
+  const handleScrollbarPointerDown = useCallback((event) => {
+    if (!scrollbar.visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = scrollbarTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const thumbTopPx = (scrollbar.top / 100) * rect.height;
+    const thumbHeightPx = (scrollbar.height / 100) * rect.height;
+    const insideThumb = event.clientY >= rect.top + thumbTopPx && event.clientY <= rect.top + thumbTopPx + thumbHeightPx;
+    const grabOffsetPx = insideThumb ? event.clientY - rect.top - thumbTopPx : thumbHeightPx / 2;
+    scrollToRatio(pointerRatioFromTrack(event.clientY, grabOffsetPx));
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      scrollToRatio(pointerRatioFromTrack(moveEvent.clientY, grabOffsetPx));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [pointerRatioFromTrack, scrollToRatio, scrollbar.height, scrollbar.top, scrollbar.visible]);
   const insertText = useCallback((text) => {
     const current = String(value || "");
     const textarea = textareaRef.current;
@@ -1511,6 +1578,7 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
         className="af-work-display-editor__textarea"
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
+        onScroll={updateScrollbar}
         onKeyDown={(event) => {
           if (event.key === "Escape") event.stopPropagation();
         }}
@@ -1518,6 +1586,14 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
         spellCheck={false}
         readOnly={readOnly}
       />
+      <div
+        ref={scrollbarTrackRef}
+        className={"af-work-display-editor__scrollbar" + (scrollbar.visible ? " af-work-display-editor__scrollbar--visible" : "")}
+        onPointerDown={handleScrollbarPointerDown}
+        aria-hidden="true"
+      >
+        <span style={{ height: `${scrollbar.height}%`, top: `${scrollbar.top}%` }} />
+      </div>
     </div>
   );
 }
@@ -6602,22 +6678,24 @@ function WorkspacePageInner() {
             onConnectStart={isDisplayMode ? undefined : handleConnectStart}
             onConnectEnd={isDisplayMode ? undefined : handleConnectEnd}
             isValidConnection={isDisplayMode ? undefined : isValidConnection}
-            onNodeClick={(_, node) => {
+            onNodeClick={(event, node) => {
               if (isDisplayMode) {
                 setSelectedDisplayNodeIds([sourceIdFromDisplayRefId(node.id)]);
                 return;
               }
+              if (event.detail >= 3) {
+                setComposerSidebarOpen(false);
+                setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
+                setEdges((list) => list.map((item) => ({ ...item, selected: false })));
+                setSelectedNodeId(node.id);
+                return;
+              }
               // React Flow handles selection on click. If the properties drawer is already open,
-              // keep it in sync with the clicked node; otherwise opening requires double click.
+              // keep it in sync with the clicked node; otherwise opening requires triple click.
               if (selectedNodeId) setSelectedNodeId(node.id);
             }}
-            onNodeDoubleClick={(event, node) => {
+            onNodeDoubleClick={(event) => {
               event.preventDefault();
-              if (isDisplayMode) return;
-              setComposerSidebarOpen(false);
-              setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
-              setEdges((list) => list.map((item) => ({ ...item, selected: false })));
-              setSelectedNodeId(node.id);
             }}
             onPaneClick={() => {
               if (isDisplayMode) setSelectedDisplayNodeIds([]);
