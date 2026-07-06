@@ -1,0 +1,50 @@
+builtin/web-ui/dist/assets/index-BFZ6_IPB.css
+  s_a65ae7045fcebe::t_90f715211c955b 1
+builtin/web-ui/dist/assets/index-cXSDkE21.js
+  s_a65ae7045fcebe::t_afcce0262162d1 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-79,81,85-88,94-95,98,103,109-110,123,126-133,136,139-141,143,145,149,151,154,166-167,169,171-175,180-181,183,187,189,201,203,207,215,217,221,229-230,232-234,238,264
+builtin/web-ui/src/displayRenderers.jsx
+  s_a65ae7045fcebe::t_e5c22455a09aba 316-317,339,349
+  s_a65ae7045fcebe::t_e8d7ae91a75339 269-286,288-289,294-295,308,320,322
+  s_a65ae7045fcebe::t_7e89f27d169247 26-204,218-242,267,299-306,326-328
+  s_a65ae7045fcebe::t_f6734b8b5b1f7c 290-293,296,311
+  s_a65ae7045fcebe::t_efc5e6e898285d 287
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_a65ae7045fcebe::t_cc3f205bf52055 1437,1439-1503,1581,1589-1596
+  s_a65ae7045fcebe::t_c645c41d517cd9 6681,6684-6690,6694
+  s_a65ae7045fcebe::t_534c21efe9ba5d 1349,1413
+  s_a65ae7045fcebe::t_c4652c169ee17e 129,135
+  s_a65ae7045fcebe::t_52cfc4c2bc51d2 6697
+  s_a65ae7045fcebe::t_40366b89075951 6691-6692
+builtin/web-ui/src/index.css
+  s_a65ae7045fcebe::t_50a9abc6e7f72e 5751,11648,11650-11670,11672,11676-11686
+  s_a65ae7045fcebe::t_2e2df52487eb40 5240,5259,5261,5263-5265,5304-5342
+  s_a65ae7045fcebe::t_732f8e50c99d77 5753-5809,5811
+  s_a65ae7045fcebe::t_fe524f3e37c27a 5343-5344
+  s_a65ae7045fcebe::t_d84340fcee3c9c 5810
+  s_a65ae7045fcebe::t_274d3db9d17acc 11671
+  s_a65ae7045fcebe::t_ec81ee5b430bec 11687-11688
+bin/lib/ui-server.mjs
+  s_a65ae7045fcebe::t_7b15f768f1d6b0 2236-2239,2246
+builtin/web-ui/dist/index.html
+  s_a65ae7045fcebe::t_90f715211c955b 19
+  s_a65ae7045fcebe::t_afcce0262162d1 18
+builtin/web-ui/src/pages/DisplayPage.jsx
+  s_a65ae7045fcebe::t_16eee8018c1d31 155,162,166,169,287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "da1bee0e6556e105efbe5624e4f5e4e60fb9b5e8",
+  "prompts": {},
+  "logical_commit_id": "da1bee0e6556e105efbe5624e4f5e4e60fb9b5e8",
+  "sessions": {
+    "s_a65ae7045fcebe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f35b6-c15e-78c3-acc0-da40cb6cb285",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
