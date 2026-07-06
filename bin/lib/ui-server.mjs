@@ -2416,7 +2416,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   ].join("\n");
 }
 
-function workspaceRunPlan(graph, runNodeId) {
+function workspaceRunPlan(graph, runNodeId, scopedRoot = "") {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const target = String(runNodeId || "").trim();
@@ -2464,6 +2464,7 @@ function workspaceRunPlan(graph, runNodeId) {
     for (const edge of incoming.get(id) || []) {
       const source = String(edge?.source || "");
       if (!source || source === target || needed.has(source)) continue;
+      if (!workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot)) continue;
       addNeeded(source);
       if (needed.has(source)) dependencyQueue.push(source);
     }
@@ -2511,6 +2512,42 @@ function workspaceIsControlEdge(graph, edge) {
     workspaceIsControlInputSlot(workspaceTargetSlotForEdge(graph, edge));
 }
 
+function workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot = "") {
+  if (workspaceIsControlEdge(graph, edge)) return true;
+  return !workspaceEdgeHasCachedOutput(graph, edge, scopedRoot);
+}
+
+function workspaceEdgeHasCachedOutput(graph, edge, scopedRoot = "") {
+  const sourceId = String(edge?.source || "");
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const source = instances[sourceId];
+  if (!source) return false;
+  const slot = workspaceSourceSlotForEdge(graph, edge);
+  if (!isWorkspaceSemanticOutputSlot(slot) && slot && String(slot?.type || "") !== "node") {
+    const value = workspaceSlotValue(slot);
+    if (workspaceCachedOutputValueExists(value, scopedRoot)) return true;
+  }
+  const defId = String(source.definitionId || "");
+  if (workspaceDisplayKind(defId) && String(source.body || "").trim()) return true;
+  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file") {
+    return Boolean(String(workspaceInstanceText(source) || "").trim());
+  }
+  return false;
+}
+
+function workspaceCachedOutputValueExists(value, scopedRoot = "") {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const outputRel = workspaceSafeNodeOutputRelPath(text);
+  if (!outputRel) return true;
+  const root = path.resolve(scopedRoot || "");
+  if (!root) return false;
+  const abs = path.resolve(root, outputRel);
+  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (abs !== root && !abs.startsWith(rootWithSep)) return false;
+  return fs.existsSync(abs) && fs.statSync(abs).isFile();
+}
+
 function workspaceUpstreamText(graph, nodeId, outputs) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const incoming = edges
@@ -2539,13 +2576,17 @@ function isWorkspaceSemanticInputSlot(slot) {
   return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "workspaceContext" || name === "gitContext";
 }
 
-function workspaceAgentInputBlock(inputValues = {}) {
+function workspaceAgentInputBlock(inputValues = {}, inputMounts = {}) {
   const entries = Object.entries(inputValues || {}).filter(([name, value]) => String(name || "").trim() && String(value || "").trim());
   if (!entries.length) return "## 输入\n\n无。";
   const lines = entries.map(([name, value]) => {
     const text = String(value || "");
     const clipped = text.length > 6000 ? `${text.slice(0, 6000)}\n...[已截断 ${text.length - 6000} 字]` : text;
-    return `### ${name}\n\n${clipped}`;
+    const mount = inputMounts?.[name];
+    const mountNote = mount?.mounted
+      ? `\n\n> 源文件：\`${mount.source}\`\n> 已挂载为当前任务可读文件：\`${mount.mounted}\`。请读取挂载路径，不要修改源文件。`
+      : "";
+    return `### ${name}\n\n${clipped}${mountNote}`;
   });
   return ["## 输入", "", ...lines].join("\n");
 }
@@ -2560,6 +2601,7 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
     "",
     nodeRunDir ? `- 当前执行目录：\`${nodeRunDir}\`。` : "",
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
+    Object.keys(runPackage?.inputMounts || {}).length ? "- 已挂载的输入文件位于本任务 `inputs/`；`inputs/` 只用于读取，正式产物仍写入 `outputs/`。" : "",
     `- 正式产物写入本任务 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时仍使用 \`${outputsRel}/...\` 相对路径。`,
     "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
@@ -2613,6 +2655,18 @@ function workspaceResolveBodyPlaceholders(body, inputValues = {}) {
     if (!Object.prototype.hasOwnProperty.call(inputValues, name)) return match;
     return String(inputValues[name] ?? "");
   });
+}
+
+function workspacePromptUpstreamText(upstreamText, runPackage = {}) {
+  const raw = String(upstreamText || "").trim();
+  if (!raw) return "";
+  for (const [name, mount] of Object.entries(runPackage?.inputMounts || {})) {
+    if (!mount?.mounted) continue;
+    if (raw === String(mount.source || "").trim() || raw === String(mount.mounted || "").trim()) {
+      return `输入 \`${name}\` 已挂载为 \`${mount.mounted}\`。源文件：\`${mount.source}\`。`;
+    }
+  }
+  return upstreamText;
 }
 
 function parseWorkspaceSkillKeys(raw) {
@@ -2792,7 +2846,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const { values: relevantInputValues, placeholders } = workspaceRelevantInputValues(instance.body || "", inputValues);
   const runPackage = typeof nodeTmpDir === "object" && nodeTmpDir ? nodeTmpDir : { nodeTmpDir: String(nodeTmpDir || "") };
-  const inputBlock = workspaceAgentInputBlock(relevantInputValues);
+  const inputBlock = workspaceAgentInputBlock(relevantInputValues, runPackage.inputMounts || {});
   const fileBoundary = workspaceNodeFileBoundaryBlock(runPackage);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
@@ -2900,7 +2954,8 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = 
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
   const outputsDir = path.join(nodeRunDir, "outputs");
-  const workspaceOutputsDir = path.join(path.resolve(scopedRoot), "outputs");
+  const workspaceRoot = path.resolve(scopedRoot);
+  const workspaceOutputsDir = path.join(workspaceRoot, "outputs");
   fs.mkdirSync(nodeTmpDir, { recursive: true });
   fs.mkdirSync(outputsDir, { recursive: true });
   fs.mkdirSync(workspaceOutputsDir, { recursive: true });
@@ -2910,13 +2965,19 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = 
     nodeRunDir,
     nodeTmpDir,
     outputsDir,
+    workspaceRoot,
     createdAt: new Date().toISOString(),
   };
+  const materializedInputs = workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues);
+  const runtimeInputValues = { ...(inputValues || {}), ...(materializedInputs.values || {}) };
   try {
     fs.writeFileSync(path.join(nodeRunDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf-8");
     fs.writeFileSync(path.join(nodeRunDir, "task.md"), String(task || "").trimEnd() + "\n", "utf-8");
-    if (Object.keys(inputValues || {}).length) {
-      fs.writeFileSync(path.join(nodeRunDir, "inputs.json"), JSON.stringify(inputValues, null, 2) + "\n", "utf-8");
+    if (Object.keys(runtimeInputValues || {}).length) {
+      fs.writeFileSync(path.join(nodeRunDir, "inputs.json"), JSON.stringify(runtimeInputValues, null, 2) + "\n", "utf-8");
+    }
+    if (Object.keys(materializedInputs.mounts || {}).length) {
+      fs.writeFileSync(path.join(nodeRunDir, "inputs.manifest.json"), JSON.stringify(materializedInputs.mounts, null, 2) + "\n", "utf-8");
     }
     if (skillsBlock) fs.writeFileSync(path.join(nodeRunDir, "skills.md"), String(skillsBlock).trimEnd() + "\n", "utf-8");
     if (mcpBlock) fs.writeFileSync(path.join(nodeRunDir, "mcp.md"), String(mcpBlock).trimEnd() + "\n", "utf-8");
@@ -2927,7 +2988,57 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = 
     ...manifest,
     workspaceOutputsDir,
     outputsRel: "outputs",
+    inputValues: runtimeInputValues,
+    inputMounts: materializedInputs.mounts,
   };
+}
+
+function workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues = {}) {
+  const values = {};
+  const mounts = {};
+  for (const [name, value] of Object.entries(inputValues || {})) {
+    const slotName = String(name || "").trim();
+    if (!slotName) continue;
+    const rel = workspaceInputFileRelPath(value);
+    if (!rel) continue;
+    const src = path.resolve(workspaceRoot, rel);
+    const rootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
+    if (src !== workspaceRoot && !src.startsWith(rootWithSep)) continue;
+    if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
+    const stat = fs.statSync(src);
+    const mountedRel = path.join("inputs", workspaceSanitizeTmpSegment(slotName, "input"), path.basename(rel));
+    const dest = path.resolve(nodeRunDir, mountedRel);
+    const nodeRunWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+    if (dest !== nodeRunDir && !dest.startsWith(nodeRunWithSep)) continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    workspaceCopyInputFile(src, dest);
+    const mounted = mountedRel.split(path.sep).join(path.posix.sep);
+    values[slotName] = mounted;
+    mounts[slotName] = {
+      source: rel,
+      mounted,
+      bytes: stat.size,
+    };
+  }
+  return { values, mounts };
+}
+
+function workspaceCopyInputFile(src, dest) {
+  try {
+    fs.copyFileSync(src, dest, fs.constants.COPYFILE_FICLONE);
+  } catch {
+    fs.copyFileSync(src, dest);
+  }
+}
+
+function workspaceInputFileRelPath(value) {
+  const text = String(value || "").trim().replace(/^["']|["']$/g, "");
+  if (!text || text.length > 260) return "";
+  if (/[\r\n<>]/.test(text)) return "";
+  if (/^(?:https?:|data:|blob:|file:|javascript:|mailto:|tel:)/i.test(text)) return "";
+  const clean = text.replace(/^\/+/, "");
+  if (clean.includes("..") || clean.startsWith(".") || path.isAbsolute(clean)) return "";
+  return clean;
 }
 
 function workspaceShouldKeepTmp(userCtx = {}) {
@@ -2953,7 +3064,7 @@ function workspaceCleanupTmpRoot(runTmpRoot, userCtx = {}, emit = () => {}) {
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
   const runNodeId = String(payload?.runNodeId || "").trim();
-  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId);
+  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot);
   const signal = opts.signal || null;
   const throwIfAborted = () => {
     if (signal?.aborted) {
@@ -3316,22 +3427,29 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const inputValues = workspaceInputValues(graph, nodeId, outputs);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
     const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders);
-    const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
-    if (defId === "agent_subAgent" && !body && !String(upstreamText || "").trim()) {
-      throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
-    }
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
       scopedRoot,
       cwd,
-      task: body || upstreamText,
+      task: workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim() || upstreamText,
       inputValues: relevantInputs.values,
       skillsBlock: promptSkillsBlock,
       mcpBlock: promptMcpBlock,
     });
-    const prompt = workspaceNodePrompt(graph, nodeId, upstreamText, promptSkillsBlock, promptMcpBlock, inputValues, runPackage);
+    const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
+    const body = workspaceResolveBodyPlaceholders(instance.body || "", runtimeInputValues).trim();
+    const promptUpstreamText = workspacePromptUpstreamText(upstreamText, runPackage);
+    if (defId === "agent_subAgent" && !body && !String(promptUpstreamText || "").trim()) {
+      throw new Error(`Workspace node ${nodeId} has no task. Fill the node body or connect upstream text.`);
+    }
+    try {
+      fs.writeFileSync(path.join(runPackage.nodeRunDir, "task.md"), String(body || promptUpstreamText || "").trimEnd() + "\n", "utf-8");
+    } catch {
+      // Best-effort debug artifact only.
+    }
+    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
     } catch {
