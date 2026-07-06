@@ -207,6 +207,9 @@ function isLegacyWorkspaceRunLogText(text) {
 function workspaceRunActivityText(text) {
   const line = String(text || "").trim();
   if (!line) return "";
+  if (/^运行完成/.test(line)) return "运行完成";
+  if (/^运行暂停/.test(line)) return "运行暂停";
+  if (/^运行停止/.test(line)) return "运行停止";
   if (/^思考中/.test(line)) return "模型正在思考";
   if (/^生成回复中/.test(line)) return "模型正在生成回复";
   if (/^Timing\s+(.+?):\s+(\d+)ms/i.test(line)) {
@@ -229,6 +232,25 @@ function workspaceRunActivityText(text) {
   }
   if (/^\[stderr\]/.test(line)) return line;
   return "";
+}
+
+function formatWorkspaceRunDuration(ms) {
+  const value = Math.max(0, Number(ms) || 0);
+  if (value < 1000) return `${value}ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(value / 60_000);
+  const seconds = Math.round((value % 60_000) / 1000);
+  return `${minutes}m${seconds ? `${seconds}s` : ""}`;
+}
+
+function workspaceRunActivityLine(item, index) {
+  const text = typeof item === "string" ? item : String(item?.text || "");
+  const stepMs = typeof item === "object" ? Number(item?.stepMs) : NaN;
+  const totalMs = typeof item === "object" ? Number(item?.totalMs) : NaN;
+  const timing = Number.isFinite(stepMs) && Number.isFinite(totalMs)
+    ? `（+${formatWorkspaceRunDuration(stepMs)} / 总 ${formatWorkspaceRunDuration(totalMs)}）`
+    : "";
+  return `${index + 1}. ${text}${timing}`;
 }
 
 function extractThinkingDeltaFromRawTrace(event) {
@@ -3724,21 +3746,30 @@ function WorkspacePageInner() {
           return { ...session, messages: nextMessages.slice(-160) };
         }));
       };
-      const updateRunActivity = (text) => {
+      const updateRunActivity = (text, event = null) => {
         const activity = workspaceRunActivityText(text);
         if (!activity) return;
         setComposerRunSessions((list) => list.map((session) => {
           if (session.id !== runSessionId) return session;
+          const now = Number(event?.ts) || Date.now();
+          const startedAt = Number(session.startedAt) || now;
+          const previousAt = Number(session.lastActivityAt) || startedAt;
+          const stepMs = Math.max(0, now - previousAt);
+          const totalMs = Number.isFinite(Number(event?.runElapsedMs))
+            ? Math.max(0, Number(event.runElapsedMs))
+            : Math.max(0, now - startedAt);
           const currentActivities = Array.isArray(session.activities) ? session.activities : [];
-          const nextActivities = currentActivities[currentActivities.length - 1] === activity
+          const lastActivity = currentActivities[currentActivities.length - 1];
+          const lastActivityText = typeof lastActivity === "string" ? lastActivity : String(lastActivity?.text || "");
+          const nextActivities = lastActivityText === activity
             ? currentActivities
-            : [...currentActivities, activity].slice(-8);
+            : [...currentActivities, { text: activity, stepMs, totalMs, at: now }].slice(-8);
           const currentMessages = Array.isArray(session.messages) ? session.messages : [];
           const activityIndex = currentMessages.findIndex((msg) => msg.kind === "activity");
           const activityMessage = {
             role: "assistant",
             kind: "activity",
-            text: nextActivities.map((item, index) => `${index + 1}. ${item}`).join("\n"),
+            text: nextActivities.map((item, index) => workspaceRunActivityLine(item, index)).join("\n"),
             at: Date.now(),
           };
           const nextMessages = [...currentMessages];
@@ -3748,7 +3779,7 @@ function WorkspacePageInner() {
             const summaryIndex = nextMessages.findIndex((msg) => msg.kind === "run-summary");
             nextMessages.splice(summaryIndex >= 0 ? summaryIndex + 1 : 0, 0, activityMessage);
           }
-          return { ...session, activities: nextActivities, messages: nextMessages.slice(-160) };
+          return { ...session, activities: nextActivities, lastActivityAt: now, messages: nextMessages.slice(-160) };
         }));
       };
       const appendRawTrace = (event) => {
@@ -3857,6 +3888,7 @@ function WorkspacePageInner() {
           if (event.type === "stopped") {
             workspaceRunStoppedRef.current = true;
             finalOrder = Array.isArray(event.order) ? event.order : finalOrder;
+            updateRunActivity("运行停止", event);
             continue;
           }
           if (event.type === "node-start") {
@@ -3869,10 +3901,11 @@ function WorkspacePageInner() {
             updateRunStep(event.nodeId, event.definitionId, "done");
           }
           if (event.type === "status") {
-            updateRunActivity(event.line || event.message || "");
+            updateRunActivity(event.line || event.message || "", event);
           }
           if (event.type === "paused") {
             finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
+            updateRunActivity("运行暂停", event);
           }
           if (event.type === "natural") {
             if (event.kind === "thinking") appendThinkingText(event.text || "");
@@ -3888,6 +3921,7 @@ function WorkspacePageInner() {
             if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
             finalOrder = Array.isArray(event.order) ? event.order : [];
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
+            updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
           }
         }
       }
@@ -3896,6 +3930,7 @@ function WorkspacePageInner() {
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
         if (event.type === "stopped") {
           workspaceRunStoppedRef.current = true;
+          updateRunActivity("运行停止", event);
         }
         if (event.type === "node-start") {
           setStatus(`Running ${event.nodeId}...`);
@@ -3907,10 +3942,11 @@ function WorkspacePageInner() {
           updateRunStep(event.nodeId, event.definitionId, "done");
         }
         if (event.type === "status") {
-          updateRunActivity(event.line || event.message || "");
+          updateRunActivity(event.line || event.message || "", event);
         }
         if (event.type === "paused") {
           finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
+          updateRunActivity("运行暂停", event);
         }
         if (event.type === "natural") {
           if (event.kind === "thinking") appendThinkingText(event.text || "");
@@ -3926,6 +3962,7 @@ function WorkspacePageInner() {
           if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
           finalOrder = Array.isArray(event.order) ? event.order : [];
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
+          updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
         }
       }
       if (workspaceRunStoppedRef.current) {

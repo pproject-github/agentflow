@@ -2066,6 +2066,7 @@ function workspaceStructuredAgentOutput(content) {
     return { result: raw, outParams: {}, structured: false, parsed: null };
   }
   const hasEnvelope = Object.prototype.hasOwnProperty.call(parsed, "result") ||
+    Object.prototype.hasOwnProperty.call(parsed, "resultFile") ||
     Object.prototype.hasOwnProperty.call(parsed, "outParams");
   if (!hasEnvelope) return { result: raw, outParams: {}, structured: false, parsed };
   const outParamsRaw = parsed.outParams && typeof parsed.outParams === "object" && !Array.isArray(parsed.outParams)
@@ -2206,6 +2207,57 @@ function workspaceDisplayTextFilePath(value, kind = "") {
   return allowed.has(ext) ? clean : "";
 }
 
+function workspaceSafeNodeOutputRelPath(value) {
+  const text = String(value || "").trim().replace(/^["']|["']$/g, "");
+  if (!text || text.length > 260) return "";
+  if (/[\r\n<>]/.test(text)) return "";
+  if (/^(?:https?:|data:|blob:|file:|javascript:|mailto:|tel:)/i.test(text)) return "";
+  const clean = text.replace(/^\/+/, "");
+  if (clean.includes("..") || clean.startsWith(".") || path.isAbsolute(clean)) return "";
+  if (!clean.startsWith("outputs/")) return "";
+  return clean;
+}
+
+function workspacePublishNodeOutputFile(runPackage, relPath) {
+  if (!String(relPath || "").trim()) return "";
+  const clean = workspaceSafeNodeOutputRelPath(relPath);
+  if (!clean) throw new Error(`Agent returned an invalid output file path: ${String(relPath || "").trim()}`);
+  const nodeRunDir = path.resolve(runPackage?.nodeRunDir || "");
+  const workspaceOutputsDir = path.resolve(runPackage?.workspaceOutputsDir || "");
+  if (!nodeRunDir || !workspaceOutputsDir) return clean;
+  const src = path.resolve(nodeRunDir, clean);
+  const nodeRootWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+  if (src !== nodeRunDir && !src.startsWith(nodeRootWithSep)) {
+    throw new Error(`Invalid node output path: ${clean}`);
+  }
+  if (!fs.existsSync(src) || !fs.statSync(src).isFile()) {
+    throw new Error(`Agent returned resultFile but did not create it under node outputs: ${clean}`);
+  }
+  const destRel = clean.slice("outputs/".length);
+  const dest = path.resolve(workspaceOutputsDir, destRel);
+  const workspaceOutputsWithSep = workspaceOutputsDir.endsWith(path.sep) ? workspaceOutputsDir : `${workspaceOutputsDir}${path.sep}`;
+  if (dest !== workspaceOutputsDir && !dest.startsWith(workspaceOutputsWithSep)) {
+    throw new Error(`Invalid workspace output path: ${clean}`);
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+  return clean;
+}
+
+function workspacePublishAgentOutputFiles(structured, runPackage) {
+  if (!structured?.structured || !runPackage) return structured;
+  const resultFile = workspacePublishNodeOutputFile(runPackage, structured.resultFile);
+  const outParams = { ...(structured.outParams || {}) };
+  for (const [key, value] of Object.entries(outParams)) {
+    if (!String(key || "").endsWith("File")) continue;
+    const published = workspacePublishNodeOutputFile(runPackage, value);
+    if (published) outParams[key] = published;
+  }
+  return resultFile || Object.keys(outParams).length
+    ? { ...structured, result: resultFile || structured.result, resultFile: resultFile || structured.resultFile, outParams }
+    : structured;
+}
+
 function workspaceOutputFieldForSlot(slot, index = 0) {
   const name = String(slot?.name || "").trim();
   if (!name || name === "result" || name === "content" || index === 0) return "result";
@@ -2221,19 +2273,6 @@ function workspaceDisplayKindExample(kind, field) {
   if (kind === "image") return "<图片 URL 或 data URL>";
   if (kind === "markdown") return field === "result" ? "<给用户看的完整 Markdown 正文>" : "<Markdown 正文>";
   return `<${field} 的值>`;
-}
-
-function workspaceDisplayFieldRule(kind, field, slotName = "") {
-  const slotText = field === "result" ? "`result` 或 `resultFile`" : `\`${field}\` 或 \`${field}File\``;
-  const prefix = slotName ? `- 输出引脚 \`${slotName}\` 连接了 ${kind} 展示节点：` : `- 下游连接了 ${kind} 展示节点：`;
-  if (kind === "html") return `${prefix}将可直接放入 iframe 渲染的 HTML 放在 ${slotText} 中；内容较长时优先写入 outputs/*.html 并返回文件路径。不要使用 Markdown 代码围栏。`;
-  if (kind === "markdown") return `${prefix}将 Markdown 正文放在 ${slotText} 中；内容较长时优先写入 outputs/*.md 并返回文件路径。除非正文确实需要代码块，否则不要额外包裹代码围栏。`;
-  if (kind === "mermaid") return `${prefix}将 Mermaid 图表代码放在 ${slotText} 中，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。`;
-  if (kind === "ascii") return `${prefix}将纯文本/ASCII 图或表格放在 ${slotText} 中；不要输出 HTML 或 Markdown 装饰。`;
-  if (kind === "image") return `${prefix}将可作为 img src 使用的图片地址、data URL 或 base64 data URL 放在 ${slotText} 中；不要输出 Markdown 图片语法。`;
-  if (kind === "chart") return `${prefix}将 ChartSpec JSON 对象放在 ${slotText} 中。ChartSpec 必须包含 "type":"chart"、"version":"1.0"、"renderer":"echarts"、"option"；option.series[].type 只使用 line/bar/pie/scatter/radar/heatmap/tree/treemap/sunburst/sankey/graph/gauge/funnel；不要输出 HTML、script、iframe 或 JS 函数。`;
-  if (kind === "table") return `${prefix}将表格数据放在 ${slotText} 中。推荐格式：{"columns":["列名1","列名2"],"rows":[["值1","值2"]]}；也可使用对象数组、Markdown 表格、CSV 或 TSV。不要输出 HTML。`;
-  return `${prefix}将展示内容放在 ${slotText} 中。`;
 }
 
 function workspaceDownstreamOutputDisplayBindings(graph, nodeId) {
@@ -2295,66 +2334,6 @@ function normalizeHtmlDisplayContent(content) {
   return text;
 }
 
-function workspaceDownstreamDisplayRequirements(graph, nodeId) {
-  const bindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
-  if (bindings.length === 0) return "";
-  const seen = new Set();
-  const rules = [];
-  for (const binding of bindings) {
-    const key = `${binding.field}:${binding.kind}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rules.push(workspaceDisplayFieldRule(binding.kind, binding.field, binding.name));
-  }
-  return [
-    "## 下游输出要求",
-    "",
-    ...rules,
-    "",
-    "这些要求按输出引脚分别生效：不要把非 `result` 引脚连接的展示内容误写到 `result`；具名引脚应写入 `outParams.<引脚名>`。",
-    "如果用户任务与下游展示格式没有冲突，优先满足上述格式要求；如果用户明确指定了其他格式，以用户任务为准。",
-  ].join("\n");
-}
-
-function workspaceDisplayRequirementsSummary(graph, nodeId) {
-  const bindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
-  if (bindings.length === 0) return "";
-  const seen = new Set();
-  const rules = [];
-  for (const binding of bindings) {
-    const key = `${binding.field}:${binding.kind}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rules.push(workspaceDisplayFieldRule(binding.kind, binding.field, binding.name));
-  }
-  return rules.join("\n");
-}
-
-function workspaceNodeScopeGuardrails(graph, nodeId, inputValues = {}, relevantInputNames = null) {
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const inputNames = Object.keys(inputValues || {}).filter(Boolean);
-  const inputNameSet = relevantInputNames && relevantInputNames.size ? relevantInputNames : new Set(inputNames);
-  const directInputEdges = edges
-    .filter((edge) => String(edge?.target || "") === String(nodeId))
-    .filter((edge) => {
-      const slot = workspaceTargetSlotForEdge(graph, edge);
-      if (isWorkspaceSemanticInputSlot(slot)) return false;
-      return !inputNameSet.size || inputNameSet.has(String(slot?.name || "").trim());
-    });
-  const upstreamNodeIds = Array.from(new Set(directInputEdges.map((edge) => String(edge?.source || "").trim()).filter(Boolean)));
-  return [
-    "## 当前节点上下文边界",
-    "",
-    "你只负责执行当前节点；`上游上下文`、已解析输入槽和节点任务就是本节点的业务上下文边界。",
-    upstreamNodeIds.length ? `当前直接上游节点：${upstreamNodeIds.map((id) => `\`${id}\``).join("、")}。` : "当前没有直接业务上游节点。",
-    inputNames.length ? `当前已解析输入槽：${inputNames.map((name) => `\`${name}\``).join("、")}。` : "当前没有已解析的具名业务输入槽。",
-    "不要为了理解本节点而读取或搜索整张 workspace、`workspace.graph.json`、正式 `flow.yaml`、历史 run/log 或其它未连接节点。",
-    "不要把下游展示节点已有内容、下游错误信息、其它分支节点内容当作本节点输入；下游输出要求只用于决定输出字段和格式。",
-    "只有当当前节点任务文本或上游输入明确要求读取/修改 `workspace.graph.json`、`flow.yaml` 或某个具体文件路径时，才可以打开对应文件。",
-    "如果完成任务所需信息不在当前节点任务、输入槽或上游上下文中，应明确说明缺少哪个上游输入，而不是扫描整张 workspace 猜测。",
-  ].join("\n");
-}
-
 function workspaceBodyPlaceholderNames(body) {
   const names = new Set();
   const raw = String(body || "");
@@ -2390,39 +2369,46 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
       return name && type !== "node" && name !== "next" && name !== "result" && name !== "content";
     })
     .map((slot) => String(slot.name).trim());
-  const outParamsExample = slots.length
-    ? Object.fromEntries(slots.map((name) => [name, workspaceDisplayKindExample(displayByField.get(`outParams.${name}`) || "", name)]))
-    : {};
-  const resultExample = workspaceDisplayKindExample(displayByField.get("result") || "markdown", "result");
-  const slotDisplayRules = displayBindings
-    .map((binding) => `- 输出引脚 \`${binding.name}\` -> ${binding.kind} 展示节点：写入 \`${binding.field}\`。`)
-    .filter((line, index, arr) => arr.indexOf(line) === index);
+  const resultKind = displayByField.get("result") || "";
+  const resultExtByKind = {
+    html: "html",
+    markdown: "md",
+    mermaid: "mmd",
+    ascii: "txt",
+    chart: "json",
+    table: "json",
+  };
+  const resultExt = resultExtByKind[resultKind] || "txt";
+  const resultFile = `outputs/result.${resultExt}`;
+  const resultKindText = resultKind ? ` ${resultKind}` : "";
+  const resultGuidance = {
+    html: "内容必须是可直接放入 iframe 渲染的 HTML；不要使用 Markdown 代码围栏。",
+    markdown: "内容必须是 Markdown 正文；除非正文确实需要代码块，否则不要额外包裹代码围栏。",
+    mermaid: "内容必须是 Mermaid 图表代码，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。",
+    ascii: "内容必须是纯文本/ASCII 图或表格；不要输出 HTML 或 Markdown 装饰。",
+    image: "内容必须是可作为 img src 使用的图片地址、data URL 或 base64 data URL；不要输出 Markdown 图片语法。",
+    chart: "内容必须是 ChartSpec JSON 对象，包含 type/version/renderer/option；不要输出 HTML、script、iframe 或 JS 函数。",
+    table: "内容必须是表格数据，推荐 JSON：{\"columns\":[...],\"rows\":[...]}；不要输出 HTML。",
+  }[resultKind] || "内容应满足任务要求。";
   const envelopeExample = [
     "---agentflow",
-    "resultFile: outputs/result.html",
+    `resultFile: ${resultFile}`,
     slots.length ? "outParams:" : "",
-    ...slots.slice(0, 3).map((name) => `  ${name}: <${name} 的短值>`),
+    ...slots.slice(0, 3).map((name) => {
+      const kind = displayByField.get(`outParams.${name}`) || "";
+      const ext = resultExtByKind[kind] || "txt";
+      return kind ? `  ${name}File: outputs/${name}.${ext}` : `  ${name}: <${name} 的短值>`;
+    }),
     "---end",
   ].filter(Boolean).join("\n");
   return [
-    "## Workspace 输出协议",
+    "## 输出",
     "",
-    "如果只有一个默认输出，直接输出正文即可，系统会写入 `result` / `content` 输出口。",
-    "如果需要多个输出，或需要返回文件路径，最后输出一个轻量 envelope；不要把大段 HTML/Markdown/SQL 包进 JSON 字符串。",
-    "长内容、HTML、Markdown、SQL、CSV、图片等 artifact 优先写入当前 workspace 的 `outputs/` 目录，然后在 `resultFile` 或 `outParams.<name>File` 返回相对路径。",
-    "普通 assistant 文本会被当作本节点输出内容；执行过程中不要发送进度说明、解释或寒暄，例如“正在读取/正在生成/准备输出”。需要思考时只使用内部 thinking，最终只发送正文或 envelope。",
-    "envelope 格式必须按下面这样独占多行输出；不要把 `---agentflow`、字段和 `---end` 写在同一行：",
+    `请把${resultKindText}结果写入 \`${resultFile}\`。${resultGuidance}`,
+    ...(slots.length ? [`额外输出：${slots.map((name) => `\`${name}\``).join("、")}。短值可写在 \`outParams\`，文件值写成 \`outParams.<name>File\`。`] : []),
+    "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
     "",
     envelopeExample,
-    "",
-    "- `result`：默认输出正文；`resultFile`：默认输出对应的 workspace 相对文件路径。",
-    "- `outParams`：具名输出参数；`outParams.<name>File`：具名输出对应的 workspace 相对文件路径。",
-    "- 旧格式 `{ \"result\": ..., \"outParams\": ... }` 仍兼容，但新输出优先使用正文或 envelope。",
-    ...(slotDisplayRules.length ? ["- 当前输出引脚与展示节点映射：", ...slotDisplayRules] : []),
-    ...(slots.length
-      ? [`- 当前节点具名输出槽：${slots.map((name) => `\`${name}\``).join("、")}。例如任务要求写入 \`${slots[0]}\` 时，放到 \`outParams.${slots[0]}\`；如果写成文件，放到 \`outParams.${slots[0]}File\`。`]
-      : ["- 当前节点没有额外具名输出槽；只有默认输出时不需要 envelope。"]),
-    "- 如果 `result` 需要承载表格、ChartSpec 等短结构化内容，可以直接输出对象或正文；系统会转换给下游展示节点。",
   ].join("\n");
 }
 
@@ -2508,67 +2494,6 @@ function isWorkspaceSemanticInputSlot(slot) {
   return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "workspaceContext" || name === "gitContext";
 }
 
-function workspaceNodeBrief(graph, nodeId) {
-  const instance = graph?.instances?.[String(nodeId || "")] || {};
-  const label = String(instance?.label || nodeId || "").trim();
-  const defId = String(instance?.definitionId || "").trim();
-  return defId && defId !== label ? `${label || nodeId} (${defId})` : (label || nodeId);
-}
-
-function workspaceSlotBrief(slot, fallback) {
-  const name = String(slot?.name || "").trim();
-  const type = String(slot?.type || "").trim();
-  return `${name || fallback}${type ? `:${type}` : ""}`;
-}
-
-function workspaceNodeConnectionContextBlock(graph, nodeId, relevantInputNames = null) {
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const incoming = edges
-    .filter((edge) => String(edge?.target || "") === String(nodeId))
-    .filter((edge) => {
-      if (!relevantInputNames || !relevantInputNames.size) return true;
-      const targetSlot = workspaceTargetSlotForEdge(graph, edge);
-      if (isWorkspaceSemanticInputSlot(targetSlot)) return true;
-      return relevantInputNames.has(String(targetSlot?.name || "").trim());
-    });
-  const outgoing = edges.filter((edge) => String(edge?.source || "") === String(nodeId));
-  const inputLines = incoming.map((edge) => {
-    const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
-    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
-    const targetName = String(targetSlot?.name || "").trim();
-    const semantic = isWorkspaceSemanticInputSlot(targetSlot) ? "上下文输入" : "业务输入";
-    return `- ${workspaceNodeBrief(graph, edge.source)} \`${workspaceSlotBrief(sourceSlot, edge.sourceHandle || "output")}\` -> 当前 \`${workspaceSlotBrief(targetSlot, edge.targetHandle || "input")}\`（${semantic}${targetName ? `：${targetName}` : ""}）`;
-  });
-  const outputLines = outgoing.map((edge) => {
-    const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
-    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
-    const targetKind = workspaceDisplayKind(graph?.instances?.[String(edge?.target || "")]?.definitionId);
-    return `- 当前 \`${workspaceSlotBrief(sourceSlot, edge.sourceHandle || "output")}\` -> ${workspaceNodeBrief(graph, edge.target)} \`${workspaceSlotBrief(targetSlot, edge.targetHandle || "input")}\`${targetKind ? `（${targetKind} 展示）` : ""}`;
-  });
-  if (!inputLines.length && !outputLines.length) return "";
-  return [
-    "## 当前节点连线",
-    "",
-    inputLines.length ? "### 直接上游" : "",
-    ...inputLines,
-    outputLines.length ? "\n### 直接下游" : "",
-    ...outputLines,
-    "",
-    "只把直接上游的业务输入和上下文输入当作本节点依据；直接下游只用于确定输出字段和格式。",
-  ].filter(Boolean).join("\n");
-}
-
-function workspaceResolvedInputValuesBlock(inputValues = {}) {
-  const entries = Object.entries(inputValues || {}).filter(([name, value]) => String(name || "").trim() && String(value || "").trim());
-  if (!entries.length) return "";
-  const lines = entries.map(([name, value]) => {
-    const text = String(value || "");
-    const clipped = text.length > 6000 ? `${text.slice(0, 6000)}\n...[已截断 ${text.length - 6000} 字]` : text;
-    return `### ${name}\n\n${clipped}`;
-  });
-  return ["## 已解析业务输入槽", "", ...lines].join("\n");
-}
-
 function workspaceAgentInputBlock(inputValues = {}) {
   const entries = Object.entries(inputValues || {}).filter(([name, value]) => String(name || "").trim() && String(value || "").trim());
   if (!entries.length) return "## 输入\n\n无。";
@@ -2580,35 +2505,17 @@ function workspaceAgentInputBlock(inputValues = {}) {
   return ["## 输入", "", ...lines].join("\n");
 }
 
-function workspaceNodeTmpDirectoryBlock(nodeTmpDir) {
-  const dir = String(nodeTmpDir || "").trim();
-  if (!dir) return "";
-  return [
-    "## 临时文件目录",
-    "",
-    `- 本节点专用临时目录：\`${dir}\``,
-    "- 如果确实需要创建中间文件，只能写入该目录，路径也可通过环境变量 `AGENTFLOW_NODE_TMP_DIR` 获取。",
-    "- 不要在 workspace 根目录、业务仓库根目录或当前 cwd 下创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
-    "- 不要自行删除该目录或其中的最终待读文件；AgentFlow 会在节点运行结束后统一清理。",
-    "- 短文本结果可直接输出；长 HTML/Markdown/SQL 等正式 artifact 应写入 workspace 的 `outputs/` 目录并返回相对路径，不要为了输出而写临时文件、cat 文件再粘贴。",
-  ].join("\n");
-}
-
 function workspaceNodeFileBoundaryBlock(runPackage = {}) {
   const nodeRunDir = String(runPackage?.nodeRunDir || "").trim();
   const nodeTmpDir = String(runPackage?.nodeTmpDir || "").trim();
   const outputsRel = String(runPackage?.outputsRel || "outputs").trim() || "outputs";
-  const workspaceLink = String(runPackage?.workspaceLink || "").trim();
-  const pipelineLink = String(runPackage?.pipelineLink || "").trim();
   if (!nodeRunDir && !nodeTmpDir) return "";
   return [
     "## 文件边界",
     "",
-    nodeRunDir ? `- 当前执行目录是本节点 run package：\`${nodeRunDir}\`。` : "",
+    nodeRunDir ? `- 当前执行目录：\`${nodeRunDir}\`。` : "",
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
-    `- 正式产物写入 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时使用 workspace 相对路径。`,
-    workspaceLink ? `- 如任务明确需要读取业务工作目录，可从 \`${workspaceLink}\` 进入；不要扫描未明确要求的图文件、历史 run/log。` : "",
-    pipelineLink && pipelineLink !== workspaceLink ? `- 当前 pipeline workspace 可从 \`${pipelineLink}\` 进入。` : "",
+    `- 正式产物写入本任务 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时仍使用 \`${outputsRel}/...\` 相对路径。`,
     "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
   ].filter(Boolean).join("\n");
@@ -2842,19 +2749,15 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const runPackage = typeof nodeTmpDir === "object" && nodeTmpDir ? nodeTmpDir : { nodeTmpDir: String(nodeTmpDir || "") };
   const inputBlock = workspaceAgentInputBlock(relevantInputValues);
   const fileBoundary = workspaceNodeFileBoundaryBlock(runPackage);
-  const downstreamRequirements = workspaceDisplayRequirementsSummary(graph, nodeId);
   const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
   return [
-    "你正在执行一个独立任务。只使用本提示中的任务、输入、已加载能力和文件边界；不要根据整张 workspace 图、其它未连接节点、历史 run/log 或下游展示内容补全业务事实。",
-    "执行过程中不要发送 assistant 进度说明或寒暄；最终只输出正文或 agentflow envelope。",
-    workspaceSearchGuardrailsBlock(),
+    "你正在执行一个独立任务。只使用本提示中的任务、输入、可用能力和文件边界。",
     fileBoundary ? `\n${fileBoundary}` : "",
     inputBlock ? `\n${inputBlock}` : "",
     placeholders.size ? "\n任务只显式引用了上面的输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为分析依据。" : "",
-    skillsBlock ? `\n## 已加载 Skills\n\n${skillsBlock}` : "",
-    mcpBlock ? `\n## 已加载 MCP\n\n${mcpBlock}` : "",
+    skillsBlock ? `\n## 可用能力\n\n${skillsBlock}` : "",
+    mcpBlock ? `\n## 可用 MCP\n\n${mcpBlock}` : "",
     upstreamText ? `\n## 上游正文\n\n${upstreamText}` : "",
-    downstreamRequirements ? `\n## 输出展示要求\n\n${downstreamRequirements}` : "",
     outputProtocolRequirements ? `\n${outputProtocolRequirements}` : "",
     `\n## 任务\n\n${body || upstreamText}`,
   ].filter(Boolean).join("\n");
@@ -2948,34 +2851,20 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceEnsureSymlink(target, linkPath) {
-  try {
-    if (fs.existsSync(linkPath)) return;
-    fs.symlinkSync(target, linkPath, "dir");
-  } catch {
-    // Symlinks are a convenience for the agent; env vars and absolute paths remain authoritative.
-  }
-}
-
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd, task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
-  const outputsDir = path.join(path.resolve(scopedRoot), "outputs");
-  const workspaceRoot = path.resolve(cwd || scopedRoot);
-  const pipelineRoot = path.resolve(scopedRoot);
+  const outputsDir = path.join(nodeRunDir, "outputs");
+  const workspaceOutputsDir = path.join(path.resolve(scopedRoot), "outputs");
   fs.mkdirSync(nodeTmpDir, { recursive: true });
   fs.mkdirSync(outputsDir, { recursive: true });
-  workspaceEnsureSymlink(outputsDir, path.join(nodeRunDir, "outputs"));
-  workspaceEnsureSymlink(workspaceRoot, path.join(nodeRunDir, "workspace"));
-  if (workspaceRoot !== pipelineRoot) workspaceEnsureSymlink(pipelineRoot, path.join(nodeRunDir, "pipeline"));
+  fs.mkdirSync(workspaceOutputsDir, { recursive: true });
   const manifest = {
     version: 1,
     nodeId: String(nodeId || ""),
     nodeRunDir,
     nodeTmpDir,
     outputsDir,
-    workspaceRoot,
-    pipelineRoot,
     createdAt: new Date().toISOString(),
   };
   try {
@@ -2991,9 +2880,8 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd, ta
   }
   return {
     ...manifest,
+    workspaceOutputsDir,
     outputsRel: "outputs",
-    workspaceLink: "workspace/",
-    pipelineLink: workspaceRoot !== pipelineRoot ? "pipeline/" : "workspace/",
   };
 }
 
@@ -3061,9 +2949,16 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   };
   const outputs = new Map();
   const events = [];
+  const runStartedAt = Date.now();
   const emit = (event) => {
-    events.push(event);
-    if (typeof opts.onEvent === "function") opts.onEvent(event);
+    const now = Date.now();
+    const enriched = {
+      ...event,
+      ts: Number(event?.ts) || now,
+      runElapsedMs: Number.isFinite(event?.runElapsedMs) ? event.runElapsedMs : Math.max(0, now - runStartedAt),
+    };
+    events.push(enriched);
+    if (typeof opts.onEvent === "function") opts.onEvent(enriched);
   };
   const emitTiming = (nodeId, label, startedAt, extra = {}) => {
     const elapsedMs = Math.max(0, Date.now() - startedAt);
@@ -3424,8 +3319,6 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
             AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
             AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
-            AGENTFLOW_WORKSPACE_ROOT: cwd,
-            AGENTFLOW_PIPELINE_WORKSPACE: scopedRoot,
             AGENTFLOW_OUTPUTS_DIR: runPackage.outputsDir,
           },
           onStreamEvent: (ev) => {
@@ -3474,7 +3367,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         throw e;
       }
     }
-    const normalizedAgentOutput = workspaceStructuredAgentOutput(content);
+    const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
     const resultContent = normalizedAgentOutput.result || content;
     outputs.set(nodeId, resultContent);
     const slotUpdate = workspaceApplyAgentOutputSlots(instance, content);
