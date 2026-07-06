@@ -286,6 +286,57 @@ function normalizeMarkdownRelativePath(value, basePath = "") {
   return normalized.join("/");
 }
 
+function autoLinkBareUrls(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  return lines.map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    if (inFence) return line;
+    let out = "";
+    let i = 0;
+    let inlineCode = false;
+    while (i < line.length) {
+      const ch = line[i];
+      if (ch === "`") {
+        inlineCode = !inlineCode;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      const startsUrl = !inlineCode && /^https?:\/\//i.test(line.slice(i));
+      if (!startsUrl) {
+        out += ch;
+        i += 1;
+        continue;
+      }
+      const prev = i > 0 ? line[i - 1] : "";
+      if (prev === "(") {
+        out += ch;
+        i += 1;
+        continue;
+      }
+      let end = i;
+      while (end < line.length && !/\s|<|>/.test(line[end])) end += 1;
+      let url = line.slice(i, end);
+      let trailing = "";
+      while (/[.,;:!?)}\]]$/.test(url)) {
+        trailing = url.slice(-1) + trailing;
+        url = url.slice(0, -1);
+      }
+      if (!url) {
+        out += line.slice(i, end);
+      } else {
+        out += `[${url}](${url})${trailing}`;
+      }
+      i = end;
+    }
+    return out;
+  }).join("\n");
+}
+
 function markdownComponents(resolveSrc, inline = false, basePath = "") {
   const resolveLinkHref = (href) => {
     const text = String(href || "").trim();
@@ -314,7 +365,7 @@ function markdownComponents(resolveSrc, inline = false, basePath = "") {
 }
 
 function MarkdownInline({ children, resolveSrc, basePath = "" }) {
-  return <ReactMarkdown components={markdownComponents(resolveSrc, true, basePath)}>{String(children || "")}</ReactMarkdown>;
+  return <ReactMarkdown components={markdownComponents(resolveSrc, true, basePath)}>{autoLinkBareUrls(children)}</ReactMarkdown>;
 }
 
 export function MarkdownDisplayContent({ content, resolveSrc, basePath = "" }) {
@@ -327,7 +378,7 @@ export function MarkdownDisplayContent({ content, resolveSrc, basePath = "" }) {
           return <MermaidDisplayBlock key={`mermaid-${idx}`} code={block.text} />;
         }
         if (block.type !== "table") {
-          return <ReactMarkdown key={`md-${idx}`} components={components}>{block.text}</ReactMarkdown>;
+          return <ReactMarkdown key={`md-${idx}`} components={components}>{autoLinkBareUrls(block.text)}</ReactMarkdown>;
         }
         return (
           <div className="af-work-display-table-wrap" key={`table-${idx}`}>
