@@ -2122,7 +2122,9 @@ function workspaceExtractNamedOutputValue(content, slotName) {
 }
 
 function workspaceApplyAgentOutputSlots(instance, content) {
-  const structured = workspaceStructuredAgentOutput(content);
+  const structured = content && typeof content === "object" && !Array.isArray(content)
+    ? content
+    : workspaceStructuredAgentOutput(content);
   const text = String(structured.result || "").trim();
   let changed = false;
   const next = {
@@ -3372,7 +3374,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
     const resultContent = normalizedAgentOutput.result || content;
     outputs.set(nodeId, resultContent);
-    const slotUpdate = workspaceApplyAgentOutputSlots(instance, content);
+    const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
     if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
     const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
     if (slotUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
