@@ -386,6 +386,33 @@ export default function DisplayPage() {
     );
   }
 
+  const layout = String(state.share?.layout || "").trim() || "gallery";
+  if (layout !== "canvas") {
+    const pageClass = layout === "slides"
+      ? "af-public-display-page--slides"
+      : layout === "document"
+        ? "af-public-display-page--document"
+        : layout === "single"
+          ? "af-public-display-page--single"
+          : "af-public-display-page--gallery";
+    return (
+      <main className={`af-public-display-page ${pageClass}`}>
+        <header className="af-public-display-hero">
+          <div>
+            <p>AgentFlow Display</p>
+            <h1>{state.share?.title || "AgentFlow Display"}</h1>
+          </div>
+          {state.share?.expiresAt ? <span>有效期至 {new Date(state.share.expiresAt).toLocaleString()}</span> : null}
+        </header>
+        <div className="af-public-display-grid">
+          {(state.nodes || []).map((node) => (
+            <DisplayNode key={node.id} node={node} shareId={shareId} />
+          ))}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="af-public-display-page af-public-display-page--canvas">
       <ReactFlowProvider>

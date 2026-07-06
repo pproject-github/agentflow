@@ -1443,6 +1443,7 @@ function readWorkspaceGraph(workspaceRoot) {
 }
 
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
+const DISPLAY_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function displaySharesPath() {
   return path.join(getAgentflowDataRoot(), DISPLAY_SHARE_FILENAME);
@@ -1465,6 +1466,26 @@ function writeDisplayShares(shares) {
 
 function createDisplayShareId() {
   return crypto.randomBytes(12).toString("base64url");
+}
+
+function displayShareExpiresAt(now = new Date()) {
+  const time = now instanceof Date ? now.getTime() : Date.now();
+  return new Date(time + DISPLAY_SHARE_TTL_MS).toISOString();
+}
+
+function isDisplayShareExpired(share) {
+  const expiresAt = Date.parse(String(share?.expiresAt || ""));
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+}
+
+function getDisplayShareOrExpired(id) {
+  const shares = readDisplayShares();
+  const share = shares[id];
+  if (!share) return { shares, share: null, expired: false };
+  if (!isDisplayShareExpired(share)) return { shares, share, expired: false };
+  delete shares[id];
+  writeDisplayShares(shares);
+  return { shares, share: null, expired: true };
 }
 
 function normalizeDisplayShareNodeIds(ids, graph) {
@@ -1554,6 +1575,7 @@ function publicDisplayPayloadFromShare(root, share) {
         : null,
       createdAt: share.createdAt || "",
       updatedAt: share.updatedAt || "",
+      expiresAt: share.expiresAt || "",
     },
     nodes,
   };
@@ -3962,9 +3984,9 @@ export function startUiServer({
           json(res, 400, { error: "Missing display share id" });
           return;
         }
-        const share = readDisplayShares()[id];
+        const { share, expired } = getDisplayShareOrExpired(id);
         if (!share) {
-          json(res, 404, { error: "Display share not found" });
+          json(res, expired ? 410 : 404, { error: expired ? "Display share has expired" : "Display share not found" });
           return;
         }
         const payload = publicDisplayPayloadFromShare(root, share);
@@ -3986,9 +4008,9 @@ export function startUiServer({
           json(res, 400, { error: "Missing display share id" });
           return;
         }
-        const share = readDisplayShares()[id];
+        const { share, expired } = getDisplayShareOrExpired(id);
         if (!share) {
-          json(res, 404, { error: "Display share not found" });
+          json(res, expired ? 410 : 404, { error: expired ? "Display share has expired" : "Display share not found" });
           return;
         }
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -4429,7 +4451,8 @@ export function startUiServer({
         const shares = readDisplayShares();
         let id = createDisplayShareId();
         while (shares[id]) id = createDisplayShareId();
-        const now = new Date().toISOString();
+        const nowDate = new Date();
+        const now = nowDate.toISOString();
         const share = {
           id,
           userId: authUser.userId,
@@ -4437,10 +4460,11 @@ export function startUiServer({
           flowSource: scoped.flowSource || "user",
           archived: scoped.archived === true,
           title: String(payload.title || "").trim() || "AgentFlow Display",
-          layout: ["canvas", "gallery", "slides", "document"].includes(String(payload.layout || "")) ? String(payload.layout) : "canvas",
+          layout: ["canvas", "gallery", "slides", "document", "single"].includes(String(payload.layout || "")) ? String(payload.layout) : "canvas",
           nodeIds,
           createdAt: now,
           updatedAt: now,
+          expiresAt: displayShareExpiresAt(nowDate),
         };
         shares[id] = share;
         writeDisplayShares(shares);
