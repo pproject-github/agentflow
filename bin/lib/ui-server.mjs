@@ -2421,20 +2421,26 @@ function workspaceRunPlan(graph, runNodeId) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const target = String(runNodeId || "").trim();
   if (!target || !instances[target]) throw new Error("Missing workspace run node");
-  const upstream = new Map();
-  const downstream = new Map();
+  const incoming = new Map();
+  const controlDownstream = new Map();
+  const validEdges = [];
   for (const edge of edges) {
     const source = String(edge?.source || "");
     const dest = String(edge?.target || "");
     if (!source || !dest || !instances[source] || !instances[dest]) continue;
-    if (!upstream.has(dest)) upstream.set(dest, []);
-    upstream.get(dest).push(source);
-    if (!downstream.has(source)) downstream.set(source, []);
-    downstream.get(source).push(dest);
+    validEdges.push(edge);
+    if (!incoming.has(dest)) incoming.set(dest, []);
+    incoming.get(dest).push(edge);
+    if (workspaceIsControlEdge(graph, edge)) {
+      if (!controlDownstream.has(source)) controlDownstream.set(source, []);
+      controlDownstream.get(source).push(dest);
+    }
   }
   const needed = new Set();
   const pauseNodeIds = new Set();
-  const visit = (id) => {
+  // Downstream execution is selected only by control edges. Data/context edges
+  // are used later to pull in upstream dependencies for selected nodes.
+  const addNeeded = (id) => {
     if (!id || needed.has(id)) return;
     const defId = String(instances[id]?.definitionId || "");
     if (id !== target && defId === "workspace_run") {
@@ -2442,23 +2448,41 @@ function workspaceRunPlan(graph, runNodeId) {
       return;
     }
     needed.add(id);
-    for (const next of downstream.get(id) || []) visit(next);
   };
-  visit(target);
-  needed.delete(target);
-  const indegree = new Map(Array.from(needed).map((id) => [id, 0]));
-  for (const id of needed) {
-    for (const prev of upstream.get(id) || []) {
-      if (needed.has(prev)) indegree.set(id, (indegree.get(id) || 0) + 1);
+  const visitControlDownstream = (id) => {
+    for (const next of controlDownstream.get(id) || []) {
+      const before = needed.size;
+      addNeeded(next);
+      if (needed.size !== before) visitControlDownstream(next);
     }
+  };
+  visitControlDownstream(target);
+  needed.delete(target);
+  const dependencyQueue = Array.from(needed);
+  for (let i = 0; i < dependencyQueue.length; i++) {
+    const id = dependencyQueue[i];
+    for (const edge of incoming.get(id) || []) {
+      const source = String(edge?.source || "");
+      if (!source || source === target || needed.has(source)) continue;
+      addNeeded(source);
+      if (needed.has(source)) dependencyQueue.push(source);
+    }
+  }
+  const indegree = new Map(Array.from(needed).map((id) => [id, 0]));
+  const dependents = new Map(Array.from(needed).map((id) => [id, []]));
+  for (const edge of validEdges) {
+    const source = String(edge?.source || "");
+    const dest = String(edge?.target || "");
+    if (!needed.has(source) || !needed.has(dest)) continue;
+    indegree.set(dest, (indegree.get(dest) || 0) + 1);
+    dependents.get(source)?.push(dest);
   }
   const ready = Array.from(needed).filter((id) => (indegree.get(id) || 0) === 0);
   const ordered = [];
   while (ready.length) {
     const id = ready.shift();
     ordered.push(id);
-    for (const next of downstream.get(id) || []) {
-      if (!needed.has(next)) continue;
+    for (const next of dependents.get(id) || []) {
       const n = (indegree.get(next) || 0) - 1;
       indegree.set(next, n);
       if (n === 0) ready.push(next);
@@ -2468,6 +2492,23 @@ function workspaceRunPlan(graph, runNodeId) {
     throw new Error("Workspace run graph contains a cycle");
   }
   return { order: ordered, pauseNodeIds: Array.from(pauseNodeIds) };
+}
+
+function workspaceIsControlInputSlot(slot) {
+  const name = String(slot?.name || "");
+  const type = String(slot?.type || "");
+  return type === "node" || name === "prev" || name === "next";
+}
+
+function workspaceIsControlOutputSlot(slot) {
+  const name = String(slot?.name || "");
+  const type = String(slot?.type || "");
+  return type === "node" || name === "prev" || name === "next";
+}
+
+function workspaceIsControlEdge(graph, edge) {
+  return workspaceIsControlOutputSlot(workspaceSourceSlotForEdge(graph, edge)) ||
+    workspaceIsControlInputSlot(workspaceTargetSlotForEdge(graph, edge));
 }
 
 function workspaceUpstreamText(graph, nodeId, outputs) {
