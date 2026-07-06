@@ -43,9 +43,12 @@ import {
 import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
+  ARCHIVED_PIPELINES_DIR_NAME,
   getAgentflowDataRoot,
   getAgentflowUserConfigAbs,
   getAgentflowUserDataRoot,
+  getUserPipelinesRoot,
+  listAgentflowUserIds,
   getModelListsAbs,
   getRunDir,
 } from "./paths.mjs";
@@ -1462,6 +1465,120 @@ function writeDisplayShares(shares) {
   const file = displaySharesPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(shares && typeof shares === "object" ? shares : {}, null, 2) + "\n", "utf-8");
+}
+
+function countFlowYamlDirs(root) {
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return 0;
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.name !== ARCHIVED_PIPELINES_DIR_NAME)
+      .filter((entry) => fs.existsSync(path.join(root, entry.name, FLOW_YAML_FILENAME)))
+      .length;
+  } catch {
+    return 0;
+  }
+}
+
+function pipelineCountsForUser(userId) {
+  const pipelinesRoot = getUserPipelinesRoot(userId);
+  const active = countFlowYamlDirs(pipelinesRoot);
+  const archived = countFlowYamlDirs(path.join(pipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME));
+  return {
+    active,
+    archived,
+    total: active + archived,
+  };
+}
+
+function buildAdminUsageDashboard(workspaceRoot) {
+  const authUsers = readAuthUsers();
+  const userIds = Array.from(new Set([
+    ...Object.keys(authUsers || {}),
+    ...listAgentflowUserIds(),
+  ].map((id) => String(id || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const users = userIds.map((userId) => {
+    const user = authUsers[userId] || {};
+    const pipelineCounts = pipelineCountsForUser(userId);
+    const runs = listRecentRunsFromDisk(workspaceRoot, {
+      userId,
+      includeWorkspaceRuns: false,
+      includeLegacyUserRuns: false,
+    });
+    const statusCounts = {};
+    let totalDurationMs = 0;
+    for (const run of runs) {
+      const status = String(run.status || "unknown");
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+      totalDurationMs += Math.max(0, Number(run.durationMs || 0));
+    }
+    const lastRun = runs[0] || null;
+    return {
+      userId,
+      username: user.username || userId,
+      isAdmin: Boolean(user.isAdmin),
+      pipelines: pipelineCounts,
+      runs: {
+        total: runs.length,
+        running: statusCounts.running || 0,
+        success: statusCounts.success || 0,
+        failed: statusCounts.failed || 0,
+        stopped: statusCounts.stopped || 0,
+        interrupted: statusCounts.interrupted || 0,
+        unknown: statusCounts.unknown || 0,
+        totalDurationMs,
+        avgDurationMs: runs.length > 0 ? Math.round(totalDurationMs / runs.length) : 0,
+        lastRunAt: lastRun?.at || null,
+        lastRunFlowId: lastRun?.flowId || "",
+        lastRunStatus: lastRun?.status || "",
+        recent: runs.slice(0, 5).map((run) => ({
+          flowId: run.flowId,
+          flowSource: run.flowSource,
+          runId: run.runId,
+          at: run.at,
+          endedAt: run.endedAt,
+          durationMs: run.durationMs,
+          status: run.status,
+        })),
+      },
+    };
+  });
+  const totals = users.reduce((acc, user) => {
+    acc.users += 1;
+    acc.admins += user.isAdmin ? 1 : 0;
+    acc.pipelines += user.pipelines.total;
+    acc.activePipelines += user.pipelines.active;
+    acc.archivedPipelines += user.pipelines.archived;
+    acc.runs += user.runs.total;
+    acc.runningRuns += user.runs.running;
+    acc.successRuns += user.runs.success;
+    acc.failedRuns += user.runs.failed;
+    acc.stoppedRuns += user.runs.stopped;
+    acc.interruptedRuns += user.runs.interrupted;
+    acc.unknownRuns += user.runs.unknown;
+    acc.totalDurationMs += user.runs.totalDurationMs;
+    return acc;
+  }, {
+    users: 0,
+    admins: 0,
+    pipelines: 0,
+    activePipelines: 0,
+    archivedPipelines: 0,
+    runs: 0,
+    runningRuns: 0,
+    successRuns: 0,
+    failedRuns: 0,
+    stoppedRuns: 0,
+    interruptedRuns: 0,
+    unknownRuns: 0,
+    totalDurationMs: 0,
+  });
+  totals.avgDurationMs = totals.runs > 0 ? Math.round(totals.totalDurationMs / totals.runs) : 0;
+  return {
+    generatedAt: new Date().toISOString(),
+    totals,
+    users,
+  };
 }
 
 function createDisplayShareId() {
@@ -4110,6 +4227,19 @@ export function startUiServer({
         json(res, 200, { ok: true, config: result.config });
         return;
       }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/usage-dashboard") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        json(res, 200, buildAdminUsageDashboard(root));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
     }
 
     if (url.pathname === "/api/admin/user-allowlist") {

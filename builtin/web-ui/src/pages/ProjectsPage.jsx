@@ -113,6 +113,22 @@ function activityMatchesSearch(query, row) {
   return id.includes(q) || src.includes(q);
 }
 
+function compactNumber(value) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.max(0, Number(value || 0)));
+}
+
+function formatDurationShort(ms) {
+  const value = Math.max(0, Number(ms || 0));
+  if (!value) return "-";
+  const sec = Math.round(value / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hour = Math.round(min / 60);
+  if (hour < 48) return `${hour}h`;
+  return `${Math.round(hour / 24)}d`;
+}
+
 function resourceTextMatches(query, parts) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -377,6 +393,9 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const [hideCommunityLinks, setHideCommunityLinks] = useState(false);
   const [adminBuiltinBusy, setAdminBuiltinBusy] = useState("");
   const [adminBuiltinConfig, setAdminBuiltinConfig] = useState({ hiddenBuiltins: [], promoted: [] });
+  const [adminUsage, setAdminUsage] = useState(null);
+  const [adminUsageLoading, setAdminUsageLoading] = useState(false);
+  const [adminUsageError, setAdminUsageError] = useState("");
   const dragDepthRef = useRef(0);
   const mountIdRef = useRef(0);
   const resourceLoadIdRef = useRef(0);
@@ -411,8 +430,13 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       setRecentRuns([]);
     }
     if (authUser?.isAdmin) {
+      setAdminUsageLoading(true);
+      setAdminUsageError("");
       try {
-        const rAdmin = await fetch("/api/admin/builtin-flows");
+        const [rAdmin, rUsage] = await Promise.all([
+          fetch("/api/admin/builtin-flows"),
+          fetch("/api/admin/usage-dashboard"),
+        ]);
         if (myId !== mountIdRef.current) return;
         const jAdmin = await rAdmin.json().catch(() => ({}));
         if (rAdmin.ok) {
@@ -421,12 +445,27 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
             promoted: Array.isArray(jAdmin?.config?.promoted) ? jAdmin.config.promoted : [],
           });
         }
+        const jUsage = await rUsage.json().catch(() => ({}));
+        if (rUsage.ok) {
+          setAdminUsage(jUsage);
+          setAdminUsageError("");
+        } else {
+          setAdminUsage(null);
+          setAdminUsageError(jUsage.error || "加载全局看板失败");
+        }
       } catch {
         if (myId !== mountIdRef.current) return;
         setAdminBuiltinConfig({ hiddenBuiltins: [], promoted: [] });
+        setAdminUsage(null);
+        setAdminUsageError("加载全局看板失败");
+      } finally {
+        if (myId === mountIdRef.current) setAdminUsageLoading(false);
       }
     } else {
       setAdminBuiltinConfig({ hiddenBuiltins: [], promoted: [] });
+      setAdminUsage(null);
+      setAdminUsageLoading(false);
+      setAdminUsageError("");
     }
     setLoaded(true);
   }, [authUser?.isAdmin]);
@@ -1346,6 +1385,96 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
             </div>
           ) : (
             <>
+            {authUser?.isAdmin && filter === "all" ? (
+              <div className="af-project-admin-usage">
+                <div className="af-project-admin-usage__head">
+                  <div>
+                    <strong>全局使用看板</strong>
+                    <span>观察各用户的流水线数量、Run 次数与最近运行状态。</span>
+                  </div>
+                  <button type="button" onClick={() => void loadFlows()} disabled={adminUsageLoading}>
+                    <span className="material-symbols-outlined" aria-hidden>refresh</span>
+                    {adminUsageLoading ? "刷新中" : "刷新"}
+                  </button>
+                </div>
+                {adminUsageError ? <div className="af-project-admin-usage__error">{adminUsageError}</div> : null}
+                <div className="af-project-admin-usage__stats">
+                  <div>
+                    <span>用户</span>
+                    <strong>{compactNumber(adminUsage?.totals?.users)}</strong>
+                  </div>
+                  <div>
+                    <span>流水线</span>
+                    <strong>{compactNumber(adminUsage?.totals?.pipelines)}</strong>
+                    <em>{compactNumber(adminUsage?.totals?.activePipelines)} active</em>
+                  </div>
+                  <div>
+                    <span>Run 次数</span>
+                    <strong>{compactNumber(adminUsage?.totals?.runs)}</strong>
+                    <em>{compactNumber(adminUsage?.totals?.runningRuns)} running</em>
+                  </div>
+                  <div>
+                    <span>失败/中断</span>
+                    <strong>{compactNumber((adminUsage?.totals?.failedRuns || 0) + (adminUsage?.totals?.interruptedRuns || 0))}</strong>
+                    <em>avg {formatDurationShort(adminUsage?.totals?.avgDurationMs)}</em>
+                  </div>
+                </div>
+                <div className="af-project-admin-usage__table-wrap">
+                  <table className="af-project-admin-usage__table">
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Pipeline</th>
+                        <th>Runs</th>
+                        <th>状态</th>
+                        <th>最近运行</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsageLoading && !adminUsage ? (
+                        <tr><td colSpan={5}>正在加载...</td></tr>
+                      ) : (adminUsage?.users || []).length === 0 ? (
+                        <tr><td colSpan={5}>暂无用户数据</td></tr>
+                      ) : (
+                        (adminUsage?.users || []).map((row) => (
+                          <tr key={row.userId}>
+                            <td>
+                              <strong>{row.username || row.userId}</strong>
+                              <span>{row.userId}{row.isAdmin ? " · admin" : ""}</span>
+                            </td>
+                            <td>
+                              <strong>{compactNumber(row.pipelines?.total)}</strong>
+                              <span>{compactNumber(row.pipelines?.active)} active / {compactNumber(row.pipelines?.archived)} archived</span>
+                            </td>
+                            <td>
+                              <strong>{compactNumber(row.runs?.total)}</strong>
+                              <span>avg {formatDurationShort(row.runs?.avgDurationMs)}</span>
+                            </td>
+                            <td>
+                              <span className="af-project-admin-usage__chips">
+                                <em>成功 {compactNumber(row.runs?.success)}</em>
+                                <em>失败 {compactNumber(row.runs?.failed)}</em>
+                                <em>运行中 {compactNumber(row.runs?.running)}</em>
+                              </span>
+                            </td>
+                            <td>
+                              {row.runs?.lastRunAt ? (
+                                <>
+                                  <strong>{row.runs?.lastRunFlowId || "-"}</strong>
+                                  <span>{row.runs?.lastRunStatus || "unknown"} · {formatRelativeTime(row.runs.lastRunAt, t)}</span>
+                                </>
+                              ) : (
+                                <span>无运行记录</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
             {authUser?.isAdmin && filter === "all" && hiddenBuiltinFlows.length > 0 ? (
               <div className="af-project-admin-panel">
                 <div>
