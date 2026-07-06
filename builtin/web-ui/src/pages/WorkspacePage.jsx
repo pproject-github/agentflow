@@ -1813,6 +1813,8 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
   const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
+  const shareNodeId = String(data?.sourceNodeId || id);
+  const sharingDisplay = data?.sharingDisplayNodeId === shareNodeId;
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
@@ -2141,6 +2143,19 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             </button>
           </>
         ) : null}
+        <button
+          type="button"
+          className="af-work-display-card__action nodrag"
+          disabled={sharingDisplay}
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onShareDisplayNode?.(shareNodeId);
+          }}
+          aria-label="分享展示"
+          title="分享展示（1 天有效）"
+        >
+          <span className="material-symbols-outlined">{sharingDisplay ? "hourglass_empty" : "ios_share"}</span>
+        </button>
         <button
           type="button"
           className="af-work-display-card__action nodrag"
@@ -3206,6 +3221,7 @@ function WorkspacePageInner() {
   const [displayShareError, setDisplayShareError] = useState("");
   const [displayShareResult, setDisplayShareResult] = useState(null);
   const [displayShareDraft, setDisplayShareDraft] = useState({ title: "", layout: "gallery", nodeIds: [] });
+  const [sharingDisplayNodeId, setSharingDisplayNodeId] = useState("");
   const [displayLinkOpen, setDisplayLinkOpen] = useState(false);
   const [displayLinkCopyState, setDisplayLinkCopyState] = useState("");
   const [displayPickerOpen, setDisplayPickerOpen] = useState(false);
@@ -4708,6 +4724,48 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, setDisplayNodeContent, workspaceWritable]);
 
+  const shareDisplayNode = useCallback(async (nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id || sharingDisplayNodeId) return;
+    const node = nodesRef.current.find((item) => item.id === id);
+    if (!node || !displayKind(node?.data?.definitionId)) {
+      setStatus("展示节点不可用");
+      return;
+    }
+    setSharingDisplayNodeId(id);
+    setDisplayShareError("");
+    const shareWindow = window.open("", "_blank");
+    try {
+      await saveGraph(nodesRef.current, edgesRef.current);
+      const title = String(node.data?.label || node.data?.displayName || id).trim() || "AgentFlow Display";
+      const res = await fetch("/api/display/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          title,
+          layout: "single",
+          nodeIds: [id],
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "生成展示链接失败");
+      const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
+      setDisplayShareResult({ ...json, absoluteUrl });
+      setDisplayLinkCopyState("");
+      setStatus("已生成 1 天有效的展示链接");
+      if (shareWindow) shareWindow.location.href = absoluteUrl;
+      else window.location.assign(absoluteUrl);
+    } catch (e) {
+      if (shareWindow) shareWindow.close();
+      const message = String(e.message || e);
+      setDisplayShareError(message);
+      setStatus(message);
+    } finally {
+      setSharingDisplayNodeId("");
+    }
+  }, [flowParams, saveGraph, sharingDisplayNodeId]);
+
   const syncNodePropDraft = useCallback((nodeId, patchOrUpdater) => {
     const id = String(nodeId || "");
     if (!id) return;
@@ -4742,6 +4800,8 @@ function WorkspacePageInner() {
       onChangeLoadMcpNames: changeLoadMcpNames,
       onRefreshMcps: refreshMcps,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
+      onShareDisplayNode: shareDisplayNode,
+      sharingDisplayNodeId,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
       onStatus: setStatus,
@@ -4755,7 +4815,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),

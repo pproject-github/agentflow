@@ -16168,6 +16168,15 @@ button.af-exec-history-card {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.af-public-display-page--single .af-public-display-grid {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(1280px, 100%);
+}
+
+.af-public-display-page--single .af-public-display-node {
+  min-height: min(78vh, 56rem);
+}
+
 .af-public-display-page--slides .af-public-display-node {
   min-height: min(72vh, 48rem);
 }
@@ -16248,7 +16257,8 @@ button.af-exec-history-card {
 }
 
 .af-public-display-page--document .af-public-display-node__body,
-.af-public-display-page--slides .af-public-display-node__body {
+.af-public-display-page--slides .af-public-display-node__body,
+.af-public-display-page--single .af-public-display-node__body {
   min-height: 28rem;
 }
 
