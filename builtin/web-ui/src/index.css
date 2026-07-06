@@ -16179,6 +16179,18 @@ button.af-exec-history-card {
   min-height: min(78vh, 56rem);
 }
 
+.af-public-display-page--single .af-public-display-node--bare {
+  grid-template-rows: minmax(0, 1fr);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.af-public-display-page--single .af-public-display-node--bare .af-public-display-node__body {
+  min-height: 0;
+}
+
 .af-public-display-page--slides .af-public-display-node {
   min-height: min(72vh, 48rem);
 }
