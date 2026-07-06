@@ -97,6 +97,7 @@ import {
   isAuthUserAllowed,
   loginOrCreateUser,
   logoutRequest,
+  readAuthUsers,
   readUserAllowlist,
   writeUserAllowlist,
 } from "./auth.mjs";
@@ -257,8 +258,38 @@ function createFeedbackItem(payload, user) {
   };
 }
 
-function skillCollectionsAbs(userCtx = {}) {
-  return path.join(getAgentflowUserDataRoot(userCtx.userId), SKILL_COLLECTIONS_FILENAME);
+function skillCollectionsAbs() {
+  return path.join(getAgentflowDataRoot(), "admin", SKILL_COLLECTIONS_FILENAME);
+}
+
+function legacyAdminSkillCollectionPaths() {
+  const users = readAuthUsers();
+  return Object.entries(users || {})
+    .filter(([, user]) => user?.isAdmin)
+    .map(([userId, user]) => path.join(getAgentflowUserDataRoot(user.userId || userId), SKILL_COLLECTIONS_FILENAME));
+}
+
+function readSkillCollectionFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeSkillCollectionConfigs(configs = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const config of configs) {
+    for (const collection of normalizeSkillCollectionConfig(config).collections) {
+      if (!collection.id || seen.has(collection.id)) continue;
+      seen.add(collection.id);
+      merged.push(collection);
+    }
+  }
+  return { version: 1, collections: merged };
 }
 
 function slugifySkillCollectionId(name, fallback = "collection") {
@@ -382,8 +413,12 @@ function withBuiltinSkillCollections(config, availableSkills = []) {
 function readSkillCollectionConfig(userCtx = {}, availableSkills = []) {
   const p = skillCollectionsAbs(userCtx);
   try {
-    if (!fs.existsSync(p)) return withBuiltinSkillCollections({}, availableSkills);
-    return withBuiltinSkillCollections(JSON.parse(fs.readFileSync(p, "utf-8")), availableSkills);
+    const globalConfig = readSkillCollectionFile(p);
+    if (globalConfig) return withBuiltinSkillCollections(globalConfig, availableSkills);
+    const legacyConfigs = legacyAdminSkillCollectionPaths()
+      .map((legacyPath) => readSkillCollectionFile(legacyPath))
+      .filter(Boolean);
+    return withBuiltinSkillCollections(mergeSkillCollectionConfigs(legacyConfigs), availableSkills);
   } catch {
     return withBuiltinSkillCollections({}, availableSkills);
   }
@@ -5481,6 +5516,10 @@ export function startUiServer({
         json(res, 400, { error: "Missing skill slug or collection" });
         return;
       }
+      if (payload?.collection && !authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
+        return;
+      }
       const beforeSkills = payload?.collection ? listComposerSkills(PACKAGE_ROOT, root) : [];
       const result = await runSkillhub(args, { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
       if (!result.ok) {
@@ -5508,6 +5547,10 @@ export function startUiServer({
       const args = skillhubInstallArgs(payload, { uninstall: true });
       if (!args) {
         json(res, 400, { error: "Missing skill slug or collection" });
+        return;
+      }
+      if (payload?.collection && !authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
         return;
       }
       const result = await runSkillhub(args, { cwd: root, timeoutMs: 120_000, maxBuffer: 4 * 1024 * 1024 });
@@ -6499,6 +6542,10 @@ finishedAt: "${new Date().toISOString()}"
     }
 
     if (req.method === "POST" && url.pathname === "/api/skill-collections") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));

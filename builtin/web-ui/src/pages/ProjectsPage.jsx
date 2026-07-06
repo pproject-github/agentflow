@@ -340,6 +340,7 @@ function flowSnippetPreview(snippet) {
 export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const { t } = useTranslation();
   const { navigate, path } = useRoute();
+  const canEditSkillCollections = Boolean(authUser?.isAdmin);
   const [filter, setFilter] = useState(resourceKind || "all");
   const [apiFlows, setApiFlows] = useState([]);
   const [globalNodes, setGlobalNodes] = useState([]);
@@ -534,6 +535,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   }, []);
 
   const saveSkillCollections = useCallback(async (nextCollections) => {
+    if (!canEditSkillCollections) return;
     const normalized = normalizeSkillCollections({ collections: nextCollections });
     setSkillCollectionSaving(true);
     setResourceError("");
@@ -551,9 +553,10 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     } finally {
       setSkillCollectionSaving(false);
     }
-  }, []);
+  }, [canEditSkillCollections]);
 
   const createSkillCollection = useCallback(() => {
+    if (!canEditSkillCollections) return;
     const name = newSkillCollectionName.trim();
     if (!name) return;
     const base = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "collection";
@@ -565,17 +568,19 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     void saveSkillCollections([...skillCollections, { id, name, skillKeys: [], createdAt: now, updatedAt: now }]);
     setNewSkillCollectionName("");
     setResourceFilter(`collection:${id}`);
-  }, [newSkillCollectionName, saveSkillCollections, skillCollections]);
+  }, [canEditSkillCollections, newSkillCollectionName, saveSkillCollections, skillCollections]);
 
   const deleteSkillCollection = useCallback((collectionId) => {
+    if (!canEditSkillCollections) return;
     const collection = skillCollections.find((item) => item.id === collectionId);
     if (collection?.builtin) return;
     const next = skillCollections.filter((collection) => collection.id !== collectionId);
     if (resourceFilter === `collection:${collectionId}`) setResourceFilter("all");
     void saveSkillCollections(next);
-  }, [resourceFilter, saveSkillCollections, skillCollections]);
+  }, [canEditSkillCollections, resourceFilter, saveSkillCollections, skillCollections]);
 
   const toggleSkillCollectionMembership = useCallback((collectionId, skillKey, checked) => {
+    if (!canEditSkillCollections) return;
     const key = String(skillKey || "").trim();
     if (!key) return;
     const now = Date.now();
@@ -587,7 +592,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       return { ...collection, skillKeys: Array.from(keys), updatedAt: now };
     });
     void saveSkillCollections(next);
-  }, [saveSkillCollections, skillCollections]);
+  }, [canEditSkillCollections, saveSkillCollections, skillCollections]);
 
   const deleteMarketplaceNode = useCallback(async (node) => {
     const packageId = node?.packageId;
@@ -1128,7 +1133,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                           <em>{item.count}</em>
                           {item.collection.builtin ? <strong>built-in</strong> : null}
                         </button>
-                        {!item.collection.builtin ? (
+                        {canEditSkillCollections && !item.collection.builtin ? (
                           <button
                             type="button"
                             className="af-resource-filter-chip__delete"
@@ -1156,7 +1161,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   ))}
                 </div>
               ) : null}
-              {filter === "skills" ? (
+              {filter === "skills" && canEditSkillCollections ? (
                 <div className="af-skill-collections-manager">
                   <div className="af-skill-collections-create">
                     <input
@@ -1778,7 +1783,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={skillCollectionSaving}
+                              disabled={skillCollectionSaving || !canEditSkillCollections}
                               onChange={(e) => toggleSkillCollectionMembership(collection.id, key, e.target.checked)}
                             />
                             <span className="af-composer-skill-option-main">
