@@ -316,15 +316,6 @@ function displayShareIdFromPath(path) {
   return new URLSearchParams(window.location.search).get("id") || "";
 }
 
-function publicDisplaySingleNodeStyle(node) {
-  const width = Number(node?.size?.width || 0);
-  const height = Number(node?.size?.height || 0);
-  const style = {};
-  if (Number.isFinite(width) && width > 0) style.width = `${Math.round(width)}px`;
-  if (Number.isFinite(height) && height > 0) style.height = `${Math.round(height)}px`;
-  return Object.keys(style).length > 0 ? style : undefined;
-}
-
 export default function DisplayPage() {
   const { path } = useRoute();
   const shareId = useMemo(() => displayShareIdFromPath(path), [path]);
@@ -411,7 +402,6 @@ export default function DisplayPage() {
                 key={node.id}
                 node={node}
                 shareId={shareId}
-                style={publicDisplaySingleNodeStyle(node)}
                 bare
               />
             ))}
