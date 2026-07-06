@@ -152,20 +152,21 @@ function htmlDisplaySrcDoc(content) {
   return `<!doctype html><html><head>${guard}</head><body>${html}</body></html>`;
 }
 
-function displayFileUrl(src, shareId) {
+function displayFileUrl(src, shareId, opts = {}) {
   const text = String(src || "").trim();
   if (!text) return "";
   if (/^(?:https?:|data:|blob:|file:)/i.test(text) || text.startsWith("/")) return text;
   const q = new URLSearchParams();
   q.set("id", shareId);
   q.set("path", text);
+  if (opts.download) q.set("download", "1");
   return `/api/display/file/raw?${q.toString()}`;
 }
 
-function markdownImageSrc(src, shareId) {
+function markdownImageSrc(src, shareId, opts = {}) {
   const text = String(src || "").trim();
   if (!text) return "";
-  return displayFileUrl(text, shareId);
+  return displayFileUrl(text, shareId, opts);
 }
 
 function VisibleScrollFrame({ className = "", children }) {
@@ -283,7 +284,7 @@ function DisplayNode({ node, shareId, style }) {
             {node.kind === "image" ? <img src={displayFileUrl(content, shareId)} alt={node.label || node.id} loading="lazy" /> : null}
             {node.kind === "markdown" ? (
               <div className="af-public-display-markdown">
-                <MarkdownDisplayContent content={content} resolveSrc={(src) => markdownImageSrc(src, shareId)} />
+                <MarkdownDisplayContent content={content} resolveSrc={(src, opts) => markdownImageSrc(src, shareId, opts)} />
               </div>
             ) : null}
             {node.kind === "chart" ? <ChartDisplayContent content={content} /> : null}

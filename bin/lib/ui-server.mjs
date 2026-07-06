@@ -2233,15 +2233,17 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
   if (!fs.existsSync(src) || !fs.statSync(src).isFile()) {
     throw new Error(`Agent returned resultFile but did not create it under node outputs: ${clean}`);
   }
-  const destRel = clean.slice("outputs/".length);
-  const dest = path.resolve(workspaceOutputsDir, destRel);
+  const nodePart = workspaceSanitizeTmpSegment(runPackage?.nodeId || "node", "node");
+  const destRel = clean.slice("outputs/".length).replace(/^\/+/, "");
+  const publishedRel = path.posix.join("outputs", nodePart, ...destRel.split("/").filter(Boolean));
+  const dest = path.resolve(workspaceOutputsDir, nodePart, ...destRel.split("/").filter(Boolean));
   const workspaceOutputsWithSep = workspaceOutputsDir.endsWith(path.sep) ? workspaceOutputsDir : `${workspaceOutputsDir}${path.sep}`;
   if (dest !== workspaceOutputsDir && !dest.startsWith(workspaceOutputsWithSep)) {
     throw new Error(`Invalid workspace output path: ${clean}`);
   }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
-  return clean;
+  return publishedRel;
 }
 
 function workspacePublishAgentOutputFiles(structured, runPackage) {

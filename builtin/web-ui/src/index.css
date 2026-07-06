@@ -5237,6 +5237,7 @@ button.af-project-card {
   display: flex;
   padding: 0.8rem;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .af-work-display-editor__toolbar {
@@ -5255,8 +5256,13 @@ button.af-project-card {
 }
 
 .af-work-display-editor__textarea {
+  flex: 1 1 auto;
   width: 100%;
+  height: auto;
   min-height: 100%;
+  max-height: 100%;
+  overflow-x: auto;
+  overflow-y: scroll;
   resize: none;
   box-sizing: border-box;
   border: 1px solid rgba(124, 77, 255, 0.36);
@@ -5295,6 +5301,45 @@ button.af-project-card {
 
 .af-work-display-editor__textarea::-webkit-scrollbar-thumb:hover {
   background: rgba(205, 189, 255, 0.68);
+}
+
+.af-work-display-editor__scrollbar {
+  position: absolute;
+  top: 3.35rem;
+  right: 1.08rem;
+  bottom: 1.08rem;
+  z-index: 3;
+  width: 0.64rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.af-work-display-editor__scrollbar--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.af-work-display-editor__scrollbar span {
+  position: absolute;
+  left: 0.14rem;
+  right: 0.14rem;
+  min-height: 1.8rem;
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.58);
+  box-shadow: 0 0 10px rgba(124, 77, 255, 0.18);
+}
+
+.af-work-display-editor__scrollbar:active {
+  cursor: grabbing;
+}
+
+.af-work-display-editor__scrollbar:hover span,
+.af-work-display-editor__scrollbar:active span {
+  background: rgba(205, 189, 255, 0.78);
 }
 
 .af-work-node-chat-anchor {
@@ -5703,6 +5748,65 @@ button.af-project-card {
   color: #d7f2ff;
   text-decoration-color: #d7f2ff;
   background: rgba(143, 216, 255, 0.12);
+}
+
+.af-md-mermaid-preview {
+  margin: 1rem 0;
+  max-width: 100%;
+  max-height: 28rem;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(92, 184, 255, 0.22);
+  border-radius: 0.55rem;
+  background: rgba(7, 17, 26, 0.62);
+}
+
+.af-md-mermaid-preview svg {
+  display: block;
+  min-width: 100%;
+  height: auto;
+}
+
+.af-md-mermaid-preview marker path {
+  fill: rgba(120, 198, 255, 0.9);
+}
+
+.af-md-mermaid-edge {
+  fill: none;
+  stroke: rgba(120, 198, 255, 0.82);
+  stroke-width: 2;
+}
+
+.af-md-mermaid-box {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: rgba(151, 209, 255, 0.72);
+  stroke-width: 1;
+}
+
+.af-md-mermaid-text,
+.af-md-sequence-label {
+  fill: rgba(255, 255, 255, 0.88);
+  font-family: var(--af-body);
+  font-size: 12px;
+}
+
+.af-md-sequence-label {
+  fill: rgba(221, 238, 255, 0.9);
+  font-size: 11px;
+}
+
+.af-md-sequence-life {
+  stroke: rgba(205, 189, 255, 0.28);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 6;
+}
+
+.af-md-sequence-note {
+  fill: rgba(255, 255, 255, 0.06);
+  stroke: rgba(205, 189, 255, 0.24);
+  stroke-width: 1;
 }
 
 .af-work-display-table-wrap {
@@ -11543,10 +11647,43 @@ button.af-project-card {
   outline: none;
 }
 
+.af-node-props-select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 2rem;
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(205, 189, 255, 0.72) 50%) calc(100% - 1rem) 50% / 0.36rem 0.36rem no-repeat,
+    linear-gradient(135deg, rgba(205, 189, 255, 0.72) 50%, transparent 50%) calc(100% - 0.74rem) 50% / 0.36rem 0.36rem no-repeat,
+    var(--af-surface-lowest);
+  cursor: pointer;
+}
+
+.af-node-props-select:hover {
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(231, 225, 255, 0.88) 50%) calc(100% - 1rem) 50% / 0.36rem 0.36rem no-repeat,
+    linear-gradient(135deg, rgba(231, 225, 255, 0.88) 50%, transparent 50%) calc(100% - 0.74rem) 50% / 0.36rem 0.36rem no-repeat,
+    rgba(26, 26, 29, 0.98);
+}
+
+.af-node-props-select option {
+  background: #151518;
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .af-node-props-input:focus-visible,
 .af-node-props-select:focus-visible {
-  background: rgba(57, 57, 57, 0.95);
   box-shadow: 0 0 0 1px rgba(205, 189, 255, 0.2);
+}
+
+.af-node-props-input:focus-visible {
+  background: rgba(57, 57, 57, 0.95);
+}
+
+.af-node-props-select:focus-visible {
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(231, 225, 255, 0.92) 50%) calc(100% - 1rem) 50% / 0.36rem 0.36rem no-repeat,
+    linear-gradient(135deg, rgba(231, 225, 255, 0.92) 50%, transparent 50%) calc(100% - 0.74rem) 50% / 0.36rem 0.36rem no-repeat,
+    rgba(57, 57, 57, 0.95);
 }
 
 .af-node-props-readonly-mono {
