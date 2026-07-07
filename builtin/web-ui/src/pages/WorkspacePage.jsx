@@ -1997,6 +1997,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       }
       style={displaySize ? { width: displaySize.width, height: displaySize.height } : undefined}
       ref={displayCardRef}
+      onPointerDownCapture={data?.onSelectNodePointerDown}
       onDragOver={handleImageDragOver}
       onDragLeave={handleImageDragLeave}
       onDrop={handleImageDrop}
@@ -2262,6 +2263,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         (data?.nodeStatus === "failed" ? " af-work-run-card--failed" : "") +
         (stopped ? " af-work-run-card--stopped" : "")
       }
+      onPointerDownCapture={data?.onSelectNodePointerDown}
     >
       {inputs.map((slot, idx) => {
         if (slot.showOnNode === false) return null;
@@ -2337,6 +2339,12 @@ function WorkspaceFlowNode(props) {
     setNodes((list) => list.filter((node) => node.id !== nodeId));
     setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
   }, [readOnly, setEdges, setNodes]);
+  const onSelectNodePointerDown = useCallback((event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    if (event.target?.closest?.(".react-flow__handle, .af-work-display-resize")) return;
+    setNodes((list) => selectSingleCanvasNode(list, props.id));
+    setEdges((list) => clearSelectedCanvasEdges(list));
+  }, [props.id, setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
     if (readOnly) return;
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
@@ -2374,15 +2382,16 @@ function WorkspaceFlowNode(props) {
     syncNodePropDraft?.(nodeId, { images: normalizedImages });
   }, [readOnly, setNodes, syncNodePropDraft]);
   if (displayKind(props.data?.definitionId)) {
-    return <WorkspaceDisplayNode {...props} deleteNode={deleteNode} />;
+    return <WorkspaceDisplayNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
   if (props.data?.definitionId === "workspace_run") {
-    return <WorkspaceRunNode {...props} deleteNode={deleteNode} />;
+    return <WorkspaceRunNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
   if (props.data?.definitionId === "control_load_skills") {
     return (
       <WorkspaceLoadSkillsNode
         {...props}
+        data={{ ...props.data, onSelectNodePointerDown }}
         deleteNode={deleteNode}
         skills={props.data?.skills}
         skillCollections={props.data?.skillCollections}
@@ -2394,6 +2403,7 @@ function WorkspaceFlowNode(props) {
     return (
       <WorkspaceLoadMcpNode
         {...props}
+        data={{ ...props.data, onSelectNodePointerDown }}
         deleteNode={deleteNode}
         servers={props.data?.mcpServers}
         onChangeMcpNames={props.data?.onChangeLoadMcpNames}
@@ -2408,6 +2418,7 @@ function WorkspaceFlowNode(props) {
         (resizingFlowNode ? " af-work-flow-node--resizing" : "")
       }
       style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
+      onPointerDownCapture={onSelectNodePointerDown}
     >
       {!readOnly ? (
         <NodeResizeControl
@@ -2465,6 +2476,28 @@ function parentDirectoryPaths(relPath) {
     dirs.push(parts.slice(0, i).join("/"));
   }
   return dirs;
+}
+
+function selectSingleCanvasNode(nodes, nodeId) {
+  const id = String(nodeId || "");
+  let changed = false;
+  const nextNodes = (nodes || []).map((node) => {
+    const selected = node.id === id;
+    if (node.selected === selected) return node;
+    changed = true;
+    return { ...node, selected };
+  });
+  return changed ? nextNodes : nodes;
+}
+
+function clearSelectedCanvasEdges(edges) {
+  let changed = false;
+  const nextEdges = (edges || []).map((edge) => {
+    if (!edge.selected) return edge;
+    changed = true;
+    return { ...edge, selected: false };
+  });
+  return changed ? nextEdges : edges;
 }
 
 function sortWorkspaceFileItems(items) {
@@ -2931,7 +2964,10 @@ function WorkspaceLoadSkillsNode({
   }, [pointerRatioFromTrack, scrollMenuToRatio, scrollbar.height, scrollbar.top, scrollbar.visible]);
 
   return (
-    <div className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}>
+    <div
+      className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      onPointerDownCapture={data?.onSelectNodePointerDown}
+    >
       {inputs.map((slot, idx) => {
         if (slot.showOnNode === false) return null;
         const top = `${2.6 + idx * 1.7}rem`;
@@ -3124,7 +3160,10 @@ function WorkspaceLoadMcpNode({ id, data, selected, deleteNode, servers = [], on
   }, [id, keys, onChangeMcpNames]);
 
   return (
-    <div className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}>
+    <div
+      className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      onPointerDownCapture={data?.onSelectNodePointerDown}
+    >
       {inputs.map((slot, idx) => {
         if (slot.showOnNode === false) return null;
         const top = `${2.6 + idx * 1.7}rem`;
