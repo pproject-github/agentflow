@@ -90,7 +90,7 @@ import {
   publishFlowSnippet,
   publishNodeFromInstance,
 } from "./marketplace.mjs";
-import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, unloadGitWorktree } from "./git-worktree.mjs";
+import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, sanitizeWorktreeName, unloadGitWorktree } from "./git-worktree.mjs";
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
 import {
   authSetupRequired,
@@ -109,6 +109,7 @@ import {
   readAdminBuiltinPipelineConfig,
   updateAdminBuiltinPipelineConfig,
 } from "./admin-builtin-pipelines.mjs";
+import { readAdminStorageConfig, writeAdminStorageConfig } from "./admin-storage-config.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -1370,31 +1371,40 @@ function shouldSkipWorkspaceFileRelPath(relPath) {
   ));
 }
 
+const WORKSPACE_FILES_MAX_ITEMS = 500;
+
 function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget = { count: 0 }) {
-  if (depth > maxDepth || budget.count > 500) return [];
+  if (depth > maxDepth) return [];
+  if (depth > 0 && budget.count > WORKSPACE_FILES_MAX_ITEMS) return [];
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
   const out = [];
   for (const entry of entries) {
-    if (budget.count > 500) break;
+    if (depth > 0 && budget.count > WORKSPACE_FILES_MAX_ITEMS) break;
     if (entry.name.startsWith(".") && entry.name !== ".agents" && entry.name !== ".codex") continue;
     const abs = path.join(dir, entry.name);
     const rel = path.relative(root, abs).replace(/\\/g, "/");
     if (shouldSkipWorkspaceFileRelPath(rel)) continue;
     if (entry.isDirectory()) {
       if (WORKSPACE_FILE_SKIP_DIRS.has(entry.name)) continue;
-      budget.count++;
       out.push({
         type: "directory",
         name: entry.name,
         path: rel,
         icon: workspaceFileIcon(entry.name, true),
-        children: readWorkspaceFilesRecursive(abs, root, depth + 1, maxDepth, budget),
+        children: budget.count > WORKSPACE_FILES_MAX_ITEMS
+          ? []
+          : readWorkspaceFilesRecursive(abs, root, depth + 1, maxDepth, budget),
       });
+      budget.count++;
     } else if (entry.isFile()) {
       if (WORKSPACE_FILE_SKIP_FILES.has(entry.name)) continue;
       const ext = path.extname(entry.name).toLowerCase();
@@ -1405,10 +1415,6 @@ function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget 
       out.push({ type: "file", name: entry.name, path: rel, icon: workspaceFileIcon(entry.name), size });
     }
   }
-  out.sort((a, b) => {
-    if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
   return out;
 }
 
@@ -1854,6 +1860,44 @@ function mergeWorkspaceRunGraph(currentGraph, runGraph, touchedIds) {
     ui: current.ui && typeof current.ui === "object" ? current.ui : { nodePositions: {} },
     updatedAt: new Date().toISOString(),
   };
+}
+
+function mergeWorkspacePersistentNodeRefs(incomingGraph, currentGraph) {
+  const incoming = normalizeWorkspaceGraphPayload(incomingGraph || {});
+  const current = normalizeWorkspaceGraphPayload(currentGraph || {});
+  const instances = { ...(incoming.instances || {}) };
+  for (const [id, currentInstance] of Object.entries(current.instances || {})) {
+    const nextInstance = instances[id];
+    if (!nextInstance || typeof nextInstance !== "object") continue;
+    for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
+      const currentValue = currentInstance?.[key];
+      const nextValue = nextInstance?.[key];
+      if (currentValue != null && String(currentValue).trim() && (nextValue == null || !String(nextValue).trim())) {
+        nextInstance[key] = currentValue;
+      }
+    }
+  }
+  return { ...incoming, instances };
+}
+
+function hydrateWorkspaceNodeRefsFromFiles(scopedRoot, graph) {
+  const next = normalizeWorkspaceGraphPayload(graph || {});
+  const instances = { ...(next.instances || {}) };
+  let changed = false;
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (!instance || typeof instance !== "object") continue;
+    const defId = String(instance.definitionId || "");
+    if (defId === "workspace_run" || defId === "workspace_scheduled_run") continue;
+    if (!String(instance.implementationRef || "").trim()) {
+      const implementationRef = workspaceDefaultImplementationRef(nodeId);
+      const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        instances[nodeId] = { ...instance, implementationRef };
+        changed = true;
+      }
+    }
+  }
+  return changed ? { ...next, instances } : next;
 }
 
 function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
@@ -2441,6 +2485,45 @@ function workspaceResolvePath(baseCwd, raw) {
   return path.isAbsolute(text) ? path.resolve(text) : path.resolve(baseCwd, text);
 }
 
+function workspaceShellQuote(value) {
+  return "'" + String(value ?? "").replace(/'/g, "'\\''") + "'";
+}
+
+function workspaceSafeFlowRelPath(raw, fieldName = "path") {
+  const text = String(raw || "").trim().replace(/^["']|["']$/g, "");
+  if (!text) return "";
+  if (text.length > 260) throw new Error(`${fieldName} is too long`);
+  if (/[\r\n<>]/.test(text)) throw new Error(`${fieldName} contains invalid characters`);
+  if (/^(?:https?:|data:|blob:|file:|javascript:|mailto:|tel:)/i.test(text)) {
+    throw new Error(`${fieldName} must be a relative file path`);
+  }
+  if (path.isAbsolute(text)) throw new Error(`${fieldName} must be relative`);
+  const normalized = path.posix.normalize(text.replace(/\\/g, "/")).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
+    throw new Error(`${fieldName} escapes workspace root`);
+  }
+  return normalized;
+}
+
+function workspaceResolveFlowFile(scopedRoot, relPath, fieldName = "path") {
+  const clean = workspaceSafeFlowRelPath(relPath, fieldName);
+  if (!clean) return "";
+  const root = path.resolve(scopedRoot);
+  const abs = path.resolve(root, ...clean.split("/"));
+  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (abs !== root && !abs.startsWith(rootWithSep)) {
+    throw new Error(`${fieldName} escapes workspace root`);
+  }
+  return abs;
+}
+
+function workspaceReadTextFileIfExists(absPath, maxChars = 60000) {
+  const file = String(absPath || "").trim();
+  if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return "";
+  const raw = fs.readFileSync(file, "utf-8");
+  return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[truncated ${raw.length - maxChars} chars]` : raw;
+}
+
 function workspaceSanitizeRepoDirName(repoUrl) {
   const raw = String(repoUrl || "").trim().replace(/\.git$/i, "");
   const last = raw.split(/[/:]/).filter(Boolean).pop() || "repo";
@@ -2953,6 +3036,296 @@ function workspacePromptUpstreamText(upstreamText, runPackage = {}) {
   return upstreamText;
 }
 
+function workspaceImplementationInlineText(instance) {
+  const candidates = [instance?.implementation, instance?.implementationPlan];
+  for (const item of candidates) {
+    if (item == null) continue;
+    if (typeof item === "string" && item.trim()) return item.trim();
+    if (typeof item === "object" && !Array.isArray(item)) {
+      const content = item.content ?? item.body ?? item.notes ?? "";
+      if (String(content || "").trim()) return String(content).trim();
+    }
+  }
+  return "";
+}
+
+function workspaceImplementationBlock(instance, scopedRoot) {
+  const parts = [];
+  const implementationRef = String(instance?.implementationRef || "").trim();
+  if (implementationRef) {
+    const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
+    const body = workspaceReadTextFileIfExists(abs, 60000);
+    if (body.trim()) {
+      parts.push(`### ${implementationRef}\n\n${body.trim()}`);
+    }
+  }
+  const inline = workspaceImplementationInlineText(instance);
+  if (inline) parts.push(`### Inline implementation\n\n${inline}`);
+  if (!parts.length) return "";
+  const mode = String(instance?.implementationMode || "").trim();
+  return [
+    "## 参考实现方案",
+    "",
+    mode ? `mode: ${mode}` : "",
+    "",
+    ...parts,
+    "",
+    "以上方案用于加速本次执行。若发现过期，可以按当前任务修正执行，但最终结果必须以当前输入为准。",
+  ].filter((line) => line !== "").join("\n");
+}
+
+function workspaceSafeNodeFileName(nodeId) {
+  const text = String(nodeId || "").trim().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return text || "node";
+}
+
+function workspaceDefaultImplementationRef(nodeId) {
+  return `nodes/${workspaceSafeNodeFileName(nodeId)}/implementation.md`;
+}
+
+function workspaceImplementationModeForInstance(instance) {
+  const explicit = String(instance?.implementationMode || "").trim();
+  if (explicit) return explicit;
+  return String(instance?.definitionId || "") === "tool_nodejs" ? "script" : "steps";
+}
+
+function workspaceClipImplementationText(value, maxChars = 2400) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.length > maxChars ? `${text.slice(0, maxChars)}\n...[truncated ${text.length - maxChars} chars]` : text;
+}
+
+function workspaceUniqueImplementationList(items = [], maxItems = 12) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const text = String(item || "").trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function workspaceImplementationArtifactCandidates(structured = {}, result = "") {
+  const candidates = [
+    structured.resultFile,
+    structured.result,
+    result,
+    ...Object.values(structured.outParams || {}),
+  ];
+  return workspaceUniqueImplementationList(candidates, 10)
+    .filter((item) => /^(?:outputs|nodes|artifacts)\//.test(item) && !/[\r\n]/.test(item));
+}
+
+function workspaceReadImplementationArtifact(scopedRoot, structured = {}, result = "") {
+  const root = String(scopedRoot || "").trim();
+  if (!root) return null;
+  for (const rel of workspaceImplementationArtifactCandidates(structured, result)) {
+    let abs = "";
+    try {
+      abs = workspaceResolveFlowFile(root, rel, "resultFile");
+    } catch {
+      continue;
+    }
+    if (!abs || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
+    const ext = path.extname(abs).toLowerCase();
+    const content = workspaceReadTextFileIfExists(abs, 120000);
+    if (!content.trim()) continue;
+    return { rel, abs, ext, content };
+  }
+  return null;
+}
+
+function workspaceImplementationArtifactContext(scopedRoot, structured = {}, result = "") {
+  const artifact = workspaceReadImplementationArtifact(scopedRoot, structured, result);
+  if (!artifact) return "无可读取产物文件。";
+  return [
+    `产物路径：${artifact.rel}`,
+    `文件类型：${artifact.ext || "(unknown)"}`,
+    "",
+    "产物内容：",
+    "```",
+    workspaceClipImplementationText(artifact.content, 50000),
+    "```",
+  ].join("\n");
+}
+
+function workspaceBuildImplementationPrompt(instance, nodeId, opts = {}) {
+  const defId = String(instance?.definitionId || "").trim();
+  const label = String(instance?.label || nodeId || "node").trim();
+  const mode = workspaceImplementationModeForInstance(instance);
+  const inputValues = opts.inputValues || {};
+  const structured = opts.structured && typeof opts.structured === "object" ? opts.structured : {};
+  const result = String(opts.resultContent || structured.result || "").trim();
+  const task = workspaceResolveBodyPlaceholders(instance?.body || "", inputValues).trim();
+  const scriptRef = String(instance?.scriptRef || "").trim();
+  const inlineScript = String(instance?.script || "").trim();
+  const previousImplementation = opts.previousImplementation
+    ? workspaceClipImplementationText(opts.previousImplementation, 12000)
+    : "";
+  return [
+    "你要为 AgentFlow 的一个节点写“实现方案”Markdown。这个文件会在下次运行同一个节点前作为上下文给模型参考。",
+    "",
+    "要求：",
+    "- 必须基于实际任务、输入和产物内容自己总结，不要写流水账，不要写“使用 Agent 生成输出”这类空话。",
+    "- 写清楚这次结果到底是如何实现的：核心思路、产物结构、关键文件/路径、关键样式/函数/数据结构、可复用约定。",
+    "- 写清楚下次如果要继续迭代，应该从哪里改、哪些约定不能破坏。",
+    "- 如果产物是 HTML/UI，必须总结页面模块、视觉风格、关键 class/token、交互点和下游展示契约。",
+    "- 如果产物是脚本，必须总结脚本入口、环境变量、输入输出协议和错误处理方式。",
+    "- 只输出 Markdown 正文，不要输出代码围栏包裹整篇，不要解释你在总结。",
+    "",
+    "## 节点信息",
+    "",
+    `nodeId: ${nodeId}`,
+    `label: ${label}`,
+    `definitionId: ${defId || "(unknown)"}`,
+    `mode: ${mode}`,
+    scriptRef ? `scriptRef: ${scriptRef}` : "",
+    inlineScript ? `inlineScript: ${workspaceClipImplementationText(inlineScript, 1200)}` : "",
+    "",
+    "## 当前任务",
+    "",
+    workspaceClipImplementationText(task || instance?.body || scriptRef || inlineScript || "(无显式任务)", 6000),
+    "",
+    "## 输入",
+    "",
+    JSON.stringify(inputValues || {}, null, 2),
+    "",
+    "## 输出",
+    "",
+    JSON.stringify({
+      result: structured.result || result,
+      resultFile: structured.resultFile || "",
+      outParams: structured.outParams || {},
+    }, null, 2),
+    "",
+    previousImplementation ? "## 上一版实现方案" : "",
+    previousImplementation || "",
+    previousImplementation ? "" : "",
+    "## 实际产物上下文",
+    "",
+    workspaceImplementationArtifactContext(opts.scopedRoot, structured, result),
+  ].filter((line) => line !== "").join("\n");
+}
+
+async function workspaceGenerateImplementationMarkdown({
+  scopedRoot,
+  nodeId,
+  instance,
+  inputValues,
+  resultContent,
+  structured,
+  implementationPath,
+  previousImplementation,
+  runPackage,
+  modelKey,
+  userCtx,
+  emit,
+  onActiveChild,
+}) {
+  const prompt = workspaceBuildImplementationPrompt(instance, nodeId, {
+    scopedRoot,
+    inputValues,
+    resultContent,
+    structured,
+    previousImplementation,
+  });
+  let content = "";
+  let lastAssistant = "";
+  let resultText = "";
+  emit?.({ type: "status", line: "Summarize implementation plan with model" });
+  const handle = startComposerAgent({
+    uiWorkspaceRoot: scopedRoot,
+    cliWorkspace: runPackage?.nodeRunDir || scopedRoot,
+    prompt,
+    modelKey,
+    agentflowUserId: userCtx?.userId || "",
+    extraEnv: runtimeEnvForUser(userCtx, {
+      AGENTFLOW_IMPLEMENTATION_REF: implementationPath || "",
+      AGENTFLOW_NODE_RUN_DIR: runPackage?.nodeRunDir || "",
+      AGENTFLOW_NODE_TMP_DIR: runPackage?.nodeTmpDir || "",
+      AGENTFLOW_OUTPUTS_DIR: runPackage?.outputsDir || "",
+    }),
+    onStreamEvent: (ev) => {
+      if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
+        lastAssistant = ev.text;
+        content += (content ? "\n" : "") + ev.text;
+      } else if (ev?.type === "natural" && ev.kind === "result" && typeof ev.text === "string") {
+        resultText = ev.text;
+      }
+    },
+    onToolCall: (subtype, toolName) => {
+      const sub = subtype ? String(subtype) : "";
+      const tool = toolName ? String(toolName) : "";
+      emit?.({ type: "status", line: `总结方案工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
+    },
+  });
+  if (typeof onActiveChild === "function") onActiveChild(handle.child || null);
+  try {
+    await handle.finished;
+  } finally {
+    if (typeof onActiveChild === "function") onActiveChild(null);
+  }
+  const markdown = String(resultText || lastAssistant || content || "").trim();
+  return markdown.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
+}
+
+async function workspacePersistNodeImplementation(scopedRoot, graph, nodeId, opts = {}) {
+  const current = graph?.instances?.[nodeId];
+  if (!current || String(current.definitionId || "") === "workspace_run" || String(current.definitionId || "") === "workspace_scheduled_run") {
+    return { changed: false, wrote: false, instance: current };
+  }
+  const existingRef = String(current.implementationRef || "").trim();
+  const implementationRef = existingRef || workspaceDefaultImplementationRef(nodeId);
+  const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const previousImplementation = fs.existsSync(abs) && fs.statSync(abs).isFile()
+    ? workspaceReadTextFileIfExists(abs, 60000)
+    : "";
+  const markdown = await workspaceGenerateImplementationMarkdown({
+    scopedRoot,
+    nodeId,
+    instance: current,
+    inputValues: opts.inputValues || {},
+    resultContent: opts.resultContent || "",
+    structured: opts.structured || {},
+    implementationPath: implementationRef,
+    previousImplementation,
+    runPackage: opts.runPackage,
+    modelKey: opts.modelKey || "",
+    userCtx: opts.userCtx || {},
+    emit: opts.emit,
+    onActiveChild: opts.onActiveChild,
+  });
+  if (!markdown.trim()) throw new Error(`Implementation summary is empty for node ${nodeId}`);
+  fs.writeFileSync(abs, markdown.trimEnd() + "\n", "utf-8");
+  const explicitMode = String(current.implementationMode || "").trim();
+  const next = {
+    ...current,
+    implementationRef,
+    ...(explicitMode ? { implementationMode: explicitMode } : {}),
+  };
+  const changed = String(current.implementationRef || "") !== implementationRef;
+  return { changed, wrote: true, instance: next, implementationRef };
+}
+
+async function workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, opts = {}) {
+  try {
+    return await workspacePersistNodeImplementation(scopedRoot, graph, nodeId, opts);
+  } catch (e) {
+    opts.emit?.({
+      type: "natural",
+      kind: "warning",
+      text: `实现方案未更新：${e?.message || String(e)}`,
+    });
+    return { changed: false, wrote: false, instance: graph?.instances?.[nodeId] };
+  }
+}
+
 function parseWorkspaceSkillKeys(raw) {
   const text = String(raw || "").trim();
   if (!text) return [];
@@ -3086,6 +3459,7 @@ function workspaceWriteDisplayContent(instance, content) {
   const unwrapped = workspaceUnwrapOutputEnvelopeForDisplay(content);
   const text = kind === "html" ? normalizeHtmlDisplayContent(unwrapped) : String(unwrapped || "");
   const primaryName = kind === "image" ? "src" : "content";
+  next.displayReloadKey = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   next.body = text;
   next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
     String(slot?.name || "") === primaryName || String(slot?.type || "") === "text"
@@ -3125,7 +3499,7 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null)
   return updated;
 }
 
-function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "") {
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "", implementationBlock = "") {
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const { values: relevantInputValues, placeholders } = workspaceRelevantInputValues(instance.body || "", inputValues);
@@ -3138,6 +3512,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
     fileBoundary ? `\n${fileBoundary}` : "",
     inputBlock ? `\n${inputBlock}` : "",
     placeholders.size ? "\n任务只显式引用了上面的输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为分析依据。" : "",
+    implementationBlock ? `\n${implementationBlock}` : "",
     skillsBlock ? `\n## 可用能力\n\n${skillsBlock}` : "",
     mcpBlock ? `\n## 可用 MCP\n\n${mcpBlock}` : "",
     upstreamText ? `\n## 上游正文\n\n${upstreamText}` : "",
@@ -3146,13 +3521,38 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   ].filter(Boolean).join("\n");
 }
 
-function workspaceDefaultWorktreeRoot(scopedRoot) {
-  return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "worktrees");
+function workspaceDefaultGitRepoRoot(scopedRoot, _userCtx = {}) {
+  return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "git-repos");
 }
 
-function workspaceShouldAutoCleanupWorktree(scopedRoot, worktreePath, hasExplicitWorktreePath) {
-  if (hasExplicitWorktreePath || !worktreePath) return false;
-  return workspacePathInside(workspaceDefaultWorktreeRoot(scopedRoot), worktreePath);
+function workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch = "") {
+  const repoRoot = path.resolve(repoPath);
+  const repoName = sanitizeWorktreeName(path.basename(repoRoot));
+  const branchName = String(branch || "").trim();
+  let refLabel = branchName;
+  if (!refLabel) {
+    const currentBranch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoRoot);
+    if (currentBranch.status === 0 && currentBranch.stdout.trim() && currentBranch.stdout.trim() !== "HEAD") {
+      refLabel = currentBranch.stdout.trim();
+    }
+  }
+  if (!refLabel) {
+    const currentCommit = runGit(["rev-parse", "HEAD"], repoRoot);
+    refLabel = currentCommit.status === 0 && currentCommit.stdout.trim()
+      ? currentCommit.stdout.trim().slice(0, 12)
+      : "HEAD";
+  }
+  return path.join(
+    path.resolve(runTmpRoot),
+    "worktrees",
+    workspaceSanitizeTmpSegment(nodeId, "node"),
+    repoName,
+    sanitizeWorktreeName(refLabel),
+  );
+}
+
+function workspaceShouldAutoCleanupWorktree(worktreePath, hasExplicitWorktreePath) {
+  return Boolean(worktreePath) && !hasExplicitWorktreePath;
 }
 
 function workspaceTrackAutoCleanupWorktree(list, item) {
@@ -3188,7 +3588,7 @@ function workspaceCleanupAutoWorktrees(list, graph, emit) {
       const result = unloadGitWorktree({
         repoPath: entry.repoPath,
         worktreePath: entry.worktreePath,
-        force: false,
+        force: true,
         prune: true,
       });
       emit({
@@ -3343,6 +3743,146 @@ function workspaceCleanupTmpRoot(runTmpRoot, userCtx = {}, emit = () => {}) {
   } catch (e) {
     emit({ type: "natural", kind: "warning", text: `Workspace tmp cleanup failed: ${dir}\n原因：${e?.message || String(e)}` });
   }
+}
+
+function workspaceOutputFileRefsForNode(instance) {
+  const refs = {};
+  const slots = Array.isArray(instance?.output) ? instance.output : [];
+  for (let index = 0; index < slots.length; index += 1) {
+    const slot = slots[index];
+    const name = String(slot?.name || "").trim();
+    const type = String(slot?.type || "");
+    if (!name || type === "node" || name === "next" || name === "prev") continue;
+    const key = name === "content" || index === 0 ? "result" : name;
+    const safe = workspaceSanitizeTmpSegment(key, "result");
+    refs[key] = `outputs/${safe}.txt`;
+  }
+  if (!refs.result) refs.result = "outputs/result.txt";
+  return refs;
+}
+
+function workspaceResolveScriptCommandText(script, values = {}) {
+  return String(script || "").replace(/\$\{([^}]+)\}/g, (_, key) => {
+    const name = String(key || "").trim();
+    return workspaceShellQuote(Object.prototype.hasOwnProperty.call(values, name) ? values[name] : "");
+  });
+}
+
+function workspaceDefaultScriptCommand(scriptAbs) {
+  const ext = path.extname(scriptAbs).toLowerCase();
+  if (ext === ".js" || ext === ".mjs" || ext === ".cjs") return `node ${workspaceShellQuote(scriptAbs)}`;
+  if (ext === ".sh" || ext === ".bash") return `bash ${workspaceShellQuote(scriptAbs)}`;
+  if (ext === ".py") return `python3 ${workspaceShellQuote(scriptAbs)}`;
+  return workspaceShellQuote(scriptAbs);
+}
+
+function workspaceEnvelopeFromOutputFiles(outputRefs, nodeRunDir) {
+  const entries = Object.entries(outputRefs || {})
+    .map(([name, rel]) => {
+      const abs = path.resolve(nodeRunDir, rel);
+      const nodeRootWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+      if (abs !== nodeRunDir && !abs.startsWith(nodeRootWithSep)) return null;
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return null;
+      return { name, rel };
+    })
+    .filter(Boolean);
+  if (entries.length === 0) return "";
+  const result = entries.find((entry) => entry.name === "result") || entries[0];
+  const outParams = entries.filter((entry) => entry !== result);
+  return [
+    "---agentflow",
+    `resultFile: ${result.rel}`,
+    outParams.length ? "outParams:" : "",
+    ...outParams.map((entry) => `  ${entry.name}File: ${entry.rel}`),
+    "---end",
+  ].filter(Boolean).join("\n");
+}
+
+async function workspaceRunToolNodejsScript({
+  scopedRoot,
+  cwd,
+  instance,
+  inputValues,
+  runPackage,
+  userCtx,
+  emit,
+}) {
+  const scriptRef = String(instance?.scriptRef || "").trim();
+  const scriptAbs = scriptRef ? workspaceResolveFlowFile(scopedRoot, scriptRef, "scriptRef") : "";
+  if (scriptAbs && (!fs.existsSync(scriptAbs) || !fs.statSync(scriptAbs).isFile())) {
+    throw new Error(`scriptRef not found: ${scriptRef}`);
+  }
+  const outputRefs = workspaceOutputFileRefsForNode(instance);
+  const outputAbs = Object.fromEntries(
+    Object.entries(outputRefs).map(([key, rel]) => [key, path.resolve(runPackage.nodeRunDir, rel)]),
+  );
+  for (const abs of Object.values(outputAbs)) fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const constants = {
+    workspaceRoot: path.resolve(scopedRoot),
+    pipelineWorkspace: path.resolve(scopedRoot),
+    flowDir: path.resolve(scopedRoot),
+    cwd: path.resolve(cwd || scopedRoot),
+    nodeRunDir: runPackage.nodeRunDir,
+    nodeTmpDir: runPackage.nodeTmpDir,
+    outputsDir: runPackage.outputsDir,
+    scriptRef: scriptAbs,
+    ...inputValues,
+    ...outputRefs,
+  };
+  const inlineScript = String(instance?.script || "").trim();
+  const command = inlineScript
+    ? workspaceResolveScriptCommandText(inlineScript, constants)
+    : scriptAbs
+      ? workspaceDefaultScriptCommand(scriptAbs)
+      : "";
+  if (!command) throw new Error("tool_nodejs requires script or scriptRef");
+
+  emit?.({ type: "status", line: `Run script: ${scriptRef || command.slice(0, 120)}` });
+
+  const env = runtimeEnvForUser(userCtx, {
+    AGENTFLOW_WORKSPACE_ROOT: path.resolve(scopedRoot),
+    AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
+    AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
+    AGENTFLOW_OUTPUTS_DIR: runPackage.outputsDir,
+    AGENTFLOW_SCRIPT_REF: scriptAbs,
+    AGENTFLOW_INPUTS_JSON: JSON.stringify(inputValues || {}),
+    AGENTFLOW_OUTPUTS_JSON: JSON.stringify(outputRefs),
+    AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify(outputAbs),
+  });
+
+  const started = Date.now();
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, [], {
+      cwd: runPackage.nodeRunDir,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (stderr.trim()) {
+        emit?.({ type: "natural", kind: "warning", text: `[script stderr]\n${stderr.trim().slice(-4000)}` });
+      }
+      if (code !== 0) {
+        reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`));
+        return;
+      }
+      const elapsedMs = Math.max(0, Date.now() - started);
+      emit?.({ type: "status", line: `Timing script: ${elapsedMs}ms`, timing: { label: "script", elapsedMs } });
+      const content = stdout.trim() || workspaceEnvelopeFromOutputFiles(outputRefs, runPackage.nodeRunDir);
+      resolve(content);
+    });
+  });
 }
 
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
@@ -3524,7 +4064,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const targetRaw = workspaceSlotValue(workspaceSlotByName(instance, "targetDir")).trim();
       const targetDir = targetRaw
         ? workspaceResolvePath(cwd, targetRaw)
-        : path.join(scopedRoot, ".workspace", "agentflow", "git-repos", workspaceSanitizeRepoDirName(repoUrl));
+        : path.join(workspaceDefaultGitRepoRoot(scopedRoot, userCtx), workspaceSanitizeRepoDirName(repoUrl));
       const pullIfExists = workspaceBoolSlot(instance, "pullIfExists", true);
       const includeSubmodules = workspaceBoolSlot(instance, "includeSubmodules", false);
       fs.mkdirSync(path.dirname(targetDir), { recursive: true });
@@ -3596,14 +4136,16 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const worktreeInputSlot = (Array.isArray(instance.input) ? instance.input : [])
         .find((slot) => String(slot?.name || "") === "worktreePath") || null;
       const rawWorktreePath = workspaceSlotValue(worktreeInputSlot || workspaceSlotByName(instance, "worktreePath")).trim();
-      const worktreePath = rawWorktreePath ? workspaceResolvePath(cwd, rawWorktreePath) : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : "");
+      const worktreePath = rawWorktreePath
+        ? workspaceResolvePath(cwd, rawWorktreePath)
+        : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch));
       const hasExplicitWorktreePath = Boolean(rawWorktreePath) || Boolean(gitContext?.worktreePath);
       const previousCwd = cwd;
       const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
       const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
       const pruneMissing = pruneMissingRaw !== "false";
       const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot, force, pruneMissing });
-      if (workspaceShouldAutoCleanupWorktree(scopedRoot, result.worktreePath, hasExplicitWorktreePath)) {
+      if (workspaceShouldAutoCleanupWorktree(result.worktreePath, hasExplicitWorktreePath)) {
         workspaceTrackAutoCleanupWorktree(autoCleanupWorktrees, {
           nodeId,
           repoPath: result.repoRoot,
@@ -3707,6 +4249,51 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
+    if (defId === "tool_nodejs") {
+      const prepareStartedAt = Date.now();
+      const inputValues = workspaceInputValues(graph, nodeId, outputs);
+      const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
+        scopedRoot,
+        cwd,
+        task: String(instance.script || instance.scriptRef || instance.body || "").trim(),
+        inputValues,
+      });
+      const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
+      emitTiming(nodeId, "prepare-script", prepareStartedAt, {
+        inputCount: Object.keys(runtimeInputValues || {}).length,
+        nodeRunDir: runPackage.nodeRunDir,
+      });
+      const content = await workspaceRunToolNodejsScript({
+        scopedRoot,
+        cwd,
+        instance,
+        inputValues: runtimeInputValues,
+        runPackage,
+        userCtx,
+        emit: (event) => emit({ ...event, nodeId }),
+      });
+      const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
+      const resultContent = normalizedAgentOutput.result || content;
+      outputs.set(nodeId, resultContent);
+      const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
+      if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
+      const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
+        inputValues: runtimeInputValues,
+        resultContent,
+        structured: normalizedAgentOutput,
+        runPackage,
+        modelKey,
+        userCtx,
+        emit: (event) => emit({ ...event, nodeId }),
+        onActiveChild: opts.onActiveChild,
+      });
+      if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
+      const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
+      if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
     const prepareStartedAt = Date.now();
     const inputValues = workspaceInputValues(graph, nodeId, outputs);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
@@ -3733,7 +4320,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     } catch {
       // Best-effort debug artifact only.
     }
-    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage);
+    const implementationBlock = workspaceImplementationBlock(instance, scopedRoot);
+    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, implementationBlock);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
     } catch {
@@ -3819,8 +4407,19 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     outputs.set(nodeId, resultContent);
     const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
     if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
+    const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
+      inputValues: runtimeInputValues,
+      resultContent,
+      structured: normalizedAgentOutput,
+      runPackage,
+      modelKey,
+      userCtx,
+      emit: (event) => emit({ ...event, nodeId }),
+      onActiveChild: opts.onActiveChild,
+    });
+    if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
     const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
-    if (slotUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+    if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
   } finally {
@@ -4339,6 +4938,33 @@ export function startUiServer({
       }
     }
 
+    if (url.pathname === "/api/admin/storage-config") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        json(res, 200, { config: readAdminStorageConfig() });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        try {
+          const config = writeAdminStorageConfig(payload?.config || payload || {});
+          json(res, 200, { ok: true, config });
+        } catch (e) {
+          json(res, 400, { error: (e && e.message) || String(e) });
+        }
+        return;
+      }
+    }
+
     if (req.method === "GET" && url.pathname === "/api/admin/usage-dashboard") {
       if (!authUser?.isAdmin) {
         json(res, 403, { error: "Admin permission required" });
@@ -4648,9 +5274,10 @@ export function startUiServer({
           return;
         }
         const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
+        const hydratedGraph = hydrateWorkspaceNodeRefsFromFiles(scoped.root, graph);
         json(res, 200, {
           ok: true,
-          graph,
+          graph: hydratedGraph,
           path: graphPath,
           root: scoped.root,
           flowId: scoped.flowId,
@@ -4737,8 +5364,10 @@ export function startUiServer({
           json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
           return;
         }
-        const graph = normalizeWorkspaceGraphPayload(payload.graph || payload);
+        const submittedGraph = normalizeWorkspaceGraphPayload(payload.graph || payload);
         const graphPath = workspaceGraphPath(scoped.root);
+        const currentGraph = hydrateWorkspaceNodeRefsFromFiles(scoped.root, readWorkspaceGraph(scoped.root).graph);
+        const graph = mergeWorkspacePersistentNodeRefs(submittedGraph, currentGraph);
         fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2) + "\n", "utf-8");
         json(res, 200, { ok: true, path: graphPath, graph });
       } catch (e) {

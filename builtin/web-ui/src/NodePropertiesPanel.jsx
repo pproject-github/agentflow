@@ -151,6 +151,9 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
  *     body: string,
  *     images?: Array<any>,
  *     script?: string,
+ *     scriptRef?: string,
+ *     implementationRef?: string,
+ *     implementationMode?: string,
  *     inputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
  *     outputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
  *   } | null,
@@ -409,6 +412,49 @@ export function NodePropertiesPanel({
             />
           </div>
         ) : null}
+
+        <label className="af-pipeline-drawer-field af-node-props-field">
+          <span className="af-node-props-label">Script file（scriptRef）</span>
+          <span className="af-node-props-sublabel">Relative path under this flow, for example nodes/{draft.id}/script.mjs</span>
+          <input
+            type="text"
+            className="af-node-props-input"
+            value={draft.scriptRef || ""}
+            onChange={(e) => update({ scriptRef: e.target.value })}
+            disabled={disabled}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </label>
+
+        <label className="af-pipeline-drawer-field af-node-props-field">
+          <span className="af-node-props-label">Implementation file（implementationRef）</span>
+          <span className="af-node-props-sublabel">Relative path under this flow, for example nodes/{draft.id}/implementation.md</span>
+          <input
+            type="text"
+            className="af-node-props-input"
+            value={draft.implementationRef || ""}
+            onChange={(e) => update({ implementationRef: e.target.value })}
+            disabled={disabled}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </label>
+
+        <label className="af-pipeline-drawer-field af-node-props-field">
+          <span className="af-node-props-label">Implementation mode</span>
+          <select
+            className="af-node-props-select"
+            value={draft.implementationMode || ""}
+            onChange={(e) => update({ implementationMode: e.target.value })}
+            disabled={disabled}
+          >
+            <option value="">auto</option>
+            <option value="script">script</option>
+            <option value="steps">steps</option>
+            <option value="hybrid">hybrid</option>
+          </select>
+        </label>
 
         <div className="af-pipeline-drawer-field af-node-props-field af-node-props-field--prompt">
           <div className="af-node-props-prompt-head">

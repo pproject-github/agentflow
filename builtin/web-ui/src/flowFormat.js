@@ -100,6 +100,9 @@ export function deserializeFromFlowYaml(flowYamlContent) {
       const model = inst?.model != null ? String(inst.model).trim() : undefined;
       const body = inst?.body != null ? String(inst.body) : "";
       const script = inst?.script != null ? String(inst.script) : "";
+      const scriptRef = inst?.scriptRef != null ? String(inst.scriptRef) : "";
+      const implementationRef = inst?.implementationRef != null ? String(inst.implementationRef) : "";
+      const implementationMode = inst?.implementationMode != null ? String(inst.implementationMode) : "";
       const images = Array.isArray(inst?.images) ? inst.images : [];
       return {
         id,
@@ -116,6 +119,9 @@ export function deserializeFromFlowYaml(flowYamlContent) {
           images,
           ...(size ? { displaySize: size } : {}),
           ...(script.trim() !== "" ? { script } : {}),
+          ...(scriptRef.trim() !== "" ? { scriptRef } : {}),
+          ...(implementationRef.trim() !== "" ? { implementationRef } : {}),
+          ...(implementationMode.trim() !== "" ? { implementationMode } : {}),
         },
       };
     });
@@ -268,6 +274,18 @@ export function buildInstancesForYaml(nodes, instancesMap) {
       delete rec.script;
     } else {
       rec.script = script;
+    }
+
+    for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
+      const fromData = n.data?.[key];
+      const value =
+        fromData !== undefined && fromData !== null
+          ? String(fromData)
+          : base[key] != null
+            ? String(base[key])
+            : "";
+      if (value.trim() === "") delete rec[key];
+      else rec[key] = value.trim();
     }
 
     delete rec.temperature;

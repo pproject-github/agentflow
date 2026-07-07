@@ -687,6 +687,10 @@ function graphToFlow(graph, palette) {
         model: inst.model || undefined,
         body: inst.body || "",
         script: inst.script || "",
+        scriptRef: inst.scriptRef || "",
+        implementationRef: inst.implementationRef || "",
+        implementationMode: inst.implementationMode || "",
+        displayReloadKey: inst.displayReloadKey || "",
         ...(size ? { nodeSize: size } : {}),
         ...(isDisplay && size ? { displaySize: size } : {}),
       },
@@ -3110,6 +3114,9 @@ function nodeToPropDraft(node) {
     body: String(node.data?.body ?? ""),
     images: normalizeImages(node.data?.images),
     script: String(node.data?.script ?? ""),
+    scriptRef: String(node.data?.scriptRef ?? ""),
+    implementationRef: String(node.data?.implementationRef ?? ""),
+    implementationMode: String(node.data?.implementationMode ?? ""),
     inputs,
     outputs,
   };
@@ -3148,6 +3155,11 @@ function workspaceNodeDataFromPropDraft(selectedNode, draft, nextId) {
   const scriptTrim = String(draft?.script ?? "").trim();
   if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
   else delete nextData.script;
+  for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
+    const value = String(draft?.[key] ?? "").trim();
+    if (value) nextData[key] = value;
+    else delete nextData[key];
+  }
   return nextData;
 }
 
@@ -3170,6 +3182,9 @@ function workspaceApplyNodePropDraftToCanvasState({ nodes, edges, instances, sel
     prevData.body !== nextData.body ||
     JSON.stringify(normalizeImages(prevData.images)) !== JSON.stringify(nextData.images) ||
     (prevData.script ?? undefined) !== (nextData.script ?? undefined) ||
+    (prevData.scriptRef ?? undefined) !== (nextData.scriptRef ?? undefined) ||
+    (prevData.implementationRef ?? undefined) !== (nextData.implementationRef ?? undefined) ||
+    (prevData.implementationMode ?? undefined) !== (nextData.implementationMode ?? undefined) ||
     JSON.stringify(prevData.inputs || []) !== JSON.stringify(nextData.inputs || []) ||
     JSON.stringify(prevData.outputs || []) !== JSON.stringify(nextData.outputs || []);
   if (!changed) return { ok: true, changed: false, nextId, nodes, edges, instances };
@@ -3201,7 +3216,7 @@ function draftValueEquals(a, b) {
 function mergeUntouchedPropDraft(current, previousNodeDraft, nextNodeDraft) {
   if (!current || !previousNodeDraft || !nextNodeDraft) return nextNodeDraft;
   const next = { ...current };
-  for (const key of ["newId", "label", "role", "model", "body", "images", "script", "inputs", "outputs"]) {
+  for (const key of ["newId", "label", "role", "model", "body", "images", "script", "scriptRef", "implementationRef", "implementationMode", "inputs", "outputs"]) {
     if (draftValueEquals(current[key], previousNodeDraft[key])) {
       next[key] = nextNodeDraft[key];
     }
@@ -4015,6 +4030,9 @@ function WorkspacePageInner() {
         definitionId,
         body: draft?.body || "",
         script: draft?.script || "",
+        scriptRef: draft?.scriptRef || "",
+        implementationRef: draft?.implementationRef || "",
+        implementationMode: draft?.implementationMode || "",
         inputs: Array.isArray(draft?.inputs) ? draft.inputs : [],
         outputs: Array.isArray(draft?.outputs) ? draft.outputs : [],
         flowId: flowParams.flowId,
@@ -4427,6 +4445,26 @@ function WorkspacePageInner() {
         const incomingNodesById = new Map(flow.nodes.map((node) => [node.id, node]));
         const incomingInstances = flow.instances || {};
         const scopedIds = touchedNodeIds instanceof Set ? touchedNodeIds : null;
+        const mergeRuntimeNodeInstance = (currentInstance, incomingInstance) => {
+          const merged = { ...(currentInstance || incomingInstance) };
+          if (Array.isArray(incomingInstance?.output)) merged.output = incomingInstance.output;
+          for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
+            if (incomingInstance?.[key] != null && String(incomingInstance[key]).trim() !== "") {
+              merged[key] = incomingInstance[key];
+            }
+          }
+          return merged;
+        };
+        const mergeRuntimeNodeData = (currentData, incomingData) => {
+          const merged = { ...(currentData || {}) };
+          if (Array.isArray(incomingData?.outputs)) merged.outputs = incomingData.outputs;
+          for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
+            if (incomingData?.[key] != null && String(incomingData[key]).trim() !== "") {
+              merged[key] = incomingData[key];
+            }
+          }
+          return merged;
+        };
         setNodes((currentNodes) => {
           const currentIds = new Set(currentNodes.map((node) => node.id));
           const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current);
@@ -4438,7 +4476,7 @@ function WorkspacePageInner() {
             if (displayKind(instance?.definitionId || currentInstance?.definitionId)) {
               nextInstances[instanceId] = instance;
             } else if (Array.isArray(instance?.output)) {
-              nextInstances[instanceId] = { ...(currentInstance || instance), output: instance.output };
+              nextInstances[instanceId] = mergeRuntimeNodeInstance(currentInstance, instance);
             }
           }
           instancesRef.current = nextInstances;
@@ -4448,9 +4486,10 @@ function WorkspacePageInner() {
             const incomingNode = incomingNodesById.get(node.id);
             if (!incomingNode) return node;
             if (!displayKind(incomingNode.data?.definitionId || node.data?.definitionId)) {
-              return Array.isArray(incomingNode.data?.outputs)
-                ? { ...node, data: { ...node.data, outputs: incomingNode.data.outputs } }
-                : node;
+              return {
+                ...node,
+                data: mergeRuntimeNodeData(node.data, incomingNode.data),
+              };
             }
             return {
               ...node,
@@ -5593,6 +5632,9 @@ function WorkspacePageInner() {
     nodePropDraft?.body,
     JSON.stringify(nodePropDraft?.images || []),
     nodePropDraft?.script,
+    nodePropDraft?.scriptRef,
+    nodePropDraft?.implementationRef,
+    nodePropDraft?.implementationMode,
     JSON.stringify(nodePropDraft?.inputs || []),
     JSON.stringify(nodePropDraft?.outputs || []),
     applyNodeProperties,
@@ -6471,6 +6513,10 @@ function WorkspacePageInner() {
       label: overrides.label || labelForDefinition(def),
       role: "normal",
       body: overrides.body || "",
+      ...(overrides.script ? { script: overrides.script } : {}),
+      ...(overrides.scriptRef ? { scriptRef: overrides.scriptRef } : {}),
+      ...(overrides.implementationRef ? { implementationRef: overrides.implementationRef } : {}),
+      ...(overrides.implementationMode ? { implementationMode: overrides.implementationMode } : {}),
       input: overrides.inputs || input,
       output: overrides.outputs || output,
     };
@@ -6487,6 +6533,10 @@ function WorkspacePageInner() {
         schemaType: schemaTypeForDefinition(runtimeDefinitionId, def),
         role: "normal",
         body: instance.body,
+        ...(instance.script ? { script: instance.script } : {}),
+        ...(instance.scriptRef ? { scriptRef: instance.scriptRef } : {}),
+        ...(instance.implementationRef ? { implementationRef: instance.implementationRef } : {}),
+        ...(instance.implementationMode ? { implementationMode: instance.implementationMode } : {}),
         inputs: instance.input,
         outputs: instance.output,
       },

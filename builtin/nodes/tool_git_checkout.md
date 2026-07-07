@@ -5,7 +5,7 @@ description: |
 
   - `repoUrl` is required.
   - `targetDir` may be absolute or relative to the current workspace context.
-  - If `targetDir` is empty, the repository is cloned into `${pipelineWorkspace}/.workspace/agentflow/git-repos/<repo-name>`.
+  - If `targetDir` is empty, the repository is cloned into `${pipelineWorkspace}/.workspace/agentflow/git-repos/<repo-name>`. For user pipelines, `${pipelineWorkspace}` follows the Admin Settings AgentFlow Data Root.
   - Set `includeSubmodules` to `true` to clone/update Git submodules recursively.
   - The `workspaceContext` output can be connected to CD Workspace, Load Skills, agent, or tool nodes.
   - The `gitContext` output can be connected to Worktree, GitLab MR, or other Git nodes.
