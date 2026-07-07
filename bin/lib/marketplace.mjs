@@ -708,6 +708,47 @@ function buildPackagedRuntimeFromScript(command, destDir, opts = {}) {
   };
 }
 
+function safePackageRefPath(raw) {
+  const text = String(raw || "").trim().replace(/^["']|["']$/g, "").replace(/\\/g, "/");
+  if (!text || path.isAbsolute(text) || text.includes("\n") || text.includes("\r")) return "";
+  const normalized = path.posix.normalize(text).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) return "";
+  return normalized;
+}
+
+function packageNodeReferenceFiles(destDir, opts = {}) {
+  const flowDir = opts.flowDir ? path.resolve(opts.flowDir) : "";
+  const packagedFiles = [];
+  const result = {};
+  const copyRef = (rawRef, targetRel, key) => {
+    const clean = safePackageRefPath(rawRef);
+    if (!clean || !flowDir) return "";
+    const source = path.resolve(flowDir, ...clean.split("/"));
+    if (!isInsideDir(source, flowDir) || !fs.existsSync(source) || !fs.statSync(source).isFile()) return "";
+    const rel = targetRel.replace(/\\/g, "/");
+    const abs = path.join(destDir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.copyFileSync(source, abs);
+    packagedFiles.push({ from: source, to: rel, role: key });
+    result[key] = rel;
+    return rel;
+  };
+  const scriptRef = copyRef(opts.scriptRef, `scripts/${path.basename(safePackageRefPath(opts.scriptRef) || "script.mjs")}`, "scriptRef");
+  const implementationRef = copyRef(opts.implementationRef, "implementation.md", "implementationRef");
+  let scriptRuntime = null;
+  if (scriptRef) {
+    const abs = path.join(destDir, scriptRef);
+    scriptRuntime = {
+      type: "tool_nodejs",
+      language: scriptLanguageFor("", scriptRef),
+      entry: scriptRef,
+      args: [],
+    };
+    if (!fs.existsSync(abs)) scriptRuntime = null;
+  }
+  return { ...result, packagedFiles, scriptRuntime };
+}
+
 export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {}) {
   const label = String(payload.label || payload.instanceId || "node").trim();
   const id = safePackageId(payload.id || payload.packageId || label);
@@ -732,6 +773,9 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     ...(slot.showOnNode != null ? { showOnNode: Boolean(slot.showOnNode) } : {}),
   }));
   const script = String(payload.script || "").trim();
+  const scriptRef = String(payload.scriptRef || "").trim();
+  const implementationRef = String(payload.implementationRef || "").trim();
+  const implementationMode = String(payload.implementationMode || "").trim();
   const body = String(payload.body || "").trim();
   const description = String(payload.description || body || `Published from node ${label}`).trim();
   const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", id, version);
@@ -744,13 +788,18 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
+  const packagedRefs = packageNodeReferenceFiles(dest, {
+    flowDir: options.flowDir || payload.flowDir,
+    scriptRef,
+    implementationRef,
+  });
   const packagedScript = script
     ? buildPackagedRuntimeFromScript(script, dest, {
         flowDir: options.flowDir || payload.flowDir,
         workspaceRoot,
       })
     : null;
-  const runtime = packagedScript?.runtime || (
+  const runtime = packagedScript?.runtime || packagedRefs.scriptRuntime || (
     script
       ? {
           type: "tool_nodejs",
@@ -775,7 +824,10 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     createdAt: existingManifest?.createdAt || now,
     updatedAt: now,
   };
-  if (packagedScript?.packagedFiles?.length) manifest.packagedFiles = packagedScript.packagedFiles;
+  if (packagedRefs.implementationRef) manifest.implementationRef = packagedRefs.implementationRef;
+  if (implementationMode) manifest.implementationMode = implementationMode;
+  const packagedFiles = [...(packagedScript?.packagedFiles || []), ...(packagedRefs.packagedFiles || [])];
+  if (packagedFiles.length) manifest.packagedFiles = packagedFiles;
   fs.writeFileSync(path.join(dest, NODE_MANIFEST), yaml.dump(manifest, { lineWidth: -1 }), "utf-8");
   fs.writeFileSync(
     path.join(dest, "README.md"),
@@ -791,7 +843,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     definitionId: `marketplace:${id}@${version}`,
     baseDefinitionId: manifest.baseDefinitionId,
     marketplaceDefinitionId: `marketplace:${id}@${version}`,
-    packagedFiles: packagedScript?.packagedFiles || [],
+    packagedFiles,
   };
 }
 

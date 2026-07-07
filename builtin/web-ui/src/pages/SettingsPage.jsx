@@ -128,6 +128,11 @@ export default function SettingsPage({ authUser }) {
   const [allowlistLoading, setAllowlistLoading] = useState(false);
   const [allowlistSaving, setAllowlistSaving] = useState(false);
   const [allowlistErr, setAllowlistErr] = useState("");
+  const [dataRootDraft, setDataRootDraft] = useState("");
+  const [dataRootConfig, setDataRootConfig] = useState(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageSaving, setStorageSaving] = useState(false);
+  const [storageErr, setStorageErr] = useState("");
   /** 与服务器（或首次加载的本地回退）已同步的 Provider，用于防抖保存时去重 */
   const lastSyncedOpencode = useRef(/** @type {string | null} */ (null));
   const opencodeConfigReady = useRef(false);
@@ -241,6 +246,46 @@ export default function SettingsPage({ authUser }) {
     }
   }, [authUser?.isAdmin]);
 
+  const loadStorageConfig = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setStorageLoading(true);
+    setStorageErr("");
+    try {
+      const r = await fetch("/api/admin/storage-config");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const config = j.config && typeof j.config === "object" ? j.config : {};
+      setDataRootConfig(config);
+      setDataRootDraft(typeof config.dataRoot === "string" ? config.dataRoot : "");
+    } catch (e) {
+      setStorageErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setStorageLoading(false);
+    }
+  }, [authUser?.isAdmin]);
+
+  const saveStorageConfig = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setStorageSaving(true);
+    setStorageErr("");
+    try {
+      const r = await fetch("/api/admin/storage-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataRoot: dataRootDraft.trim() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const config = j.config && typeof j.config === "object" ? j.config : {};
+      setDataRootConfig(config);
+      setDataRootDraft(typeof config.dataRoot === "string" ? config.dataRoot : "");
+    } catch (e) {
+      setStorageErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setStorageSaving(false);
+    }
+  }, [authUser?.isAdmin, dataRootDraft]);
+
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
     const personalRows = normalized.filter((row) => row.scope !== "global");
@@ -299,6 +344,7 @@ export default function SettingsPage({ authUser }) {
     if (authUser?.isAdmin) {
       void loadFeedback();
       void loadUserAllowlist();
+      void loadStorageConfig();
     }
     (async () => {
       try {
@@ -324,7 +370,7 @@ export default function SettingsPage({ authUser }) {
         opencodeConfigReady.current = true;
       }
     })();
-  }, [authUser?.isAdmin, loadContext, loadFeedback, loadLists, loadUserAllowlist, loadUserEnv]);
+  }, [authUser?.isAdmin, loadContext, loadFeedback, loadLists, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
 
   useEffect(() => {
     if (!envConfigReady.current) return;
@@ -474,6 +520,7 @@ export default function SettingsPage({ authUser }) {
             {contextErr ? <p className="af-err af-settings-api-hint">{contextErr}</p> : null}
             {listsErr ? <p className="af-err af-settings-api-hint">{listsErr}</p> : null}
             {envErr ? <p className="af-err af-settings-api-hint">{envErr}</p> : null}
+            {storageErr ? <p className="af-err af-settings-api-hint">{storageErr}</p> : null}
           </header>
 
           <div className="af-settings-layout">
@@ -812,6 +859,67 @@ export default function SettingsPage({ authUser }) {
                   </div>
                 </div>
               </section>
+
+              {authUser?.isAdmin ? (
+                <section className="af-set-card af-set-card--wide af-set-card--low">
+                  <div className="af-set-env-head">
+                    <div className="af-set-card-head">
+                      <div className="af-set-env-icon-wrap">
+                        <span className="material-symbols-outlined af-set-icon--primary">hard_drive_2</span>
+                      </div>
+                      <div>
+                        <h2 className="af-set-h2">AgentFlow Data Root</h2>
+                        <p className="af-set-card-subtitle">配置整个 AgentFlow 数据目录的位置，保存时会迁移当前数据。</p>
+                      </div>
+                    </div>
+                    <span className={"af-set-badge" + (dataRootConfig?.envLocked ? " af-set-badge--err" : " af-set-badge--ok")}>
+                      {dataRootConfig?.envLocked ? "Env locked" : "Configurable"}
+                    </span>
+                    <button
+                      type="button"
+                      className="af-set-btn-outline af-set-btn-outline--compact"
+                      onClick={() => void loadStorageConfig()}
+                      disabled={storageLoading || storageSaving}
+                    >
+                      {storageLoading ? "刷新中..." : "刷新"}
+                    </button>
+                  </div>
+                  {storageErr ? <p className="af-err af-set-hint af-set-hint--inline">{storageErr}</p> : null}
+                  <label className="af-set-label-sm" htmlFor="af-agentflow-data-root">
+                    Data Root
+                  </label>
+                  <div className="af-set-input-wrap">
+                    <input
+                      id="af-agentflow-data-root"
+                      className="af-set-input af-set-input--mono"
+                      type="text"
+                      value={dataRootDraft}
+                      onChange={(e) => setDataRootDraft(e.target.value)}
+                      placeholder="/data1/services/mengmai/agentflow"
+                      autoComplete="off"
+                      disabled={Boolean(dataRootConfig?.envLocked) || storageSaving}
+                    />
+                    <button
+                      type="button"
+                      className="af-set-input-suffix"
+                      onClick={() => void saveStorageConfig()}
+                      aria-label="保存 AgentFlow Data Root"
+                      disabled={storageSaving || Boolean(dataRootConfig?.envLocked)}
+                    >
+                      <span className="material-symbols-outlined">{storageSaving ? "hourglass_empty" : "save"}</span>
+                    </button>
+                  </div>
+                  <p className="af-set-hint">
+                    当前目录：<code>{dataRootConfig?.dataRoot || dataRootDraft || "-"}</code>
+                    {dataRootConfig?.configPath ? <>；配置文件：<code>{dataRootConfig.configPath}</code></> : null}
+                  </p>
+                  <p className="af-set-hint">
+                    这个目录包含 <code>users/</code>、<code>pipelines/</code>、<code>runBuild/</code>、<code>auth/</code> 和 admin 配置。
+                    保存到新绝对路径时会复制旧目录内容；旧目录不会自动删除。
+                    {dataRootConfig?.envLocked ? " 当前设置了 AGENTFLOW_HOME，需要改环境变量才能生效。" : ""}
+                  </p>
+                </section>
+              ) : null}
 
               {authUser?.isAdmin ? (
                 <section className="af-set-card af-set-card--wide af-set-card--allowlist">

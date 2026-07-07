@@ -20,17 +20,55 @@ export const PACKAGE_AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
 export const PACKAGE_AGENTS_JSON = path.join(PACKAGE_AGENTS_DIR, "agents.json");
 
 /**
- * 用户级 AgentFlow 数据根目录：`AGENTFLOW_HOME` 或 `~/agentflow`。
+ * 用户级 AgentFlow 数据根目录：`AGENTFLOW_HOME`、`~/.agentflow/config.json:dataRoot` 或 `~/agentflow`。
  * 与项目根 workspaceRoot 分离；run、pipelines、agents 等均落盘于此。
  */
+export const AGENTFLOW_CONFIG_DIR = path.join(os.homedir(), ".agentflow");
+export const AGENTFLOW_HOME_CONFIG_PATH = path.join(AGENTFLOW_CONFIG_DIR, "config.json");
+
+export function expandAgentflowHomePath(rawPath) {
+  let raw = String(rawPath || "").trim();
+  if (!raw) return "";
+  if (raw === "~") raw = os.homedir();
+  else if (raw.startsWith("~/")) raw = path.join(os.homedir(), raw.slice(2));
+  return path.resolve(raw);
+}
+
+function readAgentflowHomeConfig() {
+  try {
+    if (!fs.existsSync(AGENTFLOW_HOME_CONFIG_PATH)) return {};
+    const parsed = JSON.parse(fs.readFileSync(AGENTFLOW_HOME_CONFIG_PATH, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getAgentflowDataRootOverride() {
+  const config = readAgentflowHomeConfig();
+  return expandAgentflowHomePath(config.dataRoot || "");
+}
+
+export function writeAgentflowDataRootOverride(dataRoot) {
+  const nextRoot = expandAgentflowHomePath(dataRoot);
+  if (nextRoot && !path.isAbsolute(nextRoot)) {
+    throw new Error("dataRoot must be an absolute path");
+  }
+  const current = readAgentflowHomeConfig();
+  const next = { ...current, dataRoot: nextRoot };
+  if (!nextRoot) delete next.dataRoot;
+  fs.mkdirSync(path.dirname(AGENTFLOW_HOME_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(AGENTFLOW_HOME_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  return nextRoot;
+}
+
 export function getAgentflowDataRoot() {
   const env = process.env.AGENTFLOW_HOME;
   if (env != null && String(env).trim() !== "") {
-    let raw = String(env).trim();
-    if (raw === "~") raw = os.homedir();
-    else if (raw.startsWith("~/")) raw = path.join(os.homedir(), raw.slice(2));
-    return path.resolve(raw);
+    return expandAgentflowHomePath(env);
   }
+  const configured = getAgentflowDataRootOverride();
+  if (configured) return configured;
   return path.join(os.homedir(), "agentflow");
 }
 
