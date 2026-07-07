@@ -175,6 +175,7 @@ export function buildInstancesForYaml(nodes, instancesMap) {
   };
   const instances = {};
   for (const n of nodes) {
+    if (n?.data?.isWorkspaceGroup) continue;
     const base =
       instancesMap[n.id] && typeof instancesMap[n.id] === "object" ? { ...instancesMap[n.id] } : {};
     const defId = n.data?.definitionId || n.id;

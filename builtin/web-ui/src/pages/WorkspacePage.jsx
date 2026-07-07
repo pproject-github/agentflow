@@ -105,6 +105,9 @@ const MIN_WORKSPACE_NODE_WIDTH = 180;
 const MAX_WORKSPACE_NODE_WIDTH = 960;
 const MIN_WORKSPACE_NODE_HEIGHT = 96;
 const MAX_WORKSPACE_NODE_HEIGHT = 900;
+const WORKSPACE_GROUP_PADDING = 52;
+const MIN_WORKSPACE_GROUP_WIDTH = 240;
+const MIN_WORKSPACE_GROUP_HEIGHT = 160;
 const DISPLAY_REF_PREFIX = "display-ref:";
 
 /* global __APP_VERSION__ */
@@ -535,6 +538,69 @@ function formatScheduledRunTime(ts) {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function isWorkspaceGroupNode(node) {
+  return Boolean(node?.data?.isWorkspaceGroup);
+}
+
+function workspaceGroupTitle(index) {
+  return index > 0 ? `Group ${index + 1}` : "Group";
+}
+
+function normalizeWorkspaceGroups(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  return list
+    .map((group, index) => {
+      const id = String(group?.id || `group_${index + 1}`).trim();
+      const x = Number(group?.x);
+      const y = Number(group?.y);
+      const width = Number(group?.width);
+      const height = Number(group?.height);
+      if (!id || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+      return {
+        id,
+        title: String(group?.title || workspaceGroupTitle(index)).trim() || workspaceGroupTitle(index),
+        color: String(group?.color || "purple").trim() || "purple",
+        x,
+        y,
+        width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
+        height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height)),
+      };
+    })
+    .filter(Boolean);
+}
+
+function workspaceGroupNodesFromGraph(graph) {
+  const groups = normalizeWorkspaceGroups(graph?.ui?.groups);
+  return groups.map((group) => ({
+    id: group.id,
+    type: FLOW_NODE_TYPE,
+    position: { x: group.x, y: group.y },
+    width: group.width,
+    height: group.height,
+    selected: false,
+    draggable: true,
+    selectable: true,
+    zIndex: 0,
+    data: {
+      isWorkspaceGroup: true,
+      label: group.title,
+      title: group.title,
+      color: group.color,
+      nodeSize: { width: group.width, height: group.height },
+    },
+  }));
+}
+
+function normalizeWorkspaceGroupSize(size) {
+  const width = Number(size?.width);
+  const height = Number(size?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return {
+    width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
+    height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height)),
+  };
+}
+
 function cloneSlots(slots) {
   return (Array.isArray(slots) ? slots : []).map((slot) => ({
     type: slot?.type || "node",
@@ -627,8 +693,10 @@ function graphToFlow(graph, palette) {
     };
   });
   const merged = rawNodes.map((node) => mergeNodeWithPalette(node, instances, palette));
+  const groupNodes = workspaceGroupNodesFromGraph(graph);
   const edges = rawEdges
     .filter((e) => e?.source && e?.target)
+    .filter((e) => !groupNodes.some((node) => node.id === String(e.source) || node.id === String(e.target)))
     .map((e, idx) => ({
       id: e.id || `we-${e.source}-${e.target}-${idx}`,
       source: String(e.source),
@@ -637,7 +705,8 @@ function graphToFlow(graph, palette) {
       targetHandle: e.targetHandle ?? undefined,
       markerEnd: { type: MarkerType.ArrowClosed },
     }));
-  return { nodes: merged, edges: filterValidEdges(edges, merged), instances };
+  const nodes = [...groupNodes, ...merged];
+  return { nodes, edges: filterValidEdges(edges, nodes), instances };
 }
 
 function displayRefNodeId(sourceId) {
@@ -755,21 +824,39 @@ function persistedWorkspaceNodeSize(node) {
 }
 
 function flowToGraph(nodes, edges, instances) {
-  const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(nodes, instances || {}));
+  const regularNodes = (nodes || []).filter((node) => !isWorkspaceGroupNode(node));
+  const groupNodes = (nodes || []).filter(isWorkspaceGroupNode);
+  const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(regularNodes, instances || {}));
   const graphEdges = edges.map((edge) => ({
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle ?? null,
     targetHandle: edge.targetHandle ?? null,
-  }));
+  })).filter((edge) => (
+    !groupNodes.some((node) => node.id === edge.source || node.id === edge.target)
+  ));
   const nodePositions = {};
   const nodeSizes = {};
-  for (const node of nodes) {
+  const groups = [];
+  for (const node of regularNodes) {
     nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
     const size = persistedWorkspaceNodeSize(node);
     if (size) nodeSizes[node.id] = size;
   }
-  return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes } };
+  for (const node of groupNodes) {
+    const width = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
+    const height = Number(node.data?.nodeSize?.height || node.height || node.measured?.height || 0);
+    groups.push({
+      id: node.id,
+      title: String(node.data?.title || node.data?.label || "Group"),
+      color: String(node.data?.color || "purple"),
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0),
+      width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width || MIN_WORKSPACE_GROUP_WIDTH)),
+      height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height || MIN_WORKSPACE_GROUP_HEIGHT)),
+    });
+  }
+  return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes, groups } };
 }
 
 function sanitizeWorkspaceRuntimeOutputs(instances) {
@@ -2579,6 +2666,54 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   );
 }
 
+function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
+  const { setNodes } = useReactFlow();
+  const readOnly = Boolean(data?.readOnly);
+  const size = normalizeWorkspaceGroupSize(data?.nodeSize) || {
+    width: MIN_WORKSPACE_GROUP_WIDTH,
+    height: MIN_WORKSPACE_GROUP_HEIGHT,
+  };
+  const onSelectGroupPointerDown = useCallback((event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    if (event.target?.closest?.(".af-work-group-node__resize, .af-work-group-node__delete")) return;
+    setNodes((list) => selectSingleCanvasNode(list, id));
+  }, [id, setNodes]);
+  return (
+    <div
+      className={"af-work-group-node" + (selected ? " af-work-group-node--selected" : "")}
+      style={{ width: size.width, height: size.height }}
+      onPointerDownCapture={onSelectGroupPointerDown}
+    >
+      {!readOnly ? (
+        <NodeResizeControl
+          className="af-work-group-node__resize nodrag"
+          minWidth={MIN_WORKSPACE_GROUP_WIDTH}
+          minHeight={MIN_WORKSPACE_GROUP_HEIGHT}
+          position="bottom-right"
+        >
+          <span className="material-symbols-outlined">open_in_full</span>
+        </NodeResizeControl>
+      ) : null}
+      <div className="af-work-group-node__title nodrag">
+        <span>{data?.title || data?.label || "Group"}</span>
+        <button
+          type="button"
+          className="af-work-group-node__delete"
+          disabled={readOnly}
+          onClick={(event) => {
+            event.stopPropagation();
+            deleteNode?.(id);
+          }}
+          aria-label="删除分组"
+          title="删除分组"
+        >
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
@@ -2634,6 +2769,9 @@ function WorkspaceFlowNode(props) {
     )));
     syncNodePropDraft?.(nodeId, { images: normalizedImages });
   }, [readOnly, setNodes, syncNodePropDraft]);
+  if (props.data?.isWorkspaceGroup) {
+    return <WorkspaceGroupNode {...props} deleteNode={deleteNode} />;
+  }
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
@@ -5643,6 +5781,65 @@ function WorkspacePageInner() {
 
   const selectedCanvasNodeIds = useMemo(() => selectedCanvasNodes.map((node) => node.id), [selectedCanvasNodes]);
 
+  const createWorkspaceGroupFromSelection = useCallback(() => {
+    if (isDisplayMode) return;
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
+    const selectedNodes = (nodesRef.current || []).filter((node) => node?.selected && !isWorkspaceGroupNode(node));
+    if (selectedNodes.length < 2) {
+      setStatus("选择至少两个节点后按 G 创建 Group");
+      return;
+    }
+    const bounds = selectedNodes.reduce((acc, node) => {
+      const x = Number(node.position?.x || 0);
+      const y = Number(node.position?.y || 0);
+      const width = Number(node.measured?.width || node.width || node.data?.nodeSize?.width || node.data?.displaySize?.width || DEFAULT_WORKSPACE_NODE_WIDTH);
+      const height = Number(node.measured?.height || node.height || node.data?.nodeSize?.height || node.data?.displaySize?.height || MIN_WORKSPACE_NODE_HEIGHT);
+      return {
+        minX: Math.min(acc.minX, x),
+        minY: Math.min(acc.minY, y),
+        maxX: Math.max(acc.maxX, x + width),
+        maxY: Math.max(acc.maxY, y + height),
+      };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)) return;
+    const used = new Set((nodesRef.current || []).map((node) => node.id));
+    let index = 1;
+    let id = `group_${index}`;
+    while (used.has(id)) {
+      index += 1;
+      id = `group_${index}`;
+    }
+    const size = normalizeWorkspaceGroupSize({
+      width: bounds.maxX - bounds.minX + WORKSPACE_GROUP_PADDING * 2,
+      height: bounds.maxY - bounds.minY + WORKSPACE_GROUP_PADDING * 2,
+    }) || { width: MIN_WORKSPACE_GROUP_WIDTH, height: MIN_WORKSPACE_GROUP_HEIGHT };
+    const groupNode = {
+      id,
+      type: FLOW_NODE_TYPE,
+      position: { x: bounds.minX - WORKSPACE_GROUP_PADDING, y: bounds.minY - WORKSPACE_GROUP_PADDING },
+      width: size.width,
+      height: size.height,
+      selected: true,
+      draggable: true,
+      selectable: true,
+      zIndex: 0,
+      data: {
+        isWorkspaceGroup: true,
+        label: workspaceGroupTitle(index - 1),
+        title: workspaceGroupTitle(index - 1),
+        color: "purple",
+        nodeSize: size,
+      },
+    };
+    setNodes((list) => [groupNode, ...list.map((node) => ({ ...node, selected: false }))]);
+    setEdges((list) => list.map((edge) => ({ ...edge, selected: false })));
+    setSelectedNodeId("");
+    setStatus(`Created group for ${selectedNodes.length} nodes`);
+  }, [isDisplayMode, setEdges, setNodes, workspaceWritable]);
+
   const workspaceDisplayNodes = useMemo(
     () => nodes.filter((node) => displayKind(node?.data?.definitionId)),
     [nodes],
@@ -6164,11 +6361,15 @@ function WorkspacePageInner() {
     for (const change of changes || []) {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
         const node = nodes.find((item) => item.id === change.id);
+        const isGroup = isWorkspaceGroupNode(node);
         const isDisplay = Boolean(displayKind(node?.data?.definitionId));
-        const size = normalizeWorkspaceNodeSize({
+        const rawSize = {
           width: Math.round(Number(change.dimensions.width)),
           height: Math.round(Number(change.dimensions.height)),
-        }, { display: isDisplay });
+        };
+        const size = isGroup
+          ? normalizeWorkspaceGroupSize(rawSize)
+          : normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
         if (size) resized.set(change.id, size);
       }
     }
@@ -6176,6 +6377,17 @@ function WorkspacePageInner() {
     setNodes((current) => applyNodeChanges(changes, current).map((node) => {
       const size = resized.get(node.id);
       if (!size) return node;
+      if (isWorkspaceGroupNode(node)) {
+        return {
+          ...node,
+          width: size.width,
+          height: size.height,
+          data: {
+            ...node.data,
+            nodeSize: size,
+          },
+        };
+      }
       if (!displayKind(node.data?.definitionId)) {
         return {
           ...node,
@@ -6513,6 +6725,11 @@ function WorkspacePageInner() {
         setShortcutsOpen(true);
         return;
       }
+      if (shortcutKey === "g" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        createWorkspaceGroupFromSelection();
+        return;
+      }
       if (event.key === "a" || event.key === "A") {
         if (event.metaKey || event.ctrlKey) {
           event.preventDefault();
@@ -6556,7 +6773,7 @@ function WorkspacePageInner() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [isDisplayMode, jumpPaletteOpen, lockCurrentViewport, redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas, workspaceWritable]);
+  }, [createWorkspaceGroupFromSelection, isDisplayMode, jumpPaletteOpen, lockCurrentViewport, redoCanvas, saveGraph, shortcutsOpen, setEdges, setNodes, undoCanvas, workspaceWritable]);
 
   const toggleDir = useCallback((dirPath) => {
     setCollapsedDirs((prev) => {
@@ -7243,6 +7460,10 @@ function WorkspacePageInner() {
             onNodeClick={(event, node) => {
               if (isDisplayMode) {
                 setSelectedDisplayNodeIds([sourceIdFromDisplayRefId(node.id)]);
+                return;
+              }
+              if (node?.data?.isWorkspaceGroup) {
+                setSelectedNodeId("");
                 return;
               }
               if (event.detail >= 3) {

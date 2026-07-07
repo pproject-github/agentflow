@@ -6363,6 +6363,90 @@ button.af-project-card {
   box-shadow: -22px 0 54px rgba(0, 0, 0, 0.34);
 }
 
+.af-work-group-node {
+  position: relative;
+  box-sizing: border-box;
+  min-width: 15rem;
+  min-height: 10rem;
+  border: 1px solid rgba(168, 143, 255, 0.34);
+  border-radius: 0.9rem;
+  background: rgba(88, 62, 160, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), 0 18px 44px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+
+.af-work-group-node--selected {
+  border-color: rgba(168, 143, 255, 0.82);
+  background: rgba(88, 62, 160, 0.13);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.34), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.af-work-group-node__title {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.7rem;
+  right: 0.55rem;
+  height: 1.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-radius: 0.65rem;
+  padding: 0 0.35rem 0 0.65rem;
+  background: rgba(18, 16, 26, 0.72);
+  color: rgba(255, 255, 255, 0.84);
+  font-family: var(--af-headline);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.af-work-group-node__title span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-group-node__delete {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.52);
+  cursor: pointer;
+}
+
+.af-work-group-node__delete:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.af-work-group-node__delete .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-work-group-node__resize {
+  width: 2rem;
+  height: 2rem;
+  right: 0.3rem;
+  bottom: 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.65rem;
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.af-work-group-node__resize .material-symbols-outlined {
+  font-size: 1.05rem;
+}
+
 .af-work-run-card {
   box-sizing: border-box;
   width: 16rem;
