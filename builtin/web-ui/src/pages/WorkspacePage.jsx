@@ -1422,6 +1422,40 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   return <VisibleScrollFrame className="af-work-display-body af-work-display-body--ascii"><pre className="af-work-node__diagram af-work-node__diagram--ascii">{content}</pre></VisibleScrollFrame>;
 }
 
+function DisplayFullscreenPreview({ node, onClose }) {
+  const htmlFrameRef = useRef(null);
+  const kind = displayKind(node?.data?.definitionId);
+  const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : "Display 预览");
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  if (!node) return null;
+  return createPortal(
+    <div className="af-display-preview-overlay" role="dialog" aria-modal="true" aria-label="全屏预览">
+      <div className="af-display-preview-shell">
+        <div className="af-display-preview-head">
+          <div className="af-display-preview-title">
+            <span className="material-symbols-outlined" aria-hidden>{displayIcon(kind)}</span>
+            <strong>{title}</strong>
+            <span>{node.id}</span>
+          </div>
+          <button type="button" className="af-display-preview-close" onClick={onClose} aria-label="关闭全屏预览" title="关闭">
+            <span className="material-symbols-outlined" aria-hidden>close</span>
+          </button>
+        </div>
+        <div className="af-display-preview-content">
+          <DisplayBody data={node.data} flowParams={node.data?.flowParams} htmlFrameRef={htmlFrameRef} />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function DisplayPickerPreview({ node }) {
   const kind = displayKind(node?.data?.definitionId);
   const rawContent = displayContent(node?.data);
@@ -2199,6 +2233,18 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             </button>
           </>
         ) : null}
+        <button
+          type="button"
+          className="af-work-display-card__action nodrag"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onOpenDisplayPreview?.(shareNodeId);
+          }}
+          aria-label="全屏预览"
+          title="全屏预览"
+        >
+          <span className="material-symbols-outlined">fullscreen</span>
+        </button>
         <button
           type="button"
           className="af-work-display-card__action nodrag"
@@ -3320,6 +3366,7 @@ function WorkspacePageInner() {
   const [displayLinkCopyState, setDisplayLinkCopyState] = useState("");
   const [displayPickerOpen, setDisplayPickerOpen] = useState(false);
   const [displayPickerSearch, setDisplayPickerSearch] = useState("");
+  const [displayPreviewNodeId, setDisplayPreviewNodeId] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddMode, setQuickAddMode] = useState("nodes");
   const [quickAddSearch, setQuickAddSearch] = useState("");
@@ -4895,6 +4942,7 @@ function WorkspacePageInner() {
       onRefreshMcps: refreshMcps,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
       onShareDisplayNode: shareDisplayNode,
+      onOpenDisplayPreview: setDisplayPreviewNodeId,
       sharingDisplayNodeId,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
@@ -4915,6 +4963,7 @@ function WorkspacePageInner() {
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
     [hydratedNodes],
   );
+  const displayPreviewNode = displayPreviewNodeId ? hydratedNodeById.get(displayPreviewNodeId) : null;
 
   const displayCanvasNodes = useMemo(() => {
     const selected = new Set(selectedDisplayNodeIds);
@@ -7350,6 +7399,9 @@ function WorkspacePageInner() {
             </div>
           </div>,
           document.body,
+        ) : null}
+        {displayPreviewNode ? (
+          <DisplayFullscreenPreview node={displayPreviewNode} onClose={() => setDisplayPreviewNodeId("")} />
         ) : null}
         {displayShareOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
