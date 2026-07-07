@@ -110,6 +110,11 @@ import {
   updateAdminBuiltinPipelineConfig,
 } from "./admin-builtin-pipelines.mjs";
 import { readAdminStorageConfig, writeAdminStorageConfig } from "./admin-storage-config.mjs";
+import {
+  appendRunLedgerEvent,
+  readRunLedgerEvents,
+  runLedgerId,
+} from "./run-ledger.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -1498,6 +1503,7 @@ function pipelineCountsForUser(userId) {
 }
 
 const USAGE_DAY_MS = 24 * 60 * 60 * 1000;
+const RUN_LEDGER_STALE_MS = 6 * 60 * 60 * 1000;
 
 function startOfLocalDayMs(timeMs) {
   const d = new Date(Number(timeMs) || Date.now());
@@ -1554,7 +1560,12 @@ function buildUsageDailyTrend(runs, days = 14, nowMs = Date.now()) {
     row[bucket] += 1;
     row.totalDurationMs += Math.max(0, Number(run.durationMs || 0));
     row._userIds.add(String(run.userId || ""));
-    row._pipelineKeys.add(`${run.userId || ""}:${run.flowSource || ""}:${run.flowId || ""}`);
+    {
+      const flowSource = String(run.flowSource || "user");
+      const flowId = String(run.flowId || "");
+      const userId = String(run.userId || "");
+      row._pipelineKeys.add(flowSource === "workspace" ? `workspace:${flowId}` : `${userId}:${flowSource}:${flowId}`);
+    }
   }
   return rows.map((row) => {
     row.users = row._userIds.size;
@@ -1566,7 +1577,7 @@ function buildUsageDailyTrend(runs, days = 14, nowMs = Date.now()) {
   });
 }
 
-function buildUsageRates(users, runs, nowMs = Date.now()) {
+function buildUsageRates(users, runs, nowMs = Date.now(), workspacePipelineCount = 0) {
   const windowDays = 7;
   const sinceMs = startOfLocalDayMs(nowMs) - (windowDays - 1) * USAGE_DAY_MS;
   const recentRuns = runs.filter((run) => Number(run?.at || 0) >= sinceMs);
@@ -1577,13 +1588,16 @@ function buildUsageRates(users, runs, nowMs = Date.now()) {
   for (const run of recentRuns) {
     const userId = String(run.userId || "");
     if (userId) activeUsers.add(userId);
-    activePipelines.add(`${userId}:${run.flowSource || ""}:${run.flowId || ""}`);
+    const flowSource = String(run.flowSource || "user");
+    const flowId = String(run.flowId || "");
+    activePipelines.add(flowSource === "workspace" ? `workspace:${flowId}` : `${userId}:${flowSource}:${flowId}`);
     const bucket = runStatusBucket(run.status);
     statusCounts[bucket] = (statusCounts[bucket] || 0) + 1;
     recentDurationMs += Math.max(0, Number(run.durationMs || 0));
   }
   const totalUsers = users.length;
-  const totalActivePipelines = users.reduce((sum, user) => sum + Math.max(0, Number(user?.pipelines?.active || 0)), 0);
+  const totalActivePipelines = users.reduce((sum, user) => sum + Math.max(0, Number(user?.pipelines?.active || 0)), 0)
+    + Math.max(0, Number(workspacePipelineCount || 0));
   const completedRuns = recentRuns.length - (statusCounts.running || 0);
   const badRuns = (statusCounts.failed || 0) + (statusCounts.stopped || 0) + (statusCounts.interrupted || 0) + (statusCounts.unknown || 0);
   return {
@@ -1603,21 +1617,196 @@ function buildUsageRates(users, runs, nowMs = Date.now()) {
   };
 }
 
+function appendWorkspaceRunStarted(record) {
+  appendRunLedgerEvent({
+    ...record,
+    type: "run_started",
+    kind: "workspace",
+    at: Number(record.startedAt || record.at || Date.now()),
+  });
+}
+
+function appendWorkspaceRunFinished(record, status) {
+  appendRunLedgerEvent({
+    ...record,
+    type: "run_finished",
+    kind: "workspace",
+    at: Number(record.startedAt || record.at || Date.now()),
+    endedAt: Number(record.endedAt || Date.now()),
+    durationMs: Math.max(0, Number(record.durationMs || (Number(record.endedAt || Date.now()) - Number(record.startedAt || record.at || Date.now())))),
+    status,
+  });
+}
+
+function normalizeWorkspaceUsageRecord(parsed, source = "workspace-run") {
+  const userId = String(parsed?.userId || "").trim();
+  const flowId = String(parsed?.flowId || "").trim();
+  const at = Number(parsed?.at || parsed?.startedAt || 0);
+  if (!userId || !flowId || !Number.isFinite(at) || at <= 0) return null;
+  return {
+    userId,
+    username: String(parsed?.username || userId),
+    flowId,
+    flowSource: String(parsed?.flowSource || "user"),
+    runId: String(parsed?.runId || ""),
+    at,
+    endedAt: parsed?.endedAt == null ? null : Number(parsed.endedAt),
+    durationMs: Math.max(0, Number(parsed?.durationMs || 0)),
+    status: runStatusBucket(parsed?.status),
+    source,
+  };
+}
+
+function readLegacyWorkspaceRunUsageRecords() {
+  const filePath = path.join(getAgentflowDataRoot(), "admin", "workspace-run-usage.jsonl");
+  if (!fs.existsSync(filePath)) return [];
+  let items = [];
+  try {
+    items = fs.readFileSync(filePath, "utf-8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => {
+        try { return JSON.parse(line); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch {
+    items = [];
+  }
+  return items
+    .map((item) => normalizeWorkspaceUsageRecord(item, "workspace-run-legacy"))
+    .filter(Boolean);
+}
+
+function readWorkspaceRunLedgerRecords(options = {}) {
+  const byRunId = new Map();
+  for (const event of readRunLedgerEvents(options)) {
+    if (String(event?.kind || "") !== "workspace") continue;
+    const runId = String(event?.runId || "").trim();
+    if (!runId) continue;
+    const existing = byRunId.get(runId) || {};
+    if (event.type === "run_started") {
+      byRunId.set(runId, {
+        ...existing,
+        ...event,
+        runId,
+        at: Number(event.at || existing.at || Date.now()),
+        status: existing.status || "running",
+      });
+    } else if (event.type === "run_finished") {
+      byRunId.set(runId, {
+        ...existing,
+        ...event,
+        runId,
+        at: Number(existing.at || event.at || Date.now()),
+        endedAt: event.endedAt == null ? null : Number(event.endedAt),
+        durationMs: Math.max(0, Number(event.durationMs || 0)),
+        status: runStatusBucket(event.status),
+      });
+    }
+  }
+  const now = Date.now();
+  return Array.from(byRunId.values())
+    .map((item) => {
+      const at = Number(item?.at || 0);
+      const status = runStatusBucket(item?.status);
+      if (status === "running" && at > 0 && now - at > RUN_LEDGER_STALE_MS) {
+        return {
+          ...item,
+          endedAt: Number(item?.endedAt || at + RUN_LEDGER_STALE_MS),
+          durationMs: Math.max(0, Number(item?.durationMs || Math.min(now - at, RUN_LEDGER_STALE_MS))),
+          status: "interrupted",
+        };
+      }
+      return item;
+    })
+    .map((item) => normalizeWorkspaceUsageRecord(item, "workspace-run-ledger"))
+    .filter(Boolean);
+}
+
+function readWorkspaceRunUsageRecords(options = {}) {
+  const sinceMs = Number(options?.sinceMs || 0);
+  return [
+    ...readLegacyWorkspaceRunUsageRecords(),
+    ...readWorkspaceRunLedgerRecords(options),
+  ].filter((run) => !Number.isFinite(sinceMs) || sinceMs <= 0 || Number(run?.at || 0) >= sinceMs);
+}
+
+function activeWorkspaceRunUsageRecords() {
+  const out = [];
+  for (const entry of activeWorkspaceRuns.values()) {
+    const userId = String(entry?.userId || "").trim();
+    const flowId = String(entry?.flowId || "").trim();
+    const at = Number(entry?.startedAt || 0);
+    if (!userId || !flowId || !Number.isFinite(at) || at <= 0) continue;
+    out.push({
+      userId,
+      username: String(entry?.username || userId),
+      flowId,
+      flowSource: String(entry?.flowSource || "user"),
+      runId: String(entry?.runId || ""),
+      at,
+      endedAt: null,
+      durationMs: Math.max(0, Date.now() - at),
+      status: "running",
+      source: "workspace-run-active",
+    });
+  }
+  return out;
+}
+
+function dedupeWorkspaceUsageRuns(runs = []) {
+  const byKey = new Map();
+  for (const run of runs) {
+    const runId = String(run?.runId || "").trim();
+    const key = runId || `${run?.userId || ""}:${run?.flowSource || ""}:${run?.flowId || ""}:${run?.at || ""}:${run?.status || ""}`;
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, run);
+      continue;
+    }
+    const runScore = (item) => {
+      if (item?.source === "workspace-run-active") return 3;
+      if (item?.status && item.status !== "running") return 2;
+      return 1;
+    };
+    if (runScore(run) >= runScore(existing)) byKey.set(key, run);
+  }
+  return Array.from(byKey.values());
+}
+
 function buildAdminUsageDashboard(workspaceRoot) {
   const authUsers = readAuthUsers();
+  const usageSinceMs = startOfLocalDayMs(Date.now()) - 13 * USAGE_DAY_MS;
+  const workspacePipelineCount = listFlowsJson(workspaceRoot, { includeWorkspaceFlows: true })
+    .filter((flow) => flow?.source === "workspace" && !flow?.archived)
+    .length;
+  const workspaceUsageRuns = dedupeWorkspaceUsageRuns([
+    ...readWorkspaceRunUsageRecords({ sinceMs: usageSinceMs }),
+    ...activeWorkspaceRunUsageRecords(),
+  ]);
   const userIds = Array.from(new Set([
     ...Object.keys(authUsers || {}),
     ...listAgentflowUserIds(),
+    ...workspaceUsageRuns.map((run) => run.userId),
   ].map((id) => String(id || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const allRuns = [];
+  const workspaceUsageByUser = new Map();
+  for (const run of workspaceUsageRuns) {
+    const userId = String(run.userId || "");
+    if (!workspaceUsageByUser.has(userId)) workspaceUsageByUser.set(userId, []);
+    workspaceUsageByUser.get(userId).push(run);
+  }
   const users = userIds.map((userId) => {
     const user = authUsers[userId] || {};
     const pipelineCounts = pipelineCountsForUser(userId);
-    const runs = listRecentRunsFromDisk(workspaceRoot, {
+    const pipelineRuns = listRecentRunsFromDisk(workspaceRoot, {
       userId,
       includeWorkspaceRuns: false,
       includeLegacyUserRuns: false,
     });
+    const runs = [...pipelineRuns, ...(workspaceUsageByUser.get(userId) || [])]
+      .sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
     const statusCounts = {};
     let totalDurationMs = 0;
     for (const run of runs) {
@@ -1688,11 +1877,28 @@ function buildAdminUsageDashboard(workspaceRoot) {
     totalDurationMs: 0,
   });
   totals.avgDurationMs = totals.runs > 0 ? Math.round(totals.totalDurationMs / totals.runs) : 0;
+  const recentRuns = allRuns
+    .slice()
+    .sort((a, b) => Number(b.at || 0) - Number(a.at || 0))
+    .slice(0, 50)
+    .map((run) => ({
+      userId: String(run.userId || ""),
+      username: String(run.username || run.userId || ""),
+      flowId: String(run.flowId || ""),
+      flowSource: String(run.flowSource || "user"),
+      runId: String(run.runId || ""),
+      at: Number(run.at || 0),
+      endedAt: run.endedAt == null ? null : Number(run.endedAt),
+      durationMs: Math.max(0, Number(run.durationMs || 0)),
+      status: runStatusBucket(run.status),
+      runType: String(run.source || "").startsWith("workspace-run") ? "workspace" : "pipeline",
+    }));
   return {
     generatedAt: new Date().toISOString(),
     totals,
-    usage: buildUsageRates(users, allRuns),
+    usage: buildUsageRates(users, allRuns, Date.now(), workspacePipelineCount),
     dailyTrend: buildUsageDailyTrend(allRuns, 14),
+    recentRuns,
     users,
   };
 }
@@ -3049,28 +3255,46 @@ function workspaceImplementationInlineText(instance) {
   return "";
 }
 
-function workspaceImplementationBlock(instance, scopedRoot) {
-  const parts = [];
+function workspaceMaterializeImplementationReference(instance, scopedRoot, runPackage = {}) {
   const implementationRef = String(instance?.implementationRef || "").trim();
-  if (implementationRef) {
-    const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
-    const body = workspaceReadTextFileIfExists(abs, 60000);
-    if (body.trim()) {
-      parts.push(`### ${implementationRef}\n\n${body.trim()}`);
+  if (!implementationRef) return null;
+  const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
+  const exists = fs.existsSync(abs) && fs.statSync(abs).isFile();
+  const nodeRunDir = String(runPackage?.nodeRunDir || "").trim();
+  let mounted = "";
+  if (exists && nodeRunDir) {
+    try {
+      const mountedRel = path.join("references", "implementation.md");
+      const dest = path.resolve(nodeRunDir, mountedRel);
+      const nodeRunWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+      if (dest === nodeRunDir || dest.startsWith(nodeRunWithSep)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(abs, dest);
+        mounted = mountedRel.split(path.sep).join(path.posix.sep);
+      }
+    } catch {
+      mounted = "";
     }
   }
+  return { implementationRef, exists, mounted };
+}
+
+function workspaceImplementationBlock(instance, scopedRoot, runPackage = {}) {
+  const ref = workspaceMaterializeImplementationReference(instance, scopedRoot, runPackage);
   const inline = workspaceImplementationInlineText(instance);
-  if (inline) parts.push(`### Inline implementation\n\n${inline}`);
-  if (!parts.length) return "";
+  if (!ref && !inline) return "";
   const mode = String(instance?.implementationMode || "").trim();
   return [
     "## 参考实现方案",
     "",
     mode ? `mode: ${mode}` : "",
+    ref ? `- 实现方案文件：\`${ref.mounted || ref.implementationRef}\`` : "",
+    ref?.mounted ? `- 原始流水线路径：\`${ref.implementationRef}\`` : "",
+    ref && !ref.exists ? "- 当前实现方案文件不存在，本次不要依赖旧方案。" : "",
+    inline ? "- 节点存在内联实现方案字段，但本提示不会内联其内容；如需复用，请优先参考实现方案文件。" : "",
     "",
-    ...parts,
-    "",
-    "以上方案用于加速本次执行。若发现过期，可以按当前任务修正执行，但最终结果必须以当前输入为准。",
+    "该文件只作为可选参考，用于了解上次执行的实现路径。不要把旧方案当成硬约束；如果与当前任务、输入或输出要求冲突，以当前任务为准。",
+    "只有在需要复用细节或确认历史约定时才读取该文件；不要在最终回复中复述参考方案内容。",
   ].filter((line) => line !== "").join("\n");
 }
 
@@ -4320,7 +4544,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     } catch {
       // Best-effort debug artifact only.
     }
-    const implementationBlock = workspaceImplementationBlock(instance, scopedRoot);
+    const implementationBlock = workspaceImplementationBlock(instance, scopedRoot, runPackage);
     const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, implementationBlock);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
@@ -5413,6 +5637,9 @@ export function startUiServer({
         const runEntry = {
           controller,
           child: null,
+          runId: runLedgerId("workspace"),
+          userId: String(userCtx.userId || ""),
+          username: String(authUser?.username || userCtx.userId || ""),
           runNodeId: String(payload.runNodeId || "").trim(),
           flowId,
           flowSource: scoped.flowSource || payload.flowSource || "user",
@@ -5424,6 +5651,7 @@ export function startUiServer({
           },
         };
         activeWorkspaceRuns.set(runKey, runEntry);
+        appendWorkspaceRunStarted(runEntry);
         const setActiveChild = (child) => {
           runEntry.child = child || null;
           if (controller.signal.aborted) runEntry.stopChild();
@@ -5451,12 +5679,27 @@ export function startUiServer({
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
             fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+            appendWorkspaceRunFinished({
+              ...runEntry,
+              endedAt: Date.now(),
+              durationMs: Date.now() - runEntry.startedAt,
+            }, "success");
             writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
             if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
+              appendWorkspaceRunFinished({
+                ...runEntry,
+                endedAt: Date.now(),
+                durationMs: Date.now() - runEntry.startedAt,
+              }, "stopped");
               writeEvent({ type: "stopped", ok: false, stopped: true, message: "Workspace run stopped" });
             } else {
+              appendWorkspaceRunFinished({
+                ...runEntry,
+                endedAt: Date.now(),
+                durationMs: Date.now() - runEntry.startedAt,
+              }, "failed");
               writeEvent({ type: "error", error: (e && e.message) || String(e) });
             }
             res.end();
@@ -5475,11 +5718,26 @@ export function startUiServer({
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
           fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+          appendWorkspaceRunFinished({
+            ...runEntry,
+            endedAt: Date.now(),
+            durationMs: Date.now() - runEntry.startedAt,
+          }, "success");
           json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, touchedNodeIds: Array.from(touchedIds) });
         } catch (e) {
           if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
+            appendWorkspaceRunFinished({
+              ...runEntry,
+              endedAt: Date.now(),
+              durationMs: Date.now() - runEntry.startedAt,
+            }, "stopped");
             json(res, 200, { ok: false, stopped: true, message: "Workspace run stopped" });
           } else {
+            appendWorkspaceRunFinished({
+              ...runEntry,
+              endedAt: Date.now(),
+              durationMs: Date.now() - runEntry.startedAt,
+            }, "failed");
             throw e;
           }
         } finally {
