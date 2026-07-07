@@ -1491,12 +1491,119 @@ function pipelineCountsForUser(userId) {
   };
 }
 
+const USAGE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function startOfLocalDayMs(timeMs) {
+  const d = new Date(Number(timeMs) || Date.now());
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function localDayKey(timeMs) {
+  const d = new Date(Number(timeMs) || Date.now());
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function runStatusBucket(status) {
+  const s = String(status || "unknown");
+  if (s === "success" || s === "failed" || s === "running" || s === "stopped" || s === "interrupted") return s;
+  return "unknown";
+}
+
+function buildUsageDailyTrend(runs, days = 14, nowMs = Date.now()) {
+  const startMs = startOfLocalDayMs(nowMs) - (Math.max(1, days) - 1) * USAGE_DAY_MS;
+  const rows = [];
+  const byDate = new Map();
+  for (let i = 0; i < days; i += 1) {
+    const dateMs = startMs + i * USAGE_DAY_MS;
+    const date = localDayKey(dateMs);
+    const row = {
+      date,
+      runs: 0,
+      success: 0,
+      failed: 0,
+      running: 0,
+      stopped: 0,
+      interrupted: 0,
+      unknown: 0,
+      users: 0,
+      pipelines: 0,
+      totalDurationMs: 0,
+      avgDurationMs: 0,
+      _userIds: new Set(),
+      _pipelineKeys: new Set(),
+    };
+    rows.push(row);
+    byDate.set(date, row);
+  }
+  for (const run of runs) {
+    const at = Number(run?.at || 0);
+    if (!Number.isFinite(at) || at < startMs) continue;
+    const row = byDate.get(localDayKey(at));
+    if (!row) continue;
+    const bucket = runStatusBucket(run.status);
+    row.runs += 1;
+    row[bucket] += 1;
+    row.totalDurationMs += Math.max(0, Number(run.durationMs || 0));
+    row._userIds.add(String(run.userId || ""));
+    row._pipelineKeys.add(`${run.userId || ""}:${run.flowSource || ""}:${run.flowId || ""}`);
+  }
+  return rows.map((row) => {
+    row.users = row._userIds.size;
+    row.pipelines = row._pipelineKeys.size;
+    row.avgDurationMs = row.runs > 0 ? Math.round(row.totalDurationMs / row.runs) : 0;
+    delete row._userIds;
+    delete row._pipelineKeys;
+    return row;
+  });
+}
+
+function buildUsageRates(users, runs, nowMs = Date.now()) {
+  const windowDays = 7;
+  const sinceMs = startOfLocalDayMs(nowMs) - (windowDays - 1) * USAGE_DAY_MS;
+  const recentRuns = runs.filter((run) => Number(run?.at || 0) >= sinceMs);
+  const activeUsers = new Set();
+  const activePipelines = new Set();
+  const statusCounts = {};
+  let recentDurationMs = 0;
+  for (const run of recentRuns) {
+    const userId = String(run.userId || "");
+    if (userId) activeUsers.add(userId);
+    activePipelines.add(`${userId}:${run.flowSource || ""}:${run.flowId || ""}`);
+    const bucket = runStatusBucket(run.status);
+    statusCounts[bucket] = (statusCounts[bucket] || 0) + 1;
+    recentDurationMs += Math.max(0, Number(run.durationMs || 0));
+  }
+  const totalUsers = users.length;
+  const totalActivePipelines = users.reduce((sum, user) => sum + Math.max(0, Number(user?.pipelines?.active || 0)), 0);
+  const completedRuns = recentRuns.length - (statusCounts.running || 0);
+  const badRuns = (statusCounts.failed || 0) + (statusCounts.stopped || 0) + (statusCounts.interrupted || 0) + (statusCounts.unknown || 0);
+  return {
+    windowDays,
+    activeUsers: activeUsers.size,
+    activeUserRate: totalUsers > 0 ? activeUsers.size / totalUsers : 0,
+    activePipelines: activePipelines.size,
+    activePipelineRate: totalActivePipelines > 0 ? activePipelines.size / totalActivePipelines : 0,
+    runs: recentRuns.length,
+    avgRunsPerDay: recentRuns.length / windowDays,
+    successRuns: statusCounts.success || 0,
+    badRuns,
+    runningRuns: statusCounts.running || 0,
+    successRate: completedRuns > 0 ? (statusCounts.success || 0) / completedRuns : 0,
+    failureRate: completedRuns > 0 ? badRuns / completedRuns : 0,
+    avgDurationMs: recentRuns.length > 0 ? Math.round(recentDurationMs / recentRuns.length) : 0,
+  };
+}
+
 function buildAdminUsageDashboard(workspaceRoot) {
   const authUsers = readAuthUsers();
   const userIds = Array.from(new Set([
     ...Object.keys(authUsers || {}),
     ...listAgentflowUserIds(),
   ].map((id) => String(id || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const allRuns = [];
   const users = userIds.map((userId) => {
     const user = authUsers[userId] || {};
     const pipelineCounts = pipelineCountsForUser(userId);
@@ -1508,6 +1615,7 @@ function buildAdminUsageDashboard(workspaceRoot) {
     const statusCounts = {};
     let totalDurationMs = 0;
     for (const run of runs) {
+      allRuns.push({ ...run, userId, username: user.username || userId });
       const status = String(run.status || "unknown");
       statusCounts[status] = (statusCounts[status] || 0) + 1;
       totalDurationMs += Math.max(0, Number(run.durationMs || 0));
@@ -1577,6 +1685,8 @@ function buildAdminUsageDashboard(workspaceRoot) {
   return {
     generatedAt: new Date().toISOString(),
     totals,
+    usage: buildUsageRates(users, allRuns),
+    dailyTrend: buildUsageDailyTrend(allRuns, 14),
     users,
   };
 }
