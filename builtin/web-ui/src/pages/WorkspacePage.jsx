@@ -59,6 +59,15 @@ const WORKSPACE_RUN_DEFINITION = {
   inputs: [{ type: "node", name: "prev", default: "" }],
   outputs: [{ type: "node", name: "next", default: "" }],
 };
+const WORKSPACE_SCHEDULED_RUN_DEFINITION = {
+  id: "workspace_scheduled_run",
+  displayName: "Scheduled Run",
+  label: "Scheduled Run",
+  description: "Run the downstream workspace subgraph on a local interval while this workspace page is open.",
+  type: "control",
+  inputs: [{ type: "node", name: "prev", default: "" }],
+  outputs: [{ type: "node", name: "next", default: "" }],
+};
 const WORKSPACE_LOAD_SKILLS_DEFINITION = {
   id: "control_load_skills",
   displayName: "Load Skills",
@@ -295,7 +304,7 @@ function runtimeDefinitionIdForPalette(def) {
 
 function paletteCategory(node) {
   const id = String(runtimeDefinitionIdForPalette(node) || node?.id || "");
-  if (id === "workspace_run") return "CONTROL";
+  if (id === "workspace_run" || id === "workspace_scheduled_run") return "CONTROL";
   if (id.startsWith("display_")) return "DISPLAY";
   if (/^control/i.test(id)) return "CONTROL";
   if (/^tool/i.test(id)) return "TOOL";
@@ -494,6 +503,36 @@ function slotDefault(slot) {
   if (slot?.default != null) return String(slot.default);
   if (slot?.value != null) return String(slot.value);
   return "";
+}
+
+function normalizeScheduledRunConfig(raw) {
+  let parsed = {};
+  const text = String(raw || "").trim();
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = {};
+    }
+  }
+  const intervalMinutes = Number(parsed.intervalMinutes);
+  return {
+    enabled: parsed.enabled === true,
+    intervalMinutes: Number.isFinite(intervalMinutes) && intervalMinutes > 0
+      ? Math.min(Math.max(Math.round(intervalMinutes), 1), 1440)
+      : 60,
+  };
+}
+
+function serializeScheduledRunConfig(config) {
+  const normalized = normalizeScheduledRunConfig(JSON.stringify(config || {}));
+  return JSON.stringify(normalized);
+}
+
+function formatScheduledRunTime(ts) {
+  const value = Number(ts || 0);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function cloneSlots(slots) {
@@ -2426,6 +2465,120 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   );
 }
 
+function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const config = normalizeScheduledRunConfig(data?.body || "");
+  const scheduleState = data?.scheduledRunState || {};
+  const running = data?.runningRunNodeId === id;
+  const stopped = data?.nodeStatus === "stopped";
+  const readOnly = Boolean(data?.readOnly);
+  const updateConfig = (patch) => {
+    data?.onChangeScheduledRunConfig?.(id, { ...config, ...patch });
+  };
+  return (
+    <div
+      className={
+        "af-work-run-card af-work-schedule-card" +
+        (selected ? " af-work-run-card--selected" : "") +
+        (config.enabled ? " af-work-schedule-card--enabled" : "") +
+        (running ? " af-work-run-card--running" : "") +
+        (data?.isExecuting ? " af-work-run-card--executing" : "") +
+        (data?.nodeStatus === "success" ? " af-work-run-card--done" : "") +
+        (data?.nodeStatus === "failed" ? " af-work-run-card--failed" : "") +
+        (stopped ? " af-work-run-card--stopped" : "")
+      }
+      onPointerDownCapture={data?.onSelectNodePointerDown}
+    >
+      {inputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.25 + idx * 1.75}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`in-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--in" style={{ top }}>{label}</span>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`input-${idx}`}
+              className="af-work-display-handle af-work-display-handle--in"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      {outputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.25 + idx * 1.75}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`out-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--out" style={{ top }}>{label}</span>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id={`output-${idx}`}
+              className="af-work-display-handle af-work-display-handle--out"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      <div className="af-work-run-card__head">
+        <span className="material-symbols-outlined">event_repeat</span>
+        <strong>{data?.label || "Scheduled Run"}</strong>
+        <span>{data?.definitionId || "workspace_scheduled_run"}</span>
+        <button type="button" className="af-work-display-card__close nodrag" disabled={readOnly} onClick={() => deleteNode?.(id)} aria-label="删除节点">
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div className="af-work-schedule-card__body nodrag">
+        <label className="af-work-schedule-card__toggle">
+          <input
+            type="checkbox"
+            checked={config.enabled}
+            disabled={readOnly}
+            onChange={(event) => updateConfig({ enabled: event.target.checked })}
+          />
+          <span>{config.enabled ? "定时开启" : "定时关闭"}</span>
+        </label>
+        <label className="af-work-schedule-card__field">
+          <span>每</span>
+          <input
+            type="number"
+            min="1"
+            max="1440"
+            step="1"
+            value={config.intervalMinutes}
+            disabled={readOnly}
+            onChange={(event) => updateConfig({ intervalMinutes: event.target.value })}
+          />
+          <span>分钟</span>
+        </label>
+        <div className="af-work-schedule-card__meta">
+          <span>Next {formatScheduledRunTime(scheduleState.nextAt)}</span>
+          <span>{scheduleState.lastStatus || "idle"}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+        disabled={readOnly}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (running) data?.onStopWorkspaceNode?.(id);
+          else data?.onRunWorkspaceNode?.(id);
+        }}
+      >
+        <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+        <span>{running ? "Stop" : "Run now"}</span>
+      </button>
+    </div>
+  );
+}
+
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
@@ -2486,6 +2639,9 @@ function WorkspaceFlowNode(props) {
   }
   if (props.data?.definitionId === "workspace_run") {
     return <WorkspaceRunNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
+  }
+  if (props.data?.definitionId === "workspace_scheduled_run") {
+    return <WorkspaceScheduledRunNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
   if (props.data?.definitionId === "control_load_skills") {
     return (
@@ -3542,6 +3698,11 @@ function WorkspacePageInner() {
   const [canvasTool, setCanvasTool] = useState("pan");
   const [authUser, setAuthUser] = useState(null);
   const [runningRunNodeId, setRunningRunNodeId] = useState("");
+  const runningRunNodeIdRef = useRef("");
+  const workspaceWritableRef = useRef(true);
+  const runWorkspaceNodeRef = useRef(null);
+  const scheduledRunTimersRef = useRef(new Map());
+  const [scheduledRunState, setScheduledRunState] = useState({});
   const workspaceRunAbortRef = useRef(null);
   const workspaceRunStoppedRef = useRef(false);
   const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
@@ -3684,6 +3845,7 @@ function WorkspacePageInner() {
       WORKSPACE_LOAD_SKILLS_DEFINITION,
       WORKSPACE_LOAD_MCP_DEFINITION,
       WORKSPACE_RUN_DEFINITION,
+      WORKSPACE_SCHEDULED_RUN_DEFINITION,
     ];
     setPalette(paletteList);
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
@@ -4324,6 +4486,10 @@ function WorkspacePageInner() {
     }
   }, []);
 
+  useEffect(() => {
+    runWorkspaceNodeRef.current = runWorkspaceNode;
+  }, [runWorkspaceNode]);
+
   const refreshMcps = useCallback(async () => {
     try {
       const r = await fetch("/api/mcps");
@@ -4390,6 +4556,14 @@ function WorkspacePageInner() {
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+
+  useEffect(() => {
+    runningRunNodeIdRef.current = runningRunNodeId;
+  }, [runningRunNodeId]);
+
+  useEffect(() => {
+    workspaceWritableRef.current = workspaceWritable;
+  }, [workspaceWritable]);
 
   useEffect(() => {
     const prev = nodeHandleSignaturesRef.current;
@@ -4463,6 +4637,80 @@ function WorkspacePageInner() {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
   }, [nodes, edges, displayPage, saveGraph, workspaceWritable]);
+
+  const scheduledRunConfigs = useMemo(() => (
+    nodes
+      .filter((node) => node?.data?.definitionId === "workspace_scheduled_run")
+      .map((node) => ({ id: node.id, config: normalizeScheduledRunConfig(node.data?.body || "") }))
+  ), [nodes]);
+
+  const scheduledRunKey = useMemo(() => (
+    scheduledRunConfigs
+      .map((item) => `${item.id}:${item.config.enabled ? "1" : "0"}:${item.config.intervalMinutes}`)
+      .join("|")
+  ), [scheduledRunConfigs]);
+
+  useEffect(() => {
+    for (const timer of scheduledRunTimersRef.current.values()) {
+      window.clearInterval(timer);
+    }
+    scheduledRunTimersRef.current.clear();
+    if (!loadedRef.current || !workspaceWritable || workspaceMode !== "workspace") {
+      setScheduledRunState({});
+      return undefined;
+    }
+    const enabled = scheduledRunConfigs.filter((item) => item.config.enabled);
+    if (!enabled.length) {
+      setScheduledRunState({});
+      return undefined;
+    }
+    const now = Date.now();
+    setScheduledRunState((current) => {
+      const next = {};
+      for (const item of enabled) {
+        const intervalMs = item.config.intervalMinutes * 60 * 1000;
+        next[item.id] = {
+          ...(current[item.id] || {}),
+          nextAt: now + intervalMs,
+          lastStatus: current[item.id]?.lastStatus || "armed",
+        };
+      }
+      return next;
+    });
+    for (const item of enabled) {
+      const intervalMs = item.config.intervalMinutes * 60 * 1000;
+      const timer = window.setInterval(() => {
+        const nextAt = Date.now() + intervalMs;
+        if (!workspaceWritableRef.current) {
+          setScheduledRunState((current) => ({
+            ...current,
+            [item.id]: { ...(current[item.id] || {}), nextAt, lastStatus: "readonly" },
+          }));
+          return;
+        }
+        if (runningRunNodeIdRef.current) {
+          setScheduledRunState((current) => ({
+            ...current,
+            [item.id]: { ...(current[item.id] || {}), nextAt, lastStatus: "skipped: busy" },
+          }));
+          return;
+        }
+        setScheduledRunState((current) => ({
+          ...current,
+          [item.id]: { ...(current[item.id] || {}), nextAt, lastAt: Date.now(), lastStatus: "triggered" },
+        }));
+        setStatus(`Scheduled run triggered: ${item.id}`);
+        runWorkspaceNodeRef.current?.(item.id);
+      }, intervalMs);
+      scheduledRunTimersRef.current.set(item.id, timer);
+    }
+    return () => {
+      for (const timer of scheduledRunTimersRef.current.values()) {
+        window.clearInterval(timer);
+      }
+      scheduledRunTimersRef.current.clear();
+    };
+  }, [scheduledRunConfigs, scheduledRunKey, workspaceMode, workspaceWritable]);
 
   const changeLoadSkillKeys = useCallback((nodeId, keys) => {
     if (!workspaceWritable) {
@@ -4551,6 +4799,35 @@ function WorkspacePageInner() {
         inputs: patchInputSlots(draft.inputs),
       };
     });
+    saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
+  }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
+
+  const changeScheduledRunConfig = useCallback((nodeId, config) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
+    const serialized = serializeScheduledRunConfig(config);
+    const nextNodes = nodes.map((node) => (
+      node.id === nodeId
+        ? { ...node, data: { ...node.data, body: serialized } }
+        : node
+    ));
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [nodeId]: {
+        ...base,
+        body: serialized,
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    setNodePropDraft((draft) => (
+      draft?.id === nodeId ? { ...draft, body: serialized } : draft
+    ));
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
 
@@ -4987,6 +5264,8 @@ function WorkspacePageInner() {
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
       runningRunNodeId,
+      scheduledRunState: scheduledRunState[node.id] || null,
+      onChangeScheduledRunConfig: changeScheduledRunConfig,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
@@ -5011,7 +5290,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),

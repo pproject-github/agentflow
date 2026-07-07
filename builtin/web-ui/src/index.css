@@ -6447,6 +6447,73 @@ button.af-project-card {
   background: rgba(255, 82, 82, 0.26);
 }
 
+.af-work-schedule-card {
+  width: 18rem;
+}
+
+.af-work-schedule-card--enabled {
+  border-color: rgba(92, 176, 255, 0.58);
+}
+
+.af-work-schedule-card__body {
+  padding: 0.7rem 0.75rem 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.af-work-schedule-card__toggle,
+.af-work-schedule-card__field,
+.af-work-schedule-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.78rem;
+}
+
+.af-work-schedule-card__toggle {
+  justify-content: space-between;
+}
+
+.af-work-schedule-card__toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: rgba(124, 77, 255, 0.95);
+}
+
+.af-work-schedule-card__field input {
+  width: 4.5rem;
+  height: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.55rem;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(255, 255, 255, 0.92);
+  font: 700 0.82rem var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  text-align: center;
+}
+
+.af-work-schedule-card__field input:disabled,
+.af-work-schedule-card__toggle input:disabled {
+  opacity: 0.58;
+}
+
+.af-work-schedule-card__meta {
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.68rem;
+  overflow: hidden;
+}
+
+.af-work-schedule-card__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .af-work-load-skills-card {
   position: relative;
   width: 23rem;

@@ -31,6 +31,8 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   control_interval_loop: ["Interval Loop"],
   control_load_skills: ["Load Skills"],
   control_load_mcp: ["Load MCP"],
+  workspace_scheduled_run: ["Scheduled Run"],
+  workspace_run: ["Run"],
   control_user_workspace: ["User Workspace"],
   control_toBool: ["To Bool", "Code ToBool"],
   control_wait_until: ["Wait Until"],

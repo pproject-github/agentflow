@@ -2727,7 +2727,7 @@ function workspaceRunPlan(graph, runNodeId, scopedRoot = "") {
   const addNeeded = (id) => {
     if (!id || needed.has(id)) return;
     const defId = String(instances[id]?.definitionId || "");
-    if (id !== target && defId === "workspace_run") {
+    if (id !== target && (defId === "workspace_run" || defId === "workspace_scheduled_run")) {
       pauseNodeIds.add(id);
       return;
     }
@@ -3417,7 +3417,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const defId = String(instance.definitionId || "");
     emit({ type: "node-start", nodeId, definitionId: defId });
 
-    if (defId === "workspace_run") {
+    if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
       continue;
     }
 
