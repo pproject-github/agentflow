@@ -8444,6 +8444,51 @@ button.af-project-card {
   font-size: 17px;
 }
 
+.af-connect-node-menu__tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  padding: 0 0.65rem 0.55rem;
+}
+
+.af-connect-node-menu__tab {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(230, 224, 240, 0.62);
+  font: 700 11px/1 var(--af-headline);
+  cursor: pointer;
+}
+
+.af-connect-node-menu__tab span {
+  color: rgba(151, 209, 255, 0.78);
+  font-family: var(--af-mono);
+  font-size: 10px;
+}
+
+.af-connect-node-menu__tab:hover:not(:disabled) {
+  border-color: rgba(205, 189, 255, 0.28);
+  background: rgba(255, 255, 255, 0.065);
+  color: rgba(245, 241, 255, 0.88);
+}
+
+.af-connect-node-menu__tab--active {
+  border-color: rgba(124, 77, 255, 0.58);
+  background: rgba(124, 77, 255, 0.24);
+  color: rgba(245, 241, 255, 0.96);
+}
+
+.af-connect-node-menu__tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .af-connect-node-menu__search {
   margin: 0 0.65rem 0.55rem;
   min-height: 32px;
@@ -8531,9 +8576,8 @@ button.af-project-card {
 }
 
 .af-connect-node-menu__port {
-  max-width: 128px;
-  display: inline-grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  max-width: 150px;
+  display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   padding: 0.24rem 0.4rem;
@@ -8542,6 +8586,19 @@ button.af-project-card {
   font-size: 10px;
   font-weight: 700;
   color: rgba(230, 224, 240, 0.72);
+}
+
+.af-connect-node-menu__port-name {
+  flex: 1 1 auto;
+}
+
+.af-connect-node-menu__port-badge {
+  flex: 0 0 auto;
+  padding: 0.08rem 0.28rem;
+  border-radius: 999px;
+  background: rgba(255, 183, 77, 0.16);
+  color: rgba(255, 213, 128, 0.86);
+  font-size: 9px;
 }
 
 .af-connect-node-menu__empty {

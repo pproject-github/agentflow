@@ -412,6 +412,60 @@ function buildWorkspaceConnectionCandidates(palette, draft) {
     });
 }
 
+function buildWorkspaceExistingConnectionCandidates(nodes, edges, draft) {
+  if (!draft) return [];
+  const candidates = [];
+  const wantInputs = draft.handleType === "source";
+  for (const node of nodes || []) {
+    if (!node || node.id === draft.nodeId) continue;
+    const slots = Array.isArray(wantInputs ? node.data?.inputs : node.data?.outputs)
+      ? (wantInputs ? node.data.inputs : node.data.outputs)
+      : [];
+    for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
+      const slot = slots[slotIndex];
+      if (slot?.showOnNode === false) continue;
+      const ok = wantInputs
+        ? areSlotsCompatible(draft.slot, slot)
+        : areSlotsCompatible(slot, draft.slot);
+      if (!ok) continue;
+      const connection = wantInputs
+        ? {
+            source: draft.nodeId,
+            sourceHandle: draft.handleId,
+            target: node.id,
+            targetHandle: `input-${slotIndex}`,
+          }
+        : {
+            source: node.id,
+            sourceHandle: `output-${slotIndex}`,
+            target: draft.nodeId,
+            targetHandle: draft.handleId,
+          };
+      const occupied = (edges || []).some((edge) => (
+        edge.target === connection.target && edge.targetHandle === connection.targetHandle
+      ));
+      candidates.push({
+        node,
+        nodeId: node.id,
+        nodeLabel: node.data?.label || node.id,
+        definitionId: node.data?.definitionId || "",
+        slot,
+        slotIndex,
+        handleId: wantInputs ? connection.targetHandle : connection.sourceHandle,
+        connection,
+        occupied,
+      });
+    }
+  }
+  return candidates.sort((a, b) => {
+    const ay = Number(a.node?.position?.y || 0);
+    const by = Number(b.node?.position?.y || 0);
+    const ax = Number(a.node?.position?.x || 0);
+    const bx = Number(b.node?.position?.x || 0);
+    return ay - by || ax - bx || a.slotIndex - b.slotIndex || String(a.nodeId).localeCompare(String(b.nodeId));
+  });
+}
+
 function iconForFile(fileName, isDir = false) {
   if (isDir) return "folder";
   const ext = String(fileName || "").toLowerCase().split(".").pop();
@@ -5986,7 +6040,8 @@ function WorkspacePageInner() {
     if (!draft) return;
     if (connectionState?.toNode) return;
     const candidates = buildWorkspaceConnectionCandidates(palette, draft);
-    if (candidates.length === 0) {
+    const existingCandidates = buildWorkspaceExistingConnectionCandidates(nodesRef.current, edgesRef.current, draft);
+    if (candidates.length === 0 && existingCandidates.length === 0) {
       setStatus(`没有匹配 ${draft.slotType} 端口的节点`);
       return;
     }
@@ -5997,7 +6052,8 @@ function WorkspacePageInner() {
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
     const menuWidth = 320;
-    const menuHeight = Math.min(440, 104 + candidates.length * 58);
+    const maxCandidateCount = Math.max(candidates.length, existingCandidates.length);
+    const menuHeight = Math.min(480, 150 + maxCandidateCount * 58);
     const left = Math.max(12, Math.min(clientX - rect.left, rect.width - menuWidth - 12));
     const top = Math.max(12, Math.min(clientY - rect.top, rect.height - menuHeight - 12));
     setConnectionMenu({
@@ -6006,6 +6062,8 @@ function WorkspacePageInner() {
       flowPosition: reactFlow.screenToFlowPosition({ x: clientX, y: clientY }),
       draft,
       candidates,
+      existingCandidates,
+      mode: existingCandidates.length > 0 ? "existing" : "create",
       query: "",
     });
   }, [palette, reactFlow, workspaceWritable]);
@@ -6043,6 +6101,28 @@ function WorkspacePageInner() {
     });
     setConnectionMenu(null);
   }, [addNodeFromDefinition, setEdges, workspaceWritable]);
+
+  const handleConnectionMenuExistingSelect = useCallback((candidate) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      setConnectionMenu(null);
+      return;
+    }
+    const nextConnection = candidate?.connection;
+    if (!nextConnection || !workspaceConnectionCompatible(nextConnection, nodesRef.current)) {
+      setStatus("端口类型不匹配，已取消连线");
+      setConnectionMenu(null);
+      return;
+    }
+    setNodes((current) => revealConnectedSlots(current, nextConnection));
+    setEdges((current) => {
+      const filtered = current.filter(
+        (edge) => !(edge.target === nextConnection.target && edge.targetHandle === nextConnection.targetHandle)
+      );
+      return addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+    });
+    setConnectionMenu(null);
+  }, [setEdges, setNodes, workspaceWritable]);
 
   const addQuickNode = useCallback((def) => {
     if (!def) return;
@@ -6922,8 +7002,11 @@ function WorkspacePageInner() {
           </ReactFlow>
           {!isDisplayMode && connectionMenu ? (() => {
             const q = String(connectionMenu.query || "").trim().toLowerCase();
-            const visibleCandidates = q
-              ? connectionMenu.candidates.filter((candidate) =>
+            const activeMode = connectionMenu.mode === "create" ? "create" : "existing";
+            const createCandidates = Array.isArray(connectionMenu.candidates) ? connectionMenu.candidates : [];
+            const existingCandidates = Array.isArray(connectionMenu.existingCandidates) ? connectionMenu.existingCandidates : [];
+            const visibleCreateCandidates = q
+              ? createCandidates.filter((candidate) =>
                   [
                     candidate.def?.id,
                     candidate.displayLabel,
@@ -6934,7 +7017,20 @@ function WorkspacePageInner() {
                     .filter(Boolean)
                     .some((value) => String(value).toLowerCase().includes(q))
                 )
-              : connectionMenu.candidates;
+              : createCandidates;
+            const visibleExistingCandidates = q
+              ? existingCandidates.filter((candidate) =>
+                  [
+                    candidate.nodeId,
+                    candidate.nodeLabel,
+                    candidate.definitionId,
+                    candidate.slot?.name,
+                    candidate.slot?.type,
+                  ]
+                    .filter(Boolean)
+                    .some((value) => String(value).toLowerCase().includes(q))
+                )
+              : existingCandidates;
             const portKind = connectionMenu.draft.handleType === "source" ? "IN" : "OUT";
             return (
               <div
@@ -6961,6 +7057,24 @@ function WorkspacePageInner() {
                     <span className="material-symbols-outlined" aria-hidden>close</span>
                   </button>
                 </div>
+                <div className="af-connect-node-menu__tabs" role="tablist" aria-label="连接方式">
+                  <button
+                    type="button"
+                    className={activeMode === "existing" ? "af-connect-node-menu__tab af-connect-node-menu__tab--active" : "af-connect-node-menu__tab"}
+                    disabled={existingCandidates.length === 0}
+                    onClick={() => setConnectionMenu((menu) => menu ? { ...menu, mode: "existing", query: "" } : menu)}
+                  >
+                    连接已有 <span>{existingCandidates.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={activeMode === "create" ? "af-connect-node-menu__tab af-connect-node-menu__tab--active" : "af-connect-node-menu__tab"}
+                    disabled={createCandidates.length === 0}
+                    onClick={() => setConnectionMenu((menu) => menu ? { ...menu, mode: "create", query: "" } : menu)}
+                  >
+                    新建节点 <span>{createCandidates.length}</span>
+                  </button>
+                </div>
                 <label className="af-connect-node-menu__search">
                   <span className="material-symbols-outlined" aria-hidden>search</span>
                   <input
@@ -6974,7 +7088,7 @@ function WorkspacePageInner() {
                   />
                 </label>
                 <div className="af-connect-node-menu__list">
-                  {visibleCandidates.map((candidate) => {
+                  {activeMode === "create" ? visibleCreateCandidates.map((candidate) => {
                     const label = candidate.displayLabel || candidate.def?.id;
                     const slotLabel = paletteSlotLabel(candidate.slot, candidate.slotIndex);
                     return (
@@ -7002,8 +7116,37 @@ function WorkspacePageInner() {
                         </span>
                       </button>
                     );
+                  }) : visibleExistingCandidates.map((candidate) => {
+                    const label = candidate.nodeLabel || candidate.nodeId;
+                    const slotLabel = paletteSlotLabel(candidate.slot, candidate.slotIndex);
+                    return (
+                      <button
+                        key={`${candidate.nodeId}-${candidate.handleId}`}
+                        type="button"
+                        className="af-connect-node-menu__item"
+                        onClick={() => handleConnectionMenuExistingSelect(candidate)}
+                        title={`${candidate.definitionId || candidate.nodeId} · ${slotLabel}`}
+                      >
+                        <span className="af-connect-node-menu__item-main">
+                          <span className="af-connect-node-menu__item-label">{label}</span>
+                          <span className="af-connect-node-menu__item-id">
+                            {candidate.definitionId ? `${candidate.definitionId} · ` : ""}{candidate.nodeId}
+                          </span>
+                        </span>
+                        <span className="af-connect-node-menu__port">
+                          <span>{portKind}</span>
+                          <span
+                            className="af-connect-node-menu__port-dot"
+                            style={{ background: getHandleColor(candidate.slot?.type) }}
+                            aria-hidden
+                          />
+                          <span className="af-connect-node-menu__port-name">{slotLabel}</span>
+                          {candidate.occupied ? <span className="af-connect-node-menu__port-badge">替换</span> : null}
+                        </span>
+                      </button>
+                    );
                   })}
-                  {visibleCandidates.length === 0 ? (
+                  {(activeMode === "create" ? visibleCreateCandidates.length : visibleExistingCandidates.length) === 0 ? (
                     <div className="af-connect-node-menu__empty">没有匹配结果</div>
                   ) : null}
                 </div>
