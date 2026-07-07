@@ -4809,11 +4809,12 @@ button.af-project-card {
   position: absolute;
   z-index: 20;
   left: 1.15rem;
-  top: 1.15rem;
+  top: 50%;
+  transform: translateY(-50%);
   width: 3.4rem;
-  height: min(22rem, calc(100% - 2.3rem));
-  min-height: 12.8rem;
-  padding: 0.42rem 0.34rem 0.46rem;
+  height: auto;
+  min-height: 0;
+  padding: 0.58rem 0.34rem;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -4828,7 +4829,7 @@ button.af-project-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.82rem;
+  gap: 0.72rem;
 }
 
 .af-workspace-rail__primary,
