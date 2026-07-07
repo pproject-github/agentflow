@@ -890,11 +890,27 @@ function validateDisplayContentForWrite(kind, content) {
   return "";
 }
 
-function htmlDisplaySrcDoc(content) {
+function htmlDisplaySrcDoc(content, frameId = "") {
   const html = normalizeHtmlDisplayContent(content);
   if (!html.trim()) return "";
+  const frameIdJson = JSON.stringify(String(frameId || ""));
   const guard = `<base target="_self"><script>
 (() => {
+  const frameId = ${frameIdJson};
+  const postSize = () => {
+    const doc = document.documentElement;
+    const body = document.body;
+    const height = Math.ceil(Math.max(
+      doc ? doc.scrollHeight : 0,
+      doc ? doc.offsetHeight : 0,
+      doc ? doc.clientHeight : 0,
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      body ? body.clientHeight : 0,
+      window.innerHeight || 0
+    ));
+    window.parent.postMessage({ source: "agentflow-html-display-size", frameId, height }, "*");
+  };
   document.addEventListener("click", (event) => {
     const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
     if (!link) return;
@@ -904,6 +920,20 @@ function htmlDisplaySrcDoc(content) {
     event.preventDefault();
     window.location.href = link.href;
   }, true);
+  window.addEventListener("load", postSize);
+  window.addEventListener("resize", postSize);
+  requestAnimationFrame(postSize);
+  setTimeout(postSize, 60);
+  setTimeout(postSize, 300);
+  if (typeof ResizeObserver !== "undefined") {
+    const resizeObserver = new ResizeObserver(postSize);
+    resizeObserver.observe(document.documentElement);
+    if (document.body) resizeObserver.observe(document.body);
+  }
+  if (typeof MutationObserver !== "undefined") {
+    const mutationObserver = new MutationObserver(postSize);
+    mutationObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+  }
 })();
 </script>`;
   if (/<script\b[^>]*>\s*\(\(\)\s*=>\s*\{\s*document\.addEventListener\("click"/i.test(html)) return html;
@@ -1313,9 +1343,33 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
       });
     return () => { cancelled = true; };
   }, [filePath, flowParams?.flowId, flowParams?.flowSource, flowParams?.archived, data?.displayReloadKey]);
-  if (!kind) return null;
   const resolvedContent = filePath ? fileContent : unwrappedRawContent;
   const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
+  const htmlFrameIdRef = useRef("");
+  const [htmlFrameHeight, setHtmlFrameHeight] = useState(0);
+  if (!htmlFrameIdRef.current) {
+    htmlFrameIdRef.current = `html-display-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  useEffect(() => {
+    if (kind !== "html") {
+      setHtmlFrameHeight(0);
+      return undefined;
+    }
+    const frameId = htmlFrameIdRef.current;
+    const onMessage = (event) => {
+      const iframe = htmlFrameRef.current;
+      if (!iframe || event.source !== iframe.contentWindow) return;
+      const payload = event.data && typeof event.data === "object" ? event.data : null;
+      if (!payload || payload.source !== "agentflow-html-display-size" || payload.frameId !== frameId) return;
+      const nextHeight = Math.ceil(Number(payload.height || 0));
+      if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+      setHtmlFrameHeight(Math.min(200000, Math.max(220, nextHeight)));
+    };
+    setHtmlFrameHeight(0);
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [content, htmlFrameRef, htmlFrameVersion, kind]);
+  if (!kind) return null;
   const contentProblem = validateDisplayContentForWrite(kind, content);
   if (fileLoading) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
   if (fileError) return <VisibleScrollFrame className="af-work-display-empty">{fileError}</VisibleScrollFrame>;
@@ -1328,9 +1382,10 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
           key={htmlFrameVersion}
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
+          style={htmlFrameHeight > 0 ? { height: `${htmlFrameHeight}px` } : undefined}
           title={data?.label || "HTML preview"}
           sandbox="allow-scripts allow-forms allow-modals"
-          srcDoc={htmlDisplaySrcDoc(content)}
+          srcDoc={htmlDisplaySrcDoc(content, htmlFrameIdRef.current)}
         />
       </VisibleScrollFrame>
     );
