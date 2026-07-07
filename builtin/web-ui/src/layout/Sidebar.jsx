@@ -10,6 +10,7 @@ const ITEMS = [
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
+  { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
   { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
@@ -57,7 +58,7 @@ export default function Sidebar({ authUser, onLogout }) {
         </div>
       </div>
       <nav className="af-nav">
-        {ITEMS.map((item) => (
+        {ITEMS.filter((item) => !item.adminOnly || authUser?.isAdmin).map((item) => (
           <button
             key={item.to}
             type="button"
@@ -68,7 +69,7 @@ export default function Sidebar({ authUser, onLogout }) {
             onClick={() => navigate(item.to)}
           >
             <span className="material-symbols-outlined">{item.icon}</span>
-            <span>{t(item.labelKey)}</span>
+            <span>{item.label || t(item.labelKey)}</span>
           </button>
         ))}
       </nav>

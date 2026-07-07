@@ -6,6 +6,7 @@ import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import AdminUsagePage from "./pages/AdminUsagePage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
@@ -65,6 +66,7 @@ function RoutedContent({ authUser }) {
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
+  if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;
