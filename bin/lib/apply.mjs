@@ -24,6 +24,7 @@ import { printEntryAndFlowFiles, printNodeStatusTable, runValidateFlowAndExitIfI
 import { clearApplyActiveLock, writeApplyActiveLock } from "./run-apply-active-lock.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, getRunDir } from "./workspace.mjs";
 import { readMergedEnvObject } from "./user-env.mjs";
+import { appendRunLedgerEvent } from "./run-ledger.mjs";
 
 const PARALLEL_PREFIX_COLORS = [
   (s) => chalk.cyan(s),
@@ -72,6 +73,31 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
   // 提前 ensure：apply-start 携带原始 run 起始时间，UI 计时器可按「这个 uuid 从头到现在的总时长」显示，
   // 避免每次 resume 仅从 totalExecutedMs 累加看起来像从 resume 才开始计时。
   const priorRunStartTime = ensureRunStartTime(workspaceRoot, flowName, uuid);
+  let runStartTime = priorRunStartTime;
+  let totalExecutedMs = priorTotalExecutedMs;
+  const writeRunLedger = !dryRun;
+  let runLedgerFinished = false;
+  const runLedgerBase = {
+    kind: "pipeline",
+    runId: uuid,
+    userId: String(process.env.AGENTFLOW_USER_ID || ""),
+    username: String(process.env.AGENTFLOW_USER_ID || ""),
+    flowId: flowName,
+    flowSource: "user",
+    at: priorRunStartTime,
+  };
+  if (writeRunLedger) appendRunLedgerEvent({ ...runLedgerBase, type: "run_started" });
+  const finishRunLedger = (status) => {
+    if (!writeRunLedger || runLedgerFinished) return;
+    runLedgerFinished = true;
+    appendRunLedgerEvent({
+      ...runLedgerBase,
+      type: "run_finished",
+      endedAt: Date.now(),
+      durationMs: totalExecutedMs,
+      status,
+    });
+  };
   emitEvent(workspaceRoot, flowName, uuid, {
     event: "apply-start",
     flowName,
@@ -85,8 +111,6 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
   writeApplyActiveLock(workspaceRoot, flowName, uuid);
 
   try {
-  let runStartTime = priorRunStartTime;
-  let totalExecutedMs = priorTotalExecutedMs;
   let round = 0;
   while (round < MAX_LOOP_ROUNDS) {
     round++;
@@ -100,6 +124,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
     if (readyNodes.length === 0) {
       if (allDone) {
         saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
+        finishRunLedger("success");
         const totalElapsed = formatDuration(totalExecutedMs);
         emitEvent(workspaceRoot, flowName, uuid, {
           event: "apply-done",
@@ -163,6 +188,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
             if (options.length === 0) {
               log.info(chalk.yellow(`节点 ${pendId} 未配置任何选项（output 槽位），无法选择。请先在编辑器中添加 output 槽位。`));
               log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+              finishRunLedger("interrupted");
               return;
             }
 
@@ -177,6 +203,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
               }
               process.stderr.write(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
               log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+              finishRunLedger("interrupted");
               return;
             }
 
@@ -209,6 +236,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
                 if (trimmed === "q") {
                   rl.close();
                   log.info(chalk.yellow("用户取消，流程暂停。") + chalk.dim(` 恢复命令: ${resumeExample}`));
+                  finishRunLedger("interrupted");
                   return;
                 }
                 const idx = parseInt(trimmed, 10);
@@ -250,6 +278,7 @@ export async function apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel
                 }
                 process.stderr.write(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
                 log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+                finishRunLedger("interrupted");
                 return;
               }
 
@@ -380,6 +409,7 @@ ${currentContent}
                 } else if (answer.trim().toLowerCase() === "q") {
                   rl.close();
                   log.info(chalk.yellow("用户取消，流程暂停。") + chalk.dim(` 恢复命令: ${resumeExample}`));
+                  finishRunLedger("interrupted");
                   return;
                 }
               }
@@ -393,6 +423,7 @@ ${currentContent}
         }
 
         log.info(chalk.bold.yellow("→ " + t("flow.resume_hint") + " ") + resumeExample);
+        finishRunLedger("interrupted");
         return;
       }
       const endNodeIds = Array.isArray(parseOut.nodes)
@@ -401,6 +432,7 @@ ${currentContent}
       const endReached = endNodeIds.some((id) => instanceStatus[id] === "success");
       if (endReached) {
         saveTotalExecutedMs(workspaceRoot, flowName, uuid, totalExecutedMs);
+        finishRunLedger("success");
         const totalElapsed = formatDuration(totalExecutedMs);
         emitEvent(workspaceRoot, flowName, uuid, {
           event: "apply-done",
@@ -763,6 +795,7 @@ ${currentContent}
   maxErr.uuid = uuid;
   throw maxErr;
   } finally {
+    finishRunLedger("failed");
     clearApplyActiveLock(workspaceRoot, flowName, uuid);
   }
 }
