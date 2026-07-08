@@ -1,0 +1,38 @@
+builtin/web-ui/dist/assets/index-fQlSZjeW.css
+  s_98d3237c964562::t_90c5eab155082e 1
+builtin/web-ui/dist/assets/index-CcAo-uHQ.js
+  s_98d3237c964562::t_90c5eab155082e 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-95,97-98,102-104,106,109-110,123,126-136,140-141,144,146,148-150,154,156,159,200-201,205-209,213-214,216,220,222,234,236,240,248,250,254,262-267,271,297
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_98d3237c964562::t_9a24394b36a864 5974
+  s_98d3237c964562::t_792f4fc94bc8a0 66
+  s_98d3237c964562::t_1f342ae116eee5 3012-3024
+  s_98d3237c964562::t_ca49e2c1e3a7e4 2870,2875-2886,2957,2959,2961,2963-2966,2969-3011,3026,3033-3045
+  s_98d3237c964562::t_1b2286151c3972 5352
+  s_98d3237c964562::t_2988a2093b48a6 711-762,775-785,788-793,810-815
+  s_98d3237c964562::t_a814f2be045f0d 816
+  s_98d3237c964562::t_c8b281ae2592b6 2887
+bin/lib/ui-server.mjs
+  s_98d3237c964562::t_085c6f6bf552d1 5389-5391,5430,5527
+builtin/web-ui/src/index.css
+  s_98d3237c964562::t_5303bfc616d4fa 6663-6667,6688-6692
+  s_98d3237c964562::t_d67a8e4698f66e 6693-6694
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_90c5eab155082e 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "b3f47975c256794c1d10879117fb4233118f7848",
+  "prompts": {},
+  "logical_commit_id": "b3f47975c256794c1d10879117fb4233118f7848",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
