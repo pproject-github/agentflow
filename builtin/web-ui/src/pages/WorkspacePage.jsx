@@ -63,7 +63,7 @@ const WORKSPACE_SCHEDULED_RUN_DEFINITION = {
   id: "workspace_scheduled_run",
   displayName: "Scheduled Run",
   label: "Scheduled Run",
-  description: "Trigger a selected Workspace Run node on a cron schedule.",
+  description: "Run the downstream workspace subgraph on a schedule.",
   type: "control",
   inputs: [{ type: "node", name: "prev", default: "" }],
   outputs: [{ type: "node", name: "next", default: "" }],
@@ -708,6 +708,58 @@ function scheduledRunIntervalToCron(intervalMinutes) {
   return DEFAULT_WORKSPACE_SCHEDULE_CRON;
 }
 
+function padScheduleNumber(value, fallback = 0, min = 0, max = 59) {
+  const n = Math.max(min, Math.min(max, Number.parseInt(String(value ?? fallback), 10) || fallback));
+  return String(n).padStart(2, "0");
+}
+
+function normalizeScheduleTime(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return "09:00";
+  return `${padScheduleNumber(match[1], 9, 0, 23)}:${padScheduleNumber(match[2], 0, 0, 59)}`;
+}
+
+function scheduleCronFromParts(scheduleType, time, weekday, monthDay, customCron) {
+  const normalizedTime = normalizeScheduleTime(time);
+  const [hour, minute] = normalizedTime.split(":").map((part) => Number.parseInt(part, 10));
+  const type = String(scheduleType || "daily");
+  if (type === "weekly") {
+    const day = Math.max(0, Math.min(6, Number.parseInt(String(weekday ?? 1), 10) || 1));
+    return `${minute} ${hour} * * ${day}`;
+  }
+  if (type === "monthly") {
+    const day = Math.max(1, Math.min(31, Number.parseInt(String(monthDay ?? 1), 10) || 1));
+    return `${minute} ${hour} ${day} * *`;
+  }
+  if (type === "custom") return String(customCron || "").trim() || DEFAULT_WORKSPACE_SCHEDULE_CRON;
+  return `${minute} ${hour} * * *`;
+}
+
+function inferSchedulePartsFromCron(cron) {
+  const normalizedCron = String(cron || DEFAULT_WORKSPACE_SCHEDULE_CRON).trim();
+  const parts = normalizedCron.split(/\s+/);
+  if (parts.length !== 5) {
+    return { scheduleType: "custom", time: "09:00", weekday: 1, monthDay: 1 };
+  }
+  const [minuteRaw, hourRaw, dayRaw, monthRaw, weekRaw] = parts;
+  const minute = Number.parseInt(minuteRaw, 10);
+  const hour = Number.parseInt(hourRaw, 10);
+  const hasSimpleTime = Number.isFinite(minute) && Number.isFinite(hour) && minuteRaw === String(minute) && hourRaw === String(hour);
+  const time = hasSimpleTime
+    ? `${padScheduleNumber(hour, 9, 0, 23)}:${padScheduleNumber(minute, 0, 0, 59)}`
+    : "09:00";
+  if (hasSimpleTime && dayRaw === "*" && monthRaw === "*" && weekRaw === "*") {
+    return { scheduleType: "daily", time, weekday: 1, monthDay: 1 };
+  }
+  if (hasSimpleTime && dayRaw === "*" && monthRaw === "*" && /^\d+$/.test(weekRaw)) {
+    return { scheduleType: "weekly", time, weekday: Math.max(0, Math.min(6, Number.parseInt(weekRaw, 10))), monthDay: 1 };
+  }
+  if (hasSimpleTime && /^\d+$/.test(dayRaw) && monthRaw === "*" && weekRaw === "*") {
+    return { scheduleType: "monthly", time, weekday: 1, monthDay: Math.max(1, Math.min(31, Number.parseInt(dayRaw, 10))) };
+  }
+  return { scheduleType: "custom", time, weekday: 1, monthDay: 1 };
+}
+
 function normalizeScheduledRunConfig(raw) {
   let parsed = {};
   const text = String(raw || "").trim();
@@ -720,14 +772,25 @@ function normalizeScheduledRunConfig(raw) {
   }
   const intervalMinutes = Number(parsed.intervalMinutes);
   const migratedCron = scheduledRunIntervalToCron(intervalMinutes);
+  const rawCron = typeof parsed.cron === "string" && parsed.cron.trim()
+    ? parsed.cron.trim()
+    : migratedCron;
+  const inferred = inferSchedulePartsFromCron(rawCron);
+  const scheduleType = ["daily", "weekly", "monthly", "custom"].includes(parsed.scheduleType)
+    ? parsed.scheduleType
+    : inferred.scheduleType;
+  const time = normalizeScheduleTime(parsed.time || inferred.time || "09:00");
+  const weekday = Math.max(0, Math.min(6, Number.parseInt(String(parsed.weekday ?? inferred.weekday ?? 1), 10) || 1));
+  const monthDay = Math.max(1, Math.min(31, Number.parseInt(String(parsed.monthDay ?? inferred.monthDay ?? 1), 10) || 1));
+  const cron = scheduleCronFromParts(scheduleType, time, weekday, monthDay, rawCron);
   return {
     enabled: parsed.enabled === true,
-    cron: typeof parsed.cron === "string" && parsed.cron.trim()
-      ? parsed.cron.trim()
-      : migratedCron,
-    timezone: typeof parsed.timezone === "string" && parsed.timezone.trim()
-      ? parsed.timezone.trim()
-      : DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE,
+    scheduleType,
+    time,
+    weekday,
+    monthDay,
+    cron,
+    timezone: DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE,
     targetRunNodeId: typeof parsed.targetRunNodeId === "string" ? parsed.targetRunNodeId.trim() : "",
     overlapPolicy: "skip",
   };
@@ -742,6 +805,13 @@ function formatScheduledRunTime(ts) {
   const value = Number(ts || 0);
   if (!Number.isFinite(value) || value <= 0) return "-";
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function scheduleTypeLabel(type) {
+  if (type === "weekly") return "每周";
+  if (type === "monthly") return "每月";
+  if (type === "custom") return "高级 Cron";
+  return "每天";
 }
 
 function scheduledRunTimestamp(value) {
@@ -2797,13 +2867,23 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const config = normalizeScheduledRunConfig(data?.body || "");
   const scheduleState = data?.scheduledRunState || {};
-  const workspaceRunOptions = Array.isArray(data?.workspaceRunOptions) ? data.workspaceRunOptions : [];
-  const targetRunNodeId = config.targetRunNodeId || scheduleState.targetRunNodeId || "";
-  const running = Boolean(targetRunNodeId && (data?.runningRunNodeIds?.has?.(targetRunNodeId) || data?.runningRunNodeIds?.[targetRunNodeId] === true));
+  const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   const updateConfig = (patch) => {
     data?.onChangeScheduledRunConfig?.(id, { ...config, ...patch });
+  };
+  const updateScheduleType = (scheduleType) => {
+    updateConfig({ scheduleType, cron: scheduleCronFromParts(scheduleType, config.time, config.weekday, config.monthDay, config.cron) });
+  };
+  const updateScheduleTime = (time) => {
+    updateConfig({ time, cron: scheduleCronFromParts(config.scheduleType, time, config.weekday, config.monthDay, config.cron) });
+  };
+  const updateWeekday = (weekday) => {
+    updateConfig({ weekday, cron: scheduleCronFromParts(config.scheduleType, config.time, weekday, config.monthDay, config.cron) });
+  };
+  const updateMonthDay = (monthDay) => {
+    updateConfig({ monthDay, cron: scheduleCronFromParts(config.scheduleType, config.time, config.weekday, monthDay, config.cron) });
   };
   return (
     <div
@@ -2874,47 +2954,95 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
           <span>{config.enabled ? "定时开启" : "定时关闭"}</span>
         </label>
         <label className="af-work-schedule-card__field">
-          <span>Cron</span>
-          <input
-            type="text"
-            value={config.cron}
-            disabled={readOnly}
-            spellCheck={false}
-            placeholder={DEFAULT_WORKSPACE_SCHEDULE_CRON}
-            onChange={(event) => updateConfig({ cron: event.target.value })}
-          />
-        </label>
-        <label className="af-work-schedule-card__field">
-          <span>时区</span>
-          <input
-            type="text"
-            value={config.timezone}
-            disabled={readOnly}
-            spellCheck={false}
-            placeholder={DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE}
-            onChange={(event) => updateConfig({ timezone: event.target.value })}
-          />
-        </label>
-        <label className="af-work-schedule-card__field">
-          <span>目标</span>
+          <span>频率</span>
           <select
-            value={config.targetRunNodeId}
+            value={config.scheduleType}
             disabled={readOnly}
-            onChange={(event) => updateConfig({ targetRunNodeId: event.target.value })}
+            onChange={(event) => updateScheduleType(event.target.value)}
           >
-            <option value="">自动选择</option>
-            {workspaceRunOptions.map((option) => (
-              <option key={option.id} value={option.id}>{option.label}</option>
-            ))}
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+            <option value="custom">高级 Cron</option>
           </select>
         </label>
+        {config.scheduleType !== "custom" ? (
+          <label className="af-work-schedule-card__field">
+            <span>时间</span>
+            <input
+              type="time"
+              value={config.time}
+              disabled={readOnly}
+              onChange={(event) => updateScheduleTime(event.target.value)}
+            />
+          </label>
+        ) : null}
+        {config.scheduleType === "weekly" ? (
+          <label className="af-work-schedule-card__field">
+            <span>星期</span>
+            <select
+              value={config.weekday}
+              disabled={readOnly}
+              onChange={(event) => updateWeekday(event.target.value)}
+            >
+              <option value={1}>周一</option>
+              <option value={2}>周二</option>
+              <option value={3}>周三</option>
+              <option value={4}>周四</option>
+              <option value={5}>周五</option>
+              <option value={6}>周六</option>
+              <option value={0}>周日</option>
+            </select>
+          </label>
+        ) : null}
+        {config.scheduleType === "monthly" ? (
+          <label className="af-work-schedule-card__field">
+            <span>日期</span>
+            <select
+              value={config.monthDay}
+              disabled={readOnly}
+              onChange={(event) => updateMonthDay(event.target.value)}
+            >
+              {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                <option key={day} value={day}>{day} 日</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {config.scheduleType === "custom" ? (
+          <label className="af-work-schedule-card__field">
+            <span>Cron</span>
+            <input
+              type="text"
+              value={config.cron}
+              disabled={readOnly}
+              spellCheck={false}
+              placeholder={DEFAULT_WORKSPACE_SCHEDULE_CRON}
+              onChange={(event) => updateConfig({ cron: event.target.value })}
+            />
+          </label>
+        ) : null}
         <div className="af-work-schedule-card__meta">
+          <span>{scheduleTypeLabel(config.scheduleType)} {config.scheduleType === "custom" ? "" : config.time}</span>
           <span>Next {formatScheduledRunTime(scheduleState.nextAt)}</span>
           <span>{running ? "running" : (scheduleState.lastStatus || "idle")}</span>
         </div>
         {scheduleState.lastError ? (
           <div className="af-work-schedule-card__error">{scheduleState.lastError}</div>
         ) : null}
+        <button
+          type="button"
+          className={"af-work-run-card__button af-work-schedule-card__run-now nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+          disabled={readOnly}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (running) data?.onStopWorkspaceNode?.(id);
+            else data?.onRunWorkspaceNode?.(id);
+          }}
+        >
+          <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+          <span>{running ? "停止" : "立即运行"}</span>
+        </button>
       </div>
     </div>
   );
@@ -5221,7 +5349,7 @@ function WorkspacePageInner() {
 
   const scheduledRunKey = useMemo(() => (
     scheduledRunConfigs
-      .map((item) => `${item.id}:${item.config.enabled ? "1" : "0"}:${item.config.cron}:${item.config.timezone}:${item.config.targetRunNodeId}`)
+      .map((item) => `${item.id}:${item.config.enabled ? "1" : "0"}:${item.config.cron}:${item.config.timezone}`)
       .join("|")
   ), [scheduledRunConfigs]);
 
@@ -5802,15 +5930,6 @@ function WorkspacePageInner() {
     });
   }, []);
 
-  const workspaceRunOptions = useMemo(() => (
-    nodes
-      .filter((node) => node?.data?.definitionId === "workspace_run")
-      .map((node) => ({
-        id: node.id,
-        label: String(node.data?.label || node.id || "Run"),
-      }))
-  ), [nodes]);
-
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -5828,7 +5947,6 @@ function WorkspacePageInner() {
       runningRunNodeIds,
       scheduledRunState: scheduledRunState[node.id] || null,
       onChangeScheduledRunConfig: changeScheduledRunConfig,
-      workspaceRunOptions,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
@@ -5853,7 +5971,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceRunOptions, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),

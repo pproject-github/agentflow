@@ -5386,18 +5386,9 @@ function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user",
 
 function workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config = {}) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const explicit = String(config.targetRunNodeId || "").trim();
-  if (explicit && String(instances[explicit]?.definitionId || "") === "workspace_run") return explicit;
-  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
-  for (const edge of edges) {
-    const source = String(edge?.source || "");
-    const target = String(edge?.target || "");
-    if (source !== String(scheduleNodeId || "") || !target) continue;
-    if (!workspaceIsControlEdge(graph, edge)) continue;
-    if (String(instances[target]?.definitionId || "") === "workspace_run") return target;
-  }
-  const firstRun = Object.entries(instances).find(([, instance]) => String(instance?.definitionId || "") === "workspace_run");
-  return firstRun ? firstRun[0] : "";
+  return String(instances[scheduleNodeId]?.definitionId || "") === "workspace_scheduled_run"
+    ? String(scheduleNodeId || "")
+    : "";
 }
 
 function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
@@ -5436,7 +5427,7 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
         : workspaceScheduleNextRunAt(config, new Date(now));
       if (!targetRunNodeId) {
         lastStatus = "invalid";
-        lastError = "No target Run node selected or connected";
+        lastError = "Scheduled Run node is missing";
       }
     } catch (e) {
       lastStatus = "invalid";
@@ -5533,7 +5524,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt,
       lastStatus: "invalid",
-      lastError: "No target Run node selected or connected",
+      lastError: "Scheduled Run node is missing",
       lastErrorAt: Date.now(),
     });
     return;
