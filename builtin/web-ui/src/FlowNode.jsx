@@ -256,6 +256,10 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const handleProvideFilePick = (e) => {
     e.stopPropagation();
     if (readOnly) return;
+    if (typeof data?.onOpenProvideFilePicker === "function") {
+      data.onOpenProvideFilePicker(id, provideDraft);
+      return;
+    }
     const next = window.prompt("文件路径", provideDraft);
     if (next != null) {
       setProvideDraft(next);

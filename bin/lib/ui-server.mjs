@@ -1249,8 +1249,11 @@ function sanitizeWorkspaceUploadName(filename) {
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "image";
-  const ext = String(parsed.ext || "").toLowerCase();
-  return `${stem}${WORKSPACE_IMAGE_EXTS.has(ext) ? ext : ".png"}`;
+  const ext = String(parsed.ext || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "")
+    .slice(0, 24);
+  return `${stem}${ext}`;
 }
 
 function uniqueWorkspaceRelPath(workspaceRoot, relPath) {
@@ -1434,8 +1437,6 @@ function readWorkspaceFilesRecursive(dir, root, depth = 0, maxDepth = 3, budget 
       budget.count++;
     } else if (entry.isFile()) {
       if (WORKSPACE_FILE_SKIP_FILES.has(entry.name)) continue;
-      const ext = path.extname(entry.name).toLowerCase();
-      if (!WORKSPACE_TEXT_EXTS.has(ext) && !WORKSPACE_IMAGE_EXTS.has(ext)) continue;
       let size = 0;
       try { size = fs.statSync(abs).size; } catch {}
       budget.count++;
@@ -6897,13 +6898,9 @@ export function startUiServer({
           return;
         }
         const safeName = sanitizeWorkspaceUploadName(parsed.filename);
-        const ext = path.extname(safeName).toLowerCase();
-        if (!WORKSPACE_IMAGE_EXTS.has(ext) || (parsed.mimeType && !/^image\//i.test(parsed.mimeType))) {
-          json(res, 400, { error: "Only image uploads are supported" });
-          return;
-        }
-        const targetDir = String(parsed.fields.dir || "img").trim().replace(/^[/\\]+/, "") || "img";
-        const target = uniqueWorkspaceRelPath(scoped.root, path.posix.join(targetDir.replace(/\\/g, "/"), safeName));
+        const targetDir = String(parsed.fields.dir ?? "").trim().replace(/^[/\\]+/, "").replace(/\\/g, "/");
+        const targetRel = targetDir ? path.posix.join(targetDir, safeName) : safeName;
+        const target = uniqueWorkspaceRelPath(scoped.root, targetRel);
         fs.mkdirSync(path.dirname(target.abs), { recursive: true });
         fs.writeFileSync(target.abs, parsed.file);
         json(res, 200, {
