@@ -129,10 +129,41 @@ function marketplaceRefForDefinition(def) {
 function runtimeDefinitionIdForPalette(def, fallback) {
   const baseDefinitionId = String(def?.baseDefinitionId || "").trim();
   if (!baseDefinitionId) return fallback;
-  const runtime = def?.runtime && typeof def.runtime === "object" ? def.runtime : {};
-  const hasPackagedRuntime = Boolean(runtime.entry || runtime.command);
-  if (hasPackagedRuntime && baseDefinitionId === "tool_nodejs") return fallback;
   return baseDefinitionId;
+}
+
+function shellQuoteArg(value) {
+  const text = String(value ?? "");
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text)) return text;
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+function runtimeInterpreterForMarketplaceEntry(runtime, entry) {
+  const language = String(runtime?.language || "").trim().toLowerCase();
+  const entryLower = String(entry || "").trim().toLowerCase();
+  if (language.includes("python") || entryLower.endsWith(".py")) return "python3";
+  if (language.includes("shell") || language === "bash" || entryLower.endsWith(".sh") || entryLower.endsWith(".bash")) return "bash";
+  return "node";
+}
+
+function marketplaceRuntimeArg(arg) {
+  const text = String(arg ?? "").trim();
+  if (!text) return "";
+  if (text.includes("${")) return text;
+  return shellQuoteArg(text);
+}
+
+function scriptFromMarketplaceRuntime(def) {
+  if (String(def?.baseDefinitionId || "").trim() !== "tool_nodejs") return "";
+  const runtime = def?.runtime && typeof def.runtime === "object" ? def.runtime : {};
+  const entry = String(runtime.entry || "").trim().replace(/^\/+/, "");
+  if (entry) {
+    const packageDir = String(def?.packageDir || "").trim().replace(/\/+$/, "");
+    const entryPath = packageDir ? `${packageDir}/${entry}` : `\${flowDir}/${entry}`;
+    const args = Array.isArray(runtime.args) ? runtime.args.map(marketplaceRuntimeArg).filter(Boolean) : [];
+    return [runtimeInterpreterForMarketplaceEntry(runtime, entry), shellQuoteArg(entryPath), ...args].join(" ");
+  }
+  return String(runtime.command || "").trim();
 }
 
 function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
@@ -222,12 +253,13 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   const mergedDescription = defDescRaw !== "" ? defDescRaw : undefined;
   const mergedBody = instanceBody ?? n.data?.body ?? "";
   const mergedImages = Array.isArray(instanceImages) ? instanceImages : Array.isArray(n.data?.images) ? n.data.images : [];
+  const runtimeScript = scriptFromMarketplaceRuntime(def);
   const mergedScript =
     instanceScript !== undefined
       ? instanceScript
       : n.data?.script != null
         ? String(n.data.script)
-        : "";
+        : runtimeScript;
   const nodeId = String(n.id);
   const pipelineNodeTranslations = pipelineTranslations?.[flowId]?.[nodeId];
   const translatedLabel = pipelineNodeTranslations?.label?.label;

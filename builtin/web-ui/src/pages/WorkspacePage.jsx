@@ -63,7 +63,7 @@ const WORKSPACE_SCHEDULED_RUN_DEFINITION = {
   id: "workspace_scheduled_run",
   displayName: "Scheduled Run",
   label: "Scheduled Run",
-  description: "Run the downstream workspace subgraph on a local interval while this workspace page is open.",
+  description: "Trigger a selected Workspace Run node on a cron schedule.",
   type: "control",
   inputs: [{ type: "node", name: "prev", default: "" }],
   outputs: [{ type: "node", name: "next", default: "" }],
@@ -109,6 +109,8 @@ const WORKSPACE_GROUP_PADDING = 52;
 const MIN_WORKSPACE_GROUP_WIDTH = 240;
 const MIN_WORKSPACE_GROUP_HEIGHT = 160;
 const DISPLAY_REF_PREFIX = "display-ref:";
+const DEFAULT_WORKSPACE_SCHEDULE_CRON = "0 9 * * *";
+const DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE = "Asia/Shanghai";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -247,6 +249,16 @@ function workspaceRunActivityText(text) {
   return "";
 }
 
+function workspaceRunActivityKind(text) {
+  const line = String(text || "").trim();
+  if (!line) return "other";
+  if (/^模型/.test(line)) return "model";
+  if (/^(执行|完成|耗时)：/.test(line)) return "tool";
+  if (/^运行/.test(line)) return "run";
+  if (/^\[stderr\]/.test(line)) return "error";
+  return "other";
+}
+
 function formatWorkspaceRunDuration(ms) {
   const value = Math.max(0, Number(ms) || 0);
   if (value < 1000) return `${value}ms`;
@@ -266,20 +278,166 @@ function workspaceRunActivityLine(item, index) {
   return `${index + 1}. ${text}${timing}`;
 }
 
+function parseWorkspaceRunRawJson(event) {
+  if (String(event?.type || "") !== "raw") return null;
+  const rawText = String(event?.text || "").trim();
+  if (!rawText) return null;
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+}
+
+function firstFiniteWorkspaceRunNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return NaN;
+}
+
+function workspaceRunToolCallName(parsed) {
+  const call = parsed?.tool_call && typeof parsed.tool_call === "object" ? parsed.tool_call : {};
+  const key = Object.keys(call).find((item) => /ToolCall$/i.test(item)) || "";
+  if (key) return key;
+  return String(parsed?.name || parsed?.tool || "tool_call");
+}
+
+function workspaceRunToolCallPayload(parsed) {
+  const call = parsed?.tool_call && typeof parsed.tool_call === "object" ? parsed.tool_call : {};
+  const key = Object.keys(call).find((item) => /ToolCall$/i.test(item)) || "";
+  return key && call[key] && typeof call[key] === "object" ? call[key] : {};
+}
+
+function workspaceRunToolLabel(name, payload) {
+  const command = String(payload?.args?.command || "");
+  if (/ck_fetch\.py/.test(command)) return "CK 查询";
+  if (/collect_important_mails\.py|list_mails_by_date\.py|read_mail_content\.py/.test(command)) return "邮件脚本";
+  if (/npm\s+run\s+build|build:web-ui/.test(command)) return "前端构建";
+  if (/python3/.test(command)) return "Python 脚本";
+  const map = {
+    shellToolCall: "Shell 命令",
+    readToolCall: "读取文件/上下文",
+    grepToolCall: "搜索代码",
+    globToolCall: "查找文件",
+    editToolCall: "编辑文件",
+    writeToolCall: "写入文件",
+  };
+  return map[name] || name || "工具调用";
+}
+
+function workspaceRunRawTimingEntry(event) {
+  const parsed = parseWorkspaceRunRawJson(event);
+  if (!parsed || typeof parsed !== "object") return null;
+  const type = String(parsed.type || "");
+  const subtype = String(parsed.subtype || "");
+  const at = firstFiniteWorkspaceRunNumber(parsed.timestamp_ms, parsed.completedAtMs, parsed.startedAtMs, event?.ts, Date.now());
+  if (type === "tool_call" && subtype === "completed") {
+    const payload = workspaceRunToolCallPayload(parsed);
+    const name = workspaceRunToolCallName(parsed);
+    const startedAt = firstFiniteWorkspaceRunNumber(parsed.startedAtMs, payload?.startedAtMs);
+    const completedAt = firstFiniteWorkspaceRunNumber(parsed.completedAtMs, payload?.completedAtMs);
+    const result = payload?.result?.success || payload?.result?.failure || {};
+    const durationMs = Number.isFinite(startedAt) && Number.isFinite(completedAt)
+      ? Math.max(0, completedAt - startedAt)
+      : firstFiniteWorkspaceRunNumber(result.executionTime, result.localExecutionTimeMs);
+    const command = String(payload?.args?.command || result.command || "").trim();
+    const commandLine = command ? command.split("\n").find(Boolean) || command : "";
+    return {
+      kind: "tool",
+      label: workspaceRunToolLabel(name, payload),
+      durationMs: Number.isFinite(durationMs) ? durationMs : null,
+      at,
+      detail: commandLine ? commandLine.slice(0, 90) : "",
+    };
+  }
+  if (type === "result") {
+    const durationMs = firstFiniteWorkspaceRunNumber(parsed.duration_ms, parsed.duration_api_ms);
+    return {
+      kind: "total",
+      label: "运行总耗时",
+      durationMs: Number.isFinite(durationMs) ? durationMs : null,
+      at,
+      detail: parsed.is_error ? "失败结束" : "成功结束",
+    };
+  }
+  if (type === "connection") {
+    const label = subtype === "reconnecting" ? "连接重连" : subtype === "reconnected" ? "连接恢复" : "连接事件";
+    return { kind: "network", label, durationMs: null, at, detail: "" };
+  }
+  if (type === "retry") {
+    const label = subtype === "resuming" ? "会话恢复" : subtype === "starting" ? "开始重试" : "重试事件";
+    return { kind: "network", label, durationMs: null, at, detail: "" };
+  }
+  return null;
+}
+
+function workspaceRunActivityMessageText(activities, timingEntries, startedAt, lastAt) {
+  const activityItems = (Array.isArray(activities) ? activities : [])
+    .map((item) => (typeof item === "string" ? { text: item } : item))
+    .filter((item) => item && String(item.text || "").trim());
+  const timingItems = Array.isArray(timingEntries) ? timingEntries : [];
+  const explicitTotal = [...timingItems].reverse().find((item) => item?.kind === "total" && Number.isFinite(Number(item.durationMs)));
+  const activityTotal = [...activityItems].reverse().find((item) => Number.isFinite(Number(item.totalMs)));
+  const inferredTotal = Number.isFinite(Number(lastAt)) && Number.isFinite(Number(startedAt))
+    ? Math.max(0, Number(lastAt) - Number(startedAt))
+    : NaN;
+  const totalMs = firstFiniteWorkspaceRunNumber(explicitTotal?.durationMs, activityTotal?.totalMs, inferredTotal);
+  const modelMs = activityItems
+    .filter((item) => item.kind === "model")
+    .reduce((sum, item) => sum + (Number(item.stepMs) || 0), 0);
+  const toolEntries = timingItems.filter((item) => item?.kind === "tool");
+  const toolMs = toolEntries.reduce((sum, item) => sum + (Number(item.durationMs) || 0), 0);
+  const networkCount = timingItems.filter((item) => item?.kind === "network").length;
+  const slowCandidates = [
+    ...activityItems
+      .filter((item) => Number(item.stepMs) >= 1000)
+      .map((item) => ({ label: item.text, durationMs: Number(item.stepMs), detail: "Activity 间隔" })),
+    ...toolEntries
+      .filter((item) => Number(item.durationMs) >= 1000)
+      .map((item) => ({ label: item.label, durationMs: Number(item.durationMs), detail: item.detail || "工具实际执行" })),
+  ].sort((a, b) => b.durationMs - a.durationMs).slice(0, 6);
+  const lines = ["耗时概览"];
+  if (Number.isFinite(totalMs)) lines.push(`- 当前总耗时：${formatWorkspaceRunDuration(totalMs)}`);
+  if (modelMs > 0) lines.push(`- 模型相关间隔：约 ${formatWorkspaceRunDuration(modelMs)}（按 Activity 间隔估算）`);
+  if (toolEntries.length > 0) lines.push(`- 工具实际执行：${formatWorkspaceRunDuration(toolMs)}（${toolEntries.length} 次完成事件）`);
+  if (networkCount > 0) lines.push(`- 网络/会话恢复事件：${networkCount} 次`);
+  if (slowCandidates.length > 0) {
+    lines.push("");
+    lines.push("慢步骤");
+    slowCandidates.forEach((item, index) => {
+      const detail = item.detail ? ` · ${item.detail}` : "";
+      lines.push(`${index + 1}. ${item.label}：${formatWorkspaceRunDuration(item.durationMs)}${detail}`);
+    });
+  }
+  if (activityItems.length > 0) {
+    lines.push("");
+    lines.push("最近 Activity");
+    activityItems.slice(-10).forEach((item, index) => {
+      lines.push(workspaceRunActivityLine(item, index));
+    });
+  }
+  if (toolEntries.length > 0) {
+    lines.push("");
+    lines.push("最近工具完成");
+    toolEntries.slice(-8).forEach((item, index) => {
+      const duration = Number.isFinite(Number(item.durationMs)) ? ` ${formatWorkspaceRunDuration(item.durationMs)}` : "";
+      const detail = item.detail ? ` · ${item.detail}` : "";
+      lines.push(`${index + 1}. ${item.label}${duration}${detail}`);
+    });
+  }
+  return lines.join("\n");
+}
+
 function extractThinkingDeltaFromRawTrace(event) {
   if (String(event?.type || "") !== "raw") return "";
   if (String(event?.eventType || "") !== "thinking") return "";
-  const rawText = String(event?.text || "").trim();
-  if (!rawText) return "";
-  try {
-    const parsed = JSON.parse(rawText);
-    if (parsed?.type !== "thinking") return "";
-    const subtype = String(parsed?.subtype || "");
-    if (subtype && subtype !== "delta") return "";
-    return String(parsed?.text || parsed?.delta || parsed?.thinking || "").trim();
-  } catch {
-    return "";
-  }
+  const parsed = parseWorkspaceRunRawJson(event);
+  if (parsed?.type !== "thinking") return "";
+  const subtype = String(parsed?.subtype || "");
+  if (subtype && subtype !== "delta") return "";
+  return String(parsed?.text || parsed?.delta || parsed?.thinking || "").trim();
 }
 
 function schemaTypeForDefinition(definitionId, def) {
@@ -299,10 +457,42 @@ function runtimeDefinitionIdForPalette(def) {
   if (!def) return "";
   const baseDefinitionId = String(def.baseDefinitionId || "").trim();
   if (!baseDefinitionId) return String(def.id || "").trim();
-  const runtime = def.runtime && typeof def.runtime === "object" ? def.runtime : {};
-  const hasPackagedRuntime = Boolean(runtime.entry || runtime.command);
-  if (hasPackagedRuntime && baseDefinitionId === "tool_nodejs") return String(def.id || "").trim();
   return baseDefinitionId;
+}
+
+function shellQuoteArg(value) {
+  const text = String(value ?? "");
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text)) return text;
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+function runtimeInterpreterForMarketplaceEntry(runtime, entry) {
+  const language = String(runtime?.language || "").trim().toLowerCase();
+  const entryLower = String(entry || "").trim().toLowerCase();
+  if (language.includes("python") || entryLower.endsWith(".py")) return "python3";
+  if (language.includes("shell") || language === "bash" || entryLower.endsWith(".sh") || entryLower.endsWith(".bash")) return "bash";
+  return "node";
+}
+
+function marketplaceRuntimeArg(arg) {
+  const text = String(arg ?? "").trim();
+  if (!text) return "";
+  if (text.includes("${")) return text;
+  return shellQuoteArg(text);
+}
+
+function scriptFromMarketplaceRuntime(def) {
+  if (String(def?.baseDefinitionId || "").trim() !== "tool_nodejs") return "";
+  const runtime = def?.runtime && typeof def.runtime === "object" ? def.runtime : {};
+  const entry = String(runtime.entry || "").trim().replace(/^\/+/, "");
+  if (entry) {
+    const packageDir = String(def?.packageDir || "").trim().replace(/\/+$/, "");
+    const entryPath = packageDir ? `${packageDir}/${entry}` : `\${flowDir}/${entry}`;
+    const args = Array.isArray(runtime.args) ? runtime.args.map(marketplaceRuntimeArg).filter(Boolean) : [];
+    return [runtimeInterpreterForMarketplaceEntry(runtime, entry), shellQuoteArg(entryPath), ...args].join(" ");
+  }
+  const command = String(runtime.command || "").trim();
+  return command;
 }
 
 function paletteCategory(node) {
@@ -508,6 +698,16 @@ function slotDefault(slot) {
   return "";
 }
 
+function scheduledRunIntervalToCron(intervalMinutes) {
+  const n = Number(intervalMinutes);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_WORKSPACE_SCHEDULE_CRON;
+  const minutes = Math.max(1, Math.min(1440, Math.round(n)));
+  if (minutes < 60) return `*/${minutes} * * * *`;
+  if (minutes === 60) return "0 * * * *";
+  if (minutes < 1440 && minutes % 60 === 0) return `0 */${minutes / 60} * * *`;
+  return DEFAULT_WORKSPACE_SCHEDULE_CRON;
+}
+
 function normalizeScheduledRunConfig(raw) {
   let parsed = {};
   const text = String(raw || "").trim();
@@ -519,11 +719,17 @@ function normalizeScheduledRunConfig(raw) {
     }
   }
   const intervalMinutes = Number(parsed.intervalMinutes);
+  const migratedCron = scheduledRunIntervalToCron(intervalMinutes);
   return {
     enabled: parsed.enabled === true,
-    intervalMinutes: Number.isFinite(intervalMinutes) && intervalMinutes > 0
-      ? Math.min(Math.max(Math.round(intervalMinutes), 1), 1440)
-      : 60,
+    cron: typeof parsed.cron === "string" && parsed.cron.trim()
+      ? parsed.cron.trim()
+      : migratedCron,
+    timezone: typeof parsed.timezone === "string" && parsed.timezone.trim()
+      ? parsed.timezone.trim()
+      : DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE,
+    targetRunNodeId: typeof parsed.targetRunNodeId === "string" ? parsed.targetRunNodeId.trim() : "",
+    overlapPolicy: "skip",
   };
 }
 
@@ -550,14 +756,17 @@ function scheduledRunTimestamp(value) {
 function scheduledRunStateFromServer(rawSchedules) {
   const next = {};
   for (const item of Array.isArray(rawSchedules) ? rawSchedules : []) {
-    const runNodeId = String(item?.runNodeId || "").trim();
-    if (!runNodeId) continue;
-    next[runNodeId] = {
+    const scheduleNodeId = String(item?.scheduleNodeId || item?.runNodeId || "").trim();
+    if (!scheduleNodeId) continue;
+    next[scheduleNodeId] = {
       nextAt: scheduledRunTimestamp(item.nextRunAt),
       lastAt: scheduledRunTimestamp(item.lastTriggeredAt),
       lastStatus: String(item.lastStatus || (item.enabled ? "armed" : "disabled")),
       lastError: String(item.lastError || ""),
       lastRunId: String(item.lastRunId || ""),
+      targetRunNodeId: String(item.targetRunNodeId || item.runNodeId || ""),
+      cron: String(item.cron || ""),
+      timezone: String(item.timezone || ""),
     };
   }
   return next;
@@ -667,7 +876,7 @@ function workspaceNodeLayoutSignature(node) {
     Number(displaySize.height || 0) || "",
     data?.isExecuting ? "executing" : "",
     data?.nodeStatus || "",
-    data?.runningRunNodeId || "",
+    data?.runningRunNodeIds?.has?.(node?.id) ? "running-run" : "",
   ].join("::");
 }
 
@@ -689,6 +898,7 @@ function graphToFlow(graph, palette) {
     const runtimeDefinitionId = runtimeDefinitionIdForPalette(def) || definitionId;
     const runtimeDef = palette.find((p) => p.id === runtimeDefinitionId) || def;
     const marketplaceRef = inst.marketplaceRef || marketplaceRefForDefinition(def);
+    const runtimeScript = scriptFromMarketplaceRuntime(def);
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
       : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
@@ -712,7 +922,7 @@ function graphToFlow(graph, palette) {
         role: inst.role || "normal",
         model: inst.model || undefined,
         body: inst.body || "",
-        script: inst.script || "",
+        script: inst.script || runtimeScript || "",
         scriptRef: inst.scriptRef || "",
         implementationRef: inst.implementationRef || "",
         implementationMode: inst.implementationMode || "",
@@ -2505,7 +2715,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
 function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
-  const running = data?.runningRunNodeId === id;
+  const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   return (
@@ -2587,7 +2797,9 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const config = normalizeScheduledRunConfig(data?.body || "");
   const scheduleState = data?.scheduledRunState || {};
-  const running = data?.runningRunNodeId === id;
+  const workspaceRunOptions = Array.isArray(data?.workspaceRunOptions) ? data.workspaceRunOptions : [];
+  const targetRunNodeId = config.targetRunNodeId || scheduleState.targetRunNodeId || "";
+  const running = Boolean(targetRunNodeId && (data?.runningRunNodeIds?.has?.(targetRunNodeId) || data?.runningRunNodeIds?.[targetRunNodeId] === true));
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   const updateConfig = (patch) => {
@@ -2662,36 +2874,48 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
           <span>{config.enabled ? "定时开启" : "定时关闭"}</span>
         </label>
         <label className="af-work-schedule-card__field">
-          <span>每</span>
+          <span>Cron</span>
           <input
-            type="number"
-            min="1"
-            max="1440"
-            step="1"
-            value={config.intervalMinutes}
+            type="text"
+            value={config.cron}
             disabled={readOnly}
-            onChange={(event) => updateConfig({ intervalMinutes: event.target.value })}
+            spellCheck={false}
+            placeholder={DEFAULT_WORKSPACE_SCHEDULE_CRON}
+            onChange={(event) => updateConfig({ cron: event.target.value })}
           />
-          <span>分钟</span>
+        </label>
+        <label className="af-work-schedule-card__field">
+          <span>时区</span>
+          <input
+            type="text"
+            value={config.timezone}
+            disabled={readOnly}
+            spellCheck={false}
+            placeholder={DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE}
+            onChange={(event) => updateConfig({ timezone: event.target.value })}
+          />
+        </label>
+        <label className="af-work-schedule-card__field">
+          <span>目标</span>
+          <select
+            value={config.targetRunNodeId}
+            disabled={readOnly}
+            onChange={(event) => updateConfig({ targetRunNodeId: event.target.value })}
+          >
+            <option value="">自动选择</option>
+            {workspaceRunOptions.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
         </label>
         <div className="af-work-schedule-card__meta">
           <span>Next {formatScheduledRunTime(scheduleState.nextAt)}</span>
-          <span>{scheduleState.lastStatus || "idle"}</span>
+          <span>{running ? "running" : (scheduleState.lastStatus || "idle")}</span>
         </div>
+        {scheduleState.lastError ? (
+          <div className="af-work-schedule-card__error">{scheduleState.lastError}</div>
+        ) : null}
       </div>
-      <button
-        type="button"
-        className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
-        disabled={readOnly}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (running) data?.onStopWorkspaceNode?.(id);
-          else data?.onRunWorkspaceNode?.(id);
-        }}
-      >
-        <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
-        <span>{running ? "Stop" : "Run now"}</span>
-      </button>
     </div>
   );
 }
@@ -3876,17 +4100,30 @@ function WorkspacePageInner() {
   const [jumpPaletteOpen, setJumpPaletteOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState("pan");
   const [authUser, setAuthUser] = useState(null);
-  const [runningRunNodeId, setRunningRunNodeId] = useState("");
-  const runningRunNodeIdRef = useRef("");
+  const [runningRunSessions, setRunningRunSessions] = useState({});
+  const runningRunSessionsRef = useRef({});
   const [scheduledRunState, setScheduledRunState] = useState({});
-  const workspaceRunAbortRef = useRef(null);
-  const workspaceRunStoppedRef = useRef(false);
+  const workspaceRunAbortRefs = useRef(new Map());
+  const workspaceRunStoppedRef = useRef(new Set());
   const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
   const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
   const [status, setStatus] = useState("");
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
   const flowSource = flowParams.flowSource || "user";
+  const runningRunNodeIds = useMemo(() => new Set(
+    Object.values(runningRunSessions || {})
+      .map((session) => String(session?.runNodeId || "").trim())
+      .filter(Boolean),
+  ), [runningRunSessions]);
+  const setRunningRunSessionsSynced = useCallback((updater) => {
+    const current = runningRunSessionsRef.current || {};
+    const next = typeof updater === "function" ? updater(current) : updater;
+    const normalized = next && typeof next === "object" && !Array.isArray(next) ? next : {};
+    runningRunSessionsRef.current = normalized;
+    setRunningRunSessions(normalized);
+    return normalized;
+  }, []);
   const canManageCurrentFlow = Boolean(
     flowParams.flowId &&
     !flowParams.archived &&
@@ -4084,45 +4321,67 @@ function WorkspacePageInner() {
     setActiveComposerSessionId(sessionId || "workspace");
   }, []);
 
-  const stopWorkspaceRun = useCallback(async (runNodeId = "") => {
-    const id = String(runNodeId || runningRunNodeId || "").trim();
-    workspaceRunStoppedRef.current = true;
-    if (workspaceRunAbortRef.current) {
-      workspaceRunAbortRef.current.abort();
-      workspaceRunAbortRef.current = null;
+  const stopWorkspaceRun = useCallback(async (runNodeIdOrSessionId = "") => {
+    const requestedId = String(runNodeIdOrSessionId || "").trim();
+    const sessions = runningRunSessionsRef.current || {};
+    const match = Object.entries(sessions).find(([sessionId, session]) => (
+      sessionId === requestedId || String(session?.runNodeId || "") === requestedId
+    )) || Object.entries(sessions)[0] || null;
+    const sessionId = match?.[0] || "";
+    const session = match?.[1] || null;
+    const runNodeId = String(session?.runNodeId || requestedId || "").trim();
+    const affectedIds = new Set([
+      runNodeId,
+      ...(Array.isArray(session?.plannedNodeIds) ? session.plannedNodeIds : []),
+    ].map((id) => String(id || "").trim()).filter(Boolean));
+    if (sessionId) workspaceRunStoppedRef.current.add(sessionId);
+    const abortController = sessionId ? workspaceRunAbortRefs.current.get(sessionId) : null;
+    if (abortController) {
+      abortController.abort();
+      workspaceRunAbortRefs.current.delete(sessionId);
     }
-    setRunningRunNodeId("");
-    setWorkspaceExecutingNodes(new Set());
-    setWorkspaceNodeRunStatus((current) => {
-      const next = { ...current };
-      for (const [nodeId, item] of Object.entries(next)) {
-        if (item?.status === "running") next[nodeId] = { status: "stopped" };
-      }
-      if (id) next[id] = { status: "stopped" };
+    if (sessionId) {
+      setRunningRunSessionsSynced((current) => {
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+    }
+    setWorkspaceExecutingNodes((current) => {
+      const next = new Set(current);
+      for (const id of affectedIds) next.delete(id);
       return next;
     });
-    setStatus(id ? `Workspace run stopped: ${id}` : "Workspace run stopped");
-    setComposerRunSessions((list) => list.map((session) => (
-      (!id || session.runNodeId === id) && session.status === "running"
+    setWorkspaceNodeRunStatus((current) => {
+      const next = { ...current };
+      for (const id of affectedIds) {
+        if (!id) continue;
+        if (!next[id] || next[id]?.status === "running") next[id] = { status: "stopped" };
+      }
+      return next;
+    });
+    setStatus(runNodeId ? `Workspace run stopped: ${runNodeId}` : "Workspace run stopped");
+    setComposerRunSessions((list) => list.map((item) => (
+      (sessionId ? item.id === sessionId : (!runNodeId || item.runNodeId === runNodeId)) && item.status === "running"
         ? {
-            ...session,
+            ...item,
             status: "stopped",
             endedAt: Date.now(),
             messages: [
-              ...(Array.isArray(session.messages) ? session.messages : []),
+              ...(Array.isArray(item.messages) ? item.messages : []),
               { role: "assistant", kind: "status", text: "Workspace run stopped.", at: Date.now() },
             ].slice(-160),
           }
-        : session
+        : item
     )));
     try {
       await fetch("/api/workspace/run/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...flowParams, runNodeId: id }),
+        body: JSON.stringify({ ...flowParams, runId: sessionId, runNodeId }),
       });
     } catch (_) {}
-  }, [flowParams, runningRunNodeId]);
+  }, [flowParams, setRunningRunSessionsSynced]);
 
   const refreshWorkspaceRunStatus = useCallback(async () => {
     if (!flowParams.flowId) return;
@@ -4132,42 +4391,72 @@ function WorkspacePageInner() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) return;
       if (!json.running) return;
-      const runNodeId = String(json.runNodeId || "").trim();
-      if (runNodeId) {
-        setRunningRunNodeId(runNodeId);
-        setWorkspaceExecutingNodes(new Set([runNodeId]));
-        setWorkspaceNodeRunStatus((current) => ({ ...current, [runNodeId]: { status: "running" } }));
-        setStatus(`Workspace run still running: ${runNodeId}`);
-      } else {
-        setStatus("Workspace run still running");
+      const runs = Array.isArray(json.runs) && json.runs.length
+        ? json.runs
+        : [{ runId: `run-restored-${json.startedAt || Date.now()}`, runNodeId: json.runNodeId || "", startedAt: json.startedAt || Date.now(), plannedNodeIds: [] }];
+      const restoredSessions = {};
+      const restoredNodeIds = [];
+      for (const item of runs) {
+        const runNodeId = String(item?.runNodeId || "").trim();
+        const sessionId = String(item?.runId || `run-restored-${item?.startedAt || Date.now()}-${runNodeId}`).trim();
+        if (!sessionId) continue;
+        restoredSessions[sessionId] = {
+          id: sessionId,
+          runNodeId,
+          plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
+          startedAt: item?.startedAt || Date.now(),
+        };
+        if (runNodeId) restoredNodeIds.push(runNodeId);
       }
+      if (!Object.keys(restoredSessions).length) return;
+      setRunningRunSessionsSynced((current) => ({ ...current, ...restoredSessions }));
+      setWorkspaceExecutingNodes((current) => {
+        const next = new Set(current);
+        for (const runNodeId of restoredNodeIds) next.add(runNodeId);
+        return next;
+      });
+      setWorkspaceNodeRunStatus((current) => {
+        const next = { ...current };
+        for (const runNodeId of restoredNodeIds) next[runNodeId] = { status: "running" };
+        return next;
+      });
+      setStatus(restoredNodeIds.length ? `Workspace run still running: ${restoredNodeIds.join(", ")}` : "Workspace run still running");
       setComposerRunSessions((list) => {
-        if (list.some((session) => session.status === "running" && (!runNodeId || session.runNodeId === runNodeId))) return list;
-        const sessionId = `run-restored-${json.startedAt || Date.now()}`;
-        return [
-          ...list.slice(-7),
-          {
+        const next = [...list];
+        for (const [sessionId, sessionInfo] of Object.entries(restoredSessions)) {
+          if (next.some((session) => session.id === sessionId || (session.status === "running" && session.runNodeId === sessionInfo.runNodeId))) continue;
+          const runNodeId = String(sessionInfo.runNodeId || "");
+          next.push({
             id: sessionId,
             label: runNodeId ? `Run ${runNodeId}` : "Workspace Run",
             runNodeId,
             status: "running",
-            startedAt: json.startedAt || Date.now(),
+            startedAt: sessionInfo.startedAt || Date.now(),
             steps: runNodeId ? [{ id: runNodeId, label: runNodeId, status: "running" }] : [],
             messages: [{ role: "assistant", kind: "run-summary", text: "Workspace run is still running in the background.", at: Date.now() }],
-          },
+          });
+        }
+        return [
+          ...next.slice(-8),
         ];
       });
     } catch {
       /* status restore is best-effort */
     }
-  }, [flowParams]);
+  }, [flowParams, setRunningRunSessionsSynced]);
 
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
     }
-    if (!runNodeId || runningRunNodeId) return;
+    if (!runNodeId) return;
+    const existingSession = Object.values(runningRunSessionsRef.current || {})
+      .find((session) => String(session?.runNodeId || "") === String(runNodeId || ""));
+    if (existingSession) {
+      setStatus(`Workspace run already running: ${runNodeId}`);
+      return;
+    }
     let runNodes = nodes;
     let runEdges = edges;
     let runInstances = instancesRef.current;
@@ -4201,12 +4490,57 @@ function WorkspacePageInner() {
     const graph = flowToGraph(runNodes, runEdges, runInstances);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
     const runSessionLabel = `Run ${runNodeId}`;
+    let plannedNodeIds = [runNodeId];
+    try {
+      const planRes = await fetch("/api/workspace/run/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, graph, runNodeId }),
+      });
+      const planJson = await planRes.json().catch(() => ({}));
+      if (!planRes.ok || planJson?.ok === false) throw new Error(planJson.error || "Workspace run plan failed");
+      plannedNodeIds = Array.isArray(planJson.plannedNodeIds) && planJson.plannedNodeIds.length
+        ? planJson.plannedNodeIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : [runNodeId];
+      plannedNodeIds = Array.from(new Set([runNodeId, ...plannedNodeIds].filter(Boolean)));
+      const conflict = planJson.conflict || null;
+      if (conflict?.runNodeId || conflict?.runId) {
+        const conflictIds = Array.isArray(conflict.conflictNodeIds) && conflict.conflictNodeIds.length
+          ? `: ${conflict.conflictNodeIds.join(", ")}`
+          : "";
+        setStatus(`Run ${runNodeId} conflicts with running ${conflict.runNodeId || conflict.runId}${conflictIds}`);
+        return;
+      }
+    } catch (e) {
+      setStatus(String(e.message || e));
+      return;
+    }
+    const plannedSet = new Set(plannedNodeIds);
+    const localConflict = Object.values(runningRunSessionsRef.current || {}).find((session) => (
+      (Array.isArray(session?.plannedNodeIds) ? session.plannedNodeIds : [])
+        .some((id) => plannedSet.has(String(id || "").trim()))
+    ));
+    if (localConflict) {
+      const overlap = (Array.isArray(localConflict.plannedNodeIds) ? localConflict.plannedNodeIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => id && plannedSet.has(id));
+      setStatus(`Run ${runNodeId} conflicts with running ${localConflict.runNodeId || "workspace run"}${overlap.length ? `: ${overlap.join(", ")}` : ""}`);
+      return;
+    }
     const abortController = new AbortController();
-    workspaceRunAbortRef.current = abortController;
-    workspaceRunStoppedRef.current = false;
-    setRunningRunNodeId(runNodeId);
-    setWorkspaceExecutingNodes(new Set([runNodeId]));
-    setWorkspaceNodeRunStatus({ [runNodeId]: { status: "running" } });
+    workspaceRunAbortRefs.current.set(runSessionId, abortController);
+    workspaceRunStoppedRef.current.delete(runSessionId);
+    setRunningRunSessionsSynced((current) => ({
+      ...current,
+      [runSessionId]: {
+        id: runSessionId,
+        runNodeId,
+        plannedNodeIds,
+        startedAt: Date.now(),
+      },
+    }));
+    setWorkspaceExecutingNodes((current) => new Set([...current, runNodeId]));
+    setWorkspaceNodeRunStatus((current) => ({ ...current, [runNodeId]: { status: "running" } }));
     setStatus(`Running ${runNodeId}...`);
     setActiveComposerSessionId(runSessionId);
     setComposerRunSessions((list) => [
@@ -4221,6 +4555,29 @@ function WorkspacePageInner() {
         messages: [{ role: "assistant", kind: "run-summary", text: "准备运行...", at: Date.now() }],
       },
     ]);
+    let activeNodeId = runNodeId;
+    const isRunStopped = () => workspaceRunStoppedRef.current.has(runSessionId);
+    const removeSessionExecutingNodes = (ids) => {
+      const affectedIds = new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean));
+      if (!affectedIds.size) affectedIds.add(String(runNodeId || ""));
+      setWorkspaceExecutingNodes((current) => {
+        const next = new Set(current);
+        for (const id of affectedIds) next.delete(id);
+        return next;
+      });
+    };
+    const markSessionNodesFinal = (ids, finalStatus) => {
+      const affectedIds = new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean));
+      if (!affectedIds.size) affectedIds.add(String(runNodeId || ""));
+      setWorkspaceNodeRunStatus((current) => {
+        const next = { ...current };
+        for (const id of affectedIds) {
+          if (!id) continue;
+          if (!next[id] || next[id]?.status === "running") next[id] = { status: finalStatus };
+        }
+        return next;
+      });
+    };
     try {
       await saveGraph(runNodes, runEdges);
       const res = await fetch("/api/workspace/run", {
@@ -4231,6 +4588,7 @@ function WorkspacePageInner() {
           ...flowParams,
           graph,
           runNodeId,
+          runSessionId,
           model: composerModel,
           selectedSkills,
           stream: true,
@@ -4246,7 +4604,6 @@ function WorkspacePageInner() {
       let buffer = "";
       let finalOrder = [];
       let finalPauseNodeIds = [];
-      let activeNodeId = runNodeId;
       const nodeLabelForRun = (nodeId, definitionId) => {
         const node = nodes.find((item) => item.id === nodeId);
         const label = String(node?.data?.label || nodeId || "").trim();
@@ -4294,18 +4651,25 @@ function WorkspacePageInner() {
           return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
         }));
       };
-      const markNodeStart = (nodeId) => {
-        const id = String(nodeId || "").trim();
-        if (!id) return;
-        const previousId = activeNodeId;
-        activeNodeId = id;
-        setWorkspaceExecutingNodes(new Set([id]));
-        setWorkspaceNodeRunStatus((current) => ({
-          ...current,
-          ...(previousId && previousId !== id && current[previousId]?.status === "running" ? { [previousId]: { status: "success" } } : {}),
-          [id]: { status: "running" },
-        }));
-      };
+    const markNodeStart = (nodeId) => {
+      const id = String(nodeId || "").trim();
+      if (!id) return;
+      const previousId = activeNodeId;
+      activeNodeId = id;
+      setWorkspaceExecutingNodes((current) => {
+        const next = new Set(current);
+        if (previousId && previousId !== id && previousId !== runNodeId) next.delete(previousId);
+        if (runNodeId) next.add(runNodeId);
+        next.add(id);
+        return next;
+      });
+      setWorkspaceNodeRunStatus((current) => ({
+        ...current,
+        ...(previousId && previousId !== id && previousId !== runNodeId && current[previousId]?.status === "running" ? { [previousId]: { status: "success" } } : {}),
+        ...(runNodeId ? { [runNodeId]: { status: "running" } } : {}),
+        [id]: { status: "running" },
+      }));
+    };
       const markNodeDone = (nodeId) => {
         const id = String(nodeId || "").trim();
         if (!id) return;
@@ -4393,13 +4757,14 @@ function WorkspacePageInner() {
           const lastActivityText = typeof lastActivity === "string" ? lastActivity : String(lastActivity?.text || "");
           const nextActivities = lastActivityText === activity
             ? currentActivities
-            : [...currentActivities, { text: activity, stepMs, totalMs, at: now }].slice(-8);
+            : [...currentActivities, { text: activity, kind: workspaceRunActivityKind(activity), stepMs, totalMs, at: now }].slice(-30);
+          const timingEntries = Array.isArray(session.timingEntries) ? session.timingEntries : [];
           const currentMessages = Array.isArray(session.messages) ? session.messages : [];
           const activityIndex = currentMessages.findIndex((msg) => msg.kind === "activity");
           const activityMessage = {
             role: "assistant",
             kind: "activity",
-            text: nextActivities.map((item, index) => workspaceRunActivityLine(item, index)).join("\n"),
+            text: workspaceRunActivityMessageText(nextActivities, timingEntries, startedAt, now),
             at: Date.now(),
           };
           const nextMessages = [...currentMessages];
@@ -4419,12 +4784,17 @@ function WorkspacePageInner() {
         const rawText = String(event?.text || "").trim();
         if (!rawText) return;
         const entry = `[${source}${stream ? `:${stream}` : ""}] ${eventType}\n${rawText}`;
+        const timingEntry = workspaceRunRawTimingEntry(event);
         setComposerRunSessions((list) => list.map((session) => {
           if (session.id !== runSessionId) return session;
           const currentRaw = Array.isArray(session.rawTrace) ? session.rawTrace : [];
           const nextRaw = [...currentRaw, entry].slice(-80);
+          const currentTimingEntries = Array.isArray(session.timingEntries) ? session.timingEntries : [];
+          const nextTimingEntries = timingEntry ? [...currentTimingEntries, timingEntry].slice(-80) : currentTimingEntries;
+          const currentActivities = Array.isArray(session.activities) ? session.activities : [];
+          const startedAt = Number(session.startedAt) || Number(event?.ts) || Date.now();
+          const lastAt = Number(timingEntry?.at) || Number(event?.ts) || Date.now();
           const currentMessages = Array.isArray(session.messages) ? session.messages : [];
-          const rawIndex = currentMessages.findIndex((msg) => msg.kind === "raw");
           const rawMessage = {
             role: "assistant",
             kind: "raw",
@@ -4432,12 +4802,28 @@ function WorkspacePageInner() {
             at: Date.now(),
           };
           const nextMessages = [...currentMessages];
+          const activityIndex = nextMessages.findIndex((msg) => msg.kind === "activity");
+          if (timingEntry) {
+            const activityMessage = {
+              role: "assistant",
+              kind: "activity",
+              text: workspaceRunActivityMessageText(currentActivities, nextTimingEntries, startedAt, lastAt),
+              at: Date.now(),
+            };
+            if (activityIndex >= 0) {
+              nextMessages[activityIndex] = activityMessage;
+            } else {
+              const summaryIndex = nextMessages.findIndex((msg) => msg.kind === "run-summary");
+              nextMessages.splice(summaryIndex >= 0 ? summaryIndex + 1 : 0, 0, activityMessage);
+            }
+          }
+          const rawIndex = nextMessages.findIndex((msg) => msg.kind === "raw");
           if (rawIndex >= 0) {
             nextMessages[rawIndex] = rawMessage;
           } else {
             nextMessages.push(rawMessage);
           }
-          return { ...session, rawTrace: nextRaw, messages: nextMessages.slice(-160) };
+          return { ...session, rawTrace: nextRaw, timingEntries: nextTimingEntries, messages: nextMessages.slice(-160) };
         }));
       };
       const markRunSessionStatus = (sessionStatus) => {
@@ -4537,7 +4923,7 @@ function WorkspacePageInner() {
           const event = JSON.parse(line);
           if (event.type === "error") throw new Error(event.error || "Workspace run failed");
           if (event.type === "stopped") {
-            workspaceRunStoppedRef.current = true;
+            workspaceRunStoppedRef.current.add(runSessionId);
             finalOrder = Array.isArray(event.order) ? event.order : finalOrder;
             updateRunActivity("运行停止", event);
             continue;
@@ -4580,7 +4966,7 @@ function WorkspacePageInner() {
         const event = JSON.parse(buffer);
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
         if (event.type === "stopped") {
-          workspaceRunStoppedRef.current = true;
+          workspaceRunStoppedRef.current.add(runSessionId);
           updateRunActivity("运行停止", event);
         }
         if (event.type === "node-start") {
@@ -4616,40 +5002,31 @@ function WorkspacePageInner() {
           updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
         }
       }
-      if (workspaceRunStoppedRef.current) {
-        setWorkspaceExecutingNodes(new Set());
-        setWorkspaceNodeRunStatus((current) => {
-          const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0] || runNodeId;
-          return id ? { ...current, [id]: { status: "stopped" } } : current;
-        });
+      if (isRunStopped()) {
+        removeSessionExecutingNodes(plannedNodeIds);
+        markSessionNodesFinal(plannedNodeIds, "stopped");
       }
       setStatus(
-        workspaceRunStoppedRef.current
+        isRunStopped()
           ? `Workspace run stopped: ${runNodeId}`
           : finalPauseNodeIds.length
           ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
           : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
       );
-      markRunSessionStatus(workspaceRunStoppedRef.current ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
-      if (!workspaceRunStoppedRef.current) await loadFiles();
+      markRunSessionStatus(isRunStopped() ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
+      if (!isRunStopped()) await loadFiles();
     } catch (e) {
-      if (workspaceRunStoppedRef.current || e?.name === "AbortError") {
-        setWorkspaceExecutingNodes(new Set());
-        setWorkspaceNodeRunStatus((current) => {
-          const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0] || runNodeId;
-          return id ? { ...current, [id]: { status: "stopped" } } : current;
-        });
+      if (isRunStopped() || e?.name === "AbortError") {
+        removeSessionExecutingNodes(plannedNodeIds);
+        markSessionNodesFinal(plannedNodeIds, "stopped");
         setStatus(`Workspace run stopped: ${runNodeId}`);
         setComposerRunSessions((list) => list.map((session) => (
           session.id === runSessionId ? { ...session, status: "stopped", endedAt: Date.now() } : session
         )));
         return;
       }
-      setWorkspaceExecutingNodes(new Set());
-      setWorkspaceNodeRunStatus((current) => {
-        const id = Object.entries(current).find(([, item]) => item?.status === "running")?.[0];
-        return id ? { ...current, [id]: { status: "failed" } } : current;
-      });
+      removeSessionExecutingNodes(plannedNodeIds);
+      markSessionNodesFinal([activeNodeId || runNodeId], "failed");
       setStatus(String(e.message || e));
       setComposerRunSessions((list) => list.map((session) => (
         session.id === runSessionId
@@ -4665,11 +5042,16 @@ function WorkspacePageInner() {
           : session
       )));
     } finally {
-      if (workspaceRunAbortRef.current === abortController) workspaceRunAbortRef.current = null;
-      setRunningRunNodeId("");
-      setWorkspaceExecutingNodes(new Set());
+      if (workspaceRunAbortRefs.current.get(runSessionId) === abortController) workspaceRunAbortRefs.current.delete(runSessionId);
+      setRunningRunSessionsSynced((current) => {
+        const next = { ...current };
+        delete next[runSessionId];
+        return next;
+      });
+      workspaceRunStoppedRef.current.delete(runSessionId);
+      removeSessionExecutingNodes(plannedNodeIds);
     }
-  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, runningRunNodeId, saveGraph, selectedSkills, setEdges, setNodes, workspaceWritable]);
+  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, saveGraph, selectedSkills, setEdges, setNodes, setRunningRunSessionsSynced, workspaceWritable]);
 
   const refreshSkills = useCallback(async () => {
     try {
@@ -4756,10 +5138,6 @@ function WorkspacePageInner() {
   }, [nodes]);
 
   useEffect(() => {
-    runningRunNodeIdRef.current = runningRunNodeId;
-  }, [runningRunNodeId]);
-
-  useEffect(() => {
     const prev = nodeHandleSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
@@ -4840,7 +5218,7 @@ function WorkspacePageInner() {
 
   const scheduledRunKey = useMemo(() => (
     scheduledRunConfigs
-      .map((item) => `${item.id}:${item.config.enabled ? "1" : "0"}:${item.config.intervalMinutes}`)
+      .map((item) => `${item.id}:${item.config.enabled ? "1" : "0"}:${item.config.cron}:${item.config.timezone}:${item.config.targetRunNodeId}`)
       .join("|")
   ), [scheduledRunConfigs]);
 
@@ -5421,6 +5799,15 @@ function WorkspacePageInner() {
     });
   }, []);
 
+  const workspaceRunOptions = useMemo(() => (
+    nodes
+      .filter((node) => node?.data?.definitionId === "workspace_run")
+      .map((node) => ({
+        id: node.id,
+        label: String(node.data?.label || node.id || "Run"),
+      }))
+  ), [nodes]);
+
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -5435,9 +5822,10 @@ function WorkspacePageInner() {
       readOnly: !workspaceWritable,
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
-      runningRunNodeId,
+      runningRunNodeIds,
       scheduledRunState: scheduledRunState[node.id] || null,
       onChangeScheduledRunConfig: changeScheduledRunConfig,
+      workspaceRunOptions,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
@@ -5462,7 +5850,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeId, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceRunOptions, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
@@ -6497,6 +6885,7 @@ function WorkspacePageInner() {
     if (!def) return null;
     const runtimeDefinitionId = runtimeDefinitionIdForPalette(def) || def.id;
     const marketplaceRef = marketplaceRefForDefinition(def);
+    const runtimeScript = scriptFromMarketplaceRuntime(def);
     const id = overrides.id || nextNodeId(runtimeDefinitionId, nodes);
     const input = cloneSlots(def.inputs);
     const output = cloneSlots(def.outputs);
@@ -6508,7 +6897,7 @@ function WorkspacePageInner() {
       label: overrides.label || labelForDefinition(def),
       role: "normal",
       body: overrides.body || "",
-      ...(overrides.script ? { script: overrides.script } : {}),
+      ...(overrides.script || runtimeScript ? { script: overrides.script || runtimeScript } : {}),
       ...(overrides.scriptRef ? { scriptRef: overrides.scriptRef } : {}),
       ...(overrides.implementationRef ? { implementationRef: overrides.implementationRef } : {}),
       ...(overrides.implementationMode ? { implementationMode: overrides.implementationMode } : {}),

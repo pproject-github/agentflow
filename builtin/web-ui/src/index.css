@@ -6609,7 +6609,7 @@ button.af-project-card {
 }
 
 .af-work-schedule-card {
-  width: 18rem;
+  width: 21rem;
 }
 
 .af-work-schedule-card--enabled {
@@ -6643,18 +6643,25 @@ button.af-project-card {
   accent-color: rgba(124, 77, 255, 0.95);
 }
 
-.af-work-schedule-card__field input {
-  width: 4.5rem;
+.af-work-schedule-card__field input,
+.af-work-schedule-card__field select {
+  flex: 1;
+  min-width: 0;
   height: 2rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.55rem;
   background: rgba(0, 0, 0, 0.24);
   color: rgba(255, 255, 255, 0.92);
   font: 700 0.82rem var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
-  text-align: center;
+}
+
+.af-work-schedule-card__field select {
+  font-family: inherit;
+  font-weight: 600;
 }
 
 .af-work-schedule-card__field input:disabled,
+.af-work-schedule-card__field select:disabled,
 .af-work-schedule-card__toggle input:disabled {
   opacity: 0.58;
 }
@@ -6673,6 +6680,14 @@ button.af-project-card {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.af-work-schedule-card__error {
+  color: rgba(255, 132, 132, 0.9);
+  font-size: 0.68rem;
+  line-height: 1.25;
+  max-height: 2.2rem;
+  overflow: hidden;
 }
 
 .af-work-load-skills-card {
@@ -13602,6 +13617,17 @@ button.af-exec-history-card {
   color: transparent;
   caret-color: rgba(229, 226, 225, 0.95);
   background: transparent;
+}
+
+.af-flow-node__prompt-stack--composing .af-flow-node__prompt-editor {
+  border-color: rgba(124, 77, 255, 0.62);
+  color: var(--af-on-surface);
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
+}
+
+.af-flow-node__prompt-stack--composing .af-flow-node__prompt-backdrop {
+  opacity: 0;
 }
 
 .af-flow-node__prompt-backdrop {

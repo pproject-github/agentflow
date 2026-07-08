@@ -81,7 +81,7 @@ import {
   readComposerSessionMeta,
 } from "./composer-log.mjs";
 import { runNodeScript } from "./pipeline-scripts.mjs";
-import { readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
+import { computeNextRunAt, readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
 import {
   deleteMarketplaceFlowSnippetPackage,
@@ -91,6 +91,7 @@ import {
   listMarketplacePackages,
   publishFlowSnippet,
   publishNodeFromInstance,
+  resolveMarketplaceNodePackage,
 } from "./marketplace.mjs";
 import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, sanitizeWorktreeName, unloadGitWorktree } from "./git-worktree.mjs";
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
@@ -2173,9 +2174,76 @@ function hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped = {}, gra
   return changed ? { ...next, instances } : next;
 }
 
+function workspaceRuntimeInterpreterForMarketplaceEntry(runtime, entry) {
+  const language = String(runtime?.language || "").trim().toLowerCase();
+  const entryLower = String(entry || "").trim().toLowerCase();
+  if (language.includes("python") || entryLower.endsWith(".py")) return "python3";
+  if (language.includes("shell") || language === "bash" || entryLower.endsWith(".sh") || entryLower.endsWith(".bash")) return "bash";
+  return "node";
+}
+
+function workspaceRuntimeArgForMarketplace(arg) {
+  const text = String(arg ?? "").trim();
+  if (!text) return "";
+  if (text.includes("${")) return text;
+  return workspaceShellQuote(text);
+}
+
+function workspaceMarketplaceRuntimeCommand(resolved) {
+  const runtime = resolved?.runtime && typeof resolved.runtime === "object" ? resolved.runtime : {};
+  const entry = String(runtime.entry || "").trim().replace(/^\/+/, "");
+  if (entry && resolved?.packageDir) {
+    const entryAbs = path.resolve(resolved.packageDir, ...entry.split(/[\\/]+/).filter(Boolean));
+    const packageRoot = path.resolve(resolved.packageDir);
+    const packageRootWithSep = packageRoot.endsWith(path.sep) ? packageRoot : `${packageRoot}${path.sep}`;
+    if (entryAbs === packageRoot || !entryAbs.startsWith(packageRootWithSep)) return "";
+    const args = Array.isArray(runtime.args) ? runtime.args.map(workspaceRuntimeArgForMarketplace).filter(Boolean) : [];
+    return [workspaceRuntimeInterpreterForMarketplaceEntry(runtime, entry), workspaceShellQuote(entryAbs), ...args].join(" ");
+  }
+  return String(runtime.command || "").trim();
+}
+
+function hydrateWorkspaceMarketplaceToolNodejsRuntime(workspaceRoot, scoped = {}, graph = {}, userCtx = {}) {
+  const next = normalizeWorkspaceGraphPayload(graph || {});
+  const instances = { ...(next.instances || {}) };
+  let changed = false;
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (!instance || typeof instance !== "object") continue;
+    const marketplaceDefId = String(instance.marketplaceRef || instance.definitionId || "").trim();
+    if (!marketplaceDefId.startsWith("marketplace:")) continue;
+    let resolved = null;
+    try {
+      resolved = resolveMarketplaceNodePackage(
+        workspaceRoot,
+        scoped.root || scoped.scopedRoot || workspaceRoot,
+        marketplaceDefId,
+        next,
+        { userId: userCtx?.userId || "" },
+      );
+    } catch {
+      resolved = null;
+    }
+    if (!resolved || String(resolved.baseDefinitionId || "").trim() !== "tool_nodejs") continue;
+    const script = String(instance.script || "").trim();
+    const scriptRef = String(instance.scriptRef || "").trim();
+    const runtimeScript = script || scriptRef ? "" : workspaceMarketplaceRuntimeCommand(resolved);
+    instances[nodeId] = {
+      ...instance,
+      definitionId: "tool_nodejs",
+      marketplaceRef: resolved.resolvedDefinitionId || marketplaceDefId,
+      marketplacePackageId: resolved.id,
+      marketplaceVersion: resolved.version,
+      ...(runtimeScript ? { script: runtimeScript } : {}),
+    };
+    changed = true;
+  }
+  return changed ? { ...next, instances } : next;
+}
+
 function hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped = {}, graph = {}, userCtx = {}) {
   const withRefs = hydrateWorkspaceNodeRefsFromFiles(scoped.root || scoped.scopedRoot || workspaceRoot, graph);
-  return hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withRefs, userCtx);
+  const withMarketplaceRuntime = hydrateWorkspaceMarketplaceToolNodejsRuntime(workspaceRoot, scoped, withRefs, userCtx);
+  return hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withMarketplaceRuntime, userCtx);
 }
 
 function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
@@ -3451,6 +3519,7 @@ function workspaceMaterializeImplementationReference(instance, scopedRoot, runPa
 }
 
 function workspaceImplementationBlock(instance, scopedRoot, runPackage = {}) {
+  if (!WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED) return "";
   const ref = workspaceMaterializeImplementationReference(instance, scopedRoot, runPackage);
   const inline = workspaceImplementationInlineText(instance);
   if (!ref && !inline) return "";
@@ -3476,6 +3545,46 @@ function workspaceSafeNodeFileName(nodeId) {
 
 function workspaceDefaultImplementationRef(nodeId) {
   return `nodes/${workspaceSafeNodeFileName(nodeId)}/implementation.md`;
+}
+
+function workspaceDefaultHistoryRef(nodeId) {
+  return `nodes/${workspaceSafeNodeFileName(nodeId)}/history.md`;
+}
+
+function workspaceMaterializeNodeHistoryReference(nodeId, scopedRoot, runPackage = {}) {
+  const historyRef = workspaceDefaultHistoryRef(nodeId);
+  const abs = workspaceResolveFlowFile(scopedRoot, historyRef, "historyRef");
+  const exists = fs.existsSync(abs) && fs.statSync(abs).isFile();
+  const nodeRunDir = String(runPackage?.nodeRunDir || "").trim();
+  let mounted = "";
+  if (exists && nodeRunDir) {
+    try {
+      const mountedRel = path.join("references", "history.md");
+      const dest = path.resolve(nodeRunDir, mountedRel);
+      const nodeRunWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+      if (dest === nodeRunDir || dest.startsWith(nodeRunWithSep)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(abs, dest);
+        mounted = mountedRel.split(path.sep).join(path.posix.sep);
+      }
+    } catch {
+      mounted = "";
+    }
+  }
+  return { historyRef, exists, mounted };
+}
+
+function workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage = {}) {
+  const ref = workspaceMaterializeNodeHistoryReference(nodeId, scopedRoot, runPackage);
+  if (!ref?.exists) return "";
+  return [
+    "## 历史参考",
+    "",
+    `- 历史记录文件：\`${ref.mounted || ref.historyRef}\``,
+    ref.mounted ? `- 原始流水线路径：\`${ref.historyRef}\`` : "",
+    "",
+    "该文件只记录之前运行时的 thinking 摘要与最终结论，用作轻量参考；不要把历史当成硬约束。若历史与当前任务、输入或输出要求冲突，以当前任务为准。",
+  ].filter((line) => line !== "").join("\n");
 }
 
 function workspaceImplementationModeForInstance(instance) {
@@ -3669,10 +3778,95 @@ async function workspaceGenerateImplementationMarkdown({
   return markdown.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
 }
 
+function workspaceHistoryTextFromEvents(events = [], kind, maxItems = 24, maxChars = 12000) {
+  const parts = [];
+  for (const ev of Array.isArray(events) ? events : []) {
+    if (!ev || ev.kind !== kind) continue;
+    const text = String(ev.text || "").trim();
+    if (!text) continue;
+    parts.push(text);
+    if (parts.length >= maxItems) break;
+  }
+  return workspaceClipImplementationText(parts.join("\n"), maxChars);
+}
+
+function workspaceBuildNodeHistoryEntry(instance, nodeId, opts = {}) {
+  const inputValues = opts.inputValues || {};
+  const structured = opts.structured && typeof opts.structured === "object" ? opts.structured : {};
+  const result = String(opts.resultContent || structured.result || "").trim();
+  const task = workspaceResolveBodyPlaceholders(instance?.body || "", inputValues).trim();
+  const thinking = workspaceHistoryTextFromEvents(opts.historyEvents || [], "thinking", 40, 16000);
+  const assistant = workspaceHistoryTextFromEvents(opts.historyEvents || [], "assistant", 8, 8000);
+  const resultEvent = workspaceHistoryTextFromEvents(opts.historyEvents || [], "result", 4, 12000);
+  const conclusion = workspaceClipImplementationText(resultEvent || result || assistant, 20000);
+  return [
+    `## ${new Date().toISOString()} · ${nodeId}`,
+    "",
+    `label: ${String(instance?.label || nodeId || "node")}`,
+    `definitionId: ${String(instance?.definitionId || "(unknown)")}`,
+    "",
+    "### 任务",
+    "",
+    workspaceClipImplementationText(task || instance?.body || instance?.scriptRef || instance?.script || "(无显式任务)", 6000),
+    "",
+    Object.keys(inputValues || {}).length ? "### 输入摘要" : "",
+    Object.keys(inputValues || {}).length ? "" : "",
+    Object.keys(inputValues || {}).length ? workspaceClipImplementationText(JSON.stringify(inputValues, null, 2), 8000) : "",
+    Object.keys(inputValues || {}).length ? "" : "",
+    thinking ? "### Thinking 摘要" : "",
+    thinking ? "" : "",
+    thinking || "",
+    thinking ? "" : "",
+    "### 结论",
+    "",
+    conclusion || "(无结论内容)",
+    "",
+    "### 输出协议",
+    "",
+    JSON.stringify({
+      result: workspaceClipImplementationText(structured.result || result, 4000),
+      resultFile: structured.resultFile || "",
+      outParams: structured.outParams || {},
+    }, null, 2),
+  ].filter((line) => line !== "").join("\n");
+}
+
+function workspaceClipNodeHistory(value, maxChars = WORKSPACE_NODE_HISTORY_MAX_CHARS) {
+  const text = String(value || "").trim();
+  if (text.length <= maxChars) return text;
+  return [
+    "# Workspace Node History",
+    "",
+    "> Older history was truncated to keep this reference lightweight.",
+    "",
+    text.slice(-maxChars),
+  ].join("\n").trim();
+}
+
+function workspacePersistNodeHistory(scopedRoot, graph, nodeId, opts = {}) {
+  const current = graph?.instances?.[nodeId];
+  if (!current || String(current.definitionId || "") === "workspace_run" || String(current.definitionId || "") === "workspace_scheduled_run") {
+    return { changed: false, wrote: false, instance: current };
+  }
+  const historyRef = workspaceDefaultHistoryRef(nodeId);
+  const abs = workspaceResolveFlowFile(scopedRoot, historyRef, "historyRef");
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const previous = fs.existsSync(abs) && fs.statSync(abs).isFile()
+    ? workspaceReadTextFileIfExists(abs, WORKSPACE_NODE_HISTORY_MAX_CHARS + 20000)
+    : "# Workspace Node History\n";
+  const entry = workspaceBuildNodeHistoryEntry(current, nodeId, opts);
+  const nextText = workspaceClipNodeHistory(`${previous.trimEnd()}\n\n${entry}\n`);
+  fs.writeFileSync(abs, `${nextText.trimEnd()}\n`, "utf-8");
+  return { changed: false, wrote: true, instance: current, historyRef };
+}
+
 async function workspacePersistNodeImplementation(scopedRoot, graph, nodeId, opts = {}) {
   const current = graph?.instances?.[nodeId];
   if (!current || String(current.definitionId || "") === "workspace_run" || String(current.definitionId || "") === "workspace_scheduled_run") {
     return { changed: false, wrote: false, instance: current };
+  }
+  if (!WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED) {
+    return workspacePersistNodeHistory(scopedRoot, graph, nodeId, opts);
   }
   const existingRef = String(current.implementationRef || "").trim();
   const implementationRef = existingRef || workspaceDefaultImplementationRef(nodeId);
@@ -3715,7 +3909,9 @@ async function workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, 
     opts.emit?.({
       type: "natural",
       kind: "warning",
-      text: `实现方案未更新：${e?.message || String(e)}`,
+      text: WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED
+        ? `实现方案未更新：${e?.message || String(e)}`
+        : `历史记录未更新：${e?.message || String(e)}`,
     });
     return { changed: false, wrote: false, instance: graph?.instances?.[nodeId] };
   }
@@ -4747,8 +4943,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     } catch {
       // Best-effort debug artifact only.
     }
-    const implementationBlock = workspaceImplementationBlock(instance, scopedRoot, runPackage);
-    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, implementationBlock);
+    const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
+    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
     } catch {
@@ -4763,6 +4959,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
     let content = "";
+    const runHistoryEvents = [];
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let attemptContent = "";
@@ -4792,6 +4989,12 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
               ? { ...ev, text: workspaceCanonicalAgentOutput(ev.text), nodeId }
               : { ...ev, nodeId };
             emit(eventToEmit);
+            if (ev?.type === "natural" && typeof ev.text === "string") {
+              const kind = String(ev.kind || "");
+              if (kind === "thinking" || kind === "assistant" || kind === "result") {
+                runHistoryEvents.push({ kind, text: ev.text });
+              }
+            }
             if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
               attemptLastAssistantContent = ev.text;
               attemptContent += (attemptContent ? "\n" : "") + ev.text;
@@ -4841,6 +5044,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       runPackage,
       modelKey,
       userCtx,
+      historyEvents: runHistoryEvents,
       emit: (event) => emit({ ...event, nodeId }),
       onActiveChild: opts.onActiveChild,
     });
@@ -5040,13 +5244,59 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 
 /** 正在执行的 flow run（flowId → { child, runUuid }）；同一 flow 只允许一个 run */
 const activeFlowRuns = new Map();
-/** 正在执行的 Workspace 临时 run（flowId → { controller, child, runNodeId, startedAt }）；同一 flow 只允许一个 run */
+/** 正在执行的 Workspace 临时 run（runId/sessionId → { controller, child, runNodeId, startedAt, plannedNodeIds }） */
 const activeWorkspaceRuns = new Map();
 const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
 const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
+const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = false;
+const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
+const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
+
+function workspaceIntervalMinutesToCron(intervalMinutes) {
+  const n = Number(intervalMinutes);
+  if (!Number.isFinite(n) || n <= 0) return "0 9 * * *";
+  const minutes = Math.max(1, Math.min(1440, Math.round(n)));
+  if (minutes < 60) return `*/${minutes} * * * *`;
+  if (minutes === 60) return "0 * * * *";
+  if (minutes < 1440 && minutes % 60 === 0) return `0 */${minutes / 60} * * *`;
+  return "0 9 * * *";
+}
 
 function workspaceRunKey(userCtx, flowSource, flowId) {
   return `${userCtx?.userId || ""}:${flowSource || "user"}:${flowId}`;
+}
+
+function workspaceRunEntryKey(scopeKey, runId) {
+  return `${scopeKey}:${String(runId || "").trim() || runLedgerId("workspace")}`;
+}
+
+function workspaceActiveRunsForScope(scopeKey) {
+  const key = String(scopeKey || "");
+  return Array.from(activeWorkspaceRuns.entries())
+    .filter(([, entry]) => String(entry?.scopeKey || "") === key);
+}
+
+function workspaceRunPlanNodeIds(runNodeId, plan) {
+  return Array.from(new Set([
+    String(runNodeId || "").trim(),
+    ...(Array.isArray(plan?.order) ? plan.order : []),
+    ...(Array.isArray(plan?.pauseNodeIds) ? plan.pauseNodeIds : []),
+  ].map((id) => String(id || "").trim()).filter(Boolean)));
+}
+
+function workspaceFindActiveRunConflict(scopeKey, plannedNodeIds) {
+  const planned = new Set((plannedNodeIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  for (const [key, entry] of workspaceActiveRunsForScope(scopeKey)) {
+    const activeIds = Array.isArray(entry?.plannedNodeIds) ? entry.plannedNodeIds : [];
+    if (!activeIds.length) {
+      return { key, entry, conflictNodeIds: [] };
+    }
+    const conflictNodeIds = activeIds
+      .map((id) => String(id || "").trim())
+      .filter((id) => id && planned.has(id));
+    if (conflictNodeIds.length) return { key, entry, conflictNodeIds };
+  }
+  return null;
 }
 
 function normalizeWorkspaceScheduledRunConfig(raw) {
@@ -5060,12 +5310,27 @@ function normalizeWorkspaceScheduledRunConfig(raw) {
     }
   }
   const intervalMinutes = Number(parsed.intervalMinutes);
+  const migratedCron = workspaceIntervalMinutesToCron(intervalMinutes);
+  const cron = typeof parsed.cron === "string" && parsed.cron.trim()
+    ? parsed.cron.trim()
+    : migratedCron;
+  const timezone = typeof parsed.timezone === "string" && parsed.timezone.trim()
+    ? parsed.timezone.trim()
+    : "Asia/Shanghai";
+  const targetRunNodeId = typeof parsed.targetRunNodeId === "string" ? parsed.targetRunNodeId.trim() : "";
+  const overlapPolicy = parsed.overlapPolicy === "skip" ? "skip" : "skip";
   return {
     enabled: parsed.enabled === true,
-    intervalMinutes: Number.isFinite(intervalMinutes) && intervalMinutes > 0
-      ? Math.min(Math.max(Math.round(intervalMinutes), 1), 1440)
-      : 60,
+    cron,
+    timezone,
+    targetRunNodeId,
+    overlapPolicy,
   };
+}
+
+function workspaceScheduleNextRunAt(config, fromDate = new Date()) {
+  if (!config?.enabled || !config?.cron) return null;
+  return Date.parse(computeNextRunAt(config.cron, config.timezone || "Asia/Shanghai", fromDate));
 }
 
 function workspaceSchedulesPath() {
@@ -5098,12 +5363,12 @@ function writeWorkspaceScheduleRegistry(registry) {
   }, null, 2) + "\n", "utf-8");
 }
 
-function workspaceScheduleKey(userId, flowSource, flowId, runNodeId) {
+function workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId) {
   return [
     String(userId || ""),
     String(flowSource || "user"),
     String(flowId || ""),
-    String(runNodeId || ""),
+    String(scheduleNodeId || ""),
   ].join(":");
 }
 
@@ -5116,7 +5381,23 @@ function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user",
       String(entry?.flowSource || "user") === String(flowSource || "user") &&
       String(entry?.flowId || "") === String(flowId || "")
     ))
-    .sort((a, b) => String(a.runNodeId || "").localeCompare(String(b.runNodeId || "")));
+    .sort((a, b) => String(a.scheduleNodeId || a.runNodeId || "").localeCompare(String(b.scheduleNodeId || b.runNodeId || "")));
+}
+
+function workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config = {}) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const explicit = String(config.targetRunNodeId || "").trim();
+  if (explicit && String(instances[explicit]?.definitionId || "") === "workspace_run") return explicit;
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  for (const edge of edges) {
+    const source = String(edge?.source || "");
+    const target = String(edge?.target || "");
+    if (source !== String(scheduleNodeId || "") || !target) continue;
+    if (!workspaceIsControlEdge(graph, edge)) continue;
+    if (String(instances[target]?.definitionId || "") === "workspace_run") return target;
+  }
+  const firstRun = Object.entries(instances).find(([, instance]) => String(instance?.definitionId || "") === "workspace_run");
+  return firstRun ? firstRun[0] : "";
 }
 
 function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
@@ -5133,14 +5414,35 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
     if (key.startsWith(prefix)) delete schedules[key];
   }
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  for (const [runNodeId, instance] of Object.entries(instances)) {
+  for (const [scheduleNodeId, instance] of Object.entries(instances)) {
     if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
     const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
     if (!config.enabled) continue;
-    const key = workspaceScheduleKey(userId, flowSource, flowId, runNodeId);
-    const intervalMs = config.intervalMinutes * 60 * 1000;
+    const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
+    const key = workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId);
     const previous = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
     const previousNext = Number(previous.nextRunAt || 0);
+    const previousMatches = (
+      String(previous.cron || "") === config.cron &&
+      String(previous.timezone || "") === config.timezone &&
+      String(previous.targetRunNodeId || previous.runNodeId || "") === targetRunNodeId
+    );
+    let nextRunAt = null;
+    let lastStatus = previous.lastStatus || "armed";
+    let lastError = previous.lastError || "";
+    try {
+      nextRunAt = previousMatches && Number.isFinite(previousNext) && previousNext > now
+        ? previousNext
+        : workspaceScheduleNextRunAt(config, new Date(now));
+      if (!targetRunNodeId) {
+        lastStatus = "invalid";
+        lastError = "No target Run node selected or connected";
+      }
+    } catch (e) {
+      lastStatus = "invalid";
+      lastError = (e && e.message) || String(e);
+      nextRunAt = null;
+    }
     schedules[key] = {
       ...previous,
       key,
@@ -5149,11 +5451,16 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
       username: String(authUser?.username || previous.username || userId),
       flowId,
       flowSource,
-      runNodeId,
+      scheduleNodeId,
+      runNodeId: targetRunNodeId,
+      targetRunNodeId,
       label: String(instance.label || "Scheduled Run"),
-      intervalMinutes: config.intervalMinutes,
-      nextRunAt: Number.isFinite(previousNext) && previousNext > now ? previousNext : now + intervalMs,
-      lastStatus: previous.lastStatus || "armed",
+      cron: config.cron,
+      timezone: config.timezone,
+      overlapPolicy: config.overlapPolicy,
+      nextRunAt,
+      lastStatus,
+      lastError,
       updatedAt: nowIso,
     };
   }
@@ -5178,17 +5485,22 @@ function updateWorkspaceScheduleEntry(key, patch) {
 
 async function runWorkspaceScheduledEntry(root, entry) {
   const userCtx = { userId: String(entry.userId || "") };
-  const runKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");
-  const intervalMs = Math.max(1, Number(entry.intervalMinutes || 60)) * 60 * 1000;
-  const nextRunAt = Date.now() + intervalMs;
-  if (activeWorkspaceRuns.has(runKey)) {
-    updateWorkspaceScheduleEntry(entry.key, {
-      nextRunAt,
-      lastSkippedAt: Date.now(),
-      lastStatus: "skipped: busy",
-    });
-    return;
-  }
+  const scopeKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");
+  const fallbackConfig = {
+    enabled: true,
+    cron: String(entry.cron || "0 9 * * *"),
+    timezone: String(entry.timezone || "Asia/Shanghai"),
+    targetRunNodeId: String(entry.targetRunNodeId || entry.runNodeId || ""),
+    overlapPolicy: "skip",
+  };
+  const computeNext = (config = fallbackConfig) => {
+    try {
+      return workspaceScheduleNextRunAt(config, new Date());
+    } catch {
+      return null;
+    }
+  };
+  let nextRunAt = computeNext(fallbackConfig);
   const scoped = resolveWorkspaceScopeRoot(root, {
     flowId: entry.flowId || "",
     flowSource: entry.flowSource || "user",
@@ -5204,8 +5516,10 @@ async function runWorkspaceScheduledEntry(root, entry) {
   }
   const graphPath = workspaceGraphPath(scoped.root);
   const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
-  const instance = graph.instances?.[entry.runNodeId];
+  const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
+  const instance = graph.instances?.[scheduleNodeId];
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
+  nextRunAt = computeNext(config);
   if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run" || !config.enabled) {
     updateWorkspaceScheduleEntry(entry.key, {
       enabled: false,
@@ -5214,19 +5528,56 @@ async function runWorkspaceScheduledEntry(root, entry) {
     });
     return;
   }
+  const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
+  if (!targetRunNodeId) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt,
+      lastStatus: "invalid",
+      lastError: "No target Run node selected or connected",
+      lastErrorAt: Date.now(),
+    });
+    return;
+  }
+  let plan;
+  try {
+    plan = workspaceRunPlan(graph, targetRunNodeId, scoped.root);
+  } catch (e) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt,
+      lastStatus: "failed",
+      lastError: (e && e.message) || String(e),
+      lastErrorAt: Date.now(),
+    });
+    return;
+  }
+  const plannedNodeIds = workspaceRunPlanNodeIds(targetRunNodeId, plan);
+  const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);
+  if (conflict) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt,
+      lastSkippedAt: Date.now(),
+      lastStatus: "skipped: busy",
+      lastError: "",
+    });
+    return;
+  }
 
   const controller = new AbortController();
   const authUsers = readAuthUsers();
   const authUser = authUsers[userCtx.userId] || {};
+  const runId = runLedgerId("workspace");
+  const runKey = workspaceRunEntryKey(scopeKey, runId);
   const runEntry = {
+    scopeKey,
     controller,
     child: null,
-    runId: runLedgerId("workspace"),
+    runId,
     userId: userCtx.userId,
     username: String(authUser.username || entry.username || userCtx.userId),
-    runNodeId: String(entry.runNodeId || ""),
+    runNodeId: targetRunNodeId,
     flowId: String(entry.flowId || ""),
     flowSource: String(entry.flowSource || "user"),
+    plannedNodeIds,
     startedAt: Date.now(),
     scheduled: true,
     stopChild() {
@@ -5241,6 +5592,10 @@ async function runWorkspaceScheduledEntry(root, entry) {
     lastStatus: "running",
     lastTriggeredAt: runEntry.startedAt,
     lastRunId: runEntry.runId,
+    runNodeId: targetRunNodeId,
+    targetRunNodeId,
+    cron: config.cron,
+    timezone: config.timezone,
     lastError: "",
   });
   const setActiveChild = (child) => {
@@ -5251,7 +5606,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     const result = await runWorkspaceGraph(root, scoped.root, {
       flowId: entry.flowId,
       flowSource: entry.flowSource || "user",
-      runNodeId: entry.runNodeId,
+      runNodeId: targetRunNodeId,
       graph,
     }, userCtx, {
       signal: controller.signal,
@@ -5264,7 +5619,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
     updateWorkspaceScheduleEntry(entry.key, {
-      nextRunAt: Date.now() + intervalMs,
+      nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
       lastStatus: "success",
       lastError: "",
@@ -5273,13 +5628,13 @@ async function runWorkspaceScheduledEntry(root, entry) {
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "failed");
     updateWorkspaceScheduleEntry(entry.key, {
-      nextRunAt: Date.now() + intervalMs,
+      nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
       lastStatus: "failed",
       lastError: (e && e.message) || String(e),
       lastErrorAt: endedAt,
     });
-    log.info(`[workspace-scheduler] failed ${entry.flowId}/${entry.runNodeId}: ${(e && e.message) || String(e)}`);
+    log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${(e && e.message) || String(e)}`);
   } finally {
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
   }
@@ -5292,8 +5647,25 @@ function pollWorkspaceSchedules(root) {
     if (!entry || entry.enabled !== true) continue;
     const nextRunAt = Number(entry.nextRunAt || 0);
     if (!Number.isFinite(nextRunAt) || nextRunAt <= 0) {
+      const config = {
+        enabled: true,
+        cron: String(entry.cron || "0 9 * * *"),
+        timezone: String(entry.timezone || "Asia/Shanghai"),
+      };
+      let computedNext = null;
+      try {
+        computedNext = workspaceScheduleNextRunAt(config, new Date(now));
+      } catch (e) {
+        updateWorkspaceScheduleEntry(entry.key, {
+          nextRunAt: null,
+          lastStatus: "invalid",
+          lastError: (e && e.message) || String(e),
+          lastErrorAt: now,
+        });
+        continue;
+      }
       updateWorkspaceScheduleEntry(entry.key, {
-        nextRunAt: now + Math.max(1, Number(entry.intervalMinutes || 60)) * 60 * 1000,
+        nextRunAt: computedNext,
         lastStatus: entry.lastStatus || "armed",
       });
       continue;
@@ -6079,6 +6451,53 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/run/plan") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        if (!flowId) {
+          json(res, 400, { error: "Missing flowId" });
+          return;
+        }
+        const graph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || {}, userCtx);
+        const runNodeId = String(payload.runNodeId || "").trim();
+        const plan = workspaceRunPlan(graph, runNodeId, scoped.root);
+        const plannedNodeIds = workspaceRunPlanNodeIds(runNodeId, plan);
+        const scopeKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
+        const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);
+        json(res, 200, {
+          ok: true,
+          runNodeId,
+          order: plan.order,
+          pauseNodeIds: plan.pauseNodeIds,
+          plannedNodeIds,
+          conflict: conflict ? {
+            runId: conflict.entry?.runId || "",
+            runNodeId: conflict.entry?.runNodeId || "",
+            conflictNodeIds: conflict.conflictNodeIds,
+          } : null,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/workspace/run") {
       let payload;
       try {
@@ -6107,21 +6526,35 @@ export function startUiServer({
           json(res, 400, { error: "Missing flowId" });
           return;
         }
-        const runKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
-        if (activeWorkspaceRuns.has(runKey)) {
-          json(res, 409, { error: "该 Workspace 正在运行" });
+        const runtimeGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || {}, userCtx);
+        const runNodeId = String(payload.runNodeId || "").trim();
+        const plan = workspaceRunPlan(runtimeGraph, runNodeId, scoped.root);
+        const plannedNodeIds = workspaceRunPlanNodeIds(runNodeId, plan);
+        const scopeKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
+        const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);
+        if (conflict) {
+          json(res, 409, {
+            error: "该 Run 与正在执行的 Run 共享节点",
+            runNodeId: conflict.entry?.runNodeId || "",
+            runId: conflict.entry?.runId || "",
+            conflictNodeIds: conflict.conflictNodeIds,
+          });
           return;
         }
         const controller = new AbortController();
+        const runId = String(payload.runSessionId || payload.runId || "").trim() || runLedgerId("workspace");
+        const runKey = workspaceRunEntryKey(scopeKey, runId);
         const runEntry = {
+          scopeKey,
           controller,
           child: null,
-          runId: runLedgerId("workspace"),
+          runId,
           userId: String(userCtx.userId || ""),
           username: String(authUser?.username || userCtx.userId || ""),
-          runNodeId: String(payload.runNodeId || "").trim(),
+          runNodeId,
           flowId,
           flowSource: scoped.flowSource || payload.flowSource || "user",
+          plannedNodeIds,
           startedAt: Date.now(),
           stopChild() {
             if (this.child && !this.child.killed) {
@@ -6235,14 +6668,22 @@ export function startUiServer({
         return;
       }
       const flowSource = url.searchParams.get("flowSource") || "user";
-      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
-      const entry = activeWorkspaceRuns.get(runKey);
+      const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
+      const entries = workspaceActiveRunsForScope(scopeKey).map(([, entry]) => entry);
+      const entry = entries[0] || null;
       json(res, 200, {
-        running: Boolean(entry),
+        running: entries.length > 0,
         flowId,
         flowSource,
         runNodeId: entry?.runNodeId || "",
         startedAt: entry?.startedAt || null,
+        runs: entries.map((item) => ({
+          runId: item?.runId || "",
+          runNodeId: item?.runNodeId || "",
+          startedAt: item?.startedAt || null,
+          plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
+          scheduled: item?.scheduled === true,
+        })),
       });
       return;
     }
@@ -6260,8 +6701,14 @@ export function startUiServer({
         json(res, 400, { error: "Missing flowId" });
         return;
       }
-      const runKey = workspaceRunKey(userCtx, payload.flowSource || "user", flowId);
-      const entry = activeWorkspaceRuns.get(runKey);
+      const scopeKey = workspaceRunKey(userCtx, payload.flowSource || "user", flowId);
+      const runId = String(payload.runId || payload.runSessionId || "").trim();
+      const runNodeId = String(payload.runNodeId || "").trim();
+      const entries = workspaceActiveRunsForScope(scopeKey);
+      const match = entries.find(([, item]) => runId && String(item?.runId || "") === runId)
+        || entries.find(([, item]) => runNodeId && String(item?.runNodeId || "") === runNodeId)
+        || (!runId && !runNodeId && entries.length === 1 ? entries[0] : null);
+      const entry = match?.[1] || null;
       if (!entry) {
         json(res, 404, { error: "该 Workspace 未在运行" });
         return;
