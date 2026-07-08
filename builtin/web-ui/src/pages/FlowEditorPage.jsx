@@ -3110,6 +3110,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         type: String(s?.type ?? "节点").trim() || "节点",
         name: String(s?.name ?? ""),
         default: String(s?.default ?? ""),
+        description: String(s?.description ?? ""),
         required: Boolean(s?.required),
         showOnNode: s?.showOnNode != null
           ? s.showOnNode !== false
@@ -3196,6 +3197,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         type: String(s?.type ?? "节点").trim() || "节点",
         name: String(s?.name ?? ""),
         default: String(s?.default ?? ""),
+        description: String(s?.description ?? ""),
         required: Boolean(s?.required),
         showOnNode: s?.showOnNode != null
           ? s.showOnNode !== false

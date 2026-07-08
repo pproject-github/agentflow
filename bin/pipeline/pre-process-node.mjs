@@ -50,6 +50,7 @@ import {
 } from "../lib/runtime-context.mjs";
 import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, unloadGitWorktree } from "../lib/git-worktree.mjs";
 import { createGitLabMergeRequest } from "../lib/gitlab-mr.mjs";
+import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "../lib/wecom.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -468,6 +469,35 @@ async function emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId,
     body: result.mrUrl,
   }, { execId });
   return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "gitlab-create-mr", `${result.message || "GitLab MR ready"}\n${result.mrUrl}\n`);
+}
+
+async function emitWecomMarkdownNode(workspaceRoot, flowName, uuid, instanceId, execId, definitionId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  const inputs = data.ok ? (data.resolvedInputs || {}) : {};
+  const result = definitionId === "tool_wecom_send_app_markdown"
+    ? await sendWecomAppMarkdown({
+        markdown: inputs.markdown || inputs.content,
+        toUser: inputs.toUser,
+        corpId: inputs.corpId,
+        corpSecret: inputs.corpSecret,
+        agentId: inputs.agentId,
+        accessToken: inputs.accessToken,
+      }, process.env)
+    : await sendWecomGroupMarkdown({
+        markdown: inputs.markdown || inputs.content,
+        webhookUrl: inputs.webhookUrl,
+        webhookKey: inputs.webhookKey,
+      }, process.env);
+  writeOutputSlot(runDir, instanceId, execId, "sent", "true");
+  writeOutputSlot(runDir, instanceId, execId, "message", result.message);
+  writeOutputSlot(runDir, instanceId, execId, "response", JSON.stringify(result.response || {}));
+  writeResult(workspaceRoot, flowName, uuid, instanceId, {
+    status: "success",
+    message: result.message,
+    body: result.message,
+  }, { execId });
+  return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "wecom-markdown", `${result.message}\n`);
 }
 
 function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) {
@@ -1173,7 +1203,7 @@ async function main() {
     return;
   }
 
-  if (definitionId === "tool_git_checkout" || definitionId === "tool_git_worktree_load" || definitionId === "tool_git_worktree_unload" || definitionId === "tool_gitlab_create_mr" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
+  if (definitionId === "tool_git_checkout" || definitionId === "tool_git_worktree_load" || definitionId === "tool_git_worktree_unload" || definitionId === "tool_gitlab_create_mr" || definitionId === "tool_wecom_send_group_markdown" || definitionId === "tool_wecom_send_app_markdown" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
     try {
       const promptPath =
         definitionId === "tool_git_checkout"
@@ -1184,13 +1214,15 @@ async function main() {
               ? emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, execId)
               : definitionId === "tool_gitlab_create_mr"
                 ? await emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                : definitionId === "control_cd_workspace"
-                  ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                  : definitionId === "control_user_workspace"
-                    ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                    : definitionId === "control_load_skills"
-                      ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                      : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
+                : definitionId === "tool_wecom_send_group_markdown" || definitionId === "tool_wecom_send_app_markdown"
+                  ? await emitWecomMarkdownNode(workspaceRoot, flowName, uuid, instanceId, execId, definitionId)
+                  : definitionId === "control_cd_workspace"
+                    ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                    : definitionId === "control_user_workspace"
+                      ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                      : definitionId === "control_load_skills"
+                        ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                        : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
       writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
       logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "runtime-context-node", instanceId, definitionId });
       console.log(JSON.stringify({

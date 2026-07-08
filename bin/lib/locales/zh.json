@@ -289,6 +289,14 @@
       "displayName": "提交 GitLab MR",
       "description": "为当前分支创建或复用 GitLab Merge Request，并输出 MR 链接"
     },
+    "tool_wecom_send_group_markdown": {
+      "displayName": "企业微信群 Markdown",
+      "description": "通过企业微信群机器人 webhook 发送 Markdown 消息"
+    },
+    "tool_wecom_send_app_markdown": {
+      "displayName": "企业微信应用 Markdown",
+      "description": "通过企业微信应用消息接口发送 Markdown 给用户"
+    },
     "tool_nodejs": {
       "displayName": "Node.js 脚本",
       "description": "执行 Node.js 脚本，以 exit code 判断成败，stdout 作为结果"

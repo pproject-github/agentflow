@@ -72,6 +72,7 @@ function normalizeSlotList(value) {
       default: def == null ? "" : String(def),
     };
     if (slot.required != null) normalized.required = Boolean(slot.required);
+    if (slot.description != null) normalized.description = String(slot.description);
     normalized.showOnNode = slot.showOnNode != null
       ? Boolean(slot.showOnNode)
       : Boolean(normalized.required) || type.toLowerCase() === "node";

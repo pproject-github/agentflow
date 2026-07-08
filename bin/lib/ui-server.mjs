@@ -92,6 +92,7 @@ import {
 } from "./marketplace.mjs";
 import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, sanitizeWorktreeName, unloadGitWorktree } from "./git-worktree.mjs";
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
+import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "./wecom.mjs";
 import {
   authSetupRequired,
   buildClearSessionCookie,
@@ -2106,6 +2107,57 @@ function hydrateWorkspaceNodeRefsFromFiles(scopedRoot, graph) {
   return changed ? { ...next, instances } : next;
 }
 
+function workspaceMergeSlotsWithDefinitionMeta(slots, definitionSlots) {
+  const current = Array.isArray(slots) ? slots : [];
+  const defs = Array.isArray(definitionSlots) ? definitionSlots : [];
+  const byName = new Map(defs.map((slot) => [String(slot?.name || ""), slot]));
+  return current.map((slot, index) => {
+    const def = byName.get(String(slot?.name || "")) || defs[index] || null;
+    if (!def) return slot;
+    const next = { ...slot };
+    for (const key of ["type", "name", "description", "required", "showOnNode"]) {
+      if (next[key] == null || String(next[key]).trim?.() === "") {
+        if (def[key] != null) next[key] = def[key];
+      }
+    }
+    return next;
+  });
+}
+
+function hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped = {}, graph = {}, userCtx = {}) {
+  const next = normalizeWorkspaceGraphPayload(graph || {});
+  let definitions = [];
+  try {
+    definitions = listNodesJson(workspaceRoot, scoped.flowId || "", scoped.flowSource || "user", {
+      archived: scoped.archived === true,
+      userId: userCtx?.userId || "",
+    }).nodes || [];
+  } catch {
+    definitions = [];
+  }
+  if (!definitions.length) return next;
+  const defById = new Map(definitions.map((def) => [String(def?.id || ""), def]));
+  const instances = { ...(next.instances || {}) };
+  let changed = false;
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (!instance || typeof instance !== "object") continue;
+    const def = defById.get(String(instance.definitionId || ""));
+    if (!def) continue;
+    const input = workspaceMergeSlotsWithDefinitionMeta(instance.input, def.inputs);
+    const output = workspaceMergeSlotsWithDefinitionMeta(instance.output, def.outputs);
+    if (JSON.stringify(input) !== JSON.stringify(instance.input || []) || JSON.stringify(output) !== JSON.stringify(instance.output || [])) {
+      instances[nodeId] = { ...instance, input, output };
+      changed = true;
+    }
+  }
+  return changed ? { ...next, instances } : next;
+}
+
+function hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped = {}, graph = {}, userCtx = {}) {
+  const withRefs = hydrateWorkspaceNodeRefsFromFiles(scoped.root || scoped.scopedRoot || workspaceRoot, graph);
+  return hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withRefs, userCtx);
+}
+
 function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   const flowId = params.flowId != null ? String(params.flowId).trim() : "";
   if (!flowId) return { root: path.resolve(workspaceRoot), flowId: "", flowSource: "", archived: false };
@@ -2290,22 +2342,47 @@ function isWorkspaceSemanticOutputSlot(slot) {
   return type === "node" || name === "prev" || name === "next";
 }
 
-function workspaceOutputSlotValueForEdge(graph, outputs, edge) {
+function workspaceLinkedOutputShouldStayPath(slot) {
+  const rawName = String(slot?.name || "").trim();
+  const name = rawName.toLowerCase();
+  const type = String(slot?.type || "").trim().toLowerCase();
+  if (["file", "image", "audio", "video", "binary", "directory", "dir"].includes(type)) return true;
+  if (["file", "filepath", "file_path", "path", "url", "uri", "ref"].includes(name)) return true;
+  return /(?:^|[_-])(file|path|url|uri|ref)$/i.test(rawName) || /(?:File|Path|Url|URL|Uri|URI|Ref)$/.test(rawName);
+}
+
+function workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot = "") {
+  const text = String(value ?? "");
+  if (!text.trim() || workspaceLinkedOutputShouldStayPath(targetSlot)) return text;
+  const outputRel = workspaceSafeNodeOutputRelPath(text);
+  if (!outputRel || !String(scopedRoot || "").trim()) return text;
+  try {
+    const abs = workspaceResolveFlowFile(scopedRoot, outputRel, "linked output");
+    const content = workspaceReadTextFileIfExists(abs, 120000);
+    return content || text;
+  } catch {
+    return text;
+  }
+}
+
+function workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot = "") {
   const sourceId = String(edge?.source || "");
   const slot = workspaceSourceSlotForEdge(graph, edge);
   if (isWorkspaceSemanticOutputSlot(slot)) return "";
+  const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+  const resolveValue = (value) => workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot);
   const out = outputs.get(sourceId);
   const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
   const slotName = String(slot?.name || "").trim();
   const isPrimaryOutput = !slot || slotName === "result" || slotName === "content" || sourceIndex === 0;
-  if (isPrimaryOutput && out != null && String(out).trim()) return String(out);
+  if (isPrimaryOutput && out != null && String(out).trim()) return resolveValue(out);
   if (slot && String(slot?.type || "") !== "node") {
     const value = workspaceSlotValue(slot);
-    if (value.trim()) return value;
+    if (value.trim()) return resolveValue(value);
   }
-  if (out != null && String(out).trim()) return String(out);
+  if (out != null && String(out).trim()) return resolveValue(out);
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  return workspaceInstanceText(instances[sourceId]);
+  return resolveValue(workspaceInstanceText(instances[sourceId]));
 }
 
 function workspaceParseJsonObjectFromText(text) {
@@ -2931,10 +3008,47 @@ function workspaceRelevantInputValues(body, inputValues = {}) {
   return { values, placeholders };
 }
 
+function workspaceDownstreamSlotKind(slot) {
+  const name = String(slot?.name || "").trim().toLowerCase();
+  const type = String(slot?.type || "").trim().toLowerCase();
+  if (type === "markdown" || name === "markdown" || name.endsWith("markdown")) return "markdown";
+  if (type === "html" || name === "html" || name.endsWith("html")) return "html";
+  if (type === "mermaid" || name === "mermaid" || name.endsWith("mermaid")) return "mermaid";
+  if (type === "ascii" || name === "ascii") return "ascii";
+  if (type === "chart" || name === "chart" || name.endsWith("chart")) return "chart";
+  if (type === "table" || name === "table" || name.endsWith("table")) return "table";
+  return "";
+}
+
+function workspaceDownstreamOutputKindForField(graph, nodeId, field) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const source = instances[String(nodeId || "")] || {};
+  const outputSlots = Array.isArray(source.output) ? source.output : [];
+  for (const edge of edges) {
+    if (String(edge?.source || "") !== String(nodeId)) continue;
+    const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
+    const sourceSlot = outputSlots[sourceIndex] || null;
+    if (workspaceOutputFieldForSlot(sourceSlot, sourceIndex) !== field) continue;
+    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+    if (!targetSlot || isWorkspaceSemanticInputSlot(targetSlot)) continue;
+    const kind = workspaceDownstreamSlotKind(targetSlot);
+    if (kind) return kind;
+  }
+  return "";
+}
+
+function workspaceDownstreamInputDescription(target, slot) {
+  const description = String(slot?.description || "").trim();
+  if (description) return description;
+  return "";
+}
+
 function workspaceOutputProtocolRequirements(graph, nodeId) {
   const instance = graph?.instances?.[nodeId] || {};
   const outputSlots = Array.isArray(instance.output) ? instance.output : [];
   const displayBindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  const downstreamInputRequirements = workspaceDownstreamInputRequirements(graph, nodeId);
   const displayByField = new Map();
   for (const binding of displayBindings) {
     if (!displayByField.has(binding.field)) displayByField.set(binding.field, binding.kind);
@@ -2946,7 +3060,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
       return name && type !== "node" && name !== "next" && name !== "result" && name !== "content";
     })
     .map((slot) => String(slot.name).trim());
-  const resultKind = displayByField.get("result") || "";
+  const resultKind = displayByField.get("result") || workspaceDownstreamOutputKindForField(graph, nodeId, "result") || "";
   const resultExtByKind = {
     html: "html",
     markdown: "md",
@@ -2982,10 +3096,47 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     "## 输出",
     "",
     `请把${resultKindText}结果写入 \`${resultFile}\`。${resultGuidance}`,
+    downstreamInputRequirements ? `\n${downstreamInputRequirements}` : "",
     ...(slots.length ? [`额外输出：${slots.map((name) => `\`${name}\``).join("、")}。短值可写在 \`outParams\`，文件值写成 \`outParams.<name>File\`。`] : []),
     "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
     "",
     envelopeExample,
+  ].join("\n");
+}
+
+function workspaceDownstreamInputRequirements(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const source = instances[String(nodeId || "")] || {};
+  const outputSlots = Array.isArray(source.output) ? source.output : [];
+  const rows = [];
+  const seen = new Set();
+  for (const edge of edges) {
+    if (String(edge?.source || "") !== String(nodeId)) continue;
+    const target = instances[String(edge?.target || "")];
+    if (!target) continue;
+    const targetSlot = workspaceTargetSlotForEdge(graph, edge);
+    if (!targetSlot || isWorkspaceSemanticInputSlot(targetSlot)) continue;
+    const targetName = String(targetSlot.name || "").trim();
+    const targetType = String(targetSlot.type || "text").trim();
+    const description = workspaceDownstreamInputDescription(target, targetSlot);
+    if (!targetName && !description) continue;
+    const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
+    const sourceSlot = outputSlots[sourceIndex] || null;
+    const sourceField = workspaceOutputFieldForSlot(sourceSlot, sourceIndex);
+    const targetLabel = String(target.label || target.definitionId || edge.target || "").trim();
+    const key = `${sourceField}->${edge.target}:${targetName}:${description}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push([
+      `- 输出 \`${sourceField}\` 会连接到下游 \`${targetLabel}\` 的输入 \`${targetName || "input"}\`（type=${targetType}）。`,
+      description ? `  要求：${description}` : "",
+    ].filter(Boolean).join("\n"));
+  }
+  if (!rows.length) return "";
+  return [
+    "下游输入格式要求：",
+    ...rows,
   ].join("\n");
 }
 
@@ -3121,14 +3272,14 @@ function workspaceCachedOutputValueExists(value, scopedRoot = "") {
   return fs.existsSync(abs) && fs.statSync(abs).isFile();
 }
 
-function workspaceUpstreamText(graph, nodeId, outputs) {
+function workspaceUpstreamText(graph, nodeId, outputs, scopedRoot = "") {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const incoming = edges
     .filter((edge) => String(edge?.target || "") === String(nodeId))
     .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
   const contentEdge = incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0];
   if (!contentEdge) return "";
-  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
+  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
 }
 
 function workspaceHandleIndex(handle, prefix) {
@@ -3181,7 +3332,7 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
   ].filter(Boolean).join("\n");
 }
 
-function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = null) {
+function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = null, scopedRoot = "") {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const incoming = edges.filter((edge) => String(edge?.target || "") === String(nodeId));
@@ -3194,10 +3345,10 @@ function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = 
   }
   const contentEdge = contentEdges.find((edge) => String(edge?.targetHandle || "") === "input-1") || contentEdges[0];
   if (!contentEdge) return "";
-  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge);
+  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
 }
 
-function workspaceInputValues(graph, nodeId, outputs) {
+function workspaceInputValues(graph, nodeId, outputs, scopedRoot = "") {
   const values = {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
@@ -3209,7 +3360,7 @@ function workspaceInputValues(graph, nodeId, outputs) {
     const slot = inputSlots[index] || null;
     const name = String(slot?.name || "").trim();
     if (!name || isWorkspaceSemanticInputSlot(slot)) continue;
-    const value = workspaceOutputSlotValueForEdge(graph, outputs, edge);
+    const value = workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot);
     if (String(value || "").trim()) values[name] = String(value);
   }
   for (const slot of inputSlots) {
@@ -3706,7 +3857,7 @@ function workspaceUnwrapOutputEnvelopeForDisplay(content) {
   return structured.structured ? String(structured.result || "") : raw;
 }
 
-function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null) {
+function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null, scopedRoot = "") {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const updated = [];
@@ -3716,7 +3867,7 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null)
     const targetId = String(edge?.target || "");
     const target = instances[targetId];
     if (!target || !workspaceDisplayKind(target.definitionId)) continue;
-    const value = outputs ? workspaceOutputSlotValueForEdge(graph, outputs, edge) : String(content || "");
+    const value = outputs ? workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot) : String(content || "");
     instances[targetId] = workspaceWriteDisplayContent(target, value || content);
     updated.push(targetId);
   }
@@ -4110,7 +4261,12 @@ async function workspaceRunToolNodejsScript({
 }
 
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
-  const graph = normalizeWorkspaceGraphPayload(payload.graph || {});
+  const graph = hydrateWorkspaceGraphForRuntime(root, {
+    root: scopedRoot,
+    flowId: payload.flowId || "",
+    flowSource: payload.flowSource || "user",
+    archived: payload.archived === true || payload.flowArchived === true,
+  }, payload.graph || {}, userCtx);
   const runNodeId = String(payload?.runNodeId || "").trim();
   const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot);
   const signal = opts.signal || null;
@@ -4199,7 +4355,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         )),
       };
       outputs.set(nodeId, skillsBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock, outputs);
+      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock, outputs, scopedRoot);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -4219,14 +4375,14 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         )),
       };
       outputs.set(nodeId, mcpBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock, outputs);
+      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock, outputs, scopedRoot);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
 
     if (workspaceDisplayKind(defId)) {
-      const content = workspaceUpstreamText(graph, nodeId, outputs);
+      const content = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
       outputs.set(nodeId, content);
       emit({ type: "graph", nodeId, graph });
@@ -4262,7 +4418,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
 
     if (defId === "control_cd_workspace") {
-      const inputText = workspaceUpstreamText(graph, nodeId, outputs);
+      const inputText = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       const inputSlots = Array.isArray(instance.input) ? instance.input : [];
       const pathSlot = inputSlots.find((slot) => String(slot?.name || "") === "path") ||
         inputSlots.find((slot) => String(slot?.name || "") === "target");
@@ -4473,9 +4629,36 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
+    if (defId === "tool_wecom_send_group_markdown" || defId === "tool_wecom_send_app_markdown") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const markdown = String(inputValues.markdown || inputValues.content || workspaceSlotValue(workspaceSlotByName(instance, "markdown")) || workspaceUpstreamText(graph, nodeId, outputs, scopedRoot) || "");
+      const result = defId === "tool_wecom_send_app_markdown"
+        ? await sendWecomAppMarkdown({
+            markdown,
+            toUser: inputValues.toUser || workspaceSlotValue(workspaceSlotByName(instance, "toUser")),
+            corpId: inputValues.corpId || workspaceSlotValue(workspaceSlotByName(instance, "corpId")),
+            corpSecret: inputValues.corpSecret || workspaceSlotValue(workspaceSlotByName(instance, "corpSecret")),
+            agentId: inputValues.agentId || workspaceSlotValue(workspaceSlotByName(instance, "agentId")),
+            accessToken: inputValues.accessToken || workspaceSlotValue(workspaceSlotByName(instance, "accessToken")),
+          }, runtimeEnvForUser(userCtx))
+        : await sendWecomGroupMarkdown({
+            markdown,
+            webhookUrl: inputValues.webhookUrl || workspaceSlotValue(workspaceSlotByName(instance, "webhookUrl")),
+            webhookKey: inputValues.webhookKey || workspaceSlotValue(workspaceSlotByName(instance, "webhookKey")),
+          }, runtimeEnvForUser(userCtx));
+      let nextInstance = workspaceSetOutputSlot(instance, "sent", "true");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "response", JSON.stringify(result.response || {}));
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, result.message);
+      emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
     if (defId === "tool_nodejs") {
       const prepareStartedAt = Date.now();
-      const inputValues = workspaceInputValues(graph, nodeId, outputs);
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
       const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
         scopedRoot,
         cwd,
@@ -4512,16 +4695,16 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         onActiveChild: opts.onActiveChild,
       });
       if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
-      const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
+      const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs, scopedRoot);
       if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
 
     const prepareStartedAt = Date.now();
-    const inputValues = workspaceInputValues(graph, nodeId, outputs);
+    const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
-    const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders);
+    const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders, scopedRoot);
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
@@ -4642,7 +4825,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       onActiveChild: opts.onActiveChild,
     });
     if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
-    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs);
+    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs, scopedRoot);
     if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
@@ -4839,9 +5022,265 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 const activeFlowRuns = new Map();
 /** 正在执行的 Workspace 临时 run（flowId → { controller, child, runNodeId, startedAt }）；同一 flow 只允许一个 run */
 const activeWorkspaceRuns = new Map();
+const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
+const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
 
 function workspaceRunKey(userCtx, flowSource, flowId) {
   return `${userCtx?.userId || ""}:${flowSource || "user"}:${flowId}`;
+}
+
+function normalizeWorkspaceScheduledRunConfig(raw) {
+  let parsed = {};
+  const text = String(raw || "").trim();
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = {};
+    }
+  }
+  const intervalMinutes = Number(parsed.intervalMinutes);
+  return {
+    enabled: parsed.enabled === true,
+    intervalMinutes: Number.isFinite(intervalMinutes) && intervalMinutes > 0
+      ? Math.min(Math.max(Math.round(intervalMinutes), 1), 1440)
+      : 60,
+  };
+}
+
+function workspaceSchedulesPath() {
+  return path.join(getAgentflowDataRoot(), WORKSPACE_SCHEDULES_FILENAME);
+}
+
+function readWorkspaceScheduleRegistry() {
+  const filePath = workspaceSchedulesPath();
+  if (!fs.existsSync(filePath)) return { version: 1, schedules: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return {
+      version: 1,
+      schedules: parsed?.schedules && typeof parsed.schedules === "object" && !Array.isArray(parsed.schedules)
+        ? parsed.schedules
+        : {},
+    };
+  } catch {
+    return { version: 1, schedules: {} };
+  }
+}
+
+function writeWorkspaceScheduleRegistry(registry) {
+  const filePath = workspaceSchedulesPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    schedules: registry?.schedules && typeof registry.schedules === "object" ? registry.schedules : {},
+  }, null, 2) + "\n", "utf-8");
+}
+
+function workspaceScheduleKey(userId, flowSource, flowId, runNodeId) {
+  return [
+    String(userId || ""),
+    String(flowSource || "user"),
+    String(flowId || ""),
+    String(runNodeId || ""),
+  ].join(":");
+}
+
+function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user", flowId = "") {
+  const registry = readWorkspaceScheduleRegistry();
+  const userId = String(userCtx.userId || "");
+  return Object.values(registry.schedules || {})
+    .filter((entry) => (
+      String(entry?.userId || "") === userId &&
+      String(entry?.flowSource || "user") === String(flowSource || "user") &&
+      String(entry?.flowId || "") === String(flowId || "")
+    ))
+    .sort((a, b) => String(a.runNodeId || "").localeCompare(String(b.runNodeId || "")));
+}
+
+function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
+  const flowId = String(scoped?.flowId || "").trim();
+  const flowSource = String(scoped?.flowSource || "user");
+  const userId = String(userCtx.userId || authUser?.userId || "");
+  if (!flowId || !userId) return [];
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const registry = readWorkspaceScheduleRegistry();
+  const schedules = { ...(registry.schedules || {}) };
+  const prefix = `${userId}:${flowSource}:${flowId}:`;
+  for (const key of Object.keys(schedules)) {
+    if (key.startsWith(prefix)) delete schedules[key];
+  }
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  for (const [runNodeId, instance] of Object.entries(instances)) {
+    if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
+    const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+    if (!config.enabled) continue;
+    const key = workspaceScheduleKey(userId, flowSource, flowId, runNodeId);
+    const intervalMs = config.intervalMinutes * 60 * 1000;
+    const previous = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
+    const previousNext = Number(previous.nextRunAt || 0);
+    schedules[key] = {
+      ...previous,
+      key,
+      enabled: true,
+      userId,
+      username: String(authUser?.username || previous.username || userId),
+      flowId,
+      flowSource,
+      runNodeId,
+      label: String(instance.label || "Scheduled Run"),
+      intervalMinutes: config.intervalMinutes,
+      nextRunAt: Number.isFinite(previousNext) && previousNext > now ? previousNext : now + intervalMs,
+      lastStatus: previous.lastStatus || "armed",
+      updatedAt: nowIso,
+    };
+  }
+  const nextRegistry = { version: 1, schedules };
+  writeWorkspaceScheduleRegistry(nextRegistry);
+  return listWorkspaceScheduleStatusesForFlow(userCtx, flowSource, flowId);
+}
+
+function updateWorkspaceScheduleEntry(key, patch) {
+  const registry = readWorkspaceScheduleRegistry();
+  const current = registry.schedules?.[key];
+  if (!current) return null;
+  const next = {
+    ...current,
+    ...(patch && typeof patch === "object" ? patch : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  registry.schedules[key] = next;
+  writeWorkspaceScheduleRegistry(registry);
+  return next;
+}
+
+async function runWorkspaceScheduledEntry(root, entry) {
+  const userCtx = { userId: String(entry.userId || "") };
+  const runKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");
+  const intervalMs = Math.max(1, Number(entry.intervalMinutes || 60)) * 60 * 1000;
+  const nextRunAt = Date.now() + intervalMs;
+  if (activeWorkspaceRuns.has(runKey)) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt,
+      lastSkippedAt: Date.now(),
+      lastStatus: "skipped: busy",
+    });
+    return;
+  }
+  const scoped = resolveWorkspaceScopeRoot(root, {
+    flowId: entry.flowId || "",
+    flowSource: entry.flowSource || "user",
+  }, userCtx);
+  if (scoped.error || scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt,
+      lastStatus: "error",
+      lastError: scoped.error || "Workspace schedule target is not writable",
+      lastErrorAt: Date.now(),
+    });
+    return;
+  }
+  const graphPath = workspaceGraphPath(scoped.root);
+  const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
+  const instance = graph.instances?.[entry.runNodeId];
+  const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
+  if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run" || !config.enabled) {
+    updateWorkspaceScheduleEntry(entry.key, {
+      enabled: false,
+      nextRunAt: null,
+      lastStatus: "disabled",
+    });
+    return;
+  }
+
+  const controller = new AbortController();
+  const authUsers = readAuthUsers();
+  const authUser = authUsers[userCtx.userId] || {};
+  const runEntry = {
+    controller,
+    child: null,
+    runId: runLedgerId("workspace"),
+    userId: userCtx.userId,
+    username: String(authUser.username || entry.username || userCtx.userId),
+    runNodeId: String(entry.runNodeId || ""),
+    flowId: String(entry.flowId || ""),
+    flowSource: String(entry.flowSource || "user"),
+    startedAt: Date.now(),
+    scheduled: true,
+    stopChild() {
+      if (this.child && !this.child.killed) {
+        try { this.child.kill("SIGTERM"); } catch (_) {}
+      }
+    },
+  };
+  activeWorkspaceRuns.set(runKey, runEntry);
+  appendWorkspaceRunStarted(runEntry);
+  updateWorkspaceScheduleEntry(entry.key, {
+    lastStatus: "running",
+    lastTriggeredAt: runEntry.startedAt,
+    lastRunId: runEntry.runId,
+    lastError: "",
+  });
+  const setActiveChild = (child) => {
+    runEntry.child = child || null;
+    if (controller.signal.aborted) runEntry.stopChild();
+  };
+  try {
+    const result = await runWorkspaceGraph(root, scoped.root, {
+      flowId: entry.flowId,
+      flowSource: entry.flowSource || "user",
+      runNodeId: entry.runNodeId,
+      graph,
+    }, userCtx, {
+      signal: controller.signal,
+      onActiveChild: setActiveChild,
+    });
+    const currentGraph = readWorkspaceGraph(scoped.root).graph;
+    const touchedIds = workspaceRunTouchedNodeIds(result);
+    const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+    fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+    const endedAt = Date.now();
+    appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt: Date.now() + intervalMs,
+      lastFinishedAt: endedAt,
+      lastStatus: "success",
+      lastError: "",
+    });
+  } catch (e) {
+    const endedAt = Date.now();
+    appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "failed");
+    updateWorkspaceScheduleEntry(entry.key, {
+      nextRunAt: Date.now() + intervalMs,
+      lastFinishedAt: endedAt,
+      lastStatus: "failed",
+      lastError: (e && e.message) || String(e),
+      lastErrorAt: endedAt,
+    });
+    log.info(`[workspace-scheduler] failed ${entry.flowId}/${entry.runNodeId}: ${(e && e.message) || String(e)}`);
+  } finally {
+    if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
+  }
+}
+
+function pollWorkspaceSchedules(root) {
+  const now = Date.now();
+  const registry = readWorkspaceScheduleRegistry();
+  for (const entry of Object.values(registry.schedules || {})) {
+    if (!entry || entry.enabled !== true) continue;
+    const nextRunAt = Number(entry.nextRunAt || 0);
+    if (!Number.isFinite(nextRunAt) || nextRunAt <= 0) {
+      updateWorkspaceScheduleEntry(entry.key, {
+        nextRunAt: now + Math.max(1, Number(entry.intervalMinutes || 60)) * 60 * 1000,
+        lastStatus: entry.lastStatus || "armed",
+      });
+      continue;
+    }
+    if (nextRunAt > now) continue;
+    void runWorkspaceScheduledEntry(root, entry);
+  }
 }
 
 /** Cursor/OpenCode 执行目录统一使用当前 UI 启动 workspace。 */
@@ -5498,7 +5937,7 @@ export function startUiServer({
           return;
         }
         const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
-        const hydratedGraph = hydrateWorkspaceNodeRefsFromFiles(scoped.root, graph);
+        const hydratedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, graph, userCtx);
         json(res, 200, {
           ok: true,
           graph: hydratedGraph,
@@ -5508,6 +5947,7 @@ export function startUiServer({
           flowSource: scoped.flowSource,
           archived: scoped.archived,
           writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)),
+          workspaceSchedules: listWorkspaceScheduleStatusesForFlow(userCtx, scoped.flowSource || "user", scoped.flowId || ""),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -5588,12 +6028,30 @@ export function startUiServer({
           json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
           return;
         }
-        const submittedGraph = normalizeWorkspaceGraphPayload(payload.graph || payload);
+        const submittedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || payload, userCtx);
         const graphPath = workspaceGraphPath(scoped.root);
-        const currentGraph = hydrateWorkspaceNodeRefsFromFiles(scoped.root, readWorkspaceGraph(scoped.root).graph);
+        const currentGraph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
         const graph = mergeWorkspacePersistentNodeRefs(submittedGraph, currentGraph);
         fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2) + "\n", "utf-8");
-        json(res, 200, { ok: true, path: graphPath, graph });
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
+        json(res, 200, { ok: true, path: graphPath, graph, workspaceSchedules });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/schedules") {
+      try {
+        const flowId = url.searchParams.get("flowId") || "";
+        const flowSource = url.searchParams.get("flowSource") || "user";
+        if (!flowId) {
+          json(res, 400, { error: "Missing flowId" });
+          return;
+        }
+        json(res, 200, {
+          schedules: listWorkspaceScheduleStatusesForFlow(userCtx, flowSource, flowId),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -8153,6 +8611,25 @@ finishedAt: "${new Date().toISOString()}"
     res.writeHead(200, { "Content-Type": type, "Content-Length": data.length });
     res.end(data);
   });
+
+  const workspaceScheduleTimer = setInterval(() => {
+    try {
+      pollWorkspaceSchedules(root);
+    } catch (e) {
+      log.debug(`[workspace-scheduler] poll failed: ${(e && e.message) || String(e)}`);
+    }
+  }, WORKSPACE_SCHEDULE_POLL_MS);
+  try {
+    workspaceScheduleTimer.unref?.();
+  } catch (_) {}
+  server.on("close", () => clearInterval(workspaceScheduleTimer));
+  setTimeout(() => {
+    try {
+      pollWorkspaceSchedules(root);
+    } catch (e) {
+      log.debug(`[workspace-scheduler] initial poll failed: ${(e && e.message) || String(e)}`);
+    }
+  }, 1000).unref?.();
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
