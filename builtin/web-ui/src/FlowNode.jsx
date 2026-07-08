@@ -115,6 +115,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const bodyBackdropRef = useRef(null);
   const [provideDraft, setProvideDraft] = useState(provideValue);
   const [bodyDraft, setBodyDraft] = useState(bodyValue);
+  const [bodyComposing, setBodyComposing] = useState(false);
 
   useEffect(() => {
     if (!provideComposingRef.current) setProvideDraft(provideValue);
@@ -288,18 +289,22 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     e.stopPropagation();
     if (readOnly) return;
     bodyComposingRef.current = true;
+    setBodyComposing(true);
   };
 
   const handleNodeBodyCompositionEnd = (e) => {
     e.stopPropagation();
     if (readOnly) return;
     bodyComposingRef.current = false;
+    setBodyComposing(false);
     const next = e.currentTarget.value;
     commitNodeBody(next);
   };
 
   const handleNodeBodyBlur = () => {
     if (readOnly) return;
+    bodyComposingRef.current = false;
+    setBodyComposing(false);
     commitNodeBody(bodyDraft);
   };
 
@@ -548,7 +553,10 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
               </button>
             </div>
           ) : isSubAgent && !isRunMode ? (
-            <div ref={bodyPromptStackRef} className="af-flow-node__prompt-stack nodrag">
+            <div
+              ref={bodyPromptStackRef}
+              className={"af-flow-node__prompt-stack nodrag" + (bodyComposing ? " af-flow-node__prompt-stack--composing" : "")}
+            >
               <pre
                 ref={bodyBackdropRef}
                 className="af-flow-node__prompt-backdrop"
