@@ -289,6 +289,14 @@
       "displayName": "Create GitLab MR",
       "description": "Create or reuse a GitLab merge request for the current branch and output its URL"
     },
+    "tool_wecom_send_group_markdown": {
+      "displayName": "WeCom Group Markdown",
+      "description": "Send a Markdown message through a WeCom group robot webhook"
+    },
+    "tool_wecom_send_app_markdown": {
+      "displayName": "WeCom App Markdown",
+      "description": "Send a Markdown message to users through a WeCom enterprise application"
+    },
     "tool_nodejs": {
       "displayName": "Node.js Script",
       "description": "Execute Node.js script, success determined by exit code, stdout as result"

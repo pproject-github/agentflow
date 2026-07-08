@@ -16,8 +16,8 @@ function modelEntryId(entry) {
  * @param {{
  *   kind: "input" | "output",
  *   label: string,
- *   slots: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
- *   onSlotsChange: (next: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[]) => void,
+ *   slots: { type: string, name: string, default: string, description?: string, required?: boolean, showOnNode?: boolean }[],
+ *   onSlotsChange: (next: { type: string, name: string, default: string, description?: string, required?: boolean, showOnNode?: boolean }[]) => void,
  *   disabled: boolean,
  *   requiredReadonly?: boolean,
  * }} p
@@ -62,6 +62,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
             <span>{t("flow:nodeProps.type")}</span>
             <span>{t("flow:nodeProps.name")}</span>
             <span>{t("flow:nodeProps.defaultValue")}</span>
+            <span>{t("flow:nodeProps.description")}</span>
             <span>{t("flow:nodeProps.required")}</span>
             <span>{t("flow:nodeProps.showOnNode")}</span>
             <span />
@@ -101,6 +102,16 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
                 spellCheck={false}
                 autoComplete="off"
                 aria-label={t("flow:nodeProps.pinDefaultAriaLabel", { label, index: i })}
+              />
+              <input
+                type="text"
+                className="af-node-props-input af-node-props-io-cell"
+                value={s.description || ""}
+                onChange={(e) => patch(i, "description", e.target.value)}
+                disabled={disabled}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={t("flow:nodeProps.pinDescriptionAriaLabel", { label, index: i })}
               />
               <label className="af-node-props-io-flag" title={t("flow:nodeProps.requiredHint")}>
                 <input
@@ -154,8 +165,8 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
  *     scriptRef?: string,
  *     implementationRef?: string,
  *     implementationMode?: string,
- *     inputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
- *     outputs: { type: string, name: string, default: string, required?: boolean, showOnNode?: boolean }[],
+ *     inputs: { type: string, name: string, default: string, description?: string, required?: boolean, showOnNode?: boolean }[],
+ *     outputs: { type: string, name: string, default: string, description?: string, required?: boolean, showOnNode?: boolean }[],
  *   } | null,
  *   setDraft: (fn: (d: any) => any) => void,
  *   definitionId: string,

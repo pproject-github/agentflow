@@ -538,6 +538,31 @@ function formatScheduledRunTime(ts) {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function scheduledRunTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function scheduledRunStateFromServer(rawSchedules) {
+  const next = {};
+  for (const item of Array.isArray(rawSchedules) ? rawSchedules : []) {
+    const runNodeId = String(item?.runNodeId || "").trim();
+    if (!runNodeId) continue;
+    next[runNodeId] = {
+      nextAt: scheduledRunTimestamp(item.nextRunAt),
+      lastAt: scheduledRunTimestamp(item.lastTriggeredAt),
+      lastStatus: String(item.lastStatus || (item.enabled ? "armed" : "disabled")),
+      lastError: String(item.lastError || ""),
+      lastRunId: String(item.lastRunId || ""),
+    };
+  }
+  return next;
+}
+
 function isWorkspaceGroupNode(node) {
   return Boolean(node?.data?.isWorkspaceGroup);
 }
@@ -607,6 +632,7 @@ function cloneSlots(slots) {
     name: slot?.name || "",
     default: slotDefault(slot),
     required: Boolean(slot?.required),
+    description: String(slot?.description || ""),
     showOnNode: slot?.showOnNode != null
       ? slot.showOnNode !== false
       : Boolean(slot?.required) || String(slot?.type || "node").trim().toLowerCase() === "node",
@@ -3852,9 +3878,6 @@ function WorkspacePageInner() {
   const [authUser, setAuthUser] = useState(null);
   const [runningRunNodeId, setRunningRunNodeId] = useState("");
   const runningRunNodeIdRef = useRef("");
-  const workspaceWritableRef = useRef(true);
-  const runWorkspaceNodeRef = useRef(null);
-  const scheduledRunTimersRef = useRef(new Map());
   const [scheduledRunState, setScheduledRunState] = useState({});
   const workspaceRunAbortRef = useRef(null);
   const workspaceRunStoppedRef = useRef(false);
@@ -3950,6 +3973,7 @@ function WorkspacePageInner() {
     if (!res.ok) throw new Error(json.error || "保存 workspace graph 失败");
     instancesRef.current = json.graph?.instances || graph.instances;
     setInstances(instancesRef.current);
+    setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
     setStatus("Workspace graph saved");
   }, [edges, flowParams, nodes, workspaceWritable]);
 
@@ -4009,6 +4033,7 @@ function WorkspacePageInner() {
     setInstances(flow.instances);
     setNodes(flow.nodes);
     setEdges(flow.edges);
+    setScheduledRunState(scheduledRunStateFromServer(graphJson.workspaceSchedules || []));
     setDisplayPage(nextDisplayPage);
     displayPageRef.current = nextDisplayPage;
     setWorkspaceViewport(nextWorkspaceViewport);
@@ -4663,10 +4688,6 @@ function WorkspacePageInner() {
     }
   }, []);
 
-  useEffect(() => {
-    runWorkspaceNodeRef.current = runWorkspaceNode;
-  }, [runWorkspaceNode]);
-
   const refreshMcps = useCallback(async () => {
     try {
       const r = await fetch("/api/mcps");
@@ -4737,10 +4758,6 @@ function WorkspacePageInner() {
   useEffect(() => {
     runningRunNodeIdRef.current = runningRunNodeId;
   }, [runningRunNodeId]);
-
-  useEffect(() => {
-    workspaceWritableRef.current = workspaceWritable;
-  }, [workspaceWritable]);
 
   useEffect(() => {
     const prev = nodeHandleSignaturesRef.current;
@@ -4828,66 +4845,44 @@ function WorkspacePageInner() {
   ), [scheduledRunConfigs]);
 
   useEffect(() => {
-    for (const timer of scheduledRunTimersRef.current.values()) {
-      window.clearInterval(timer);
-    }
-    scheduledRunTimersRef.current.clear();
-    if (!loadedRef.current || !workspaceWritable || workspaceMode !== "workspace") {
+    if (!loadedRef.current || workspaceMode !== "workspace" || !flowParams.flowId) {
       setScheduledRunState({});
       return undefined;
     }
-    const enabled = scheduledRunConfigs.filter((item) => item.config.enabled);
-    if (!enabled.length) {
+    if (!scheduledRunConfigs.length) {
       setScheduledRunState({});
       return undefined;
     }
-    const now = Date.now();
-    setScheduledRunState((current) => {
-      const next = {};
-      for (const item of enabled) {
-        const intervalMs = item.config.intervalMinutes * 60 * 1000;
-        next[item.id] = {
-          ...(current[item.id] || {}),
-          nextAt: now + intervalMs,
-          lastStatus: current[item.id]?.lastStatus || "armed",
-        };
-      }
-      return next;
-    });
-    for (const item of enabled) {
-      const intervalMs = item.config.intervalMinutes * 60 * 1000;
-      const timer = window.setInterval(() => {
-        const nextAt = Date.now() + intervalMs;
-        if (!workspaceWritableRef.current) {
-          setScheduledRunState((current) => ({
-            ...current,
-            [item.id]: { ...(current[item.id] || {}), nextAt, lastStatus: "readonly" },
-          }));
-          return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const q = flowParamsQuery(flowParams);
+        const res = await fetch(`/api/workspace/schedules?${q.toString()}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || "读取 Workspace 定时状态失败");
+        if (!cancelled) setScheduledRunState(scheduledRunStateFromServer(json.schedules || []));
+      } catch {
+        if (!cancelled) {
+          setScheduledRunState((current) => {
+            const next = {};
+            for (const item of scheduledRunConfigs) {
+              next[item.id] = {
+                ...(current[item.id] || {}),
+                lastStatus: current[item.id]?.lastStatus || "unknown",
+              };
+            }
+            return next;
+          });
         }
-        if (runningRunNodeIdRef.current) {
-          setScheduledRunState((current) => ({
-            ...current,
-            [item.id]: { ...(current[item.id] || {}), nextAt, lastStatus: "skipped: busy" },
-          }));
-          return;
-        }
-        setScheduledRunState((current) => ({
-          ...current,
-          [item.id]: { ...(current[item.id] || {}), nextAt, lastAt: Date.now(), lastStatus: "triggered" },
-        }));
-        setStatus(`Scheduled run triggered: ${item.id}`);
-        runWorkspaceNodeRef.current?.(item.id);
-      }, intervalMs);
-      scheduledRunTimersRef.current.set(item.id, timer);
-    }
-    return () => {
-      for (const timer of scheduledRunTimersRef.current.values()) {
-        window.clearInterval(timer);
       }
-      scheduledRunTimersRef.current.clear();
     };
-  }, [scheduledRunConfigs, scheduledRunKey, workspaceMode, workspaceWritable]);
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [flowParams, scheduledRunConfigs, scheduledRunKey, workspaceMode]);
 
   const changeLoadSkillKeys = useCallback((nodeId, keys) => {
     if (!workspaceWritable) {
@@ -6568,9 +6563,10 @@ function WorkspacePageInner() {
     });
   }, [setEdges, setNodes, workspaceWritable]);
 
-  const handleConnectStart = useCallback((_, params) => {
+  const handleConnectStart = useCallback((event, params) => {
     if (!workspaceWritable) return;
-    connectionStartRef.current = buildWorkspaceConnectionDraft(params, nodesRef.current);
+    const draft = buildWorkspaceConnectionDraft(params, nodesRef.current);
+    connectionStartRef.current = draft ? { ...draft, preferExisting: Boolean(event?.shiftKey) } : null;
     setConnectionMenu(null);
   }, [workspaceWritable]);
 
@@ -6586,6 +6582,10 @@ function WorkspacePageInner() {
       setStatus(`没有匹配 ${draft.slotType} 端口的节点`);
       return;
     }
+    const preferExisting = Boolean(event?.shiftKey || draft.preferExisting);
+    const defaultMode = preferExisting
+      ? (existingCandidates.length > 0 ? "existing" : "create")
+      : (candidates.length > 0 ? "create" : "existing");
     const clientX = event?.changedTouches?.[0]?.clientX ?? event?.clientX;
     const clientY = event?.changedTouches?.[0]?.clientY ?? event?.clientY;
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
@@ -6604,7 +6604,7 @@ function WorkspacePageInner() {
       draft,
       candidates,
       existingCandidates,
-      mode: existingCandidates.length > 0 ? "existing" : "create",
+      mode: defaultMode,
       query: "",
     });
   }, [palette, reactFlow, workspaceWritable]);
@@ -7102,13 +7102,6 @@ function WorkspacePageInner() {
             <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
           </div>
           <div className="af-view-switch" aria-label="视图切换">
-            <button type="button" onClick={() => {
-              navigate(flowUrlForView({
-                id: flowParams.flowId,
-                source: flowParams.flowSource || "user",
-                archived: Boolean(flowParams.archived),
-              }, "pipeline"));
-            }}>Pipeline</button>
             <button
               type="button"
               className={workspaceMode === "workspace" ? "af-view-switch__active" : ""}

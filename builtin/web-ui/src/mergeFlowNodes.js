@@ -11,6 +11,7 @@ function toIOSlot(s) {
     default: s.value !== undefined && s.value !== null ? String(s.value) : s.default !== undefined ? String(s.default) : "",
   };
   if (s.required != null) slot.required = Boolean(s.required);
+  if (s.description != null) slot.description = String(s.description);
   slot.showOnNode = hasShowOnNode
     ? Boolean(s.showOnNode)
     : Boolean(slot.required) || String(type).trim().toLowerCase() === "node";
@@ -148,6 +149,7 @@ function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
     return {
       ...slot,
       ...(slot.required == null && def.required != null ? { required: Boolean(def.required) } : {}),
+      ...(slot.description == null && def.description != null ? { description: String(def.description) } : {}),
       ...(wasLegacyAutoHidden ? { showOnNode: true } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode == null ? { showOnNode: Boolean(slot.required) || String(slot.type || "").trim().toLowerCase() === "node" } : {}),
@@ -173,6 +175,7 @@ export function cloneNodeIoDraftSlots(node) {
         name: String(sl.name ?? ""),
         default: String(sl.default ?? ""),
         required: Boolean(sl.required),
+        description: String(sl.description ?? ""),
         showOnNode: sl.showOnNode != null
           ? sl.showOnNode !== false
           : Boolean(sl.required) || String(sl.type || "").trim().toLowerCase() === "node",

@@ -158,6 +158,7 @@ function normalizeFrontmatterSlots(arr) {
     else if (typeof def !== "string") def = String(def);
     const slot = { type, name, default: def };
     if (item.required != null) slot.required = Boolean(item.required);
+    if (item.description != null) slot.description = String(item.description);
     slot.showOnNode = item.showOnNode != null ? Boolean(item.showOnNode) : defaultShowOnNodeForSlot(slot);
     return slot;
   });

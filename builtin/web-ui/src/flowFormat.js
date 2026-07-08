@@ -176,6 +176,7 @@ export function buildInstancesForYaml(nodes, instancesMap) {
       value: s?.value ?? s?.default ?? "",
     };
     if (s?.required === true) slot.required = true;
+    if (s?.description != null && String(s.description).trim()) slot.description = String(s.description);
     if (s?.showOnNode != null) slot.showOnNode = Boolean(s.showOnNode);
     return slot;
   };
