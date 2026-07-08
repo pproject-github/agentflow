@@ -17,9 +17,31 @@ export function skillCollectionConfig(collections) {
   return { version: 1, collections: normalizeSkillCollections({ collections }) };
 }
 
+function skillNameFromKey(key) {
+  const value = String(key || "").trim();
+  const idx = value.indexOf(":");
+  return idx >= 0 ? value.slice(idx + 1).trim() : value;
+}
+
+function skillKeyResolver(skills) {
+  const byKey = new Map();
+  const byName = new Map();
+  for (const skill of Array.isArray(skills) ? skills : []) {
+    if (skill?.key) byKey.set(skill.key, skill.key);
+    if (skill?.name && skill?.key && !byName.has(skill.name)) byName.set(skill.name, skill.key);
+  }
+  return (key) => {
+    const raw = String(key || "").trim();
+    if (!raw) return "";
+    return byKey.get(raw) || byName.get(skillNameFromKey(raw)) || "";
+  };
+}
+
 export function collectionSkillKeys(collection, skills) {
-  const available = new Set((Array.isArray(skills) ? skills : []).map((skill) => skill.key).filter(Boolean));
-  return (Array.isArray(collection?.skillKeys) ? collection.skillKeys : []).filter((key) => available.has(key));
+  const resolveSkillKey = skillKeyResolver(skills);
+  return Array.from(new Set((Array.isArray(collection?.skillKeys) ? collection.skillKeys : [])
+    .map((key) => resolveSkillKey(key))
+    .filter(Boolean)));
 }
 
 export function addSkillKeys(selected, keys) {
@@ -62,8 +84,8 @@ export function readStoredOrDefaultSkillKeys(storageKey, view, skills, collectio
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        const available = new Set(availableKeys);
-        const stored = parsed.map(String).filter((key) => available.has(key));
+        const resolveSkillKey = skillKeyResolver(skills);
+        const stored = Array.from(new Set(parsed.map(resolveSkillKey).filter(Boolean)));
         if (availableKeys.length > 0 && stored.length === availableKeys.length) return fallback;
         const storedSet = new Set(stored);
         const defaultSet = new Set(defaultKeys);

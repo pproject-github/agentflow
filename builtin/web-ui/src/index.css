@@ -3190,9 +3190,9 @@ button.af-project-card {
 }
 
 .af-set-env-row--draft {
-  padding-top: 0.35rem;
-  border-top: 1px solid rgba(229, 226, 225, 0.08);
-  margin-top: 0.25rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid rgba(229, 226, 225, 0.08);
+  margin-bottom: 0.25rem;
 }
 
 .af-set-env-cell {

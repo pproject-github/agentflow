@@ -1105,7 +1105,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
 
           {isResourceTab ? (
             <div className="af-resource-toolbar">
-              {filter === "skills" ? <SkillHubPanel onChanged={loadResources} /> : null}
+              {filter === "skills" ? <SkillHubPanel onChanged={loadResources} canManage={Boolean(authUser?.isAdmin)} /> : null}
               <div className="af-resource-purpose">
                 <span className="material-symbols-outlined">{isMyFlowsTab ? "schema" : isNodeResourceTab ? (isMyNodesTab ? "deployed_code" : "account_tree") : "extension"}</span>
                 <div>

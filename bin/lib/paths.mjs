@@ -49,6 +49,11 @@ export function getAgentflowDataRootOverride() {
   return expandAgentflowHomePath(config.dataRoot || "");
 }
 
+export function getAgentflowSkillsRootOverride() {
+  const config = readAgentflowHomeConfig();
+  return expandAgentflowHomePath(config.skillsRoot || "");
+}
+
 export function writeAgentflowDataRootOverride(dataRoot) {
   const nextRoot = expandAgentflowHomePath(dataRoot);
   if (nextRoot && !path.isAbsolute(nextRoot)) {
@@ -62,6 +67,19 @@ export function writeAgentflowDataRootOverride(dataRoot) {
   return nextRoot;
 }
 
+export function writeAgentflowSkillsRootOverride(skillsRoot) {
+  const nextRoot = expandAgentflowHomePath(skillsRoot);
+  if (nextRoot && !path.isAbsolute(nextRoot)) {
+    throw new Error("skillsRoot must be an absolute path");
+  }
+  const current = readAgentflowHomeConfig();
+  const next = { ...current, skillsRoot: nextRoot };
+  if (!nextRoot) delete next.skillsRoot;
+  fs.mkdirSync(path.dirname(AGENTFLOW_HOME_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(AGENTFLOW_HOME_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  return nextRoot;
+}
+
 export function getAgentflowDataRoot() {
   const env = process.env.AGENTFLOW_HOME;
   if (env != null && String(env).trim() !== "") {
@@ -70,6 +88,16 @@ export function getAgentflowDataRoot() {
   const configured = getAgentflowDataRootOverride();
   if (configured) return configured;
   return path.join(os.homedir(), "agentflow");
+}
+
+export function getAgentflowSkillsRoot() {
+  const env = process.env.AGENTFLOW_SKILLS_ROOT;
+  if (env != null && String(env).trim() !== "") {
+    return expandAgentflowHomePath(env);
+  }
+  const configured = getAgentflowSkillsRootOverride();
+  if (configured) return configured;
+  return path.join(getAgentflowDataRoot(), "skills");
 }
 
 export const AGENTFLOW_DEFAULT_USER_ID = "";
