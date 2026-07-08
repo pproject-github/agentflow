@@ -150,15 +150,6 @@ function workspaceRawFileUrl(src, flowParams, opts = {}) {
   return `/api/workspace/file/raw?${q.toString()}`;
 }
 
-function workspaceDownloadFileUrl(src, flowParams) {
-  const text = String(src || "").trim();
-  if (!text) return "";
-  const q = flowParamsQuery(flowParams || {});
-  q.set("path", text);
-  q.set("download", "1");
-  return `/api/workspace/file/raw?${q.toString()}`;
-}
-
 function workspaceSkillsStorageKey(params) {
   const flowId = String(params?.flowId || "").trim();
   if (!flowId) return "";
@@ -3253,6 +3244,23 @@ function flattenFiles(files, out = []) {
   return out;
 }
 
+function findWorkspaceFileItem(files, itemPath) {
+  const needle = String(itemPath || "");
+  if (!needle) return null;
+  for (const item of files || []) {
+    if (item.path === needle) return item;
+    const found = Array.isArray(item.children) ? findWorkspaceFileItem(item.children, needle) : null;
+    if (found) return found;
+  }
+  return null;
+}
+
+function workspaceParentDir(relPath) {
+  const normalized = String(relPath || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!normalized || !normalized.includes("/")) return "";
+  return normalized.split("/").slice(0, -1).join("/");
+}
+
 function collectDirectoryPaths(files, out = []) {
   for (const item of files || []) {
     if (item.type !== "directory") continue;
@@ -3346,62 +3354,101 @@ function upsertWorkspaceFile(items, relPath, size = 0) {
   return visit(items || [], 0, "");
 }
 
-function FileTree({ items, flowParams, onOpen, collapsedDirs, onToggleDir, onCreateFile, onCreateFolder, onDelete, onFileDragStart }) {
+function formatWorkspaceFileSize(size) {
+  const n = Number(size || 0);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 102.4) / 10} KB`;
+  return `${Math.round(n / 1024 / 102.4) / 10} MB`;
+}
+
+function FileTree({ items, onOpen, selectedPath, collapsedDirs, onToggleDir, onSelect, onFileDragStart }) {
   return (
     <ul className="af-work-files">
       {(items || []).map((item) => {
         const isDir = item.type === "directory";
         const collapsed = isDir && collapsedDirs?.has(item.path);
+        const selected = selectedPath === item.path;
         return (
           <li key={item.path}>
             <div className="af-work-file-row">
               <button
                 type="button"
-                className={"af-work-file af-work-file--" + item.type}
+                className={"af-work-file af-work-file--" + item.type + (selected ? " af-work-file--selected" : "")}
                 draggable={!isDir}
                 onDragStart={(e) => {
                   if (!isDir) onFileDragStart?.(e, item);
                 }}
-                onClick={() => isDir ? onToggleDir?.(item.path) : onOpen(item)}
+                onClick={() => {
+                  onSelect?.(item);
+                  if (isDir) onToggleDir?.(item.path);
+                }}
+                onDoubleClick={() => {
+                  if (!isDir) onOpen(item);
+                }}
                 title={item.path}
               >
                 {isDir ? <span className="material-symbols-outlined af-work-file__chevron">{collapsed ? "chevron_right" : "expand_more"}</span> : null}
                 <span className="material-symbols-outlined">{item.icon || iconForFile(item.name, isDir)}</span>
                 <span>{item.name}</span>
               </button>
-              {isDir ? (
-                <>
-                  <button type="button" className="af-work-file-action" onClick={() => onCreateFile?.(item.path)} title="新增文件" aria-label={`在 ${item.name} 新增文件`}>
-                    <span className="material-symbols-outlined">note_add</span>
-                  </button>
-                  <button type="button" className="af-work-file-action" onClick={() => onCreateFolder?.(item.path)} title="新增文件夹" aria-label={`在 ${item.name} 新增文件夹`}>
-                    <span className="material-symbols-outlined">create_new_folder</span>
-                  </button>
-                </>
-              ) : null}
-              {!isDir ? (
-                <a
-                  className="af-work-file-action"
-                  href={workspaceDownloadFileUrl(item.path, flowParams)}
-                  download={item.name}
-                  onClick={(event) => event.stopPropagation()}
-                  title="下载"
-                  aria-label={`下载 ${item.name}`}
-                >
-                  <span className="material-symbols-outlined">download</span>
-                </a>
-              ) : null}
-              <button type="button" className="af-work-file-action af-work-file-action--danger" onClick={() => onDelete?.(item)} title="删除" aria-label={`删除 ${item.name}`}>
-                <span className="material-symbols-outlined">delete</span>
-              </button>
             </div>
             {isDir && !collapsed && item.children?.length ? (
-              <FileTree items={item.children} flowParams={flowParams} onOpen={onOpen} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onCreateFile={onCreateFile} onCreateFolder={onCreateFolder} onDelete={onDelete} onFileDragStart={onFileDragStart} />
+              <FileTree items={item.children} onOpen={onOpen} selectedPath={selectedPath} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onSelect={onSelect} onFileDragStart={onFileDragStart} />
             ) : null}
           </li>
         );
       })}
     </ul>
+  );
+}
+
+function WorkspaceFilePickerModal({ files, query, onQueryChange, onSelect, onUpload, onClose }) {
+  const flatFiles = useMemo(() => flattenFiles(files), [files]);
+  const needle = String(query || "").trim().toLowerCase();
+  const visibleFiles = flatFiles.filter((file) => {
+    if (!needle) return true;
+    return `${file.path} ${file.name}`.toLowerCase().includes(needle);
+  });
+
+  return (
+    <div className="af-flow-snippet-modal-overlay" onMouseDown={onClose}>
+      <div className="af-flow-snippet-modal af-work-file-picker-modal" role="dialog" aria-modal="true" aria-label="选择文件" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="af-flow-snippet-modal__head">
+          <span className="af-flow-snippet-modal__title">
+            <span className="material-symbols-outlined">folder_open</span>
+            选择文件
+          </span>
+          <button type="button" className="af-flow-snippet-modal__close" onClick={onClose} aria-label="关闭">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        <div className="af-flow-snippet-modal__body">
+          <div className="af-work-file-picker-modal__tools">
+            <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索文件路径..." autoFocus />
+            <button type="button" onClick={() => onUpload?.("")}>
+              <span className="material-symbols-outlined">upload_file</span>
+              上传
+            </button>
+          </div>
+          <div className="af-work-file-picker-modal__list">
+            {visibleFiles.map((file) => (
+              <button key={file.path} type="button" className="af-work-file-picker-modal__item" onClick={() => onSelect(file)}>
+                <span className="material-symbols-outlined">{file.icon || iconForFile(file.name)}</span>
+                <span className="af-work-file-picker-modal__main">
+                  <strong>{file.name}</strong>
+                  <small>{file.path}</small>
+                </span>
+                {file.size ? <em>{formatWorkspaceFileSize(file.size)}</em> : null}
+              </button>
+            ))}
+            {visibleFiles.length === 0 ? (
+              <div className="af-work-file-picker-modal__empty">没有匹配文件，可先上传或调整搜索词。</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -4142,7 +4189,12 @@ function WorkspacePageInner() {
   const [workspaceWritable, setWorkspaceWritable] = useState(true);
   const [fileFilter, setFileFilter] = useState("");
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set());
+  const [selectedWorkspaceFilePath, setSelectedWorkspaceFilePath] = useState("");
+  const [provideFilePicker, setProvideFilePicker] = useState({ nodeId: "", query: "" });
+  const [workspaceFileUploading, setWorkspaceFileUploading] = useState(false);
   const workspaceSidebarRef = useRef(null);
+  const workspaceFileUploadInputRef = useRef(null);
+  const workspaceFileUploadDirRef = useRef("");
   const [workspaceFilesPaneHeight, setWorkspaceFilesPaneHeight] = useState(() => {
     try {
       const saved = Number(window.localStorage.getItem("agentflow.workspace.filesPaneHeight") || 0);
@@ -5641,19 +5693,16 @@ function WorkspacePageInner() {
     setStatus(String(options?.statusMessage || "") || (mode === "append" ? "已追加节点内容" : "已替换节点内容"));
   }, [saveGraph, setNodes, workspaceWritable]);
 
-  const uploadWorkspaceImage = useCallback(async (file) => {
+  const uploadWorkspaceFile = useCallback(async (file, targetDir = "") => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return "";
     }
-    if (!isWorkspaceImageFile(file)) {
-      setStatus("请选择图片文件");
-      return "";
-    }
+    if (!file) return "";
     try {
       const form = new FormData();
       form.set("file", file);
-      form.set("dir", "img");
+      form.set("dir", String(targetDir || ""));
       if (flowParams.flowId) form.set("flowId", flowParams.flowId);
       if (flowParams.flowSource) form.set("flowSource", flowParams.flowSource);
       if (flowParams.archived) form.set("archived", "1");
@@ -5662,22 +5711,59 @@ function WorkspacePageInner() {
         body: form,
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "上传图片失败");
+      if (!res.ok) throw new Error(json.error || "上传文件失败");
       const savedPath = String(json.path || "").trim();
-      if (!savedPath) throw new Error("上传图片失败：未返回路径");
+      if (!savedPath) throw new Error("上传文件失败：未返回路径");
       await loadFiles();
       setCollapsedDirs((prev) => {
         const next = new Set(prev);
         for (const dir of parentDirectoryPaths(savedPath)) next.delete(dir);
         return next;
       });
-      setStatus(`已上传图片 ${savedPath}`);
+      setStatus(`已上传 ${savedPath}`);
       return savedPath;
     } catch (e) {
       setStatus(String(e.message || e));
       return "";
     }
   }, [flowParams, loadFiles, workspaceWritable]);
+
+  const uploadWorkspaceImage = useCallback(async (file) => {
+    if (!isWorkspaceImageFile(file)) {
+      setStatus("请选择图片文件");
+      return "";
+    }
+    return uploadWorkspaceFile(file, "img");
+  }, [uploadWorkspaceFile]);
+
+  const triggerWorkspaceFileUpload = useCallback((targetDir = "") => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
+    workspaceFileUploadDirRef.current = String(targetDir || "");
+    workspaceFileUploadInputRef.current?.click();
+  }, [workspaceWritable]);
+
+  const handleWorkspaceFileUploadInput = useCallback(async (event) => {
+    const selected = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!selected.length) return;
+    const targetDir = workspaceFileUploadDirRef.current || "";
+    setWorkspaceFileUploading(true);
+    try {
+      let lastPath = "";
+      for (const file of selected) {
+        const savedPath = await uploadWorkspaceFile(file, targetDir);
+        if (savedPath) lastPath = savedPath;
+      }
+      if (selected.length > 1) setStatus(`已上传 ${selected.length} 个文件${lastPath ? `，最后一个：${lastPath}` : ""}`);
+    } catch (e) {
+      setStatus(String(e.message || e));
+    } finally {
+      setWorkspaceFileUploading(false);
+    }
+  }, [uploadWorkspaceFile]);
 
   const uploadImageToDisplayNode = useCallback(async (nodeId, file) => {
     const id = String(nodeId || "").trim();
@@ -5950,6 +6036,40 @@ function WorkspacePageInner() {
     });
   }, []);
 
+  const setProvideNodeValue = useCallback((nodeId, value) => {
+    const id = String(nodeId || "");
+    if (!id || !workspaceWritable) return;
+    setNodes((list) => list.map((node) => {
+      if (node.id !== id) return node;
+      const outputs = Array.isArray(node.data?.outputs) && node.data.outputs.length
+        ? node.data.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
+        : [{ type: "file", name: "value", default: value, value }];
+      return { ...node, data: { ...node.data, body: "", outputs } };
+    }));
+    syncNodePropDraft(id, (draft) => {
+      const outputs = Array.isArray(draft?.outputs) && draft.outputs.length
+        ? draft.outputs.map((slot, index) => index === 0 ? { ...slot, default: value, value } : slot)
+        : [{ type: "file", name: "value", default: value, value }];
+      return { body: "", outputs };
+    });
+    setStatus(`已选择文件 ${value}`);
+  }, [setNodes, syncNodePropDraft, workspaceWritable]);
+
+  const openProvideFilePicker = useCallback((nodeId) => {
+    setProvideFilePicker({ nodeId: String(nodeId || ""), query: "" });
+  }, []);
+
+  const closeProvideFilePicker = useCallback(() => {
+    setProvideFilePicker({ nodeId: "", query: "" });
+  }, []);
+
+  const selectProvideFile = useCallback((file) => {
+    const path = String(file?.path || "").trim();
+    if (!path || !provideFilePicker.nodeId) return;
+    setProvideNodeValue(provideFilePicker.nodeId, path);
+    closeProvideFilePicker();
+  }, [closeProvideFilePicker, provideFilePicker.nodeId, setProvideNodeValue]);
+
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -5980,6 +6100,7 @@ function WorkspacePageInner() {
       sharingDisplayNodeId,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
+      onOpenProvideFilePicker: openProvideFilePicker,
       onStatus: setStatus,
       nodeChatActive: activeNodeChatId === node.id,
       nodeChat: nodeChatSessions[node.id] || null,
@@ -5991,7 +6112,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
@@ -6297,6 +6418,14 @@ function WorkspacePageInner() {
     if (!q) return files;
     return flattenFiles(files).filter((file) => file.path.toLowerCase().includes(q));
   }, [fileFilter, files]);
+
+  const selectedWorkspaceFile = useMemo(
+    () => findWorkspaceFileItem(files, selectedWorkspaceFilePath),
+    [files, selectedWorkspaceFilePath],
+  );
+  const selectedWorkspaceTargetDir = selectedWorkspaceFile?.type === "directory"
+    ? selectedWorkspaceFile.path
+    : workspaceParentDir(selectedWorkspaceFile?.path || "");
 
   const modelOptions = [
     ...(modelLists.cursor || []).map((m) => ({ label: `Cursor · ${m.split(" - ")[0]}`, value: `cursor:${m.split(" - ")[0]}` })),
@@ -7795,20 +7924,33 @@ function WorkspacePageInner() {
                 <button type="button" className="af-icon-btn" onClick={() => setWorkspaceSidebarCollapsed(true)} aria-label="最小化侧边栏" title="最小化侧边栏">
                   <span className="material-symbols-outlined">keyboard_double_arrow_left</span>
                 </button>
-                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFile("")} aria-label="新增文件" title="新增文件">
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFile(selectedWorkspaceTargetDir)} aria-label="新增文件" title={selectedWorkspaceTargetDir ? `在 ${selectedWorkspaceTargetDir} 新增文件` : "新增文件"}>
                   <span className="material-symbols-outlined">note_add</span>
                 </button>
-                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFolder("")} aria-label="新增文件夹" title="新增文件夹">
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable} onClick={() => createWorkspaceFolder(selectedWorkspaceTargetDir)} aria-label="新增文件夹" title={selectedWorkspaceTargetDir ? `在 ${selectedWorkspaceTargetDir} 新增文件夹` : "新增文件夹"}>
                   <span className="material-symbols-outlined">create_new_folder</span>
+                </button>
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable || workspaceFileUploading} onClick={() => triggerWorkspaceFileUpload(selectedWorkspaceTargetDir)} aria-label="上传文件" title={selectedWorkspaceTargetDir ? `上传到 ${selectedWorkspaceTargetDir}` : "上传文件"}>
+                  <span className="material-symbols-outlined">{workspaceFileUploading ? "hourglass_top" : "upload_file"}</span>
+                </button>
+                <button type="button" className="af-icon-btn" disabled={!workspaceWritable || !selectedWorkspaceFile} onClick={() => deleteWorkspacePath(selectedWorkspaceFile)} aria-label="删除选中项" title={selectedWorkspaceFile ? `删除 ${selectedWorkspaceFile.path}` : "先选择文件或文件夹"}>
+                  <span className="material-symbols-outlined">delete</span>
                 </button>
                 <button type="button" className="af-icon-btn" onClick={() => void loadFiles()} aria-label="刷新文件" title="刷新文件">
                   <span className="material-symbols-outlined">refresh</span>
                 </button>
+                <input
+                  ref={workspaceFileUploadInputRef}
+                  type="file"
+                  multiple
+                  className="af-visually-hidden"
+                  onChange={handleWorkspaceFileUploadInput}
+                />
               </div>
             </div>
             <input className="af-workspace-search" value={fileFilter} onChange={(e) => setFileFilter(e.target.value)} placeholder="搜索文件..." />
             <div className="af-workspace-files-scroll">
-              <FileTree items={filteredFiles} flowParams={flowParams} onOpen={openFileNode} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onCreateFile={createWorkspaceFile} onCreateFolder={createWorkspaceFolder} onDelete={deleteWorkspacePath} onFileDragStart={handleFileDragStart} />
+              <FileTree items={filteredFiles} onOpen={openFileNode} selectedPath={selectedWorkspaceFilePath} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onSelect={(item) => setSelectedWorkspaceFilePath(item.path || "")} onFileDragStart={handleFileDragStart} />
             </div>
           </section>
 
@@ -8832,6 +8974,17 @@ function WorkspacePageInner() {
               </div>
             </div>
           </div>,
+          document.body,
+        ) : null}
+        {provideFilePicker.nodeId ? createPortal(
+          <WorkspaceFilePickerModal
+            files={files}
+            query={provideFilePicker.query}
+            onQueryChange={(query) => setProvideFilePicker((prev) => ({ ...prev, query }))}
+            onSelect={selectProvideFile}
+            onUpload={triggerWorkspaceFileUpload}
+            onClose={closeProvideFilePicker}
+          />,
           document.body,
         ) : null}
         {!isDisplayMode && quickAddOpen ? createPortal(

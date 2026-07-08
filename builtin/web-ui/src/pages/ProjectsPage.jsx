@@ -13,10 +13,16 @@ import { normalizeSkillCollections, skillCollectionConfig } from "../skillCollec
 import { useRoute } from "../routeContext.jsx";
 
 function badgeClass(tone) {
+  if (tone === "builtin") return "af-proj-badge af-proj-badge--builtin";
   if (tone === "secondary") return "af-proj-badge af-proj-badge--secondary";
   if (tone === "primary") return "af-proj-badge af-proj-badge--primary";
   if (tone === "muted") return "af-proj-badge af-proj-badge--muted";
   return "af-proj-badge";
+}
+
+function projectCardClass(source) {
+  const s = source ?? "user";
+  return s === "builtin" || s === "admin" ? "af-project-card af-project-card--builtin" : "af-project-card";
 }
 
 function activityIconKind(kind) {
@@ -25,8 +31,8 @@ function activityIconKind(kind) {
 }
 
 function sourceBadgeMeta(source, t) {
-  if (source === "builtin") return { label: t("project:sourceBadge.builtin"), tone: "muted" };
-  if (source === "admin") return { label: t("project:sourceBadge.builtin"), tone: "muted" };
+  if (source === "builtin") return { label: t("project:sourceBadge.builtin"), tone: "builtin" };
+  if (source === "admin") return { label: t("project:sourceBadge.builtin"), tone: "builtin" };
   if (source === "workspace") return { label: t("project:sourceBadge.workspace"), tone: "secondary" };
   return { label: t("project:sourceBadge.user"), tone: "primary" };
 }
@@ -1380,7 +1386,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   return (
                   <div
                     key={`${f.id}:${f.source ?? "user"}:${f.archived ? "a" : ""}`}
-                    className="af-project-card"
+                    className={projectCardClass(f.source)}
                     role="button"
                     tabIndex={0}
                     onClick={() => openFlow(f)}
