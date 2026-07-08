@@ -23,7 +23,7 @@ function installedSkillMeta(s) {
   return parts.join(" · ");
 }
 
-export default function SkillHubPanel({ onChanged }) {
+export default function SkillHubPanel({ onChanged, canManage = false }) {
   const [status, setStatus] = useState({
     available: false,
     version: "",
@@ -32,6 +32,7 @@ export default function SkillHubPanel({ onChanged }) {
     error: "",
   });
   const [installed, setInstalled] = useState([]);
+  const [skillsRoot, setSkillsRoot] = useState("");
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState("keyword");
   const [results, setResults] = useState([]);
@@ -45,7 +46,7 @@ export default function SkillHubPanel({ onChanged }) {
     try {
       const [statusRes, listRes] = await Promise.all([
         fetch("/api/skillhub/status"),
-        fetch("/api/skillhub/list?target=global&agent=codex"),
+        fetch("/api/skillhub/list?target=agentflow&agent=codex"),
       ]);
       const statusJson = await statusRes.json().catch(() => ({}));
       if (statusRes.ok) {
@@ -60,6 +61,7 @@ export default function SkillHubPanel({ onChanged }) {
       const listJson = await listRes.json().catch(() => ({}));
       if (!listRes.ok) throw new Error(typeof listJson.error === "string" ? listJson.error : "HTTP " + listRes.status);
       setInstalled(Array.isArray(listJson.skills) ? listJson.skills : []);
+      setSkillsRoot(typeof listJson.skillsRoot === "string" ? listJson.skillsRoot : "");
       setUpdateState({});
     } catch (e) {
       setErr(String(e.message || e));
@@ -89,6 +91,7 @@ export default function SkillHubPanel({ onChanged }) {
   }, [query, searchMode]);
 
   const install = useCallback(async (itemOrSlug, force = false) => {
+    if (!canManage) return;
     const item = itemOrSlug && typeof itemOrSlug === "object" ? itemOrSlug : null;
     const s = String(item ? item.slug || item.name || item.collection || item.skillId || item.id : itemOrSlug || "").trim();
     if (!s) return;
@@ -102,11 +105,11 @@ export default function SkillHubPanel({ onChanged }) {
             skillId: item.skillId || "",
             collection: item.collection || "",
             collectionName: item.collection ? item.name || "" : "",
-            target: "global",
+            target: "agentflow",
             agent: "codex",
             force,
           }
-        : { slug: s, target: "global", agent: "codex", force };
+        : { slug: s, target: "agentflow", agent: "codex", force };
       const r = await fetch("/api/skillhub/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -122,9 +125,10 @@ export default function SkillHubPanel({ onChanged }) {
     } finally {
       setBusy("");
     }
-  }, [load, onChanged]);
+  }, [canManage, load, onChanged]);
 
   const checkUpdates = useCallback(async () => {
+    if (!canManage) return;
     if (installed.length === 0) return;
     setBusy("check-updates");
     setErr("");
@@ -165,9 +169,10 @@ export default function SkillHubPanel({ onChanged }) {
     } finally {
       setBusy("");
     }
-  }, [installed]);
+  }, [canManage, installed]);
 
   const uninstall = useCallback(async (slug) => {
+    if (!canManage) return;
     const s = String(slug || "").trim();
     if (!s) return;
     setBusy(`uninstall:${s}`);
@@ -177,7 +182,7 @@ export default function SkillHubPanel({ onChanged }) {
       const r = await fetch("/api/skillhub/uninstall", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug: s, target: "global", agent: "codex" }),
+        body: JSON.stringify({ slug: s, target: "agentflow", agent: "codex" }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
@@ -189,9 +194,10 @@ export default function SkillHubPanel({ onChanged }) {
     } finally {
       setBusy("");
     }
-  }, [load, onChanged]);
+  }, [canManage, load, onChanged]);
 
   const updateCli = useCallback(async () => {
+    if (!canManage) return;
     setBusy("update-cli");
     setErr("");
     setMsg("");
@@ -206,14 +212,17 @@ export default function SkillHubPanel({ onChanged }) {
     } finally {
       setBusy("");
     }
-  }, [load]);
+  }, [canManage, load]);
 
   return (
     <section className="af-set-card af-set-card--span-all af-set-skillhub">
       <div className="af-set-card-head af-set-card-head--spread">
         <div>
           <h2 className="af-set-h2">SkillHub</h2>
-          <p className="af-set-p af-set-p--tight">搜索、安装、更新和卸载 Codex 全局 skills。</p>
+          <p className="af-set-p af-set-p--tight">
+            {canManage ? "搜索、安装、更新和卸载 AgentFlow 共享 skills。" : "查看 AgentFlow 共享 skills；使用时在 Workspace 中通过 Load Skills 加载。"}
+          </p>
+          {skillsRoot ? <p className="af-set-hint af-set-hint--inline">Skills Root：<code>{skillsRoot}</code></p> : null}
         </div>
         <div className="af-set-skillhub-head-actions">
           <div className="af-set-skillhub-status">
@@ -227,10 +236,10 @@ export default function SkillHubPanel({ onChanged }) {
             <button type="button" className="af-set-btn-mini" onClick={load} disabled={Boolean(busy)}>
               刷新
             </button>
-            <button type="button" className="af-set-btn-mini" onClick={checkUpdates} disabled={Boolean(busy) || installed.length === 0}>
+            <button type="button" className="af-set-btn-mini" onClick={checkUpdates} disabled={!canManage || Boolean(busy) || installed.length === 0}>
               {busy === "check-updates" ? "检查中…" : "检查更新"}
             </button>
-            <button type="button" className="af-set-btn-mini" onClick={updateCli} disabled={Boolean(busy)}>
+            <button type="button" className="af-set-btn-mini" onClick={updateCli} disabled={!canManage || Boolean(busy)}>
               {busy === "update-cli" ? "更新中…" : "更新 CLI"}
             </button>
           </div>
@@ -287,7 +296,7 @@ export default function SkillHubPanel({ onChanged }) {
           </div>
           <div className="af-set-skillhub-list">
             {installed.length === 0 ? (
-              <div className="af-set-skillhub-empty">暂无 Codex 全局 skills</div>
+              <div className="af-set-skillhub-empty">暂无 AgentFlow 共享 skills</div>
             ) : (
               installed.map((s) => {
                 const update = updateState[s.name];
@@ -324,10 +333,10 @@ export default function SkillHubPanel({ onChanged }) {
                       </div>
                     </div>
                     <div className="af-set-skillhub-actions">
-                      <button type="button" className="af-set-btn-mini" onClick={() => install(s.name, true)} disabled={Boolean(busy) || !canUpdate}>
+                      <button type="button" className="af-set-btn-mini" onClick={() => install(s.name, true)} disabled={!canManage || Boolean(busy) || !canUpdate}>
                         {updateLabel}
                       </button>
-                      <button type="button" className="af-set-btn-mini af-set-btn-mini--danger" onClick={() => uninstall(s.name)} disabled={Boolean(busy)}>
+                      <button type="button" className="af-set-btn-mini af-set-btn-mini--danger" onClick={() => uninstall(s.name)} disabled={!canManage || Boolean(busy)}>
                         卸载
                       </button>
                     </div>
@@ -364,7 +373,7 @@ export default function SkillHubPanel({ onChanged }) {
                       type="button"
                       className={isInstalled ? "af-set-btn-mini" : "af-set-btn-add af-set-btn-add--compact"}
                       onClick={() => install(s, isInstalled)}
-                      disabled={Boolean(busy)}
+                      disabled={!canManage || Boolean(busy)}
                     >
                       {isInstalled ? "更新" : isCollection ? "安装合集" : "安装"}
                     </button>

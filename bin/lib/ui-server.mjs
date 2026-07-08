@@ -45,6 +45,7 @@ import {
   PACKAGE_ROOT,
   ARCHIVED_PIPELINES_DIR_NAME,
   getAgentflowDataRoot,
+  getAgentflowSkillsRoot,
   getAgentflowUserConfigAbs,
   getAgentflowUserDataRoot,
   getUserPipelinesRoot,
@@ -62,6 +63,7 @@ import {
   buildSkillInjectionBlock,
   buildSkillCompactInjectionBlock,
 } from "./composer-skill-router.mjs";
+import { clearSkillRegistryCache } from "./skill-registry.mjs";
 import { COMPOSER_NODE_SPEC_FILENAME } from "./composer-planner.mjs";
 import { listRecentRunsFromDisk } from "./recent-runs.mjs";
 import {
@@ -1134,6 +1136,22 @@ function normalizeSkillhubListPayload(raw) {
   }).filter((x) => x.name);
 }
 
+function skillhubManagedSkillsDir() {
+  const dir = getAgentflowSkillsRoot();
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function skillhubListArgs(target, agent) {
+  const normalizedTarget = String(target || "agentflow").trim();
+  const normalizedAgent = String(agent || "codex").trim();
+  const args = ["list", "--json"];
+  if (normalizedTarget === "all") args.push("--all");
+  else if (normalizedTarget === "legacy-global") args.push("--global", "--agent", normalizedAgent);
+  else args.push("--dir", skillhubManagedSkillsDir());
+  return args;
+}
+
 function skillhubInstallArgs(payload, { uninstall = false } = {}) {
   const slug = String(payload?.slug || payload?.name || "").trim();
   if (!slug && !payload?.collection) return null;
@@ -1144,10 +1162,12 @@ function skillhubInstallArgs(payload, { uninstall = false } = {}) {
     args.push(slug);
   }
   if (payload?.skillId) args.push("--skill-id", String(payload.skillId).trim());
-  const target = String(payload?.target || "project").trim();
+  const target = String(payload?.target || "agentflow").trim();
   const agent = String(payload?.agent || "codex").trim();
-  if (target === "global") {
+  if (target === "global" || target === "legacy-global") {
     args.push("--global", "--agent", agent);
+  } else if (target === "agentflow") {
+    args.push("--dir", skillhubManagedSkillsDir());
   } else if (payload?.dir) {
     args.push("--dir", String(payload.dir).trim());
   }
@@ -5620,6 +5640,7 @@ export function startUiServer({
         }
         try {
           const config = writeAdminStorageConfig(payload?.config || payload || {});
+          clearSkillRegistryCache();
           json(res, 200, { ok: true, config });
         } catch (e) {
           json(res, 400, { error: (e && e.message) || String(e) });
@@ -7058,17 +7079,19 @@ export function startUiServer({
     }
 
     if (req.method === "GET" && url.pathname === "/api/skillhub/list") {
-      const target = url.searchParams.get("target") || "global";
+      const target = url.searchParams.get("target") || "agentflow";
       const agent = url.searchParams.get("agent") || "codex";
-      const args = ["list", "--json"];
-      if (target === "all") args.push("--all");
-      else if (target === "global") args.push("--global", "--agent", agent);
+      const args = skillhubListArgs(target, agent);
       const result = await runSkillhub(args, { cwd: root });
       if (!result.ok) {
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
-      json(res, 200, { skills: normalizeSkillhubListPayload(parseJsonText(result.stdout, [])) });
+      json(res, 200, {
+        skills: normalizeSkillhubListPayload(parseJsonText(result.stdout, [])),
+        target,
+        skillsRoot: target === "agentflow" ? getAgentflowSkillsRoot() : "",
+      });
       return;
     }
 
@@ -7113,6 +7136,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/skillhub/install") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -7125,16 +7152,13 @@ export function startUiServer({
         json(res, 400, { error: "Missing skill slug or collection" });
         return;
       }
-      if (payload?.collection && !authUser?.isAdmin) {
-        json(res, 403, { error: "Admin required" });
-        return;
-      }
       const beforeSkills = payload?.collection ? listComposerSkills(PACKAGE_ROOT, root) : [];
       const result = await runSkillhub(args, { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
       if (!result.ok) {
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
+      clearSkillRegistryCache();
       let skillCollections = null;
       if (payload?.collection) {
         const afterSkills = listComposerSkills(PACKAGE_ROOT, root);
@@ -7146,6 +7170,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/skillhub/uninstall") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -7158,21 +7186,22 @@ export function startUiServer({
         json(res, 400, { error: "Missing skill slug or collection" });
         return;
       }
-      if (payload?.collection && !authUser?.isAdmin) {
-        json(res, 403, { error: "Admin required" });
-        return;
-      }
       const result = await runSkillhub(args, { cwd: root, timeoutMs: 120_000, maxBuffer: 4 * 1024 * 1024 });
       if (!result.ok) {
         json(res, 500, { error: result.error, stdout: result.stdout });
         return;
       }
+      clearSkillRegistryCache();
       const skillCollections = payload?.collection ? removeSkillhubCollectionGroup(userCtx, payload.collection, root) : null;
       json(res, 200, { ok: true, stdout: result.stdout, skillCollections });
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/skillhub/update") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin required" });
+        return;
+      }
       const result = await runSkillhub(["update"], { cwd: root, timeoutMs: 180_000, maxBuffer: 4 * 1024 * 1024 });
       if (!result.ok) {
         json(res, 500, { error: result.error, stdout: result.stdout });

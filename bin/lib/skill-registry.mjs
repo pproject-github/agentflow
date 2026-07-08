@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import yaml from "js-yaml";
+import { getAgentflowSkillsRoot } from "./paths.mjs";
 
 const fileCache = new Map();
 const CACHE_TTL_MS = 60_000;
@@ -9,10 +10,11 @@ const SOURCE_PRIORITY = new Map([
   ["workspace-agents", 100],
   ["workspace-codex", 95],
   ["workspace-cursor", 90],
+  ["agentflow-root", 85],
   ["builtin", 80],
-  ["global-agents", 70],
-  ["global-codex", 65],
-  ["global-cursor", 60],
+  ["global-agents", 55],
+  ["global-codex", 50],
+  ["global-cursor", 45],
 ]);
 
 function readFileCached(absPath) {
@@ -26,6 +28,10 @@ function readFileCached(absPath) {
   } catch {
     return null;
   }
+}
+
+export function clearSkillRegistryCache() {
+  fileCache.clear();
 }
 
 export function stripSkillFrontmatter(content) {
@@ -109,11 +115,17 @@ export function defaultSkillSources(packageRoot, workspaceRoot) {
     },
   ];
   if (workspaceRoot) sources.push(...workspaceSkillSources(workspaceRoot, "workspace", "工作区"));
+  sources.push({
+    source: "agentflow-root",
+    sourceLabel: "AgentFlow Skills",
+    dir: getAgentflowSkillsRoot(),
+    installedBy: "agentflow-admin",
+  });
   const home = os.homedir();
   sources.push(
-    { source: "global-agents", sourceLabel: "全局 .agents", dir: path.join(home, ".agents", "skills"), installedBy: "global" },
-    { source: "global-cursor", sourceLabel: "全局 .cursor", dir: path.join(home, ".cursor", "skills"), installedBy: "global" },
-    { source: "global-codex", sourceLabel: "全局 .codex", dir: path.join(home, ".codex", "skills"), installedBy: "skillhub" },
+    { source: "global-agents", sourceLabel: "Legacy ~/.agents", dir: path.join(home, ".agents", "skills"), installedBy: "global" },
+    { source: "global-cursor", sourceLabel: "Legacy ~/.cursor", dir: path.join(home, ".cursor", "skills"), installedBy: "global" },
+    { source: "global-codex", sourceLabel: "Legacy ~/.codex", dir: path.join(home, ".codex", "skills"), installedBy: "skillhub-legacy" },
   );
   return sources;
 }
@@ -183,9 +195,10 @@ export function listUniqueSkills(packageRoot, workspaceRoot, opts = {}) {
 export function readSkillDetail(packageRoot, workspaceRoot, keyOrName) {
   const wanted = String(keyOrName || "").trim();
   if (!wanted) return null;
+  const wantedName = wanted.includes(":") ? wanted.slice(wanted.indexOf(":") + 1).trim() : wanted;
   const all = listSkills(packageRoot, workspaceRoot);
   const item = all.find((skill) => skill.key === wanted)
-    || dedupeSkillsByName(all).find((skill) => skill.name === wanted);
+    || dedupeSkillsByName(all).find((skill) => skill.name === wanted || skill.name === wantedName);
   if (!item) return null;
   return item;
 }

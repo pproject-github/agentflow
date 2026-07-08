@@ -137,18 +137,26 @@ export function readComposerSkillDetail(packageRoot, workspaceRoot, keyOrName) {
   return registryReadSkillDetail(packageRoot, workspaceRoot, keyOrName);
 }
 
+function skillNameFromKey(keyOrName) {
+  const value = String(keyOrName || "").trim();
+  if (!value) return "";
+  const idx = value.indexOf(":");
+  return idx >= 0 ? value.slice(idx + 1).trim() : value;
+}
+
 export function loadResourcesForSkillKeys(skillKeys, packageRoot, workspaceRoot) {
   if (!Array.isArray(skillKeys) || skillKeys.length === 0) {
     return { skills: [], references: [], skillsHint: "", hasContext: false };
   }
   const wanted = new Set(skillKeys.map((x) => String(x || "").trim()).filter(Boolean));
   if (wanted.size === 0) return { skills: [], references: [], skillsHint: "", hasContext: false };
+  const wantedNames = new Set(Array.from(wanted).map(skillNameFromKey).filter(Boolean));
 
   const exactByKey = new Map(registryListSkills(packageRoot, workspaceRoot).map((item) => [item.key, item]));
   const candidateItems = [];
   const seenKeys = new Set();
   for (const item of registryListUniqueSkills(packageRoot, workspaceRoot)) {
-    if (!wanted.has(item.key) && !wanted.has(item.name)) continue;
+    if (!wanted.has(item.key) && !wanted.has(item.name) && !wantedNames.has(item.name)) continue;
     candidateItems.push(item);
     seenKeys.add(item.key);
   }

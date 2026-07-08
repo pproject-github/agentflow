@@ -129,6 +129,7 @@ export default function SettingsPage({ authUser }) {
   const [allowlistSaving, setAllowlistSaving] = useState(false);
   const [allowlistErr, setAllowlistErr] = useState("");
   const [dataRootDraft, setDataRootDraft] = useState("");
+  const [skillsRootDraft, setSkillsRootDraft] = useState("");
   const [dataRootConfig, setDataRootConfig] = useState(null);
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageSaving, setStorageSaving] = useState(false);
@@ -257,6 +258,7 @@ export default function SettingsPage({ authUser }) {
       const config = j.config && typeof j.config === "object" ? j.config : {};
       setDataRootConfig(config);
       setDataRootDraft(typeof config.dataRoot === "string" ? config.dataRoot : "");
+      setSkillsRootDraft(typeof config.skillsRoot === "string" ? config.skillsRoot : "");
     } catch (e) {
       setStorageErr(String(/** @type {{ message?: string }} */ (e).message || e));
     } finally {
@@ -272,19 +274,20 @@ export default function SettingsPage({ authUser }) {
       const r = await fetch("/api/admin/storage-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataRoot: dataRootDraft.trim() }),
+        body: JSON.stringify({ dataRoot: dataRootDraft.trim(), skillsRoot: skillsRootDraft.trim(), migrateLegacySkills: true }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
       const config = j.config && typeof j.config === "object" ? j.config : {};
       setDataRootConfig(config);
       setDataRootDraft(typeof config.dataRoot === "string" ? config.dataRoot : "");
+      setSkillsRootDraft(typeof config.skillsRoot === "string" ? config.skillsRoot : "");
     } catch (e) {
       setStorageErr(String(/** @type {{ message?: string }} */ (e).message || e));
     } finally {
       setStorageSaving(false);
     }
-  }, [authUser?.isAdmin, dataRootDraft]);
+  }, [authUser?.isAdmin, dataRootDraft, skillsRootDraft]);
 
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
@@ -436,7 +439,7 @@ export default function SettingsPage({ authUser }) {
       setEnvErr(t("settings:env.invalidKey"));
       return;
     }
-    setEnvRows((rows) => [...rows, { id: newId(), key: k, value: v, scope: authUser?.isAdmin && draftGlobal ? "global" : "user" }]);
+    setEnvRows((rows) => [{ id: newId(), key: k, value: v, scope: authUser?.isAdmin && draftGlobal ? "global" : "user" }, ...rows]);
     setDraftKey("");
     setDraftVal("");
   }, [authUser?.isAdmin, draftGlobal, draftKey, draftVal, t]);
@@ -743,6 +746,60 @@ export default function SettingsPage({ authUser }) {
                     <span>{t("settings:env.value")}</span>
                     <span></span>
                   </div>
+
+                  <div className={"af-set-env-row af-set-env-row--draft" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
+                    <div className="af-set-env-cell">
+                      <input
+                        className="af-set-env-inline af-set-env-inline--key"
+                        placeholder="KEY_NAME"
+                        value={draftKey}
+                        onChange={(e) => setDraftKey(e.target.value)}
+                        aria-label={t("settings:env.newKey")}
+                      />
+                    </div>
+                    {authUser?.isAdmin ? (
+                      <div className="af-set-env-cell af-set-env-cell--scope">
+                        <div className="af-set-env-scope-switch" role="group" aria-label={t("settings:env.scope")}>
+                          <button
+                            type="button"
+                            className={!draftGlobal ? "is-active" : ""}
+                            onClick={() => setDraftGlobal(false)}
+                          >
+                            {t("settings:env.personal")}
+                          </button>
+                          <button
+                            type="button"
+                            className={draftGlobal ? "is-active" : ""}
+                            onClick={() => setDraftGlobal(true)}
+                          >
+                            {t("settings:env.global")}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="af-set-env-cell af-set-env-cell--grow af-set-env-cell--value">
+                      <input
+                        className="af-set-env-inline af-set-env-inline--value"
+                        type="password"
+                        placeholder={t("settings:env.newValue")}
+                        value={draftVal}
+                        onChange={(e) => setDraftVal(e.target.value)}
+                        aria-label={t("settings:env.newValue")}
+                      />
+                    </div>
+                    <div className="af-set-env-actions">
+                      <button
+                        type="button"
+                        className="af-set-btn-add"
+                        onClick={addEnvRow}
+                        disabled={!draftKey.trim()}
+                      >
+                        <span className="material-symbols-outlined">add</span>
+                        {t("settings:env.add")}
+                      </button>
+                    </div>
+                  </div>
+
                   {envRows.map((row) => (
                     <div key={row.id} className={"af-set-env-row" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                       <div className="af-set-env-cell">
@@ -804,59 +861,6 @@ export default function SettingsPage({ authUser }) {
                       </div>
                     </div>
                   ))}
-
-                  <div className={"af-set-env-row af-set-env-row--draft" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
-                    <div className="af-set-env-cell">
-                      <input
-                        className="af-set-env-inline af-set-env-inline--key"
-                        placeholder="KEY_NAME"
-                        value={draftKey}
-                        onChange={(e) => setDraftKey(e.target.value)}
-                        aria-label={t("settings:env.newKey")}
-                      />
-                    </div>
-                    {authUser?.isAdmin ? (
-                      <div className="af-set-env-cell af-set-env-cell--scope">
-                        <div className="af-set-env-scope-switch" role="group" aria-label={t("settings:env.scope")}>
-                          <button
-                            type="button"
-                            className={!draftGlobal ? "is-active" : ""}
-                            onClick={() => setDraftGlobal(false)}
-                          >
-                            {t("settings:env.personal")}
-                          </button>
-                          <button
-                            type="button"
-                            className={draftGlobal ? "is-active" : ""}
-                            onClick={() => setDraftGlobal(true)}
-                          >
-                            {t("settings:env.global")}
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                    <div className="af-set-env-cell af-set-env-cell--grow af-set-env-cell--value">
-                      <input
-                        className="af-set-env-inline af-set-env-inline--value"
-                        type="password"
-                        placeholder={t("settings:env.newValue")}
-                        value={draftVal}
-                        onChange={(e) => setDraftVal(e.target.value)}
-                        aria-label={t("settings:env.newValue")}
-                      />
-                    </div>
-                    <div className="af-set-env-actions">
-                      <button
-                        type="button"
-                        className="af-set-btn-add"
-                        onClick={addEnvRow}
-                        disabled={!draftKey.trim()}
-                      >
-                        <span className="material-symbols-outlined">add</span>
-                        {t("settings:env.add")}
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </section>
 
@@ -917,6 +921,38 @@ export default function SettingsPage({ authUser }) {
                     这个目录包含 <code>users/</code>、<code>pipelines/</code>、<code>runBuild/</code>、<code>auth/</code> 和 admin 配置。
                     保存到新绝对路径时会复制旧目录内容；旧目录不会自动删除。
                     {dataRootConfig?.envLocked ? " 当前设置了 AGENTFLOW_HOME，需要改环境变量才能生效。" : ""}
+                  </p>
+                  <label className="af-set-label-sm" htmlFor="af-agentflow-skills-root">
+                    Skills Root
+                  </label>
+                  <div className="af-set-input-wrap">
+                    <input
+                      id="af-agentflow-skills-root"
+                      className="af-set-input af-set-input--mono"
+                      type="text"
+                      value={skillsRootDraft}
+                      onChange={(e) => setSkillsRootDraft(e.target.value)}
+                      placeholder="/data1/services/mengmai/agentflow/skills"
+                      autoComplete="off"
+                      disabled={Boolean(dataRootConfig?.skillsEnvLocked) || storageSaving}
+                    />
+                    <button
+                      type="button"
+                      className="af-set-input-suffix"
+                      onClick={() => void saveStorageConfig()}
+                      aria-label="保存 AgentFlow Skills Root"
+                      disabled={storageSaving || Boolean(dataRootConfig?.skillsEnvLocked)}
+                    >
+                      <span className="material-symbols-outlined">{storageSaving ? "hourglass_empty" : "save"}</span>
+                    </button>
+                  </div>
+                  <p className="af-set-hint">
+                    当前 Skills：<code>{dataRootConfig?.skillsRoot || skillsRootDraft || "-"}</code>
+                    {dataRootConfig?.legacySkillsRootExists ? <>；保存时会补迁移旧目录 <code>{dataRootConfig.legacySkillsRoot}</code> 中缺失的 skills。</> : null}
+                  </p>
+                  <p className="af-set-hint">
+                    SkillHub 新安装、更新和卸载都作用于 Skills Root；普通用户只通过 Workspace 的 Load Skills 使用。
+                    {dataRootConfig?.skillsEnvLocked ? " 当前设置了 AGENTFLOW_SKILLS_ROOT，需要改环境变量才能生效。" : ""}
                   </p>
                 </section>
               ) : null}
