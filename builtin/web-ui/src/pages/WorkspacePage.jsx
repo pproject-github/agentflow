@@ -2879,6 +2879,10 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const updateScheduleTime = (time) => {
     updateConfig({ time, cron: scheduleCronFromParts(config.scheduleType, time, config.weekday, config.monthDay, config.cron) });
   };
+  const [selectedHour, selectedMinute] = normalizeScheduleTime(config.time).split(":");
+  const updateScheduleHourMinute = (hour, minute) => {
+    updateScheduleTime(`${padScheduleNumber(hour, 9, 0, 23)}:${padScheduleNumber(minute, 0, 0, 59)}`);
+  };
   const updateWeekday = (weekday) => {
     updateConfig({ weekday, cron: scheduleCronFromParts(config.scheduleType, config.time, weekday, config.monthDay, config.cron) });
   };
@@ -2969,12 +2973,28 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
         {config.scheduleType !== "custom" ? (
           <label className="af-work-schedule-card__field">
             <span>时间</span>
-            <input
-              type="time"
-              value={config.time}
-              disabled={readOnly}
-              onChange={(event) => updateScheduleTime(event.target.value)}
-            />
+            <div className="af-work-schedule-time-selects">
+              <select
+                value={selectedHour}
+                disabled={readOnly}
+                aria-label="小时"
+                onChange={(event) => updateScheduleHourMinute(event.target.value, selectedMinute)}
+              >
+                {Array.from({ length: 24 }, (_, hour) => padScheduleNumber(hour, 0, 0, 23)).map((hour) => (
+                  <option key={hour} value={hour}>{hour} 时</option>
+                ))}
+              </select>
+              <select
+                value={selectedMinute}
+                disabled={readOnly}
+                aria-label="分钟"
+                onChange={(event) => updateScheduleHourMinute(selectedHour, event.target.value)}
+              >
+                {Array.from({ length: 12 }, (_, index) => padScheduleNumber(index * 5, 0, 0, 59)).map((minute) => (
+                  <option key={minute} value={minute}>{minute} 分</option>
+                ))}
+              </select>
+            </div>
           </label>
         ) : null}
         {config.scheduleType === "weekly" ? (
