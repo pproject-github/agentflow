@@ -105,6 +105,7 @@ export default function SkillHubPanel({ onChanged, canManage = false }) {
             skillId: item.skillId || "",
             collection: item.collection || "",
             collectionName: item.collection ? item.name || "" : "",
+            version: item.version || item.latestVersion || "",
             target: "agentflow",
             agent: "codex",
             force,
@@ -152,7 +153,11 @@ export default function SkillHubPanel({ onChanged, canManage = false }) {
           return [slug, {
             state,
             latestVersion,
+            version: latestVersion,
             installedVersion,
+            slug: exact?.slug || "",
+            skillId: exact?.skillId || exact?.id || "",
+            name: exact?.name || slug,
             summary: exact?.summary || "",
           }];
         } catch (e) {
@@ -333,7 +338,12 @@ export default function SkillHubPanel({ onChanged, canManage = false }) {
                       </div>
                     </div>
                     <div className="af-set-skillhub-actions">
-                      <button type="button" className="af-set-btn-mini" onClick={() => install(s.name, true)} disabled={!canManage || Boolean(busy) || !canUpdate}>
+                      <button
+                        type="button"
+                        className="af-set-btn-mini"
+                        onClick={() => install(update?.slug || update?.skillId ? { ...update, slug: update.slug || s.name } : s.name, true)}
+                        disabled={!canManage || Boolean(busy) || !canUpdate}
+                      >
                         {updateLabel}
                       </button>
                       <button type="button" className="af-set-btn-mini af-set-btn-mini--danger" onClick={() => uninstall(s.name)} disabled={!canManage || Boolean(busy)}>
