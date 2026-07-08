@@ -1092,21 +1092,12 @@ function normalizeSkillhubSearchPayload(raw) {
         slug,
         name: String(x.displayName ?? x.display_name ?? x.name ?? slug),
         summary: String(x.summary ?? x.description ?? ""),
-        version: String(x.version ?? x.latestVersion ?? x.latest_version ?? x.publicVersion ?? x.public_version ?? ""),
+        version: String(x.version ?? x.latestVersion ?? x.latest_version ?? ""),
         tags: Array.isArray(x.tags) ? x.tags.map(String) : [],
         kind: "skill",
       };
     }).filter((x) => x.slug || x.name),
   };
-}
-
-function inferSkillhubVersionFromPath(targetPath) {
-  const parts = String(targetPath || "").split(/[\\/]+/).filter(Boolean);
-  const contentIndex = parts.lastIndexOf("content");
-  if (contentIndex <= 0) return "";
-  const version = parts[contentIndex - 1] || "";
-  if (!version || version === "latest") return "";
-  return /^[0-9]+(?:\.[0-9A-Za-z-]+)*$/.test(version) ? version : "";
 }
 
 function normalizeSkillhubListPayload(raw) {
@@ -1129,16 +1120,11 @@ function normalizeSkillhubListPayload(raw) {
         break;
       } catch {}
     }
-    let realTargetPath = targetPath;
-    try {
-      if (!realTargetPath && pathValue) realTargetPath = fs.realpathSync(pathValue);
-    } catch {}
-    const pathVersion = inferSkillhubVersionFromPath(realTargetPath);
     return {
       name: String(x?.name ?? meta?.slug ?? ""),
       displayName: String(meta?.displayName ?? ""),
       summary: String(meta?.summary ?? ""),
-      version: String(pathVersion || meta?.version || ""),
+      version: String(meta?.version ?? ""),
       baseDir: String(x?.baseDir ?? ""),
       path: pathValue,
       targetPath,
@@ -1176,8 +1162,6 @@ function skillhubInstallArgs(payload, { uninstall = false } = {}) {
     args.push(slug);
   }
   if (payload?.skillId) args.push("--skill-id", String(payload.skillId).trim());
-  const version = String(payload?.version || payload?.latestVersion || "").trim();
-  if (version) args.push("--version", version);
   const target = String(payload?.target || "agentflow").trim();
   const agent = String(payload?.agent || "codex").trim();
   if (target === "global" || target === "legacy-global") {
