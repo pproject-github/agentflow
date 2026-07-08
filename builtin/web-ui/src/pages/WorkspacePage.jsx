@@ -5013,6 +5013,9 @@ function WorkspacePageInner() {
           ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
           : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
       );
+      if (!isRunStopped()) {
+        markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "paused" : "success");
+      }
       markRunSessionStatus(isRunStopped() ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
       if (!isRunStopped()) await loadFiles();
     } catch (e) {
@@ -5026,7 +5029,7 @@ function WorkspacePageInner() {
         return;
       }
       removeSessionExecutingNodes(plannedNodeIds);
-      markSessionNodesFinal([activeNodeId || runNodeId], "failed");
+      markSessionNodesFinal([runNodeId, activeNodeId].filter(Boolean), "failed");
       setStatus(String(e.message || e));
       setComposerRunSessions((list) => list.map((session) => (
         session.id === runSessionId
