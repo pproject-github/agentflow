@@ -6660,9 +6660,12 @@ button.af-project-card {
   font-weight: 600;
 }
 
-.af-work-schedule-card__field input[type="time"] {
-  font-family: inherit;
-  font-weight: 700;
+.af-work-schedule-time-selects {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
 }
 
 .af-work-schedule-card__field input:disabled,
