@@ -332,11 +332,14 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "tool_gitlab_create_mr",
   "tool_wecom_send_group_markdown",
   "tool_wecom_send_app_markdown",
+  "tool_display_share_link",
+  "tool_set_run_env",
   "tool_print",
   "tool_user_check",
   "tool_user_ask",
   "provide_str",
   "provide_file",
+  "provide_password",
   "provide_bool",
 ]);
 
@@ -347,5 +350,6 @@ export const LOCAL_ONLY_TERMINAL_SUCCESS_IDS = new Set([
   "tool_print",
   "provide_str",
   "provide_file",
+  "provide_password",
   "provide_bool",
 ]);

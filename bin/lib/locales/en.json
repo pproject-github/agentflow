@@ -297,6 +297,10 @@
       "displayName": "WeCom App Markdown",
       "description": "Send a Markdown message to users through a WeCom enterprise application"
     },
+    "tool_display_share_link": {
+      "displayName": "Display Share Link",
+      "description": "Publish upstream Display nodes as a shareable link and output the URL"
+    },
     "tool_nodejs": {
       "displayName": "Node.js Script",
       "description": "Execute Node.js script, success determined by exit code, stdout as result"
@@ -308,6 +312,10 @@
     "tool_get_env": {
       "displayName": "Get Env",
       "description": "Get environment variable value"
+    },
+    "tool_set_run_env": {
+      "displayName": "Set Run Env",
+      "description": "Set temporary environment variables for downstream nodes in the current run"
     },
     "tool_save_key": {
       "displayName": "Save Key",
@@ -352,6 +360,10 @@
     "provide_file": {
       "displayName": "File",
       "description": "Provide file path or content directly, value will be passed to downstream as-is"
+    },
+    "provide_password": {
+      "displayName": "Password",
+      "description": "Provide a password or secret text value without showing it on the node card"
     },
     "provide_bool": {
       "displayName": "Boolean",

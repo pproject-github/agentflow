@@ -1965,6 +1965,102 @@ function normalizeDisplayShareNodeIds(ids, graph) {
   return out;
 }
 
+function normalizeDisplayShareLayout(layout, fallback = "canvas") {
+  const text = String(layout || "").trim();
+  return ["canvas", "gallery", "slides", "document", "single"].includes(text) ? text : fallback;
+}
+
+function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds }) {
+  const shares = readDisplayShares();
+  let id = createDisplayShareId();
+  while (shares[id]) id = createDisplayShareId();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const share = {
+    id,
+    userId: String(userId || ""),
+    flowId: String(flowId || ""),
+    flowSource: String(flowSource || "user"),
+    archived: archived === true,
+    title: String(title || "").trim() || "AgentFlow Display",
+    layout: normalizeDisplayShareLayout(layout, "canvas"),
+    nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: displayShareExpiresAt(nowDate),
+  };
+  shares[id] = share;
+  writeDisplayShares(shares);
+  return share;
+}
+
+function parseDisplayShareNodeIdInput(value) {
+  return String(value || "")
+    .split(/[\s,，]+/g)
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
+function inferUpstreamDisplayNodeIds(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const ids = [];
+  const seen = new Set();
+  for (const edge of edges) {
+    if (String(edge?.target || "") !== String(nodeId || "")) continue;
+    const sourceId = String(edge?.source || "").trim();
+    if (!sourceId || seen.has(sourceId)) continue;
+    if (!workspaceDisplayKind(instances[sourceId]?.definitionId)) continue;
+    seen.add(sourceId);
+    ids.push(sourceId);
+  }
+  return ids;
+}
+
+function displayShareOutputUrl(shareId, baseUrl = "") {
+  const pathPart = `/display/${encodeURIComponent(String(shareId || ""))}`;
+  const base = String(baseUrl || "").trim();
+  if (!base) return pathPart;
+  try {
+    return new URL(pathPart, base.endsWith("/") ? base : `${base}/`).href;
+  } catch {
+    return pathPart;
+  }
+}
+
+function normalizeRunEnvKey(key) {
+  const text = String(key || "").trim();
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : "";
+}
+
+function parseRunEnvAssignments(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) return {};
+  if (text.startsWith("{")) {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Run Env JSON must be an object");
+    const out = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const normalizedKey = normalizeRunEnvKey(key);
+      if (!normalizedKey) throw new Error(`Invalid env key: ${key}`);
+      out[normalizedKey] = String(value ?? "");
+    }
+    return out;
+  }
+  const out = {};
+  for (const line of text.split(/\r?\n/g)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const normalized = trimmed.replace(/^export\s+/i, "");
+    const eq = normalized.indexOf("=");
+    if (eq <= 0) throw new Error(`Invalid env assignment: ${trimmed}`);
+    const key = normalizeRunEnvKey(normalized.slice(0, eq));
+    if (!key) throw new Error(`Invalid env key: ${normalized.slice(0, eq).trim()}`);
+    out[key] = normalized.slice(eq + 1);
+  }
+  return out;
+}
+
 function publicDisplayPayloadFromShare(root, share) {
   const scoped = resolveWorkspaceScopeRoot(root, {
     flowId: share.flowId || "",
@@ -3342,7 +3438,7 @@ function workspaceEdgeHasCachedOutput(graph, edge, scopedRoot = "") {
   }
   const defId = String(source.definitionId || "");
   if (workspaceDisplayKind(defId) && String(source.body || "").trim()) return true;
-  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file") {
+  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file" || defId === "provide_password") {
     return Boolean(String(workspaceInstanceText(source) || "").trim());
   }
   return false;
@@ -4397,6 +4493,7 @@ async function workspaceRunToolNodejsScript({
   inputValues,
   runPackage,
   userCtx,
+  envOverlay = {},
   emit,
 }) {
   const scriptRef = String(instance?.scriptRef || "").trim();
@@ -4432,6 +4529,7 @@ async function workspaceRunToolNodejsScript({
   emit?.({ type: "status", line: `Run script: ${scriptRef || command.slice(0, 120)}` });
 
   const env = runtimeEnvForUser(userCtx, {
+    ...envOverlay,
     AGENTFLOW_WORKSPACE_ROOT: path.resolve(scopedRoot),
     AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
     AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
@@ -4543,6 +4641,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   };
   let cwd = scopedRoot;
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
+  const runEnv = {};
+  const runtimeEnv = (extra = {}) => runtimeEnvForUser(userCtx, { ...runEnv, ...(extra || {}) });
   const autoCleanupWorktrees = [];
   const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
 
@@ -4607,7 +4707,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
-    if (defId === "provide_str") {
+    if (defId === "provide_str" || defId === "provide_password") {
       const content = workspaceInstanceText(instance);
       outputs.set(nodeId, content);
       emit({ type: "node-done", nodeId, definitionId: defId });
@@ -4630,6 +4730,26 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       }
       const content = fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : fileValue;
       outputs.set(nodeId, content);
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_set_run_env") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const assignments = {
+        ...parseRunEnvAssignments(inputValues.variables || workspaceSlotValue(workspaceSlotByName(instance, "variables"))),
+      };
+      const key = normalizeRunEnvKey(inputValues.key || workspaceSlotValue(workspaceSlotByName(instance, "key")));
+      if (key) assignments[key] = String(inputValues.value ?? workspaceSlotValue(workspaceSlotByName(instance, "value")) ?? "");
+      const keys = Object.keys(assignments);
+      if (!keys.length) throw new Error("Set Run Env requires key/value or variables");
+      Object.assign(runEnv, assignments);
+      let nextInstance = workspaceSetOutputSlot(instance, "keys", keys.join(", "));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "count", String(keys.length));
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, keys.join(", "));
+      emit({ type: "status", nodeId, line: `Set run env: ${keys.join(", ")}`, envKeys: keys });
+      emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4830,7 +4950,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         gitlabApiBase: workspaceSlotValue(workspaceSlotByName(instance, "gitlabApiBase")),
         removeSourceBranch: workspaceSlotValue(workspaceSlotByName(instance, "removeSourceBranch")),
         squash: workspaceSlotValue(workspaceSlotByName(instance, "squash")),
-      }, runtimeEnvForUser(userCtx));
+      }, runtimeEnv());
       let nextInstance = workspaceSetOutputSlot(instance, "mrUrl", result.mrUrl);
       nextInstance = workspaceSetOutputSlot(nextInstance, "created", result.created ? "true" : "false");
       nextInstance = workspaceSetOutputSlot(nextInstance, "mrIid", result.mrIid ?? "");
@@ -4857,18 +4977,64 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             corpSecret: inputValues.corpSecret || workspaceSlotValue(workspaceSlotByName(instance, "corpSecret")),
             agentId: inputValues.agentId || workspaceSlotValue(workspaceSlotByName(instance, "agentId")),
             accessToken: inputValues.accessToken || workspaceSlotValue(workspaceSlotByName(instance, "accessToken")),
-          }, runtimeEnvForUser(userCtx))
+          }, runtimeEnv())
         : await sendWecomGroupMarkdown({
             markdown,
             webhookUrl: inputValues.webhookUrl || workspaceSlotValue(workspaceSlotByName(instance, "webhookUrl")),
             webhookKey: inputValues.webhookKey || workspaceSlotValue(workspaceSlotByName(instance, "webhookKey")),
-          }, runtimeEnvForUser(userCtx));
+          }, runtimeEnv());
       let nextInstance = workspaceSetOutputSlot(instance, "sent", "true");
       nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message);
       nextInstance = workspaceSetOutputSlot(nextInstance, "response", JSON.stringify(result.response || {}));
       graph.instances[nodeId] = nextInstance;
       outputs.set(nodeId, result.message);
       emit({ type: "graph", nodeId, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_display_share_link") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const explicitNodeIds = parseDisplayShareNodeIdInput(inputValues.nodeIds || workspaceSlotValue(workspaceSlotByName(instance, "nodeIds")));
+      const inferredNodeIds = explicitNodeIds.length ? explicitNodeIds : inferUpstreamDisplayNodeIds(graph, nodeId);
+      const nodeIds = normalizeDisplayShareNodeIds(inferredNodeIds, graph);
+      if (nodeIds.length === 0) throw new Error("Display Share Link requires at least one connected display node or nodeIds input");
+
+      const layout = normalizeDisplayShareLayout(inputValues.layout || workspaceSlotValue(workspaceSlotByName(instance, "layout")), "single");
+      const title = inputValues.title || workspaceSlotValue(workspaceSlotByName(instance, "title"));
+      const env = runtimeEnv();
+      const baseUrl = inputValues.baseUrl ||
+        workspaceSlotValue(workspaceSlotByName(instance, "baseUrl")) ||
+        env.AGENTFLOW_PUBLIC_BASE_URL ||
+        env.AGENTFLOW_BASE_URL ||
+        env.PUBLIC_BASE_URL ||
+        "";
+
+      const graphPath = workspaceGraphPath(scopedRoot);
+      try {
+        const currentGraph = readWorkspaceGraph(scopedRoot).graph;
+        const mergedGraph = mergeWorkspaceRunGraph(currentGraph, graph, new Set([nodeId, ...nodeIds]));
+        fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+      } catch (e) {
+        emit({ type: "natural", kind: "warning", text: `保存分享展示内容失败：${(e && e.message) || String(e)}` });
+      }
+
+      const share = createDisplayShareRecord({
+        userId: userCtx.userId,
+        flowId: payload.flowId || "",
+        flowSource: payload.flowSource || "user",
+        archived: payload.archived === true || payload.flowArchived === true,
+        title,
+        layout,
+        nodeIds,
+      });
+      const url = displayShareOutputUrl(share.id, baseUrl);
+      let nextInstance = workspaceSetOutputSlot(instance, "url", url);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "shareId", share.id);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "expiresAt", share.expiresAt);
+      graph.instances[nodeId] = nextInstance;
+      outputs.set(nodeId, url);
+      emit({ type: "graph", nodeId, graph, displayNodeIds: nodeIds });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4894,6 +5060,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         inputValues: runtimeInputValues,
         runPackage,
         userCtx,
+        envOverlay: runEnv,
         emit: (event) => emit({ ...event, nodeId }),
       });
       const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
@@ -4975,12 +5142,12 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           prompt,
           modelKey,
           agentflowUserId: userCtx.userId || "",
-          extraEnv: {
+          extraEnv: runtimeEnv({
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
             AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
             AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
             AGENTFLOW_OUTPUTS_DIR: runPackage.outputsDir,
-          },
+          }),
           onStreamEvent: (ev) => {
             if (!firstAgentEventSeen) {
               firstAgentEventSeen = true;
@@ -6364,27 +6531,16 @@ export function startUiServer({
           json(res, 400, { error: "请选择至少一个 display 节点" });
           return;
         }
-        const shares = readDisplayShares();
-        let id = createDisplayShareId();
-        while (shares[id]) id = createDisplayShareId();
-        const nowDate = new Date();
-        const now = nowDate.toISOString();
-        const share = {
-          id,
+        const share = createDisplayShareRecord({
           userId: authUser.userId,
           flowId: scoped.flowId || "",
           flowSource: scoped.flowSource || "user",
           archived: scoped.archived === true,
-          title: String(payload.title || "").trim() || "AgentFlow Display",
-          layout: ["canvas", "gallery", "slides", "document", "single"].includes(String(payload.layout || "")) ? String(payload.layout) : "canvas",
+          title: payload.title,
+          layout: payload.layout,
           nodeIds,
-          createdAt: now,
-          updatedAt: now,
-          expiresAt: displayShareExpiresAt(nowDate),
-        };
-        shares[id] = share;
-        writeDisplayShares(shares);
-        json(res, 200, { ok: true, share, url: `/display/${encodeURIComponent(id)}` });
+        });
+        json(res, 200, { ok: true, share, url: `/display/${encodeURIComponent(share.id)}` });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }

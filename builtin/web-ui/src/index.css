@@ -13805,7 +13805,8 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__inline-text:focus,
-.af-flow-node__file-input:focus {
+.af-flow-node__file-input:focus,
+.af-flow-node__password-input:focus {
   border-color: rgba(124, 77, 255, 0.62);
   box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
 }
@@ -13815,7 +13816,8 @@ button.af-exec-history-card {
   box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.16);
 }
 
-.af-flow-node__file-value {
+.af-flow-node__file-value,
+.af-flow-node__password-value {
   display: flex;
   align-items: center;
   width: min(16rem, 100%);
@@ -13823,7 +13825,8 @@ button.af-exec-history-card {
   gap: 0.35rem;
 }
 
-.af-flow-node__file-input {
+.af-flow-node__file-input,
+.af-flow-node__password-input {
   flex: 1;
   min-width: 0;
   height: 2rem;
@@ -13834,6 +13837,10 @@ button.af-exec-history-card {
   font-size: 0.7rem;
   padding: 0 0.5rem;
   outline: none;
+}
+
+.af-flow-node__password-input {
+  letter-spacing: 0;
 }
 
 .af-flow-node__file-picker {
@@ -13855,6 +13862,28 @@ button.af-exec-history-card {
 }
 
 .af-flow-node__file-picker .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-flow-node__password-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid rgba(255, 193, 7, 0.38);
+  border-radius: 0.5rem;
+  background: rgba(255, 193, 7, 0.1);
+  color: rgba(255, 230, 160, 0.92);
+  cursor: pointer;
+}
+
+.af-flow-node__password-toggle:hover {
+  border-color: rgba(255, 193, 7, 0.62);
+  background: rgba(255, 193, 7, 0.18);
+}
+
+.af-flow-node__password-toggle .material-symbols-outlined {
   font-size: 1rem;
 }
 

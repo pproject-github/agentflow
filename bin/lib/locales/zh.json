@@ -297,6 +297,10 @@
       "displayName": "企业微信应用 Markdown",
       "description": "通过企业微信应用消息接口发送 Markdown 给用户"
     },
+    "tool_display_share_link": {
+      "displayName": "展示分享链接",
+      "description": "将上游 Display 节点发布为可分享链接，并输出 URL"
+    },
     "tool_nodejs": {
       "displayName": "Node.js 脚本",
       "description": "执行 Node.js 脚本，以 exit code 判断成败，stdout 作为结果"
@@ -308,6 +312,10 @@
     "tool_get_env": {
       "displayName": "获取环境变量",
       "description": "获取环境变量值"
+    },
+    "tool_set_run_env": {
+      "displayName": "设置 Run Env",
+      "description": "为当前运行设置临时环境变量，只影响后续节点"
     },
     "tool_save_key": {
       "displayName": "保存键值",
@@ -352,6 +360,10 @@
     "provide_file": {
       "displayName": "文件",
       "description": "直接提供文件路径或内容，value 会原样供下游引用"
+    },
+    "provide_password": {
+      "displayName": "密码",
+      "description": "直接提供密码或密钥文本，默认不在节点卡片上展示"
     },
     "provide_bool": {
       "displayName": "布尔",
