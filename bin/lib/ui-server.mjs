@@ -2029,6 +2029,17 @@ function displayShareOutputUrl(shareId, baseUrl = "") {
   }
 }
 
+function requestPublicBaseUrl(req) {
+  const origin = String(req?.headers?.origin || "").trim();
+  if (/^https?:\/\//i.test(origin)) return origin;
+  const forwardedHost = String(req?.headers?.["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = forwardedHost || String(req?.headers?.host || "").trim();
+  if (!host) return "";
+  const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim();
+  const proto = /^https?$/i.test(forwardedProto) ? forwardedProto.toLowerCase() : "http";
+  return `${proto}://${host}`;
+}
+
 function normalizeRunEnvKey(key) {
   const text = String(key || "").trim();
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : "";
@@ -5074,6 +5085,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         env.AGENTFLOW_PUBLIC_BASE_URL ||
         env.AGENTFLOW_BASE_URL ||
         env.PUBLIC_BASE_URL ||
+        payload.requestBaseUrl ||
+        payload.requestOrigin ||
         "";
 
       const graphPath = workspaceGraphPath(scopedRoot);
@@ -6787,6 +6800,7 @@ export function startUiServer({
         };
         if (wantsStream) {
           const graphPath = workspaceGraphPath(scoped.root);
+          const runPayload = { ...payload, requestBaseUrl: requestPublicBaseUrl(req) };
           res.writeHead(200, {
             "Content-Type": "application/x-ndjson; charset=utf-8",
             "Cache-Control": "no-cache",
@@ -6796,7 +6810,7 @@ export function startUiServer({
             try { res.write(JSON.stringify(event) + "\n"); } catch (_) {}
           };
           try {
-            const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, {
+            const result = await runWorkspaceGraph(root, scoped.root, runPayload, userCtx, {
               onEvent: writeEvent,
               signal: controller.signal,
               onActiveChild: setActiveChild,
@@ -6835,7 +6849,7 @@ export function startUiServer({
           return;
         }
         try {
-          const result = await runWorkspaceGraph(root, scoped.root, payload, userCtx, {
+          const result = await runWorkspaceGraph(root, scoped.root, { ...payload, requestBaseUrl: requestPublicBaseUrl(req) }, userCtx, {
             signal: controller.signal,
             onActiveChild: setActiveChild,
           });

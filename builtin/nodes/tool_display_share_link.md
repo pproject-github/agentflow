@@ -9,22 +9,22 @@ input:
   - type: text
     name: title
     default: ""
-    description: "分享页标题；为空时使用 AgentFlow Display。"
+    description: "可选。分享页标题；只影响打开分享页后的页面标题，不影响输出 URL。为空时使用 AgentFlow Display。"
     showOnNode: true
   - type: text
     name: layout
     default: "single"
-    description: "分享布局：single、gallery、slides、document、canvas。"
-    showOnNode: true
+    description: "可选。分享页布局：single、gallery、slides、document、canvas。通常保持默认 single。"
+    showOnNode: false
   - type: text
     name: nodeIds
     default: ""
-    description: "可选。逗号或空格分隔的 Display 节点 ID；为空时自动使用连接到本节点的上游 Display 节点。"
+    description: "可选。逗号或空格分隔的 Display 节点 ID；为空时自动分享连接到本节点的上游 Display 节点。"
     showOnNode: false
   - type: text
     name: baseUrl
     default: ""
-    description: "可选。输出绝对链接的站点地址，例如 https://agentflow.example.com；为空时输出 /display/<id>。"
+    description: "可选。分享站点地址，例如 https://agentflow.example.com；为空时优先使用环境变量，其次使用当前访问地址。"
     showOnNode: false
 output:
   - type: node
@@ -43,4 +43,4 @@ output:
     default: ""
     showOnNode: false
 ---
-Create a share link for connected Display nodes.
+Create a share link for connected Display nodes. Connect a Display node to this node, optionally set title, and use the url output.
