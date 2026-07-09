@@ -4295,7 +4295,23 @@ function WorkspacePageInner() {
   const [composerMinimized, setComposerMinimized] = useState(true);
   const [activeNodeChatId, setActiveNodeChatId] = useState("");
   const [nodeChatSessions, setNodeChatSessions] = useState({});
-  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(false);
+  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem("agentflow.workspace.sidebarCollapsed");
+      if (saved === "false") return false;
+      if (saved === "true") return true;
+    } catch {
+      /* ignore storage */
+    }
+    return true;
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("agentflow.workspace.sidebarCollapsed", workspaceSidebarCollapsed ? "true" : "false");
+    } catch {
+      /* ignore storage */
+    }
+  }, [workspaceSidebarCollapsed]);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [jumpPaletteOpen, setJumpPaletteOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState("pan");

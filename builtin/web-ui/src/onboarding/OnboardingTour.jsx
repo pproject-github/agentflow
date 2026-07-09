@@ -20,18 +20,15 @@ export function OnboardingTour({ page, hasNodes = false }) {
 
   useEffect(() => {
     const raw = localStorage.getItem(STORAGE_KEY);
-    console.log('[Onboarding] localStorage:', raw);
     const progress = raw ? JSON.parse(raw) : {};
-    console.log('[Onboarding] progress:', progress, 'page:', page);
     
     if (progress.completed || progress[page]) {
-      console.log('[Onboarding] skipped - already done');
       setRun(false);
       setSteps([]);
       return;
     }
 
-    console.log('[Onboarding] starting with steps:', allStepsConfig);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...progress, [page]: true }));
     setSteps(allStepsConfig);
     setRun(true);
   }, [page, hasNodes, allStepsConfig]);

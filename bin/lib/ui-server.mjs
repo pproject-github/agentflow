@@ -4677,6 +4677,18 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     return "";
   };
+  const recordNodeOutput = (nodeId, content) => {
+    outputs.set(nodeId, content);
+  };
+  const propagateNodeOutputDisplays = (nodeId, content, { emitGraph = false } = {}) => {
+    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, content, outputs, scopedRoot);
+    if (emitGraph && updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+    return updatedDisplays;
+  };
+  const publishNodeOutput = (nodeId, content, options = {}) => {
+    recordNodeOutput(nodeId, content);
+    return propagateNodeOutputDisplays(nodeId, content, options);
+  };
 
   try {
   for (const nodeId of order) {
@@ -4710,9 +4722,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             : slot
         )),
       };
-      outputs.set(nodeId, skillsBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, skillsBlock, outputs, scopedRoot);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, skillsBlock);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4730,9 +4741,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             : slot
         )),
       };
-      outputs.set(nodeId, mcpBlock);
-      workspaceUpdateDirectDisplays(graph, nodeId, mcpBlock, outputs, scopedRoot);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, mcpBlock);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4740,8 +4750,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     if (workspaceDisplayKind(defId)) {
       const content = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
-      outputs.set(nodeId, content);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, content);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4757,7 +4767,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const boolValue = parseBool(rawValue);
       const branch = boolValue ? "true" : "false";
       controlBranches.set(nodeId, branch);
-      outputs.set(nodeId, branch);
+      publishNodeOutput(nodeId, branch, { emitGraph: true });
       emit({ type: "status", nodeId, line: `control_if branch: ${branch}` });
       emit({ type: "node-done", nodeId, definitionId: defId, branch });
       continue;
@@ -4765,7 +4775,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
 
     if (defId === "provide_str" || defId === "provide_password") {
       const content = workspaceInstanceText(instance);
-      outputs.set(nodeId, content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4773,7 +4783,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     if (defId === "provide_bool") {
       const raw = workspaceSlotValue(Array.isArray(instance.output) ? instance.output[0] : null) || workspaceInstanceText(instance);
       const content = ["true", "1", "yes", "on"].includes(String(raw || "").trim().toLowerCase()) ? "true" : "false";
-      outputs.set(nodeId, content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4785,7 +4795,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         throw new Error(`Workspace file is outside root: ${fileValue}`);
       }
       const content = fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : fileValue;
-      outputs.set(nodeId, content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4803,9 +4813,9 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       let nextInstance = workspaceSetOutputSlot(instance, "keys", keys.join(", "));
       nextInstance = workspaceSetOutputSlot(nextInstance, "count", String(keys.length));
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, keys.join(", "));
+      const updatedDisplays = publishNodeOutput(nodeId, keys.join(", "));
       emit({ type: "status", nodeId, line: `Set run env: ${keys.join(", ")}`, envKeys: keys });
-      emit({ type: "graph", nodeId, graph });
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4818,14 +4828,14 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const candidate = workspaceSlotValue(pathSlot) || workspaceInstanceText(instance) || inputText;
       const abs = candidate ? path.resolve(scopedRoot, candidate) : scopedRoot;
       if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) cwd = abs;
-      outputs.set(nodeId, cwd);
+      publishNodeOutput(nodeId, cwd, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
 
     if (defId === "control_user_workspace") {
       cwd = path.resolve(os.homedir());
-      outputs.set(nodeId, cwd);
+      publishNodeOutput(nodeId, cwd, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4894,8 +4904,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         previous: { version: 1, label: "workspace", cwd: previousCwd, workspaceRoot: previousCwd, pipelineWorkspace: scopedRoot, previous: null },
       }));
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, targetDir);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, targetDir);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4947,8 +4957,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         previous: { version: 1, label: "workspace", cwd: previousCwd, workspaceRoot: previousCwd, pipelineWorkspace: scopedRoot, previous: null },
       }));
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, result.worktreePath);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, result.worktreePath);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -4981,8 +4991,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         previous: null,
       }));
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, result.message);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, result.message);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -5016,8 +5026,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       nextInstance = workspaceSetOutputSlot(nextInstance, "title", result.title ?? "");
       nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message ?? "");
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, result.mrUrl);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, result.mrUrl);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -5043,8 +5053,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       nextInstance = workspaceSetOutputSlot(nextInstance, "message", result.message);
       nextInstance = workspaceSetOutputSlot(nextInstance, "response", JSON.stringify(result.response || {}));
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, result.message);
-      emit({ type: "graph", nodeId, graph });
+      const updatedDisplays = publishNodeOutput(nodeId, result.message);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -5089,8 +5099,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       nextInstance = workspaceSetOutputSlot(nextInstance, "shareId", share.id);
       nextInstance = workspaceSetOutputSlot(nextInstance, "expiresAt", share.expiresAt);
       graph.instances[nodeId] = nextInstance;
-      outputs.set(nodeId, url);
-      emit({ type: "graph", nodeId, graph, displayNodeIds: nodeIds });
+      const updatedDisplays = publishNodeOutput(nodeId, url);
+      emit({ type: "graph", nodeId, graph, displayNodeIds: [...nodeIds, ...updatedDisplays] });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -5121,7 +5131,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       });
       const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
       const resultContent = normalizedAgentOutput.result || content;
-      outputs.set(nodeId, resultContent);
+      recordNodeOutput(nodeId, resultContent);
       const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
       if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
       const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
@@ -5135,7 +5145,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         onActiveChild: opts.onActiveChild,
       });
       if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
-      const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs, scopedRoot);
+      const updatedDisplays = propagateNodeOutputDisplays(nodeId, resultContent);
       if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -5258,7 +5268,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
     const resultContent = normalizedAgentOutput.result || content;
-    outputs.set(nodeId, resultContent);
+    recordNodeOutput(nodeId, resultContent);
     const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
     if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
     const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
@@ -5273,7 +5283,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       onActiveChild: opts.onActiveChild,
     });
     if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
-    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, resultContent, outputs, scopedRoot);
+    const updatedDisplays = propagateNodeOutputDisplays(nodeId, resultContent);
     if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
