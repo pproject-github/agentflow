@@ -1481,7 +1481,7 @@ function readWorkspaceGraph(workspaceRoot) {
 }
 
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
-const DISPLAY_SHARE_TTL_MS = 24 * 60 * 60 * 1000;
+const DISPLAY_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function displaySharesPath() {
   return path.join(getAgentflowDataRoot(), DISPLAY_SHARE_FILENAME);
