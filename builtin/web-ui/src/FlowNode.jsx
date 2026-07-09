@@ -101,6 +101,13 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const nodeTitle = data?.displayLabel || data?.label || t("flow:node.fallbackLabel");
   const bodyPreview = !isProvideNode && !hasInlineBodyEditor && data?.showBodyPreview ? String(data?.body || "").trim() : "";
   const images = normalizeImages(data?.images);
+  const hasNodeBodyContent =
+    isProvideBool ||
+    isProvideText ||
+    isProvideFile ||
+    isProvidePassword ||
+    hasInlineBodyEditor ||
+    Boolean(bodyPreview);
   const provideComposingRef = useRef(false);
   const bodyComposingRef = useRef(false);
   const bodyPromptStackRef = useRef(null);
@@ -630,6 +637,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           {bodyPreview ? (
             <span className="af-flow-node__prompt-preview" title={bodyPreview}>
               {bodyPreview}
+            </span>
+          ) : null}
+          {!hasNodeBodyContent ? (
+            <span className="af-flow-node__body-title" title={nodeTitle}>
+              {nodeTitle}
             </span>
           ) : null}
         </div>

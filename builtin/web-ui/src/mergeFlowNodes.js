@@ -77,6 +77,13 @@ const LEGACY_AUTO_HIDDEN_SLOT_NAMES = {
 const CANVAS_HIDDEN_SLOT_NAMES = {
   control_cd_workspace: new Set(["mode", "label", "cwd", "previous"]),
   control_user_workspace: new Set(["cwd"]),
+  display_markdown: new Set(["prev", "next"]),
+  display_mermaid: new Set(["prev", "next"]),
+  display_ascii: new Set(["prev", "next"]),
+  display_html: new Set(["prev", "next"]),
+  display_image: new Set(["prev", "next"]),
+  display_chart: new Set(["prev", "next"]),
+  display_table: new Set(["prev", "next"]),
   tool_git_checkout: new Set([
     "branch",
     "targetDir",

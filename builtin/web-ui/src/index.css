@@ -13584,6 +13584,19 @@ button.af-exec-history-card {
   white-space: nowrap;
 }
 
+.af-flow-node__body-title {
+  max-width: 12rem;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.86);
+  font-family: var(--af-headline);
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.3;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .af-flow-node__subtitle {
   display: none;
   max-width: 16rem;
