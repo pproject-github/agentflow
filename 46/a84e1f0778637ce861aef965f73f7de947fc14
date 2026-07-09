@@ -1,0 +1,33 @@
+builtin/web-ui/dist/assets/index-CWmnwmgL.js
+  s_98d3237c964562::t_e5d93219336511 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,73,75,79,81-82,84-90,94-95,98,110,123,126-128,131-134,136,140,148-150,159,200-201,205-209,213-214,216,234,236,250,262,265-267,271,297
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_e5d93219336511 18
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_98d3237c964562::t_8666aaae684297 4308-4314
+  s_98d3237c964562::t_ccec4e9c41d373 4298-4307
+bin/lib/ui-server.mjs
+  s_98d3237c964562::t_750a1c1ef4c1f5 5103
+  s_98d3237c964562::t_f894af39fe57e0 4725-4726,4744-4745,4753-4754,4770,4778,4786,4798,4816,4818,4831,4838,4907-4908,4960-4961,4994-4995,5029-5030,5056-5057,5102
+  s_98d3237c964562::t_095ba46965300f 4680-4691
+  s_98d3237c964562::t_bd6f41d0203e21 5134,5271,5286
+  s_98d3237c964562::t_7f9d92d262e269 5148
+builtin/web-ui/src/onboarding/OnboardingTour.jsx
+  s_98d3237c964562::t_8da1092c551628 31,115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "46a84e1f0778637ce861aef965f73f7de947fc14",
+  "prompts": {},
+  "logical_commit_id": "46a84e1f0778637ce861aef965f73f7de947fc14",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
