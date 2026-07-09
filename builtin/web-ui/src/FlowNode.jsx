@@ -100,6 +100,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const isProvideBool = definitionId === "provide_bool";
   const isProvideText = definitionId === "provide_str";
   const isProvideFile = definitionId === "provide_file";
+  const isProvidePassword = definitionId === "provide_password";
   const isSubAgent = definitionId === "agent_subAgent";
   const hasInlineBodyEditor = isSubAgent && !isRunMode;
   const provideBoolValue = isProvideBool ? boolValueFromSlot(outputs[0]) : false;
@@ -114,6 +115,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const bodyTextareaRef = useRef(null);
   const bodyBackdropRef = useRef(null);
   const [provideDraft, setProvideDraft] = useState(provideValue);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [bodyDraft, setBodyDraft] = useState(bodyValue);
   const [bodyComposing, setBodyComposing] = useState(false);
 
@@ -267,6 +269,11 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     }
   };
 
+  const handleTogglePasswordVisible = (e) => {
+    e.stopPropagation();
+    setPasswordVisible((value) => !value);
+  };
+
   const commitNodeBody = (next) => {
     setBodyDraft(next);
     onNodeBodyChange?.(id, next);
@@ -369,6 +376,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
         (isDim ? " af-flow-node--dim" : "") +
         (hasInlineBodyEditor ? " af-flow-node--inline-body-editor" : "") +
         (isProvideText ? " af-flow-node--provide-text" : "") +
+        (isProvidePassword ? " af-flow-node--provide-password" : "") +
         " af-flow-node--" + schemaType.replace(/[^a-z0-9_-]/g, "")
       }
       data-schema={schemaType}
@@ -447,7 +455,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
             FAILED
           </span>
         )}
-        {!isRunMode && isProvideNode && !isProvideBool && !isProvideText && !isProvideFile && (
+        {!isRunMode && isProvideNode && !isProvideBool && !isProvideText && !isProvideFile && !isProvidePassword && (
           <button
             type="button"
             className="af-flow-node__expand"
@@ -554,6 +562,32 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 title="选择文件"
               >
                 <span className="material-symbols-outlined">folder_open</span>
+              </button>
+            </div>
+          ) : isProvidePassword ? (
+            <div className="af-flow-node__password-value nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+              <input
+                className="af-flow-node__password-input nodrag"
+                type={passwordVisible ? "text" : "password"}
+                value={provideDraft}
+                onChange={handleProvideValueChange}
+                onCompositionStart={handleProvideCompositionStart}
+                onCompositionEnd={handleProvideCompositionEnd}
+                onBlur={handleProvideValueBlur}
+                placeholder="输入密码或密钥"
+                title={passwordVisible ? provideDraft : "密码已隐藏"}
+                autoComplete="off"
+                readOnly={readOnly}
+              />
+              <button
+                type="button"
+                className="af-flow-node__password-toggle nodrag"
+                disabled={readOnly}
+                onClick={handleTogglePasswordVisible}
+                aria-label={passwordVisible ? "隐藏密码" : "预览密码"}
+                title={passwordVisible ? "隐藏密码" : "预览密码"}
+              >
+                <span className="material-symbols-outlined">{passwordVisible ? "visibility_off" : "visibility"}</span>
               </button>
             </div>
           ) : isSubAgent && !isRunMode ? (

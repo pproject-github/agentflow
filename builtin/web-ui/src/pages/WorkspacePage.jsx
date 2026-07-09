@@ -6426,6 +6426,10 @@ function WorkspacePageInner() {
   const selectedWorkspaceTargetDir = selectedWorkspaceFile?.type === "directory"
     ? selectedWorkspaceFile.path
     : workspaceParentDir(selectedWorkspaceFile?.path || "");
+  const clearWorkspaceFileSelection = useCallback((event) => {
+    if (event.target?.closest?.(".af-work-file")) return;
+    setSelectedWorkspaceFilePath("");
+  }, []);
 
   const modelOptions = [
     ...(modelLists.cursor || []).map((m) => ({ label: `Cursor · ${m.split(" - ")[0]}`, value: `cursor:${m.split(" - ")[0]}` })),
@@ -7949,7 +7953,7 @@ function WorkspacePageInner() {
               </div>
             </div>
             <input className="af-workspace-search" value={fileFilter} onChange={(e) => setFileFilter(e.target.value)} placeholder="搜索文件..." />
-            <div className="af-workspace-files-scroll">
+            <div className="af-workspace-files-scroll" onClick={clearWorkspaceFileSelection}>
               <FileTree items={filteredFiles} onOpen={openFileNode} selectedPath={selectedWorkspaceFilePath} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onSelect={(item) => setSelectedWorkspaceFilePath(item.path || "")} onFileDragStart={handleFileDragStart} />
             </div>
           </section>
