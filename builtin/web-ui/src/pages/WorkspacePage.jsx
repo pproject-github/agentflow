@@ -6780,12 +6780,18 @@ function WorkspacePageInner() {
       }));
 
     const flow = graphToFlow({ instances: nextInstances, edges: nextEdges, ui: { nodePositions, nodeSizes } }, palette);
+    const insertedNodeIds = flow.nodes.map((node) => node.id);
     const insertedNodes = flow.nodes.map((node) => ({ ...node, selected: true }));
     instancesRef.current = { ...instancesRef.current, ...flow.instances };
     setInstances(instancesRef.current);
     setNodes((list) => [...list.map((node) => ({ ...node, selected: false })), ...insertedNodes]);
-    setEdges((list) => [...list.map((edge) => ({ ...edge, selected: false })), ...flow.edges]);
-    setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}`);
+    setEdges((list) => [
+      ...list.map((edge) => ({ ...edge, selected: false })),
+      ...flow.edges.map((edge) => ({ ...edge, selected: false })),
+    ]);
+    setSelectedNodeId("");
+    setSelectedDisplayNodeIds([]);
+    setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}（已选中 ${insertedNodeIds.length} 个节点）`);
   }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes, workspaceWritable]);
 
   const openPublishSnippetDialog = useCallback(() => {
