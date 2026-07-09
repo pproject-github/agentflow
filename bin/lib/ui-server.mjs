@@ -66,6 +66,7 @@ import {
 import { clearSkillRegistryCache } from "./skill-registry.mjs";
 import { COMPOSER_NODE_SPEC_FILENAME } from "./composer-planner.mjs";
 import { listRecentRunsFromDisk } from "./recent-runs.mjs";
+import { parseBool } from "../pipeline/parse-bool.mjs";
 import {
   unzipAndNormalizePipelineZip,
   validateImportedFlowYaml,
@@ -3421,6 +3422,13 @@ function workspaceIsControlEdge(graph, edge) {
     workspaceIsControlInputSlot(workspaceTargetSlotForEdge(graph, edge));
 }
 
+function workspaceControlIfBranchToSourceHandle(branch) {
+  const text = String(branch || "").trim().toLowerCase();
+  if (text === "true" || text === "next1") return "output-0";
+  if (text === "false" || text === "next2") return "output-1";
+  return null;
+}
+
 function workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot = "") {
   if (workspaceIsControlEdge(graph, edge)) return true;
   return !workspaceEdgeHasCachedOutput(graph, edge, scopedRoot);
@@ -4645,6 +4653,30 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
   const runtimeEnv = (extra = {}) => runtimeEnvForUser(userCtx, { ...runEnv, ...(extra || {}) });
   const autoCleanupWorktrees = [];
   const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
+  const controlBranches = new Map();
+  const skippedNodes = new Set();
+  const incomingControlEdgesByTarget = new Map();
+  for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
+    const target = String(edge?.target || "");
+    if (!target || !workspaceIsControlEdge(graph, edge)) continue;
+    if (!incomingControlEdgesByTarget.has(target)) incomingControlEdgesByTarget.set(target, []);
+    incomingControlEdgesByTarget.get(target).push(edge);
+  }
+  const skipReasonForNode = (nodeId) => {
+    for (const edge of incomingControlEdgesByTarget.get(nodeId) || []) {
+      const sourceId = String(edge?.source || "");
+      if (!sourceId) continue;
+      if (skippedNodes.has(sourceId)) return `上游 ${sourceId} 已被分支跳过`;
+      const sourceDefId = String(graph.instances?.[sourceId]?.definitionId || "");
+      if (sourceDefId !== "control_if" || !controlBranches.has(sourceId)) continue;
+      const expectedHandle = workspaceControlIfBranchToSourceHandle(controlBranches.get(sourceId));
+      const actualHandle = String(edge?.sourceHandle || "output-0");
+      if (expectedHandle && actualHandle !== expectedHandle) {
+        return `control_if ${sourceId} 分支为 ${controlBranches.get(sourceId)}，跳过 ${actualHandle}`;
+      }
+    }
+    return "";
+  };
 
   try {
   for (const nodeId of order) {
@@ -4652,6 +4684,13 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const instance = graph.instances[nodeId];
     if (!instance) continue;
     const defId = String(instance.definitionId || "");
+    const skipReason = skipReasonForNode(nodeId);
+    if (skipReason) {
+      skippedNodes.add(nodeId);
+      emit({ type: "status", nodeId, line: `Skipped: ${skipReason}` });
+      emit({ type: "node-done", nodeId, definitionId: defId, skipped: true });
+      continue;
+    }
     emit({ type: "node-start", nodeId, definitionId: defId });
 
     if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
@@ -4704,6 +4743,23 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       outputs.set(nodeId, content);
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_if") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const boolSlot = (Array.isArray(instance.input) ? instance.input : [])
+        .find((slot) => String(slot?.type || "").trim().toLowerCase() === "bool");
+      const boolSlotName = String(boolSlot?.name || "").trim();
+      const rawValue = boolSlotName && Object.prototype.hasOwnProperty.call(inputValues, boolSlotName)
+        ? inputValues[boolSlotName]
+        : workspaceSlotValue(boolSlot);
+      const boolValue = parseBool(rawValue);
+      const branch = boolValue ? "true" : "false";
+      controlBranches.set(nodeId, branch);
+      outputs.set(nodeId, branch);
+      emit({ type: "status", nodeId, line: `control_if branch: ${branch}` });
+      emit({ type: "node-done", nodeId, definitionId: defId, branch });
       continue;
     }
 

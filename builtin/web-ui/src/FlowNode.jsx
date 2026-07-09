@@ -19,14 +19,6 @@ function getNodeTypeLabel(data) {
   return "agent";
 }
 
-function getNodeTypeShortLabel(label) {
-  const text = String(label || "").trim();
-  if (!text) return "";
-  const marketplacePrefix = text.match(/^marketplace:/i);
-  if (marketplacePrefix) return "MARKETPLACE";
-  return text;
-}
-
 function boolValueFromSlot(slot) {
   return ["true", "1", "yes", "on"].includes(String(slot?.value ?? slot?.default ?? "").trim().toLowerCase());
 }
@@ -88,7 +80,6 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const outputs = data?.outputs ?? [];
   const schemaType = (data?.schemaType ?? "agent").toLowerCase();
   const typeLabel = getNodeTypeLabel(data);
-  const typeShortLabel = getNodeTypeShortLabel(typeLabel);
   const isRunMode = data?.isRunMode ?? false;
   const readOnly = Boolean(data?.readOnly);
   const isExecuting = data?.isExecuting ?? false;
@@ -102,7 +93,8 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const isProvideFile = definitionId === "provide_file";
   const isProvidePassword = definitionId === "provide_password";
   const isSubAgent = definitionId === "agent_subAgent";
-  const hasInlineBodyEditor = isSubAgent && !isRunMode;
+  const isAgentToBool = definitionId === "control_agent_toBool";
+  const hasInlineBodyEditor = (isSubAgent || isAgentToBool) && !isRunMode;
   const provideBoolValue = isProvideBool ? boolValueFromSlot(outputs[0]) : false;
   const provideValue = isProvideNode ? String(outputs[0]?.value ?? outputs[0]?.default ?? data?.body ?? "") : "";
   const bodyValue = String(data?.body || "");
@@ -382,9 +374,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
       data-schema={schemaType}
     >
       <div className="af-flow-node__chrome">
-        <span className="af-flow-node__type" title={typeLabel}>
-          {typeShortLabel}
-        </span>
+        <span className="af-flow-node__title af-flow-node__title--chrome" title={`${nodeTitle}${id ? ` (${id})` : ""}${typeLabel ? ` · ${typeLabel}` : ""}`}>{nodeTitle}</span>
         {!isRunMode && needsModel && (
           <div className="af-flow-node__model-wrap nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
             <select
@@ -504,12 +494,6 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           })}
         </div>
         <div className="af-flow-node__title-wrap">
-          <span className="af-flow-node__title">{nodeTitle}</span>
-          {id ? (
-            <span className="af-flow-node__subtitle" title={id}>
-              {id}
-            </span>
-          ) : null}
           {isProvideBool ? (
             <select
               className={"af-flow-node__bool-select nodrag" + (provideBoolValue ? " af-flow-node__bool-select--true" : "")}
@@ -590,7 +574,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 <span className="material-symbols-outlined">{passwordVisible ? "visibility_off" : "visibility"}</span>
               </button>
             </div>
-          ) : isSubAgent && !isRunMode ? (
+          ) : hasInlineBodyEditor ? (
             <div
               ref={bodyPromptStackRef}
               className={"af-flow-node__prompt-stack nodrag" + (bodyComposing ? " af-flow-node__prompt-stack--composing" : "")}
@@ -615,13 +599,13 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 onDragOver={(e) => {
                   if (imageFilesFromDropEvent(e).length > 0) e.preventDefault();
                 }}
-                placeholder="输入 prompt"
+                placeholder={isAgentToBool ? "输入判断条件 / prompt" : "输入 prompt"}
                 rows={2}
                 readOnly={readOnly}
               />
             </div>
           ) : null}
-          {isSubAgent && images.length > 0 ? (
+          {hasInlineBodyEditor && images.length > 0 ? (
             <div className="af-flow-node__image-chips">
               {images.map((img, idx) => (
                 <span key={img.id || idx} className="af-flow-node__image-chip" title={img.name}>
