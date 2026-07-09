@@ -28,6 +28,16 @@ function normalizeView(view) {
   return view === "pipeline" ? "pipeline" : "workspace";
 }
 
+function isReadonlyBuiltinFlowSource(source) {
+  const s = String(source || "").toLowerCase();
+  return s === "builtin" || s === "admin";
+}
+
+function normalizeViewForFlow(flow, view) {
+  const normalized = normalizeView(view);
+  return normalized === "pipeline" && isReadonlyBuiltinFlowSource(flow?.source) ? "workspace" : normalized;
+}
+
 function hasPipeline(flow) {
   return flow?.hasPipeline !== false && flow?.hasFlow !== false && flow?.flowYaml !== false;
 }
@@ -46,12 +56,12 @@ export function getPreferredPipelineView(flow, fallback = "workspace") {
   if (!flow?.id) return normalizeView(fallback);
   const store = safeRead();
   const entry = store[flowKey(flow.id, flow.source ?? "user", Boolean(flow.archived))];
-  const preferred = normalizeView(entry?.view || fallback);
+  const preferred = normalizeViewForFlow(flow, entry?.view || fallback);
   return preferred === "pipeline" && !hasPipeline(flow) ? "workspace" : preferred;
 }
 
 export function flowUrlForView(flow, view = "workspace") {
-  const normalizedView = normalizeView(view);
+  const normalizedView = normalizeViewForFlow(flow, view);
   if (!flow?.id) return normalizedView === "pipeline" ? "/flow" : normalizedView === "display" ? "/workspace?view=display" : "/workspace";
   const q = new URLSearchParams({
     flowId: flow.id,

@@ -48,6 +48,7 @@ import { useRoute } from "../routeContext.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
+const WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX = "agentflow.workspace.sidebarCollapsed";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
 const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp"]);
 const WORKSPACE_RUN_DEFINITION = {
@@ -155,6 +156,24 @@ function workspaceSkillsStorageKey(params) {
   if (!flowId) return "";
   const flowSource = String(params?.flowSource || "user").trim() || "user";
   return `af:composer-skills:workspace:${flowId}:${flowSource}${params?.archived ? ":archived" : ""}`;
+}
+
+function workspaceSidebarCollapsedStorageKey(authUser) {
+  const userKey = String(authUser?.username || authUser?.userId || "").trim();
+  return userKey
+    ? `${WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX}:${userKey}`
+    : WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX;
+}
+
+function readWorkspaceSidebarCollapsed(key) {
+  try {
+    const saved = window.localStorage.getItem(key);
+    if (saved === "false") return false;
+    if (saved === "true") return true;
+  } catch {
+    /* ignore storage */
+  }
+  return true;
 }
 
 function isEditableShortcutTarget(target) {
@@ -2735,7 +2754,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             data?.onShareDisplayNode?.(shareNodeId);
           }}
           aria-label="分享展示"
-          title="分享展示（1 天有效）"
+          title="分享展示（30 天有效）"
         >
           <span className="material-symbols-outlined">{sharingDisplay ? "hourglass_empty" : "ios_share"}</span>
         </button>
@@ -4295,27 +4314,27 @@ function WorkspacePageInner() {
   const [composerMinimized, setComposerMinimized] = useState(true);
   const [activeNodeChatId, setActiveNodeChatId] = useState("");
   const [nodeChatSessions, setNodeChatSessions] = useState({});
-  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem("agentflow.workspace.sidebarCollapsed");
-      if (saved === "false") return false;
-      if (saved === "true") return true;
-    } catch {
-      /* ignore storage */
-    }
-    return true;
-  });
+  const [authUser, setAuthUser] = useState(null);
+  const [authResolved, setAuthResolved] = useState(false);
+  const workspaceSidebarStorageKey = useMemo(() => (
+    authResolved ? workspaceSidebarCollapsedStorageKey(authUser) : ""
+  ), [authResolved, authUser]);
+  const [workspaceSidebarCollapsed, setWorkspaceSidebarCollapsed] = useState(true);
   useEffect(() => {
+    if (!workspaceSidebarStorageKey) return;
+    setWorkspaceSidebarCollapsed(readWorkspaceSidebarCollapsed(workspaceSidebarStorageKey));
+  }, [workspaceSidebarStorageKey]);
+  useEffect(() => {
+    if (!workspaceSidebarStorageKey) return;
     try {
-      window.localStorage.setItem("agentflow.workspace.sidebarCollapsed", workspaceSidebarCollapsed ? "true" : "false");
+      window.localStorage.setItem(workspaceSidebarStorageKey, workspaceSidebarCollapsed ? "true" : "false");
     } catch {
       /* ignore storage */
     }
-  }, [workspaceSidebarCollapsed]);
+  }, [workspaceSidebarCollapsed, workspaceSidebarStorageKey]);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [jumpPaletteOpen, setJumpPaletteOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState("pan");
-  const [authUser, setAuthUser] = useState(null);
   const [runningRunSessions, setRunningRunSessions] = useState({});
   const runningRunSessionsRef = useRef({});
   const [scheduledRunState, setScheduledRunState] = useState({});
@@ -5324,8 +5343,14 @@ function WorkspacePageInner() {
     }).catch(() => {});
     fetch("/api/auth/me")
       .then((r) => r.json())
-      .then((j) => setAuthUser(j.user || null))
-      .catch(() => setAuthUser(null));
+      .then((j) => {
+        setAuthUser(j.user || null);
+        setAuthResolved(true);
+      })
+      .catch(() => {
+        setAuthUser(null);
+        setAuthResolved(true);
+      });
   }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, skillsStorageKey]);
 
   useEffect(() => {
@@ -6028,7 +6053,7 @@ function WorkspacePageInner() {
       const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
       setDisplayShareResult({ ...json, absoluteUrl });
       setDisplayLinkCopyState("");
-      setStatus("已生成 1 天有效的展示链接");
+      setStatus("已生成 30 天有效的展示链接");
       if (shareWindow) shareWindow.location.href = absoluteUrl;
       else window.location.assign(absoluteUrl);
     } catch (e) {

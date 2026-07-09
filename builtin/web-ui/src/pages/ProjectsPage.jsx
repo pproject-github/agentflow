@@ -680,25 +680,30 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   useEffect(() => {
     if (path !== "/projects" && path !== "/") return;
     const sp = new URLSearchParams(window.location.search);
+    const tab = sp.get("tab");
     let changed = false;
-    if (sp.get("tab") === "nodes") {
+    if (tab === "nodes") {
       navigate("/nodes");
       return;
     }
-    if (sp.get("tab") === "my-nodes") {
+    if (tab === "my-nodes") {
       navigate("/my-nodes");
       return;
     }
-    if (sp.get("tab") === "my-flows") {
+    if (tab === "my-flows") {
       navigate("/my-flows");
       return;
     }
-    if (sp.get("tab") === "skills") {
+    if (tab === "skills") {
       navigate("/skills");
       return;
     }
-    if (sp.get("tab") === "archived") {
+    if (tab === "archived") {
       setFilter("archived");
+      sp.delete("tab");
+      changed = true;
+    } else if (tab) {
+      setFilter("all");
       sp.delete("tab");
       changed = true;
     }
