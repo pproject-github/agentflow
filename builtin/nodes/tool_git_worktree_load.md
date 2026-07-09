@@ -8,7 +8,8 @@ description: |
   - `branch` is optional. When empty, AgentFlow creates a detached worktree at the current HEAD.
   - `worktreePath` is optional. When empty, AgentFlow creates a temporary worktree under the current run temp directory.
   - A worktree created by this node during the current Workspace run is removed when the run finishes or is stopped, even when `worktreePath` is explicitly set.
-  - Existing registered worktrees that were present before the run are reused and not removed automatically.
+  - Existing registered worktrees under the current flow workspace are also removed after the run, covering leftovers from previous interrupted runs.
+  - Existing registered worktrees outside the current flow workspace are reused and not removed automatically unless this run created them.
   - Existing worktree paths are reused only when they are registered by `git worktree list` for the given repo.
   - `pruneMissing` defaults to true. When Git has a registered worktree whose directory is missing, AgentFlow runs `git worktree prune` before adding it again.
   - `force` defaults to false. When true, AgentFlow passes `--force` to `git worktree add`.

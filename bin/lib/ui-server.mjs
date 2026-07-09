@@ -4329,8 +4329,11 @@ function workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch = "")
   );
 }
 
-function workspaceShouldAutoCleanupWorktree(result) {
-  return Boolean(result?.worktreePath) && result.created === true;
+function workspaceShouldAutoCleanupWorktree(result, scopedRoot = "") {
+  const worktreePath = String(result?.worktreePath || "").trim();
+  if (!worktreePath) return false;
+  if (result.created === true) return true;
+  return scopedRoot ? workspacePathInside(scopedRoot, worktreePath) : false;
 }
 
 function workspaceTrackAutoCleanupWorktree(list, item) {
@@ -5010,7 +5013,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
       const pruneMissing = pruneMissingRaw !== "false";
       const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot, force, pruneMissing });
-      if (workspaceShouldAutoCleanupWorktree(result)) {
+      if (workspaceShouldAutoCleanupWorktree(result, scopedRoot)) {
         workspaceTrackAutoCleanupWorktree(autoCleanupWorktrees, {
           nodeId,
           repoPath: result.repoRoot,
