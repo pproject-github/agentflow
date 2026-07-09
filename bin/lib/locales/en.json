@@ -290,12 +290,12 @@
       "description": "Create or reuse a GitLab merge request for the current branch and output its URL"
     },
     "tool_wecom_send_group_markdown": {
-      "displayName": "WeCom Group Markdown",
-      "description": "Send a Markdown message through a WeCom group robot webhook"
+      "displayName": "WeCom Group Chat Markdown",
+      "description": "Send a Markdown message to a group chat through a WeCom group robot webhook"
     },
     "tool_wecom_send_app_markdown": {
-      "displayName": "WeCom App Markdown",
-      "description": "Send a Markdown message to users through a WeCom enterprise application"
+      "displayName": "WeCom Direct Markdown",
+      "description": "Send a Markdown message to one or more users through a WeCom enterprise application"
     },
     "tool_display_share_link": {
       "displayName": "Display Share Link",

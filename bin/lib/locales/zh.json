@@ -290,12 +290,12 @@
       "description": "为当前分支创建或复用 GitLab Merge Request，并输出 MR 链接"
     },
     "tool_wecom_send_group_markdown": {
-      "displayName": "企业微信群 Markdown",
-      "description": "通过企业微信群机器人 webhook 发送 Markdown 消息"
+      "displayName": "企业微信群聊 Markdown",
+      "description": "通过企业微信群机器人 webhook 发送 Markdown 到群聊"
     },
     "tool_wecom_send_app_markdown": {
-      "displayName": "企业微信应用 Markdown",
-      "description": "通过企业微信应用消息接口发送 Markdown 给用户"
+      "displayName": "企业微信个人 Markdown",
+      "description": "通过企业微信应用消息接口发送 Markdown 给个人或多个用户"
     },
     "tool_display_share_link": {
       "displayName": "展示分享链接",
