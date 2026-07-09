@@ -225,6 +225,7 @@ export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipe
   const repoRoot = resolveGitRepoRoot(repoPath);
   const wantedBranch = String(branch || "").trim();
   const target = path.resolve(worktreePath || defaultWorktreePath(pipelineWorkspace || repoRoot, repoRoot, wantedBranch));
+  let created = false;
 
   if (wantedBranch && !branchExists(repoRoot, wantedBranch)) {
     throw new Error(`branch does not exist in repoPath: ${wantedBranch}`);
@@ -262,6 +263,7 @@ export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipe
     if (result.status !== 0) {
       throw new Error(`git worktree add failed: ${result.stderr || result.stdout}`);
     }
+    created = true;
   }
 
   const actualBranch = actualWorktreeBranch(target);
@@ -271,6 +273,7 @@ export function loadGitWorktree({ repoPath, branch = "", worktreePath = "", pipe
     worktreePath: target,
     branch: actualBranch,
     commit,
+    created,
   };
 }
 
