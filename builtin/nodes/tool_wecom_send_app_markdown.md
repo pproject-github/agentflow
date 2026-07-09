@@ -1,7 +1,7 @@
 ---
-# Built-in node: WeCom app markdown message
+# Built-in node: WeCom direct markdown message
 description: Send Markdown message to WeCom users through an enterprise application
-displayName: WeCom App Markdown
+displayName: WeCom Direct Markdown
 input:
   - type: node
     name: prev
@@ -51,6 +51,6 @@ output:
     default: ""
     showOnNode: false
 ---
-Send `${markdown}` to `${toUser}` using a WeCom enterprise application.
+Send `${markdown}` to one or more WeCom users (`${toUser}`) using a WeCom enterprise application.
 
 If credential inputs are empty, AgentFlow reads `WECOM_CORP_ID`, `WECOM_APP_SECRET` / `WECOM_CORP_SECRET`, `WECOM_AGENT_ID`, and optionally `WECOM_TO_USER` from environment config.

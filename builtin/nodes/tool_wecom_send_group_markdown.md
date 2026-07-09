@@ -1,7 +1,7 @@
 ---
 # Built-in node: WeCom group robot markdown message
 description: Send Markdown message to a WeCom group robot webhook
-displayName: WeCom Group Markdown
+displayName: WeCom Group Chat Markdown
 input:
   - type: node
     name: prev
@@ -39,6 +39,6 @@ output:
     default: ""
     showOnNode: false
 ---
-Send `${markdown}` to a WeCom group robot.
+Send `${markdown}` to a WeCom group chat through a group robot webhook.
 
 Use either `webhookUrl` or `webhookKey`. If both are empty, AgentFlow reads `WECOM_GROUP_WEBHOOK` / `WECOM_BOT_WEBHOOK` or `WECOM_GROUP_WEBHOOK_KEY` / `WECOM_BOT_KEY` from environment config.

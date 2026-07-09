@@ -1,5 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { getHandleColor } from "./nodeSchema.js";
 import { IMAGE_TOKEN_RE, addImageFiles, filterImagesReferencedByBody, imageFilesFromClipboardEvent, imageFilesFromDropEvent, normalizeImages } from "./imageAttachments.js";
@@ -113,10 +114,26 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   const bodyPromptStackRef = useRef(null);
   const bodyTextareaRef = useRef(null);
   const bodyBackdropRef = useRef(null);
+  const bodyPromptScrollbarTrackRef = useRef(null);
+  const bodyFullscreenTextareaRef = useRef(null);
   const [provideDraft, setProvideDraft] = useState(provideValue);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [bodyDraft, setBodyDraft] = useState(bodyValue);
   const [bodyComposing, setBodyComposing] = useState(false);
+  const [bodyPromptScrollbar, setBodyPromptScrollbar] = useState({ visible: false, top: 0, height: 100 });
+  const [bodyFullscreenEditor, setBodyFullscreenEditor] = useState(false);
+
+  const updateBodyPromptScrollbar = useCallback(() => {
+    const el = bodyTextareaRef.current;
+    if (!el) return;
+    const scrollHeight = Math.max(1, el.scrollHeight);
+    const clientHeight = Math.max(1, el.clientHeight);
+    const visible = scrollHeight > clientHeight + 1;
+    const height = visible ? Math.max(12, (clientHeight / scrollHeight) * 100) : 100;
+    const maxTop = Math.max(0, 100 - height);
+    const top = visible ? Math.min(maxTop, (el.scrollTop / Math.max(1, scrollHeight - clientHeight)) * maxTop) : 0;
+    setBodyPromptScrollbar({ visible, top, height });
+  }, []);
 
   useEffect(() => {
     if (!provideComposingRef.current) setProvideDraft(provideValue);
@@ -129,6 +146,15 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
   useEffect(() => {
     const el = bodyTextareaRef.current;
     if (!el) return;
+    if (hasInlineBodyEditor) {
+      el.style.minHeight = "";
+      el.style.height = "";
+      if (bodyBackdropRef.current) {
+        bodyBackdropRef.current.style.minHeight = "";
+        bodyBackdropRef.current.style.height = "";
+      }
+      return;
+    }
     const desiredHeight = promptEditorHeightForText(el, bodyDraft);
     el.style.minHeight = `${desiredHeight}px`;
     el.style.height = "";
@@ -136,7 +162,22 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
       bodyBackdropRef.current.style.minHeight = `${desiredHeight}px`;
       bodyBackdropRef.current.style.height = "";
     }
-  }, [bodyDraft]);
+  }, [bodyDraft, hasInlineBodyEditor]);
+
+  useEffect(() => {
+    if (!hasInlineBodyEditor) return undefined;
+    const frame = window.requestAnimationFrame(updateBodyPromptScrollbar);
+    const el = bodyTextareaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      return () => window.cancelAnimationFrame(frame);
+    }
+    const observer = new ResizeObserver(updateBodyPromptScrollbar);
+    observer.observe(el);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [bodyDraft, hasInlineBodyEditor, updateBodyPromptScrollbar]);
 
   useEffect(() => {
     const el = bodyPromptStackRef.current;
@@ -155,6 +196,18 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
       observer.disconnect();
     };
   }, [data?.onNodeContentResize, hasInlineBodyEditor, id]);
+
+  useEffect(() => {
+    if (!bodyFullscreenEditor) return undefined;
+    const focusTimer = window.setTimeout(() => {
+      const el = bodyFullscreenTextareaRef.current;
+      if (!el) return;
+      el.focus();
+      const pos = el.value.length;
+      el.setSelectionRange(pos, pos);
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [bodyFullscreenEditor]);
 
   const cursorList = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
   const opencodeList = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
@@ -317,6 +370,77 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     setBodyComposing(false);
     commitNodeBody(bodyDraft);
   };
+
+  const openBodyFullscreenEditor = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (readOnly) return;
+    setBodyFullscreenEditor(true);
+  };
+
+  const closeBodyFullscreenEditor = () => {
+    setBodyFullscreenEditor(false);
+    handleNodeBodyBlur();
+  };
+
+  const handleBodyFullscreenKeyDown = (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeBodyFullscreenEditor();
+    }
+  };
+
+  const scrollBodyPromptToRatio = useCallback((ratio) => {
+    const el = bodyTextareaRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(1, Math.max(0, ratio)) * maxScroll;
+    updateBodyPromptScrollbar();
+  }, [updateBodyPromptScrollbar]);
+
+  const bodyPromptPointerRatioFromTrack = useCallback((clientY, grabOffsetPx = 0) => {
+    const track = bodyPromptScrollbarTrackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const thumbPx = (bodyPromptScrollbar.height / 100) * rect.height;
+    const maxTopPx = Math.max(1, rect.height - thumbPx);
+    return (clientY - rect.top - grabOffsetPx) / maxTopPx;
+  }, [bodyPromptScrollbar.height]);
+
+  const handleBodyPromptScrollbarPointerDown = useCallback((event) => {
+    if (!bodyPromptScrollbar.visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = bodyPromptScrollbarTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const thumbTopPx = (bodyPromptScrollbar.top / 100) * rect.height;
+    const thumbHeightPx = (bodyPromptScrollbar.height / 100) * rect.height;
+    const insideThumb = event.clientY >= rect.top + thumbTopPx && event.clientY <= rect.top + thumbTopPx + thumbHeightPx;
+    const grabOffsetPx = insideThumb ? event.clientY - rect.top - thumbTopPx : thumbHeightPx / 2;
+    scrollBodyPromptToRatio(bodyPromptPointerRatioFromTrack(event.clientY, grabOffsetPx));
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture?.(pointerId);
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      scrollBodyPromptToRatio(bodyPromptPointerRatioFromTrack(moveEvent.clientY, grabOffsetPx));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [
+    bodyPromptPointerRatioFromTrack,
+    bodyPromptScrollbar.height,
+    bodyPromptScrollbar.top,
+    bodyPromptScrollbar.visible,
+    scrollBodyPromptToRatio,
+  ]);
 
   const attachImages = async (files) => {
     if (readOnly) return;
@@ -584,7 +708,10 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           ) : hasInlineBodyEditor ? (
             <div
               ref={bodyPromptStackRef}
-              className={"af-flow-node__prompt-stack nodrag" + (bodyComposing ? " af-flow-node__prompt-stack--composing" : "")}
+              className={
+                "af-flow-node__prompt-stack nodrag" +
+                (bodyComposing ? " af-flow-node__prompt-stack--composing" : "")
+              }
             >
               <pre
                 ref={bodyBackdropRef}
@@ -602,7 +729,14 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 onBlur={handleNodeBodyBlur}
                 onPaste={handlePromptPaste}
                 onDrop={handlePromptDrop}
-                onScroll={handlePromptScroll}
+                onScroll={(e) => {
+                  handlePromptScroll(e);
+                  updateBodyPromptScrollbar();
+                }}
+                onPointerDown={stopInteractiveEvent}
+                onMouseDown={stopInteractiveEvent}
+                onClick={stopInteractiveEvent}
+                onKeyDown={stopInteractiveEvent}
                 onDragOver={(e) => {
                   if (imageFilesFromDropEvent(e).length > 0) e.preventDefault();
                 }}
@@ -610,6 +744,27 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
                 rows={2}
                 readOnly={readOnly}
               />
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="af-flow-node__prompt-expand nodrag"
+                  onPointerDown={stopInteractiveEvent}
+                  onMouseDown={stopInteractiveEvent}
+                  onClick={openBodyFullscreenEditor}
+                  aria-label="放大编辑"
+                  title="放大编辑"
+                >
+                  <span className="material-symbols-outlined">open_in_full</span>
+                </button>
+              )}
+              <div
+                ref={bodyPromptScrollbarTrackRef}
+                className={"af-flow-node__prompt-scrollbar" + (bodyPromptScrollbar.visible ? " af-flow-node__prompt-scrollbar--visible" : "")}
+                onPointerDown={handleBodyPromptScrollbarPointerDown}
+                aria-hidden="true"
+              >
+                <span style={{ height: `${bodyPromptScrollbar.height}%`, top: `${bodyPromptScrollbar.top}%` }} />
+              </div>
             </div>
           ) : null}
           {hasInlineBodyEditor && images.length > 0 ? (
@@ -669,6 +824,50 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
           })}
         </div>
       </div>
+      {bodyFullscreenEditor ? createPortal(
+        <div
+          className="af-flow-node-full-editor nodrag"
+          onPointerDown={stopInteractiveEvent}
+          onMouseDown={stopInteractiveEvent}
+          onClick={stopInteractiveEvent}
+          onWheel={stopInteractiveEvent}
+        >
+          <div className="af-flow-node-full-editor__panel">
+            <div className="af-flow-node-full-editor__header">
+              <div>
+                <div className="af-flow-node-full-editor__title">{nodeTitle}</div>
+                <div className="af-flow-node-full-editor__hint">编辑 prompt，Esc 关闭</div>
+              </div>
+              <button
+                type="button"
+                className="af-flow-node-full-editor__close"
+                onClick={closeBodyFullscreenEditor}
+                aria-label="关闭"
+                title="关闭"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <textarea
+              ref={bodyFullscreenTextareaRef}
+              className="af-flow-node-full-editor__textarea"
+              value={bodyDraft}
+              onChange={handleNodeBodyChange}
+              onCompositionStart={handleNodeBodyCompositionStart}
+              onCompositionEnd={handleNodeBodyCompositionEnd}
+              onPaste={handlePromptPaste}
+              onDrop={handlePromptDrop}
+              onKeyDown={handleBodyFullscreenKeyDown}
+              onDragOver={(e) => {
+                if (imageFilesFromDropEvent(e).length > 0) e.preventDefault();
+              }}
+              placeholder={isAgentToBool ? "输入判断条件 / prompt" : "输入 prompt"}
+              readOnly={readOnly}
+            />
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }
