@@ -1,0 +1,28 @@
+builtin/nodes/tool_display_share_link.md
+  s_98d3237c964562::t_9bb69c25b89ea0 12,17-18,22,27,46
+bin/lib/ui-server.mjs
+  s_98d3237c964562::t_382e09e51deb9b 6803,6813,6852
+  s_98d3237c964562::t_6e7e5c6fd105a0 2032-2042
+  s_98d3237c964562::t_d19dfa33aed8c7 5088-5089
+builtin/web-ui/dist/assets/index-CWUR5Ocs.js
+  s_98d3237c964562::t_705249528f0137 128,148
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_14e8e5131f1015 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "7218fb64f3e80241e37cca4f67a25b3e14457f75",
+  "prompts": {},
+  "logical_commit_id": "7218fb64f3e80241e37cca4f67a25b3e14457f75",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
