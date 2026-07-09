@@ -1252,8 +1252,14 @@ export default function FlowEditorPage() {
 
   useEffect(() => {
     if (!selected?.id) return;
+    if (isReadonlyBuiltinFlowSource(selected.source)) return;
     recordPipelineView(selected.id, selected.source ?? "user", "pipeline", Boolean(selected.archived));
   }, [selected?.id, selected?.source, selected?.archived]);
+
+  useEffect(() => {
+    if (!selected?.id || !isReadonlyBuiltinFlowSource(selected.source)) return;
+    navigate(flowUrlForView(selected, "workspace"));
+  }, [navigate, selected?.id, selected?.source, selected?.archived]);
 
   // ── Run mode state ──
   const [runMode, setRunMode] = useState(/** @type {"edit" | "ready" | "running" | "stopped" | "done" | "error"} */ ("edit"));

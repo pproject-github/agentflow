@@ -4091,6 +4091,76 @@ function workspaceUpstreamMcpBlocks(graph, nodeId, outputs) {
   return Array.from(new Set(blocks)).join("\n\n---\n\n");
 }
 
+function workspaceSemanticInputText(graph, nodeId, outputs, name, scopedRoot = "") {
+  const targetName = String(name || "").trim();
+  if (!targetName) return "";
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const edge = edges
+    .filter((item) => String(item?.target || "") === String(nodeId))
+    .find((item) => String(workspaceTargetSlotForEdge(graph, item)?.name || "") === targetName);
+  if (edge) return workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot);
+  const instance = graph?.instances && typeof graph.instances === "object" ? graph.instances[String(nodeId || "")] : null;
+  return workspaceSlotValue(workspaceSlotByName(instance, targetName));
+}
+
+function workspaceContextObjectFromText(text, baseCwd, scopedRoot) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const parsed = parseJsonText(raw, null);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  const resolved = workspaceResolvePath(baseCwd || scopedRoot, raw) || raw;
+  return {
+    version: 1,
+    label: "workspace",
+    cwd: resolved,
+    workspaceRoot: resolved,
+    pipelineWorkspace: scopedRoot ? path.resolve(scopedRoot) : "",
+    previous: null,
+  };
+}
+
+function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot = "", logicalCwd = "") {
+  const root = scopedRoot ? path.resolve(scopedRoot) : "";
+  const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
+  const workspaceText = workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot);
+  let workspaceContext = workspaceContextObjectFromText(workspaceText, cwd || root, scopedRoot);
+  if (!workspaceContext && cwd && root && cwd !== root) {
+    workspaceContext = {
+      version: 1,
+      label: "workspace",
+      cwd,
+      workspaceRoot: cwd,
+      pipelineWorkspace: root,
+      previous: null,
+    };
+  }
+  const gitContext = normalizeGitContext(workspaceSemanticInputText(graph, nodeId, outputs, "gitContext", scopedRoot));
+  if (!workspaceContext && !gitContext) return "";
+
+  const contextCwd = workspaceContext?.cwd ? path.resolve(String(workspaceContext.cwd)) : "";
+  const workspaceRoot = workspaceContext?.workspaceRoot ? path.resolve(String(workspaceContext.workspaceRoot)) : contextCwd;
+  const pipelineWorkspace = workspaceContext?.pipelineWorkspace ? path.resolve(String(workspaceContext.pipelineWorkspace)) : root;
+  const label = String(workspaceContext?.label || "").trim();
+  const lines = [
+    "## Workspace 上下文",
+    "",
+    "当前 Agent 仍在独立节点目录中运行，文件边界以“文件边界”章节为准。",
+    label ? `- 名称：${label}` : "",
+    contextCwd ? `- 当前工作目录上下文：\`${contextCwd}\`` : "",
+    workspaceRoot && workspaceRoot !== contextCwd ? `- workspaceRoot：\`${workspaceRoot}\`` : "",
+    pipelineWorkspace ? `- 流程目录：\`${pipelineWorkspace}\`` : "",
+    gitContext?.repoPath ? `- Git repoPath：\`${gitContext.repoPath}\`` : "",
+    gitContext?.worktreePath ? `- Git worktreePath：\`${gitContext.worktreePath}\`` : "",
+    gitContext?.branch ? `- Git branch：\`${gitContext.branch}\`` : "",
+    gitContext?.commit ? `- Git commit：\`${gitContext.commit}\`` : "",
+    "",
+    "使用要求：",
+    "- 读取、搜索、分析当前项目或资料时，优先从“当前工作目录上下文”开始；不要把节点的“当前执行目录”误认为项目根目录。",
+    "- 临时文件和正式产物仍必须按“文件边界”写入本节点的 `tmp/` 与 `outputs/`。",
+  ].filter((line) => line !== "");
+  return lines.join("\n");
+}
+
 function mergeWorkspaceSkillBlocks(...values) {
   const blocks = values
     .map((value) => String(value || ""))
@@ -4206,7 +4276,7 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null,
   return updated;
 }
 
-function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "", implementationBlock = "") {
+function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock = "", inputValues = {}, nodeTmpDir = "", implementationBlock = "", workspaceContextBlock = "") {
   const instance = graph.instances[nodeId] || {};
   const body = workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim();
   const { values: relevantInputValues, placeholders } = workspaceRelevantInputValues(instance.body || "", inputValues);
@@ -4217,6 +4287,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   return [
     "你正在执行一个独立任务。只使用本提示中的任务、输入、可用能力和文件边界。",
     fileBoundary ? `\n${fileBoundary}` : "",
+    workspaceContextBlock ? `\n${workspaceContextBlock}` : "",
     inputBlock ? `\n${inputBlock}` : "",
     placeholders.size ? "\n任务只显式引用了上面的输入槽；其它未被 `${...}` 引用的已连接业务输入不要作为分析依据。" : "",
     implementationBlock ? `\n${implementationBlock}` : "",
@@ -4258,8 +4329,8 @@ function workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch = "")
   );
 }
 
-function workspaceShouldAutoCleanupWorktree(worktreePath, hasExplicitWorktreePath) {
-  return Boolean(worktreePath) && !hasExplicitWorktreePath;
+function workspaceShouldAutoCleanupWorktree(result) {
+  return Boolean(result?.worktreePath) && result.created === true;
 }
 
 function workspaceTrackAutoCleanupWorktree(list, item) {
@@ -4341,7 +4412,7 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
   const outputsDir = path.join(nodeRunDir, "outputs");
@@ -4357,6 +4428,7 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, task = 
     nodeTmpDir,
     outputsDir,
     workspaceRoot,
+    executionCwd: cwd ? path.resolve(cwd) : workspaceRoot,
     createdAt: new Date().toISOString(),
   };
   const materializedInputs = workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues);
@@ -4933,13 +5005,12 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const worktreePath = rawWorktreePath
         ? workspaceResolvePath(cwd, rawWorktreePath)
         : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch));
-      const hasExplicitWorktreePath = Boolean(rawWorktreePath) || Boolean(gitContext?.worktreePath);
       const previousCwd = cwd;
       const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
       const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
       const pruneMissing = pruneMissingRaw !== "false";
       const result = loadGitWorktree({ repoPath, branch, worktreePath, pipelineWorkspace: scopedRoot, force, pruneMissing });
-      if (workspaceShouldAutoCleanupWorktree(result.worktreePath, hasExplicitWorktreePath)) {
+      if (workspaceShouldAutoCleanupWorktree(result)) {
         workspaceTrackAutoCleanupWorktree(autoCleanupWorktrees, {
           nodeId,
           repoPath: result.repoRoot,
@@ -5191,7 +5262,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       // Best-effort debug artifact only.
     }
     const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
-    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock);
+    const workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
+    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, workspaceContextBlock);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
     } catch {

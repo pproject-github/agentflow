@@ -7799,6 +7799,7 @@ function WorkspacePageInner() {
       : composerMessages.length > 0
         ? "Workspace conversation"
         : "Ready";
+  const workspaceProjectTitle = String(flowParams.flowId || "").trim() || "Workspace";
 
   return (
     <div className="af-workspace-page">
@@ -7808,7 +7809,7 @@ function WorkspacePageInner() {
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
           <div className="af-pipeline-brand" title={flowParams.flowId ? `${flowParams.flowId} · ${workspaceRoot}` : workspaceRoot || "PROJECT"}>
-            <span className="af-pipeline-brand-name">WORKSPACE</span>
+            <span className="af-pipeline-brand-name">{workspaceProjectTitle}</span>
             <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
           </div>
           <div className="af-view-switch" aria-label="视图切换">
