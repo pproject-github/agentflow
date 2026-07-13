@@ -25,6 +25,7 @@ import { normalizeImages } from "../imageAttachments.js";
 import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
+import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
 import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
@@ -35,7 +36,7 @@ import {
   getNodeSlotByHandle,
   getSlotConnectionLabel,
 } from "../nodeSchema.js";
-import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
+import { recordPipelineView } from "../pipelineViewPreference.js";
 import {
   addSkillKeys,
   collectionSelectionState,
@@ -1080,6 +1081,86 @@ function normalizeDisplayPageState(raw, workspaceNodes = []) {
 
 function displayPageForGraph(displayPage, workspaceNodes = []) {
   return normalizeDisplayPageState(displayPage, workspaceNodes);
+}
+
+const DISPLAY_SHARE_EXPIRY_OPTIONS = [
+  { value: "1", label: "1 天" },
+  { value: "7", label: "7 天" },
+  { value: "30", label: "30 天" },
+  { value: "90", label: "90 天" },
+  { value: "365", label: "1 年" },
+  { value: "permanent", label: "永久" },
+];
+
+function defaultDisplayShareDraft(patch = {}) {
+  return {
+    title: "",
+    layout: "gallery",
+    nodeIds: [],
+    expiresInDays: 30,
+    permanent: false,
+    ...patch,
+  };
+}
+
+function displayShareExpiryValue(draft = {}) {
+  return draft.permanent ? "permanent" : String(draft.expiresInDays || 30);
+}
+
+function displayShareExpiryPayload(draft = {}) {
+  if (draft.permanent) return { expiresMode: "permanent", permanent: true };
+  const days = Number(draft.expiresInDays || 30);
+  return { expiresMode: "days", expiresInDays: Number.isFinite(days) ? days : 30 };
+}
+
+function formatDisplayShareExpiry(share = {}) {
+  if (!share.expiresAt) return "永久有效";
+  const time = Date.parse(String(share.expiresAt || ""));
+  if (!Number.isFinite(time)) return "永久有效";
+  return `有效期至 ${new Date(time).toLocaleString()}`;
+}
+
+function displayShareUrl(share = {}) {
+  return new URL(share.url || `/display/${share.id || ""}`, window.location.origin).href;
+}
+
+const WORKSPACE_CANVAS_CLIPBOARD_STORAGE_KEY = "af:workspace:canvas-clipboard";
+const WORKSPACE_CANVAS_CLIPBOARD_TYPE = "agentflow.workspace.canvas-clipboard";
+
+function encodeWorkspaceCanvasClipboard(clipboard) {
+  return JSON.stringify({
+    type: WORKSPACE_CANVAS_CLIPBOARD_TYPE,
+    version: 1,
+    clipboard,
+  });
+}
+
+function decodeWorkspaceCanvasClipboard(text) {
+  try {
+    const parsed = JSON.parse(String(text || ""));
+    if (parsed?.type !== WORKSPACE_CANVAS_CLIPBOARD_TYPE) return null;
+    const clipboard = parsed.clipboard;
+    if (!clipboard || !Array.isArray(clipboard.nodes) || clipboard.nodes.length === 0) return null;
+    return clipboard;
+  } catch {
+    return null;
+  }
+}
+
+function persistWorkspaceCanvasClipboard(clipboard) {
+  try {
+    localStorage.setItem(WORKSPACE_CANVAS_CLIPBOARD_STORAGE_KEY, encodeWorkspaceCanvasClipboard(clipboard));
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function readPersistedWorkspaceCanvasClipboard() {
+  try {
+    return decodeWorkspaceCanvasClipboard(localStorage.getItem(WORKSPACE_CANVAS_CLIPBOARD_STORAGE_KEY));
+  } catch {
+    return null;
+  }
 }
 
 function clampWorkspaceFocusZoom(zoom) {
@@ -2754,7 +2835,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
             data?.onShareDisplayNode?.(shareNodeId);
           }}
           aria-label="分享展示"
-          title="分享展示（30 天有效）"
+          title="分享展示"
         >
           <span className="material-symbols-outlined">{sharingDisplay ? "hourglass_empty" : "ios_share"}</span>
         </button>
@@ -2796,6 +2877,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
+  const optimizing = data?.optimizingSchedule === true;
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   return (
@@ -2855,19 +2937,37 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
           <span className="material-symbols-outlined">close</span>
         </button>
       </div>
-      <button
-        type="button"
-        className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
-        disabled={readOnly}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (running) data?.onStopWorkspaceNode?.(id);
-          else data?.onRunWorkspaceNode?.(id);
-        }}
-      >
-        <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
-        <span>{running ? "Stop" : "Run line"}</span>
-      </button>
+      <div className="af-work-run-card__actions">
+        <button
+          type="button"
+          className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+          disabled={readOnly}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (running) data?.onStopWorkspaceNode?.(id);
+            else data?.onRunWorkspaceNode?.(id);
+          }}
+        >
+          <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+          <span>{running ? "Stop" : "Run line"}</span>
+        </button>
+        <button
+          type="button"
+          className="af-work-run-card__button af-work-run-card__logs nodrag"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onOpenWorkspaceRunLogs?.({
+              nodeId: id,
+              runNodeId: id,
+              scheduleNodeId: "",
+              label: data?.label || "Run",
+            });
+          }}
+        >
+          <span className="material-symbols-outlined">article</span>
+          <span>Logs</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -2878,6 +2978,7 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const config = normalizeScheduledRunConfig(data?.body || "");
   const scheduleState = data?.scheduledRunState || {};
   const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
+  const optimizing = data?.optimizingSchedule === true;
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   const updateConfig = (patch) => {
@@ -3060,19 +3161,51 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
         {scheduleState.lastError ? (
           <div className="af-work-schedule-card__error">{scheduleState.lastError}</div>
         ) : null}
-        <button
-          type="button"
-          className={"af-work-run-card__button af-work-schedule-card__run-now nodrag" + (running ? " af-work-run-card__button--stop" : "")}
-          disabled={readOnly}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (running) data?.onStopWorkspaceNode?.(id);
-            else data?.onRunWorkspaceNode?.(id);
-          }}
-        >
-          <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
-          <span>{running ? "停止" : "立即运行"}</span>
-        </button>
+        <div className="af-work-schedule-card__actions">
+          <button
+            type="button"
+            className={"af-work-run-card__button af-work-schedule-card__run-now nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+            disabled={readOnly || optimizing}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (running) data?.onStopWorkspaceNode?.(id);
+              else data?.onRunWorkspaceNode?.(id);
+            }}
+          >
+            <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+            <span>{running ? "停止" : "立即运行"}</span>
+          </button>
+          <button
+            type="button"
+            className={"af-work-run-card__button af-work-schedule-card__optimize nodrag" + (optimizing ? " af-work-schedule-card__optimize--running" : "")}
+            disabled={readOnly || running || optimizing}
+            title="为下游节点提前生成 implementation"
+            onClick={(event) => {
+              event.stopPropagation();
+              data?.onOptimizeWorkspaceSchedule?.(id);
+            }}
+          >
+            <span className="material-symbols-outlined">{optimizing ? "sync" : "auto_fix_high"}</span>
+            <span>{optimizing ? "优化中" : "优化"}</span>
+          </button>
+          <button
+            type="button"
+            className="af-work-run-card__button af-work-schedule-card__logs nodrag"
+            onClick={(event) => {
+              event.stopPropagation();
+              data?.onOpenWorkspaceRunLogs?.({
+                nodeId: id,
+                scheduleNodeId: id,
+                runNodeId: scheduleState.targetRunNodeId || id,
+                lastRunId: scheduleState.lastRunId || "",
+                label: data?.label || "Scheduled Run",
+              });
+            }}
+          >
+            <span className="material-symbols-outlined">article</span>
+            <span>日志</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -4156,6 +4289,7 @@ function WorkspacePageInner() {
   const [edges, setEdges, rawOnEdgesChange] = useEdgesState([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const workspaceCanvasRef = useRef(null);
   const [displayPage, setDisplayPage] = useState(() => normalizeDisplayPageState(null, []));
   const displayPageRef = useRef(displayPage);
   const [workspaceViewport, setWorkspaceViewport] = useState(null);
@@ -4187,10 +4321,16 @@ function WorkspacePageInner() {
   const [displayShareBusy, setDisplayShareBusy] = useState(false);
   const [displayShareError, setDisplayShareError] = useState("");
   const [displayShareResult, setDisplayShareResult] = useState(null);
-  const [displayShareDraft, setDisplayShareDraft] = useState({ title: "", layout: "gallery", nodeIds: [] });
+  const [displayShareDraft, setDisplayShareDraft] = useState(() => defaultDisplayShareDraft());
   const [sharingDisplayNodeId, setSharingDisplayNodeId] = useState("");
   const [displayLinkOpen, setDisplayLinkOpen] = useState(false);
   const [displayLinkCopyState, setDisplayLinkCopyState] = useState("");
+  const [displaySharesOpen, setDisplaySharesOpen] = useState(false);
+  const [displayShares, setDisplayShares] = useState([]);
+  const [displaySharesLoading, setDisplaySharesLoading] = useState(false);
+  const [displaySharesError, setDisplaySharesError] = useState("");
+  const [displayShareUpdatingId, setDisplayShareUpdatingId] = useState("");
+  const [displayShareCopyId, setDisplayShareCopyId] = useState("");
   const [displayPickerOpen, setDisplayPickerOpen] = useState(false);
   const [displayPickerSearch, setDisplayPickerSearch] = useState("");
   const [displayPreviewNodeId, setDisplayPreviewNodeId] = useState("");
@@ -4311,6 +4451,7 @@ function WorkspacePageInner() {
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
+  const [workspaceRunLogsTarget, setWorkspaceRunLogsTarget] = useState(null);
   const [composerMinimized, setComposerMinimized] = useState(true);
   const [activeNodeChatId, setActiveNodeChatId] = useState("");
   const [nodeChatSessions, setNodeChatSessions] = useState({});
@@ -4342,6 +4483,7 @@ function WorkspacePageInner() {
   const workspaceRunStoppedRef = useRef(new Set());
   const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
   const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
+  const [optimizingScheduleNodeId, setOptimizingScheduleNodeId] = useState("");
   const [status, setStatus] = useState("");
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
@@ -4364,19 +4506,6 @@ function WorkspacePageInner() {
     !flowParams.archived &&
     (flowSource === "user" || flowSource === "workspace"),
   );
-  const pipelineSettingsUrl = useMemo(() => {
-    if (!flowParams.flowId) return "/flow?panel=settings";
-    const url = flowUrlForView({
-      id: flowParams.flowId,
-      source: flowSource,
-      archived: Boolean(flowParams.archived),
-    }, "pipeline");
-    const [pathname, query = ""] = url.split("?");
-    const sp = new URLSearchParams(query);
-    sp.set("panel", "settings");
-    return `${pathname}?${sp.toString()}`;
-  }, [flowParams.archived, flowParams.flowId, flowSource]);
-
   useEffect(() => {
     if (!flowParams.flowId) return;
     recordPipelineView(flowParams.flowId, flowParams.flowSource || "user", "workspace", Boolean(flowParams.archived));
@@ -4552,9 +4681,59 @@ function WorkspacePageInner() {
 
   const openComposerLogPanel = useCallback((sessionId = "workspace") => {
     setComposerSidebarOpen(true);
+    setWorkspaceRunLogsTarget(null);
     setNodePropDraft(null);
     setActiveComposerSessionId(sessionId || "workspace");
   }, []);
+
+  const openWorkspaceRunLogs = useCallback((target = {}) => {
+    setWorkspaceRunLogsTarget({
+      scheduleNodeId: String(target.scheduleNodeId || ""),
+      runNodeId: String(target.runNodeId || target.nodeId || ""),
+      lastRunId: String(target.lastRunId || ""),
+      label: String(target.label || ""),
+    });
+    setComposerSidebarOpen(false);
+    setNodePropDraft(null);
+    setSelectedNodeId("");
+  }, []);
+
+  const optimizeWorkspaceScheduleRun = useCallback(async (scheduleNodeId = "") => {
+    const runNodeId = String(scheduleNodeId || "").trim();
+    if (!runNodeId || !workspaceWritable) return;
+    setOptimizingScheduleNodeId(runNodeId);
+    setStatus(`Optimizing scheduled run: ${runNodeId}`);
+    try {
+      await saveGraph(nodesRef.current, edgesRef.current);
+      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+      const res = await fetch("/api/workspace/run/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          runNodeId,
+          graph,
+          model: composerModel || "",
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "优化失败");
+      const nextGraph = json.graph || graph;
+      const flow = graphToFlow(nextGraph, palette);
+      instancesRef.current = flow.instances;
+      setInstances(flow.instances);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+      resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
+      const count = Array.isArray(json.optimized) ? json.optimized.length : 0;
+      setStatus(count > 0 ? `已生成 ${count} 个 implementation` : "没有需要优化的节点");
+    } catch (e) {
+      setStatus(String(e.message || e));
+    } finally {
+      setOptimizingScheduleNodeId("");
+    }
+  }, [composerModel, edgesRef, flowParams, nodesRef, palette, resetCanvasHistory, saveGraph, setEdges, setNodes, workspaceWritable]);
 
   const stopWorkspaceRun = useCallback(async (runNodeIdOrSessionId = "") => {
     const requestedId = String(runNodeIdOrSessionId || "").trim();
@@ -6024,7 +6203,7 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, setDisplayNodeContent, workspaceWritable]);
 
-  const shareDisplayNode = useCallback(async (nodeId) => {
+  const shareDisplayNode = useCallback((nodeId) => {
     const id = String(nodeId || "").trim();
     if (!id || sharingDisplayNodeId) return;
     const node = nodesRef.current.find((item) => item.id === id);
@@ -6032,39 +6211,12 @@ function WorkspacePageInner() {
       setStatus("展示节点不可用");
       return;
     }
-    setSharingDisplayNodeId(id);
+    const title = String(node.data?.label || node.data?.displayName || id).trim() || "AgentFlow Display";
+    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "single", nodeIds: [id] }));
     setDisplayShareError("");
-    const shareWindow = window.open("", "_blank");
-    try {
-      await saveGraph(nodesRef.current, edgesRef.current);
-      const title = String(node.data?.label || node.data?.displayName || id).trim() || "AgentFlow Display";
-      const res = await fetch("/api/display/share", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...flowParams,
-          title,
-          layout: "single",
-          nodeIds: [id],
-        }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || json.ok === false) throw new Error(json.error || "生成展示链接失败");
-      const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
-      setDisplayShareResult({ ...json, absoluteUrl });
-      setDisplayLinkCopyState("");
-      setStatus("已生成 30 天有效的展示链接");
-      if (shareWindow) shareWindow.location.href = absoluteUrl;
-      else window.location.assign(absoluteUrl);
-    } catch (e) {
-      if (shareWindow) shareWindow.close();
-      const message = String(e.message || e);
-      setDisplayShareError(message);
-      setStatus(message);
-    } finally {
-      setSharingDisplayNodeId("");
-    }
-  }, [flowParams, saveGraph, sharingDisplayNodeId]);
+    setDisplayShareResult(null);
+    setDisplayShareOpen(true);
+  }, [sharingDisplayNodeId]);
 
   const syncNodePropDraft = useCallback((nodeId, patchOrUpdater) => {
     const id = String(nodeId || "");
@@ -6125,6 +6277,9 @@ function WorkspacePageInner() {
       readOnly: !workspaceWritable,
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
+      onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
+      onOptimizeWorkspaceSchedule: optimizeWorkspaceScheduleRun,
+      optimizingSchedule: optimizingScheduleNodeId === node.id,
       runningRunNodeIds,
       scheduledRunState: scheduledRunState[node.id] || null,
       onChangeScheduledRunConfig: changeScheduledRunConfig,
@@ -6153,7 +6308,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceScheduleRun, optimizingScheduleNodeId, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
@@ -6916,7 +7071,7 @@ function WorkspacePageInner() {
     }
     const defaultNodeIds = selectedWorkspaceDisplayNodeIds.length > 0 ? selectedWorkspaceDisplayNodeIds : workspaceDisplayNodes.map((node) => node.id);
     const title = flowParams.flowId ? `${flowParams.flowId} 展示页` : "AgentFlow Display";
-    setDisplayShareDraft({ title, layout: "gallery", nodeIds: defaultNodeIds });
+    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "gallery", nodeIds: defaultNodeIds }));
     setDisplayShareError("");
     setDisplayShareResult(null);
     setDisplayShareOpen(true);
@@ -6930,6 +7085,28 @@ function WorkspacePageInner() {
         : { ...prev, nodeIds: [...current, nodeId] };
     });
   }, []);
+
+  const loadDisplayShares = useCallback(async () => {
+    setDisplaySharesLoading(true);
+    setDisplaySharesError("");
+    try {
+      const res = await fetch("/api/display/shares");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "读取分享列表失败");
+      setDisplayShares(Array.isArray(json.shares) ? json.shares : []);
+    } catch (e) {
+      setDisplaySharesError(String(e.message || e));
+      setDisplayShares([]);
+    } finally {
+      setDisplaySharesLoading(false);
+    }
+  }, []);
+
+  const openDisplaySharesPanel = useCallback(() => {
+    setDisplaySharesOpen(true);
+    setDisplayShareCopyId("");
+    void loadDisplayShares();
+  }, [loadDisplayShares]);
 
   const publishDisplayShare = useCallback(async () => {
     const title = displayShareDraft.title.trim();
@@ -6951,19 +7128,21 @@ function WorkspacePageInner() {
           title,
           layout: displayShareDraft.layout,
           nodeIds,
+          ...displayShareExpiryPayload(displayShareDraft),
         }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.ok === false) throw new Error(json.error || "发布展示页失败");
       const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
       setDisplayShareResult({ ...json, absoluteUrl });
-      setStatus("展示页已生成");
+      setStatus(json.share?.expiresAt ? "展示页已生成" : "展示页已生成：永久有效");
+      if (displaySharesOpen) void loadDisplayShares();
     } catch (e) {
       setDisplayShareError(String(e.message || e));
     } finally {
       setDisplayShareBusy(false);
     }
-  }, [displayShareDraft, edges, flowParams, nodes, saveGraph]);
+  }, [displayShareDraft, displaySharesOpen, edges, flowParams, loadDisplayShares, nodes, saveGraph]);
 
   const publishCurrentDisplayPage = useCallback(async () => {
     const nodeIds = Array.isArray(displayPage.nodeIds) ? displayPage.nodeIds : [];
@@ -6986,6 +7165,7 @@ function WorkspacePageInner() {
           title,
           layout: "canvas",
           nodeIds,
+          ...displayShareExpiryPayload(displayShareDraft),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -6993,7 +7173,8 @@ function WorkspacePageInner() {
       const absoluteUrl = new URL(json.url || `/display/${json.share?.id || ""}`, window.location.origin).href;
       setDisplayShareResult({ ...json, absoluteUrl });
       setDisplayLinkOpen(true);
-      setStatus("展示链接已生成");
+      setStatus(json.share?.expiresAt ? "展示链接已生成" : "展示链接已生成：永久有效");
+      if (displaySharesOpen) void loadDisplayShares();
     } catch (e) {
       const message = String(e.message || e);
       setDisplayShareError(message);
@@ -7001,7 +7182,7 @@ function WorkspacePageInner() {
     } finally {
       setDisplayShareBusy(false);
     }
-  }, [displayPage.nodeIds, edges, flowParams, nodes, saveGraph]);
+  }, [displayPage.nodeIds, displayShareDraft, displaySharesOpen, edges, flowParams, loadDisplayShares, nodes, saveGraph]);
 
   const copyDisplayShareUrl = useCallback(async () => {
     const url = displayShareResult?.absoluteUrl;
@@ -7010,6 +7191,56 @@ function WorkspacePageInner() {
     setDisplayLinkCopyState(ok ? "copied" : "failed");
     window.setTimeout(() => setDisplayLinkCopyState(""), 1600);
   }, [displayShareResult?.absoluteUrl]);
+
+  const copyDisplayShareListUrl = useCallback(async (share) => {
+    const url = displayShareUrl(share);
+    const ok = await copyTextToClipboard(url);
+    setDisplayShareCopyId(ok ? String(share?.id || "") : "failed");
+    window.setTimeout(() => setDisplayShareCopyId(""), 1600);
+  }, []);
+
+  const updateDisplayShareExpiry = useCallback(async (share, value) => {
+    const id = String(share?.id || "");
+    if (!id) return;
+    setDisplayShareUpdatingId(id);
+    setDisplaySharesError("");
+    try {
+      const body = value === "permanent"
+        ? { id, expiresMode: "permanent", permanent: true }
+        : { id, expiresMode: "days", expiresInDays: Number(value || 30) };
+      const res = await fetch("/api/display/share", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "更新分享有效期失败");
+      await loadDisplayShares();
+      setStatus("分享有效期已更新");
+    } catch (e) {
+      setDisplaySharesError(String(e.message || e));
+    } finally {
+      setDisplayShareUpdatingId("");
+    }
+  }, [loadDisplayShares]);
+
+  const revokeDisplayShare = useCallback(async (share) => {
+    const id = String(share?.id || "");
+    if (!id) return;
+    setDisplayShareUpdatingId(id);
+    setDisplaySharesError("");
+    try {
+      const res = await fetch(`/api/display/share?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "撤销分享失败");
+      await loadDisplayShares();
+      setStatus("分享已撤销");
+    } catch (e) {
+      setDisplaySharesError(String(e.message || e));
+    } finally {
+      setDisplayShareUpdatingId("");
+    }
+  }, [loadDisplayShares]);
 
   const dismissSelectedNode = useCallback((nodeId) => {
     setNodes((list) => list.map((node) => (
@@ -7389,6 +7620,14 @@ function WorkspacePageInner() {
     setQuickAddSearch("");
   }, [insertFlowSnippet, quickAddNodePosition]);
 
+  const focusWorkspaceCanvasForShortcuts = useCallback((event) => {
+    if (isDisplayMode) return;
+    const target = event?.target;
+    if (isEditableShortcutTarget(target)) return;
+    if (target?.closest?.("button, a, [role='button'], .react-flow__handle")) return;
+    workspaceCanvasRef.current?.focus?.({ preventScroll: true });
+  }, [isDisplayMode]);
+
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.defaultPrevented) return;
@@ -7452,6 +7691,7 @@ function WorkspacePageInner() {
           event.preventDefault();
           event.stopPropagation();
           canvasClipboardRef.current = clip;
+          persistWorkspaceCanvasClipboard(clip);
           if (useCanvasCopyFromEditable && typeof event.target?.blur === "function") event.target.blur();
           setStatus(`Copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
         }
@@ -7468,7 +7708,9 @@ function WorkspacePageInner() {
           setStatus("Readonly workspace");
           return;
         }
-        const pasted = pasteCanvasClipboard(canvasClipboardRef.current, nodesRef.current, edgesRef.current, instancesRef.current);
+        const canvasClipboard = canvasClipboardRef.current || readPersistedWorkspaceCanvasClipboard();
+        if (canvasClipboard && !canvasClipboardRef.current) canvasClipboardRef.current = canvasClipboard;
+        const pasted = pasteCanvasClipboard(canvasClipboard, nodesRef.current, edgesRef.current, instancesRef.current);
         if (pasted) {
           event.preventDefault();
           event.stopPropagation();
@@ -7839,8 +8081,7 @@ function WorkspacePageInner() {
                 disabled={displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
                 onClick={() => {
                   setDisplayLinkCopyState("");
-                  if (displayShareResult?.absoluteUrl) setDisplayLinkOpen(true);
-                  else void publishCurrentDisplayPage();
+                  setDisplayLinkOpen(true);
                 }}
                 title={displayShareResult?.absoluteUrl ? "查看展示链接" : displayPage.nodeIds.length === 0 ? "先添加展示节点" : "生成展示链接"}
               >
@@ -7861,12 +8102,12 @@ function WorkspacePageInner() {
           ) : null}
           <button
             type="button"
-            className="af-icon-btn"
-            onClick={() => navigate(pipelineSettingsUrl)}
-            aria-label={t("flow:topbar.pipelineSettings")}
-            title={t("flow:topbar.pipelineSettings")}
+            className="af-workspace-display-share-btn"
+            onClick={openDisplaySharesPanel}
+            title="查看我的展示分享"
           >
-            <span className="material-symbols-outlined">settings</span>
+            <span className="material-symbols-outlined" aria-hidden>folder_shared</span>
+            我的分享
           </button>
           <button
             type="button"
@@ -7901,7 +8142,10 @@ function WorkspacePageInner() {
             type="button"
             className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
             disabled={isDisplayMode}
-            onClick={() => setComposerSidebarOpen((v) => !v)}
+            onClick={() => {
+              setWorkspaceRunLogsTarget(null);
+              setComposerSidebarOpen((v) => !v);
+            }}
           >
             AI
           </button>
@@ -7920,14 +8164,14 @@ function WorkspacePageInner() {
         </div>
       ) : null}
 
-      <div
-        className={
-          "af-workspace-body" +
-          (!isDisplayMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
-          (!isDisplayMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
-          (isDisplayMode ? " af-workspace-body--display-mode" : "")
-        }
-      >
+	      <div
+	        className={
+	          "af-workspace-body" +
+	          (!isDisplayMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
+	          (!isDisplayMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
+	          (isDisplayMode ? " af-workspace-body--display-mode" : "")
+	        }
+	      >
         {!isDisplayMode && workspaceSidebarCollapsed ? (
           <nav className="af-workspace-rail" aria-label="Workspace sidebar">
             <div className="af-workspace-rail__stack">
@@ -8208,7 +8452,12 @@ function WorkspacePageInner() {
 
         </aside> : null}
 
-        <main className="af-workspace-canvas">
+        <main
+          ref={workspaceCanvasRef}
+          className="af-workspace-canvas"
+          tabIndex={-1}
+          onPointerDownCapture={focusWorkspaceCanvasForShortcuts}
+        >
           <ReactFlow
             className={
               "af-flow-canvas af-workspace-flow" +
@@ -8703,6 +8952,21 @@ function WorkspacePageInner() {
             />
           </aside>
         ) : null}
+        {!isDisplayMode && workspaceRunLogsTarget ? createPortal(
+          <div className="af-workspace-run-logs-overlay" role="presentation" onMouseDown={() => setWorkspaceRunLogsTarget(null)}>
+            <aside className="af-workspace-run-logs-drawer" aria-label="Workspace Run Logs" onMouseDown={(event) => event.stopPropagation()}>
+              <WorkspaceRunLogsDrawer
+                flowParams={flowParams}
+                scheduleNodeId={workspaceRunLogsTarget.scheduleNodeId}
+                runNodeId={workspaceRunLogsTarget.runNodeId}
+                lastRunId={workspaceRunLogsTarget.lastRunId}
+                label={workspaceRunLogsTarget.label}
+                onClose={() => setWorkspaceRunLogsTarget(null)}
+              />
+            </aside>
+          </div>,
+          document.body,
+        ) : null}
         <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
         <NodeJumpPalette
           open={jumpPaletteOpen}
@@ -8853,6 +9117,25 @@ function WorkspacePageInner() {
                     <option value="slides">Slides</option>
                   </select>
                 </label>
+                <label className="af-flow-snippet-field">
+                  <span>有效期</span>
+                  <select
+                    className="af-display-share-select"
+                    value={displayShareExpiryValue(displayShareDraft)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDisplayShareDraft((prev) => ({
+                        ...prev,
+                        permanent: value === "permanent",
+                        expiresInDays: value === "permanent" ? prev.expiresInDays || 30 : Number(value),
+                      }));
+                    }}
+                  >
+                    {DISPLAY_SHARE_EXPIRY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
                 <div className="af-display-share-node-list" role="group" aria-label="选择展示节点">
                   {workspaceDisplayNodes.map((node) => {
                     const checked = Array.isArray(displayShareDraft.nodeIds) && displayShareDraft.nodeIds.includes(node.id);
@@ -8944,6 +9227,25 @@ function WorkspacePageInner() {
                 ) : (
                   <div className="af-display-link-modal__empty">还没有生成展示链接</div>
                 )}
+                <label className="af-flow-snippet-field">
+                  <span>新链接有效期</span>
+                  <select
+                    className="af-display-share-select"
+                    value={displayShareExpiryValue(displayShareDraft)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDisplayShareDraft((prev) => ({
+                        ...prev,
+                        permanent: value === "permanent",
+                        expiresInDays: value === "permanent" ? prev.expiresInDays || 30 : Number(value),
+                      }));
+                    }}
+                  >
+                    {DISPLAY_SHARE_EXPIRY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
                 {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
               </div>
               <div className="af-flow-snippet-modal__foot">
@@ -8965,6 +9267,83 @@ function WorkspacePageInner() {
                 >
                   {displayShareBusy ? "生成中..." : displayShareResult?.absoluteUrl ? "更新链接" : "生成链接"}
                 </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {displaySharesOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-display-shares-modal" role="dialog" aria-modal="true" aria-label="我的分享">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>folder_shared</span>
+                  我的分享
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setDisplaySharesOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <div className="af-display-shares-toolbar">
+                  <span>{displayShares.length ? `${displayShares.length} 个分享` : "暂无分享"}</span>
+                  <button type="button" onClick={() => void loadDisplayShares()} disabled={displaySharesLoading}>
+                    <span className="material-symbols-outlined" aria-hidden>refresh</span>
+                    刷新
+                  </button>
+                </div>
+                {displaySharesError ? <div className="af-flow-snippet-error">{displaySharesError}</div> : null}
+                {displaySharesLoading ? <div className="af-display-link-modal__empty">Loading...</div> : null}
+                {!displaySharesLoading && displayShares.length === 0 ? (
+                  <div className="af-display-link-modal__empty">还没有创建过展示分享</div>
+                ) : null}
+                <div className="af-display-shares-list">
+                  {displayShares.map((share) => {
+                    const url = displayShareUrl(share);
+                    const busy = displayShareUpdatingId === share.id;
+                    const expiryValue = !share.expiresAt ? "permanent" : String(share.expiresInDays || 30);
+                    return (
+                      <article key={share.id} className="af-display-share-item">
+                        <div className="af-display-share-item__main">
+                          <strong>{share.title || "AgentFlow Display"}</strong>
+                          <span>{share.flowId || "-"} · {share.layout || "gallery"} · {Array.isArray(share.nodeIds) ? share.nodeIds.length : 0} nodes</span>
+                          <small>{formatDisplayShareExpiry(share)}</small>
+                        </div>
+                        <input className="af-display-share-item__url" type="text" readOnly value={url} onFocus={(event) => event.target.select()} />
+                        <select
+                          className="af-display-share-select"
+                          value={expiryValue}
+                          disabled={busy}
+                          onChange={(event) => void updateDisplayShareExpiry(share, event.target.value)}
+                          aria-label="修改分享有效期"
+                        >
+                          {DISPLAY_SHARE_EXPIRY_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                        <div className="af-display-share-item__actions">
+                          <button type="button" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
+                            <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                            打开
+                          </button>
+                          <button type="button" onClick={() => void copyDisplayShareListUrl(share)}>
+                            <span className="material-symbols-outlined" aria-hidden>{displayShareCopyId === share.id ? "check" : "content_copy"}</span>
+                            {displayShareCopyId === share.id ? "已复制" : "复制"}
+                          </button>
+                          <button type="button" className="af-display-share-item__danger" disabled={busy} onClick={() => void revokeDisplayShare(share)}>
+                            <span className="material-symbols-outlined" aria-hidden>{busy ? "hourglass_empty" : "link_off"}</span>
+                            撤销
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>,

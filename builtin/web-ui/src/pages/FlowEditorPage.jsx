@@ -861,6 +861,45 @@ function setsEqual(a, b) {
   return true;
 }
 
+const FLOW_CANVAS_CLIPBOARD_STORAGE_KEY = "af:flow:canvas-clipboard";
+const FLOW_CANVAS_CLIPBOARD_TYPE = "agentflow.flow.canvas-clipboard";
+
+function encodeFlowCanvasClipboard(clipboard) {
+  return JSON.stringify({
+    type: FLOW_CANVAS_CLIPBOARD_TYPE,
+    version: 1,
+    clipboard,
+  });
+}
+
+function decodeFlowCanvasClipboard(text) {
+  try {
+    const parsed = JSON.parse(String(text || ""));
+    if (parsed?.type !== FLOW_CANVAS_CLIPBOARD_TYPE) return null;
+    const clipboard = parsed.clipboard;
+    if (!clipboard || !Array.isArray(clipboard.nodes) || clipboard.nodes.length === 0) return null;
+    return clipboard;
+  } catch {
+    return null;
+  }
+}
+
+function persistFlowCanvasClipboard(clipboard) {
+  try {
+    localStorage.setItem(FLOW_CANVAS_CLIPBOARD_STORAGE_KEY, encodeFlowCanvasClipboard(clipboard));
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function readPersistedFlowCanvasClipboard() {
+  try {
+    return decodeFlowCanvasClipboard(localStorage.getItem(FLOW_CANVAS_CLIPBOARD_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
 function FlowBoard({
   fitViewEpoch,
   canvasTool,
@@ -1719,6 +1758,7 @@ export default function FlowEditorPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
+  const flowCanvasFocusRef = useRef(null);
   const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
@@ -3276,6 +3316,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     applyNodeProperties();
   }, [nodePropDraft, soleSelectedNode, applyNodeProperties]);
 
+  const focusFlowCanvasForShortcuts = useCallback((e) => {
+    if (runMode !== "edit") return;
+    const target = e?.target;
+    if (isEditableFocus(target)) return;
+    if (target?.closest?.("button, a, [role='button'], .react-flow__handle")) return;
+    flowCanvasFocusRef.current?.focus?.({ preventScroll: true });
+  }, [runMode]);
+
   useEffect(() => {
     const onKeyDown = (/** @type {KeyboardEvent} */ e) => {
       if (runMode !== "edit") return;
@@ -3353,13 +3401,16 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           e.preventDefault();
           e.stopPropagation();
           canvasClipboardRef.current = clip;
+          persistFlowCanvasClipboard(clip);
           setSaveStatus(`Copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
         }
         return;
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
-        const pasted = pasteCanvasClipboard(canvasClipboardRef.current, nodesRef.current, edgesRef.current, instancesRef.current);
+        const canvasClipboard = canvasClipboardRef.current || readPersistedFlowCanvasClipboard();
+        if (canvasClipboard && !canvasClipboardRef.current) canvasClipboardRef.current = canvasClipboard;
+        const pasted = pasteCanvasClipboard(canvasClipboard, nodesRef.current, edgesRef.current, instancesRef.current);
         if (pasted) {
           e.preventDefault();
           e.stopPropagation();
@@ -6195,7 +6246,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             {rightPanel === "settings" && selected && runMode === "edit" ? (
               renderPipelineSettingsPage()
             ) : (
-            <div className="af-react-flow-wrap af-pipeline-flow">
+            <div
+              ref={flowCanvasFocusRef}
+              className="af-react-flow-wrap af-pipeline-flow"
+              tabIndex={-1}
+              onPointerDownCapture={focusFlowCanvasForShortcuts}
+            >
               {selected ? (
                 <>
                 <FlowBoard

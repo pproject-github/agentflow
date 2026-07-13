@@ -120,6 +120,13 @@ import {
   readRunLedgerEvents,
   runLedgerId,
 } from "./run-ledger.mjs";
+import {
+  appendWorkspaceRunLogEvent,
+  createWorkspaceRunLogSession,
+  finishWorkspaceRunLogSession,
+  listWorkspaceRunLogs,
+  readWorkspaceRunLogEvents,
+} from "./workspace-run-logs.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -1482,6 +1489,7 @@ function readWorkspaceGraph(workspaceRoot) {
 
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
 const DISPLAY_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DISPLAY_SHARE_ALLOWED_EXPIRY_DAYS = new Set([1, 7, 30, 90, 365]);
 
 function displaySharesPath() {
   return path.join(getAgentflowDataRoot(), DISPLAY_SHARE_FILENAME);
@@ -1931,9 +1939,30 @@ function createDisplayShareId() {
   return crypto.randomBytes(12).toString("base64url");
 }
 
-function displayShareExpiresAt(now = new Date()) {
+function normalizeDisplayShareExpiry(input = {}, now = new Date()) {
+  const mode = String(input?.expiresMode || input?.expiryMode || "").trim().toLowerCase();
+  const rawDays = Number(input?.expiresInDays ?? input?.expiryDays ?? input?.ttlDays);
+  if (
+    mode === "permanent" ||
+    mode === "forever" ||
+    input?.permanent === true ||
+    input?.expiresAt === null ||
+    String(input?.expiresAt || "").trim().toLowerCase() === "permanent"
+  ) {
+    return { expiresAt: "", expiresMode: "permanent", expiresInDays: null };
+  }
+  let days = Number.isFinite(rawDays) ? Math.round(rawDays) : 30;
+  if (!DISPLAY_SHARE_ALLOWED_EXPIRY_DAYS.has(days)) days = 30;
   const time = now instanceof Date ? now.getTime() : Date.now();
-  return new Date(time + DISPLAY_SHARE_TTL_MS).toISOString();
+  return {
+    expiresAt: new Date(time + days * 24 * 60 * 60 * 1000).toISOString(),
+    expiresMode: "days",
+    expiresInDays: days,
+  };
+}
+
+function displayShareExpiresAt(now = new Date()) {
+  return normalizeDisplayShareExpiry({ expiresInDays: 30 }, now).expiresAt;
 }
 
 function isDisplayShareExpired(share) {
@@ -1971,12 +2000,13 @@ function normalizeDisplayShareLayout(layout, fallback = "canvas") {
   return ["canvas", "gallery", "slides", "document", "single"].includes(text) ? text : fallback;
 }
 
-function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds }) {
+function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt }) {
   const shares = readDisplayShares();
   let id = createDisplayShareId();
   while (shares[id]) id = createDisplayShareId();
   const nowDate = new Date();
   const now = nowDate.toISOString();
+  const expiry = normalizeDisplayShareExpiry({ expiresMode, expiresInDays, permanent, expiresAt }, nowDate);
   const share = {
     id,
     userId: String(userId || ""),
@@ -1988,11 +2018,82 @@ function createDisplayShareRecord({ userId, flowId, flowSource, archived, title,
     nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
     createdAt: now,
     updatedAt: now,
-    expiresAt: displayShareExpiresAt(nowDate),
+    expiresAt: expiry.expiresAt,
+    expiresMode: expiry.expiresMode,
+    expiresInDays: expiry.expiresInDays,
   };
   shares[id] = share;
   writeDisplayShares(shares);
   return share;
+}
+
+function displayShareSummary(share, baseUrl = "") {
+  return {
+    id: String(share?.id || ""),
+    userId: String(share?.userId || ""),
+    flowId: String(share?.flowId || ""),
+    flowSource: String(share?.flowSource || "user"),
+    archived: share?.archived === true,
+    title: String(share?.title || "AgentFlow Display"),
+    layout: String(share?.layout || "gallery"),
+    nodeIds: Array.isArray(share?.nodeIds) ? share.nodeIds : [],
+    createdAt: String(share?.createdAt || ""),
+    updatedAt: String(share?.updatedAt || ""),
+    expiresAt: String(share?.expiresAt || ""),
+    expiresMode: String(share?.expiresMode || (share?.expiresAt ? "days" : "permanent")),
+    expiresInDays: share?.expiresInDays == null ? null : Number(share.expiresInDays),
+    url: displayShareOutputUrl(share?.id || "", baseUrl),
+  };
+}
+
+function listDisplaySharesForUser(userCtx = {}, baseUrl = "") {
+  const userId = String(userCtx?.userId || "");
+  const isAdmin = userCtx?.isAdmin === true;
+  const shares = readDisplayShares();
+  let changed = false;
+  const rows = [];
+  for (const [id, share] of Object.entries(shares)) {
+    if (isDisplayShareExpired(share)) {
+      delete shares[id];
+      changed = true;
+      continue;
+    }
+    if (!isAdmin && String(share?.userId || "") !== userId) continue;
+    rows.push(displayShareSummary(share, baseUrl));
+  }
+  if (changed) writeDisplayShares(shares);
+  rows.sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  return rows;
+}
+
+function updateDisplayShareExpiryForUser(id, userCtx = {}, patch = {}) {
+  const shares = readDisplayShares();
+  const share = shares[id];
+  if (!share) return { status: 404, error: "Display share not found" };
+  const userId = String(userCtx?.userId || "");
+  if (userCtx?.isAdmin !== true && String(share.userId || "") !== userId) return { status: 403, error: "Forbidden" };
+  const expiry = normalizeDisplayShareExpiry(patch, new Date());
+  const updated = {
+    ...share,
+    expiresAt: expiry.expiresAt,
+    expiresMode: expiry.expiresMode,
+    expiresInDays: expiry.expiresInDays,
+    updatedAt: new Date().toISOString(),
+  };
+  shares[id] = updated;
+  writeDisplayShares(shares);
+  return { status: 200, share: updated };
+}
+
+function deleteDisplayShareForUser(id, userCtx = {}) {
+  const shares = readDisplayShares();
+  const share = shares[id];
+  if (!share) return { status: 404, error: "Display share not found" };
+  const userId = String(userCtx?.userId || "");
+  if (userCtx?.isAdmin !== true && String(share.userId || "") !== userId) return { status: 403, error: "Forbidden" };
+  delete shares[id];
+  writeDisplayShares(shares);
+  return { status: 200 };
 }
 
 function parseDisplayShareNodeIdInput(value) {
@@ -2146,6 +2247,8 @@ function publicDisplayPayloadFromShare(root, share) {
       createdAt: share.createdAt || "",
       updatedAt: share.updatedAt || "",
       expiresAt: share.expiresAt || "",
+      expiresMode: share.expiresMode || (share.expiresAt ? "days" : "permanent"),
+      expiresInDays: share.expiresInDays == null ? null : Number(share.expiresInDays),
     },
     nodes,
   };
@@ -3832,6 +3935,135 @@ function workspaceBuildImplementationPrompt(instance, nodeId, opts = {}) {
   ].filter((line) => line !== "").join("\n");
 }
 
+function workspaceImplementationPlanNeighbors(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const incoming = [];
+  const outgoing = [];
+  for (const edge of edges) {
+    if (String(edge?.target || "") === String(nodeId)) {
+      const sourceId = String(edge?.source || "");
+      if (sourceId) incoming.push(`${sourceId} (${instances[sourceId]?.label || instances[sourceId]?.definitionId || "node"})`);
+    }
+    if (String(edge?.source || "") === String(nodeId)) {
+      const targetId = String(edge?.target || "");
+      if (targetId) outgoing.push(`${targetId} (${instances[targetId]?.label || instances[targetId]?.definitionId || "node"})`);
+    }
+  }
+  return {
+    incoming: workspaceUniqueImplementationList(incoming, 20),
+    outgoing: workspaceUniqueImplementationList(outgoing, 20),
+  };
+}
+
+function workspaceBuildPlannedImplementationPrompt(graph, nodeId, opts = {}) {
+  const instance = graph?.instances?.[nodeId] || {};
+  const defId = String(instance?.definitionId || "").trim();
+  const label = String(instance?.label || nodeId || "node").trim();
+  const mode = workspaceImplementationModeForInstance(instance);
+  const inputValues = opts.inputValues || {};
+  const task = workspaceResolveBodyPlaceholders(instance?.body || "", inputValues).trim();
+  const scriptRef = String(instance?.scriptRef || "").trim();
+  const inlineScript = String(instance?.script || "").trim();
+  const previousImplementation = opts.previousImplementation
+    ? workspaceClipImplementationText(opts.previousImplementation, 12000)
+    : "";
+  const neighbors = workspaceImplementationPlanNeighbors(graph, nodeId);
+  return [
+    "你要为 AgentFlow Workspace 的一个重复执行节点提前写“实现方案”Markdown。",
+    "这个 implementation.md 会在后续 Scheduled Run 执行同一节点前作为参考上下文，目标是减少重复推理、提前固定执行路径和脚本约定。",
+    "",
+    "要求：",
+    "- 基于当前节点任务、输入槽、上下游关系，写一份可复用的执行方案。",
+    "- 写清楚下次运行应优先采用的步骤、文件路径、输入输出协议、错误处理和可复用约定。",
+    "- 如果是脚本类节点，重点写清楚脚本入口、环境变量、输入 JSON/输出文件协议、幂等性和失败重试策略。",
+    "- 不要假装已经执行过；这是执行前优化计划，不要引用不存在的实际结果。",
+    "- 只输出 Markdown 正文，不要输出代码围栏包裹整篇。",
+    "",
+    "## 节点信息",
+    "",
+    `nodeId: ${nodeId}`,
+    `label: ${label}`,
+    `definitionId: ${defId || "(unknown)"}`,
+    `mode: ${mode}`,
+    scriptRef ? `scriptRef: ${scriptRef}` : "",
+    inlineScript ? `inlineScript: ${workspaceClipImplementationText(inlineScript, 2400)}` : "",
+    "",
+    "## 当前任务",
+    "",
+    workspaceClipImplementationText(task || instance?.body || scriptRef || inlineScript || "(无显式任务)", 8000),
+    "",
+    "## 可见输入",
+    "",
+    JSON.stringify(inputValues || {}, null, 2),
+    "",
+    "## 上下游",
+    "",
+    `incoming: ${neighbors.incoming.length ? neighbors.incoming.join(", ") : "(none)"}`,
+    `outgoing: ${neighbors.outgoing.length ? neighbors.outgoing.join(", ") : "(none)"}`,
+    "",
+    previousImplementation ? "## 上一版实现方案" : "",
+    previousImplementation || "",
+  ].filter((line) => line !== "").join("\n");
+}
+
+async function workspaceGeneratePlannedImplementationMarkdown({
+  scopedRoot,
+  graph,
+  nodeId,
+  inputValues,
+  implementationPath,
+  previousImplementation,
+  runPackage,
+  modelKey,
+  userCtx,
+  emit,
+  onActiveChild,
+}) {
+  const prompt = workspaceBuildPlannedImplementationPrompt(graph, nodeId, {
+    inputValues,
+    previousImplementation,
+  });
+  let content = "";
+  let lastAssistant = "";
+  let resultText = "";
+  emit?.({ type: "status", nodeId, line: `Generate implementation plan: ${nodeId}` });
+  const handle = startComposerAgent({
+    uiWorkspaceRoot: scopedRoot,
+    cliWorkspace: runPackage?.nodeRunDir || scopedRoot,
+    prompt,
+    modelKey,
+    agentflowUserId: userCtx?.userId || "",
+    extraEnv: runtimeEnvForUser(userCtx, {
+      AGENTFLOW_IMPLEMENTATION_REF: implementationPath || "",
+      AGENTFLOW_NODE_RUN_DIR: runPackage?.nodeRunDir || "",
+      AGENTFLOW_NODE_TMP_DIR: runPackage?.nodeTmpDir || "",
+      AGENTFLOW_OUTPUTS_DIR: runPackage?.outputsDir || "",
+    }),
+    onStreamEvent: (ev) => {
+      if (ev?.type === "natural" && ev.kind === "assistant" && typeof ev.text === "string") {
+        lastAssistant = ev.text;
+        content += (content ? "\n" : "") + ev.text;
+      } else if (ev?.type === "natural" && ev.kind === "result" && typeof ev.text === "string") {
+        resultText = ev.text;
+      }
+    },
+    onToolCall: (subtype, toolName) => {
+      const sub = subtype ? String(subtype) : "";
+      const tool = toolName ? String(toolName) : "";
+      emit?.({ type: "status", nodeId, line: `优化工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
+    },
+  });
+  if (typeof onActiveChild === "function") onActiveChild(handle.child || null);
+  try {
+    await handle.finished;
+  } finally {
+    if (typeof onActiveChild === "function") onActiveChild(null);
+  }
+  const markdown = String(resultText || lastAssistant || content || "").trim();
+  return markdown.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
+}
+
 async function workspaceGenerateImplementationMarkdown({
   scopedRoot,
   nodeId,
@@ -4031,6 +4263,88 @@ async function workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, 
     });
     return { changed: false, wrote: false, instance: graph?.instances?.[nodeId] };
   }
+}
+
+function workspaceShouldOptimizeNodeImplementation(instance) {
+  const defId = String(instance?.definitionId || "").trim();
+  if (!defId) return false;
+  if (defId === "workspace_run" || defId === "workspace_scheduled_run") return false;
+  if (defId.startsWith("display_") || defId.startsWith("provide_") || defId.startsWith("control_")) return false;
+  return defId === "agent_subAgent" || defId === "tool_nodejs" || defId.startsWith("tool_");
+}
+
+async function workspaceOptimizeNodeImplementation(scopedRoot, graph, nodeId, opts = {}) {
+  const current = graph?.instances?.[nodeId];
+  if (!current || !workspaceShouldOptimizeNodeImplementation(current)) {
+    return { optimized: false, skipped: true, nodeId, reason: "not optimizable" };
+  }
+  const implementationRef = String(current.implementationRef || "").trim() || workspaceDefaultImplementationRef(nodeId);
+  const abs = workspaceResolveFlowFile(scopedRoot, implementationRef, "implementationRef");
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const previousImplementation = fs.existsSync(abs) && fs.statSync(abs).isFile()
+    ? workspaceReadTextFileIfExists(abs, 60000)
+    : "";
+  const inputValues = workspaceInputValues(graph, nodeId, new Map(), scopedRoot);
+  const runPackage = workspaceCreateNodeRunPackage(opts.runTmpRoot || workspaceCreateRunTmpRoot(scopedRoot, "optimize"), nodeId, {
+    scopedRoot,
+    cwd: scopedRoot,
+    task: workspaceResolveBodyPlaceholders(current.body || current.script || current.scriptRef || "", inputValues),
+    inputValues,
+  });
+  const markdown = await workspaceGeneratePlannedImplementationMarkdown({
+    scopedRoot,
+    graph,
+    nodeId,
+    inputValues: { ...inputValues, ...(runPackage.inputValues || {}) },
+    implementationPath: implementationRef,
+    previousImplementation,
+    runPackage,
+    modelKey: opts.modelKey || "",
+    userCtx: opts.userCtx || {},
+    emit: opts.emit,
+    onActiveChild: opts.onActiveChild,
+  });
+  if (!markdown.trim()) throw new Error(`Implementation plan is empty for node ${nodeId}`);
+  fs.writeFileSync(abs, markdown.trimEnd() + "\n", "utf-8");
+  const explicitMode = String(current.implementationMode || "").trim();
+  graph.instances[nodeId] = {
+    ...current,
+    implementationRef,
+    implementationMode: explicitMode || workspaceImplementationModeForInstance(current),
+  };
+  return { optimized: true, nodeId, implementationRef };
+}
+
+async function workspaceOptimizeRunImplementations(root, scopedRoot, payload, userCtx = {}, opts = {}) {
+  const graph = hydrateWorkspaceGraphForRuntime(root, {
+    root: scopedRoot,
+    flowId: payload.flowId || "",
+    flowSource: payload.flowSource || "user",
+    archived: payload.archived === true || payload.flowArchived === true,
+  }, payload.graph || {}, userCtx);
+  const runNodeId = String(payload?.runNodeId || "").trim();
+  const plan = workspaceRunPlan(graph, runNodeId, scopedRoot);
+  const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, `${runNodeId || "run"}-optimize`);
+  const optimized = [];
+  const skipped = [];
+  for (const nodeId of plan.order) {
+    const instance = graph.instances?.[nodeId];
+    if (!workspaceShouldOptimizeNodeImplementation(instance)) {
+      skipped.push({ nodeId, reason: "not optimizable" });
+      continue;
+    }
+    opts.emit?.({ type: "node-start", nodeId, definitionId: instance.definitionId, phase: "optimize" });
+    const result = await workspaceOptimizeNodeImplementation(scopedRoot, graph, nodeId, {
+      runTmpRoot,
+      modelKey: payload.model || "",
+      userCtx,
+      emit: opts.emit,
+      onActiveChild: opts.onActiveChild,
+    });
+    optimized.push(result);
+    opts.emit?.({ type: "node-done", nodeId, definitionId: instance.definitionId, phase: "optimize", implementationRef: result.implementationRef });
+  }
+  return { ok: true, graph, order: plan.order, optimized, skipped };
 }
 
 function parseWorkspaceSkillKeys(raw) {
@@ -5180,6 +5494,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         title,
         layout,
         nodeIds,
+        expiresMode: payload.expiresMode,
+        expiresInDays: payload.expiresInDays,
+        permanent: payload.permanent,
+        expiresAt: payload.expiresAt,
       });
       const url = displayShareOutputUrl(share.id, baseUrl);
       let nextInstance = workspaceSetOutputSlot(instance, "url", url);
@@ -5570,7 +5888,7 @@ const activeFlowRuns = new Map();
 const activeWorkspaceRuns = new Map();
 const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
 const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
-const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = false;
+const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = true;
 const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
 const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
 
@@ -5706,11 +6024,111 @@ function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user",
     .sort((a, b) => String(a.scheduleNodeId || a.runNodeId || "").localeCompare(String(b.scheduleNodeId || b.runNodeId || "")));
 }
 
+function listWorkspaceScheduleStatuses(root, userCtx = {}) {
+  const registry = readWorkspaceScheduleRegistry();
+  const userId = String(userCtx.userId || "");
+  const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
+    .filter((flow) => !flow.archived && !isReadonlyBuiltinFlowSource(flow.source || "user"));
+  const rows = [];
+  for (const flow of flows) {
+    const flowId = String(flow.id || "");
+    const flowSource = String(flow.source || "user");
+    const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
+    if (scoped.error || !scoped.root) continue;
+    let graph;
+    try {
+      graph = readWorkspaceGraph(scoped.root).graph;
+    } catch {
+      continue;
+    }
+    const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+    for (const [scheduleNodeId, instance] of Object.entries(instances)) {
+      if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
+      const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+      const key = workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId);
+      const current = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
+      const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
+      const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
+      const running = workspaceActiveRunsForScope(scopeKey).some(([, active]) => (
+        active?.scheduled === true &&
+        String(active?.runNodeId || "") === String(targetRunNodeId || scheduleNodeId)
+      ));
+      let nextRunAt = current.nextRunAt || null;
+      let lastStatus = current.lastStatus || (config.enabled ? "armed" : "disabled");
+      let lastError = current.lastError || "";
+      if (config.enabled && !nextRunAt) {
+        try {
+          nextRunAt = workspaceScheduleNextRunAt(config, new Date());
+        } catch (e) {
+          lastStatus = "invalid";
+          lastError = (e && e.message) || String(e);
+        }
+      }
+      rows.push({
+        kind: "workspace",
+        key,
+        flowId,
+        flowSource,
+        scheduleNodeId,
+        runNodeId: targetRunNodeId,
+        label: String(instance.label || "Scheduled Run"),
+        enabled: config.enabled,
+        cron: config.cron,
+        timezone: config.timezone,
+        preset: "",
+        nextRunAt,
+        lastTriggeredAt: current.lastTriggeredAt || null,
+        lastFinishedAt: current.lastFinishedAt || null,
+        lastRunId: current.lastRunId || "",
+        lastStatus,
+        lastError,
+        running,
+        waiting: 0,
+      });
+    }
+  }
+  rows.sort((a, b) => {
+    const ea = a.enabled ? 0 : 1;
+    const eb = b.enabled ? 0 : 1;
+    return ea - eb || String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")) || a.flowId.localeCompare(b.flowId);
+  });
+  return rows;
+}
+
 function workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config = {}) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   return String(instances[scheduleNodeId]?.definitionId || "") === "workspace_scheduled_run"
     ? String(scheduleNodeId || "")
     : "";
+}
+
+function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx = {}) {
+  const flowId = String(payload.flowId || "").trim();
+  const flowSource = String(payload.flowSource || "user").trim() || "user";
+  const scheduleNodeId = String(payload.scheduleNodeId || "").trim();
+  if (!flowId) return { success: false, error: "Missing flowId" };
+  if (!scheduleNodeId) return { success: false, error: "Missing scheduleNodeId" };
+  if (!isValidFlowSourceWrite(flowSource)) return { success: false, error: "Cannot update readonly workspace schedule" };
+  const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
+  if (scoped.error) return { success: false, error: scoped.error };
+  if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+    return { success: false, error: "Cannot update schedule for builtin or archived workspace" };
+  }
+  const { graph } = readWorkspaceGraph(scoped.root);
+  const instance = graph.instances?.[scheduleNodeId];
+  if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run") {
+    return { success: false, error: "Workspace schedule node not found" };
+  }
+  const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+  const nextConfig = { ...config, enabled: payload.enabled === true };
+  graph.instances = { ...(graph.instances || {}) };
+  graph.instances[scheduleNodeId] = {
+    ...instance,
+    body: JSON.stringify(nextConfig),
+  };
+  fs.writeFileSync(workspaceGraphPath(scoped.root), JSON.stringify(graph, null, 2) + "\n", "utf-8");
+  const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
+  return { success: true, workspaceSchedules };
 }
 
 function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
@@ -5730,7 +6148,6 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
   for (const [scheduleNodeId, instance] of Object.entries(instances)) {
     if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
     const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
-    if (!config.enabled) continue;
     const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
     const key = workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId);
     const previous = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
@@ -5744,9 +6161,15 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
     let lastStatus = previous.lastStatus || "armed";
     let lastError = previous.lastError || "";
     try {
-      nextRunAt = previousMatches && Number.isFinite(previousNext) && previousNext > now
+      nextRunAt = !config.enabled
+        ? null
+        : previousMatches && Number.isFinite(previousNext) && previousNext > now
         ? previousNext
         : workspaceScheduleNextRunAt(config, new Date(now));
+      if (!config.enabled) {
+        lastStatus = "disabled";
+        lastError = "";
+      }
       if (!targetRunNodeId) {
         lastStatus = "invalid";
         lastError = "Scheduled Run node is missing";
@@ -5759,7 +6182,7 @@ function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx =
     schedules[key] = {
       ...previous,
       key,
-      enabled: true,
+      enabled: config.enabled,
       userId,
       username: String(authUser?.username || previous.username || userId),
       flowId,
@@ -5799,6 +6222,21 @@ function updateWorkspaceScheduleEntry(key, patch) {
 async function runWorkspaceScheduledEntry(root, entry) {
   const userCtx = { userId: String(entry.userId || "") };
   const scopeKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");
+  const authUsers = readAuthUsers();
+  const authUser = authUsers[userCtx.userId] || {};
+  const runId = runLedgerId("workspace");
+  const runLog = createWorkspaceRunLogSession({
+    runId,
+    userId: userCtx.userId,
+    username: String(authUser.username || entry.username || userCtx.userId),
+    flowId: String(entry.flowId || ""),
+    flowSource: String(entry.flowSource || "user"),
+    scheduleNodeId: String(entry.scheduleNodeId || entry.key?.split(":").pop() || ""),
+    runNodeId: String(entry.targetRunNodeId || entry.runNodeId || ""),
+    scheduled: true,
+    trigger: "scheduled",
+    label: String(entry.label || "Scheduled Run"),
+  });
   const fallbackConfig = {
     enabled: true,
     cron: String(entry.cron || "0 9 * * *"),
@@ -5819,10 +6257,14 @@ async function runWorkspaceScheduledEntry(root, entry) {
     flowSource: entry.flowSource || "user",
   }, userCtx);
   if (scoped.error || scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+    const error = scoped.error || "Workspace schedule target is not writable";
+    appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error });
+    finishWorkspaceRunLogSession(runLog.runId, "failed", { error });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt,
       lastStatus: "error",
-      lastError: scoped.error || "Workspace schedule target is not writable",
+      lastRunId: runLog.runId,
+      lastError: error,
       lastErrorAt: Date.now(),
     });
     return;
@@ -5834,31 +6276,43 @@ async function runWorkspaceScheduledEntry(root, entry) {
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
   nextRunAt = computeNext(config);
   if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run" || !config.enabled) {
+    appendWorkspaceRunLogEvent(runLog.runId, { type: "disabled", scheduleNodeId });
+    finishWorkspaceRunLogSession(runLog.runId, "disabled");
     updateWorkspaceScheduleEntry(entry.key, {
       enabled: false,
       nextRunAt: null,
       lastStatus: "disabled",
+      lastRunId: runLog.runId,
     });
     return;
   }
   const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
   if (!targetRunNodeId) {
+    const error = "Scheduled Run node is missing";
+    appendWorkspaceRunLogEvent(runLog.runId, { type: "invalid", error, scheduleNodeId });
+    finishWorkspaceRunLogSession(runLog.runId, "failed", { error });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt,
       lastStatus: "invalid",
-      lastError: "Scheduled Run node is missing",
+      lastRunId: runLog.runId,
+      lastError: error,
       lastErrorAt: Date.now(),
     });
     return;
   }
+  appendWorkspaceRunLogEvent(runLog.runId, { type: "scheduler-triggered", scheduleNodeId, runNodeId: targetRunNodeId, cron: config.cron, timezone: config.timezone });
   let plan;
   try {
     plan = workspaceRunPlan(graph, targetRunNodeId, scoped.root);
   } catch (e) {
+    const error = (e && e.message) || String(e);
+    appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error });
+    finishWorkspaceRunLogSession(runLog.runId, "failed", { error, runNodeId: targetRunNodeId });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt,
       lastStatus: "failed",
-      lastError: (e && e.message) || String(e),
+      lastRunId: runLog.runId,
+      lastError: error,
       lastErrorAt: Date.now(),
     });
     return;
@@ -5866,19 +6320,25 @@ async function runWorkspaceScheduledEntry(root, entry) {
   const plannedNodeIds = workspaceRunPlanNodeIds(targetRunNodeId, plan);
   const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);
   if (conflict) {
+    appendWorkspaceRunLogEvent(runLog.runId, {
+      type: "skipped",
+      reason: "busy",
+      runNodeId: targetRunNodeId,
+      conflictRunId: conflict.entry?.runId || "",
+      conflictNodeIds: conflict.conflictNodeIds,
+    });
+    finishWorkspaceRunLogSession(runLog.runId, "skipped", { runNodeId: targetRunNodeId, error: "" });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt,
       lastSkippedAt: Date.now(),
       lastStatus: "skipped: busy",
+      lastRunId: runLog.runId,
       lastError: "",
     });
     return;
   }
 
   const controller = new AbortController();
-  const authUsers = readAuthUsers();
-  const authUser = authUsers[userCtx.userId] || {};
-  const runId = runLedgerId("workspace");
   const runKey = workspaceRunEntryKey(scopeKey, runId);
   const runEntry = {
     scopeKey,
@@ -5924,6 +6384,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     }, userCtx, {
       signal: controller.signal,
       onActiveChild: setActiveChild,
+      onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
     });
     const currentGraph = readWorkspaceGraph(scoped.root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
@@ -5931,6 +6392,11 @@ async function runWorkspaceScheduledEntry(root, entry) {
     fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
+    finishWorkspaceRunLogSession(runLog.runId, "success", {
+      endedAt,
+      durationMs: endedAt - runEntry.startedAt,
+      runNodeId: targetRunNodeId,
+    });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
@@ -5939,15 +6405,23 @@ async function runWorkspaceScheduledEntry(root, entry) {
     });
   } catch (e) {
     const endedAt = Date.now();
+    const error = (e && e.message) || String(e);
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "failed");
+    appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error, ts: endedAt });
+    finishWorkspaceRunLogSession(runLog.runId, "failed", {
+      endedAt,
+      durationMs: endedAt - runEntry.startedAt,
+      runNodeId: targetRunNodeId,
+      error,
+    });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
       lastStatus: "failed",
-      lastError: (e && e.message) || String(e),
+      lastError: error,
       lastErrorAt: endedAt,
     });
-    log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${(e && e.message) || String(e)}`);
+    log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${error}`);
   } finally {
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
   }
@@ -6171,6 +6645,21 @@ export function startUiServer({
 
     const authUser = getAuthUserFromRequest(req);
     const userCtx = authUser ? { userId: authUser.userId, isAdmin: Boolean(authUser.isAdmin) } : {};
+    if (req.method === "GET" && url.pathname === "/api/display/shares") {
+      try {
+        if (!authUser?.userId) {
+          json(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        json(res, 200, {
+          shares: listDisplaySharesForUser(userCtx, requestPublicBaseUrl(req)),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/display/share") {
       try {
         const id = String(url.searchParams.get("id") || "").trim();
@@ -6189,6 +6678,62 @@ export function startUiServer({
           return;
         }
         json(res, 200, payload);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/display/share") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        if (!authUser?.userId) {
+          json(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        const id = String(payload?.id || url.searchParams.get("id") || "").trim();
+        if (!id) {
+          json(res, 400, { error: "Missing display share id" });
+          return;
+        }
+        const result = updateDisplayShareExpiryForUser(id, userCtx, payload);
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        json(res, 200, {
+          ok: true,
+          share: displayShareSummary(result.share, requestPublicBaseUrl(req)),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/display/share") {
+      try {
+        if (!authUser?.userId) {
+          json(res, 401, { error: "Unauthorized" });
+          return;
+        }
+        const id = String(url.searchParams.get("id") || "").trim();
+        if (!id) {
+          json(res, 400, { error: "Missing display share id" });
+          return;
+        }
+        const result = deleteDisplayShareForUser(id, userCtx);
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        json(res, 200, { ok: true });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -6693,6 +7238,10 @@ export function startUiServer({
           title: payload.title,
           layout: payload.layout,
           nodeIds,
+          expiresMode: payload.expiresMode,
+          expiresInDays: payload.expiresInDays,
+          permanent: payload.permanent,
+          expiresAt: payload.expiresAt,
         });
         json(res, 200, { ok: true, share, url: `/display/${encodeURIComponent(share.id)}` });
       } catch (e) {
@@ -6800,6 +7349,57 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/run/optimize") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+          json(res, 400, { error: "Cannot optimize workspace graph for builtin or archived pipeline" });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        if (!flowId) {
+          json(res, 400, { error: "Missing flowId" });
+          return;
+        }
+        const graphPath = workspaceGraphPath(scoped.root);
+        const result = await workspaceOptimizeRunImplementations(root, scoped.root, payload, userCtx, {
+          emit: () => {},
+        });
+        const currentGraph = readWorkspaceGraph(scoped.root).graph;
+        const touchedIds = new Set((result.optimized || []).map((item) => item.nodeId).filter(Boolean));
+        const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+        fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, mergedGraph, authUser, userCtx);
+        json(res, 200, {
+          ok: true,
+          path: graphPath,
+          graph: mergedGraph,
+          order: result.order,
+          optimized: result.optimized,
+          skipped: result.skipped,
+          workspaceSchedules,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/workspace/run") {
       let payload;
       try {
@@ -6864,6 +7464,19 @@ export function startUiServer({
             }
           },
         };
+        const runLog = createWorkspaceRunLogSession({
+          runId,
+          userId: runEntry.userId,
+          username: runEntry.username,
+          flowId: runEntry.flowId,
+          flowSource: runEntry.flowSource,
+          scheduleNodeId: String(runtimeGraph.instances?.[runNodeId]?.definitionId || "") === "workspace_scheduled_run" ? runNodeId : "",
+          runNodeId,
+          scheduled: false,
+          trigger: "manual",
+          label: String(runtimeGraph.instances?.[runNodeId]?.label || "Workspace Run"),
+          startedAt: runEntry.startedAt,
+        });
         activeWorkspaceRuns.set(runKey, runEntry);
         appendWorkspaceRunStarted(runEntry);
         const setActiveChild = (child) => {
@@ -6882,6 +7495,7 @@ export function startUiServer({
             "X-Accel-Buffering": "no",
           });
           const writeEvent = (event) => {
+            appendWorkspaceRunLogEvent(runLog.runId, event);
             try { res.write(JSON.stringify(event) + "\n"); } catch (_) {}
           };
           try {
@@ -6894,28 +7508,47 @@ export function startUiServer({
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
             fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+            const endedAt = Date.now();
             appendWorkspaceRunFinished({
               ...runEntry,
-              endedAt: Date.now(),
-              durationMs: Date.now() - runEntry.startedAt,
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
             }, "success");
+            finishWorkspaceRunLogSession(runLog.runId, "success", {
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
+              runNodeId,
+            });
             writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
+            const endedAt = Date.now();
             if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
               appendWorkspaceRunFinished({
                 ...runEntry,
-                endedAt: Date.now(),
-                durationMs: Date.now() - runEntry.startedAt,
+                endedAt,
+                durationMs: endedAt - runEntry.startedAt,
               }, "stopped");
+              finishWorkspaceRunLogSession(runLog.runId, "stopped", {
+                endedAt,
+                durationMs: endedAt - runEntry.startedAt,
+                runNodeId,
+              });
               writeEvent({ type: "stopped", ok: false, stopped: true, message: "Workspace run stopped" });
             } else {
+              const error = (e && e.message) || String(e);
               appendWorkspaceRunFinished({
                 ...runEntry,
-                endedAt: Date.now(),
-                durationMs: Date.now() - runEntry.startedAt,
+                endedAt,
+                durationMs: endedAt - runEntry.startedAt,
               }, "failed");
-              writeEvent({ type: "error", error: (e && e.message) || String(e) });
+              finishWorkspaceRunLogSession(runLog.runId, "failed", {
+                endedAt,
+                durationMs: endedAt - runEntry.startedAt,
+                runNodeId,
+                error,
+              });
+              writeEvent({ type: "error", error });
             }
             res.end();
           } finally {
@@ -6927,37 +7560,104 @@ export function startUiServer({
           const result = await runWorkspaceGraph(root, scoped.root, { ...payload, requestBaseUrl: requestPublicBaseUrl(req) }, userCtx, {
             signal: controller.signal,
             onActiveChild: setActiveChild,
+            onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
           });
           const graphPath = workspaceGraphPath(scoped.root);
           const currentGraph = readWorkspaceGraph(scoped.root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
           fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+          const endedAt = Date.now();
           appendWorkspaceRunFinished({
             ...runEntry,
-            endedAt: Date.now(),
-            durationMs: Date.now() - runEntry.startedAt,
+            endedAt,
+            durationMs: endedAt - runEntry.startedAt,
           }, "success");
+          finishWorkspaceRunLogSession(runLog.runId, "success", {
+            endedAt,
+            durationMs: endedAt - runEntry.startedAt,
+            runNodeId,
+          });
           json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, touchedNodeIds: Array.from(touchedIds) });
         } catch (e) {
+          const endedAt = Date.now();
           if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
             appendWorkspaceRunFinished({
               ...runEntry,
-              endedAt: Date.now(),
-              durationMs: Date.now() - runEntry.startedAt,
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
             }, "stopped");
+            finishWorkspaceRunLogSession(runLog.runId, "stopped", {
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
+              runNodeId,
+            });
             json(res, 200, { ok: false, stopped: true, message: "Workspace run stopped" });
           } else {
+            const error = (e && e.message) || String(e);
             appendWorkspaceRunFinished({
               ...runEntry,
-              endedAt: Date.now(),
-              durationMs: Date.now() - runEntry.startedAt,
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
             }, "failed");
+            appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error, ts: endedAt });
+            finishWorkspaceRunLogSession(runLog.runId, "failed", {
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
+              runNodeId,
+              error,
+            });
             throw e;
           }
         } finally {
           clearActiveRun();
         }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/run-logs") {
+      try {
+        const flowId = url.searchParams.get("flowId") || "";
+        const flowSource = url.searchParams.get("flowSource") || "";
+        const scheduleNodeId = url.searchParams.get("scheduleNodeId") || "";
+        const runNodeId = url.searchParams.get("runNodeId") || "";
+        const limit = Number(url.searchParams.get("limit") || 50);
+        json(res, 200, {
+          runs: listWorkspaceRunLogs({
+            userId: userCtx.userId || "",
+            flowId,
+            flowSource,
+            scheduleNodeId,
+            runNodeId,
+            limit,
+          }),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/workspace/run-logs/")) {
+      try {
+        const runId = decodeURIComponent(url.pathname.slice("/api/workspace/run-logs/".length));
+        if (!runId) {
+          json(res, 400, { error: "Missing runId" });
+          return;
+        }
+        const run = listWorkspaceRunLogs({ userId: userCtx.userId || "", limit: 200 })
+          .find((item) => String(item.runId || "") === runId);
+        if (!run) {
+          json(res, 404, { error: "Run log not found" });
+          return;
+        }
+        json(res, 200, {
+          run,
+          events: readWorkspaceRunLogEvents(runId),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -8705,6 +9405,128 @@ finishedAt: "${new Date().toISOString()}"
       const result = writeFlowSchedule(root, flowId, flowSource, payload.schedule || {}, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "Could not save schedule" });
+        return;
+      }
+      json(res, 200, { success: true, schedule: result.schedule });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flow/schedules") {
+      try {
+        json(res, 200, { schedules: listScheduleStatuses(root, userCtx) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/schedules") {
+      try {
+        const pipelineSchedules = listScheduleStatuses(root, userCtx)
+          .filter((schedule) => (
+            schedule.enabled ||
+            schedule.cron ||
+            schedule.nextRunAt ||
+            schedule.lastTriggeredAt ||
+            schedule.lastRunUuid ||
+            schedule.lastError ||
+            schedule.running ||
+            schedule.waiting
+          ))
+          .map((schedule) => ({
+            kind: "pipeline",
+            ...schedule,
+          }));
+        const workspaceSchedules = listWorkspaceScheduleStatuses(root, userCtx);
+        json(res, 200, {
+          schedules: [...workspaceSchedules, ...pipelineSchedules].sort((a, b) => {
+            const ea = a.enabled ? 0 : 1;
+            const eb = b.enabled ? 0 : 1;
+            return ea - eb || String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")) || String(a.flowId || "").localeCompare(String(b.flowId || ""));
+          }),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/schedule/toggle") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const kind = String(payload.kind || "").trim();
+      if (kind === "workspace") {
+        try {
+          const result = setWorkspaceScheduleEnabled(root, payload, authUser, userCtx);
+          if (!result.success) {
+            json(res, 400, { error: result.error || "Could not update workspace schedule" });
+            return;
+          }
+          json(res, 200, { success: true });
+        } catch (e) {
+          json(res, 500, { error: (e && e.message) || String(e) });
+        }
+        return;
+      }
+      if (kind === "pipeline") {
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        if (!flowId) {
+          json(res, 400, { error: "Missing flowId" });
+          return;
+        }
+        if (!isValidFlowSourceWrite(flowSource)) {
+          json(res, 400, { error: "Cannot update schedule for builtin or readonly flow" });
+          return;
+        }
+        const current = readFlowSchedule(root, flowId, flowSource, userCtx);
+        if (!current.success) {
+          json(res, 400, { error: current.error || "Could not read schedule" });
+          return;
+        }
+        const result = writeFlowSchedule(root, flowId, flowSource, { ...current.schedule, enabled: payload.enabled === true }, userCtx);
+        if (!result.success) {
+          json(res, 400, { error: result.error || "Could not update schedule" });
+          return;
+        }
+        json(res, 200, { success: true, schedule: result.schedule });
+        return;
+      }
+      json(res, 400, { error: "Invalid schedule kind" });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/flow/schedule/disable") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = String(payload.flowId || "").trim();
+      const flowSource = String(payload.flowSource || "user").trim() || "user";
+      if (!flowId) {
+        json(res, 400, { error: "Missing flowId" });
+        return;
+      }
+      if (!isValidFlowSourceWrite(flowSource)) {
+        json(res, 400, { error: "Cannot disable schedule for builtin or readonly flow" });
+        return;
+      }
+      const current = readFlowSchedule(root, flowId, flowSource, userCtx);
+      if (!current.success) {
+        json(res, 400, { error: current.error || "Could not read schedule" });
+        return;
+      }
+      const result = writeFlowSchedule(root, flowId, flowSource, { ...current.schedule, enabled: false }, userCtx);
+      if (!result.success) {
+        json(res, 400, { error: result.error || "Could not disable schedule" });
         return;
       }
       json(res, 200, { success: true, schedule: result.schedule });

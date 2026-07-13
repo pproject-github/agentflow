@@ -421,7 +421,7 @@ export default function DisplayPage() {
             <p>AgentFlow Display</p>
             <h1>{state.share?.title || "AgentFlow Display"}</h1>
           </div>
-          {state.share?.expiresAt ? <span>有效期至 {new Date(state.share.expiresAt).toLocaleString()}</span> : null}
+          <span>{state.share?.expiresAt ? `有效期至 ${new Date(state.share.expiresAt).toLocaleString()}` : "永久有效"}</span>
         </header>
         <div className="af-public-display-grid">
           {(state.nodes || []).map((node) => (

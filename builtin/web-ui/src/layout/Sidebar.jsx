@@ -10,6 +10,7 @@ const ITEMS = [
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
+  { to: "/schedules", label: "定时任务", icon: "event_busy" },
   { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
   { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
