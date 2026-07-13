@@ -25,7 +25,7 @@ function safeWrite(value) {
 
 function normalizeView(view) {
   if (view === "display") return "display";
-  return view === "pipeline" ? "pipeline" : "workspace";
+  return "workspace";
 }
 
 function isReadonlyBuiltinFlowSource(source) {
@@ -62,14 +62,14 @@ export function getPreferredPipelineView(flow, fallback = "workspace") {
 
 export function flowUrlForView(flow, view = "workspace") {
   const normalizedView = normalizeViewForFlow(flow, view);
-  if (!flow?.id) return normalizedView === "pipeline" ? "/flow" : normalizedView === "display" ? "/workspace?view=display" : "/workspace";
+  if (!flow?.id) return normalizedView === "display" ? "/workspace?view=display" : "/workspace";
   const q = new URLSearchParams({
     flowId: flow.id,
     flowSource: flow.source ?? "user",
   });
-  if (flow.archived) q.set(normalizedView === "pipeline" ? "flowArchived" : "archived", "1");
+  if (flow.archived) q.set("archived", "1");
   if (normalizedView === "display") q.set("view", "display");
-  return `/${normalizedView === "pipeline" ? "flow" : "workspace"}?${q.toString()}`;
+  return `/workspace?${q.toString()}`;
 }
 
 export function preferredFlowUrl(flow, fallback = "workspace") {

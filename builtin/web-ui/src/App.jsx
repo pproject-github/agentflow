@@ -2,7 +2,6 @@ import { RouteProvider, useRoute } from "./routeContext.jsx";
 import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
-import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -15,6 +14,21 @@ import RunningIndicator from "./RunningIndicator.jsx";
 
 function isLikeeContextPath(path) {
   return path === "/likee-context" || path === "/likee_context";
+}
+
+function RedirectFlowToWorkspace() {
+  const { navigate } = useRoute();
+  useEffect(() => {
+    const current = new URLSearchParams(window.location.search);
+    const next = new URLSearchParams();
+    const flowId = current.get("flowId") || "";
+    const flowSource = current.get("flowSource") || "";
+    if (flowId) next.set("flowId", flowId);
+    if (flowSource) next.set("flowSource", flowSource);
+    if (current.get("flowArchived")) next.set("archived", current.get("flowArchived"));
+    navigate(`/workspace${next.toString() ? `?${next.toString()}` : ""}`);
+  }, [navigate]);
+  return null;
 }
 
 class UiErrorBoundary extends Component {
@@ -62,7 +76,7 @@ function RoutedContent({ authUser }) {
   if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/mcps") return <McpPage />;
-  if (path === "/flow") return <FlowEditorPage />;
+  if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
