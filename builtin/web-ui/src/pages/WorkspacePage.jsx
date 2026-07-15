@@ -1012,8 +1012,12 @@ function workspaceNodeLayoutSignature(node) {
   const data = node?.data || {};
   const displaySize = data?.displaySize && typeof data.displaySize === "object" ? data.displaySize : {};
   const nodeSize = data?.nodeSize && typeof data.nodeSize === "object" ? data.nodeSize : {};
+  const resultContent = contextRunResultContentFromData(data);
   return [
     nodeHandleSignature(node),
+    workspaceDisplayKindFromData(data) || "",
+    resultContent ? "has-result" : "",
+    data?.contextRunResultNonce || "",
     Number(node?.width || 0) || "",
     Number(node?.height || 0) || "",
     Number(node?.measured?.width || 0) || "",
@@ -1050,7 +1054,7 @@ function graphToFlow(graph, palette) {
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
       : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
-    const isDisplay = Boolean(displayKind(runtimeDefinitionId));
+    const isDisplay = Boolean(workspaceDisplayKindFromData({ definitionId: runtimeDefinitionId, inputs: inst.input, outputs: inst.output }));
     const rawSize = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
@@ -1285,7 +1289,7 @@ function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
 }
 
 function persistedWorkspaceNodeSize(node) {
-  const isDisplay = Boolean(displayKind(node?.data?.definitionId));
+  const isDisplay = Boolean(workspaceDisplayKindFromData(node?.data));
   const width = Number(node?.data?.displaySize?.width || node?.data?.nodeSize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
   const height = Number(node?.data?.displaySize?.height || node?.data?.nodeSize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
   return normalizeWorkspaceNodeSize({ width, height }, { display: isDisplay });
@@ -3228,6 +3232,12 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       setViewMode("result");
     }
   }, [data?.contextRunResultNonce, data?.nodeStatus, hasResult, outputPreview, running]);
+  useEffect(() => {
+    if (!(viewMode === "result" && hasResult)) return undefined;
+    data?.onRefreshNodeInternals?.(id);
+    const timer = window.setTimeout(() => data?.onRefreshNodeInternals?.(id), 120);
+    return () => window.clearTimeout(timer);
+  }, [data?.onRefreshNodeInternals, displayDefinitionId, hasResult, id, outputPreview, viewMode]);
   const updateConfig = (patch) => {
     data?.onChangeContextRunConfig?.(id, { ...config, task: taskDraft, ...patch });
   };
@@ -4470,7 +4480,11 @@ function contextRunDisplayDefinitionId(displayType) {
 }
 
 function contextRunResultContentFromData(data) {
-  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const outputs = Array.isArray(data?.outputs)
+    ? data.outputs
+    : Array.isArray(data?.output)
+      ? data.output
+      : [];
   const slotValue = (slot) => String(slot?.value ?? slot?.default ?? "").trim();
   const primary =
     outputs.find((slot) => (slot?.name === "content" || slot?.name === "result") && slotValue(slot)) ||
@@ -7510,6 +7524,7 @@ function WorkspacePageInner() {
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
       onShareDisplayNode: shareDisplayNode,
       onOpenDisplayPreview: setDisplayPreviewNodeId,
+      onRefreshNodeInternals: refreshNodeInternals,
       sharingDisplayNodeId,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
@@ -7525,7 +7540,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
