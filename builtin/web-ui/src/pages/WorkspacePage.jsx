@@ -3098,8 +3098,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [viewMode, setViewMode] = useState("config");
   const resultFrameRef = useRef(null);
-  const outputSlot = outputs.find((slot) => slot?.name === "content") || outputs.find((slot) => slot?.type === "text");
-  const outputPreview = String(outputSlot?.value ?? outputSlot?.default ?? "").trim();
+  const outputPreview = contextRunResultContentFromData(data);
   const hasResult = Boolean(outputPreview);
   const displayDefinitionId = contextRunDisplayDefinitionId(config.displayType);
   const resultDisplayData = useMemo(() => ({
@@ -4358,6 +4357,16 @@ function contextRunDisplayDefinitionId(displayType) {
   if (kind === "ascii") return "display_ascii";
   if (kind === "mermaid") return "display_mermaid";
   return "display_markdown";
+}
+
+function contextRunResultContentFromData(data) {
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const slotValue = (slot) => String(slot?.value ?? slot?.default ?? "").trim();
+  const primary =
+    outputs.find((slot) => (slot?.name === "content" || slot?.name === "result") && slotValue(slot)) ||
+    outputs.find((slot) => slot?.name === "resultFile" && slotValue(slot)) ||
+    outputs.find((slot) => slot?.type !== "node" && slot?.name !== "next" && slot?.name !== "displayType" && slotValue(slot));
+  return primary ? slotValue(primary) : "";
 }
 
 function contextRunConfigFromData(data) {
@@ -5833,6 +5842,7 @@ function WorkspacePageInner() {
       },
     ]);
     let activeNodeId = runNodeId;
+    const latestResultByNodeId = new Map();
     const isRunStopped = () => workspaceRunStoppedRef.current.has(runSessionId);
     const removeSessionExecutingNodes = (ids) => {
       const affectedIds = new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean));
@@ -5930,6 +5940,48 @@ function WorkspacePageInner() {
           return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
         }));
       };
+    const patchContextRunResult = (nodeId, rawContent) => {
+      const id = String(nodeId || "").trim();
+      const content = String(rawContent || "").trim();
+      if (!id || !content) return;
+      const currentInstance = instancesRef.current?.[id];
+      if (!isOneClickTaskDefinitionId(currentInstance?.definitionId)) return;
+      const displayType = workspaceSlotConfigValue(currentInstance?.input, "displayType", "markdown");
+      const patchOutputs = (slots) => {
+        const list = Array.isArray(slots) ? slots : [];
+        let hasContent = false;
+        let hasDisplayType = false;
+        const next = list.map((slot) => {
+          if (slot?.name === "content" || slot?.name === "result") {
+            hasContent = true;
+            return { ...slot, value: content, default: content };
+          }
+          if (slot?.name === "displayType") {
+            hasDisplayType = true;
+            return { ...slot, value: normalizeContextRunDisplayType(displayType), default: normalizeContextRunDisplayType(displayType) };
+          }
+          return slot;
+        });
+        if (!hasContent) next.push({ type: "text", name: "content", value: content, default: content, showOnNode: true });
+        if (!hasDisplayType) next.push({ type: "text", name: "displayType", value: normalizeContextRunDisplayType(displayType), default: normalizeContextRunDisplayType(displayType), showOnNode: false });
+        return next;
+      };
+      const nextInstances = {
+        ...(instancesRef.current || {}),
+        [id]: {
+          ...(currentInstance || {}),
+          output: patchOutputs(currentInstance?.output),
+        },
+      };
+      instancesRef.current = nextInstances;
+      setInstances(nextInstances);
+      setNodes((currentNodes) => currentNodes.map((node) => (
+        node.id === id
+          ? { ...node, data: { ...node.data, outputs: patchOutputs(node.data?.outputs) } }
+          : node
+      )));
+    };
+
     const markNodeStart = (nodeId) => {
       const id = String(nodeId || "").trim();
       if (!id) return;
@@ -6213,6 +6265,8 @@ function WorkspacePageInner() {
             updateRunStep(event.nodeId, event.definitionId, "running");
           }
           if (event.type === "node-done") {
+            const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
+            if (finalText) patchContextRunResult(event.nodeId, finalText);
             markNodeDone(event.nodeId);
             updateRunStep(event.nodeId, event.definitionId, "done");
           }
@@ -6224,6 +6278,9 @@ function WorkspacePageInner() {
             updateRunActivity("运行暂停", event);
           }
           if (event.type === "natural") {
+            if ((event.kind === "result" || /---agentflow\b|resultFile\s*:|\"resultFile\"\s*:|\"result\"\s*:/i.test(String(event.text || ""))) && event.nodeId) {
+              latestResultByNodeId.set(String(event.nodeId || "").trim(), String(event.text || ""));
+            }
             if (event.kind === "thinking") appendThinkingText(event.text || "");
             else appendNaturalText(event.kind, event.text || "");
           }
