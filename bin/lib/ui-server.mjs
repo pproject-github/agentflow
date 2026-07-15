@@ -2825,6 +2825,20 @@ function buildWorkspaceGeneratePrompt(payload) {
     ? payload.selectedNodeIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
   const skillsBlock = typeof payload?.skillsBlock === "string" ? payload.skillsBlock.trim() : "";
+  const history = Array.isArray(payload?.messages) ? payload.messages : [];
+  const historyBlock = history
+    .slice(-16)
+    .map((msg) => {
+      const text = String(msg?.text || "").trim();
+      if (!text) return "";
+      const kind = String(msg?.kind || "").trim();
+      if (kind === "raw" || kind === "prompt" || kind === "thinking") return "";
+      const role = msg?.role === "user" ? "user" : (msg?.error ? "error" : "assistant");
+      if (kind === "run-summary" || kind === "activity") return `context: ${text}`;
+      return `${role}: ${text}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
   const contexts = Array.isArray(payload?.contexts) ? payload.contexts : [];
   const contextBlocks = contexts
     .map((ctx, idx) => {
@@ -2881,6 +2895,7 @@ function buildWorkspaceGeneratePrompt(payload) {
     skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
     kindInstruction,
     contextBlocks ? `\n## 上下文\n\n${contextBlocks}` : "",
+    historyBlock ? `\n## 对话历史\n\n${historyBlock}` : "",
     `\n## 用户 prompt\n\n${userPrompt}`,
   ].filter(Boolean).join("\n");
 }
