@@ -4297,7 +4297,7 @@ function formatWorkspaceFileSize(size) {
   return `${Math.round(n / 1024 / 102.4) / 10} MB`;
 }
 
-function FileTree({ items, onOpen, selectedPath, collapsedDirs, onToggleDir, onSelect, onFileDragStart }) {
+function FileTree({ items, onOpen, selectedPath, collapsedDirs, onToggleDir, onSelect, onFileDragStart, onDelete, onDownload }) {
   return (
     <ul className="af-work-files">
       {(items || []).map((item) => {
@@ -4327,9 +4327,39 @@ function FileTree({ items, onOpen, selectedPath, collapsedDirs, onToggleDir, onS
                 <span className="material-symbols-outlined">{item.icon || iconForFile(item.name, isDir)}</span>
                 <span>{item.name}</span>
               </button>
+              {selected ? (
+                <div className="af-work-file-actions">
+                  {!isDir ? (
+                    <button
+                      type="button"
+                      className="af-work-file-action"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDownload?.(item);
+                      }}
+                      aria-label={`下载 ${item.name}`}
+                      title={`下载 ${item.path}`}
+                    >
+                      <span className="material-symbols-outlined" aria-hidden>download</span>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="af-work-file-action af-work-file-action--danger"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete?.(item);
+                    }}
+                    aria-label={`删除 ${item.name}`}
+                    title={`删除 ${item.path}`}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>delete</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
             {isDir && !collapsed && item.children?.length ? (
-              <FileTree items={item.children} onOpen={onOpen} selectedPath={selectedPath} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onSelect={onSelect} onFileDragStart={onFileDragStart} />
+              <FileTree items={item.children} onOpen={onOpen} selectedPath={selectedPath} collapsedDirs={collapsedDirs} onToggleDir={onToggleDir} onSelect={onSelect} onFileDragStart={onFileDragStart} onDelete={onDelete} onDownload={onDownload} />
             ) : null}
           </li>
         );
@@ -9304,6 +9334,19 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, workspaceWritable]);
 
+  const downloadWorkspaceFile = useCallback((item) => {
+    if (!item?.path || item.type === "directory") return;
+    const url = workspaceRawFileUrl(item.path, flowParams, { download: true });
+    if (!url) return;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = item.name || item.path.split("/").pop() || "download";
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [flowParams]);
+
   const submitWorkspaceAi = useCallback(async () => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
@@ -9607,9 +9650,6 @@ function WorkspacePageInner() {
                 <button type="button" className="af-icon-btn" disabled={!workspaceWritable || workspaceFileUploading} onClick={() => triggerWorkspaceFileUpload(selectedWorkspaceTargetDir)} aria-label="上传文件" title={selectedWorkspaceTargetDir ? `上传到 ${selectedWorkspaceTargetDir}` : "上传文件"}>
                   <span className="material-symbols-outlined">{workspaceFileUploading ? "hourglass_top" : "upload_file"}</span>
                 </button>
-                <button type="button" className="af-icon-btn" disabled={!workspaceWritable || !selectedWorkspaceFile} onClick={() => deleteWorkspacePath(selectedWorkspaceFile)} aria-label="删除选中项" title={selectedWorkspaceFile ? `删除 ${selectedWorkspaceFile.path}` : "先选择文件或文件夹"}>
-                  <span className="material-symbols-outlined">delete</span>
-                </button>
                 <button type="button" className="af-icon-btn" onClick={() => void loadFiles()} aria-label="刷新文件" title="刷新文件">
                   <span className="material-symbols-outlined">refresh</span>
                 </button>
@@ -9624,7 +9664,7 @@ function WorkspacePageInner() {
             </div>
             <input className="af-workspace-search" value={fileFilter} onChange={(e) => setFileFilter(e.target.value)} placeholder="搜索文件..." />
             <div className="af-workspace-files-scroll" onClick={clearWorkspaceFileSelection}>
-              <FileTree items={filteredFiles} onOpen={openFileNode} selectedPath={selectedWorkspaceFilePath} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onSelect={(item) => setSelectedWorkspaceFilePath(item.path || "")} onFileDragStart={handleFileDragStart} />
+              <FileTree items={filteredFiles} onOpen={openFileNode} selectedPath={selectedWorkspaceFilePath} collapsedDirs={collapsedDirs} onToggleDir={toggleDir} onSelect={(item) => setSelectedWorkspaceFilePath(item.path || "")} onFileDragStart={handleFileDragStart} onDelete={deleteWorkspacePath} onDownload={downloadWorkspaceFile} />
             </div>
           </section>
 
