@@ -3212,10 +3212,10 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       setViewMode("config");
       return;
     }
-    if (!running && (data?.nodeStatus === "success" || viewMode !== "config")) {
+    if (!running && (data?.nodeStatus === "success" || data?.contextRunResultNonce || viewMode !== "config")) {
       setViewMode("result");
     }
-  }, [data?.nodeStatus, hasResult, outputPreview, running]);
+  }, [data?.contextRunResultNonce, data?.nodeStatus, hasResult, outputPreview, running]);
   const updateConfig = (patch) => {
     data?.onChangeContextRunConfig?.(id, { ...config, task: taskDraft, ...patch });
   };
@@ -6077,9 +6077,20 @@ function WorkspacePageInner() {
       setInstances(nextInstances);
       setNodes((currentNodes) => currentNodes.map((node) => (
         node.id === id
-          ? { ...node, data: { ...node.data, outputs: patchOutputs(node.data?.outputs) } }
+          ? { ...node, data: { ...node.data, outputs: patchOutputs(node.data?.outputs), contextRunResultNonce: Date.now() } }
           : node
       )));
+    };
+
+    const patchContextRunResultsFromGraph = (nextGraph, touchedNodeIds = null) => {
+      const graphInstances = nextGraph?.instances && typeof nextGraph.instances === "object" ? nextGraph.instances : {};
+      const scopedIds = touchedNodeIds instanceof Set ? touchedNodeIds : null;
+      for (const [instanceId, instance] of Object.entries(graphInstances)) {
+        if (scopedIds && !scopedIds.has(instanceId)) continue;
+        if (!isOneClickTaskDefinitionId(instance?.definitionId)) continue;
+        const content = contextRunResultContentFromData({ outputs: instance.output });
+        if (content) patchContextRunResult(instanceId, content);
+      }
     };
 
     const markNodeStart = (nodeId) => {
@@ -6389,9 +6400,17 @@ function WorkspacePageInner() {
             if (rawThinking) appendThinkingText(rawThinking);
             appendRawTrace(event);
           }
-          if (event.type === "graph" && event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
+          if (event.type === "graph" && event.graph) {
+            const touchedIds = eventTouchedNodeIds(event);
+            applyGraph(event.graph, touchedIds);
+            patchContextRunResultsFromGraph(event.graph, touchedIds);
+          }
           if (event.type === "done") {
-            if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
+            if (event.graph) {
+              const touchedIds = eventTouchedNodeIds(event);
+              applyGraph(event.graph, touchedIds);
+              patchContextRunResultsFromGraph(event.graph, touchedIds);
+            }
             finalOrder = Array.isArray(event.order) ? event.order : [];
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
             updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
@@ -6411,6 +6430,8 @@ function WorkspacePageInner() {
           updateRunStep(event.nodeId, event.definitionId, "running");
         }
         if (event.type === "node-done") {
+          const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
+          if (finalText) patchContextRunResult(event.nodeId, finalText);
           markNodeDone(event.nodeId);
           updateRunStep(event.nodeId, event.definitionId, "done");
         }
@@ -6422,6 +6443,9 @@ function WorkspacePageInner() {
           updateRunActivity("运行暂停", event);
         }
         if (event.type === "natural") {
+          if ((event.kind === "result" || /---agentflow\b|resultFile\s*:|\"resultFile\"\s*:|\"result\"\s*:/i.test(String(event.text || ""))) && event.nodeId) {
+            latestResultByNodeId.set(String(event.nodeId || "").trim(), String(event.text || ""));
+          }
           if (event.kind === "thinking") appendThinkingText(event.text || "");
           else appendNaturalText(event.kind, event.text || "");
         }
@@ -6430,9 +6454,17 @@ function WorkspacePageInner() {
           if (rawThinking) appendThinkingText(rawThinking);
           appendRawTrace(event);
         }
-        if (event.type === "graph" && event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
+        if (event.type === "graph" && event.graph) {
+          const touchedIds = eventTouchedNodeIds(event);
+          applyGraph(event.graph, touchedIds);
+          patchContextRunResultsFromGraph(event.graph, touchedIds);
+        }
         if (event.type === "done") {
-          if (event.graph) applyGraph(event.graph, eventTouchedNodeIds(event));
+          if (event.graph) {
+            const touchedIds = eventTouchedNodeIds(event);
+            applyGraph(event.graph, touchedIds);
+            patchContextRunResultsFromGraph(event.graph, touchedIds);
+          }
           finalOrder = Array.isArray(event.order) ? event.order : [];
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
           updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
