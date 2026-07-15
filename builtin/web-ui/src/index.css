@@ -14173,6 +14173,22 @@ button.af-project-card {
   padding: 0.5rem 0.75rem;
 }
 
+.af-composer-sidebar-log-details {
+  margin-top: 0.65rem;
+  border-top: 1px solid rgba(73, 68, 85, 0.24);
+  padding-top: 0.5rem;
+}
+
+.af-composer-sidebar-log-details summary {
+  cursor: pointer;
+  color: rgba(229, 226, 225, 0.58);
+  font-family: var(--af-headline);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
 .af-composer-sidebar-thread .af-composer-ai-stack {
   max-height: none;
   overflow-y: visible;
@@ -14250,6 +14266,66 @@ button.af-project-card {
 .af-composer-sidebar-thread .af-composer-ai-block--user-msg {
   border-left: 2px solid rgba(255, 183, 77, 0.5);
   padding-left: 0.5rem;
+}
+
+.af-composer-sidebar-input {
+  position: relative;
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  border-top: 1px solid var(--af-outline-variant, #333);
+  padding: 0.7rem 0.75rem 0.8rem;
+  background: rgba(24, 24, 26, 0.96);
+}
+
+.af-composer-sidebar-textarea {
+  flex: 1;
+  min-height: 4.2rem;
+  max-height: 9rem;
+  resize: vertical;
+  border: 1px solid rgba(202, 195, 216, 0.16);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--af-on-surface, #e5e2e1);
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.af-composer-sidebar-textarea:focus {
+  border-color: rgba(124, 77, 255, 0.62);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.2);
+}
+
+.af-composer-sidebar-textarea:disabled {
+  opacity: 0.58;
+}
+
+.af-composer-sidebar-send {
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(202, 195, 216, 0.92);
+  color: #161219;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.af-composer-sidebar-send:hover:not(:disabled) {
+  background: rgba(179, 157, 255, 0.95);
+}
+
+.af-composer-sidebar-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.af-composer-sidebar-send .material-symbols-outlined {
+  font-size: 1.25rem;
 }
 
 

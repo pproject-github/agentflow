@@ -2374,6 +2374,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
   const running = Boolean(chat.running);
   const readOnly = Boolean(data?.readOnly);
   const error = String(chat.error || "");
+  const visibleMessages = messages.slice(-2);
 
   useEffect(() => {
     if (!composingDraftRef.current) setLocalDraft(draft);
@@ -2413,7 +2414,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
       </div>
       {(messages.length > 0 || running || error || candidate.trim()) ? (
         <div className="af-work-node-chat__messages">
-          {messages.slice(-4).map((msg, index) => (
+          {visibleMessages.map((msg, index) => (
             <div key={`${msg.at || index}-${index}`} className={`af-work-node-chat__msg af-work-node-chat__msg--${msg.role === "assistant" ? "assistant" : "user"}`}>
               <span>{msg.role === "assistant" ? "AI" : "你"}</span>
               <p>{msg.text}</p>
@@ -4408,6 +4409,32 @@ function WorkspaceComposerThread({ messages, running, showRunningIndicator = tru
       ) : null}
     </div>
   );
+}
+
+function isWorkspaceComposerTechnicalMessage(msg) {
+  const kind = String(msg?.kind || "");
+  return ["run-log", "run-summary", "activity", "prompt", "raw", "thinking"].includes(kind);
+}
+
+function workspaceComposerConversationMessages(messages, running = false) {
+  const list = Array.isArray(messages) ? messages : [];
+  const conversational = list.filter((msg) => !isWorkspaceComposerTechnicalMessage(msg));
+  if (conversational.length > 0) return conversational;
+  const fallback = [...list].reverse().find((msg) => msg?.kind === "result" || msg?.kind === "assistant" || msg?.error);
+  if (fallback) return [fallback];
+  if (list.length > 0 || running) {
+    return [{
+      role: "assistant",
+      kind: "assistant",
+      text: running ? "正在执行，可以在完成后继续追问或要求调整。" : "运行已完成。可以在下方继续追问、要求总结或调整结果。",
+      at: 0,
+    }];
+  }
+  return [];
+}
+
+function workspaceComposerTechnicalMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).filter(isWorkspaceComposerTechnicalMessage);
 }
 
 function selectedSkillKeysFromValue(rawValue) {
@@ -9223,12 +9250,32 @@ function WorkspacePageInner() {
       return;
     }
     const prompt = composerText.trim();
-    if (!prompt || composerRunning) return;
+    const targetSessionId = activeComposerSessionId;
+    const targetRunSession = composerRunSessions.find((session) => session.id === targetSessionId) || null;
+    if (!prompt || composerRunning || targetRunSession?.status === "running") return;
+    const previousMessages = targetRunSession
+      ? (Array.isArray(targetRunSession.messages) ? targetRunSession.messages : [])
+      : composerMessages;
     const graph = flowToGraph(nodes, edges, instancesRef.current);
     setComposerText("");
     setComposerRunning(true);
-    openComposerLogPanel("workspace");
-    setComposerMessages((list) => [...list, { role: "user", text: prompt, at: Date.now() }]);
+    setComposerSidebarOpen(true);
+    setWorkspaceRunLogsTarget(null);
+    const userMessage = { role: "user", text: prompt, at: Date.now() };
+    if (targetRunSession) {
+      setComposerRunSessions((list) => list.map((session) => (
+        session.id === targetSessionId
+          ? {
+              ...session,
+              status: "running",
+              messages: [...(Array.isArray(session.messages) ? session.messages : []), userMessage].slice(-180),
+            }
+          : session
+      )));
+    } else {
+      setActiveComposerSessionId("workspace");
+      setComposerMessages((list) => [...list, userMessage]);
+    }
     try {
       await saveGraph(nodes, edges);
       const res = await fetch("/api/workspace/generate", {
@@ -9243,26 +9290,55 @@ function WorkspacePageInner() {
           model: composerModel,
           selectedSkills,
           selectedNodeIds: selectedCanvasNodeIds,
+          messages: previousMessages,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "生成失败");
       const text = String(json.content || "").trim();
-      setComposerMessages((list) => [...list, { role: "assistant", text, at: Date.now() }]);
+      const assistantMessage = { role: "assistant", kind: "assistant", text, at: Date.now() };
+      if (targetRunSession) {
+        setComposerRunSessions((list) => list.map((session) => (
+          session.id === targetSessionId
+            ? {
+                ...session,
+                status: "done",
+                messages: [...(Array.isArray(session.messages) ? session.messages : []), assistantMessage].slice(-180),
+              }
+            : session
+        )));
+      } else {
+        setComposerMessages((list) => [...list, assistantMessage]);
+      }
       await loadWorkspace();
       setStatus("AI 生成完成");
     } catch (e) {
       const message = String(e.message || e);
-      setComposerMessages((list) => [...list, { role: "assistant", text: message, error: true, at: Date.now() }]);
+      const errorMessage = { role: "assistant", text: message, error: true, at: Date.now() };
+      if (targetRunSession) {
+        setComposerRunSessions((list) => list.map((session) => (
+          session.id === targetSessionId
+            ? {
+                ...session,
+                status: "failed",
+                messages: [...(Array.isArray(session.messages) ? session.messages : []), errorMessage].slice(-180),
+              }
+            : session
+        )));
+      } else {
+        setComposerMessages((list) => [...list, errorMessage]);
+      }
       setStatus(message);
     } finally {
       setComposerRunning(false);
     }
-  }, [composerModel, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, openComposerLogPanel, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
+  }, [activeComposerSessionId, composerMessages, composerModel, composerRunSessions, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
   const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
-  const activeComposerRunning = activeRunSession ? activeRunSession.status === "running" : composerRunning;
+  const activeComposerRunning = activeRunSession ? (activeRunSession.status === "running" || composerRunning) : composerRunning;
+  const activeComposerConversationMessages = workspaceComposerConversationMessages(activeComposerMessages, activeComposerRunning);
+  const activeComposerTechnicalMessages = workspaceComposerTechnicalMessages(activeComposerMessages);
   const activeComposerStatus = activeRunSession
     ? activeRunSession.status === "running"
       ? `${activeRunSession.label} running`
@@ -10167,10 +10243,45 @@ function WorkspacePageInner() {
               </div>
               <div className="af-composer-sidebar-thread">
                 <WorkspaceComposerThread
-                  messages={activeComposerMessages}
+                  messages={activeComposerConversationMessages}
                   running={activeComposerRunning}
                   showRunningIndicator={!activeRunSession}
                 />
+                {activeComposerTechnicalMessages.length > 0 ? (
+                  <details className="af-composer-sidebar-log-details">
+                    <summary>执行日志</summary>
+                    <WorkspaceComposerThread
+                      messages={activeComposerTechnicalMessages}
+                      running={false}
+                      showRunningIndicator={false}
+                    />
+                  </details>
+                ) : null}
+              </div>
+              <div className="af-composer-sidebar-input">
+                <textarea
+                  className="af-composer-sidebar-textarea"
+                  value={composerText}
+                  rows={3}
+                  onChange={(event) => setComposerText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void submitWorkspaceAi();
+                    }
+                  }}
+                  placeholder={activeRunSession ? "继续追问、总结或要求调整这次结果" : "继续描述你想让 AI 在 workspace 中做什么"}
+                  disabled={!workspaceWritable || activeComposerRunning}
+                />
+                <button
+                  type="button"
+                  className="af-composer-sidebar-send"
+                  disabled={!workspaceWritable || activeComposerRunning || !composerText.trim()}
+                  onClick={() => void submitWorkspaceAi()}
+                  aria-label="发送 AI 对话"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>arrow_upward</span>
+                </button>
               </div>
             </div>
           </aside>
