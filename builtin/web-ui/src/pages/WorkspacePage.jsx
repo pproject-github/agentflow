@@ -3109,6 +3109,44 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
     inputs: [{ type: "text", name: displayDefinitionId === "display_image" ? "src" : "content", value: outputPreview, default: outputPreview }],
     outputs: [],
   }), [data, displayDefinitionId, outputPreview]);
+  const cursorModels = Array.isArray(data?.modelLists?.cursor) ? data.modelLists.cursor : [];
+  const opencodeModels = Array.isArray(data?.modelLists?.opencode) ? data.modelLists.opencode : [];
+  const claudeCodeModels = Array.isArray(data?.modelLists?.claudeCode) ? data.modelLists.claudeCode : [];
+  const codexModels = Array.isArray(data?.modelLists?.codex) ? data.modelLists.codex : [];
+  const cursorModelIds = useMemo(() => new Set(cursorModels.map(workspaceModelEntryId)), [cursorModels]);
+  const opencodeModelIds = useMemo(() => new Set(opencodeModels.map(workspaceModelEntryId)), [opencodeModels]);
+  const claudeCodeModelIds = useMemo(() => new Set(claudeCodeModels.map(workspaceModelEntryId)), [claudeCodeModels]);
+  const codexModelIds = useMemo(() => new Set(codexModels.map(workspaceModelEntryId)), [codexModels]);
+  const rawModel = config.model;
+  const normalizedModelForSelect = useMemo(() => {
+    if (!rawModel) return "";
+    if (
+      rawModel.startsWith("cursor:") ||
+      rawModel.startsWith("opencode:") ||
+      rawModel.startsWith("codex:") ||
+      rawModel.startsWith("claude-code:")
+    ) return rawModel;
+    if (claudeCodeModelIds.has(rawModel)) return `claude-code:${rawModel}`;
+    if (codexModelIds.has(rawModel)) return `codex:${rawModel}`;
+    if (opencodeModelIds.has(rawModel)) return `opencode:${rawModel}`;
+    if (cursorModelIds.has(rawModel)) return `cursor:${rawModel}`;
+    return rawModel;
+  }, [claudeCodeModelIds, codexModelIds, cursorModelIds, opencodeModelIds, rawModel]);
+  const displayModel = rawModel.startsWith("cursor:")
+    ? rawModel.slice(7)
+    : rawModel.startsWith("opencode:")
+      ? rawModel.slice(9)
+      : rawModel.startsWith("codex:")
+        ? rawModel.slice(6)
+        : rawModel.startsWith("claude-code:")
+          ? rawModel.slice(12)
+          : rawModel;
+  const bareModel = displayModel;
+  const modelNotInLists = Boolean(rawModel) &&
+    !cursorModelIds.has(bareModel) &&
+    !opencodeModelIds.has(bareModel) &&
+    !claudeCodeModelIds.has(bareModel) &&
+    !codexModelIds.has(bareModel);
   const selectedSkillSet = useMemo(() => new Set(config.skillKeys), [config.skillKeys]);
   const skillsByKey = useMemo(() => new Map(skillsList.map((skill) => [skill.key, skill])), [skillsList]);
   const skillGroups = useMemo(() => {
@@ -3274,7 +3312,62 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       <div className="af-work-context-run-card__head">
         <span className="material-symbols-outlined">automation</span>
         <strong>{data?.label && data.label !== "Context Run" ? data.label : "一键任务"}</strong>
-        <span>{isOneClickTaskDefinitionId(data?.definitionId) ? "workspace_one_click_task" : (data?.definitionId || "workspace_one_click_task")}</span>
+        <div
+          className="af-work-context-run-card__model-wrap nodrag"
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <select
+            className="af-work-context-run-card__model"
+            value={normalizedModelForSelect}
+            disabled={readOnly}
+            aria-label="模型"
+            title={displayModel || "默认模型"}
+            onChange={(event) => updateConfig({ model: event.target.value })}
+          >
+            <option value="">默认</option>
+            {modelNotInLists ? <option value={rawModel}>{rawModel}</option> : null}
+            {cursorModels.length ? (
+              <optgroup label="Cursor">
+                {cursorModels.map((item) => (
+                  <option key={`context-cursor-${item}`} value={`cursor:${workspaceModelEntryId(item)}`}>
+                    {workspaceModelEntryId(item)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {opencodeModels.length ? (
+              <optgroup label="OpenCode">
+                {opencodeModels.map((item) => (
+                  <option key={`context-opencode-${item}`} value={`opencode:${workspaceModelEntryId(item)}`}>
+                    {workspaceModelEntryId(item)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {codexModels.length ? (
+              <optgroup label="Codex">
+                {codexModels.map((item) => (
+                  <option key={`context-codex-${item}`} value={`codex:${workspaceModelEntryId(item)}`}>
+                    {workspaceModelEntryId(item)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {claudeCodeModels.length ? (
+              <optgroup label="Claude Code">
+                {claudeCodeModels.map((item) => (
+                  <option key={`context-claude-${item}`} value={`claude-code:${workspaceModelEntryId(item)}`}>
+                    {workspaceModelEntryId(item)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+          </select>
+          <span className="material-symbols-outlined" aria-hidden>expand_more</span>
+        </div>
+        <span className="af-work-context-run-card__kind">{isOneClickTaskDefinitionId(data?.definitionId) ? "workspace_one_click_task" : (data?.definitionId || "workspace_one_click_task")}</span>
         {hasResult ? (
           <div className="af-work-context-run-card__view-switch nodrag" onClick={(event) => event.stopPropagation()}>
             <button
@@ -4348,6 +4441,12 @@ function normalizeContextRunDisplayType(value) {
   return ["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
 }
 
+function workspaceModelEntryId(entry) {
+  const text = String(entry || "");
+  const idx = text.indexOf(" - ");
+  return idx >= 0 ? text.slice(0, idx).trim() : text.trim();
+}
+
 function contextRunDisplayDefinitionId(displayType) {
   const kind = normalizeContextRunDisplayType(displayType);
   if (kind === "html") return "display_html";
@@ -4378,6 +4477,7 @@ function contextRunConfigFromData(data) {
     includeWorkspaceContext: includeRaw !== "false" && includeRaw !== "0" && includeRaw !== "off",
     workspaceContext: workspaceSlotConfigJsonValue(inputs, "workspaceContext"),
     displayType: normalizeContextRunDisplayType(workspaceSlotConfigValue(inputs, "displayType", "markdown")),
+    model: String(data?.model || "").trim(),
   };
 }
 
@@ -6784,6 +6884,7 @@ function WorkspacePageInner() {
     if (!id) return;
     const serializedSkills = serializeSkillKeys(config?.skillKeys || []);
     const displayType = normalizeContextRunDisplayType(config?.displayType || "markdown");
+    const model = String(config?.model || "").trim();
     const includeWorkspace = config?.includeWorkspaceContext === false ? "false" : "true";
     const workspaceContextValue = config?.workspaceContext && typeof config.workspaceContext === "object"
       ? JSON.stringify(config.workspaceContext)
@@ -6806,6 +6907,7 @@ function WorkspacePageInner() {
             data: {
               ...node.data,
               body: task,
+              model,
               inputs: patchInputSlots(node.data?.inputs),
               outputs: patchOutputSlots(node.data?.outputs),
             },
@@ -6819,6 +6921,7 @@ function WorkspacePageInner() {
       [id]: {
         ...base,
         body: task,
+        model,
         input: patchInputSlots(base.input),
         output: patchOutputSlots(base.output),
       },
@@ -6828,7 +6931,7 @@ function WorkspacePageInner() {
     setInstances(nextInstances);
     setNodePropDraft((draft) => (
       draft?.id === id
-        ? { ...draft, body: task, inputs: patchInputSlots(draft.inputs), outputs: patchOutputSlots(draft.outputs) }
+        ? { ...draft, body: task, model, inputs: patchInputSlots(draft.inputs), outputs: patchOutputSlots(draft.outputs) }
         : draft
     ));
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
