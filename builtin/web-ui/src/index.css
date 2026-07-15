@@ -2421,7 +2421,7 @@ button.af-project-card {
 
 @media (min-width: 1100px) {
   .af-settings-layout {
-    grid-template-columns: minmax(0, 1fr) 17.5rem;
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2430,6 +2430,946 @@ button.af-project-card {
   gap: 1.5rem;
   grid-template-columns: 1fr;
   align-items: start;
+}
+
+.af-set-workspace-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.af-set-workspace-list__head,
+.af-set-workspace-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.af-set-workspace-list__head {
+  color: rgba(244, 240, 255, 0.86);
+  font-weight: 800;
+}
+
+.af-set-workspace-list__head small {
+  color: rgba(216, 210, 230, 0.5);
+  font-family: var(--af-mono);
+  font-size: 0.72rem;
+}
+
+.af-set-workspace-row {
+  min-height: 3.4rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.af-set-workspace-row__main {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.af-set-workspace-row__main strong,
+.af-set-workspace-row__main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-set-workspace-row__main strong {
+  color: rgba(244, 240, 255, 0.92);
+  font-size: 0.9rem;
+}
+
+.af-set-workspace-row__main span,
+.af-set-workspace-empty {
+  color: rgba(216, 210, 230, 0.54);
+  font-family: var(--af-mono);
+  font-size: 0.72rem;
+}
+
+.af-set-workspace-empty {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.af-set-workspace-add {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.65fr) minmax(10rem, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.af-set-workspace-add input {
+  min-width: 0;
+  height: 2.35rem;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(244, 240, 255, 0.9);
+  padding: 0 0.65rem;
+  font: inherit;
+}
+
+.af-set-workspace-add button {
+  height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  border: 1px solid rgba(124, 77, 255, 0.38);
+  border-radius: 8px;
+  background: rgba(124, 77, 255, 0.2);
+  color: rgba(244, 240, 255, 0.92);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.af-set-workspace-add button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.af-workspaces-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.af-workspaces-inner {
+  max-width: 92rem;
+  margin: 0 auto;
+}
+
+.af-workspaces-config,
+.af-workspaces-status {
+  margin: 0.55rem 0 0;
+  color: rgba(216, 210, 230, 0.58);
+  font-family: var(--af-mono);
+  font-size: 0.75rem;
+}
+
+.af-workspaces-status {
+  color: #a9ffc0;
+}
+
+.af-workspaces-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1.2rem;
+}
+
+.af-workspaces-summary > div {
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 1rem;
+}
+
+.af-workspaces-summary span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: rgba(216, 210, 230, 0.62);
+  font-size: 0.78rem;
+}
+
+.af-workspaces-summary strong {
+  color: var(--af-on-surface);
+  font-family: var(--af-headline);
+  font-size: 1.45rem;
+}
+
+.af-workspaces-layout {
+  display: grid;
+  grid-template-columns: minmax(18rem, 0.85fr) minmax(0, 1.4fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.af-workspaces-list,
+.af-workspaces-editor {
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 1rem;
+}
+
+.af-workspaces-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.af-workspaces-section-head,
+.af-workspaces-editor__head,
+.af-workspaces-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.af-workspaces-section-head--sub {
+  margin-top: 0.8rem;
+}
+
+.af-workspaces-section-head h2,
+.af-workspaces-editor__head h2 {
+  margin: 0;
+  color: var(--af-on-surface);
+  font-size: 0.98rem;
+}
+
+.af-workspaces-section-head button,
+.af-workspaces-actions button,
+.af-workspaces-kind button {
+  min-height: 2.3rem;
+  border: 1px solid rgba(178, 170, 200, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--af-on-surface);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.af-workspaces-section-head button,
+.af-workspaces-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 0.8rem;
+}
+
+.af-workspaces-section-head button .material-symbols-outlined,
+.af-workspaces-actions button .material-symbols-outlined {
+  font-size: 1.05rem;
+}
+
+.af-workspaces-card {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  padding: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.af-workspaces-card--selected {
+  border-color: rgba(124, 77, 255, 0.58);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.28);
+}
+
+.af-workspaces-card__head,
+.af-workspaces-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.af-workspaces-card__head {
+  justify-content: space-between;
+}
+
+.af-workspaces-card__head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(244, 240, 255, 0.94);
+  font-size: 0.95rem;
+}
+
+.af-workspaces-card__head span,
+.af-workspaces-card__meta em {
+  flex-shrink: 0;
+  border: 1px solid rgba(124, 77, 255, 0.28);
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  color: rgba(201, 184, 255, 0.9);
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.af-workspaces-card p {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(216, 210, 230, 0.62);
+  font-size: 0.8rem;
+}
+
+.af-workspaces-card__meta {
+  color: rgba(216, 210, 230, 0.5);
+  font-size: 0.74rem;
+}
+
+.af-workspaces-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: rgba(255, 117, 117, 0.82);
+}
+
+.af-workspaces-dot--ok {
+  background: #74f79a;
+}
+
+.af-workspaces-empty {
+  border: 1px dashed rgba(178, 170, 200, 0.16);
+  border-radius: 8px;
+  padding: 1rem;
+  color: rgba(216, 210, 230, 0.56);
+  line-height: 1.5;
+}
+
+.af-workspaces-editor {
+  display: grid;
+  gap: 1rem;
+}
+
+.af-workspaces-editor__head p {
+  margin: 0.35rem 0 0;
+  color: rgba(216, 210, 230, 0.58);
+  font-size: 0.8rem;
+}
+
+.af-workspaces-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: rgba(244, 240, 255, 0.86);
+  font-weight: 800;
+}
+
+.af-workspaces-kind {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.af-workspaces-kind button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.af-workspaces-kind button.active,
+.af-workspaces-primary {
+  border-color: rgba(124, 77, 255, 0.55) !important;
+  background: rgba(124, 77, 255, 0.28) !important;
+}
+
+.af-workspaces-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.af-workspaces-form label {
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+  color: rgba(216, 210, 230, 0.66);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.af-workspaces-form__wide {
+  grid-column: 1 / -1;
+}
+
+.af-workspaces-form input,
+.af-workspaces-form select,
+.af-workspaces-form textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(178, 170, 200, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(244, 240, 255, 0.92);
+  padding: 0.7rem 0.75rem;
+  font: inherit;
+}
+
+.af-workspaces-form small {
+  color: rgba(216, 210, 230, 0.48);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.af-workspaces-form textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
+.af-workspaces-form input:focus,
+.af-workspaces-form select:focus,
+.af-workspaces-form textarea:focus {
+  outline: none;
+  border-color: rgba(124, 77, 255, 0.55);
+}
+
+.af-workspaces-actions > div {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.af-workspaces-danger {
+  border-color: rgba(255, 117, 117, 0.32) !important;
+  color: #ffb8b8 !important;
+}
+
+.af-workspaces-actions button:disabled,
+.af-workspaces-kind button:disabled,
+.af-workspaces-form input:disabled,
+.af-workspaces-form select:disabled,
+.af-workspaces-form textarea:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+@media (max-width: 980px) {
+  .af-workspaces-layout,
+  .af-workspaces-summary,
+  .af-workspaces-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+.af-node-studio-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #111112;
+  color: var(--af-on-surface);
+}
+
+.af-node-studio-top {
+  min-height: 4.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid rgba(178, 170, 200, 0.12);
+  background: rgba(19, 19, 19, 0.88);
+}
+
+.af-node-studio-top h1 {
+  margin: 0.35rem 0 0;
+  font-family: var(--af-headline);
+  font-size: 1.15rem;
+  letter-spacing: 0;
+}
+
+.af-node-studio-actions,
+.af-node-studio-panel-head,
+.af-node-studio-subhead,
+.af-node-preview-card__head,
+.af-node-preview-toggle,
+.af-node-preview-meta,
+.af-node-preview-actions,
+.af-node-studio-tab,
+.af-node-studio-agent-tools {
+  display: flex;
+  align-items: center;
+}
+
+.af-node-studio-actions {
+  gap: 0.5rem;
+}
+
+.af-node-studio-actions button,
+.af-node-studio-send,
+.af-node-studio-subhead button,
+.af-node-preview-actions button,
+.af-node-studio-agent-tools button {
+  min-height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(178, 170, 200, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(244, 240, 255, 0.9);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-node-studio-actions button {
+  padding: 0 0.9rem;
+}
+
+.af-node-studio-actions__primary,
+.af-node-studio-send,
+.af-node-preview-run {
+  border-color: rgba(124, 77, 255, 0.46) !important;
+  background: rgba(124, 77, 255, 0.26) !important;
+}
+
+.af-node-studio-shell {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.82fr) minmax(28rem, 1.7fr) minmax(18rem, 1fr);
+  gap: 0;
+}
+
+.af-node-studio-agent,
+.af-node-studio-preview,
+.af-node-studio-internals {
+  min-width: 0;
+  min-height: 0;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.af-node-studio-agent,
+.af-node-studio-preview {
+  border-right: 1px solid rgba(178, 170, 200, 0.12);
+}
+
+.af-node-studio-panel-head {
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  color: rgba(244, 240, 255, 0.92);
+  font-family: var(--af-headline);
+}
+
+.af-node-studio-panel-head .material-symbols-outlined {
+  color: #9ecfff;
+}
+
+.af-node-studio-thread {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.af-node-studio-message {
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0.75rem;
+  color: rgba(230, 225, 240, 0.78);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.af-node-studio-message--user {
+  border-color: rgba(124, 77, 255, 0.28);
+  background: rgba(124, 77, 255, 0.13);
+  color: rgba(248, 246, 255, 0.92);
+}
+
+.af-node-studio-error {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(255, 117, 117, 0.28);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.14);
+  color: #ffb8b8;
+  padding: 0.65rem;
+  font-size: 0.78rem;
+}
+
+.af-node-studio-empty {
+  border: 1px dashed rgba(178, 170, 200, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(216, 210, 230, 0.58);
+  padding: 0.8rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.af-node-studio-agent-tools {
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.af-node-studio-agent-tools button {
+  min-height: 2.1rem;
+  padding: 0 0.65rem;
+  font-size: 0.78rem;
+}
+
+.af-node-studio-prompt {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  color: rgba(216, 210, 230, 0.62);
+  font-size: 0.78rem;
+}
+
+.af-node-studio-prompt textarea {
+  min-height: 7rem;
+  resize: vertical;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(244, 240, 255, 0.9);
+  padding: 0.75rem;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.af-node-studio-send {
+  width: 100%;
+  margin-top: 0.7rem;
+}
+
+.af-node-studio-preview-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.af-node-studio-preview-stage {
+  min-height: 24rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-color: #0b0b0d;
+  padding: 1rem;
+}
+
+.af-node-preview-card {
+  width: min(100%, 24rem);
+  border: 1px solid rgba(124, 77, 255, 0.48);
+  border-radius: 8px;
+  background: rgba(26, 24, 29, 0.96);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.af-node-preview-empty {
+  width: min(100%, 24rem);
+  min-height: 12rem;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.55rem;
+  border: 1px dashed rgba(178, 170, 200, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(216, 210, 230, 0.64);
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.af-node-preview-empty .material-symbols-outlined {
+  color: rgba(168, 143, 255, 0.9);
+  font-size: 2rem;
+}
+
+.af-node-preview-empty strong {
+  color: rgba(244, 240, 255, 0.9);
+}
+
+.af-node-preview-empty p {
+  margin: 0;
+  max-width: 18rem;
+  line-height: 1.45;
+  font-size: 0.82rem;
+}
+
+.af-node-preview-card--default {
+  border-color: rgba(178, 170, 200, 0.18);
+}
+
+.af-node-preview-default-body {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.9rem;
+}
+
+.af-node-preview-default-body p {
+  margin: 0;
+  color: rgba(216, 210, 230, 0.68);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.af-node-preview-default-body div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.af-node-preview-default-body span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.55rem;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(244, 240, 255, 0.74);
+  font-size: 0.7rem;
+}
+
+.af-node-preview-card__head {
+  gap: 0.55rem;
+  min-height: 3.1rem;
+  padding: 0 0.8rem;
+  border-bottom: 1px solid rgba(178, 170, 200, 0.14);
+}
+
+.af-node-preview-card__head .material-symbols-outlined {
+  color: rgba(168, 143, 255, 0.95);
+}
+
+.af-node-preview-card__head strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-node-preview-card__head code {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(216, 210, 230, 0.45);
+  font-size: 0.68rem;
+}
+
+.af-node-preview-toggle,
+.af-node-preview-fields,
+.af-node-preview-meta,
+.af-node-preview-actions {
+  padding: 0.75rem 0.85rem 0;
+}
+
+.af-node-preview-toggle {
+  justify-content: space-between;
+  color: rgba(244, 240, 255, 0.82);
+}
+
+.af-node-preview-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: rgba(124, 77, 255, 0.95);
+}
+
+.af-node-preview-fields {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.af-node-preview-fields label {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+  color: rgba(216, 210, 230, 0.68);
+}
+
+.af-node-preview-fields label > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.af-node-preview-fields select,
+.af-node-studio-inputs input {
+  min-width: 0;
+  height: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(244, 240, 255, 0.9);
+  padding: 0 0.55rem;
+  font: inherit;
+}
+
+.af-node-preview-meta {
+  justify-content: space-between;
+  gap: 0.55rem;
+  color: rgba(216, 210, 230, 0.48);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.68rem;
+}
+
+.af-node-preview-actions {
+  display: grid;
+  grid-template-columns: minmax(7.8rem, 1.4fr) minmax(4.6rem, 0.8fr);
+  gap: 0.45rem;
+  padding-bottom: 0.85rem;
+}
+
+.af-node-preview-actions button {
+  min-width: 0;
+  width: 100%;
+}
+
+.af-node-preview-run {
+  min-height: 2.6rem !important;
+}
+
+.af-node-studio-test {
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.85rem;
+}
+
+.af-node-studio-subhead {
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.af-node-studio-subhead button {
+  min-height: 2rem;
+  padding: 0 0.7rem;
+}
+
+.af-node-studio-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.af-node-studio-inputs label {
+  display: grid;
+  gap: 0.35rem;
+  color: rgba(216, 210, 230, 0.55);
+  font-size: 0.76rem;
+}
+
+.af-node-studio-log,
+.af-node-studio-code {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(178, 170, 200, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(200, 244, 213, 0.82);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.72rem;
+}
+
+.af-node-studio-log {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem;
+}
+
+.af-node-studio-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.af-node-studio-tab {
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2.2rem;
+  border: 1px solid rgba(178, 170, 200, 0.13);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(216, 210, 230, 0.72);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.af-node-studio-tab--active {
+  border-color: rgba(98, 174, 255, 0.32);
+  background: rgba(98, 174, 255, 0.12);
+  color: #b9dcff;
+}
+
+.af-node-studio-internal-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+}
+
+.af-node-studio-internal-row {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid rgba(178, 170, 200, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.65rem;
+}
+
+.af-node-studio-internal-row span {
+  color: rgba(216, 210, 230, 0.5);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.7rem;
+}
+
+.af-node-studio-internal-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(244, 240, 255, 0.86);
+  font-size: 0.8rem;
+}
+
+.af-node-studio-code {
+  width: 100%;
+  overflow: auto;
+  padding: 0.75rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+@media (max-width: 1320px) {
+  .af-node-studio-shell {
+    grid-template-columns: minmax(14rem, 0.82fr) minmax(24rem, 1.4fr);
+  }
+
+  .af-node-studio-internals {
+    grid-column: 1 / -1;
+    border-top: 1px solid rgba(178, 170, 200, 0.12);
+  }
+}
+
+@media (max-width: 860px) {
+  .af-node-studio-top,
+  .af-node-studio-actions {
+    align-items: stretch;
+  }
+
+  .af-node-studio-top,
+  .af-node-studio-shell,
+  .af-node-studio-inputs {
+    grid-template-columns: 1fr;
+  }
+
+  .af-node-studio-top {
+    display: grid;
+    padding: 0.9rem;
+  }
+
+  .af-node-studio-agent,
+  .af-node-studio-preview {
+    border-right: 0;
+    border-bottom: 1px solid rgba(178, 170, 200, 0.12);
+  }
 }
 
 .af-schedules-refresh {
@@ -3114,11 +4054,6 @@ button.af-project-card {
   color: rgba(229, 226, 225, 0.4);
 }
 
-.af-set-card--feedback {
-  grid-column: 1 / -1;
-  background: var(--af-surface-high);
-}
-
 .af-feedback-list {
   display: grid;
   gap: 0.75rem;
@@ -3218,11 +4153,23 @@ button.af-project-card {
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.36);
 }
 
+.af-feedback-panel--admin {
+  width: min(72rem, 100%);
+}
+
 .af-feedback-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.af-feedback-admin-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .af-feedback-eyebrow {
@@ -3368,6 +4315,10 @@ button.af-project-card {
 
 .af-feedback-error {
   margin: 0;
+}
+
+.af-feedback-list--page {
+  max-height: none;
 }
 
 .af-set-env-head {
@@ -3886,6 +4837,88 @@ button.af-project-card {
   text-align: left;
 }
 
+.af-set-mcp-personal {
+  gap: 1rem;
+}
+
+.af-set-mcp-connect-grid,
+.af-set-mcp-snippet-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .af-set-mcp-connect-grid,
+  .af-set-mcp-snippet-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.af-set-mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.62);
+  font: 750 0.74rem var(--af-sans, Inter, system-ui, sans-serif);
+}
+
+.af-set-mcp-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .af-set-mcp-token-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.af-set-mcp-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+  color: rgba(255, 255, 255, 0.74);
+  font: 800 0.78rem var(--af-sans, Inter, system-ui, sans-serif);
+}
+
+.af-set-mcp-code {
+  min-height: 11rem;
+  max-height: 18rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(210, 255, 220, 0.86);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 650 0.72rem/1.45 var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+}
+
+.af-set-mcp-copy-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.af-set-mcp-copy-row .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-set-mcp-prompt {
+  min-height: 15rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
 .af-mcp-layout {
   display: grid;
   grid-template-columns: minmax(17rem, 0.38fr) minmax(0, 1fr);
@@ -3970,6 +5003,43 @@ button.af-project-card {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+}
+
+.af-mcp-server-backends {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.af-mcp-backend-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.2rem;
+  padding: 0 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.62rem;
+  font-weight: 850;
+}
+
+.af-mcp-backend-pill--ok {
+  border-color: rgba(52, 211, 153, 0.22);
+  background: rgba(16, 185, 129, 0.1);
+  color: rgba(167, 243, 208, 0.88);
+}
+
+.af-mcp-backend-pill--partial {
+  border-color: rgba(250, 204, 21, 0.24);
+  background: rgba(250, 204, 21, 0.1);
+  color: rgba(253, 224, 71, 0.88);
+}
+
+.af-mcp-backend-pill--error {
+  border-color: rgba(248, 113, 113, 0.24);
+  background: rgba(248, 113, 113, 0.1);
+  color: rgba(255, 170, 170, 0.88);
 }
 
 .af-mcp-server-item strong {
@@ -4131,6 +5201,73 @@ button.af-project-card {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.af-mcp-backends {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 760px) {
+  .af-mcp-backends {
+    grid-template-columns: 1fr;
+  }
+}
+
+.af-mcp-backend {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.af-mcp-backend--ok {
+  border-color: rgba(52, 211, 153, 0.2);
+  background: rgba(16, 185, 129, 0.07);
+}
+
+.af-mcp-backend--partial {
+  border-color: rgba(250, 204, 21, 0.22);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.af-mcp-backend--error {
+  border-color: rgba(248, 113, 113, 0.24);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.af-mcp-backend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.af-mcp-backend-head strong {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.82rem;
+}
+
+.af-mcp-backend-head span {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.af-mcp-backend p,
+.af-mcp-backend ul {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.af-mcp-backend ul {
+  padding-left: 1rem;
+}
+
 .af-mcp-check--ok {
   border-color: rgba(52, 211, 153, 0.2);
   background: rgba(16, 185, 129, 0.08);
@@ -4213,15 +5350,14 @@ button.af-project-card {
 }
 
 .af-settings-rail {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 1.5rem;
 }
 
 @media (min-width: 1100px) {
   .af-settings-rail {
-    position: sticky;
-    top: 5.5rem;
+    display: contents;
   }
 }
 
@@ -6932,28 +8068,42 @@ button.af-project-card {
   font-family: var(--af-headline);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .af-work-run-card__actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.45rem;
-  padding: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) 2.55rem 2.55rem;
+  gap: 0.38rem;
+  padding: 0.62rem 0.7rem 0.72rem;
 }
 
 .af-work-run-card__actions .af-work-run-card__button {
   width: 100%;
   margin: 0;
+  height: 2.45rem;
+  padding: 0 0.72rem;
 }
 
+.af-work-run-card__optimize,
 .af-work-run-card__logs {
-  min-width: 4.8rem;
+  min-width: 0;
+  padding: 0;
   border-color: rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.82);
+}
+
+.af-work-run-card__optimize .material-symbols-outlined,
+.af-work-run-card__logs .material-symbols-outlined {
+  font-size: 1.28rem;
+}
+
+.af-work-run-card__optimize--running .material-symbols-outlined {
+  animation: spin 1s linear infinite;
 }
 
 .af-work-run-card__button:disabled {
@@ -6969,6 +8119,312 @@ button.af-project-card {
 .af-work-run-card__button--stop:hover {
   border-color: rgba(255, 112, 112, 0.72);
   background: rgba(255, 82, 82, 0.26);
+}
+
+.af-work-context-run-card {
+  position: relative;
+  box-sizing: border-box;
+  width: 25rem;
+  overflow: visible;
+  border: 1px solid rgba(124, 77, 255, 0.32);
+  border-radius: 0.8rem;
+  background: rgba(25, 24, 29, 0.98);
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.36);
+}
+
+.af-work-context-run-card--selected {
+  border-color: rgba(124, 77, 255, 0.86);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.34), 0 20px 48px rgba(0, 0, 0, 0.36);
+}
+
+.af-work-context-run-card--running {
+  border-color: rgba(92, 176, 255, 0.82);
+}
+
+.af-work-context-run-card--done {
+  border-color: rgba(99, 221, 141, 0.74);
+}
+
+.af-work-context-run-card--failed,
+.af-work-context-run-card--stopped {
+  border-color: rgba(255, 112, 112, 0.7);
+}
+
+.af-work-context-run-card--result {
+  width: 34rem;
+}
+
+.af-work-context-run-card__head {
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.af-work-context-run-card__head > .material-symbols-outlined {
+  color: rgba(168, 143, 255, 0.96);
+}
+
+.af-work-context-run-card__head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+}
+
+.af-work-context-run-card__head > span:last-of-type {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.72rem;
+}
+
+.af-work-context-run-card__view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.16rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.af-work-context-run-card__view-switch button {
+  width: 1.8rem;
+  height: 1.55rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.52);
+  cursor: pointer;
+}
+
+.af-work-context-run-card__view-switch button:hover,
+.af-work-context-run-card__view-switch button.is-active {
+  background: rgba(124, 77, 255, 0.28);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.af-work-context-run-card__view-switch .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-work-context-run-card__body {
+  position: relative;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+}
+
+.af-work-context-run-card textarea {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 0.7rem 0.78rem;
+  font: inherit;
+  line-height: 1.45;
+  outline: none;
+}
+
+.af-work-context-run-card textarea:focus {
+  border-color: rgba(124, 77, 255, 0.68);
+  box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.26);
+}
+
+.af-work-context-run-card__result {
+  min-height: 18rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.af-work-context-run-card__result-head {
+  height: 2.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.74);
+  font-family: var(--af-headline);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.af-work-context-run-card__result-head .material-symbols-outlined {
+  color: rgba(168, 143, 255, 0.95);
+  font-size: 1rem;
+}
+
+.af-work-context-run-card__result > .af-visible-scroll-frame {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.af-work-context-run-card__result .af-visible-scroll-frame__scroller {
+  max-height: 28rem;
+}
+
+.af-work-context-run-card__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8.5rem, 0.9fr) minmax(6.4rem, 0.65fr);
+  gap: 0.48rem;
+  align-items: center;
+}
+
+.af-work-context-run-card__skills,
+.af-work-context-run-card__workspace {
+  position: relative;
+  min-width: 0;
+}
+
+.af-work-context-run-card__select,
+.af-work-context-run-card select {
+  min-height: 2.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075);
+  color: rgba(255, 255, 255, 0.88);
+  font-family: var(--af-headline);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.af-work-context-run-card__select {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.38rem;
+  padding: 0 0.65rem;
+  cursor: pointer;
+}
+
+.af-work-context-run-card__select .material-symbols-outlined {
+  font-size: 1.05rem;
+}
+
+.af-work-context-run-card__select span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-context-run-card select {
+  width: 100%;
+  padding: 0 0.65rem;
+  outline: none;
+}
+
+.af-work-context-run-card__skills-menu,
+.af-work-context-run-card__workspace-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 45;
+  width: 24rem;
+  max-width: min(24rem, 80vw);
+  overflow: visible;
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.7rem;
+  background: rgba(22, 21, 25, 0.98);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.44);
+}
+
+.af-work-context-run-card__workspace-menu {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.af-work-context-run-card__menu-scroll {
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.af-work-context-run-card__skills-menu label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.45rem;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.78rem;
+}
+
+.af-work-context-run-card__skills-menu label:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.af-work-context-run-card__skills-menu span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-context-run-card__empty {
+  padding: 0.7rem;
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.af-work-context-run-card__preview {
+  max-height: 7rem;
+  overflow: hidden;
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.6rem;
+  background: rgba(0, 0, 0, 0.34);
+  color: rgba(210, 245, 218, 0.9);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.af-work-context-run-card__actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3rem;
+  gap: 0.5rem;
+}
+
+.af-work-context-run-card__actions .af-work-run-card__button {
+  width: 100%;
+  margin: 0;
+  height: 2.55rem;
+}
+
+.af-work-context-run-card__run {
+  font-size: 0.78rem;
+}
+
+.af-work-context-run-card__logs {
+  padding: 0;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .af-work-schedule-card {
@@ -7175,7 +8631,7 @@ button.af-project-card {
 .af-work-run-logs__run {
   width: 100%;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 0.45rem;
   align-items: center;
   padding: 0.55rem 0.75rem;
@@ -7186,6 +8642,20 @@ button.af-project-card {
   font: 600 0.72rem var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
   text-align: left;
   cursor: pointer;
+}
+
+.af-work-run-logs__run-label,
+.af-work-run-logs__detail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-work-run-logs__detail-label {
+  padding: 0.1rem 0.9rem 0;
+  color: rgba(255, 255, 255, 0.82);
+  font: 800 0.86rem var(--af-sans, Inter, system-ui, sans-serif);
 }
 
 .af-work-run-logs__run:hover,
@@ -7395,6 +8865,23 @@ button.af-project-card {
 
 .af-work-load-skills-card__select .material-symbols-outlined {
   font-size: 1.05rem;
+}
+
+.af-work-load-workspace-card__path {
+  margin-top: 0.5rem;
+  min-height: 1.8rem;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.55rem;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(216, 210, 230, 0.58);
+  font-family: var(--af-mono);
+  font-size: 0.68rem;
+  padding: 0 0.55rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .af-work-load-skills-menu-shell {
@@ -16416,6 +17903,12 @@ button.af-exec-history-card {
   max-height: 16rem;
   overflow-y: auto;
   padding: 0.2rem;
+}
+
+.af-display-share-node-list__label {
+  color: rgba(202, 195, 216, 0.72);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .af-display-share-node-row {

@@ -1,13 +1,53 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 
-export default function FeedbackPage() {
+function formatFeedbackTime(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return String(iso);
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    }).format(new Date(t));
+  } catch {
+    return String(iso);
+  }
+}
+
+export default function FeedbackPage({ authUser }) {
   const { navigate } = useRoute();
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState("");
+
+  const isAdmin = Boolean(authUser?.isAdmin);
+
+  const loadFeedback = useCallback(async () => {
+    if (!isAdmin) return;
+    setLoading(true);
+    setListError("");
+    try {
+      const res = await fetch("/api/feedback");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "加载失败");
+      setItems(Array.isArray(json.feedback) ? json.feedback : []);
+    } catch (e) {
+      setListError(String(e.message || e));
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    void loadFeedback();
+  }, [loadFeedback]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -36,6 +76,56 @@ export default function FeedbackPage() {
     }
   };
 
+  if (isAdmin) {
+    return (
+      <main className="af-feedback-page">
+        <section className="af-feedback-panel af-feedback-panel--admin">
+          <div className="af-feedback-head">
+            <div>
+              <span className="af-feedback-eyebrow">Feedback</span>
+              <h1>意见反馈</h1>
+              <p>查看用户提交的问题、建议和功能需求。</p>
+            </div>
+            <div className="af-feedback-admin-actions">
+              <button type="button" className="af-feedback-back" onClick={() => void loadFeedback()} disabled={loading}>
+                <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "refresh"}</span>
+                {loading ? "刷新中..." : "刷新"}
+              </button>
+              <button type="button" className="af-feedback-back" onClick={() => navigate("/projects")}>
+                <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+                返回
+              </button>
+            </div>
+          </div>
+
+          {listError ? <p className="af-err af-feedback-error">{listError}</p> : null}
+          <div className="af-feedback-list af-feedback-list--page">
+            {items.length > 0 ? items.map((item) => (
+              <article key={item.id} className="af-feedback-item">
+                <header className="af-feedback-item__head">
+                  <div>
+                    <h3>{item.title || "未命名反馈"}</h3>
+                    <p>
+                      <span>{item.username || item.userId || "unknown"}</span>
+                      <span>{formatFeedbackTime(item.createdAt)}</span>
+                    </p>
+                  </div>
+                  {item.contact ? <span className="af-feedback-item__contact">{item.contact}</span> : null}
+                </header>
+                <p className="af-feedback-item__content">{item.content}</p>
+                {item.pageUrl ? <code className="af-feedback-item__url">{item.pageUrl}</code> : null}
+              </article>
+            )) : (
+              <div className="af-feedback-empty">
+                {loading ? "正在加载反馈..." : "暂无反馈"}
+              </div>
+            )}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="af-feedback-page">
       <section className="af-feedback-panel">
@@ -43,7 +133,7 @@ export default function FeedbackPage() {
           <div>
             <span className="af-feedback-eyebrow">Feedback</span>
             <h1>意见反馈</h1>
-            <p>提交使用中遇到的问题、改进建议或功能需求，管理员会在设置页统一查看。</p>
+            <p>提交使用中遇到的问题、改进建议或功能需求，管理员会在这里统一查看。</p>
           </div>
           <button type="button" className="af-feedback-back" onClick={() => navigate("/projects")}>
             <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
@@ -56,7 +146,7 @@ export default function FeedbackPage() {
             <span className="material-symbols-outlined" aria-hidden>check_circle</span>
             <div>
               <strong>已提交</strong>
-              <span>感谢反馈，管理员可以在设置页查看这条记录。</span>
+              <span>感谢反馈，管理员可以在意见反馈页查看这条记录。</span>
             </div>
           </div>
         ) : null}

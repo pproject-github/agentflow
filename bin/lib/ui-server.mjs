@@ -102,6 +102,7 @@ import {
   buildClearSessionCookie,
   buildSessionCookie,
   getAuthUserFromRequest,
+  getSessionTokenFromRequest,
   isAuthUserAllowed,
   loginOrCreateUser,
   logoutRequest,
@@ -619,6 +620,125 @@ function normalizeMcpServerConfig(value) {
   return next;
 }
 
+function mcpHeadersInfo(headers = {}) {
+  const entries = Object.entries(headers && typeof headers === "object" && !Array.isArray(headers) ? headers : {})
+    .filter(([key]) => String(key || "").trim());
+  const unsupported = [];
+  let bearer = false;
+  for (const [key, value] of entries) {
+    const name = String(key || "").trim();
+    if (name.toLowerCase() !== "authorization") {
+      unsupported.push(name);
+      continue;
+    }
+    if (/^Bearer\s+.+/i.test(String(value ?? "").trim())) bearer = true;
+    else unsupported.push(name);
+  }
+  return { count: entries.length, bearer, unsupported };
+}
+
+function codexMcpCompatibility(server) {
+  const raw = server?.raw && typeof server.raw === "object" && !Array.isArray(server.raw) ? server.raw : {};
+  const reasons = [];
+  const supported = [];
+  const unsupported = [];
+  const type = raw.url || server?.url ? "url" : raw.command || server?.command ? "command" : "";
+  if (raw.disabled === true) {
+    return {
+      status: "unsupported",
+      label: "Codex disabled",
+      reasons: ["该 MCP 已 disabled，Codex 不会启用。"],
+      supported,
+      unsupported: ["disabled"],
+    };
+  }
+  if (!type) {
+    return {
+      status: "unsupported",
+      label: "Codex unsupported",
+      reasons: ["缺少 url 或 command。"],
+      supported,
+      unsupported: ["transport"],
+    };
+  }
+
+  if (type === "command") {
+    supported.push("command", "args");
+    const envKeys = Object.keys(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? raw.env : {});
+    if (envKeys.length) supported.push("env");
+    if (raw.cwd) supported.push("cwd");
+    const headers = raw.headers && typeof raw.headers === "object" && !Array.isArray(raw.headers) ? raw.headers : {};
+    if (Object.keys(headers).length) {
+      unsupported.push("headers");
+      reasons.push("Codex stdio MCP 不支持 headers。");
+    }
+  }
+
+  if (type === "url") {
+    supported.push("url");
+    const headers = mcpHeadersInfo(raw.headers);
+    if (headers.bearer) supported.push("Authorization Bearer");
+    if (headers.unsupported.length) {
+      unsupported.push(...headers.unsupported.map((name) => `header:${name}`));
+      reasons.push(`Codex URL MCP 仅能等价支持 Authorization: Bearer；不支持自定义 header：${headers.unsupported.join(", ")}。`);
+    }
+    const envKeys = Object.keys(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? raw.env : {});
+    if (envKeys.length) {
+      unsupported.push("env");
+      reasons.push("Codex URL MCP 不支持 env；如需鉴权请使用 Authorization: Bearer 或 bearer_token_env_var。");
+    }
+    if (raw.bearer_token_env_var) supported.push("bearer_token_env_var");
+    if (raw.oauth_client_id) supported.push("oauth_client_id");
+    if (raw.oauth_resource) supported.push("oauth_resource");
+  }
+
+  const known = new Set([
+    "url",
+    "command",
+    "args",
+    "env",
+    "headers",
+    "description",
+    "cwd",
+    "disabled",
+    "bearer_token_env_var",
+    "oauth_client_id",
+    "oauth_resource",
+    "__agentflowPrivateKeys",
+  ]);
+  const unknownKeys = Object.keys(raw).filter((key) => !known.has(key));
+  if (unknownKeys.length) {
+    unsupported.push(...unknownKeys.map((key) => `field:${key}`));
+    reasons.push(`存在 Codex 未确认支持的额外字段：${unknownKeys.join(", ")}。`);
+  }
+
+  const status = unsupported.length ? "partial" : "ok";
+  return {
+    status,
+    label: status === "ok" ? "Codex OK" : "Codex partial",
+    reasons,
+    supported,
+    unsupported,
+  };
+}
+
+function cursorMcpCompatibility(server) {
+  if (server?.raw?.disabled === true) {
+    return { status: "unsupported", label: "Cursor disabled", reasons: ["该 MCP 已 disabled。"] };
+  }
+  return { status: "ok", label: "Cursor OK", reasons: [] };
+}
+
+function withMcpBackendCompatibility(server) {
+  return {
+    ...server,
+    backends: {
+      cursor: cursorMcpCompatibility(server),
+      codex: codexMcpCompatibility(server),
+    },
+  };
+}
+
 function readCursorMcpServers(userCtx = {}) {
   const config = readCursorMcpConfig();
   const privateConfig = readUserMcpPrivate(userCtx);
@@ -651,7 +771,7 @@ function readCursorMcpServers(userCtx = {}) {
       privateEnvKeys,
       privateHeaderKeys,
     };
-  }).sort((a, b) => a.name.localeCompare(b.name));
+  }).map(withMcpBackendCompatibility).sort((a, b) => a.name.localeCompare(b.name));
   return { path: cursorMcpConfigPath(), servers };
 }
 
@@ -958,9 +1078,11 @@ function readModelListsFromDisk(workspaceRoot) {
     cursor: [],
     opencode: [],
     claudeCode: [],
+    codex: [],
     cursorFetchedAt: null,
     opencodeFetchedAt: null,
     claudeCodeFetchedAt: null,
+    codexFetchedAt: null,
   };
   try {
     if (!fs.existsSync(p)) return empty;
@@ -969,9 +1091,11 @@ function readModelListsFromDisk(workspaceRoot) {
       cursor: Array.isArray(data.cursor) ? data.cursor.map(String) : [],
       opencode: Array.isArray(data.opencode) ? data.opencode.map(String) : [],
       claudeCode: Array.isArray(data.claudeCode) ? data.claudeCode.map(String) : [],
+      codex: Array.isArray(data.codex) ? data.codex.map(String) : [],
       cursorFetchedAt: data.cursorFetchedAt ?? null,
       opencodeFetchedAt: data.opencodeFetchedAt ?? null,
       claudeCodeFetchedAt: data.claudeCodeFetchedAt ?? null,
+      codexFetchedAt: data.codexFetchedAt ?? null,
     };
   } catch {
     return empty;
@@ -1490,6 +1614,194 @@ function readWorkspaceGraph(workspaceRoot) {
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
 const DISPLAY_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DISPLAY_SHARE_ALLOWED_EXPIRY_DAYS = new Set([1, 7, 30, 90, 365]);
+const NODE_STUDIO_DRAFTS_DIRNAME = "node-studio/drafts";
+const USER_WORKSPACES_FILENAME = "workspaces.json";
+
+function userWorkspacesPath(userCtx = {}) {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), USER_WORKSPACES_FILENAME);
+}
+
+function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
+  const label = String(entry?.label || entry?.name || "").trim();
+  const kindRaw = String(entry?.kind || entry?.source || "").trim().toLowerCase();
+  const repoUrl = String(entry?.repoUrl || entry?.gitUrl || entry?.url || "").trim();
+  const kind = kindRaw === "git" || repoUrl ? "git" : "local";
+  const branch = String(entry?.branch || "master").trim() || "master";
+  const mountPathRaw = String(entry?.mountPath || "").trim();
+  const rawPath = String(entry?.path || entry?.cwd || "").trim();
+  if (!rawPath && kind !== "git") return null;
+  const idRaw = String(entry?.id || label || mountPathRaw || repoUrl || rawPath || `workspace_${index + 1}`).trim().toLowerCase();
+  const id = idRaw.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64) || `workspace_${index + 1}`;
+  const mountPath = (mountPathRaw || id).replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "").trim() || id;
+  const defaultGitPath = path.join(getAgentflowUserDataRoot(userCtx.userId || ""), "workspaces", "repos", id);
+  const absPath = path.resolve((rawPath || defaultGitPath).replace(/^~(?=$|\/|\\)/, os.homedir()));
+  const exists = fs.existsSync(absPath) && fs.statSync(absPath).isDirectory();
+  return {
+    id,
+    label: label || path.basename(absPath) || id,
+    kind,
+    path: absPath,
+    repoUrl,
+    branch,
+    mountPath,
+    credentialRef: String(entry?.credentialRef || "").trim(),
+    type: String(entry?.type || (kind === "git" ? "code" : "local")).trim() || (kind === "git" ? "code" : "local"),
+    description: String(entry?.description || "").trim(),
+    visibility: String(entry?.visibility || "personal").trim() || "personal",
+    enabled: entry?.enabled !== false,
+    exists,
+  };
+}
+
+function readUserWorkspaces(userCtx = {}) {
+  const p = userWorkspacesPath(userCtx);
+  if (!fs.existsSync(p)) return [];
+  try {
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    const list = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data) ? data : [];
+    return list.map((entry, index) => normalizeWorkspaceEntry(entry, index, userCtx)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writeUserWorkspaces(userCtx = {}, entries = []) {
+  const seen = new Set();
+  const workspaces = (Array.isArray(entries) ? entries : [])
+    .map((entry, index) => normalizeWorkspaceEntry(entry, index, userCtx))
+    .filter(Boolean)
+    .filter((entry) => {
+      const key = entry.id || entry.path;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const p = userWorkspacesPath(userCtx);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify({ version: 1, workspaces }, null, 2) + "\n", "utf-8");
+  return workspaces;
+}
+
+function listConfiguredWorkspaces(root, scopedRoot, userCtx = {}) {
+  const currentRoot = path.resolve(scopedRoot || root);
+  const homeRoot = path.resolve(os.homedir());
+  const builtins = [
+    { id: "current", label: "当前流程工作区", kind: "local", path: currentRoot, builtin: true, exists: fs.existsSync(currentRoot) && fs.statSync(currentRoot).isDirectory(), type: "flow", enabled: true },
+    { id: "home", label: "用户 Home", kind: "local", path: homeRoot, builtin: true, exists: fs.existsSync(homeRoot) && fs.statSync(homeRoot).isDirectory(), type: "local", enabled: true },
+  ];
+  const custom = readUserWorkspaces(userCtx).filter((entry) => entry.enabled !== false).map((entry) => ({ ...entry, builtin: false }));
+  const seen = new Set();
+  return [...builtins, ...custom].filter((entry) => {
+    const key = path.resolve(entry.path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function nodeStudioDraftsRoot(userCtx = {}) {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), NODE_STUDIO_DRAFTS_DIRNAME);
+}
+
+function normalizeNodeStudioDraftId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  const safe = raw.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+  return safe || `draft_${Date.now().toString(36)}_${crypto.randomBytes(3).toString("hex")}`;
+}
+
+function nodeStudioDraftPath(userCtx = {}, draftId = "") {
+  return path.join(nodeStudioDraftsRoot(userCtx), normalizeNodeStudioDraftId(draftId), "draft.json");
+}
+
+function emptyNodeStudioDraft(userCtx = {}, draftId = "") {
+  const now = new Date().toISOString();
+  const id = normalizeNodeStudioDraftId(draftId || "untitled_node");
+  return {
+    id,
+    title: "Untitled Node",
+    definitionId: "",
+    createdAt: now,
+    updatedAt: now,
+    ownerUserId: String(userCtx.userId || ""),
+    agentMessages: [],
+    promptDraft: "",
+    manifest: {
+      id,
+      version: "1.0.0",
+      name: "Untitled Node",
+      description: "",
+      baseDefinitionId: "agent_subAgent",
+      runtime: { type: "agent_subAgent" },
+      inputs: [],
+      outputs: [],
+      configSchema: { fields: [] },
+      ui: { card: { icon: "extension", variant: "default", actions: [] } },
+    },
+    config: {},
+    test: { inputs: {}, log: [], status: "not run" },
+    files: {},
+  };
+}
+
+function isLegacyNodeStudioDemoDraft(draft) {
+  return (
+    String(draft?.id || "") === "daily_report_demo" &&
+    String(draft?.definitionId || "") === "marketplace:daily_report@1.0.0"
+  );
+}
+
+function readNodeStudioDraft(userCtx = {}, draftId = "") {
+  const id = normalizeNodeStudioDraftId(draftId || "");
+  const filePath = nodeStudioDraftPath(userCtx, id);
+  if (!fs.existsSync(filePath)) return null;
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  return parsed && typeof parsed === "object" ? parsed : null;
+}
+
+function writeNodeStudioDraft(userCtx = {}, draft = {}) {
+  const id = normalizeNodeStudioDraftId(draft.id || "untitled_node");
+  const filePath = nodeStudioDraftPath(userCtx, id);
+  const previous = fs.existsSync(filePath)
+    ? JSON.parse(fs.readFileSync(filePath, "utf-8"))
+    : {};
+  const now = new Date().toISOString();
+  const next = {
+    ...previous,
+    ...draft,
+    id,
+    createdAt: previous.createdAt || draft.createdAt || now,
+    updatedAt: now,
+    ownerUserId: String(userCtx.userId || draft.ownerUserId || ""),
+  };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  return next;
+}
+
+function listNodeStudioDrafts(userCtx = {}) {
+  const rootDir = nodeStudioDraftsRoot(userCtx);
+  if (!fs.existsSync(rootDir)) return [];
+  const rows = [];
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const filePath = path.join(rootDir, entry.name, "draft.json");
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const draft = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (isLegacyNodeStudioDemoDraft(draft)) continue;
+      rows.push({
+        id: String(draft.id || entry.name),
+        title: String(draft.title || draft.manifest?.name || entry.name),
+        definitionId: String(draft.definitionId || `marketplace:${draft.manifest?.id || entry.name}@${draft.manifest?.version || "1.0.0"}`),
+        updatedAt: String(draft.updatedAt || ""),
+      });
+    } catch {
+      /* ignore corrupt drafts */
+    }
+  }
+  rows.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) || a.id.localeCompare(b.id));
+  return rows;
+}
 
 function displaySharesPath() {
   return path.join(getAgentflowDataRoot(), DISPLAY_SHARE_FILENAME);
@@ -2525,6 +2837,14 @@ function buildWorkspaceGeneratePrompt(payload) {
             "只输出 ASCII 图正文，不要解释，不要包裹 Markdown 代码围栏。",
             "使用 +-|/\\<> 等字符表达结构，尽量保持对齐。",
           ].join("\n")
+        : outputKind === "react"
+          ? [
+              "你是 workspace React 工程节点的内容生成器。",
+              "请根据用户 prompt 和上游节点/文件上下文生成一个可预览的小型 React 工程 JSON。",
+              "只输出 JSON，不要解释，不要包裹 Markdown 代码围栏。",
+              "JSON 必须包含 title、entry、files；files 至少包含 src/App.jsx，可包含 src/styles.css。",
+              "src/App.jsx 里定义或 export default 一个 App 组件；不要依赖未声明的外部包。",
+            ].join("\n")
         : [
             "你是 AgentFlow Workspace Composer。",
             "默认以用户当前选择的 workspace 节点作为上下文范围；选中节点不是让你重建整张画布的授权。",
@@ -2578,6 +2898,8 @@ function buildWorkspaceNodeChatPrompt(payload) {
       ].join("\n")
     : nodeKind === "html"
       ? "只输出完整或片段 HTML，不要解释，不要包裹 Markdown 代码围栏。"
+      : nodeKind === "react"
+        ? "只输出 React 工程 JSON，不要解释，不要包裹 Markdown 代码围栏。JSON 必须包含 title、entry、files；files 至少包含 src/App.jsx。"
       : nodeKind === "image"
         ? "只输出新的图片 src，可以是 URL、data URL 或文件路径，不要解释。"
         : nodeKind === "mermaid"
@@ -3133,6 +3455,7 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
+  if (id === "display_react_app") return "react";
   if (id === "display_image") return "image";
   if (id === "display_chart") return "chart";
   if (id === "display_table") return "table";
@@ -3149,6 +3472,7 @@ function workspaceDisplayTextFilePath(value, kind = "") {
   const ext = clean.split("?")[0].split("#")[0].toLowerCase().split(".").pop() || "";
   const allowedByKind = {
     html: new Set(["html", "htm"]),
+    react: new Set(["json", "jsx", "tsx", "js", "txt"]),
     markdown: new Set(["md", "markdown", "txt"]),
     mermaid: new Set(["mmd", "mermaid", "txt"]),
     ascii: new Set(["txt", "log"]),
@@ -3222,6 +3546,7 @@ function workspaceDisplayKindExample(kind, field) {
   if (kind === "table") return { columns: ["列名1", "列名2"], rows: [["值1", "值2"]] };
   if (kind === "chart") return { type: "chart", version: "1.0", renderer: "echarts", option: { xAxis: { type: "category", data: [] }, yAxis: { type: "value" }, series: [{ type: "bar", data: [] }] } };
   if (kind === "html") return "<可直接渲染的 HTML>";
+  if (kind === "react") return { title: "React App", entry: "src/App.jsx", files: { "src/App.jsx": "export default function App() { return <main>...</main>; }", "src/styles.css": "body { margin: 0; }" }, inputs: {} };
   if (kind === "mermaid") return "flowchart TD\n  A[开始] --> B[结束]";
   if (kind === "ascii") return "+---+\n|   |\n+---+";
   if (kind === "image") return "<图片 URL 或 data URL>";
@@ -3357,12 +3682,16 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     .filter((slot) => {
       const name = String(slot?.name || "").trim();
       const type = String(slot?.type || "");
-      return name && type !== "node" && name !== "next" && name !== "result" && name !== "content";
+      return name && type !== "node" && name !== "next" && name !== "result" && name !== "content" && name !== "displayType";
     })
     .map((slot) => String(slot.name).trim());
-  const resultKind = displayByField.get("result") || workspaceDownstreamOutputKindForField(graph, nodeId, "result") || "";
+  const configuredResultKind = isWorkspaceOneClickTaskDefinitionId(instance.definitionId)
+    ? workspaceContextRunDisplayKind(instance)
+    : "";
+  const resultKind = displayByField.get("result") || workspaceDownstreamOutputKindForField(graph, nodeId, "result") || configuredResultKind || "";
   const resultExtByKind = {
     html: "html",
+    react: "json",
     markdown: "md",
     mermaid: "mmd",
     ascii: "txt",
@@ -3374,6 +3703,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   const resultKindText = resultKind ? ` ${resultKind}` : "";
   const resultGuidance = {
     html: "内容必须是可直接放入 iframe 渲染的 HTML；不要使用 Markdown 代码围栏。",
+    react: "内容必须是 React 工程 JSON，包含 title、entry、files；files 至少包含 src/App.jsx，可包含 CSS 文件。",
     markdown: "内容必须是 Markdown 正文；除非正文确实需要代码块，否则不要额外包裹代码围栏。",
     mermaid: "内容必须是 Mermaid 图表代码，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。",
     ascii: "内容必须是纯文本/ASCII 图或表格；不要输出 HTML 或 Markdown 装饰。",
@@ -3480,8 +3810,11 @@ function workspaceRunPlan(graph, runNodeId, scopedRoot = "") {
       if (needed.size !== before) visitControlDownstream(next);
     }
   };
+  const targetDefId = String(instances[target]?.definitionId || "");
+  const targetIsRunController = targetDefId === "workspace_run" || targetDefId === "workspace_scheduled_run";
+  if (!targetIsRunController) needed.add(target);
   visitControlDownstream(target);
-  needed.delete(target);
+  if (targetIsRunController) needed.delete(target);
   const dependencyQueue = Array.from(needed);
   for (let i = 0; i < dependencyQueue.length; i++) {
     const id = dependencyQueue[i];
@@ -4362,6 +4695,10 @@ function parseWorkspaceSkillKeys(raw) {
 function selectedSkillKeysFromInstance(instance) {
   const bodyKeys = parseWorkspaceSkillKeys(instance?.body || "");
   if (bodyKeys.length > 0) return bodyKeys;
+  return selectedSkillKeysFromConfigSlots(instance);
+}
+
+function selectedSkillKeysFromConfigSlots(instance) {
   const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
   const slot = slots.find((item) => item?.name === "skillsContext") || slots.find((item) => item?.name === "skillKeys");
   return parseWorkspaceSkillKeys(workspaceSlotValue(slot) || "");
@@ -4473,6 +4810,34 @@ function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot =
     "- 临时文件和正式产物仍必须按“文件边界”写入本节点的 `tmp/` 与 `outputs/`。",
   ].filter((line) => line !== "");
   return lines.join("\n");
+}
+
+function workspaceDefaultWorkspaceContextBlock(scopedRoot = "", logicalCwd = "") {
+  const root = scopedRoot ? path.resolve(scopedRoot) : "";
+  const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
+  if (!root && !cwd) return "";
+  return [
+    "## Workspace 上下文",
+    "",
+    "当前 Agent 仍在独立节点目录中运行，文件边界以“文件边界”章节为准。",
+    cwd ? `- 当前工作目录上下文：\`${cwd}\`` : "",
+    root ? `- 流程目录：\`${root}\`` : "",
+    "",
+    "使用要求：",
+    "- 读取、搜索、分析当前项目或资料时，优先从“当前工作目录上下文”开始；不要把节点的“当前执行目录”误认为项目根目录。",
+    "- 临时文件和正式产物仍必须按“文件边界”写入本节点的 `tmp/` 与 `outputs/`。",
+  ].filter((line) => line !== "").join("\n");
+}
+
+function isWorkspaceOneClickTaskDefinitionId(definitionId) {
+  const id = String(definitionId || "");
+  return id === "workspace_one_click_task" || id === "workspace_context_run";
+}
+
+function workspaceContextRunDisplayKind(instance) {
+  const raw = workspaceSlotValue(workspaceSlotByName(instance, "displayType")).trim().toLowerCase();
+  if (["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(raw)) return raw;
+  return "markdown";
 }
 
 function mergeWorkspaceSkillBlocks(...values) {
@@ -4983,6 +5348,12 @@ async function workspaceRunToolNodejsScript({
   });
 }
 
+function workspaceNodeModelKey(instance, fallback = "") {
+  const own = String(instance?.model || "").trim();
+  if (own && own !== "default") return own;
+  return String(fallback || "").trim();
+}
+
 async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = hydrateWorkspaceGraphForRuntime(root, {
     root: scopedRoot,
@@ -5225,17 +5596,49 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const inputSlots = Array.isArray(instance.input) ? instance.input : [];
       const pathSlot = inputSlots.find((slot) => String(slot?.name || "") === "path") ||
         inputSlots.find((slot) => String(slot?.name || "") === "target");
+      const labelSlot = inputSlots.find((slot) => String(slot?.name || "") === "label");
+      const contextSlot = inputSlots.find((slot) => String(slot?.name || "") === "workspaceContext");
       const candidate = workspaceSlotValue(pathSlot) || workspaceInstanceText(instance) || inputText;
       const abs = candidate ? path.resolve(scopedRoot, candidate) : scopedRoot;
-      if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) cwd = abs;
-      publishNodeOutput(nodeId, cwd, { emitGraph: true });
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+        throw new Error(`Load Workspace path does not exist or is not a directory: ${abs}`);
+      }
+      cwd = abs;
+      const parsedContext = parseJsonText(workspaceSlotValue(contextSlot), {});
+      const configuredContext = parsedContext && typeof parsedContext === "object" && !Array.isArray(parsedContext) ? parsedContext : {};
+      const workspaceContext = {
+        ...configuredContext,
+        version: 1,
+        label: workspaceSlotValue(labelSlot) || path.basename(cwd) || "workspace",
+        cwd,
+        workspaceRoot: cwd,
+        pipelineWorkspace: path.resolve(scopedRoot),
+        previous: null,
+      };
+      let nextInstance = workspaceSetOutputSlot(instance, "workspaceContext", JSON.stringify(workspaceContext));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "cwd", cwd);
+      graph.instances[nodeId] = nextInstance;
+      publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
+      emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
 
     if (defId === "control_user_workspace") {
       cwd = path.resolve(os.homedir());
-      publishNodeOutput(nodeId, cwd, { emitGraph: true });
+      const workspaceContext = {
+        version: 1,
+        label: "home",
+        cwd,
+        workspaceRoot: cwd,
+        pipelineWorkspace: path.resolve(scopedRoot),
+        previous: null,
+      };
+      let nextInstance = workspaceSetOutputSlot(instance, "workspaceContext", JSON.stringify(workspaceContext));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "cwd", cwd);
+      graph.instances[nodeId] = nextInstance;
+      publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
+      emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
@@ -5511,6 +5914,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
 
     if (defId === "tool_nodejs") {
+      const nodeModelKey = workspaceNodeModelKey(instance, modelKey);
       const prepareStartedAt = Date.now();
       const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
       const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
@@ -5544,7 +5948,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         resultContent,
         structured: normalizedAgentOutput,
         runPackage,
-        modelKey,
+        modelKey: nodeModelKey,
         userCtx,
         emit: (event) => emit({ ...event, nodeId }),
         onActiveChild: opts.onActiveChild,
@@ -5556,12 +5960,15 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       continue;
     }
 
+    const isContextRunNode = isWorkspaceOneClickTaskDefinitionId(defId);
+    const nodeModelKey = workspaceNodeModelKey(instance, modelKey);
     const prepareStartedAt = Date.now();
     const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
     const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders, scopedRoot);
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
-    const promptSkillsBlock = mergeWorkspaceSkillBlocks(upstreamSkillBlocks);
+    const ownSkillBlock = isContextRunNode ? loadSkillsBlockForKeys(selectedSkillKeysFromConfigSlots(instance)) : "";
+    const promptSkillsBlock = mergeWorkspaceSkillBlocks(ownSkillBlock, upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
       scopedRoot,
@@ -5583,7 +5990,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       // Best-effort debug artifact only.
     }
     const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
-    const workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
+    let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
+    if (isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true) && !workspaceContextBlock) {
+      workspaceContextBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
+    }
     const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, workspaceContextBlock);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
@@ -5598,6 +6008,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       nodeRunDir: runPackage.nodeRunDir,
     });
     emit({ type: "natural", kind: "prompt", nodeId, text: prompt });
+    emit({ type: "status", nodeId, line: `Model: ${nodeModelKey || "default"}` });
     let content = "";
     const runHistoryEvents = [];
     const maxAttempts = 3;
@@ -5612,7 +6023,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           uiWorkspaceRoot: scopedRoot,
           cliWorkspace: runPackage.nodeRunDir,
           prompt,
-          modelKey,
+          modelKey: nodeModelKey,
           agentflowUserId: userCtx.userId || "",
           extraEnv: runtimeEnv({
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
@@ -5682,15 +6093,20 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       resultContent,
       structured: normalizedAgentOutput,
       runPackage,
-      modelKey,
+      modelKey: nodeModelKey,
       userCtx,
       historyEvents: runHistoryEvents,
       emit: (event) => emit({ ...event, nodeId }),
       onActiveChild: opts.onActiveChild,
     });
     if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
+    let contextRunOutputChanged = false;
+    if (isContextRunNode) {
+      graph.instances[nodeId] = workspaceSetOutputSlot(graph.instances[nodeId] || instance, "displayType", workspaceContextRunDisplayKind(instance));
+      contextRunOutputChanged = true;
+    }
     const updatedDisplays = propagateNodeOutputDisplays(nodeId, resultContent);
-    if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+    if (slotUpdate.changed || implementationUpdate.changed || contextRunOutputChanged || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     emit({ type: "node-done", nodeId, definitionId: defId });
   }
   } finally {
@@ -5908,6 +6324,13 @@ function workspaceRunKey(userCtx, flowSource, flowId) {
 
 function workspaceRunEntryKey(scopeKey, runId) {
   return `${scopeKey}:${String(runId || "").trim() || runLedgerId("workspace")}`;
+}
+
+function workspaceRuntimeNodeLabel(graph, nodeId, fallback = "Workspace Run") {
+  const id = String(nodeId || "").trim();
+  const instance = graph?.instances && typeof graph.instances === "object" ? graph.instances[id] : null;
+  const label = String(instance?.label || "").trim();
+  return label || id || fallback;
 }
 
 function workspaceActiveRunsForScope(scopeKey) {
@@ -6287,6 +6710,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     return;
   }
   const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
+  const scheduleAlias = workspaceRuntimeNodeLabel(graph, scheduleNodeId, String(entry.label || "Scheduled Run"));
   if (!targetRunNodeId) {
     const error = "Scheduled Run node is missing";
     appendWorkspaceRunLogEvent(runLog.runId, { type: "invalid", error, scheduleNodeId });
@@ -6350,6 +6774,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     runNodeId: targetRunNodeId,
     flowId: String(entry.flowId || ""),
     flowSource: String(entry.flowSource || "user"),
+    label: scheduleAlias,
     plannedNodeIds,
     startedAt: Date.now(),
     scheduled: true,
@@ -6645,6 +7070,14 @@ export function startUiServer({
 
     const authUser = getAuthUserFromRequest(req);
     const userCtx = authUser ? { userId: authUser.userId, isAdmin: Boolean(authUser.isAdmin) } : {};
+    if (req.method === "GET" && url.pathname === "/api/auth/session-token") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/display/shares") {
       try {
         if (!authUser?.userId) {
@@ -7176,6 +7609,40 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/workspaces") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        const scopedRoot = scoped.error ? root : scoped.root;
+        json(res, 200, {
+          path: userWorkspacesPath(userCtx),
+          workspaces: listConfiguredWorkspaces(root, scopedRoot, userCtx),
+          customWorkspaces: readUserWorkspaces(userCtx),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspaces") {
+      try {
+        const payload = await readJson(req);
+        const customWorkspaces = writeUserWorkspaces(userCtx, payload?.workspaces || payload?.customWorkspaces || []);
+        json(res, 200, {
+          path: userWorkspacesPath(userCtx),
+          workspaces: listConfiguredWorkspaces(root, root, userCtx),
+          customWorkspaces,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace/graph") {
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -7446,6 +7913,7 @@ export function startUiServer({
         const controller = new AbortController();
         const runId = String(payload.runSessionId || payload.runId || "").trim() || runLedgerId("workspace");
         const runKey = workspaceRunEntryKey(scopeKey, runId);
+        const runAlias = String(payload.runAlias || "").trim() || workspaceRuntimeNodeLabel(runtimeGraph, runNodeId, "Workspace Run");
         const runEntry = {
           scopeKey,
           controller,
@@ -7454,6 +7922,7 @@ export function startUiServer({
           userId: String(userCtx.userId || ""),
           username: String(authUser?.username || userCtx.userId || ""),
           runNodeId,
+          label: runAlias,
           flowId,
           flowSource: scoped.flowSource || payload.flowSource || "user",
           plannedNodeIds,
@@ -7474,7 +7943,7 @@ export function startUiServer({
           runNodeId,
           scheduled: false,
           trigger: "manual",
-          label: String(runtimeGraph.instances?.[runNodeId]?.label || "Workspace Run"),
+          label: runAlias,
           startedAt: runEntry.startedAt,
         });
         activeWorkspaceRuns.set(runKey, runEntry);
@@ -7679,10 +8148,12 @@ export function startUiServer({
         flowId,
         flowSource,
         runNodeId: entry?.runNodeId || "",
+        label: entry?.label || "",
         startedAt: entry?.startedAt || null,
         runs: entries.map((item) => ({
           runId: item?.runId || "",
           runNodeId: item?.runNodeId || "",
+          label: item?.label || "",
           startedAt: item?.startedAt || null,
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
           scheduled: item?.scheduled === true,
@@ -8724,6 +9195,60 @@ export function startUiServer({
           return;
         }
         json(res, 200, file);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/node-studio/drafts") {
+      try {
+        json(res, 200, { drafts: listNodeStudioDrafts(userCtx) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/node-studio/draft") {
+      try {
+        const id = url.searchParams.get("id") || "";
+        if (!id) {
+          json(res, 200, { draft: null });
+          return;
+        }
+        const draft = readNodeStudioDraft(userCtx, id);
+        json(res, 200, { draft: draft && !isLegacyNodeStudioDemoDraft(draft) ? draft : null });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/node-studio/draft") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const current = readNodeStudioDraft(userCtx, payload.id || "") || emptyNodeStudioDraft(userCtx, payload.id || "untitled_node");
+        const promptDraft = payload.promptDraft != null ? String(payload.promptDraft) : current.promptDraft || "";
+        const agentMessages = Array.isArray(current.agentMessages) ? [...current.agentMessages] : [];
+        if (payload.appendUserMessage === true && promptDraft.trim()) {
+          const at = new Date().toISOString();
+          agentMessages.push({ role: "user", text: promptDraft.trim(), at });
+          agentMessages.push({ role: "assistant", text: "已记录需求，下一步会由节点 Agent 更新 manifest、脚本和 UI schema。", at });
+        }
+        const draft = writeNodeStudioDraft(userCtx, {
+          ...current,
+          ...(payload.config && typeof payload.config === "object" ? { config: { ...(current.config || {}), ...payload.config } } : {}),
+          promptDraft,
+          agentMessages,
+        });
+        json(res, 200, { ok: true, draft });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }

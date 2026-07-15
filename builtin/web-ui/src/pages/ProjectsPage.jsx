@@ -171,6 +171,17 @@ function resourceKey(item) {
   return item?.key || `${item?.id || item?.name || ""}:${item?.source || ""}:${item?.packageId || ""}`;
 }
 
+function isOwnedMarketplaceNode(node, authUser) {
+  if (node?.source !== "marketplace") return false;
+  const owner = String(node?.ownerUserId || node?.createdBy || "").trim();
+  if (!owner) return true;
+  const userIds = new Set([
+    String(authUser?.userId || "").trim(),
+    String(authUser?.username || "").trim(),
+  ].filter(Boolean));
+  return userIds.has(owner);
+}
+
 function flowSnippetKey(item) {
   return `${item?.id || ""}:${item?.version || ""}:${item?.packageDir || ""}`;
 }
@@ -466,7 +477,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     const loadId = ++resourceLoadIdRef.current;
     setResourceError("");
     setResourcesLoaded(false);
-    const nodesUrl = resourceKind === "my-nodes" ? "/api/nodes?scope=owned" : "/api/nodes";
+    const nodesUrl = "/api/nodes";
     const flowSnippetsUrl = resourceKind === "my-flows" ? "/api/marketplace/flow-snippets?scope=owned" : "/api/marketplace/flow-snippets";
     setGlobalNodes([]);
     setFlowSnippets([]);
@@ -759,7 +770,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const filteredNodes = useMemo(
     () =>
       globalNodes.filter((n) => {
-        if (isMyNodesTab && n.source !== "marketplace") return false;
+        if (isMyNodesTab && !isOwnedMarketplaceNode(n, authUser)) return false;
         const filterMatch =
           resourceFilter === "all" ||
           (resourceFilter === "marketplace" ? n.source === "marketplace" : n.type === resourceFilter);
@@ -774,7 +785,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
           n.version,
         ]);
       }),
-    [globalNodes, isMyNodesTab, pipelineSearch, resourceFilter],
+    [authUser, globalNodes, isMyNodesTab, pipelineSearch, resourceFilter],
   );
 
   const skillCollectionSkillSets = useMemo(() => {
@@ -1079,7 +1090,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                 : filter === "my-flows"
                 ? t("project:myFlows")
                 : filter === "nodes"
-                ? t("project:globalNodes")
+                ? t("project:nodes")
                 : filter === "skills"
                   ? t("project:globalSkills")
                   : filter === "archived"
@@ -1125,52 +1136,80 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                 </div>
               </div>
               {!isMyFlowsTab ? (
-                <div className="af-resource-filter-row">
-                  {(isNodeResourceTab ? (isMyNodesTab ? MY_NODE_FILTERS : NODE_FILTERS).map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
-                    item.collection ? (
-                      <span
-                        key={item.id}
-                        className={"af-resource-filter-chip" + (resourceFilter === item.id ? " af-resource-filter-chip--active" : "")}
+                <>
+                  {isNodeResourceTab ? (
+                    <div className="af-resource-filter-row">
+                      <button
+                        type="button"
+                        className={"af-resource-filter" + (!isMyNodesTab ? " af-resource-filter--active" : "")}
+                        onClick={() => {
+                          setFilter("nodes");
+                          setResourceFilter("all");
+                          setSelectedResourceKey("");
+                        }}
                       >
+                        {t("project:nodeScopeAll")}
+                      </button>
+                      <button
+                        type="button"
+                        className={"af-resource-filter" + (isMyNodesTab ? " af-resource-filter--active" : "")}
+                        onClick={() => {
+                          setFilter("my-nodes");
+                          setResourceFilter("all");
+                          setSelectedResourceKey("");
+                        }}
+                      >
+                        {t("project:nodeScopeMine")}
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="af-resource-filter-row">
+                    {(isNodeResourceTab ? (isMyNodesTab ? MY_NODE_FILTERS : NODE_FILTERS).map((item) => ({ id: item, label: t(`project:resourceFilter.${item}`) })) : skillResourceFilters).map((item) => (
+                      item.collection ? (
+                        <span
+                          key={item.id}
+                          className={"af-resource-filter-chip" + (resourceFilter === item.id ? " af-resource-filter-chip--active" : "")}
+                        >
+                          <button
+                            type="button"
+                            className="af-resource-filter af-resource-filter--embedded"
+                            onClick={() => {
+                              setResourceFilter(item.id);
+                              setSelectedResourceKey("");
+                            }}
+                          >
+                            {item.label}
+                            <em>{item.count}</em>
+                            {item.collection.builtin ? <strong>built-in</strong> : null}
+                          </button>
+                          {canEditSkillCollections && !item.collection.builtin ? (
+                            <button
+                              type="button"
+                              className="af-resource-filter-chip__delete"
+                              disabled={skillCollectionSaving}
+                              aria-label={`删除 ${item.collection.name}`}
+                              onClick={() => deleteSkillCollection(item.collection.id)}
+                            >
+                              <span className="material-symbols-outlined">close</span>
+                            </button>
+                          ) : null}
+                        </span>
+                      ) : (
                         <button
+                          key={item.id}
                           type="button"
-                          className="af-resource-filter af-resource-filter--embedded"
+                          className={"af-resource-filter" + (resourceFilter === item.id ? " af-resource-filter--active" : "")}
                           onClick={() => {
                             setResourceFilter(item.id);
                             setSelectedResourceKey("");
                           }}
                         >
                           {item.label}
-                          <em>{item.count}</em>
-                          {item.collection.builtin ? <strong>built-in</strong> : null}
                         </button>
-                        {canEditSkillCollections && !item.collection.builtin ? (
-                          <button
-                            type="button"
-                            className="af-resource-filter-chip__delete"
-                            disabled={skillCollectionSaving}
-                            aria-label={`删除 ${item.collection.name}`}
-                            onClick={() => deleteSkillCollection(item.collection.id)}
-                          >
-                            <span className="material-symbols-outlined">close</span>
-                          </button>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={"af-resource-filter" + (resourceFilter === item.id ? " af-resource-filter--active" : "")}
-                        onClick={() => {
-                          setResourceFilter(item.id);
-                          setSelectedResourceKey("");
-                        }}
-                      >
-                        {item.label}
-                      </button>
-                    )
-                  ))}
-                </div>
+                      )
+                    ))}
+                  </div>
+                </>
               ) : null}
               {filter === "skills" && canEditSkillCollections ? (
                 <div className="af-skill-collections-manager">

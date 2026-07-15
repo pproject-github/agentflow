@@ -33,7 +33,7 @@ if (langIdx >= 0 && argv[langIdx + 1]) {
 
 const updateNotifier = require("update-notifier").default;
 const pkg = require(path.join(__dirname, "..", "package.json"));
-const machineOutput = argv.includes("--json") || argv.includes("--machine-readable");
+const machineOutput = argv.includes("--json") || argv.includes("--machine-readable") || argv[0] === "mcp";
 if (!machineOutput) {
   updateNotifier({ pkg }).notify();
 }

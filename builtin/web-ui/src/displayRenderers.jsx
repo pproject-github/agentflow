@@ -345,6 +345,15 @@ function markdownComponents(resolveSrc, inline = false, basePath = "") {
     const resolvedPath = normalizeMarkdownRelativePath(text, basePath);
     return resolveSrc ? resolveSrc(resolvedPath, { kind: "link", download: true }) : resolvedPath;
   };
+  const openLink = (event, href) => {
+    const url = resolveLinkHref(href);
+    if (!url || url.startsWith("#")) return;
+    if (/^(?:javascript):/i.test(url)) return;
+    event.stopPropagation();
+    if (event.defaultPrevented || event.button !== 0) return;
+    event.preventDefault();
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
   return {
     ...(inline ? { p: ({ children: pChildren }) => <>{pChildren}</> } : {}),
     code: ({ inline: codeInline, className, children }) => {
@@ -359,7 +368,7 @@ function markdownComponents(resolveSrc, inline = false, basePath = "") {
       <img src={resolveSrc ? resolveSrc(normalizeMarkdownRelativePath(src, basePath)) : src || ""} alt={alt || ""} loading="lazy" />
     ),
     a: ({ href, children }) => (
-      <a href={resolveLinkHref(href)} target="_blank" rel="noopener noreferrer">{children}</a>
+      <a href={resolveLinkHref(href)} target="_blank" rel="noopener noreferrer" onClick={(event) => openLink(event, href)}>{children}</a>
     ),
   };
 }

@@ -61,14 +61,16 @@ function classifyModel(modelId) {
 function loadModelLists() {
   try {
     const p = getModelListsAbs();
-    if (!fs.existsSync(p)) return { cursor: [], opencode: [] };
+    if (!fs.existsSync(p)) return { cursor: [], opencode: [], claudeCode: [], codex: [] };
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
     return {
       cursor: Array.isArray(data.cursor) ? data.cursor.map(String) : [],
       opencode: Array.isArray(data.opencode) ? data.opencode.map(String) : [],
+      claudeCode: Array.isArray(data.claudeCode) ? data.claudeCode.map(String) : [],
+      codex: Array.isArray(data.codex) ? data.codex.map(String) : [],
     };
   } catch {
-    return { cursor: [], opencode: [] };
+    return { cursor: [], opencode: [], claudeCode: [], codex: [] };
   }
 }
 
@@ -85,6 +87,18 @@ function buildModelTiers(modelList) {
     tiers[tier].push(m);
   }
   return tiers;
+}
+
+function modelEntryId(entry) {
+  const idx = String(entry || "").indexOf(" - ");
+  return idx >= 0 ? entry.slice(0, idx).trim() : String(entry || "").trim();
+}
+
+function prefixedModels(models, prefix) {
+  return (Array.isArray(models) ? models : [])
+    .map((m) => modelEntryId(m))
+    .filter(Boolean)
+    .map((m) => `${prefix}:${m}`);
 }
 
 // ─── 公开接口 ──────────────────────────────────────────────────────────────
@@ -105,7 +119,12 @@ export function routeModel(complexity, opts = {}) {
   }
 
   const lists = loadModelLists();
-  const allModels = [...lists.cursor];
+  const allModels = [
+    ...lists.cursor,
+    ...prefixedModels(lists.codex, "codex"),
+    ...prefixedModels(lists.claudeCode, "claude-code"),
+    ...prefixedModels(lists.opencode, "opencode"),
+  ];
   if (allModels.length === 0) {
     return { model: null, tier: complexity === "complex" ? "capable" : complexity === "simple" ? "fast" : "balanced", source: "no-models-available" };
   }
@@ -146,11 +165,17 @@ export function getModelTierInfo() {
   const lists = loadModelLists();
   const cursorTiers = buildModelTiers(lists.cursor);
   const opencodeTiers = buildModelTiers(lists.opencode);
+  const claudeCodeTiers = buildModelTiers(lists.claudeCode);
+  const codexTiers = buildModelTiers(lists.codex);
   return {
     cursor: cursorTiers,
     opencode: opencodeTiers,
+    claudeCode: claudeCodeTiers,
+    codex: codexTiers,
     totalCursor: lists.cursor.length,
     totalOpencode: lists.opencode.length,
+    totalClaudeCode: lists.claudeCode.length,
+    totalCodex: lists.codex.length,
   };
 }
 

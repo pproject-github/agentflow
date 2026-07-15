@@ -45,6 +45,14 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
     if (raw.startsWith("api:")) {
       return { cli: "api", model: raw, label: raw };
     }
+    if (raw.startsWith("codex:")) {
+      const m = raw.slice("codex:".length).trim();
+      return {
+        cli: "codex",
+        model: m || null,
+        label: m ? `codex: ${m}` : "codex (default)",
+      };
+    }
     if (raw.startsWith("claude-code:")) {
       const m = raw.slice("claude-code:".length).trim();
       return {
@@ -75,9 +83,11 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
           ? "opencode"
           : cfg.cli === "api"
             ? "api"
-            : cfg.cli === "claude-code"
-              ? "claude-code"
-              : "cursor";
+            : cfg.cli === "codex"
+              ? "codex"
+              : cfg.cli === "claude-code"
+                ? "claude-code"
+                : "cursor";
       const model = String(cfg.model).trim();
       return { cli, model, label: `${cli}: ${model}` };
     }
@@ -85,6 +95,15 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
 
   if (key && key.startsWith("api:")) {
     return { cli: "api", model: key, label: key };
+  }
+
+  if (key && key.startsWith("codex:")) {
+    const model = key.slice("codex:".length) || "";
+    return {
+      cli: "codex",
+      model: model || null,
+      label: model ? `codex: ${model}` : "codex (default)",
+    };
   }
 
   if (key && key.startsWith("claude-code:")) {
@@ -108,6 +127,16 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
   const envModel = process.env.CURSOR_AGENT_MODEL && String(process.env.CURSOR_AGENT_MODEL).trim();
   if (envModel && envModel.startsWith("api:")) {
     return { cli: "api", model: envModel, label: envModel };
+  }
+  if (!key) {
+    const codexModel = process.env.CODEX_MODEL && String(process.env.CODEX_MODEL).trim();
+    if (codexModel) {
+      return {
+        cli: "codex",
+        model: codexModel,
+        label: `codex: ${codexModel}`,
+      };
+    }
   }
   const model = normalizeCursorModelForCli(key || envModel || "Auto");
   return {

@@ -84,6 +84,45 @@ function checkClass(check) {
   return check.ok ? "ok" : "error";
 }
 
+function backendClass(status) {
+  if (status === "ok") return "ok";
+  if (status === "partial") return "partial";
+  if (status === "unsupported") return "error";
+  return "unknown";
+}
+
+function backendLabel(backend, fallback) {
+  if (!backend) return fallback;
+  return backend.label || fallback;
+}
+
+function BackendMatrix({ server }) {
+  const backends = server?.backends || {};
+  const rows = [
+    ["Cursor", backends.cursor],
+    ["Codex", backends.codex],
+  ];
+  return (
+    <div className="af-mcp-backends">
+      {rows.map(([name, backend]) => (
+        <div key={name} className={`af-mcp-backend af-mcp-backend--${backendClass(backend?.status)}`}>
+          <div className="af-mcp-backend-head">
+            <strong>{name}</strong>
+            <span>{backendLabel(backend, "Unknown")}</span>
+          </div>
+          {Array.isArray(backend?.reasons) && backend.reasons.length ? (
+            <ul>
+              {backend.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          ) : (
+            <p>当前配置可直接使用。</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RowEditor({ title, rows, onChange, placeholderKey = "KEY", placeholderValue = "value" }) {
   const patch = (id, field, value) => onChange(rows.map((row) => row.id === id ? { ...row, [field]: value } : row));
   return (
@@ -317,6 +356,14 @@ export default function McpPage() {
                           {checkLabel(checks[server.name])}
                         </small>
                       </span>
+                      <span className="af-mcp-server-backends">
+                        <small className={`af-mcp-backend-pill af-mcp-backend-pill--${backendClass(server.backends?.cursor?.status)}`}>
+                          Cursor
+                        </small>
+                        <small className={`af-mcp-backend-pill af-mcp-backend-pill--${backendClass(server.backends?.codex?.status)}`}>
+                          Codex
+                        </small>
+                      </span>
                       <em>{server.url || [server.command, ...(server.args || [])].filter(Boolean).join(" ")}</em>
                     </span>
                   </button>
@@ -343,6 +390,7 @@ export default function McpPage() {
               </div>
               {error ? <p className="af-mcp-error">{error}</p> : null}
               {status ? <p className="af-mcp-status">{status}</p> : null}
+              {selected ? <BackendMatrix server={selected} /> : null}
               {selectedCheck ? (
                 <div className={`af-mcp-check af-mcp-check--${checkClass(selectedCheck)}`}>
                   <div className="af-mcp-check-head">

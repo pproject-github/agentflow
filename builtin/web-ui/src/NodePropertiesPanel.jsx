@@ -207,21 +207,24 @@ export function NodePropertiesPanel({
     [setDraft],
   );
 
-  const { cursorList, opencodeList, claudeCodeList, currentNotInLists } = useMemo(() => {
+  const { cursorList, opencodeList, claudeCodeList, codexList, currentNotInLists } = useMemo(() => {
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
     const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
-    const idSet = new Set([...cursor, ...opencode, ...claudeCode].map(modelEntryId));
+    const codex = Array.isArray(modelLists?.codex) ? modelLists.codex : [];
+    const idSet = new Set([...cursor, ...opencode, ...claudeCode, ...codex].map(modelEntryId));
     const m = (draft?.model ?? "").trim();
     const mBare = m.startsWith("cursor:")
       ? m.slice(7)
       : m.startsWith("opencode:")
         ? m.slice(9)
-        : m.startsWith("claude-code:")
-          ? m.slice(12)
-          : m;
+        : m.startsWith("codex:")
+          ? m.slice(6)
+          : m.startsWith("claude-code:")
+            ? m.slice(12)
+            : m;
     const extra = m && !idSet.has(mBare) ? m : "";
-    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, currentNotInLists: extra };
+    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, codexList: codex, currentNotInLists: extra };
   }, [modelLists, draft?.model]);
 
   if (!draft) return null;
@@ -358,7 +361,16 @@ export function NodePropertiesPanel({
             {opencodeList.length > 0 ? (
               <optgroup label="OpenCode">
                 {opencodeList.map((m) => (
-                  <option key={`o-${m}`} value={modelEntryId(m)}>
+                  <option key={`o-${m}`} value={`opencode:${modelEntryId(m)}`}>
+                    {m}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {codexList.length > 0 ? (
+              <optgroup label="Codex">
+                {codexList.map((m) => (
+                  <option key={`codex-${m}`} value={`codex:${modelEntryId(m)}`}>
                     {m}
                   </option>
                 ))}

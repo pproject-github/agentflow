@@ -487,7 +487,7 @@ function mentionDraftAtCursor(text, cursor) {
 }
 
 /**
- * Composer 模型下拉：OpenCode 项使用 `opencode:` 前缀；兼容旧值（仅在 opencode 列表中的无前缀 id）。
+ * Composer 模型下拉：非 Cursor 项使用前缀；兼容旧值（仅在非 Cursor 列表中的无前缀 id）。
  * @param {string} model
  * @param {string[]} cursorList
  * @param {string[]} opencodeList
@@ -498,17 +498,20 @@ function modelEntryId(entry) {
   return idx >= 0 ? entry.slice(0, idx).trim() : String(entry || "").trim();
 }
 
-function normalizeComposerModelValue(model, cursorList, opencodeList, claudeCodeList) {
+function normalizeComposerModelValue(model, cursorList, opencodeList, claudeCodeList, codexList) {
   const m = (model || "").trim();
   if (!m) return "";
-  if (m.startsWith("opencode:") || m.startsWith("claude-code:")) return m;
+  if (m.startsWith("opencode:") || m.startsWith("codex:") || m.startsWith("claude-code:")) return m;
   const c = Array.isArray(cursorList) ? cursorList : [];
   const o = Array.isArray(opencodeList) ? opencodeList : [];
   const cc = Array.isArray(claudeCodeList) ? claudeCodeList : [];
+  const codex = Array.isArray(codexList) ? codexList : [];
   const cIds = c.map(modelEntryId);
   const oIds = o.map(modelEntryId);
   const ccIds = cc.map(modelEntryId);
-  if (ccIds.includes(m) && !cIds.includes(m) && !oIds.includes(m)) return `claude-code:${m}`;
+  const codexIds = codex.map(modelEntryId);
+  if (ccIds.includes(m) && !cIds.includes(m) && !oIds.includes(m) && !codexIds.includes(m)) return `claude-code:${m}`;
+  if (codexIds.includes(m) && !cIds.includes(m)) return `codex:${m}`;
   if (oIds.includes(m) && !cIds.includes(m)) return `opencode:${m}`;
   return m;
 }
@@ -1386,7 +1389,7 @@ export default function FlowEditorPage() {
     /** @type {null | { id: string, newId: string, label: string, role: string, model: string, body: string, script?: string, inputs: IoDraftSlot[], outputs: IoDraftSlot[] }} */ (null),
   );
   const [nodePropsError, setNodePropsError] = useState("");
-  const [modelLists, setModelLists] = useState(/** @type {{ cursor: string[], opencode: string[], claudeCode: string[] }} */ ({ cursor: [], opencode: [], claudeCode: [] }));
+  const [modelLists, setModelLists] = useState(/** @type {{ cursor: string[], opencode: string[], claudeCode: string[], codex: string[] }} */ ({ cursor: [], opencode: [], claudeCode: [], codex: [] }));
   const [composerModel, setComposerModel] = useState("");
   const [composerPhaseRole, setComposerPhaseRole] = useState("");
   const [composerSkills, setComposerSkills] = useState(/** @type {Array<{ key: string, name: string, description?: string, sourceLabel?: string }>} */ ([]));
@@ -2156,6 +2159,7 @@ export default function FlowEditorPage() {
               cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
               opencode: Array.isArray(j.opencode) ? j.opencode.map(String) : [],
               claudeCode: Array.isArray(j.claudeCode) ? j.claudeCode.map(String) : [],
+              codex: Array.isArray(j.codex) ? j.codex.map(String) : [],
             });
           }
         })
@@ -4472,18 +4476,21 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
     const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
+    const codex = Array.isArray(modelLists?.codex) ? modelLists.codex : [];
     const opencodeIdValues = opencode.map((m) => `opencode:${modelEntryId(m)}`);
     const claudeCodeIdValues = claudeCode.map((m) => `claude-code:${modelEntryId(m)}`);
+    const codexIdValues = codex.map((m) => `codex:${modelEntryId(m)}`);
     const idSet = new Set(
-      [...cursor, ...opencode, ...claudeCode]
+      [...cursor, ...opencode, ...claudeCode, ...codex]
         .map(modelEntryId)
         .concat(opencodeIdValues)
-        .concat(claudeCodeIdValues),
+        .concat(claudeCodeIdValues)
+        .concat(codexIdValues),
     );
     const raw = (composerModel || "").trim();
-    const normalized = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode);
+    const normalized = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode, codex);
     const extra = normalized && !idSet.has(normalized) && !idSet.has(raw) ? raw : "";
-    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, currentNotInLists: extra };
+    return { cursorList: cursor, opencodeList: opencode, claudeCodeList: claudeCode, codexList: codex, currentNotInLists: extra };
   }, [modelLists, composerModel]);
 
   const composerSelectedSkillSet = useMemo(() => new Set(composerSelectedSkills), [composerSelectedSkills]);
@@ -4530,11 +4537,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
     const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
+    const codex = Array.isArray(modelLists?.codex) ? modelLists.codex : [];
     setComposerModel((prev) => {
-      const next = normalizeComposerModelValue(prev, cursor, opencode, claudeCode);
+      const next = normalizeComposerModelValue(prev, cursor, opencode, claudeCode, codex);
       return next === prev ? prev : next;
     });
-  }, [modelLists.cursor, modelLists.opencode, modelLists.claudeCode]);
+  }, [modelLists.cursor, modelLists.opencode, modelLists.claudeCode, modelLists.codex]);
 
   useEffect(() => {
     if (!composerSkillsOpen) return;
@@ -4605,7 +4613,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     const cursor = Array.isArray(modelLists?.cursor) ? modelLists.cursor : [];
     const opencode = Array.isArray(modelLists?.opencode) ? modelLists.opencode : [];
     const claudeCode = Array.isArray(modelLists?.claudeCode) ? modelLists.claudeCode : [];
-    const modelKey = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode);
+    const codex = Array.isArray(modelLists?.codex) ? modelLists.codex : [];
+    const modelKey = normalizeComposerModelValue(composerModel, cursor, opencode, claudeCode, codex);
     const contextInstanceIds = composerStripEntries
       .filter((e) => e.kind !== "definition" && e.node)
       .map((e) => e.node.id);
@@ -6612,6 +6621,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                             composerModelSelect.cursorList,
                             composerModelSelect.opencodeList,
                             composerModelSelect.claudeCodeList,
+                            composerModelSelect.codexList,
                           );
                         })()}
                         onChange={(e) => setComposerModel(e.target.value)}
@@ -6637,6 +6647,15 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                           <optgroup label="OpenCode">
                             {composerModelSelect.opencodeList.map((m) => (
                               <option key={`composer-o-${m}`} value={`opencode:${modelEntryId(m)}`}>
+                                {m}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                        {composerModelSelect.codexList.length > 0 ? (
+                          <optgroup label="Codex">
+                            {composerModelSelect.codexList.map((m) => (
+                              <option key={`composer-codex-${m}`} value={`codex:${modelEntryId(m)}`}>
                                 {m}
                               </option>
                             ))}

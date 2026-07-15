@@ -113,16 +113,24 @@ function loadFlowYaml(flowDir) {
 
 function loadModelLists(_workspaceRoot) {
   const p = getModelListsAbs();
-  if (!fs.existsSync(p)) return { cursor: [], opencode: [] };
+  if (!fs.existsSync(p)) return { cursor: [], opencode: [], claudeCode: [], codex: [] };
   try {
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
     return {
       cursor: Array.isArray(data.cursor) ? data.cursor : [],
       opencode: Array.isArray(data.opencode) ? data.opencode : [],
+      claudeCode: Array.isArray(data.claudeCode) ? data.claudeCode : [],
+      codex: Array.isArray(data.codex) ? data.codex : [],
     };
   } catch {
-    return { cursor: [], opencode: [] };
+    return { cursor: [], opencode: [], claudeCode: [], codex: [] };
   }
+}
+
+function modelEntryId(entry) {
+  const t = String(entry || "").trim();
+  const first = t.split(/\s+-/)[0].trim();
+  return first || t;
 }
 
 function loadCustomRoleIds(_workspaceRoot) {
@@ -683,21 +691,21 @@ function computeValidation(loaded, workspaceRoot) {
   }
 
   const root = workspaceRoot ? path.resolve(workspaceRoot) : path.dirname(loaded._flowDir || ".");
-  const { cursor: cursorList, opencode: opencodeList } = loadModelLists(root);
-  const opencodeSet = new Set((opencodeList || []).map((s) => String(s).trim()));
-  const cursorSet = new Set(
-    (cursorList || []).map((s) => {
-      const t = String(s).trim();
-      const first = t.split(/\s+-/)[0].trim();
-      return first || t;
-    })
-  );
+  const { cursor: cursorList, opencode: opencodeList, claudeCode: claudeCodeList, codex: codexList } = loadModelLists(root);
+  const opencodeSet = new Set((opencodeList || []).map(modelEntryId));
+  const claudeCodeSet = new Set((claudeCodeList || []).map(modelEntryId));
+  const codexSet = new Set((codexList || []).map(modelEntryId));
+  const cursorSet = new Set((cursorList || []).map(modelEntryId));
   for (const n of nodes) {
     const model = (instances[n.id] && instances[n.id].model != null) ? String(instances[n.id].model).trim() : "";
     if (!model) continue;
     let valid = false;
     if (model.startsWith("opencode:")) {
       valid = opencodeSet.has(model.slice(9).trim());
+    } else if (model.startsWith("claude-code:")) {
+      valid = claudeCodeSet.size === 0 || claudeCodeSet.has(model.slice(12).trim());
+    } else if (model.startsWith("codex:")) {
+      valid = codexSet.size === 0 || codexSet.has(model.slice(6).trim());
     } else {
       const cursorId = model.startsWith("cursor:") ? model.slice(7).trim() : model;
       valid = cursorSet.has(cursorId) || (cursorList || []).some((c) => String(c).trim() === model || String(c).trim().startsWith(cursorId + " "));

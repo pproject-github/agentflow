@@ -5,11 +5,12 @@ import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 
 const ITEMS = [
   { to: "/projects", labelKey: "common:nav.projects", icon: "folder_open" },
+  { to: "/workspaces", label: "工作区", icon: "folder_managed" },
   { to: "/nodes", labelKey: "common:nav.nodes", icon: "account_tree" },
-  { to: "/my-nodes", labelKey: "common:nav.myNodes", icon: "deployed_code" },
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
+  { to: "/node-studio", label: "节点编辑器", icon: "draw" },
   { to: "/schedules", label: "定时任务", icon: "event_busy" },
   { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
   { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
@@ -28,6 +29,7 @@ const EXTERNAL_LINKS = [
 
 function isActive(path, to) {
   if (to === "/projects") return path === "/projects" || path === "/";
+  if (to === "/nodes") return path === "/nodes" || path === "/my-nodes";
   return path === to || path.startsWith(to + "/");
 }
 
