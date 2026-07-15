@@ -1361,9 +1361,20 @@ function displayKind(definitionId) {
   return "";
 }
 
+function workspaceDisplayKindFromData(data) {
+  const direct = displayKind(data?.definitionId);
+  if (direct) return direct;
+  if (isOneClickTaskDefinitionId(data?.definitionId)) {
+    if (!contextRunResultContentFromData(data)) return "";
+    return normalizeContextRunDisplayType(workspaceSlotConfigValue(data?.inputs || data?.input || [], "displayType", "markdown"));
+  }
+  return "";
+}
+
 function displayContent(data) {
   const slots = [...(data?.inputs || []), ...(data?.outputs || [])];
-  const kind = displayKind(data?.definitionId);
+  const kind = workspaceDisplayKindFromData(data);
+  const isContextRun = isOneClickTaskDefinitionId(data?.definitionId);
   const primaryName = kind === "image" ? "src" : "content";
   const slotText = (slot) => String(slot?.value ?? slot?.default ?? "");
   const hasSlotText = (slot) => slotText(slot).trim();
@@ -1371,7 +1382,8 @@ function displayContent(data) {
     slots.find((slot) => slot?.name === primaryName && hasSlotText(slot)) ||
     slots.find((slot) => slot?.name === "filePath" && hasSlotText(slot)) ||
     slots.find((slot) => slot?.type === "text" && hasSlotText(slot));
-  return String(data?.body || (contentSlot ? slotText(contentSlot) : ""));
+  const slotContent = contentSlot ? slotText(contentSlot) : "";
+  return String(isContextRun ? slotContent : (data?.body || slotContent));
 }
 
 function displayTextFilePath(value, kind = "") {
@@ -1964,7 +1976,7 @@ function VisibleScrollFrame({ className = "", children }) {
 }
 
 function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
-  const kind = displayKind(data?.definitionId);
+  const kind = workspaceDisplayKindFromData(data);
   const rawContent = displayContent(data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
   const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
@@ -2079,7 +2091,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
 
 function DisplayFullscreenPreview({ node, onClose }) {
   const htmlFrameRef = useRef(null);
-  const kind = displayKind(node?.data?.definitionId);
+  const kind = workspaceDisplayKindFromData(node?.data);
   const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : "Display 预览");
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -2112,7 +2124,7 @@ function DisplayFullscreenPreview({ node, onClose }) {
 }
 
 function DisplayPickerPreview({ node }) {
-  const kind = displayKind(node?.data?.definitionId);
+  const kind = workspaceDisplayKindFromData(node?.data);
   const rawContent = displayContent(node?.data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
   const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
@@ -2482,7 +2494,7 @@ function displayFileStem(value) {
 }
 
 function suggestDisplayFilePath(id, data) {
-  const kind = displayKind(data?.definitionId) || "markdown";
+  const kind = workspaceDisplayKindFromData(data) || "markdown";
   const stem = displayFileStem(data?.label || id || kind);
   return `outputs/${stem}.${displayFileExtension(kind)}`;
 }
@@ -2503,7 +2515,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       if (bt === "node" && at !== "node") return 1;
       return a.idx - b.idx;
     });
-  const kind = displayKind(data?.definitionId);
+  const kind = workspaceDisplayKindFromData(data);
   const displayCardRef = useRef(null);
   const htmlFrameRef = useRef(null);
   const [htmlFrameVersion, setHtmlFrameVersion] = useState(0);
@@ -3097,18 +3109,18 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [viewMode, setViewMode] = useState("config");
-  const resultFrameRef = useRef(null);
   const outputPreview = contextRunResultContentFromData(data);
   const hasResult = Boolean(outputPreview);
   const displayDefinitionId = contextRunDisplayDefinitionId(config.displayType);
   const resultDisplayData = useMemo(() => ({
     ...data,
+    sourceNodeId: id,
     label: data?.label && data.label !== "Context Run" ? data.label : "一键任务",
     definitionId: displayDefinitionId,
     body: outputPreview,
     inputs: [{ type: "text", name: displayDefinitionId === "display_image" ? "src" : "content", value: outputPreview, default: outputPreview }],
-    outputs: [],
-  }), [data, displayDefinitionId, outputPreview]);
+    outputs: outputs.length ? outputs : [{ type: "node", name: "next", default: "" }],
+  }), [data, displayDefinitionId, id, outputPreview, outputs]);
   const cursorModels = Array.isArray(data?.modelLists?.cursor) ? data.modelLists.cursor : [];
   const opencodeModels = Array.isArray(data?.modelLists?.opencode) ? data.modelLists.opencode : [];
   const claudeCodeModels = Array.isArray(data?.modelLists?.claudeCode) ? data.modelLists.claudeCode : [];
@@ -3260,6 +3272,20 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
     updateConfig({ includeWorkspaceContext: Boolean(workspace), workspaceContext });
     setWorkspaceOpen(false);
   };
+  if (viewMode === "result" && hasResult) {
+    return (
+      <WorkspaceDisplayNode
+        id={id}
+        data={{
+          ...resultDisplayData,
+          selected: data?.selected,
+          onSelectNodePointerDown: data?.onSelectNodePointerDown,
+        }}
+        selected={selected}
+        deleteNode={deleteNode}
+      />
+    );
+  }
   return (
     <div
       className={
@@ -3393,21 +3419,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
         </button>
       </div>
       <div className="af-work-context-run-card__body nodrag">
-        {viewMode === "result" && hasResult ? (
-          <div className="af-work-context-run-card__result">
-            <div className="af-work-context-run-card__result-head">
-              <span className="material-symbols-outlined">{displayDefinitionId === "display_html" || displayDefinitionId === "display_react_app" ? "web_asset" : "article"}</span>
-              <strong>{config.displayType}</strong>
-            </div>
-            <DisplayBody
-              data={resultDisplayData}
-              flowParams={data?.flowParams}
-              htmlFrameRef={resultFrameRef}
-              htmlFrameVersion={String(outputPreview).length}
-            />
-          </div>
-        ) : (
-          <>
+        <>
             <textarea
           value={taskDraft}
           disabled={readOnly}
@@ -3636,8 +3648,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
         {outputPreview ? (
           <pre className="af-work-context-run-card__preview">{outputPreview.slice(0, 520)}</pre>
         ) : null}
-          </>
-        )}
+        </>
         <div className="af-work-context-run-card__actions">
           <button
             type="button"
@@ -7036,7 +7047,8 @@ function WorkspacePageInner() {
     const id = String(nodeId || "").trim();
     if (!id) return;
     const currentNode = nodesRef.current.find((node) => node.id === id);
-    const kind = displayKind(currentNode?.data?.definitionId);
+    const kind = workspaceDisplayKindFromData(currentNode?.data);
+    const isContextRunNode = isOneClickTaskDefinitionId(currentNode?.data?.definitionId);
     const unwrappedContent = displayOutputEnvelopeContent(content);
     const text = kind === "html"
       ? normalizeHtmlDisplayContent(unwrappedContent)
@@ -7054,7 +7066,9 @@ function WorkspacePageInner() {
       const nextSlots = (Array.isArray(slots) ? slots : []).map((slot) => {
         const name = String(slot?.name || "");
         const type = String(slot?.type || "");
-        const isDisplayContentSlot = name === primaryName || name === "filePath" || type === "text";
+        const isDisplayContentSlot = isContextRunNode
+          ? name === primaryName || name === "result" || name === "filePath"
+          : name === primaryName || name === "filePath" || type === "text";
         if (!isDisplayContentSlot) {
           return slot;
         }
@@ -7072,7 +7086,7 @@ function WorkspacePageInner() {
         ...node,
         data: {
           ...node.data,
-          body: nextText,
+          body: isContextRunNode ? node.data.body : nextText,
           ...(displayReloadKey ? { displayReloadKey } : {}),
           inputs: patchSlots(node.data?.inputs),
           outputs: patchSlots(node.data?.outputs),
@@ -7085,7 +7099,7 @@ function WorkspacePageInner() {
       ...currentInstances,
       [id]: {
         ...base,
-        body: nextText,
+        body: isContextRunNode ? base.body : nextText,
         input: patchSlots(base.input),
         output: patchSlots(base.output),
       },
@@ -7093,7 +7107,7 @@ function WorkspacePageInner() {
     instancesRef.current = nextInstances;
     setNodes(nextNodes);
     setInstances(nextInstances);
-    setNodePropDraft((draft) => (draft?.id === id ? { ...draft, body: nextText } : draft));
+    setNodePropDraft((draft) => (draft?.id === id ? { ...draft, ...(isContextRunNode ? {} : { body: nextText }) } : draft));
     if (options?.logChat !== false) {
       setNodeChatSessions((sessions) => ({
         ...sessions,
@@ -7214,7 +7228,7 @@ function WorkspacePageInner() {
     if (!message || session.running) return;
     const node = nodesRef.current.find((item) => item.id === id);
     if (!node) return;
-    const nodeKind = displayKind(node.data?.definitionId) || "markdown";
+    const nodeKind = workspaceDisplayKindFromData(node.data) || "markdown";
     const rawDisplayContent = displayContent(node.data);
     let targetFilePath = displayTextFilePath(rawDisplayContent, nodeKind);
     let currentContent = displayOutputEnvelopeContent(rawDisplayContent);
@@ -7344,7 +7358,7 @@ function WorkspacePageInner() {
       setStatus("Readonly workspace");
       return;
     }
-    const kind = displayKind(data?.definitionId) || "markdown";
+    const kind = workspaceDisplayKindFromData(data) || "markdown";
     const rawContent = displayContent(data);
     const sourceFilePath = displayTextFilePath(rawContent, kind);
     let content = displayOutputEnvelopeContent(rawContent);
@@ -7405,7 +7419,7 @@ function WorkspacePageInner() {
     const id = String(nodeId || "").trim();
     if (!id || sharingDisplayNodeId) return;
     const node = nodesRef.current.find((item) => item.id === id);
-    if (!node || !displayKind(node?.data?.definitionId)) {
+    if (!node || !workspaceDisplayKindFromData(node?.data)) {
       setStatus("展示节点不可用");
       return;
     }
@@ -7524,7 +7538,7 @@ function WorkspacePageInner() {
     return displayPage.nodeIds
       .map((sourceId, index) => {
         const sourceNode = hydratedNodeById.get(sourceId);
-        if (!sourceNode || !displayKind(sourceNode.data?.definitionId)) return null;
+        if (!sourceNode || !workspaceDisplayKindFromData(sourceNode.data)) return null;
         const fallbackSize = persistedWorkspaceNodeSize(sourceNode) || { width: 520, height: 320 };
         const size = normalizeWorkspaceNodeSize(displayPage.nodeSizes[sourceId] || fallbackSize, { display: true }) || fallbackSize;
         const position = displayPage.nodePositions[sourceId] || { x: 180 + index * 36, y: 120 + index * 28 };
@@ -7550,7 +7564,7 @@ function WorkspacePageInner() {
   }, [displayPage, hydratedNodeById, selectedDisplayNodeIds]);
 
   const availableDisplayNodes = useMemo(
-    () => hydratedNodes.filter((node) => displayKind(node?.data?.definitionId)),
+    () => hydratedNodes.filter((node) => workspaceDisplayKindFromData(node?.data)),
     [hydratedNodes],
   );
 
@@ -7940,12 +7954,12 @@ function WorkspacePageInner() {
   }, [isDisplayMode, setEdges, setNodes, workspaceWritable]);
 
   const workspaceDisplayNodes = useMemo(
-    () => nodes.filter((node) => displayKind(node?.data?.definitionId)),
+    () => nodes.filter((node) => workspaceDisplayKindFromData(node?.data)),
     [nodes],
   );
 
   const selectedWorkspaceDisplayNodeIds = useMemo(
-    () => selectedCanvasNodes.filter((node) => displayKind(node?.data?.definitionId)).map((node) => node.id),
+    () => selectedCanvasNodes.filter((node) => workspaceDisplayKindFromData(node?.data)).map((node) => node.id),
     [selectedCanvasNodes],
   );
 
@@ -7979,7 +7993,7 @@ function WorkspacePageInner() {
     const id = String(sourceId || "").trim();
     if (!id) return;
     const sourceNode = nodesRef.current.find((node) => node.id === id);
-    if (!sourceNode || !displayKind(sourceNode.data?.definitionId)) {
+    if (!sourceNode || !workspaceDisplayKindFromData(sourceNode.data)) {
       setStatus("展示节点不可用");
       return;
     }
@@ -8073,7 +8087,7 @@ function WorkspacePageInner() {
         </span>
         <span className="af-display-picker-card__meta">
           <strong>{node.data?.label || node.id}</strong>
-          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
+          <small>{workspaceDisplayKindFromData(node.data)} · {node.id}</small>
         </span>
       </button>
     );
@@ -8543,7 +8557,7 @@ function WorkspacePageInner() {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
         const node = nodes.find((item) => item.id === change.id);
         const isGroup = isWorkspaceGroupNode(node);
-        const isDisplay = Boolean(displayKind(node?.data?.definitionId));
+        const isDisplay = Boolean(workspaceDisplayKindFromData(node?.data));
         const rawSize = {
           width: Math.round(Number(change.dimensions.width)),
           height: Math.round(Number(change.dimensions.height)),
@@ -8569,7 +8583,7 @@ function WorkspacePageInner() {
           },
         };
       }
-      if (!displayKind(node.data?.definitionId)) {
+      if (!workspaceDisplayKindFromData(node.data)) {
         return {
           ...node,
           width: size.width,
@@ -10365,7 +10379,7 @@ function WorkspacePageInner() {
                         />
                         <span className="af-display-share-node-row__main">
                           <strong>{node.data?.label || node.id}</strong>
-                          <small>{displayKind(node.data?.definitionId)} · {node.id}</small>
+                          <small>{workspaceDisplayKindFromData(node.data)} · {node.id}</small>
                         </span>
                       </label>
                     );

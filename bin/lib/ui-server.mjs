@@ -2300,11 +2300,25 @@ function normalizeDisplayShareNodeIds(ids, graph) {
     const id = String(rawId || "").trim();
     if (!id || seen.has(id)) continue;
     const instance = instances[id];
-    if (!workspaceDisplayKind(instance?.definitionId)) continue;
+    if (!workspaceDisplayKindFromInstance(instance)) continue;
     seen.add(id);
     out.push(id);
   }
   return out;
+}
+
+function workspaceDisplayContentFromInstance(instance, kind = "") {
+  const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
+  const primaryName = kind === "image" ? "src" : "content";
+  const slotText = (slot) => workspaceSlotValue(slot);
+  const hasSlotText = (slot) => slotText(slot).trim();
+  const contentSlot =
+    slots.find((slot) => String(slot?.name || "") === primaryName && hasSlotText(slot)) ||
+    slots.find((slot) => String(slot?.name || "") === "result" && hasSlotText(slot)) ||
+    slots.find((slot) => String(slot?.name || "") === "filePath" && hasSlotText(slot)) ||
+    slots.find((slot) => String(slot?.type || "") === "text" && hasSlotText(slot));
+  const slotContent = contentSlot ? slotText(contentSlot) : "";
+  return String(isWorkspaceOneClickTaskDefinitionId(instance?.definitionId) ? slotContent : (instance?.body || slotContent));
 }
 
 function normalizeDisplayShareLayout(layout, fallback = "canvas") {
@@ -2518,8 +2532,8 @@ function publicDisplayPayloadFromShare(root, share) {
   const nodes = nodeIds.map((id) => {
     const instance = instances[id] || {};
     const definitionId = String(instance.definitionId || "");
-    const kind = workspaceDisplayKind(definitionId);
-    const rawBody = String(instance.body || "");
+    const kind = workspaceDisplayKindFromInstance(instance);
+    const rawBody = workspaceDisplayContentFromInstance(instance, kind);
     const filePath = workspaceDisplayTextFilePath(rawBody, kind);
     let body = rawBody;
     if (filePath) {
@@ -3460,6 +3474,14 @@ function workspaceDisplayKind(definitionId) {
   if (id === "display_chart") return "chart";
   if (id === "display_table") return "table";
   return "";
+}
+
+function workspaceDisplayKindFromInstance(instance) {
+  const direct = workspaceDisplayKind(instance?.definitionId);
+  if (direct) return direct;
+  if (!isWorkspaceOneClickTaskDefinitionId(instance?.definitionId)) return "";
+  if (!workspaceDisplayContentFromInstance(instance, workspaceContextRunDisplayKind(instance)).trim()) return "";
+  return workspaceContextRunDisplayKind(instance);
 }
 
 function workspaceDisplayTextFilePath(value, kind = "") {
