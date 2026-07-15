@@ -145,6 +145,8 @@ const MIN_WORKSPACE_NODE_WIDTH = 180;
 const MAX_WORKSPACE_NODE_WIDTH = 960;
 const MIN_WORKSPACE_NODE_HEIGHT = 96;
 const MAX_WORKSPACE_NODE_HEIGHT = 900;
+const DEFAULT_WORKSPACE_DISPLAY_WIDTH = 520;
+const DEFAULT_WORKSPACE_DISPLAY_HEIGHT = 320;
 const WORKSPACE_GROUP_PADDING = 52;
 const MIN_WORKSPACE_GROUP_WIDTH = 240;
 const MIN_WORKSPACE_GROUP_HEIGHT = 160;
@@ -1286,6 +1288,32 @@ function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
     width: clampNumber(rawWidth, MIN_WORKSPACE_NODE_WIDTH, MAX_WORKSPACE_NODE_WIDTH) || DEFAULT_WORKSPACE_NODE_WIDTH,
     height: clampNumber(rawHeight, MIN_WORKSPACE_NODE_HEIGHT, MAX_WORKSPACE_NODE_HEIGHT) || MIN_WORKSPACE_NODE_HEIGHT,
   };
+}
+
+function normalizeWorkspaceDisplaySize(size) {
+  const normalized = normalizeWorkspaceNodeSize(size, { display: true });
+  if (!normalized) return null;
+  return {
+    width: Math.max(320, Math.round(normalized.width)),
+    height: Math.max(180, Math.round(normalized.height)),
+  };
+}
+
+function defaultWorkspaceDisplaySizeForKind(kind) {
+  const text = String(kind || "").trim().toLowerCase();
+  if (text === "html" || text === "react") return { width: 720, height: 520 };
+  if (text === "table" || text === "chart") return { width: 640, height: 380 };
+  if (text === "image") return { width: 520, height: 360 };
+  return { width: DEFAULT_WORKSPACE_DISPLAY_WIDTH, height: DEFAULT_WORKSPACE_DISPLAY_HEIGHT };
+}
+
+function contextRunResultDisplaySizeFromData(data, displayDefinitionId = "") {
+  const existingDisplaySize = normalizeWorkspaceDisplaySize(data?.displaySize);
+  if (existingDisplaySize) return existingDisplaySize;
+  const existingNodeSize = normalizeWorkspaceDisplaySize(data?.nodeSize);
+  if (existingNodeSize) return existingNodeSize;
+  const kind = displayKind(displayDefinitionId) || normalizeContextRunDisplayType(workspaceSlotConfigValue(data?.inputs || data?.input || [], "displayType", "markdown"));
+  return defaultWorkspaceDisplaySizeForKind(kind);
 }
 
 function persistedWorkspaceNodeSize(node) {
@@ -3117,15 +3145,21 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   const outputPreview = contextRunResultContentFromData(data);
   const hasResult = Boolean(outputPreview);
   const displayDefinitionId = contextRunDisplayDefinitionId(config.displayType);
+  const resultDisplaySize = useMemo(
+    () => contextRunResultDisplaySizeFromData(data, displayDefinitionId),
+    [data?.displaySize, data?.nodeSize, data?.inputs, data?.input, displayDefinitionId],
+  );
   const resultDisplayData = useMemo(() => ({
     ...data,
     sourceNodeId: id,
     label: data?.label && data.label !== "Context Run" ? data.label : "一键任务",
     definitionId: displayDefinitionId,
+    displaySize: resultDisplaySize,
+    nodeSize: resultDisplaySize,
     body: outputPreview,
     inputs: [{ type: "text", name: displayDefinitionId === "display_image" ? "src" : "content", value: outputPreview, default: outputPreview }],
     outputs: outputs.length ? outputs : [{ type: "node", name: "next", default: "" }],
-  }), [data, displayDefinitionId, id, outputPreview, outputs]);
+  }), [data, displayDefinitionId, id, outputPreview, outputs, resultDisplaySize]);
   const cursorModels = Array.isArray(data?.modelLists?.cursor) ? data.modelLists.cursor : [];
   const opencodeModels = Array.isArray(data?.modelLists?.opencode) ? data.modelLists.opencode : [];
   const claudeCodeModels = Array.isArray(data?.modelLists?.claudeCode) ? data.modelLists.claudeCode : [];
@@ -3235,10 +3269,11 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   }, [data?.contextRunResultNonce, data?.nodeStatus, hasResult, outputPreview, running]);
   useEffect(() => {
     if (!(viewMode === "result" && hasResult)) return undefined;
+    data?.onEnsureWorkspaceNodeDisplaySize?.(id, resultDisplaySize);
     data?.onRefreshNodeInternals?.(id);
     const timer = window.setTimeout(() => data?.onRefreshNodeInternals?.(id), 120);
     return () => window.clearTimeout(timer);
-  }, [data?.onRefreshNodeInternals, displayDefinitionId, hasResult, id, outputPreview, viewMode]);
+  }, [data?.onEnsureWorkspaceNodeDisplaySize, data?.onRefreshNodeInternals, displayDefinitionId, hasResult, id, outputPreview, resultDisplaySize, viewMode]);
   const updateConfig = (patch) => {
     data?.onChangeContextRunConfig?.(id, { ...config, task: taskDraft, ...patch });
   };
@@ -5406,6 +5441,30 @@ function WorkspacePageInner() {
     window.setTimeout(refresh, 80);
   }, [updateNodeInternals]);
 
+  const ensureWorkspaceNodeDisplaySize = useCallback((nodeId, size) => {
+    const id = String(nodeId || "").trim();
+    const normalized = normalizeWorkspaceDisplaySize(size);
+    if (!id || !normalized) return;
+    setNodes((list) => list.map((node) => {
+      if (node.id !== id) return node;
+      const current = normalizeWorkspaceDisplaySize(node.data?.displaySize);
+      const sameDataSize = current && current.width === normalized.width && current.height === normalized.height;
+      const sameNodeSize = Math.round(Number(node.width || 0)) === normalized.width && Math.round(Number(node.height || 0)) === normalized.height;
+      if (sameDataSize && sameNodeSize) return node;
+      return {
+        ...node,
+        width: normalized.width,
+        height: normalized.height,
+        data: {
+          ...node.data,
+          nodeSize: normalized,
+          displaySize: normalized,
+        },
+      };
+    }));
+    refreshNodeInternals(id);
+  }, [refreshNodeInternals, setNodes]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem("agentflow.workspace.filesPaneHeight", String(Math.round(workspaceFilesPaneHeight)));
@@ -7552,6 +7611,7 @@ function WorkspacePageInner() {
       onShareDisplayNode: shareDisplayNode,
       onOpenDisplayPreview: setDisplayPreviewNodeId,
       onRefreshNodeInternals: refreshNodeInternals,
+      onEnsureWorkspaceNodeDisplaySize: ensureWorkspaceNodeDisplaySize,
       sharingDisplayNodeId,
       onUploadWorkspaceImage: uploadWorkspaceImage,
       onUploadImageToDisplayNode: uploadImageToDisplayNode,
@@ -7567,7 +7627,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
