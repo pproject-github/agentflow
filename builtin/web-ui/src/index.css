@@ -8124,7 +8124,7 @@ button.af-project-card {
 .af-work-context-run-card {
   position: relative;
   box-sizing: border-box;
-  width: 25rem;
+  width: 29rem;
   overflow: visible;
   border: 1px solid rgba(124, 77, 255, 0.32);
   border-radius: 0.8rem;
@@ -8152,14 +8152,14 @@ button.af-project-card {
 }
 
 .af-work-context-run-card--result {
-  width: 34rem;
+  width: 38rem;
 }
 
 .af-work-context-run-card__head {
   height: 3rem;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.5rem;
   padding: 0 0.7rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.045);
@@ -8170,7 +8170,7 @@ button.af-project-card {
 }
 
 .af-work-context-run-card__head strong {
-  flex: 1;
+  flex: 0 1 6.2rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8179,7 +8179,7 @@ button.af-project-card {
 }
 
 .af-work-context-run-card__kind {
-  flex: 0 1 8.8rem;
+  flex: 1 1 8.5rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8191,7 +8191,7 @@ button.af-project-card {
 
 .af-work-context-run-card__model-wrap {
   position: relative;
-  flex: 0 0 5.7rem;
+  flex: 0 0 6.8rem;
   min-width: 0;
   display: inline-flex;
   align-items: center;
