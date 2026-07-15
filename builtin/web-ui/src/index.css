@@ -6537,6 +6537,41 @@ button.af-project-card {
   white-space: nowrap;
 }
 
+.af-work-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  flex-shrink: 0;
+}
+
+.af-work-file-action {
+  width: 1.72rem;
+  height: 1.72rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(202, 195, 216, 0.14);
+  border-radius: 0.42rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(229, 226, 225, 0.76);
+  cursor: pointer;
+}
+
+.af-work-file-action:hover {
+  border-color: rgba(151, 209, 255, 0.38);
+  background: rgba(151, 209, 255, 0.1);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.af-work-file-action--danger:hover {
+  border-color: rgba(255, 107, 107, 0.42);
+  background: rgba(255, 107, 107, 0.12);
+  color: rgba(255, 190, 190, 0.98);
+}
+
+.af-work-file-action .material-symbols-outlined {
+  font-size: 1rem;
+}
+
 .af-work-file-picker-modal {
   width: min(44rem, calc(100vw - 2rem));
 }
