@@ -78,6 +78,12 @@ function parseCookies(header) {
   return out;
 }
 
+function bearerTokenFromAuthHeader(header) {
+  const raw = String(header || "").trim();
+  const m = raw.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : "";
+}
+
 export function readAuthUsers() {
   return readJsonObject(usersPath());
 }
@@ -240,8 +246,12 @@ export function buildClearSessionCookie() {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
+export function getSessionTokenFromRequest(req) {
+  return parseCookies(req.headers.cookie || "")[SESSION_COOKIE] || bearerTokenFromAuthHeader(req.headers.authorization);
+}
+
 export function getAuthUserFromRequest(req) {
-  const token = parseCookies(req.headers.cookie || "")[SESSION_COOKIE];
+  const token = getSessionTokenFromRequest(req);
   if (!token) return null;
   const sessions = readJsonObject(sessionsPath());
   const key = hashToken(token);

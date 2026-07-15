@@ -26,6 +26,7 @@ import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealCo
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
+import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
 import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
@@ -51,7 +52,7 @@ import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX = "agentflow.workspace.sidebarCollapsed";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
-const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp"]);
+const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp", "control_cd_workspace", "control_user_workspace"]);
 const WORKSPACE_RUN_DEFINITION = {
   id: "workspace_run",
   displayName: "Run",
@@ -98,6 +99,43 @@ const WORKSPACE_LOAD_MCP_DEFINITION = {
   outputs: [
     { type: "node", name: "next", default: "" },
     { type: "text", name: "mcpContext", default: "", showOnNode: true },
+  ],
+};
+const WORKSPACE_LOAD_WORKSPACE_DEFINITION = {
+  id: "control_cd_workspace",
+  displayName: "Load Workspace",
+  label: "Load Workspace",
+  description: "Select a configured workspace directory and pass workspaceContext to downstream nodes.",
+  type: "control",
+  inputs: [
+    { type: "node", name: "prev", default: "" },
+    { type: "text", name: "path", default: "", showOnNode: false },
+    { type: "text", name: "label", default: "", showOnNode: false },
+    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
+  ],
+  outputs: [
+    { type: "node", name: "next", default: "" },
+    { type: "text", name: "workspaceContext", default: "", showOnNode: true },
+    { type: "file", name: "cwd", default: "", showOnNode: false },
+  ],
+};
+const WORKSPACE_CONTEXT_RUN_DEFINITION = {
+  id: "workspace_one_click_task",
+  displayName: "一键任务",
+  label: "一键任务",
+  description: "输入任务，选择 Skills、workspace 上下文和输出类型后直接运行。",
+  type: "agent",
+  inputs: [
+    { type: "node", name: "prev", default: "" },
+    { type: "text", name: "skillKeys", default: "", showOnNode: false },
+    { type: "bool", name: "includeWorkspaceContext", default: "true", showOnNode: false },
+    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
+    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
+  ],
+  outputs: [
+    { type: "node", name: "next", default: "" },
+    { type: "text", name: "content", default: "", showOnNode: true },
+    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
   ],
 };
 
@@ -233,6 +271,7 @@ function isLegacyWorkspaceRunLogText(text) {
 function workspaceRunActivityText(text) {
   const line = String(text || "").trim();
   if (!line) return "";
+  if (isIgnorableWorkspaceRunStderr(line)) return "";
   if (/^运行完成/.test(line)) return "运行完成";
   if (/^运行暂停/.test(line)) return "运行暂停";
   if (/^运行停止/.test(line)) return "运行停止";
@@ -260,6 +299,19 @@ function workspaceRunActivityText(text) {
   return "";
 }
 
+function isIgnorableWorkspaceRunStderr(line) {
+  if (!/^\[stderr\]/.test(line)) return false;
+  return (
+    /Reading additional input from stdin/i.test(line) ||
+    /rmcp::transport::worker/i.test(line) ||
+    /Transport channel closed/i.test(line) ||
+    /http\/request failed/i.test(line) ||
+    /AuthRequiredError/i.test(line) ||
+    /No access token was provided/i.test(line) ||
+    /api\.githubcopilot\.com/i.test(line)
+  );
+}
+
 function workspaceRunActivityKind(text) {
   const line = String(text || "").trim();
   if (!line) return "other";
@@ -268,6 +320,21 @@ function workspaceRunActivityKind(text) {
   if (/^运行/.test(line)) return "run";
   if (/^\[stderr\]/.test(line)) return "error";
   return "other";
+}
+
+function workspaceRunNodeAlias(nodes, instances, nodeId, fallback = "Workspace Run") {
+  const id = String(nodeId || "").trim();
+  const node = Array.isArray(nodes) ? nodes.find((item) => String(item?.id || "") === id) : null;
+  const instance = instances && typeof instances === "object" ? instances[id] : null;
+  const label = String(node?.data?.label || instance?.label || "").trim();
+  return label || id || fallback;
+}
+
+function workspaceRunNameWithId(alias, nodeId, fallback = "Workspace Run") {
+  const cleanAlias = String(alias || "").trim() || fallback;
+  const cleanId = String(nodeId || "").trim();
+  if (!cleanId || cleanAlias === cleanId) return cleanAlias;
+  return `${cleanAlias} (${cleanId})`;
 }
 
 function formatWorkspaceRunDuration(ms) {
@@ -1287,6 +1354,7 @@ function displayKind(definitionId) {
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
+  if (id === "display_react_app") return "react";
   if (id === "display_image") return "image";
   if (id === "display_chart") return "chart";
   if (id === "display_table") return "table";
@@ -1316,6 +1384,7 @@ function displayTextFilePath(value, kind = "") {
   const ext = clean.split("?")[0].split("#")[0].toLowerCase().split(".").pop() || "";
   const allowedByKind = {
     html: new Set(["html", "htm"]),
+    react: new Set(["json", "jsx", "tsx", "js", "txt"]),
     markdown: new Set(["md", "markdown", "txt"]),
     mermaid: new Set(["mmd", "mermaid", "txt"]),
     ascii: new Set(["txt", "log"]),
@@ -1710,6 +1779,7 @@ function displayIcon(kind) {
   if (kind === "mermaid") return "account_tree";
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
+  if (kind === "react") return "deployed_code";
   if (kind === "image") return "image";
   if (kind === "chart") return "bar_chart";
   if (kind === "table") return "table";
@@ -1925,14 +1995,18 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     return () => { cancelled = true; };
   }, [filePath, flowParams?.flowId, flowParams?.flowSource, flowParams?.archived, data?.displayReloadKey]);
   const resolvedContent = filePath ? fileContent : unwrappedRawContent;
-  const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
+  const content = kind === "html"
+    ? normalizeHtmlDisplayContent(resolvedContent)
+    : kind === "react"
+      ? normalizeReactAppDisplayContent(resolvedContent)
+      : displayOutputEnvelopeContent(resolvedContent);
   const htmlFrameIdRef = useRef("");
   const [htmlFrameHeight, setHtmlFrameHeight] = useState(0);
   if (!htmlFrameIdRef.current) {
     htmlFrameIdRef.current = `html-display-${Math.random().toString(36).slice(2, 10)}`;
   }
   useEffect(() => {
-    if (kind !== "html") {
+    if (kind !== "html" && kind !== "react") {
       setHtmlFrameHeight(0);
       return undefined;
     }
@@ -1956,7 +2030,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (fileError) return <VisibleScrollFrame className="af-work-display-empty">{fileError}</VisibleScrollFrame>;
   if (contentProblem) return <VisibleScrollFrame className="af-work-display-empty">{contentProblem}</VisibleScrollFrame>;
   if (!content.trim()) return <VisibleScrollFrame className="af-work-display-empty">No display content</VisibleScrollFrame>;
-  if (kind === "html") {
+  if (kind === "html" || kind === "react") {
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--html">
         <iframe
@@ -1964,9 +2038,9 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
           style={htmlFrameHeight > 0 ? { height: `${htmlFrameHeight}px` } : undefined}
-          title={data?.label || "HTML preview"}
+          title={data?.label || (kind === "react" ? "React app preview" : "HTML preview")}
           sandbox="allow-scripts allow-forms allow-modals"
-          srcDoc={htmlDisplaySrcDoc(content, htmlFrameIdRef.current)}
+          srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content, htmlFrameIdRef.current) : htmlDisplaySrcDoc(content, htmlFrameIdRef.current)}
         />
       </VisibleScrollFrame>
     );
@@ -2066,13 +2140,17 @@ function DisplayPickerPreview({ node }) {
     return () => { cancelled = true; };
   }, [filePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
   const resolvedContent = filePath ? fileContent : unwrappedRawContent;
-  const content = kind === "html" ? normalizeHtmlDisplayContent(resolvedContent) : displayOutputEnvelopeContent(resolvedContent);
+  const content = kind === "html"
+    ? normalizeHtmlDisplayContent(resolvedContent)
+    : kind === "react"
+      ? normalizeReactAppDisplayContent(resolvedContent)
+      : displayOutputEnvelopeContent(resolvedContent);
   const contentProblem = validateDisplayContentForWrite(kind, content);
   if (fileLoading) return <div className="af-display-picker-preview__empty">Loading</div>;
   if (contentProblem) return <div className="af-display-picker-preview__empty">{contentProblem}</div>;
   if (!content.trim()) return <div className="af-display-picker-preview__empty">No content</div>;
-  if (kind === "html") {
-    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={htmlDisplaySrcDoc(content)} />;
+  if (kind === "html" || kind === "react") {
+    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content) : htmlDisplaySrcDoc(content)} />;
   }
   if (kind === "image") {
     return <img src={workspaceRawFileUrl(content, node?.data?.flowParams)} alt={node?.data?.label || node?.id} loading="lazy" />;
@@ -2387,6 +2465,7 @@ function displayFileExtension(kind) {
   if (kind === "mermaid") return "mmd";
   if (kind === "ascii") return "txt";
   if (kind === "html") return "html";
+  if (kind === "react") return "json";
   if (kind === "image") return "txt";
   if (kind === "chart") return "json";
   if (kind === "table") return "json";
@@ -2482,7 +2561,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
+  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
   const shareNodeId = String(data?.sourceNodeId || id);
   const sharingDisplay = data?.sharingDisplayNodeId === shareNodeId;
   const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
@@ -2877,7 +2956,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
-  const optimizing = data?.optimizingSchedule === true;
+  const optimizing = data?.optimizingRun === true;
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   return (
@@ -2941,7 +3020,7 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         <button
           type="button"
           className={"af-work-run-card__button nodrag" + (running ? " af-work-run-card__button--stop" : "")}
-          disabled={readOnly}
+          disabled={readOnly || optimizing}
           onClick={(event) => {
             event.stopPropagation();
             if (running) data?.onStopWorkspaceNode?.(id);
@@ -2953,7 +3032,22 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         </button>
         <button
           type="button"
+          className={"af-work-run-card__button af-work-run-card__optimize nodrag" + (optimizing ? " af-work-run-card__optimize--running" : "")}
+          disabled={readOnly || running || optimizing}
+          title={optimizing ? "正在优化" : "为下游节点提前生成 implementation"}
+          aria-label={optimizing ? "正在优化" : "优化"}
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onOptimizeWorkspaceRun?.(id);
+          }}
+        >
+          <span className="material-symbols-outlined">{optimizing ? "sync" : "auto_fix_high"}</span>
+        </button>
+        <button
+          type="button"
           className="af-work-run-card__button af-work-run-card__logs nodrag"
+          title="查看执行日志"
+          aria-label="查看执行日志"
           onClick={(event) => {
             event.stopPropagation();
             data?.onOpenWorkspaceRunLogs?.({
@@ -2965,8 +3059,524 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
           }}
         >
           <span className="material-symbols-outlined">article</span>
-          <span>Logs</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skillCollections, workspaces }) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const config = contextRunConfigFromData(data);
+  const [taskDraft, setTaskDraft] = useState(config.task);
+  const composingTaskRef = useRef(false);
+  const lastConfigTaskRef = useRef(config.task);
+  const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
+  const stopped = data?.nodeStatus === "stopped";
+  const readOnly = Boolean(data?.readOnly);
+  const skillsList = Array.isArray(skills) ? skills : [];
+  const collectionsList = Array.isArray(skillCollections) ? skillCollections : [];
+  const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
+    .map((item) => ({
+      id: String(item?.id || ""),
+      label: String(item?.label || item?.name || "Workspace"),
+      kind: item?.kind === "git" ? "git" : "local",
+      path: String(item?.path || ""),
+      repoUrl: String(item?.repoUrl || ""),
+      branch: String(item?.branch || ""),
+      mountPath: String(item?.mountPath || ""),
+      builtin: item?.builtin === true,
+      exists: item?.exists !== false,
+      type: String(item?.type || ""),
+    }))
+    .filter((item) => item.path), [workspaces]);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillsSearch, setSkillsSearch] = useState("");
+  const [collapsedSkillGroups, setCollapsedSkillGroups] = useState(() => new Set());
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
+  const [viewMode, setViewMode] = useState("config");
+  const resultFrameRef = useRef(null);
+  const outputSlot = outputs.find((slot) => slot?.name === "content") || outputs.find((slot) => slot?.type === "text");
+  const outputPreview = String(outputSlot?.value ?? outputSlot?.default ?? "").trim();
+  const hasResult = Boolean(outputPreview);
+  const displayDefinitionId = contextRunDisplayDefinitionId(config.displayType);
+  const resultDisplayData = useMemo(() => ({
+    ...data,
+    label: data?.label && data.label !== "Context Run" ? data.label : "一键任务",
+    definitionId: displayDefinitionId,
+    body: outputPreview,
+    inputs: [{ type: "text", name: displayDefinitionId === "display_image" ? "src" : "content", value: outputPreview, default: outputPreview }],
+    outputs: [],
+  }), [data, displayDefinitionId, outputPreview]);
+  const selectedSkillSet = useMemo(() => new Set(config.skillKeys), [config.skillKeys]);
+  const skillsByKey = useMemo(() => new Map(skillsList.map((skill) => [skill.key, skill])), [skillsList]);
+  const skillGroups = useMemo(() => {
+    const used = new Set();
+    const collectionGroups = collectionsList
+      .map((collection) => {
+        const groupSkills = collectionSkillKeys(collection, skillsList).map((key) => skillsByKey.get(key)).filter(Boolean);
+        for (const skill of groupSkills) used.add(skill.key);
+        return { ...collection, skills: groupSkills };
+      })
+      .filter((collection) => collection.skills.length > 0);
+    const ungrouped = skillsList.filter((skill) => !used.has(skill.key));
+    return { collectionGroups, ungrouped };
+  }, [collectionsList, skillsByKey, skillsList]);
+  useEffect(() => {
+    setCollapsedSkillGroups((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const group of skillGroups.collectionGroups) {
+        if (!next.has(group.id)) {
+          next.add(group.id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [skillGroups.collectionGroups]);
+  const filteredSkillGroups = useMemo(() => {
+    const q = skillsSearch.trim().toLowerCase();
+    if (!q) return skillGroups;
+    const matchesSkill = (skill) => [skill?.key, skill?.name, skill?.description]
+      .map((part) => String(part || "").toLowerCase())
+      .join(" ")
+      .includes(q);
+    const collectionGroups = skillGroups.collectionGroups
+      .map((group) => {
+        const groupMatches = [group?.id, group?.name, group?.description]
+          .map((part) => String(part || "").toLowerCase())
+          .join(" ")
+          .includes(q);
+        return { ...group, skills: groupMatches ? group.skills : group.skills.filter(matchesSkill) };
+      })
+      .filter((group) => group.skills.length > 0);
+    return { collectionGroups, ungrouped: skillGroups.ungrouped.filter(matchesSkill) };
+  }, [skillGroups, skillsSearch]);
+  const filteredWorkspaces = useMemo(() => {
+    const q = workspaceSearch.trim().toLowerCase();
+    if (!q) return workspaceList;
+    return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath, item.type].join(" ").toLowerCase().includes(q));
+  }, [workspaceList, workspaceSearch]);
+  const selectedWorkspace = useMemo(() => {
+    const cwd = String(config.workspaceContext?.cwd || config.workspaceContext?.workspaceRoot || "").trim();
+    const idValue = String(config.workspaceContext?.id || "").trim();
+    return workspaceList.find((item) => (idValue && item.id === idValue) || (cwd && item.path === cwd)) || null;
+  }, [config.workspaceContext, workspaceList]);
+  useEffect(() => {
+    if (config.task === lastConfigTaskRef.current) return;
+    lastConfigTaskRef.current = config.task;
+    if (!composingTaskRef.current) setTaskDraft(config.task);
+  }, [config.task]);
+  useEffect(() => {
+    if (!hasResult) {
+      setViewMode("config");
+      return;
+    }
+    if (!running && (data?.nodeStatus === "success" || viewMode !== "config")) {
+      setViewMode("result");
+    }
+  }, [data?.nodeStatus, hasResult, outputPreview, running]);
+  const updateConfig = (patch) => {
+    data?.onChangeContextRunConfig?.(id, { ...config, task: taskDraft, ...patch });
+  };
+  const commitTaskDraft = (value = taskDraft) => {
+    const text = String(value ?? "");
+    if (text !== config.task) {
+      lastConfigTaskRef.current = text;
+      data?.onChangeContextRunConfig?.(id, { ...config, task: text });
+    }
+  };
+  const toggleSkillKeys = (keys, checked) => {
+    const next = new Set(config.skillKeys);
+    for (const key of keys) {
+      const text = String(key || "").trim();
+      if (!text) continue;
+      if (checked) next.add(text);
+      else next.delete(text);
+    }
+    updateConfig({ skillKeys: Array.from(next) });
+  };
+  const toggleCollapsedSkillGroup = (groupId) => {
+    setCollapsedSkillGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+  const selectWorkspace = (workspace) => {
+    const workspaceContext = workspace ? {
+      version: 1,
+      id: workspace.id || "",
+      label: workspace.label || "Workspace",
+      kind: workspace.kind || "local",
+      cwd: workspace.path || "",
+      workspaceRoot: workspace.path || "",
+      repoUrl: workspace.repoUrl || "",
+      branch: workspace.branch || "",
+      mountPath: workspace.mountPath || "",
+      type: workspace.type || "",
+    } : null;
+    updateConfig({ includeWorkspaceContext: Boolean(workspace), workspaceContext });
+    setWorkspaceOpen(false);
+  };
+  return (
+    <div
+      className={
+        "af-work-context-run-card" +
+        (selected ? " af-work-context-run-card--selected" : "") +
+        (viewMode === "result" && hasResult ? " af-work-context-run-card--result" : "") +
+        (running ? " af-work-context-run-card--running" : "") +
+        (data?.nodeStatus === "success" ? " af-work-context-run-card--done" : "") +
+        (data?.nodeStatus === "failed" ? " af-work-context-run-card--failed" : "") +
+        (stopped ? " af-work-context-run-card--stopped" : "")
+      }
+      onPointerDownCapture={data?.onSelectNodePointerDown}
+    >
+      {inputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.25 + idx * 1.75}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`in-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--in" style={{ top }}>{label}</span>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`input-${idx}`}
+              className="af-work-display-handle af-work-display-handle--in"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      {outputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.25 + idx * 1.75}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`out-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--out" style={{ top }}>{label}</span>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id={`output-${idx}`}
+              className="af-work-display-handle af-work-display-handle--out"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      <div className="af-work-context-run-card__head">
+        <span className="material-symbols-outlined">automation</span>
+        <strong>{data?.label && data.label !== "Context Run" ? data.label : "一键任务"}</strong>
+        <span>{isOneClickTaskDefinitionId(data?.definitionId) ? "workspace_one_click_task" : (data?.definitionId || "workspace_one_click_task")}</span>
+        {hasResult ? (
+          <div className="af-work-context-run-card__view-switch nodrag" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className={viewMode === "config" ? "is-active" : ""}
+              onClick={() => setViewMode("config")}
+              aria-label="切换到任务配置"
+            >
+              <span className="material-symbols-outlined">tune</span>
+            </button>
+            <button
+              type="button"
+              className={viewMode === "result" ? "is-active" : ""}
+              onClick={() => setViewMode("result")}
+              aria-label="切换到展示结果"
+            >
+              <span className="material-symbols-outlined">preview</span>
+            </button>
+          </div>
+        ) : null}
+        <button type="button" className="af-work-display-card__close nodrag" disabled={readOnly} onClick={() => deleteNode?.(id)} aria-label="删除节点">
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div className="af-work-context-run-card__body nodrag">
+        {viewMode === "result" && hasResult ? (
+          <div className="af-work-context-run-card__result">
+            <div className="af-work-context-run-card__result-head">
+              <span className="material-symbols-outlined">{displayDefinitionId === "display_html" || displayDefinitionId === "display_react_app" ? "web_asset" : "article"}</span>
+              <strong>{config.displayType}</strong>
+            </div>
+            <DisplayBody
+              data={resultDisplayData}
+              flowParams={data?.flowParams}
+              htmlFrameRef={resultFrameRef}
+              htmlFrameVersion={String(outputPreview).length}
+            />
+          </div>
+        ) : (
+          <>
+            <textarea
+          value={taskDraft}
+          disabled={readOnly}
+          placeholder="输入任务，例如：基于当前 workspace 总结需求并生成展示页"
+          onCompositionStart={() => {
+            composingTaskRef.current = true;
+          }}
+          onCompositionEnd={(event) => {
+            composingTaskRef.current = false;
+            setTaskDraft(event.currentTarget.value);
+            commitTaskDraft(event.currentTarget.value);
+          }}
+          onChange={(event) => {
+            setTaskDraft(event.target.value);
+          }}
+          onBlur={(event) => commitTaskDraft(event.currentTarget.value)}
+        />
+        <div className="af-work-context-run-card__grid">
+          <div className="af-work-context-run-card__skills">
+            <button
+              type="button"
+              disabled={readOnly}
+              className="af-work-context-run-card__select"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!skillsOpen) data?.onRefreshSkills?.();
+                setSkillsOpen((open) => !open);
+              }}
+            >
+              <span className="material-symbols-outlined">extension</span>
+              <span>{config.skillKeys.length ? `${config.skillKeys.length} skills` : "Skills"}</span>
+              <span className="material-symbols-outlined">expand_more</span>
+            </button>
+            {skillsOpen ? (
+              <div className="af-work-context-run-card__skills-menu" onClick={(event) => event.stopPropagation()}>
+                <div className="af-work-load-skills-search">
+                  <span className="material-symbols-outlined" aria-hidden>search</span>
+                  <input
+                    type="search"
+                    value={skillsSearch}
+                    onChange={(event) => setSkillsSearch(event.target.value)}
+                    placeholder="搜索 Skills..."
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-label="搜索 Skills"
+                  />
+                  {skillsSearch ? (
+                    <button type="button" onClick={() => setSkillsSearch("")} aria-label="清空搜索">
+                      <span className="material-symbols-outlined" aria-hidden>close</span>
+                    </button>
+                  ) : null}
+                </div>
+                <div className="af-work-load-skills-menu af-work-context-run-card__menu-scroll">
+                  {filteredSkillGroups.collectionGroups.map((group) => {
+                    const groupKeys = group.skills.map((skill) => skill.key);
+                    const checkedCount = groupKeys.filter((key) => selectedSkillSet.has(key)).length;
+                    const allChecked = groupKeys.length > 0 && checkedCount === groupKeys.length;
+                    const collapsed = collapsedSkillGroups.has(group.id);
+                    return (
+                      <section key={group.id} className={"af-work-load-skills-menu__group" + (collapsed ? " af-work-load-skills-menu__group--collapsed" : "")}>
+                        <div className="af-work-load-skills-menu__group-head">
+                          <input
+                            type="checkbox"
+                            checked={allChecked}
+                            disabled={readOnly}
+                            onChange={(event) => toggleSkillKeys(groupKeys, event.target.checked)}
+                            aria-label={`选择 ${group.name}`}
+                          />
+                          <button
+                            type="button"
+                            className="af-work-load-skills-menu__group-toggle"
+                            onClick={() => toggleCollapsedSkillGroup(group.id)}
+                            aria-expanded={!collapsed}
+                          >
+                            <span className="af-work-load-skills-menu__group-main">
+                              <span>{group.name}</span>
+                              {group.description ? <em>{group.description}</em> : null}
+                            </span>
+                          </button>
+                          <small>{checkedCount}/{groupKeys.length}</small>
+                          <button
+                            type="button"
+                            className="af-work-load-skills-menu__group-arrow"
+                            onClick={() => toggleCollapsedSkillGroup(group.id)}
+                            aria-label={collapsed ? `展开 ${group.name}` : `收起 ${group.name}`}
+                          >
+                            <span className="material-symbols-outlined" aria-hidden>{collapsed ? "chevron_right" : "expand_more"}</span>
+                          </button>
+                        </div>
+                        {!collapsed ? (
+                          <div className="af-work-load-skills-menu__options">
+                            {group.skills.map((skill) => (
+                              <label key={`${group.id}:${skill.key}`} className="af-work-load-skills-menu__option">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedSkillSet.has(skill.key)}
+                                  disabled={readOnly}
+                                  onChange={(event) => toggleSkillKeys([skill.key], event.target.checked)}
+                                />
+                                <span className="af-work-load-skills-menu__option-main">
+                                  <span className="af-work-load-skills-menu__option-title">{skill.name}</span>
+                                  {skill.description ? <span className="af-work-load-skills-menu__option-desc">{skill.description}</span> : null}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })}
+                  {filteredSkillGroups.ungrouped.length > 0 ? (
+                    <section className="af-work-load-skills-menu__group">
+                      <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
+                        <span>Ungrouped</span>
+                        <small>{filteredSkillGroups.ungrouped.length}</small>
+                      </div>
+                      <div className="af-work-load-skills-menu__options">
+                        {filteredSkillGroups.ungrouped.map((skill) => (
+                          <label key={`ungrouped:${skill.key}`} className="af-work-load-skills-menu__option">
+                            <input
+                              type="checkbox"
+                              checked={selectedSkillSet.has(skill.key)}
+                              disabled={readOnly}
+                              onChange={(event) => toggleSkillKeys([skill.key], event.target.checked)}
+                            />
+                            <span className="af-work-load-skills-menu__option-main">
+                              <span className="af-work-load-skills-menu__option-title">{skill.name}</span>
+                              {skill.description ? <span className="af-work-load-skills-menu__option-desc">{skill.description}</span> : null}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                  {filteredSkillGroups.collectionGroups.length === 0 && filteredSkillGroups.ungrouped.length === 0 ? (
+                    <div className="af-work-load-skills-menu__empty">没有匹配的 Skills</div>
+                  ) : null}
+                  <button type="button" className="af-work-load-skills-menu__clear" onClick={() => updateConfig({ skillKeys: [] })}>清空</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="af-work-context-run-card__workspace">
+            <button
+              type="button"
+              disabled={readOnly}
+              className="af-work-context-run-card__select"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!workspaceOpen) data?.onRefreshWorkspaces?.();
+                setWorkspaceOpen((open) => !open);
+              }}
+            >
+              <span className="material-symbols-outlined">{selectedWorkspace ? "folder_open" : "folder_off"}</span>
+              <span>{selectedWorkspace?.label || "Workspace"}</span>
+              <span className="material-symbols-outlined">expand_more</span>
+            </button>
+            {workspaceOpen ? (
+              <div className="af-work-context-run-card__workspace-menu" onClick={(event) => event.stopPropagation()}>
+                <div className="af-work-load-skills-search">
+                  <span className="material-symbols-outlined" aria-hidden>search</span>
+                  <input
+                    type="search"
+                    value={workspaceSearch}
+                    onChange={(event) => setWorkspaceSearch(event.target.value)}
+                    placeholder="搜索 Workspace..."
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-label="搜索 Workspace"
+                  />
+                  {workspaceSearch ? (
+                    <button type="button" onClick={() => setWorkspaceSearch("")} aria-label="清空搜索">
+                      <span className="material-symbols-outlined" aria-hidden>close</span>
+                    </button>
+                  ) : null}
+                </div>
+                <div className="af-work-load-skills-menu af-work-context-run-card__menu-scroll">
+                  <section className="af-work-load-skills-menu__group">
+                    <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
+                      <span>Workspace</span>
+                      <small>{filteredWorkspaces.length}</small>
+                    </div>
+                    <div className="af-work-load-skills-menu__options">
+                      {filteredWorkspaces.map((item) => (
+                        <label key={`${item.id}:${item.path}`} className="af-work-load-skills-menu__option">
+                          <input
+                            type="radio"
+                            name={`context-workspace-${id}`}
+                            checked={selectedWorkspace?.path === item.path}
+                            disabled={readOnly}
+                            onChange={() => selectWorkspace(item)}
+                          />
+                          <span className="af-work-load-skills-menu__option-main">
+                            <span className="af-work-load-skills-menu__option-title">{item.label}</span>
+                            <span className="af-work-load-skills-menu__option-desc">
+                              {item.kind === "git" && item.repoUrl ? `${item.repoUrl}${item.branch ? ` · ${item.branch}` : ""}${item.mountPath ? ` · ${item.mountPath}` : ""}` : item.path}
+                              {item.exists ? "" : " · 路径未就绪"}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+                  {filteredWorkspaces.length === 0 ? (
+                    <div className="af-work-load-skills-menu__empty">没有匹配的 Workspace</div>
+                  ) : null}
+                  <button type="button" className="af-work-load-skills-menu__clear" onClick={() => selectWorkspace(null)}>不加载 Workspace</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <select
+            value={config.displayType}
+            disabled={readOnly}
+            onChange={(event) => updateConfig({ displayType: event.target.value })}
+          >
+            <option value="markdown">Markdown</option>
+            <option value="html">HTML</option>
+            <option value="react">React</option>
+            <option value="table">Table</option>
+            <option value="chart">Chart</option>
+            <option value="ascii">ASCII</option>
+            <option value="mermaid">Mermaid</option>
+          </select>
+        </div>
+        {outputPreview ? (
+          <pre className="af-work-context-run-card__preview">{outputPreview.slice(0, 520)}</pre>
+        ) : null}
+          </>
+        )}
+        <div className="af-work-context-run-card__actions">
+          <button
+            type="button"
+            className={"af-work-run-card__button af-work-context-run-card__run nodrag" + (running ? " af-work-run-card__button--stop" : "")}
+            disabled={readOnly}
+            onClick={(event) => {
+              event.stopPropagation();
+              commitTaskDraft();
+              if (running) data?.onStopWorkspaceNode?.(id);
+              else data?.onRunWorkspaceNode?.(id);
+            }}
+          >
+            <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
+            <span>{running ? "Stop" : "Run"}</span>
+          </button>
+          <button
+            type="button"
+            className="af-work-run-card__button af-work-context-run-card__logs nodrag"
+            onClick={(event) => {
+              event.stopPropagation();
+              data?.onOpenWorkspaceRunLogs?.({
+                nodeId: id,
+                runNodeId: id,
+                scheduleNodeId: "",
+                label: data?.label && data.label !== "Context Run" ? data.label : "一键任务",
+              });
+            }}
+          >
+            <span className="material-symbols-outlined">article</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2978,7 +3588,7 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const config = normalizeScheduledRunConfig(data?.body || "");
   const scheduleState = data?.scheduledRunState || {};
   const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
-  const optimizing = data?.optimizingSchedule === true;
+  const optimizing = data?.optimizingRun === true;
   const stopped = data?.nodeStatus === "stopped";
   const readOnly = Boolean(data?.readOnly);
   const updateConfig = (patch) => {
@@ -3326,6 +3936,18 @@ function WorkspaceFlowNode(props) {
   if (props.data?.definitionId === "workspace_scheduled_run") {
     return <WorkspaceScheduledRunNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
+  if (isOneClickTaskDefinitionId(props.data?.definitionId)) {
+    return (
+      <WorkspaceContextRunNode
+        {...props}
+        data={{ ...props.data, onSelectNodePointerDown }}
+        deleteNode={deleteNode}
+        skills={props.data?.skills}
+        skillCollections={props.data?.skillCollections}
+        workspaces={props.data?.workspaceTargets}
+      />
+    );
+  }
   if (props.data?.definitionId === "control_load_skills") {
     return (
       <WorkspaceLoadSkillsNode
@@ -3346,6 +3968,18 @@ function WorkspaceFlowNode(props) {
         deleteNode={deleteNode}
         servers={props.data?.mcpServers}
         onChangeMcpNames={props.data?.onChangeLoadMcpNames}
+      />
+    );
+  }
+  if (props.data?.definitionId === "control_cd_workspace") {
+    return (
+      <WorkspaceLoadWorkspaceNode
+        {...props}
+        data={{ ...props.data, onSelectNodePointerDown }}
+        deleteNode={deleteNode}
+        workspaces={props.data?.workspaceTargets}
+        onChangeWorkspace={props.data?.onChangeLoadWorkspace}
+        onRefreshWorkspaces={props.data?.onRefreshWorkspaces}
       />
     );
   }
@@ -3683,8 +4317,64 @@ function selectedSkillKeysFromNodeData(data) {
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
+function selectedSkillKeysFromConfigSlots(data) {
+  const slots = [...(Array.isArray(data?.inputs) ? data.inputs : []), ...(Array.isArray(data?.outputs) ? data.outputs : [])];
+  const slot = slots.find((item) => item?.name === "skillKeys" || item?.name === "skillsContext");
+  return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
+}
+
 function serializeSkillKeys(keys) {
   return JSON.stringify(Array.from(new Set((keys || []).map(String).filter(Boolean))));
+}
+
+function workspaceSlotConfigValue(slots, name, fallback = "") {
+  const slot = (Array.isArray(slots) ? slots : []).find((item) => item?.name === name);
+  const value = String(slot?.value ?? slot?.default ?? "").trim();
+  return value || fallback;
+}
+
+function workspaceSlotConfigJsonValue(slots, name) {
+  const raw = workspaceSlotConfigValue(slots, name, "");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeContextRunDisplayType(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return ["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
+}
+
+function contextRunDisplayDefinitionId(displayType) {
+  const kind = normalizeContextRunDisplayType(displayType);
+  if (kind === "html") return "display_html";
+  if (kind === "react") return "display_react_app";
+  if (kind === "table") return "display_table";
+  if (kind === "chart") return "display_chart";
+  if (kind === "ascii") return "display_ascii";
+  if (kind === "mermaid") return "display_mermaid";
+  return "display_markdown";
+}
+
+function contextRunConfigFromData(data) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const includeRaw = workspaceSlotConfigValue(inputs, "includeWorkspaceContext", "true").toLowerCase();
+  return {
+    task: String(data?.body || ""),
+    skillKeys: selectedSkillKeysFromConfigSlots(data),
+    includeWorkspaceContext: includeRaw !== "false" && includeRaw !== "0" && includeRaw !== "off",
+    workspaceContext: workspaceSlotConfigJsonValue(inputs, "workspaceContext"),
+    displayType: normalizeContextRunDisplayType(workspaceSlotConfigValue(inputs, "displayType", "markdown")),
+  };
+}
+
+function isOneClickTaskDefinitionId(definitionId) {
+  const id = String(definitionId || "");
+  return id === "workspace_one_click_task" || id === "workspace_context_run";
 }
 
 function selectedMcpNamesFromNodeData(data) {
@@ -3697,6 +4387,14 @@ function selectedMcpNamesFromNodeData(data) {
 
 function serializeMcpNames(names) {
   return JSON.stringify(Array.from(new Set((names || []).map(String).filter(Boolean))));
+}
+
+function workspaceSelectionFromNodeData(data) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  return {
+    path: workspaceSlotConfigValue(inputs, "path", ""),
+    label: workspaceSlotConfigValue(inputs, "label", ""),
+  };
 }
 
 function nodeToPropDraft(node) {
@@ -3717,6 +4415,16 @@ function nodeToPropDraft(node) {
     inputs,
     outputs,
   };
+}
+
+function workspaceRunNodeModel(nodes, instances, runNodeId, fallback = "") {
+  const id = String(runNodeId || "").trim();
+  const node = (Array.isArray(nodes) ? nodes : []).find((item) => String(item?.id || "") === id);
+  const nodeModel = String(node?.data?.model || "").trim();
+  if (nodeModel && nodeModel !== "default") return nodeModel;
+  const instanceModel = String(instances?.[id]?.model || "").trim();
+  if (instanceModel && instanceModel !== "default") return instanceModel;
+  return String(fallback || "").trim();
 }
 
 function normalizeWorkspacePropIoSlots(slots) {
@@ -4274,6 +4982,150 @@ function WorkspaceLoadMcpNode({ id, data, selected, deleteNode, servers = [], on
   );
 }
 
+function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces = [], onChangeWorkspace, onRefreshWorkspaces }) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selectedWorkspace = workspaceSelectionFromNodeData(data);
+  const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
+    .map((item) => ({
+      id: String(item?.id || ""),
+      label: String(item?.label || item?.name || "Workspace"),
+      kind: item?.kind === "git" ? "git" : "local",
+      path: String(item?.path || ""),
+      repoUrl: String(item?.repoUrl || ""),
+      branch: String(item?.branch || ""),
+      mountPath: String(item?.mountPath || ""),
+      builtin: item?.builtin === true,
+      exists: item?.exists !== false,
+    }))
+    .filter((item) => item.path), [workspaces]);
+  const filteredWorkspaces = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return workspaceList;
+    return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath].join(" ").toLowerCase().includes(q));
+  }, [search, workspaceList]);
+  const current = workspaceList.find((item) => item.path === selectedWorkspace.path) || null;
+  const title = current?.label || selectedWorkspace.label || "选择 Workspace";
+  return (
+    <div
+      className={"af-work-load-skills-card af-work-load-workspace-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      onPointerDownCapture={data?.onSelectNodePointerDown}
+    >
+      {inputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.6 + idx * 1.7}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`in-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--in" style={{ top }}>{label}</span>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`input-${idx}`}
+              className="af-work-display-handle af-work-display-handle--in"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      {outputs.map((slot, idx) => {
+        if (slot.showOnNode === false) return null;
+        const top = `${2.6 + idx * 1.7}rem`;
+        const label = slot.name || `#${idx + 1}`;
+        return (
+          <Fragment key={`out-${idx}`}>
+            <span className="af-work-port-label af-work-port-label--out" style={{ top }}>{label}</span>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id={`output-${idx}`}
+              className="af-work-display-handle af-work-display-handle--out"
+              style={{ top, background: getHandleColor(slot.type) }}
+              title={`${label} · ${slot.type}`}
+            />
+          </Fragment>
+        );
+      })}
+      <div className="af-work-load-skills-card__head">
+        <span className="material-symbols-outlined">folder_managed</span>
+        <strong>{data?.label || "Load Workspace"}</strong>
+        <span>{data?.definitionId || "control_cd_workspace"}</span>
+        <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
+          <span className="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div className="af-work-load-skills-card__body nodrag">
+        <button type="button" className="af-work-load-skills-card__select" onClick={(event) => {
+          event.stopPropagation();
+          if (!open) onRefreshWorkspaces?.();
+          setOpen((v) => !v);
+        }}>
+          <span>{title}</span>
+          <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
+        </button>
+        {selectedWorkspace.path ? <div className="af-work-load-workspace-card__path">{selectedWorkspace.path}</div> : null}
+        {open ? (
+          <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="af-work-load-skills-search">
+              <span className="material-symbols-outlined" aria-hidden>search</span>
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索 Workspace..."
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="搜索 Workspace"
+              />
+              {search ? (
+                <button type="button" onClick={() => setSearch("")} aria-label="清空搜索">
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              ) : null}
+            </div>
+            <div className="af-work-load-skills-menu">
+              <section className="af-work-load-skills-menu__group">
+                <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
+                  <span>Workspace</span>
+                  <small>{filteredWorkspaces.length}</small>
+                </div>
+                <div className="af-work-load-skills-menu__options">
+                  {filteredWorkspaces.map((item) => (
+                    <label key={`${item.id}:${item.path}`} className="af-work-load-skills-menu__option">
+                      <input
+                        type="radio"
+                        name={`workspace-${id}`}
+                        checked={item.path === selectedWorkspace.path}
+                        onChange={() => {
+                          onChangeWorkspace?.(id, item);
+                          setOpen(false);
+                        }}
+                      />
+                      <span className="af-work-load-skills-menu__option-main">
+                        <span className="af-work-load-skills-menu__option-title">{item.label}</span>
+                        <span className="af-work-load-skills-menu__option-desc">
+                          {item.kind === "git" && item.repoUrl ? `${item.repoUrl}${item.branch ? ` · ${item.branch}` : ""}${item.mountPath ? ` · ${item.mountPath}` : ""}` : item.path}
+                          {item.exists ? "" : " · 路径未就绪"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+              {filteredWorkspaces.length === 0 ? (
+                <div className="af-work-load-skills-menu__empty">没有匹配的 Workspace</div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function WorkspacePageInner() {
   const { t, i18n } = useTranslation();
   const { navigate } = useRoute();
@@ -4364,7 +5216,7 @@ function WorkspacePageInner() {
     return 360;
   });
   const [workspaceSidebarResizing, setWorkspaceSidebarResizing] = useState(false);
-  const [modelLists, setModelLists] = useState({ cursor: [], opencode: [], claudeCode: [] });
+  const [modelLists, setModelLists] = useState({ cursor: [], opencode: [], claudeCode: [], codex: [] });
   const [composerModel, setComposerModel] = useState("");
   const [skills, setSkills] = useState([]);
   const [skillsLoaded, setSkillsLoaded] = useState(false);
@@ -4372,6 +5224,7 @@ function WorkspacePageInner() {
   const [skillCollections, setSkillCollections] = useState([]);
   const [skillCollectionsLoaded, setSkillCollectionsLoaded] = useState(false);
   const [mcpServers, setMcpServers] = useState([]);
+  const [workspaceTargets, setWorkspaceTargets] = useState([]);
 
   const showFlowSnippetToast = useCallback((message) => {
     if (flowSnippetToastTimerRef.current) {
@@ -4483,7 +5336,7 @@ function WorkspacePageInner() {
   const workspaceRunStoppedRef = useRef(new Set());
   const [workspaceExecutingNodes, setWorkspaceExecutingNodes] = useState(() => new Set());
   const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
-  const [optimizingScheduleNodeId, setOptimizingScheduleNodeId] = useState("");
+  const [optimizingRunNodeId, setOptimizingRunNodeId] = useState("");
   const [status, setStatus] = useState("");
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
@@ -4620,6 +5473,8 @@ function WorkspacePageInner() {
     if (!graphRes.ok) throw new Error(graphJson.error || "读取 workspace graph 失败");
     const paletteList = [
       ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
+      WORKSPACE_CONTEXT_RUN_DEFINITION,
+      WORKSPACE_LOAD_WORKSPACE_DEFINITION,
       WORKSPACE_LOAD_SKILLS_DEFINITION,
       WORKSPACE_LOAD_MCP_DEFINITION,
       WORKSPACE_RUN_DEFINITION,
@@ -4698,14 +5553,15 @@ function WorkspacePageInner() {
     setSelectedNodeId("");
   }, []);
 
-  const optimizeWorkspaceScheduleRun = useCallback(async (scheduleNodeId = "") => {
-    const runNodeId = String(scheduleNodeId || "").trim();
+  const optimizeWorkspaceRun = useCallback(async (targetRunNodeId = "") => {
+    const runNodeId = String(targetRunNodeId || "").trim();
     if (!runNodeId || !workspaceWritable) return;
-    setOptimizingScheduleNodeId(runNodeId);
-    setStatus(`Optimizing scheduled run: ${runNodeId}`);
+    setOptimizingRunNodeId(runNodeId);
+    setStatus(`Optimizing run: ${runNodeId}`);
     try {
       await saveGraph(nodesRef.current, edgesRef.current);
       const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+      const effectiveModel = workspaceRunNodeModel(nodesRef.current, instancesRef.current, runNodeId, composerModel);
       const res = await fetch("/api/workspace/run/optimize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4713,7 +5569,7 @@ function WorkspacePageInner() {
           ...flowParams,
           runNodeId,
           graph,
-          model: composerModel || "",
+          model: effectiveModel,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -4731,7 +5587,7 @@ function WorkspacePageInner() {
     } catch (e) {
       setStatus(String(e.message || e));
     } finally {
-      setOptimizingScheduleNodeId("");
+      setOptimizingRunNodeId("");
     }
   }, [composerModel, edgesRef, flowParams, nodesRef, palette, resetCanvasHistory, saveGraph, setEdges, setNodes, workspaceWritable]);
 
@@ -4814,9 +5670,11 @@ function WorkspacePageInner() {
         const runNodeId = String(item?.runNodeId || "").trim();
         const sessionId = String(item?.runId || `run-restored-${item?.startedAt || Date.now()}-${runNodeId}`).trim();
         if (!sessionId) continue;
+        const alias = String(item?.label || "").trim() || workspaceRunNodeAlias(nodesRef.current, instancesRef.current, runNodeId, "Workspace Run");
         restoredSessions[sessionId] = {
           id: sessionId,
           runNodeId,
+          label: alias,
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
           startedAt: item?.startedAt || Date.now(),
         };
@@ -4840,13 +5698,15 @@ function WorkspacePageInner() {
         for (const [sessionId, sessionInfo] of Object.entries(restoredSessions)) {
           if (next.some((session) => session.id === sessionId || (session.status === "running" && session.runNodeId === sessionInfo.runNodeId))) continue;
           const runNodeId = String(sessionInfo.runNodeId || "");
+          const alias = String(sessionInfo.label || "").trim() || workspaceRunNodeAlias(nodesRef.current, instancesRef.current, runNodeId, "Workspace Run");
           next.push({
             id: sessionId,
-            label: runNodeId ? `Run ${runNodeId}` : "Workspace Run",
+            label: workspaceRunNameWithId(alias, runNodeId, "Workspace Run"),
+            alias,
             runNodeId,
             status: "running",
             startedAt: sessionInfo.startedAt || Date.now(),
-            steps: runNodeId ? [{ id: runNodeId, label: runNodeId, status: "running" }] : [],
+            steps: runNodeId ? [{ id: runNodeId, label: workspaceRunNameWithId(alias, runNodeId, "Workspace Run"), status: "running" }] : [],
             messages: [{ role: "assistant", kind: "run-summary", text: "Workspace run is still running in the background.", at: Date.now() }],
           });
         }
@@ -4857,7 +5717,7 @@ function WorkspacePageInner() {
     } catch {
       /* status restore is best-effort */
     }
-  }, [flowParams, setRunningRunSessionsSynced]);
+  }, [flowParams, nodesRef, setRunningRunSessionsSynced]);
 
   const runWorkspaceNode = useCallback(async (runNodeId) => {
     if (!workspaceWritable) {
@@ -4903,7 +5763,8 @@ function WorkspacePageInner() {
     }
     const graph = flowToGraph(runNodes, runEdges, runInstances);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
-    const runSessionLabel = `Run ${runNodeId}`;
+    const runAlias = workspaceRunNodeAlias(runNodes, runInstances, runNodeId, "Workspace Run");
+    const runSessionLabel = workspaceRunNameWithId(runAlias, runNodeId, "Workspace Run");
     let plannedNodeIds = [runNodeId];
     try {
       const planRes = await fetch("/api/workspace/run/plan", {
@@ -4949,19 +5810,21 @@ function WorkspacePageInner() {
       [runSessionId]: {
         id: runSessionId,
         runNodeId,
+        label: runAlias,
         plannedNodeIds,
         startedAt: Date.now(),
       },
     }));
     setWorkspaceExecutingNodes((current) => new Set([...current, runNodeId]));
     setWorkspaceNodeRunStatus((current) => ({ ...current, [runNodeId]: { status: "running" } }));
-    setStatus(`Running ${runNodeId}...`);
+    setStatus(`Running ${runSessionLabel}...`);
     setActiveComposerSessionId(runSessionId);
     setComposerRunSessions((list) => [
       ...list.slice(-7),
       {
         id: runSessionId,
         label: runSessionLabel,
+        alias: runAlias,
         runNodeId,
         status: "running",
         startedAt: Date.now(),
@@ -4994,6 +5857,7 @@ function WorkspacePageInner() {
     };
     try {
       await saveGraph(runNodes, runEdges);
+      const effectiveModel = workspaceRunNodeModel(runNodes, runInstances, runNodeId, composerModel);
       const res = await fetch("/api/workspace/run", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
@@ -5002,8 +5866,9 @@ function WorkspacePageInner() {
           ...flowParams,
           graph,
           runNodeId,
+          runAlias,
           runSessionId,
-          model: composerModel,
+          model: effectiveModel,
           selectedSkills,
           stream: true,
         }),
@@ -5505,6 +6370,24 @@ function WorkspacePageInner() {
     }
   }, []);
 
+  const refreshWorkspaces = useCallback(async () => {
+    try {
+      const q = flowParamsQuery(flowParams);
+      const r = await fetch(`/api/workspaces?${q.toString()}`);
+      const j = await r.json().catch(() => ({}));
+      const list = Array.isArray(j.workspaces) ? j.workspaces.map((item) => ({
+        id: String(item?.id || ""),
+        label: String(item?.label || item?.name || "Workspace"),
+        path: String(item?.path || ""),
+        builtin: item?.builtin === true,
+        exists: item?.exists !== false,
+      })).filter((item) => item.path) : [];
+      setWorkspaceTargets(list);
+    } catch {
+      setWorkspaceTargets([]);
+    }
+  }, [flowParams]);
+
   useEffect(() => {
     loadWorkspace().catch((e) => setStatus(String(e.message || e)));
     void loadFlowSnippets();
@@ -5512,9 +6395,11 @@ function WorkspacePageInner() {
       cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
       opencode: Array.isArray(j.opencode) ? j.opencode.map(String) : [],
       claudeCode: Array.isArray(j.claudeCode) ? j.claudeCode.map(String) : [],
+      codex: Array.isArray(j.codex) ? j.codex.map(String) : [],
     })).catch(() => {});
     void refreshSkills();
     void refreshMcps();
+    void refreshWorkspaces();
     void refreshWorkspaceRunStatus();
     fetch("/api/skill-collections").then((r) => r.json()).then((j) => {
       setSkillCollections(normalizeSkillCollections(j));
@@ -5530,7 +6415,7 @@ function WorkspacePageInner() {
         setAuthUser(null);
         setAuthResolved(true);
       });
-  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, skillsStorageKey]);
+  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -5775,6 +6660,123 @@ function WorkspacePageInner() {
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
 
+  const changeLoadWorkspace = useCallback((nodeId, workspace) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
+    const pathValue = String(workspace?.path || "").trim();
+    if (!pathValue) return;
+    const labelValue = String(workspace?.label || workspace?.id || "Workspace").trim();
+    const contextValue = JSON.stringify({
+      version: 1,
+      id: workspace?.id || "",
+      label: labelValue,
+      kind: workspace?.kind || "local",
+      cwd: pathValue,
+      workspaceRoot: pathValue,
+      repoUrl: workspace?.repoUrl || "",
+      branch: workspace?.branch || "",
+      mountPath: workspace?.mountPath || "",
+      type: workspace?.type || "",
+    });
+    const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name === "path") return { ...slot, default: pathValue, value: pathValue };
+      if (slot?.name === "label") return { ...slot, default: labelValue, value: labelValue };
+      if (slot?.name === "workspaceContext") return { ...slot, default: contextValue, value: contextValue };
+      if (slot?.name === "mode") return { ...slot, default: "set", value: "set" };
+      return slot;
+    }) : []);
+    const nextNodes = nodes.map((node) => (
+      node.id === nodeId
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              label: node.data?.label || "Load Workspace",
+              inputs: patchInputSlots(node.data?.inputs),
+            },
+          }
+        : node
+    ));
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [nodeId]: {
+        ...base,
+        label: base.label || "Load Workspace",
+        input: patchInputSlots(base.input),
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    setNodePropDraft((draft) => (
+      draft?.id === nodeId ? { ...draft, inputs: patchInputSlots(draft.inputs) } : draft
+    ));
+    saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
+  }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
+
+  const changeContextRunConfig = useCallback((nodeId, config) => {
+    if (!workspaceWritable) {
+      setStatus("Readonly workspace");
+      return;
+    }
+    const id = String(nodeId || "");
+    if (!id) return;
+    const serializedSkills = serializeSkillKeys(config?.skillKeys || []);
+    const displayType = normalizeContextRunDisplayType(config?.displayType || "markdown");
+    const includeWorkspace = config?.includeWorkspaceContext === false ? "false" : "true";
+    const workspaceContextValue = config?.workspaceContext && typeof config.workspaceContext === "object"
+      ? JSON.stringify(config.workspaceContext)
+      : "";
+    const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name === "skillKeys") return { ...slot, default: serializedSkills, value: serializedSkills };
+      if (slot?.name === "displayType") return { ...slot, default: displayType, value: displayType };
+      if (slot?.name === "includeWorkspaceContext") return { ...slot, default: includeWorkspace, value: includeWorkspace };
+      if (slot?.name === "workspaceContext") return { ...slot, default: workspaceContextValue, value: workspaceContextValue };
+      return slot;
+    }) : []);
+    const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => (
+      slot?.name === "displayType" ? { ...slot, default: displayType, value: displayType } : slot
+    )) : []);
+    const task = String(config?.task ?? "");
+    const nextNodes = nodes.map((node) => (
+      node.id === id
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              body: task,
+              inputs: patchInputSlots(node.data?.inputs),
+              outputs: patchOutputSlots(node.data?.outputs),
+            },
+          }
+        : node
+    ));
+    const currentInstances = instancesRef.current || {};
+    const base = currentInstances[id] && typeof currentInstances[id] === "object" ? currentInstances[id] : {};
+    const nextInstances = {
+      ...currentInstances,
+      [id]: {
+        ...base,
+        body: task,
+        input: patchInputSlots(base.input),
+        output: patchOutputSlots(base.output),
+      },
+    };
+    instancesRef.current = nextInstances;
+    setNodes(nextNodes);
+    setInstances(nextInstances);
+    setNodePropDraft((draft) => (
+      draft?.id === id
+        ? { ...draft, body: task, inputs: patchInputSlots(draft.inputs), outputs: patchOutputSlots(draft.outputs) }
+        : draft
+    ));
+    saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
+  }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
+
   const changeScheduledRunConfig = useCallback((nodeId, config) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
@@ -5844,7 +6846,11 @@ function WorkspacePageInner() {
     const currentNode = nodesRef.current.find((node) => node.id === id);
     const kind = displayKind(currentNode?.data?.definitionId);
     const unwrappedContent = displayOutputEnvelopeContent(content);
-    const text = kind === "html" ? normalizeHtmlDisplayContent(unwrappedContent) : String(unwrappedContent || "");
+    const text = kind === "html"
+      ? normalizeHtmlDisplayContent(unwrappedContent)
+      : kind === "react"
+        ? normalizeReactAppDisplayContent(unwrappedContent)
+        : String(unwrappedContent || "");
     const currentContent = currentNode ? displayContent(currentNode.data) : "";
     const nextText = mode === "append" && String(currentContent || "").trim()
       ? `${String(currentContent).replace(/\s+$/g, "")}\n\n${text.trim()}`
@@ -6212,7 +7218,7 @@ function WorkspacePageInner() {
       return;
     }
     const title = String(node.data?.label || node.data?.displayName || id).trim() || "AgentFlow Display";
-    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "single", nodeIds: [id] }));
+    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "single", nodeIds: [id], mode: "single-node", sourceNodeId: id }));
     setDisplayShareError("");
     setDisplayShareResult(null);
     setDisplayShareOpen(true);
@@ -6278,11 +7284,13 @@ function WorkspacePageInner() {
       onRunWorkspaceNode: runWorkspaceNode,
       onStopWorkspaceNode: stopWorkspaceRun,
       onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
-      onOptimizeWorkspaceSchedule: optimizeWorkspaceScheduleRun,
-      optimizingSchedule: optimizingScheduleNodeId === node.id,
+      onOptimizeWorkspaceRun: optimizeWorkspaceRun,
+      onOptimizeWorkspaceSchedule: optimizeWorkspaceRun,
+      optimizingRun: optimizingRunNodeId === node.id,
       runningRunNodeIds,
       scheduledRunState: scheduledRunState[node.id] || null,
       onChangeScheduledRunConfig: changeScheduledRunConfig,
+      onChangeContextRunConfig: changeContextRunConfig,
       skills,
       skillCollections,
       onChangeLoadSkillKeys: changeLoadSkillKeys,
@@ -6290,6 +7298,9 @@ function WorkspacePageInner() {
       mcpServers,
       onChangeLoadMcpNames: changeLoadMcpNames,
       onRefreshMcps: refreshMcps,
+      workspaceTargets,
+      onChangeLoadWorkspace: changeLoadWorkspace,
+      onRefreshWorkspaces: refreshWorkspaces,
       onSaveDisplayNodeToFile: saveDisplayNodeToFile,
       onShareDisplayNode: shareDisplayNode,
       onOpenDisplayPreview: setDisplayPreviewNodeId,
@@ -6308,7 +7319,7 @@ function WorkspacePageInner() {
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeLoadMcpNames, changeLoadSkillKeys, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceScheduleRun, optimizingScheduleNodeId, refreshMcps, refreshSkills, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
@@ -6631,6 +7642,7 @@ function WorkspacePageInner() {
     ...(modelLists.cursor || []).map((m) => ({ label: `Cursor · ${m.split(" - ")[0]}`, value: `cursor:${m.split(" - ")[0]}` })),
     ...(modelLists.opencode || []).map((m) => ({ label: `OpenCode · ${m.split(" - ")[0]}`, value: `opencode:${m.split(" - ")[0]}` })),
     ...(modelLists.claudeCode || []).map((m) => ({ label: `Claude · ${m.split(" - ")[0]}`, value: `claude-code:${m.split(" - ")[0]}` })),
+    ...(modelLists.codex || []).map((m) => ({ label: `Codex · ${m.split(" - ")[0]}`, value: `codex:${m.split(" - ")[0]}` })),
   ];
 
   const selectedSkillSet = useMemo(() => new Set(selectedSkills), [selectedSkills]);
@@ -7071,7 +8083,7 @@ function WorkspacePageInner() {
     }
     const defaultNodeIds = selectedWorkspaceDisplayNodeIds.length > 0 ? selectedWorkspaceDisplayNodeIds : workspaceDisplayNodes.map((node) => node.id);
     const title = flowParams.flowId ? `${flowParams.flowId} 展示页` : "AgentFlow Display";
-    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "gallery", nodeIds: defaultNodeIds }));
+    setDisplayShareDraft(defaultDisplayShareDraft({ title, layout: "gallery", nodeIds: defaultNodeIds, mode: "multi-node" }));
     setDisplayShareError("");
     setDisplayShareResult(null);
     setDisplayShareOpen(true);
@@ -7805,7 +8817,9 @@ function WorkspacePageInner() {
   const addDisplayFromFile = useCallback(async (item, position) => {
     const fileName = String(item?.name || item?.path || "").toLowerCase();
     const ext = fileName.split(".").pop();
-    const displayDefinitionId = ext === "html"
+    const displayDefinitionId = ["jsx", "tsx", "js"].includes(ext)
+      ? "display_react_app"
+      : ext === "html"
       ? "display_html"
       : ext === "csv" || ext === "tsv" || (ext === "json" && /\b(table|data|rows|report)\b/i.test(fileName))
         ? "display_table"
@@ -8042,6 +9056,13 @@ function WorkspacePageInner() {
         ? "Workspace conversation"
         : "Ready";
   const workspaceProjectTitle = String(flowParams.flowId || "").trim() || "Workspace";
+  const singleNodeDisplayShare = displayShareDraft?.mode === "single-node";
+  const displayShareSourceNode = singleNodeDisplayShare
+    ? workspaceDisplayNodes.find((node) => node.id === displayShareDraft.sourceNodeId || displayShareDraft.nodeIds?.includes(node.id)) || null
+    : null;
+  const displayShareSelectableNodes = singleNodeDisplayShare && displayShareSourceNode
+    ? [displayShareSourceNode]
+    : workspaceDisplayNodes;
 
   return (
     <div className="af-workspace-page">
@@ -9079,11 +10100,11 @@ function WorkspacePageInner() {
         ) : null}
         {displayShareOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
-            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="发布展示页">
+            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label={singleNodeDisplayShare ? "新建分享" : "发布展示页"}>
               <div className="af-flow-snippet-modal__head">
                 <span className="af-flow-snippet-modal__title">
                   <span className="material-symbols-outlined" aria-hidden>present_to_all</span>
-                  发布展示页
+                  {singleNodeDisplayShare ? "新建分享" : "发布展示页"}
                 </span>
                 <button
                   type="button"
@@ -9105,18 +10126,20 @@ function WorkspacePageInner() {
                     autoFocus
                   />
                 </label>
-                <label className="af-flow-snippet-field">
-                  <span>布局</span>
-                  <select
-                    className="af-display-share-select"
-                    value={displayShareDraft.layout}
-                    onChange={(event) => setDisplayShareDraft((prev) => ({ ...prev, layout: event.target.value }))}
-                  >
-                    <option value="gallery">Gallery</option>
-                    <option value="document">Document</option>
-                    <option value="slides">Slides</option>
-                  </select>
-                </label>
+                {!singleNodeDisplayShare ? (
+                  <label className="af-flow-snippet-field">
+                    <span>布局</span>
+                    <select
+                      className="af-display-share-select"
+                      value={displayShareDraft.layout}
+                      onChange={(event) => setDisplayShareDraft((prev) => ({ ...prev, layout: event.target.value }))}
+                    >
+                      <option value="gallery">Gallery</option>
+                      <option value="document">Document</option>
+                      <option value="slides">Slides</option>
+                    </select>
+                  </label>
+                ) : null}
                 <label className="af-flow-snippet-field">
                   <span>有效期</span>
                   <select
@@ -9136,14 +10159,16 @@ function WorkspacePageInner() {
                     ))}
                   </select>
                 </label>
-                <div className="af-display-share-node-list" role="group" aria-label="选择展示节点">
-                  {workspaceDisplayNodes.map((node) => {
+                <div className="af-display-share-node-list" role="group" aria-label={singleNodeDisplayShare ? "分享内容" : "选择展示节点"}>
+                  {singleNodeDisplayShare ? <span className="af-display-share-node-list__label">分享内容</span> : null}
+                  {displayShareSelectableNodes.map((node) => {
                     const checked = Array.isArray(displayShareDraft.nodeIds) && displayShareDraft.nodeIds.includes(node.id);
                     return (
                       <label key={node.id} className="af-display-share-node-row">
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={singleNodeDisplayShare}
                           onChange={() => toggleDisplayShareNode(node.id)}
                         />
                         <span className="af-display-share-node-row__main">

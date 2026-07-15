@@ -49,6 +49,15 @@
     "modelPreviewLabel": "Claude Code model id list",
     "description": "Built-in model list (Claude Code CLI has no models subcommand); refresh probes the claude binary in PATH. Run 'claude /login' first."
   },
+  "codex": {
+    "title": "Codex CLI",
+    "status": {
+      "ready": "Ready",
+      "notFound": "Not found"
+    },
+    "modelPreviewLabel": "Codex model id list",
+    "description": "Model list comes from codex debug models --bundled. Run 'codex login' first."
+  },
   "env": {
     "title": "Environment Variables",
     "note": "Private to the current signed-in user; overrides service-level env at runtime",
@@ -89,7 +98,8 @@
     "abnormal": "Some interfaces abnormal",
     "cursorModels": "Cursor Models",
     "opencodeModels": "OpenCode Models",
-    "claudeCodeModels": "Claude Code Models"
+    "claudeCodeModels": "Claude Code Models",
+    "codexModels": "Codex Models"
   },
   "shortcuts": {
     "title": "Shortcuts",

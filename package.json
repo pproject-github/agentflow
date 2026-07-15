@@ -1,7 +1,7 @@
 {
   "name": "@fieldwangai/agentflow",
   "version": "0.1.85",
-  "description": "Orchestration system for long-running complex agent tasks using Cursor, OpenCode, or Claude Code as execution backends",
+  "description": "Orchestration system for long-running complex agent tasks using Cursor, OpenCode, Claude Code, or Codex as execution backends",
   "type": "module",
   "main": "bin/agentflow.mjs",
   "bin": {
@@ -15,6 +15,7 @@
     "cursor",
     "opencode",
     "claude-code",
+    "codex",
     "agent-orchestration",
     "workflow",
     "cli",

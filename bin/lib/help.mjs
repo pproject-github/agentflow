@@ -8,7 +8,7 @@ export function printHelp() {
   // 根据语言输出不同的帮助文本
   if (isZh) {
     log.info(`
-AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 apply/replay。
+AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code / Codex CLI 流式输出驱动 apply/replay。
 
 用法：
   agentflow login [--provider github|google]   登录 AgentFlow Hub（默认 GitHub）
@@ -18,6 +18,7 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
   agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open] [--hide-community-links]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
+  agentflow mcp                              启动 AgentFlow MCP stdio server，供 Cursor/Codex 运行流程并读取 display 输出
   agentflow scheduler start [--poll-ms <ms>]  启动定时执行调度器（读取各流水线 schedule.json）
   agentflow scheduler status [--json]         查看定时执行配置与状态
   agentflow scheduler cancel <FlowName> <uuid>  取消某次等待中的 watch/run
@@ -31,19 +32,19 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code CLI 流式输出驱动 
   agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
   agentflow extract-thinking <flowName> <uuid>  从该次 run 的 logs/log.txt 提取 thinking，写入 logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             列出所有存在 logs/log.txt 的 run（可接 --json）
-  agentflow update-model-lists            拉取 Cursor / OpenCode 模型列表并写入 ~/agentflow/model-lists.json；--json 时输出 { cursor, opencode }
+  agentflow update-model-lists            拉取 Cursor / OpenCode / Claude Code / Codex 模型列表并写入 ~/agentflow/model-lists.json
   agentflow write-flow <flowId> --json --flow-source <user|workspace>   从 stdin 读入 YAML 写入用户目录或工作区（builtin 已弃用，将视为 workspace）
   agentflow --help
 
 选项：
   --workspace-root <path>  工作区根目录（默认：当前目录）
-  --dry-run                （仅 apply）打印就绪节点后退出，不执行 Cursor agent
-  --model <name>           后端模型。默认走 Cursor；前缀 opencode:<model>、claude-code:<model>、api:<provider>/<model> 可切换后端。覆盖 CURSOR_AGENT_MODEL。
+  --dry-run                （仅 apply）打印就绪节点后退出，不执行 agent 后端
+  --model <name>           后端模型。默认走 Cursor；前缀 opencode:<model>、claude-code:<model>、codex:<model>、api:<provider>/<model> 可切换后端。覆盖 CURSOR_AGENT_MODEL。
   --input <name>=<value>   （仅 apply）覆盖 flow 中 provide 节点的值。value 前缀 file: 表示文件路径。可多次使用。
   --debug                  显示调试日志（灰色，低优先级）
   --force                  传递 --force/--trust 给 Cursor；设置 OPENCODE_PERMISSION 允许 OpenCode 的 external_directory（默认开启）。使用 --no-force 禁用。
-  --parallel               并行运行同轮就绪节点（默认关闭）。多个 Cursor CLI 进程可能竞争 ~/.cursor/cli-config.json。
-  --machine-readable       向 stdout 每行输出一个 JSON 事件（apply-start/node-start/node-done/node-failed/apply-done/apply-paused）。供 UI 运行按钮使用：解析 stdout 显示当前节点；Cursor agent 输出转到 stderr。
+  --parallel               并行运行同轮就绪节点（默认关闭）。多个 CLI 进程可能竞争后端自身的本地配置。
+  --machine-readable       向 stdout 每行输出一个 JSON 事件（apply-start/node-start/node-done/node-failed/apply-done/apply-paused）。供 UI 运行按钮使用：解析 stdout 显示当前节点；agent 后端输出转到 stderr。
   --lang <code>            设置语言：en、zh（默认：zh，或从 LANG 环境变量检测）
 
 路径说明：
@@ -71,13 +72,13 @@ Apply：构建运行目录，解析流程，循环运行就绪节点。
 Resume：将 pending 和 failed 节点标记为成功（例如 UserCheck 确认后或重试失败后），然后继续 apply。
 Replay：运行单个节点（pre-process → execute → post-process）。
 
-需要：Node >=18，以下任一 CLI 在 PATH 中用于节点执行：Cursor CLI（'agent'，默认）、OpenCode CLI（'opencode'，env 覆盖 OPENCODE_CMD）、Claude Code CLI（'claude'，env 覆盖 CLAUDE_CODE_CMD，需先 'claude /login'）。
+需要：Node >=18，以下任一 CLI 在 PATH 中用于节点执行：Cursor CLI（'agent'，默认）、OpenCode CLI（'opencode'，env 覆盖 OPENCODE_CMD）、Claude Code CLI（'claude'，env 覆盖 CLAUDE_CODE_CMD，需先 'claude /login'）、Codex CLI（'codex'，env 覆盖 CODEX_CMD，需先 'codex login'）。
 Apply/replay 脚本已打包在 agentflow 包中（bin/pipeline/）。
 `);
   } else {
     // 英文版本
     log.info(`
-AgentFlow CLI — drive apply/replay with Cursor / OpenCode / Claude Code CLI streaming.
+AgentFlow CLI — drive apply/replay with Cursor / OpenCode / Claude Code / Codex CLI streaming.
 
 Usage:
   agentflow login [--provider github|google]   Login to AgentFlow Hub (default: GitHub)
@@ -87,6 +88,7 @@ Usage:
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
   agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open] [--hide-community-links]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
+  agentflow mcp                              Start the AgentFlow MCP stdio server for Cursor/Codex to run flows and read display outputs
   agentflow scheduler start [--poll-ms <ms>]  Start the scheduled-run scheduler (reads each pipeline schedule.json)
   agentflow scheduler status [--json]         Show scheduled-run configuration and state
   agentflow scheduler cancel <FlowName> <uuid>  Cancel a waiting watch/run
@@ -100,19 +102,19 @@ Usage:
   agentflow run-status <flowName> <uuid>  Output node status JSON for this run (for UI success/pending badges)
   agentflow extract-thinking <flowName> <uuid>  Extract thinking from run logs/log.txt, write to logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             List all runs with logs/log.txt (use --json)
-  agentflow update-model-lists            Fetch Cursor / OpenCode model lists to ~/agentflow/model-lists.json; --json outputs { cursor, opencode }
+  agentflow update-model-lists            Fetch Cursor / OpenCode / Claude Code / Codex model lists to ~/agentflow/model-lists.json
   agentflow write-flow <flowId> --json --flow-source <user|workspace>   Read YAML from stdin and write to user dir or workspace (builtin deprecated, treated as workspace)
   agentflow --help
 
 Options:
   --workspace-root <path>  Workspace root (default: cwd)
-  --dry-run                (apply only) Print ready nodes and exit without running Cursor agent
-  --model <name>           Backend model. Default routes to Cursor; prefixes opencode:<model>, claude-code:<model>, api:<provider>/<model> switch backend. Overrides CURSOR_AGENT_MODEL.
+  --dry-run                (apply only) Print ready nodes and exit without running an agent backend
+  --model <name>           Backend model. Default routes to Cursor; prefixes opencode:<model>, claude-code:<model>, codex:<model>, api:<provider>/<model> switch backend. Overrides CURSOR_AGENT_MODEL.
   --input <name>=<value>   (apply only) Override provide node values in flow. Prefix value with file: for file paths. Can be used multiple times.
   --debug                  Show debug logs (gray, low priority)
   --force                  Pass --force/--trust to Cursor; set OPENCODE_PERMISSION to allow external_directory for OpenCode (default: on). Use --no-force to disable.
-  --parallel               Run same-round ready nodes in parallel (default: off). Multiple Cursor CLI processes may race on ~/.cursor/cli-config.json.
-  --machine-readable       Emit one JSON event per line to stdout (apply-start/node-start/node-done/node-failed/apply-done/apply-paused). For UI run button: parse stdout to show current node; Cursor agent output goes to stderr.
+  --parallel               Run same-round ready nodes in parallel (default: off). Multiple CLI processes may race on backend-local config.
+  --machine-readable       Emit one JSON event per line to stdout (apply-start/node-start/node-done/node-failed/apply-done/apply-paused). For UI run button: parse stdout to show current node; agent backend output goes to stderr.
   --lang <code>            Set language: en, zh (default: en, or auto-detect from LANG env)
 
 Path notes:
@@ -140,7 +142,7 @@ Apply: builds run dir, parses flow, runs ready nodes in a loop.
 Resume: marks pending and failed node(s) as success (e.g. after UserCheck confirm or retry failed), then continues apply.
 Replay: runs a single node (pre-process → execute → post-process).
 
-Requires: Node >=18, any of Cursor CLI ('agent', default), OpenCode CLI ('opencode', env OPENCODE_CMD), or Claude Code CLI ('claude', env CLAUDE_CODE_CMD, run 'claude /login' first) in PATH for node execution.
+Requires: Node >=18, any of Cursor CLI ('agent', default), OpenCode CLI ('opencode', env OPENCODE_CMD), Claude Code CLI ('claude', env CLAUDE_CODE_CMD, run 'claude /login' first), or Codex CLI ('codex', env CODEX_CMD, run 'codex login' first) in PATH for node execution.
 Apply/replay scripts are bundled in the agentflow package (bin/pipeline/).
 `);
   }

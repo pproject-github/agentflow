@@ -16,7 +16,7 @@
 </p>
 
 >
-> 编排复杂、长时间运行的任务——模块迁移、AI 自动化、代码深度清理——以 Cursor / OpenCode / Claude Code 为可切换后端。
+> 编排复杂、长时间运行的任务——模块迁移、AI 自动化、代码深度清理——以 Cursor / OpenCode / Claude Code / Codex 为可切换后端。
 
 ![AgentFlow Projects](docs/projects.png)
 
@@ -26,7 +26,7 @@
 
 ## 解决什么问题
 
-Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
+Cursor、Claude Code、Codex 这些 Coding Agent 很好用——直到任务变长。
 
 **1. 上下文窗口是硬天花板。**
 跑 10 分钟的任务没问题，跑 10 小时的大型迁移？模型开始遗忘前面的步骤、重复已做过的工作、或悄悄偏离方向。上下文压缩能续命，但它是有损的——agent 看到的已经不是完整画面。
@@ -41,7 +41,7 @@ Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
 
 ## 核心特性
 
-- **复用你的 AI 订阅** — Cursor Pro、OpenCode（阿里云等）、Claude Code；无需购买 LLM API key
+- **复用你的 AI 订阅** — Cursor Pro、OpenCode（阿里云等）、Claude Code、Codex；无需购买 LLM API key
 - **可视化编辑器 + AI Composer** — 拖拽节点或用自然语言描述工作流
 - **状态持久化** — 每个节点的输入输出缓存到磁盘（类似 Gradle task cache），任意节点失败可续跑
 - **循环 / 分支 / 并行** — `control_if`、`control_anyOne`、`control_toBool` 实现真正的控制流
@@ -49,7 +49,7 @@ Cursor、Claude Code 这些 Coding Agent 很好用——直到任务变长。
 
 ## 快速开始
 
-**环境要求：** Node >= 18，以及 Cursor CLI (`agent`) / OpenCode CLI / Claude Code 任一
+**环境要求：** Node >= 18，以及 Cursor CLI (`agent`) / OpenCode CLI / Claude Code / Codex CLI 任一
 
 ```bash
 # 安装
@@ -157,7 +157,7 @@ AgentFlow 提供专用技能用于常见操作：
 |------|------|
 | `--workspace-root <path>` | 工作区根目录 |
 | `--dry-run` | 只预览就绪节点，不执行 |
-| `--model <name>` | 覆盖模型 |
+| `--model <name>` | 覆盖模型。可用 `opencode:<model>`、`claude-code:<model>`、`codex:<model>`、`api:<provider>/<model>` 前缀切换后端 |
 | `--parallel` | 并行执行无依赖节点 |
 | `--machine-readable` | JSON 事件流（供 UI/CI 集成） |
 | `--lang <code>` | 语言（`zh` / `en`） |
@@ -172,7 +172,23 @@ AgentFlow 提供专用技能用于常见操作：
 | `CLAUDE_CODE_CMD` | `claude` | Claude Code CLI 命令 |
 | `AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS` | `1` | 向 Claude Code 传递 `--dangerously-skip-permissions`；设置 `0` 走交互式审批 |
 | `AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT` | `0` | Claude Code stderr 直接转发到终端用于调试 |
+| `CODEX_CMD` | `codex` | Codex CLI 命令 |
+| `CODEX_MODEL` | — | 未显式设置 `codex:<model>` 时使用的 Codex 默认模型 |
+| `AGENTFLOW_CODEX_SANDBOX` | `workspace-write` | 传给 `codex exec` 的 sandbox 模式 |
+| `AGENTFLOW_CODEX_APPROVAL` | `never` | 传给 Codex 的审批策略，位于 `exec` 前 |
+| `AGENTFLOW_CODEX_DANGER` | `0` | 设置 `1` 时向 Codex 传递 `--dangerously-bypass-approvals-and-sandbox` |
+| `AGENTFLOW_CODEX_SKIP_GIT_CHECK` | `auto` | 执行目录没有 `.git` 祖先时自动跳过 Codex git 检查；可设 `1`/`0` 强制 |
+| `AGENTFLOW_CODEX_IGNORE_USER_CONFIG` | `1` | 使用 `--ignore-user-config` 启动 Codex，让 AgentFlow 任务只使用 AgentFlow 显式传入的 MCP/config；设 `0` 可同时加载用户 Codex 配置 |
+| `AGENTFLOW_CODEX_STDERR_INHERIT` | `0` | Codex stderr 直接转发到终端用于调试 |
 | `AGENTFLOW_HOME` | `~/agentflow` | 用户数据目录 |
+
+### Codex 后端
+
+使用 `--model codex:<model>`，或在 Web UI 中选择 Codex 模型，即可让 Composer 或 agent 节点通过 `codex exec` 执行。需先执行 `codex login`，再用 `agentflow update-model-lists` 刷新模型列表，UI 才能展示 Codex 模型。
+
+Composer 会复用 AgentFlow MCP 页面管理的 MCP server：运行 Codex 时把 Cursor MCP 配置翻译成 Codex `-c mcp_servers...` 临时覆盖参数。Stdio MCP 的私密 env 会通过 Codex 子进程环境变量传入；HTTP `Authorization: Bearer ...` header 会转换为 `bearer_token_env_var`。
+
+MCP 页面会为每个 server 展示后端兼容矩阵。若某个 server 依赖 Codex 无法等价表达的能力，例如任意 HTTP headers 或 URL 级 env，Codex 会标记为 partial 并展示原因。
 
 ## 目录结构
 

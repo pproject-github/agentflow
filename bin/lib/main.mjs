@@ -32,6 +32,7 @@ import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
 import { cancelScheduledRun, listScheduleStatuses, startScheduler } from "./scheduler.mjs";
 import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
+import { startMcpServer } from "./mcp-server.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -115,6 +116,10 @@ export async function main() {
     const result = await updateModelLists(workspaceRoot);
     if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(0);
+  }
+  if (sub === "mcp") {
+    await startMcpServer();
+    return;
   }
   const jsonOnlySubs = [
     "list-flows",

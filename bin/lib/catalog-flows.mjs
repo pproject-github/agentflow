@@ -296,6 +296,8 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       inputs: manifest.input,
       outputs: manifest.output,
       source: manifest.source || "marketplace",
+      ownerUserId: manifest.ownerUserId || manifest.createdBy || "",
+      createdBy: manifest.createdBy || manifest.ownerUserId || "",
       packageDir: manifest.packageDir,
       runtime: manifest.runtime,
     });

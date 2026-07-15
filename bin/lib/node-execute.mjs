@@ -4,6 +4,8 @@ import path from "path";
 import { outputNodeBasename, outputDirForNode } from "../pipeline/get-exec-id.mjs";
 import { writeResult } from "../pipeline/write-result.mjs";
 import {
+  runCodexAgentForNode,
+  runCodexAgentWithPrompt,
   runClaudeCodeAgentForNode,
   runClaudeCodeAgentWithPrompt,
   runCursorAgentForNode,
@@ -100,7 +102,7 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
 
   const prompt = buildHealPrompt(scriptPath, resolvedScript, errorInfo, scriptContent);
   const healCli =
-    cli === "opencode" ? "opencode" : cli === "claude-code" ? "claude-code" : "cursor";
+    cli === "opencode" ? "opencode" : cli === "codex" ? "codex" : cli === "claude-code" ? "claude-code" : "cursor";
 
   log.info(`[tool_nodejs AI 自愈] ${instanceId} 调用 ${healCli}${model ? ` (${model})` : ""} 修复 ${path.basename(scriptPath)}`);
   emitEvent(workspaceRoot, flowName, uuid, {
@@ -114,6 +116,9 @@ async function healToolNodejsWithAI(workspaceRoot, flowName, uuid, instanceId, r
   try {
     if (healCli === "opencode") {
       const { finished } = runOpenCodeAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined, force: true });
+      await finished;
+    } else if (healCli === "codex") {
+      const { finished } = runCodexAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined, force: true });
       await finished;
     } else if (healCli === "claude-code") {
       const { finished } = runClaudeCodeAgentWithPrompt(workspaceRoot, prompt, { model: model || undefined });
@@ -415,6 +420,22 @@ export async function executeNode(workspaceRoot, flowName, uuid, instanceId, pre
       );
     } else if (cli === "opencode") {
       await runOpenCodeAgentForNode(
+        workspaceRoot,
+        { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", intermediatePath, resultPathRel: resultPath, subagent, instanceId },
+        {
+          model,
+          stderrBuffer: options.stderrBuffer,
+          force: options.force,
+          outputPrefix: options.outputPrefix,
+          prefixColor: options.prefixColor,
+          onToolCall: options.onToolCall,
+          flowName,
+          uuid,
+          execWorkspaceRoot,
+        },
+      );
+    } else if (cli === "codex") {
+      await runCodexAgentForNode(
         workspaceRoot,
         { promptPath, nodeContext: nodeContext ?? "", taskBody: taskBody ?? "", intermediatePath, resultPathRel: resultPath, subagent, instanceId },
         {

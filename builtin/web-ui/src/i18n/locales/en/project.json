@@ -9,6 +9,8 @@
   "activeProjects": "Active Projects",
   "archivedPipelines": "Archived Pipelines",
   "globalNodes": "Global Nodes",
+  "nodeScopeAll": "All Nodes",
+  "nodeScopeMine": "My Nodes",
   "myNodesHint": "Manage node versions published to the current workspace marketplace, {{count}} total.",
   "myFlowsHint": "Manage flow snippets published to the current workspace marketplace, {{count}} total.",
   "globalSkills": "Global Skills",

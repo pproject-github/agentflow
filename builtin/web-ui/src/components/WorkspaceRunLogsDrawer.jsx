@@ -174,6 +174,7 @@ export default function WorkspaceRunLogsDrawer({
               title={run.runId}
             >
               <span className={`af-work-run-logs__status af-work-run-logs__status--${statusClass(run.status)}`}>{run.status || "unknown"}</span>
+              <span className="af-work-run-logs__run-label">{run.label || run.runNodeId || run.scheduleNodeId || "Workspace Run"}</span>
               <span>{formatTime(run.startedAt)}</span>
               <span>{formatDuration(run.durationMs)}</span>
             </button>
@@ -183,6 +184,7 @@ export default function WorkspaceRunLogsDrawer({
           <div className="af-work-run-logs__detail-head">
             <div>
               <div className="af-work-run-logs__section-title">详情</div>
+              {selectedRun?.label ? <div className="af-work-run-logs__detail-label">{selectedRun.label}</div> : null}
               <div className="af-work-run-logs__run-id">{selectedRun?.runId || "-"}</div>
             </div>
             {selectedRun ? (

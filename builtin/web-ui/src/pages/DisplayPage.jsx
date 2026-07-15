@@ -6,6 +6,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { useRoute } from "../routeContext.jsx";
 
 function displayContent(node) {
@@ -24,6 +25,7 @@ function displayIcon(kind) {
   if (kind === "mermaid") return "account_tree";
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
+  if (kind === "react") return "deployed_code";
   if (kind === "image") return "image";
   if (kind === "chart") return "bar_chart";
   if (kind === "table") return "table";
@@ -263,7 +265,11 @@ function VisibleScrollFrame({ className = "", children }) {
 
 function DisplayNode({ node, shareId, style, bare = false }) {
   const raw = displayContent(node);
-  const content = node.kind === "html" ? normalizeHtmlDisplayContent(raw) : displayOutputEnvelopeContent(raw);
+  const content = node.kind === "html"
+    ? normalizeHtmlDisplayContent(raw)
+    : node.kind === "react"
+      ? normalizeReactAppDisplayContent(raw)
+      : displayOutputEnvelopeContent(raw);
   const contentProblem = node.kind === "html" ? htmlContentProblem(content) : "";
   const bodyClassName = `af-public-display-node__body--${node.kind || "unknown"}`;
   return (
@@ -286,6 +292,7 @@ function DisplayNode({ node, shareId, style, bare = false }) {
         ) : content.trim() ? (
           <>
             {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
+            {node.kind === "react" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={reactAppDisplaySrcDoc(content)} /> : null}
             {node.kind === "image" ? <img src={displayFileUrl(content, shareId)} alt={node.label || node.id} loading="lazy" /> : null}
             {node.kind === "markdown" ? (
               <div className="af-public-display-markdown">

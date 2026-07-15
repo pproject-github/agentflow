@@ -9,6 +9,8 @@ import AdminUsagePage from "./pages/AdminUsagePage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import SchedulesPage from "./pages/SchedulesPage.jsx";
+import NodeStudioPage from "./pages/NodeStudioPage.jsx";
+import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
@@ -76,14 +78,16 @@ function RoutedContent({ authUser }) {
   if (path === "/my-nodes") return <ProjectsPage authUser={authUser} resourceKind="my-nodes" />;
   if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
+  if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
+  if (path === "/node-studio") return <NodeStudioPage />;
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
-  if (path === "/feedback") return <FeedbackPage />;
+  if (path === "/feedback") return <FeedbackPage authUser={authUser} />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;
 }

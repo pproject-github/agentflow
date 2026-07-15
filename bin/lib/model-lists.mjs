@@ -125,8 +125,68 @@ export function runOpencodeModels(workspaceRoot, provider) {
   });
 }
 
+function parseCodexModelList(stdout) {
+  const cleaned = stripAnsiModelList(stdout);
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    const rows = Array.isArray(parsed?.models) ? parsed.models : [];
+    const seen = new Set();
+    const models = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const slug = typeof row.slug === "string" ? row.slug.trim() : "";
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      const display = typeof row.display_name === "string" ? row.display_name.trim() : "";
+      models.push(display && display !== slug ? `${slug} - ${display}` : slug);
+    }
+    return models;
+  } catch (_) {
+    return [];
+  }
+}
+
+export function runCodexModels(workspaceRoot) {
+  return new Promise((resolve) => {
+    const codexCmd = process.env.CODEX_CMD || "codex";
+    const child = spawn(codexCmd, ["debug", "models", "--bundled"], {
+      cwd: workspaceRoot,
+      shell: false,
+      env: envWithCommonBinPaths(),
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (models) => {
+      if (settled) return;
+      settled = true;
+      resolve(models);
+    };
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString("utf-8");
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString("utf-8");
+    });
+    child.on("close", (code) => {
+      if (code === 0) finish(parseCodexModelList(stdout || stderr));
+      else finish([]);
+    });
+    child.on("error", () => finish([]));
+    setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+      finish([]);
+    }, 10_000);
+  });
+}
+
 /**
- * 拉取 Cursor / OpenCode 模型列表并写入 ~/agentflow/model-lists.json
+ * 拉取 Cursor / OpenCode / Claude Code / Codex 模型列表并写入 ~/agentflow/model-lists.json
  * @param {string} workspaceRoot
  * @param {{ opencodeProviderOverride?: string }} [opts]
  */
@@ -150,9 +210,11 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     cursor: [],
     opencode: [],
     claudeCode: [],
+    codex: [],
     cursorFetchedAt: null,
     opencodeFetchedAt: null,
     claudeCodeFetchedAt: null,
+    codexFetchedAt: null,
   };
   try {
     if (fs.existsSync(cachePath)) {
@@ -161,10 +223,11 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     }
   } catch (_) {}
 
-  const [cursorRaw, opencode, claudeCodeAvailable] = await Promise.all([
+  const [cursorRaw, opencode, claudeCodeAvailable, codex] = await Promise.all([
     runCursorModels(root),
     runOpencodeModels(root, opencodeProvider),
     probeClaudeCodeAvailable(),
+    runCodexModels(root),
   ]);
   const cursor = cursorRaw.filter(isCursorModelLine);
   const claudeCode = claudeCodeAvailable ? getBuiltinClaudeCodeModels() : [];
@@ -174,9 +237,11 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     cursor: cursor.length > 0 ? cursor : prev.cursor ?? [],
     opencode: opencode.length > 0 ? opencode : prev.opencode ?? [],
     claudeCode: claudeCode.length > 0 ? claudeCode : prev.claudeCode ?? [],
+    codex: codex.length > 0 ? codex : prev.codex ?? [],
     cursorFetchedAt: cursor.length > 0 ? now : prev.cursorFetchedAt ?? null,
     opencodeFetchedAt: opencode.length > 0 ? now : prev.opencodeFetchedAt ?? null,
     claudeCodeFetchedAt: claudeCode.length > 0 ? now : prev.claudeCodeFetchedAt ?? null,
+    codexFetchedAt: codex.length > 0 ? now : prev.codexFetchedAt ?? null,
   };
 
   try {
@@ -184,5 +249,5 @@ export async function updateModelLists(workspaceRoot, opts = {}) {
     fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (_) {}
 
-  return { cursor: data.cursor, opencode: data.opencode, claudeCode: data.claudeCode };
+  return { cursor: data.cursor, opencode: data.opencode, claudeCode: data.claudeCode, codex: data.codex };
 }

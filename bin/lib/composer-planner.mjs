@@ -12,7 +12,7 @@ import { buildPlannerSkillContext } from "./composer-skill-router.mjs";
 import { buildNodeSchemaPromptSection } from "./composer-node-schema.mjs";
 import { formatInstancePlannerHint } from "./composer-flow-instances.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
-import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import { runCodexAgentWithPrompt, runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { t } from "./i18n.mjs";
 
 const PLANNER_MAX_TOKENS = 2048;
@@ -428,6 +428,8 @@ async function classifyViaCli(userPrompt, cliWorkspace) {
 
   const runner = cli === "opencode"
     ? runOpenCodeAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined })
+    : cli === "codex"
+      ? runCodexAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined })
     : cli === "claude-code"
       ? runClaudeCodeAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined })
       : runCursorAgentWithPrompt(cliWorkspace, prompt, { onStreamEvent, model: model || undefined, force: true });

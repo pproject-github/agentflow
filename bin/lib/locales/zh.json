@@ -35,7 +35,7 @@
     "default": "默认"
   },
   "cli": {
-    "description": "AgentFlow CLI — 使用 Cursor 或 OpenCode CLI 流式输出驱动 apply/replay",
+    "description": "AgentFlow CLI — 使用 Cursor、OpenCode、Claude Code 或 Codex CLI 流式输出驱动 apply/replay",
     "usage": "用法",
     "commands": "命令",
     "options": "选项",
@@ -340,6 +340,10 @@
     "display_html": {
       "displayName": "HTML 展示",
       "description": "在 Workspace 画布中用 sandbox iframe 渲染 HTML，并将源码继续传给下游"
+    },
+    "display_react_app": {
+      "displayName": "React 工程",
+      "description": "在 Workspace 画布中用 sandbox iframe 预览 React 工程，并将工程 JSON 继续传给下游"
     },
     "display_image": {
       "displayName": "图片展示",

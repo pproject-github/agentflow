@@ -16,7 +16,7 @@
 </p>
 
 >
-> Orchestrate complex, long-running tasks — module migrations, AI automation, deep code cleanup — using Cursor / OpenCode / Claude Code as swappable backends.
+> Orchestrate complex, long-running tasks — module migrations, AI automation, deep code cleanup — using Cursor / OpenCode / Claude Code / Codex as swappable backends.
 
 ![AgentFlow Projects](docs/projects.png)
 
@@ -26,7 +26,7 @@
 
 ## The Problem
 
-Coding agents like Cursor and Claude Code are great — until the task gets long.
+Coding agents like Cursor, Claude Code, and Codex are great — until the task gets long.
 
 **1. Context window is a hard ceiling.**
 A 10-minute task fits comfortably. A 10-hour migration? The model starts forgetting earlier steps, repeating work, or silently drifting off course. Context compression helps, but it's lossy — the agent no longer has the full picture.
@@ -41,7 +41,7 @@ You can write a numbered plan in a prompt, but you can't express "loop until com
 
 ## Features
 
-- **Reuse your AI subscriptions** — Cursor Pro, OpenCode (Alibaba Cloud, etc.), Claude Code; no need to purchase LLM API keys
+- **Reuse your AI subscriptions** — Cursor Pro, OpenCode (Alibaba Cloud, etc.), Claude Code, Codex; no need to purchase LLM API keys
 - **Visual editor + AI Composer** — drag-and-drop nodes or describe workflows in natural language
 - **Persistent state** — every node's I/O cached to disk (like Gradle task caching); resume from any failure point
 - **Loop / branch / parallel** — `control_if`, `control_anyOne`, `control_toBool` for real control flow
@@ -49,7 +49,7 @@ You can write a numbered plan in a prompt, but you can't express "loop until com
 
 ## Quick Start
 
-**Requirements:** Node >= 18, one of: Cursor CLI (`agent`), OpenCode CLI, or Claude Code
+**Requirements:** Node >= 18, one of: Cursor CLI (`agent`), OpenCode CLI, Claude Code, or Codex CLI
 
 ```bash
 # Install
@@ -157,7 +157,7 @@ Skills are automatically loaded when relevant tasks are detected, providing doma
 |------|-------------|
 | `--workspace-root <path>` | Workspace root directory |
 | `--dry-run` | Preview ready nodes without execution |
-| `--model <name>` | Override model |
+| `--model <name>` | Override model. Use prefixes such as `opencode:<model>`, `claude-code:<model>`, `codex:<model>`, or `api:<provider>/<model>` to switch backends |
 | `--parallel` | Parallel execution for independent nodes |
 | `--machine-readable` | JSON event stream (for UI/CI integration) |
 | `--lang <code>` | Language (`zh` / `en`) |
@@ -172,7 +172,23 @@ Skills are automatically loaded when relevant tasks are detected, providing doma
 | `CLAUDE_CODE_CMD` | `claude` | Claude Code CLI command |
 | `AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS` | `1` | Pass `--dangerously-skip-permissions` to Claude Code; set `0` for interactive approval |
 | `AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT` | `0` | Forward Claude Code stderr directly to terminal for debugging |
+| `CODEX_CMD` | `codex` | Codex CLI command |
+| `CODEX_MODEL` | — | Default Codex model when no explicit `codex:<model>` is set |
+| `AGENTFLOW_CODEX_SANDBOX` | `workspace-write` | Codex sandbox mode passed to `codex exec` |
+| `AGENTFLOW_CODEX_APPROVAL` | `never` | Codex approval policy passed before `exec` |
+| `AGENTFLOW_CODEX_DANGER` | `0` | Set `1` to pass `--dangerously-bypass-approvals-and-sandbox` to Codex |
+| `AGENTFLOW_CODEX_SKIP_GIT_CHECK` | `auto` | Skip Codex git-repo check automatically when the execution directory has no `.git` ancestor; set `1`/`0` to force |
+| `AGENTFLOW_CODEX_IGNORE_USER_CONFIG` | `1` | Run Codex with `--ignore-user-config` so AgentFlow jobs only use the MCP/config overrides AgentFlow passes in; set `0` to also load the user's Codex config |
+| `AGENTFLOW_CODEX_STDERR_INHERIT` | `0` | Forward Codex stderr directly to terminal for debugging |
 | `AGENTFLOW_HOME` | `~/agentflow` | User data directory |
+
+### Codex Backend
+
+Use `--model codex:<model>` or select a Codex model in the Web UI to run Composer or agent nodes through `codex exec`. Run `codex login` first, then refresh model lists with `agentflow update-model-lists` so the UI can show Codex models.
+
+Composer reuses the MCP servers managed in AgentFlow's MCP page by translating Cursor MCP config into Codex `-c mcp_servers...` overrides for the current process. Stdio MCP private env values are passed through the Codex child process environment; HTTP `Authorization: Bearer ...` headers are converted to `bearer_token_env_var`.
+
+The MCP page shows a backend compatibility matrix for each server. Codex is marked partial when a server relies on features Codex cannot express exactly, such as arbitrary HTTP headers or URL-level env values.
 
 ## Directory Layout
 

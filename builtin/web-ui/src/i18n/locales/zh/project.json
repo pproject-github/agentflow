@@ -9,6 +9,8 @@
   "activeProjects": "活跃项目",
   "archivedPipelines": "已归档流水线",
   "globalNodes": "全局 Nodes",
+  "nodeScopeAll": "全部 Nodes",
+  "nodeScopeMine": "我的 Nodes",
   "myNodesHint": "管理当前工作区已发布到本地 Marketplace 的节点，共 {{count}} 个。",
   "myFlowsHint": "管理当前工作区已发布到本地 Marketplace 的流程片段，共 {{count}} 个。",
   "globalSkills": "全局 Skills",

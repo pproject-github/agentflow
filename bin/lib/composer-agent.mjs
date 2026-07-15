@@ -10,7 +10,7 @@ import path from "path";
 import { getAgentflowDataRoot, getAgentflowUserDataRoot, sanitizeAgentflowUserId } from "./paths.mjs";
 import { readMergedEnvObject } from "./user-env.mjs";
 import { resolveCliAndModel } from "./model-config.mjs";
-import { runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
+import { runCodexAgentWithPrompt, runClaudeCodeAgentWithPrompt, runCursorAgentWithPrompt, runOpenCodeAgentWithPrompt } from "./agent-runners.mjs";
 import { planComposerTasks, hasPlannerApiAvailable, shouldUsePhased, classifyComplexity, classifyTaskComplexity, PHASED_DEFINITIONS } from "./composer-planner.mjs";
 import { executeScriptOp, isSupportedScriptOp } from "./composer-script-ops.mjs";
 import { routeModel } from "./composer-model-router.mjs";
@@ -152,10 +152,147 @@ function materializeWorkspaceCursorMcpPrivateConfig(workspaceRoot, userId) {
   };
 }
 
+function tomlString(value) {
+  return JSON.stringify(String(value ?? ""));
+}
+
+function tomlArray(values) {
+  return `[${(Array.isArray(values) ? values : []).map((value) => tomlString(value)).join(", ")}]`;
+}
+
+function tomlInlineTable(obj) {
+  const entries = Object.entries(obj && typeof obj === "object" && !Array.isArray(obj) ? obj : {})
+    .filter(([key]) => String(key || "").trim())
+    .map(([key, value]) => `${tomlString(String(key).trim())} = ${tomlString(value)}`);
+  return `{ ${entries.join(", ")} }`;
+}
+
+function codexMcpName(name, used) {
+  const base = String(name || "mcp")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "mcp";
+  let out = base;
+  let i = 2;
+  while (used.has(out)) out = `${base}_${i++}`;
+  used.add(out);
+  return out;
+}
+
+function bearerFromHeaders(headers) {
+  const obj = headers && typeof headers === "object" && !Array.isArray(headers) ? headers : {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (String(key).toLowerCase() !== "authorization") continue;
+    const match = String(value ?? "").match(/^Bearer\s+(.+)$/i);
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
+}
+
+function mergedCursorMcpServersForCodex(workspaceRoot, userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  const workspace = path.resolve(workspaceRoot || process.cwd());
+  const localServers = cursorMcpServersFromFile(path.join(workspace, ".cursor", "mcp.json"));
+  const globalServers = cursorMcpServersFromFile(path.join(os.homedir(), ".cursor", "mcp.json"));
+  const privateServers = safe ? readUserMcpPrivateServers(safe) : {};
+  const merged = { ...globalServers, ...localServers };
+
+  for (const [name, privateServer] of Object.entries(privateServers)) {
+    const current = merged[name];
+    if (!current || typeof current !== "object" || Array.isArray(current)) continue;
+    const privateEnv = privateServer?.env && typeof privateServer.env === "object" && !Array.isArray(privateServer.env) ? privateServer.env : {};
+    const privateHeaders = privateServer?.headers && typeof privateServer.headers === "object" && !Array.isArray(privateServer.headers) ? privateServer.headers : {};
+    const currentEnv = current.env && typeof current.env === "object" && !Array.isArray(current.env) ? current.env : {};
+    const currentHeaders = current.headers && typeof current.headers === "object" && !Array.isArray(current.headers) ? current.headers : {};
+    merged[name] = {
+      ...current,
+      ...(Object.keys(privateEnv).length ? { env: { ...currentEnv, ...privateEnv } } : {}),
+      ...(Object.keys(privateHeaders).length ? { headers: { ...currentHeaders, ...privateHeaders } } : {}),
+    };
+  }
+
+  return merged;
+}
+
+function codexMcpOverridesFromCursorConfig(workspaceRoot, userId) {
+  const safe = sanitizeAgentflowUserId(userId);
+  const privateServers = safe ? readUserMcpPrivateServers(safe) : {};
+  const servers = mergedCursorMcpServersForCodex(workspaceRoot, userId);
+  const used = new Set();
+  const codexConfigArgs = [];
+  const env = {};
+
+  for (const [rawName, rawServer] of Object.entries(servers)) {
+    if (!rawServer || typeof rawServer !== "object" || Array.isArray(rawServer)) continue;
+    if (rawServer.disabled === true) continue;
+    const name = codexMcpName(rawName, used);
+    const prefix = `mcp_servers.${name}`;
+    const envObj = rawServer.env && typeof rawServer.env === "object" && !Array.isArray(rawServer.env) ? rawServer.env : {};
+    const headers = rawServer.headers && typeof rawServer.headers === "object" && !Array.isArray(rawServer.headers) ? rawServer.headers : {};
+    const privateServer = privateServers[rawName];
+    const privateEnv = privateServer?.env && typeof privateServer.env === "object" && !Array.isArray(privateServer.env) ? privateServer.env : {};
+    const url = String(rawServer.url || "").trim();
+    const command = String(rawServer.command || "").trim();
+
+    if (url) {
+      codexConfigArgs.push(`${prefix}.url=${tomlString(url)}`);
+      if (rawServer.bearer_token_env_var && String(rawServer.bearer_token_env_var).trim()) {
+        codexConfigArgs.push(`${prefix}.bearer_token_env_var=${tomlString(rawServer.bearer_token_env_var)}`);
+      }
+      if (rawServer.oauth_client_id && String(rawServer.oauth_client_id).trim()) {
+        codexConfigArgs.push(`${prefix}.oauth_client_id=${tomlString(rawServer.oauth_client_id)}`);
+      }
+      if (rawServer.oauth_resource && String(rawServer.oauth_resource).trim()) {
+        codexConfigArgs.push(`${prefix}.oauth_resource=${tomlString(rawServer.oauth_resource)}`);
+      }
+      const bearer = bearerFromHeaders(headers);
+      if (bearer) {
+        const envKey = `AGENTFLOW_CODEX_MCP_${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_BEARER`;
+        env[envKey] = bearer;
+        codexConfigArgs.push(`${prefix}.bearer_token_env_var=${tomlString(envKey)}`);
+      }
+      continue;
+    }
+
+    if (!command) continue;
+    codexConfigArgs.push(`${prefix}.command=${tomlString(command)}`);
+    if (Array.isArray(rawServer.args) && rawServer.args.length) {
+      codexConfigArgs.push(`${prefix}.args=${tomlArray(rawServer.args)}`);
+    }
+    if (rawServer.cwd && String(rawServer.cwd).trim()) {
+      codexConfigArgs.push(`${prefix}.cwd=${tomlString(rawServer.cwd)}`);
+    }
+    const publicEnvForConfig = {};
+    for (const [key, value] of Object.entries(envObj)) {
+      const envKey = String(key || "").trim();
+      if (!envKey) continue;
+      if (Object.prototype.hasOwnProperty.call(privateEnv, envKey)) {
+        env[envKey] = String(privateEnv[envKey] ?? "");
+      } else {
+        publicEnvForConfig[envKey] = value;
+      }
+    }
+    if (Object.keys(publicEnvForConfig).length) {
+      codexConfigArgs.push(`${prefix}.env=${tomlInlineTable(publicEnvForConfig)}`);
+    }
+  }
+
+  return { codexConfigArgs, env };
+}
+
 function agentflowUserEnv(userId) {
   const safe = sanitizeAgentflowUserId(userId);
   pruneCursorMcpPrivateEnvPlaceholders();
   return { ...readMergedEnvObject(safe), ...(safe ? readUserMcpPrivateEnvObject(safe) : {}), AGENTFLOW_USER_ID: safe };
+}
+
+function runCodexAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
+  const { codexConfigArgs, env } = codexMcpOverridesFromCursorConfig(cliWorkspace, userId);
+  return runCodexAgentWithPrompt(cliWorkspace, prompt, {
+    ...options,
+    codexConfigArgs: [...(Array.isArray(options?.codexConfigArgs) ? options.codexConfigArgs : []), ...codexConfigArgs],
+    env: { ...(options?.env || {}), ...env },
+  });
 }
 
 function runCursorAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
@@ -289,6 +426,13 @@ export function startComposerAgent(opts) {
       ...common,
       model: model || undefined,
     });
+  }
+
+  if (cli === "codex") {
+    return runCodexAgentWithPrivateMcp(cliWs, prompt, {
+      ...common,
+      model: model || undefined,
+    }, opts.agentflowUserId);
   }
 
   if (cli === "claude-code") {
@@ -581,6 +725,15 @@ export async function runComposerPostFlowValidationAndRepair(opts) {
         });
         setChild(handle.child);
         await handle.finished;
+      } else if (cli === "codex") {
+        const handle = runCodexAgentWithPrivateMcp(cliWs, agentPrompt, {
+          onStreamEvent: stepEmit,
+          model: model || undefined,
+          force: Boolean(opts.force),
+          env,
+        }, opts.agentflowUserId || opts.flowContext?.userId);
+        setChild(handle.child);
+        await handle.finished;
       } else if (cli === "claude-code") {
         const handle = runClaudeCodeAgentWithPrompt(cliWs, agentPrompt, {
           onStreamEvent: stepEmit,
@@ -852,6 +1005,15 @@ export function startComposerMultiStep(opts) {
                 force: Boolean(opts.force),
                 env,
               });
+              currentChild = handle.child;
+              await handle.finished;
+            } else if (cli === "codex") {
+              const handle = runCodexAgentWithPrivateMcp(cliWs, agentPrompt, {
+                onStreamEvent: stepEmit,
+                model: model || undefined,
+                force: Boolean(opts.force),
+                env,
+              }, opts.agentflowUserId || opts.flowContext?.userId);
               currentChild = handle.child;
               await handle.finished;
             } else if (cli === "claude-code") {

@@ -35,7 +35,7 @@
     "default": "Default"
   },
   "cli": {
-    "description": "AgentFlow CLI — drive apply/replay with Cursor or OpenCode CLI streaming",
+    "description": "AgentFlow CLI — drive apply/replay with Cursor, OpenCode, Claude Code, or Codex CLI streaming",
     "usage": "Usage",
     "commands": "Commands",
     "options": "Options",
@@ -340,6 +340,10 @@
     "display_html": {
       "displayName": "HTML Display",
       "description": "Render HTML in a sandboxed iframe on the Workspace canvas and pass the source downstream"
+    },
+    "display_react_app": {
+      "displayName": "React App",
+      "description": "Preview a React project in a sandboxed iframe on the Workspace canvas and pass the project JSON downstream"
     },
     "display_image": {
       "displayName": "Image Display",
