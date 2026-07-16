@@ -9037,6 +9037,14 @@ button.af-project-card {
   box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.32), 0 18px 44px rgba(0, 0, 0, 0.34);
 }
 
+.react-flow__node:has(.af-work-load-skills-card--menu-open) {
+  z-index: 1500 !important;
+}
+
+.af-work-load-skills-card--menu-open {
+  z-index: 1500;
+}
+
 .af-work-load-skills-card__head {
   height: 3rem;
   display: flex;
@@ -9135,7 +9143,7 @@ button.af-project-card {
   top: calc(100% - 0.3rem);
   left: 0.65rem;
   right: 0.65rem;
-  z-index: 40;
+  z-index: 1501;
   max-height: 22rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.7rem;

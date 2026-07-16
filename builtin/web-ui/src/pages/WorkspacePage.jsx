@@ -5096,7 +5096,11 @@ function WorkspaceLoadSkillsNode({
 
   return (
     <div
-      className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      className={
+        "af-work-load-skills-card" +
+        (selected ? " af-work-load-skills-card--selected" : "") +
+        (open ? " af-work-load-skills-card--menu-open" : "")
+      }
       onPointerDownCapture={data?.onSelectNodePointerDown}
     >
       {inputs.map((slot, idx) => {
@@ -5295,7 +5299,11 @@ function WorkspaceLoadMcpNode({ id, data, selected, deleteNode, servers = [], on
 
   return (
     <div
-      className={"af-work-load-skills-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      className={
+        "af-work-load-skills-card" +
+        (selected ? " af-work-load-skills-card--selected" : "") +
+        (open ? " af-work-load-skills-card--menu-open" : "")
+      }
       onPointerDownCapture={data?.onSelectNodePointerDown}
     >
       {inputs.map((slot, idx) => {
@@ -5440,7 +5448,11 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   };
   return (
     <div
-      className={"af-work-load-skills-card af-work-load-workspace-card" + (selected ? " af-work-load-skills-card--selected" : "")}
+      className={
+        "af-work-load-skills-card af-work-load-workspace-card" +
+        (selected ? " af-work-load-skills-card--selected" : "") +
+        (open ? " af-work-load-skills-card--menu-open" : "")
+      }
       onPointerDownCapture={data?.onSelectNodePointerDown}
     >
       {inputs.map((slot, idx) => {
