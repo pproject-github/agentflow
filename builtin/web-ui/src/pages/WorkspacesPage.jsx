@@ -99,6 +99,7 @@ function WorkspaceCard({ item, selected, onClick, readOnly }) {
 export default function WorkspacesPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [configPath, setConfigPath] = useState("");
@@ -256,6 +257,41 @@ export default function WorkspacesPage() {
     setSelectedKey("");
     void saveRows(next);
   }, [custom, saveRows, selectedCustomIndex]);
+
+  const syncDraft = useCallback(async () => {
+    if (editingReadonly) return;
+    if (selectedCustomIndex < 0 || !draft.id) {
+      setError("请先保存工作区配置，再拉取更新");
+      return;
+    }
+    if (draft.kind !== "git") {
+      setError("只有 Git 工作区支持拉取更新");
+      return;
+    }
+    setSyncing(true);
+    setError("");
+    setStatus("");
+    try {
+      const r = await fetch("/api/workspaces/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: draft.id }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const nextCustom = Array.isArray(j.customWorkspaces) ? j.customWorkspaces : custom;
+      setCustom(nextCustom);
+      setBuiltins((Array.isArray(j.workspaces) ? j.workspaces : []).filter((item) => item?.builtin));
+      const nextItem = nextCustom.find((item) => String(item?.id || "") === String(draft.id || ""));
+      if (nextItem) setDraft(toDraft(nextItem));
+      const commit = String(j.commit || "").trim();
+      setStatus(j.changed ? `已拉取更新${commit ? `：${commit.slice(0, 8)}` : ""}` : `已是最新${commit ? `：${commit.slice(0, 8)}` : ""}`);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setSyncing(false);
+    }
+  }, [custom, draft, editingReadonly, selectedCustomIndex]);
 
   const patchDraft = useCallback((patch) => {
     setDraft((prev) => ({ ...prev, ...patch }));
@@ -416,14 +452,20 @@ export default function WorkspacesPage() {
 
               <div className="af-workspaces-actions">
                 {!editingReadonly && selectedCustomIndex >= 0 ? (
-                  <button type="button" className="af-workspaces-danger" onClick={deleteDraft} disabled={saving}>
+                  <button type="button" className="af-workspaces-danger" onClick={deleteDraft} disabled={saving || syncing}>
                     <span className="material-symbols-outlined">delete</span>
                     删除
                   </button>
                 ) : <span />}
                 <div>
-                  <button type="button" onClick={startCreate} disabled={saving}>重置</button>
-                  <button type="button" className="af-workspaces-primary" onClick={saveDraft} disabled={editingReadonly || saving}>
+                  {draft.kind === "git" && selectedCustomIndex >= 0 ? (
+                    <button type="button" onClick={syncDraft} disabled={editingReadonly || saving || syncing}>
+                      <span className="material-symbols-outlined">{syncing ? "sync" : "download"}</span>
+                      {syncing ? "拉取中" : "拉取更新"}
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={startCreate} disabled={saving || syncing}>重置</button>
+                  <button type="button" className="af-workspaces-primary" onClick={saveDraft} disabled={editingReadonly || saving || syncing}>
                     <span className="material-symbols-outlined">save</span>
                     {saving ? "保存中" : "保存"}
                   </button>
