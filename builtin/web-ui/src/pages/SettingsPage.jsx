@@ -4,6 +4,8 @@ import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
 
 /** 与服务器 config.json 同步的本地缓存（离线时回退） */
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
+const CURSOR_API_KEYS_ENV = "CURSOR_API_KEYS";
+const CURSOR_API_KEY_COOLDOWN_ENV = "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES";
 
 /** @param {unknown} ml */
 function normalizeModelListsPayload(ml) {
@@ -76,6 +78,63 @@ function maskValue(v) {
   if (!v) return "";
   if (v.length <= 6) return "•".repeat(v.length);
   return `${"•".repeat(Math.min(20, v.length - 4))}${v.slice(-4)}`;
+}
+
+function parseCursorApiKeyRecords(value) {
+  const text = String(value || "").trim();
+  if (!text) return [];
+  const normalizeRecord = (item, index) => {
+    if (typeof item === "string") {
+      const key = item.trim();
+      if (!key) return null;
+      return {
+        id: `legacy_${index}_${key.slice(-6)}`,
+        name: `Key ${index + 1}`,
+        key,
+        createdAt: "",
+      };
+    }
+    if (!item || typeof item !== "object") return null;
+    const key = String(item.key ?? "").trim();
+    if (!key) return null;
+    return {
+      id: String(item.id ?? "").trim() || newId(),
+      name: String(item.name ?? "").trim() || `Key ${index + 1}`,
+      key,
+      createdAt: String(item.createdAt ?? "").trim(),
+    };
+  };
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.map(normalizeRecord).filter(Boolean);
+    }
+  } catch (_) {}
+  return text
+    .split(",")
+    .map((part, index) => normalizeRecord(part, index))
+    .filter(Boolean);
+}
+
+function serializeCursorApiKeyRecords(records) {
+  const clean = Array.isArray(records)
+    ? records
+        .map((item, index) => ({
+          id: String(item?.id || "").trim() || newId(),
+          name: String(item?.name || "").trim() || `Key ${index + 1}`,
+          key: String(item?.key || "").trim(),
+          createdAt: String(item?.createdAt || "").trim() || new Date().toISOString(),
+        }))
+        .filter((item) => item.key)
+    : [];
+  return JSON.stringify(clean);
+}
+
+function maskCursorApiKey(key) {
+  const v = String(key || "").trim();
+  if (!v) return "";
+  if (v.length <= 10) return maskValue(v);
+  return `${v.slice(0, 4)}${"•".repeat(Math.min(18, v.length - 8))}${v.slice(-4)}`;
 }
 
 function mcpTokenValue(token) {
@@ -200,6 +259,9 @@ export default function SettingsPage({ authUser }) {
   const [draftVal, setDraftVal] = useState("");
   const [draftGlobal, setDraftGlobal] = useState(false);
   const [visibleEnvIds, setVisibleEnvIds] = useState(() => new Set());
+  const [cursorApiKeyName, setCursorApiKeyName] = useState("");
+  const [cursorApiKeyValue, setCursorApiKeyValue] = useState("");
+  const [cursorApiKeyGlobal, setCursorApiKeyGlobal] = useState(Boolean(authUser?.isAdmin));
   const [opcodeDraft, setOpcodeDraft] = useState("");
   const [allowlistFileUsers, setAllowlistFileUsers] = useState([]);
   const [allowlistEnvUsers, setAllowlistEnvUsers] = useState([]);
@@ -506,6 +568,59 @@ export default function SettingsPage({ authUser }) {
     baseUrl: agentflowMcpBaseUrl,
     token: agentflowMcpToken,
   }), [agentflowMcpBaseUrl, agentflowMcpToken]);
+  const cursorApiKeyScope = authUser?.isAdmin && cursorApiKeyGlobal ? "global" : "user";
+  const cursorApiKeyRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEYS_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
+  const cursorApiKeyRecords = useMemo(() => parseCursorApiKeyRecords(cursorApiKeyRow?.value || ""), [cursorApiKeyRow?.value]);
+  const cursorCooldownRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEY_COOLDOWN_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
+  const cursorCooldownMinutes = cursorCooldownRow?.value ? String(cursorCooldownRow.value) : "30";
+
+  const setScopedEnvValue = useCallback((key, value, scope) => {
+    const cleanKey = String(key || "").trim();
+    if (!cleanKey) return;
+    const cleanValue = String(value ?? "");
+    setEnvRows((rows) => {
+      const existing = rows.find((row) => row.key === cleanKey && (row.scope || "user") === scope);
+      if (!cleanValue) {
+        return rows.filter((row) => !(row.key === cleanKey && (row.scope || "user") === scope));
+      }
+      if (existing) {
+        return rows.map((row) => (row.id === existing.id ? { ...row, value: cleanValue, scope } : row));
+      }
+      return [{ id: newId(), key: cleanKey, value: cleanValue, scope }, ...rows];
+    });
+  }, []);
+
+  const addCursorApiKey = useCallback(() => {
+    const key = cursorApiKeyValue.trim();
+    if (!key) return;
+    const nextRecords = [
+      ...cursorApiKeyRecords,
+      {
+        id: newId(),
+        name: cursorApiKeyName.trim() || `Key ${cursorApiKeyRecords.length + 1}`,
+        key,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    setScopedEnvValue(CURSOR_API_KEYS_ENV, serializeCursorApiKeyRecords(nextRecords), cursorApiKeyScope);
+    setCursorApiKeyName("");
+    setCursorApiKeyValue("");
+  }, [cursorApiKeyName, cursorApiKeyRecords, cursorApiKeyScope, cursorApiKeyValue, setScopedEnvValue]);
+
+  const removeCursorApiKey = useCallback((id) => {
+    const nextRecords = cursorApiKeyRecords.filter((record) => record.id !== id);
+    setScopedEnvValue(CURSOR_API_KEYS_ENV, nextRecords.length ? serializeCursorApiKeyRecords(nextRecords) : "", cursorApiKeyScope);
+  }, [cursorApiKeyRecords, cursorApiKeyScope, setScopedEnvValue]);
+
+  const updateCursorCooldownMinutes = useCallback((value) => {
+    const raw = String(value || "").replace(/[^\d]/g, "");
+    if (!raw) {
+      setScopedEnvValue(CURSOR_API_KEY_COOLDOWN_ENV, "", cursorApiKeyScope);
+      return;
+    }
+    const minutes = Math.min(1440, Math.max(1, Number(raw) || 30));
+    setScopedEnvValue(CURSOR_API_KEY_COOLDOWN_ENV, String(minutes), cursorApiKeyScope);
+  }, [cursorApiKeyScope, setScopedEnvValue]);
 
   const copyWorkspace = useCallback(() => {
     if (!workspaceRoot) return;
@@ -715,6 +830,108 @@ export default function SettingsPage({ authUser }) {
                 >
                   {listsLoading ? t("settings:cursor.modelList.fetching") : t("settings:cursor.modelList.refresh")}
                 </button>
+              </section>
+
+              <section className="af-set-card af-set-card--wide af-set-card--low af-set-cursor-pool">
+                <div className="af-set-env-head">
+                  <div className="af-set-card-head">
+                    <div className="af-set-env-icon-wrap">
+                      <span className="material-symbols-outlined af-set-icon--primary">key</span>
+                    </div>
+                    <div>
+                      <h2 className="af-set-h2">Cursor API Key 池</h2>
+                      <p className="af-set-card-subtitle">按请求轮换，遇到 usage limit 或 resource_exhausted 会自动尝试下一个 Key。</p>
+                    </div>
+                  </div>
+                  <span className={"af-set-badge" + (cursorApiKeyRecords.length ? " af-set-badge--ok" : " af-set-badge--muted")}>
+                    {cursorApiKeyRecords.length} keys
+                  </span>
+                </div>
+
+                <div className="af-set-cursor-pool-controls">
+                  {authUser?.isAdmin ? (
+                    <div className="af-set-env-scope-switch af-set-cursor-scope" role="group" aria-label="Cursor API Key scope">
+                      <button
+                        type="button"
+                        className={!cursorApiKeyGlobal ? "is-active" : ""}
+                        onClick={() => setCursorApiKeyGlobal(false)}
+                      >
+                        个人
+                      </button>
+                      <button
+                        type="button"
+                        className={cursorApiKeyGlobal ? "is-active" : ""}
+                        onClick={() => setCursorApiKeyGlobal(true)}
+                      >
+                        全局
+                      </button>
+                    </div>
+                  ) : null}
+                  <label className="af-set-cursor-cooldown">
+                    <span>限额冷却</span>
+                    <input
+                      className="af-set-input af-set-input--sm af-set-input--mono"
+                      inputMode="numeric"
+                      value={cursorCooldownMinutes}
+                      onChange={(e) => updateCursorCooldownMinutes(e.target.value)}
+                    />
+                    <span>分钟</span>
+                  </label>
+                  <span className="af-set-env-note">{envSaving ? "保存中" : cursorApiKeyScope === "global" ? "全局配置" : "个人配置"}</span>
+                </div>
+
+                <div className="af-set-cursor-key-list">
+                  {cursorApiKeyRecords.length ? cursorApiKeyRecords.map((record) => (
+                    <div key={record.id} className="af-set-cursor-key-row">
+                      <div className="af-set-cursor-key-main">
+                        <strong>{record.name}</strong>
+                        <code>{maskCursorApiKey(record.key)}</code>
+                      </div>
+                      <span className="af-set-cursor-key-meta">
+                        {record.createdAt ? new Date(record.createdAt).toLocaleString() : "历史 Key"}
+                      </span>
+                      <button
+                        type="button"
+                        className="af-set-env-del af-set-cursor-key-delete"
+                        aria-label={`删除 ${record.name}`}
+                        onClick={() => removeCursorApiKey(record.id)}
+                      >
+                        <span className="material-symbols-outlined">delete_outline</span>
+                      </button>
+                    </div>
+                  )) : (
+                    <div className="af-set-cursor-key-empty">还没有配置 Key。配置后 Cursor CLI runner 会自动轮换使用。</div>
+                  )}
+                </div>
+
+                <div className="af-set-cursor-key-add">
+                  <input
+                    className="af-set-input"
+                    value={cursorApiKeyName}
+                    onChange={(e) => setCursorApiKeyName(e.target.value)}
+                    placeholder="名称，例如 Team Key 1"
+                  />
+                  <input
+                    className="af-set-input af-set-input--mono"
+                    type="password"
+                    value={cursorApiKeyValue}
+                    onChange={(e) => setCursorApiKeyValue(e.target.value)}
+                    placeholder="Cursor API Key"
+                  />
+                  <button
+                    type="button"
+                    className="af-set-btn-add"
+                    onClick={addCursorApiKey}
+                    disabled={!cursorApiKeyValue.trim()}
+                  >
+                    <span className="material-symbols-outlined">add</span>
+                    添加 Key
+                  </button>
+                </div>
+
+                <p className="af-set-hint">
+                  保存到 {CURSOR_API_KEYS_ENV}；冷却时间保存到 {CURSOR_API_KEY_COOLDOWN_ENV}。个人配置会覆盖全局配置。
+                </p>
               </section>
 
               <section className="af-set-card af-set-card--narrow af-set-card--high">

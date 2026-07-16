@@ -3939,6 +3939,126 @@ button.af-project-card {
   line-height: 1.45;
 }
 
+.af-set-cursor-pool {
+  gap: 1rem;
+}
+
+.af-set-cursor-pool-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.af-set-cursor-scope {
+  width: 12rem;
+}
+
+.af-set-cursor-cooldown {
+  display: inline-grid;
+  grid-template-columns: auto 5.2rem auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.45rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  background: var(--af-surface-lowest);
+  color: rgba(229, 226, 225, 0.58);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.af-set-cursor-cooldown .af-set-input {
+  height: 1.85rem;
+  padding: 0.25rem 0.45rem;
+  text-align: center;
+}
+
+.af-set-cursor-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.af-set-cursor-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 2.2rem;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 3.15rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(229, 226, 225, 0.07);
+  border-radius: 0.6rem;
+  background: rgba(18, 18, 18, 0.55);
+}
+
+.af-set-cursor-key-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.af-set-cursor-key-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(229, 226, 225, 0.9);
+  font-size: 0.9rem;
+}
+
+.af-set-cursor-key-main code {
+  color: rgba(202, 195, 216, 0.58);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.af-set-cursor-key-meta {
+  color: rgba(229, 226, 225, 0.34);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.af-set-cursor-key-delete {
+  justify-self: end;
+}
+
+.af-set-cursor-key-empty {
+  padding: 1rem;
+  border: 1px dashed rgba(229, 226, 225, 0.12);
+  border-radius: 0.65rem;
+  color: rgba(229, 226, 225, 0.42);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.af-set-cursor-key-add {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(14rem, 1.4fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.af-set-cursor-key-add .af-set-input {
+  padding-right: 0.85rem;
+}
+
+@media (max-width: 760px) {
+  .af-set-cursor-key-row,
+  .af-set-cursor-key-add {
+    grid-template-columns: 1fr;
+  }
+
+  .af-set-cursor-key-meta,
+  .af-set-cursor-key-delete {
+    justify-self: start;
+  }
+
+  .af-set-cursor-scope {
+    width: 100%;
+  }
+}
+
 .af-set-card--allowlist {
   grid-column: 1 / -1;
   background: var(--af-surface-high);
