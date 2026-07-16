@@ -411,7 +411,7 @@ export default function WorkspacesPage() {
                 </label>
                 <label className="af-workspaces-form__wide">
                   <span>本地路径</span>
-                  <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到用户数据目录/workspaces/repos/<id>" : "/Users/.../project"} />
+                  <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到工作区根目录/workspaces/repos/<id>" : "/Users/.../project"} />
                 </label>
                 {draft.kind === "git" ? (
                   <>
