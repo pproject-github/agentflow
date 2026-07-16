@@ -31,7 +31,7 @@ export function areSlotTypesCompatible(sourceType, targetType) {
   return src === tgt;
 }
 
-const SEMANTIC_TEXT_SLOT_NAMES = new Set(["workspaceContext", "skillsContext", "mcpContext"]);
+const SEMANTIC_TEXT_SLOT_NAMES = new Set(["knowledgeContext", "workspaceContext", "skillsContext", "mcpContext"]);
 
 export function getSlotSemanticKey(slot) {
   const type = normalizeSlotType(slot?.type);

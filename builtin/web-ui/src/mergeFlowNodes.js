@@ -76,7 +76,7 @@ const LEGACY_AUTO_HIDDEN_SLOT_NAMES = {
 };
 
 const CANVAS_HIDDEN_SLOT_NAMES = {
-  control_cd_workspace: new Set(["mode", "label", "cwd", "previous"]),
+  control_cd_workspace: new Set(["mode", "label", "workspaceContext", "cwd", "previous"]),
   control_user_workspace: new Set(["cwd"]),
   display_markdown: new Set(["prev", "next"]),
   display_mermaid: new Set(["prev", "next"]),
@@ -287,6 +287,10 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   if (resolvedDefId === "agent_subAgent" && !outputs.some((slot) => slot?.name === "result")) {
     const resultSlot = def?.outputs?.find((slot) => slot?.name === "result");
     outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
+  }
+  if (resolvedDefId === "agent_subAgent" && !inputs.some((slot) => slot?.name === "knowledgeContext")) {
+    const knowledgeSlot = def?.inputs?.find((slot) => slot?.name === "knowledgeContext");
+    inputs = [...inputs, knowledgeSlot ? { ...knowledgeSlot } : { type: "text", name: "knowledgeContext", default: "", showOnNode: true }];
   }
   if (
     (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
