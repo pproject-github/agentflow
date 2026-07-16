@@ -1,0 +1,32 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f2dd7a237fc27d::t_d284882718dd46 4623,4627,4629-4633
+  s_f2dd7a237fc27d::t_ee1156aaba50ce 5431,5496-5498
+  s_f2dd7a237fc27d::t_9bb558b121bc3a 4969,5152-5154
+builtin/web-ui/src/index.css
+  s_f2dd7a237fc27d::t_ea1cb16126e6dc 9099-9101,9104-9113
+builtin/web-ui/dist/index.html
+  s_f2dd7a237fc27d::t_84736da8f2c40f 18-19
+builtin/web-ui/dist/assets/index-BfrkG8Gr.js
+  s_f2dd7a237fc27d::t_84736da8f2c40f 25,37-38,40,42,44,65-67,69,73,75,95,98-100,181-182,184-185,239,243-244,251-252,254,275,305,309-311,315,341
+builtin/web-ui/dist/assets/index-CSBbCP8S.css
+  s_f2dd7a237fc27d::t_84736da8f2c40f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3e53f2aeb581bbe278b9eed8530a4f4221700c8c",
+  "prompts": {},
+  "logical_commit_id": "3e53f2aeb581bbe278b9eed8530a4f4221700c8c",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 36729,
+      "total_deletions": 1860
+    }
+  }
+}
