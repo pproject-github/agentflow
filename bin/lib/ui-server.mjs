@@ -1704,9 +1704,46 @@ function readWorkspacesFromPath(p, userCtx = {}) {
   }
 }
 
+function readLegacyAdminWorkspaces(userCtx = {}) {
+  const users = readAuthUsers();
+  const candidates = [];
+  for (const [userId, user] of Object.entries(users || {})) {
+    if (user?.isAdmin) candidates.push(String(userId || ""));
+  }
+  if (userCtx?.isAdmin && userCtx.userId) candidates.unshift(String(userCtx.userId));
+  const seenPaths = new Set();
+  const seenEntries = new Set();
+  const out = [];
+  for (const userId of candidates) {
+    const p = legacyUserWorkspacesPath({ userId });
+    const resolved = path.resolve(p);
+    if (seenPaths.has(resolved) || resolved === path.resolve(workspacesPath())) continue;
+    seenPaths.add(resolved);
+    for (const entry of readWorkspacesFromPath(p, { userId })) {
+      const key = entry.id || entry.path || entry.repoUrl;
+      if (seenEntries.has(key)) continue;
+      seenEntries.add(key);
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
 function readUserWorkspaces(userCtx = {}) {
   const globalPath = workspacesPath();
-  if (fs.existsSync(globalPath)) return readWorkspacesFromPath(globalPath, userCtx);
+  const globalWorkspaces = fs.existsSync(globalPath) ? readWorkspacesFromPath(globalPath, userCtx) : [];
+  const adminLegacy = readLegacyAdminWorkspaces(userCtx);
+  if (globalWorkspaces.length || adminLegacy.length) {
+    const seen = new Set();
+    const out = [];
+    for (const entry of [...globalWorkspaces, ...adminLegacy]) {
+      const key = entry.id || entry.path || entry.repoUrl;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(entry);
+    }
+    return out;
+  }
   return readWorkspacesFromPath(legacyUserWorkspacesPath(userCtx), userCtx);
 }
 
