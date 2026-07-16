@@ -2526,6 +2526,36 @@ function displayFileStem(value) {
     .slice(0, 80) || "display";
 }
 
+function workspaceNodeOutputOwnerSegment(nodeId) {
+  return String(nodeId || "node")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120) || "node";
+}
+
+function workspaceSafeOutputPath(value, kind = "") {
+  const direct = displayTextFilePath(value, kind).replace(/^\/+/, "");
+  return direct.startsWith("outputs/") ? direct : "";
+}
+
+function workspaceNodeOwnedOutputPaths(nodeId, data) {
+  const owner = workspaceNodeOutputOwnerSegment(nodeId);
+  const paths = new Set();
+  const kind = workspaceDisplayKindFromData(data) || "";
+  const contentPath = workspaceSafeOutputPath(displayContent(data), kind);
+  if (contentPath) paths.add(contentPath);
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const ownsPublishedOutput = outputs.some((slot) => {
+    const value = String(slot?.value ?? slot?.default ?? "").trim().replace(/^\/+/, "");
+    const path = workspaceSafeOutputPath(value, kind);
+    if (path) paths.add(path);
+    return value === `outputs/${owner}` || value.startsWith(`outputs/${owner}/`);
+  });
+  if (owner && ownsPublishedOutput) paths.add(`outputs/${owner}`);
+  return Array.from(paths);
+}
+
 function suggestDisplayFilePath(id, data) {
   const kind = workspaceDisplayKindFromData(data) || "markdown";
   const stem = displayFileStem(data?.label || id || kind);
@@ -4028,9 +4058,10 @@ function WorkspaceFlowNode(props) {
     : null;
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
+    props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
     setNodes((list) => list.filter((node) => node.id !== nodeId));
     setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
-  }, [readOnly, setEdges, setNodes]);
+  }, [props.data, readOnly, setEdges, setNodes]);
   const onSelectNodePointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".react-flow__handle, .af-work-display-resize")) return;
@@ -7605,6 +7636,34 @@ function WorkspacePageInner() {
     closeProvideFilePicker();
   }, [closeProvideFilePicker, provideFilePicker.nodeId, setProvideNodeValue]);
 
+  const cleanupWorkspaceNodeOutputs = useCallback(async (nodeId, data) => {
+    if (!workspaceWritable) return;
+    const outputPaths = workspaceNodeOwnedOutputPaths(nodeId, data);
+    if (outputPaths.length === 0) return;
+    const deleted = [];
+    try {
+      for (const outputPath of outputPaths) {
+        const res = await fetch("/api/workspace/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...flowParams, path: outputPath }),
+        });
+        if (res.status === 404) continue;
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || "清理节点输出失败");
+        deleted.push(json.path || outputPath);
+      }
+      if (deleted.length === 0) return;
+      setStatus(`已清理 ${deleted.join(", ")}`);
+      await loadFiles();
+      setSelectedWorkspaceFilePath((current) => (
+        outputPaths.some((outputPath) => current === outputPath || current.startsWith(`${outputPath}/`)) ? "" : current
+      ));
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }, [flowParams, loadFiles, workspaceWritable]);
+
   const hydratedNodes = useMemo(() => nodes.map((node) => ({
     ...node,
     data: {
@@ -7656,8 +7715,9 @@ function WorkspacePageInner() {
       onSendNodeChat: sendNodeChat,
       onApplyNodeChatCandidate: applyNodeChatCandidate,
       onSyncNodePropDraft: syncNodePropDraft,
+      onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
     },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
+  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
