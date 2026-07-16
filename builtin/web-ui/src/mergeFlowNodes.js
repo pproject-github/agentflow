@@ -117,6 +117,10 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
   ]),
 };
 
+const CANVAS_VISIBLE_SLOT_NAMES = {
+  agent_subAgent: new Set(["knowledgeContext", "skillsContext"]),
+};
+
 const DISPLAY_DEFINITION_IDS = new Set([
   "display_markdown",
   "display_mermaid",
@@ -198,6 +202,7 @@ function mergeSlotDefinitionMeta(definitionId, slots, definitionSlots) {
       ...(!slot._showOnNodeExplicit && def.showOnNode != null ? { showOnNode: Boolean(def.showOnNode) } : {}),
       ...(!slot._showOnNodeExplicit && def.showOnNode == null ? { showOnNode: Boolean(slot.required) || String(slot.type || "").trim().toLowerCase() === "node" } : {}),
       ...(!slot._showOnNodeExplicit && isDisplayPrimarySlot(definitionId, slot) ? { showOnNode: true } : {}),
+      ...(CANVAS_VISIBLE_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: true } : {}),
       ...(CANVAS_HIDDEN_SLOT_NAMES[definitionId]?.has(slot.name) ? { showOnNode: false } : {}),
     };
   });

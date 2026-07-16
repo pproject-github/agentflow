@@ -5493,7 +5493,6 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
           </span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
-        {selectedKnowledge.sources?.length ? <div className="af-work-load-workspace-card__path">{selectedKnowledge.sources.map((item) => item.label || item.id || item.mountPath).join(", ")}</div> : null}
         {open ? (
           <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
             <div className="af-work-load-skills-search">
