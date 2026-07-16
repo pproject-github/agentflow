@@ -7351,8 +7351,8 @@ function WorkspacePageInner() {
     }) : []);
     const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
       if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
-      if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue };
-      if (slot?.name === "cwd") return { ...slot, default: pathValue, value: pathValue };
+      if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue, showOnNode: false };
+      if (slot?.name === "cwd") return { ...slot, default: pathValue, value: pathValue, showOnNode: false };
       return slot;
     }) : []);
     const nextNodes = nodes.map((node) => (

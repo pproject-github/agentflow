@@ -1,6 +1,6 @@
 ---
 # 内置节点：子 Agent
-description: 利用子 Agent 执行任务；可接收 workspaceContext 切换执行工作区，并接收 skillsContext / mcpContext 注入已加载 skills 与 MCP 工具清单。
+description: 利用子 Agent 执行任务；可接收 knowledgeContext 读取知识库，可接收 workspaceContext 切换执行工作区，并接收 skillsContext / mcpContext 注入已加载 skills 与 MCP 工具清单。
 displayName: 子 Agent
 input:
   - type: node
@@ -15,6 +15,10 @@ input:
   - type: text
     name: mcpContext
     default: ""
+  - type: text
+    name: knowledgeContext
+    default: ""
+    showOnNode: true
 output:
   - type: node
     name: next
