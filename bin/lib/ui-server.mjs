@@ -4153,7 +4153,7 @@ function workspaceTargetSlotForEdge(graph, edge) {
 function isWorkspaceSemanticInputSlot(slot) {
   const name = String(slot?.name || "");
   const type = String(slot?.type || "");
-  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "workspaceContext" || name === "gitContext";
+  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "knowledgeContext" || name === "workspaceContext" || name === "gitContext";
 }
 
 function workspaceAgentInputBlock(inputValues = {}, inputMounts = {}) {
@@ -4986,11 +4986,86 @@ function workspaceContextObjectFromText(text, baseCwd, scopedRoot) {
   };
 }
 
+function workspaceKnowledgeSourceFromObject(source = {}, baseCwd = "", scopedRoot = "") {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const rawPath = String(source.path || source.repoPath || source.cwd || source.workspaceRoot || "").trim();
+  if (!rawPath) return null;
+  const resolvedPath = workspaceResolvePath(baseCwd || scopedRoot, rawPath) || rawPath;
+  return {
+    id: String(source.id || source.mountPath || source.label || path.basename(resolvedPath) || "").trim(),
+    label: String(source.label || source.id || source.mountPath || path.basename(resolvedPath) || "知识库").trim(),
+    kind: String(source.kind || (source.repoUrl ? "git" : "local")).trim() || "local",
+    type: String(source.type || "").trim(),
+    path: resolvedPath,
+    repoPath: resolvedPath,
+    mountPath: String(source.mountPath || "").trim(),
+    repoUrl: String(source.repoUrl || "").trim(),
+    branch: String(source.branch || "").trim(),
+    readonly: source.readonly !== false,
+  };
+}
+
+function workspaceKnowledgeSourcesFromText(text, baseCwd = "", scopedRoot = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+  const parsed = parseJsonText(raw, null);
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : (parsed && typeof parsed === "object" && Array.isArray(parsed.sources)
+      ? parsed.sources
+      : (parsed && typeof parsed === "object" && (parsed.path || parsed.repoPath || parsed.cwd || parsed.workspaceRoot) ? [parsed] : []));
+  if (candidates.length) {
+    return candidates
+      .map((source) => workspaceKnowledgeSourceFromObject(source, baseCwd, scopedRoot))
+      .filter(Boolean);
+  }
+  const resolved = workspaceResolvePath(baseCwd || scopedRoot, raw) || raw;
+  return [{
+    id: path.basename(resolved) || "knowledge",
+    label: path.basename(resolved) || "知识库",
+    kind: "local",
+    type: "",
+    path: resolved,
+    repoPath: resolved,
+    mountPath: "",
+    repoUrl: "",
+    branch: "",
+    readonly: true,
+  }];
+}
+
+function workspaceKnowledgeContextBlockFromSources(sources = []) {
+  const valid = Array.isArray(sources) ? sources.filter((source) => source?.path || source?.repoPath) : [];
+  if (!valid.length) return "";
+  const lines = [
+    "## 知识库上下文",
+    "",
+    "这些路径是只读知识库/上下文源，用于检索、阅读和分析；它们不代表当前执行 cwd。需要修改代码时，请先创建或使用可写工作区。",
+    "",
+  ];
+  valid.forEach((source, index) => {
+    const label = String(source.label || source.id || source.mountPath || `知识库 ${index + 1}`).trim();
+    const sourcePath = String(source.path || source.repoPath || "").trim();
+    lines.push(`${index + 1}. ${label}`);
+    if (source.kind) lines.push(`   - 类型：${source.kind}${source.type ? `/${source.type}` : ""}`);
+    if (sourcePath) lines.push(`   - 路径：\`${sourcePath}\``);
+    if (source.mountPath) lines.push(`   - 挂载目录：${source.mountPath}`);
+    if (source.repoUrl) lines.push(`   - Git URL：${source.repoUrl}`);
+    if (source.branch) lines.push(`   - 分支：${source.branch}`);
+  });
+  return lines.join("\n");
+}
+
 function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot = "", logicalCwd = "") {
   const root = scopedRoot ? path.resolve(scopedRoot) : "";
   const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
+  const knowledgeText = workspaceSemanticInputText(graph, nodeId, outputs, "knowledgeContext", scopedRoot);
+  let knowledgeSources = workspaceKnowledgeSourcesFromText(knowledgeText, cwd || root, scopedRoot);
   const workspaceText = workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot);
   let workspaceContext = workspaceContextObjectFromText(workspaceText, cwd || root, scopedRoot);
+  if (!knowledgeSources.length && workspaceContext?.cwd) {
+    knowledgeSources = workspaceKnowledgeSourcesFromText(JSON.stringify([workspaceContext]), cwd || root, scopedRoot);
+  }
   if (!workspaceContext && cwd && root && cwd !== root) {
     workspaceContext = {
       version: 1,
@@ -5002,7 +5077,8 @@ function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot =
     };
   }
   const gitContext = normalizeGitContext(workspaceSemanticInputText(graph, nodeId, outputs, "gitContext", scopedRoot));
-  if (!workspaceContext && !gitContext) return "";
+  const knowledgeBlock = workspaceKnowledgeContextBlockFromSources(knowledgeSources);
+  if (!workspaceContext && !gitContext) return knowledgeBlock;
 
   const contextCwd = workspaceContext?.cwd ? path.resolve(String(workspaceContext.cwd)) : "";
   const workspaceRoot = workspaceContext?.workspaceRoot ? path.resolve(String(workspaceContext.workspaceRoot)) : contextCwd;
@@ -5025,7 +5101,7 @@ function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot =
     "- 读取、搜索、分析当前项目或资料时，优先从“当前工作目录上下文”开始；不要把节点的“当前执行目录”误认为项目根目录。",
     "- 临时文件和正式产物仍必须按“文件边界”写入本节点的 `tmp/` 与 `outputs/`。",
   ].filter((line) => line !== "");
-  return lines.join("\n");
+  return [knowledgeBlock, lines.join("\n")].filter(Boolean).join("\n\n");
 }
 
 function workspaceDefaultWorkspaceContextBlock(scopedRoot = "", logicalCwd = "") {
@@ -5813,28 +5889,51 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       const pathSlot = inputSlots.find((slot) => String(slot?.name || "") === "path") ||
         inputSlots.find((slot) => String(slot?.name || "") === "target");
       const labelSlot = inputSlots.find((slot) => String(slot?.name || "") === "label");
+      const knowledgeSlot = inputSlots.find((slot) => String(slot?.name || "") === "knowledgeContext");
       const contextSlot = inputSlots.find((slot) => String(slot?.name || "") === "workspaceContext");
+      const knowledgeText = workspaceSlotValue(knowledgeSlot);
+      let knowledgeSources = workspaceKnowledgeSourcesFromText(knowledgeText, cwd || scopedRoot, scopedRoot);
       const candidate = workspaceSlotValue(pathSlot) || workspaceInstanceText(instance) || inputText;
-      const abs = candidate ? path.resolve(scopedRoot, candidate) : scopedRoot;
-      if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
-        throw new Error(`Load Workspace path does not exist or is not a directory: ${abs}`);
+      if (!knowledgeSources.length && candidate) {
+        const abs = path.resolve(scopedRoot, candidate);
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+          throw new Error(`Load Knowledge path does not exist or is not a directory: ${abs}`);
+        }
+        knowledgeSources = [{
+          id: path.basename(abs) || "knowledge",
+          label: workspaceSlotValue(labelSlot) || path.basename(abs) || "知识库",
+          kind: "local",
+          type: "",
+          path: abs,
+          repoPath: abs,
+          mountPath: "",
+          repoUrl: "",
+          branch: "",
+          readonly: true,
+        }];
       }
-      cwd = abs;
       const parsedContext = parseJsonText(workspaceSlotValue(contextSlot), {});
       const configuredContext = parsedContext && typeof parsedContext === "object" && !Array.isArray(parsedContext) ? parsedContext : {};
-      const workspaceContext = {
+      const primarySource = knowledgeSources[0] || null;
+      const primaryPath = primarySource?.path ? path.resolve(String(primarySource.path)) : "";
+      const knowledgeContext = {
+        version: 1,
+        sources: knowledgeSources,
+      };
+      const workspaceContext = primarySource ? {
         ...configuredContext,
         version: 1,
-        label: workspaceSlotValue(labelSlot) || path.basename(cwd) || "workspace",
-        cwd,
-        workspaceRoot: cwd,
+        label: primarySource.label || workspaceSlotValue(labelSlot) || path.basename(primaryPath) || "知识库",
+        cwd: primaryPath,
+        workspaceRoot: primaryPath,
         pipelineWorkspace: path.resolve(scopedRoot),
         previous: null,
-      };
-      let nextInstance = workspaceSetOutputSlot(instance, "workspaceContext", JSON.stringify(workspaceContext));
-      nextInstance = workspaceSetOutputSlot(nextInstance, "cwd", cwd);
+      } : null;
+      let nextInstance = workspaceSetOutputSlot(instance, "knowledgeContext", JSON.stringify(knowledgeContext));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "workspaceContext", workspaceContext ? JSON.stringify(workspaceContext) : "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "cwd", primaryPath);
       graph.instances[nodeId] = nextInstance;
-      publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
+      publishNodeOutput(nodeId, JSON.stringify(knowledgeContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -6207,7 +6306,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
     let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
-    if (isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true) && !workspaceContextBlock) {
+    if (!isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true) && !workspaceContextBlock) {
       workspaceContextBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
     }
     const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, workspaceContextBlock);

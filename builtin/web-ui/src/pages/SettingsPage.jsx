@@ -778,7 +778,7 @@ export default function SettingsPage({ authUser }) {
                       <span className="material-symbols-outlined">content_copy</span>
                     </button>
                   </div>
-                  <p className="af-set-hint">当前页面只展示运行时根目录。可被节点加载的代码库和文档目录请在左侧“工作区”里维护。</p>
+                  <p className="af-set-hint">当前页面只展示运行时根目录。可被节点加载的代码库和文档目录请在左侧“知识库”里维护。</p>
                 </div>
                 <div className="af-set-watermark" aria-hidden>
                   <span className="material-symbols-outlined">account_tree</span>

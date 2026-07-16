@@ -107,7 +107,7 @@ function WorkspaceCard({ item, selected, onClick, readOnly }) {
       onClick={onClick}
     >
       <div className="af-workspaces-card__head">
-        <strong>{item.label || "Workspace"}</strong>
+        <strong>{item.label || "知识库"}</strong>
         <span>{item.kind === "git" ? "Git" : "Local"}</span>
       </div>
       <p>{item.description || item.repoUrl || item.path || "-"}</p>
@@ -242,11 +242,11 @@ export default function WorkspacesPage() {
       payload.credentialRef = suggestCredentialRef(draft, payload);
     }
     if (payload.kind === "local" && !payload.path) {
-      setError("本地工作区需要填写路径");
+      setError("本地知识库需要填写路径");
       return;
     }
     if (payload.kind === "git" && !payload.repoUrl) {
-      setError("Git 工作区需要填写 repoUrl");
+      setError("Git 知识库需要填写 repoUrl");
       return;
     }
     if (!payload.label) {
@@ -285,11 +285,11 @@ export default function WorkspacesPage() {
   const syncDraft = useCallback(async () => {
     if (editingReadonly) return;
     if (selectedCustomIndex < 0 || !draft.id) {
-      setError("请先保存工作区配置，再拉取更新");
+      setError("请先保存知识库配置，再拉取更新");
       return;
     }
     if (draft.kind !== "git") {
-      setError("只有 Git 工作区支持拉取更新");
+      setError("只有 Git 知识库支持拉取更新");
       return;
     }
     setSyncing(true);
@@ -324,10 +324,10 @@ export default function WorkspacesPage() {
   return (
     <div className="af-workspaces-page">
       <header className="af-settings-top">
-        <div className="af-settings-crumb" aria-label="工作区">
+        <div className="af-settings-crumb" aria-label="知识库">
           <span className="af-settings-crumb-muted">AgentFlow</span>
           <span className="af-settings-crumb-sep" aria-hidden>/</span>
-          <span className="af-settings-crumb-active">工作区</span>
+          <span className="af-settings-crumb-active">知识库</span>
         </div>
         <button type="button" className="af-schedules-refresh" onClick={load} disabled={loading}>
           <span className="material-symbols-outlined">refresh</span>
@@ -338,8 +338,8 @@ export default function WorkspacesPage() {
       <main className="af-settings-body">
         <div className="af-workspaces-inner">
           <header className="af-settings-hero">
-            <h1 className="af-settings-h1">工作区</h1>
-            <p className="af-settings-lead">维护可被 Load Workspace、一键任务和后续 Agent 运行使用的上下文目录。Git 字段与 mengmai 的资源配置保持一致。</p>
+            <h1 className="af-settings-h1">知识库</h1>
+            <p className="af-settings-lead">维护可被加载知识库、一键任务和后续 Agent 使用的只读上下文源。Git 字段与 mengmai 的资源配置保持一致。</p>
             {configPath ? <p className="af-workspaces-config">配置文件：{configPath}</p> : null}
             {error ? <p className="af-err af-settings-api-hint">{error}</p> : null}
             {status ? <p className="af-workspaces-status">{status}</p> : null}
@@ -363,7 +363,7 @@ export default function WorkspacesPage() {
           <div className="af-workspaces-layout">
             <section className="af-workspaces-list">
               <div className="af-workspaces-section-head">
-                <h2>自定义工作区</h2>
+                <h2>自定义知识库</h2>
                 <button type="button" onClick={startCreate}>
                   <span className="material-symbols-outlined">add</span>
                   新增
@@ -377,11 +377,11 @@ export default function WorkspacesPage() {
                   onClick={() => selectCustom(item, index)}
                 />
               )) : (
-                <div className="af-workspaces-empty">暂无自定义工作区。新增 Git 或本地目录后，画布里的 Load Workspace 就可以选择它。</div>
+                <div className="af-workspaces-empty">暂无自定义知识库。新增 Git 或本地目录后，画布里的加载知识库和一键任务就可以选择它。</div>
               )}
 
               <div className="af-workspaces-section-head af-workspaces-section-head--sub">
-                <h2>内置工作区</h2>
+                <h2>内置知识库</h2>
               </div>
               {builtins.map((item, index) => (
                 <WorkspaceCard
@@ -397,8 +397,8 @@ export default function WorkspacesPage() {
             <section className="af-workspaces-editor">
               <div className="af-workspaces-editor__head">
                 <div>
-                  <h2>{editingReadonly ? "查看内置工作区" : selectedCustomIndex >= 0 ? "编辑工作区" : "新增工作区"}</h2>
-                  <p>{editingReadonly ? "内置项由当前运行环境提供，不能在这里修改。" : "本地路径用于执行，Git 字段用于后续同步和上下文挂载。"}</p>
+                  <h2>{editingReadonly ? "查看内置知识库" : selectedCustomIndex >= 0 ? "编辑知识库" : "新增知识库"}</h2>
+                  <p>{editingReadonly ? "内置项由当前运行环境提供，不能在这里修改。" : "本地路径用于读取上下文，Git 字段用于后续同步和上下文挂载。"}</p>
                 </div>
                 <label className="af-workspaces-switch">
                   <input type="checkbox" checked={draft.enabled !== false} disabled={editingReadonly} onChange={(e) => patchDraft({ enabled: e.target.checked })} />
@@ -435,7 +435,7 @@ export default function WorkspacesPage() {
                 </label>
                 <label className="af-workspaces-form__wide">
                   <span>本地路径</span>
-                  <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到工作区根目录/workspaces/repos/<id>" : "/Users/.../project"} />
+                  <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到全局资源目录/repos/<仓库名>" : "/Users/.../project"} />
                 </label>
                 {draft.kind === "git" ? (
                   <>
@@ -478,13 +478,13 @@ export default function WorkspacesPage() {
                         onChange={(e) => setTokenDraft(e.target.value)}
                         placeholder={credentialEnvExists ? "已在个人环境变量中配置；留空则不修改" : "保存到个人环境变量，不写入 workspace 配置"}
                       />
-                      <small>保存后只在 workspace 配置中保留 credentialRef，token 会写入当前用户的个人环境变量。</small>
+                      <small>保存后只在知识库配置中保留 credentialRef，token 会写入当前用户的个人环境变量。</small>
                     </label>
                   </>
                 ) : null}
                 <label className="af-workspaces-form__wide">
                   <span>说明</span>
-                  <textarea value={draft.description} disabled={editingReadonly} onChange={(e) => patchDraft({ description: e.target.value })} placeholder="这个工作区包含哪些代码、文档或需求上下文" />
+                  <textarea value={draft.description} disabled={editingReadonly} onChange={(e) => patchDraft({ description: e.target.value })} placeholder="这个知识库包含哪些代码、文档或需求上下文" />
                 </label>
               </div>
 
