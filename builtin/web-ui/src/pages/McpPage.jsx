@@ -96,6 +96,36 @@ function backendLabel(backend, fallback) {
   return backend.label || fallback;
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    /* fall back below */
+  }
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function mcpTokenValue(token) {
   const trimmed = String(token || "").trim();
   return trimmed || "<AGENTFLOW_TOKEN>";
@@ -163,9 +193,10 @@ function buildAgentflowMcpPrompt({ baseUrl = "", token = "" }) {
     "4. 如果配置文件不存在，请创建父目录和配置文件。",
     "5. 不要把 token 打印到最终回复里；如果需要说明，只写 `AGENTFLOW_TOKEN 已写入配置`。",
     "6. 如果 token 仍是 `<AGENTFLOW_TOKEN>` 占位符，请提醒用户需要在配置文件中替换成真实 token，或回到 AgentFlow 的 MCP 页面点击“使用当前登录 Token”后重新复制。",
+    "7. 如果外部 Agent 启动 MCP 时找不到 `agentflow` 命令，请把 command 改成本机 agentflow 可执行文件的绝对路径，或先把 agentflow 安装/软链到 PATH。",
     "",
     "配置后验证：",
-    "- 确认 `agentflow` 命令在 PATH 中可用。",
+    "- 如果配置使用 `command: agentflow`，确认外部 Agent 所在环境可以执行这个命令；如果使用绝对路径，则确认路径存在且可执行。",
     "- 通过 MCP 客户端刷新或重启后，确认 `agentflow` server 出现在 MCP server 列表。",
     "- 如果可以做工具探测，只验证 `tools/list` 能看到 `agentflow_list_flows`、`agentflow_run_flow`、`agentflow_get_display_outputs`。",
     "",
@@ -299,22 +330,22 @@ export default function McpPage() {
     setError("");
   };
 
-  const copyMcpPrompt = useCallback(() => {
+  const copyMcpPrompt = useCallback(async () => {
     if (!mcpPrompt) return;
-    void navigator.clipboard?.writeText(mcpPrompt);
-    setMcpCopied("prompt");
+    const ok = await copyTextToClipboard(mcpPrompt);
+    setMcpCopied(ok ? "prompt" : "copy-failed");
     window.setTimeout(() => setMcpCopied(""), 1200);
   }, [mcpPrompt]);
 
-  const copyCursorMcpConfig = useCallback(() => {
-    void navigator.clipboard?.writeText(agentflowCursorMcpConfig);
-    setMcpCopied("cursor");
+  const copyCursorMcpConfig = useCallback(async () => {
+    const ok = await copyTextToClipboard(agentflowCursorMcpConfig);
+    setMcpCopied(ok ? "cursor" : "copy-failed");
     window.setTimeout(() => setMcpCopied(""), 1200);
   }, [agentflowCursorMcpConfig]);
 
-  const copyCodexMcpConfig = useCallback(() => {
-    void navigator.clipboard?.writeText(agentflowCodexMcpConfig);
-    setMcpCopied("codex");
+  const copyCodexMcpConfig = useCallback(async () => {
+    const ok = await copyTextToClipboard(agentflowCodexMcpConfig);
+    setMcpCopied(ok ? "codex" : "copy-failed");
     window.setTimeout(() => setMcpCopied(""), 1200);
   }, [agentflowCodexMcpConfig]);
 
@@ -496,7 +527,7 @@ export default function McpPage() {
                 <div className="af-set-mcp-snippet-head">
                   <span>Cursor mcp.json</span>
                   <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={copyCursorMcpConfig}>
-                    {mcpCopied === "cursor" ? "已复制" : "复制"}
+                    {mcpCopied === "cursor" ? "已复制" : mcpCopied === "copy-failed" ? "复制失败" : "复制"}
                   </button>
                 </div>
                 <pre className="af-set-mcp-code">{agentflowCursorMcpConfig}</pre>
@@ -505,7 +536,7 @@ export default function McpPage() {
                 <div className="af-set-mcp-snippet-head">
                   <span>Codex config.toml</span>
                   <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={copyCodexMcpConfig}>
-                    {mcpCopied === "codex" ? "已复制" : "复制"}
+                    {mcpCopied === "codex" ? "已复制" : mcpCopied === "copy-failed" ? "复制失败" : "复制"}
                   </button>
                 </div>
                 <pre className="af-set-mcp-code">{agentflowCodexMcpConfig}</pre>
@@ -515,9 +546,12 @@ export default function McpPage() {
             <div className="af-set-mcp-copy-row">
               <button type="button" className="af-set-footer-primary" onClick={copyMcpPrompt}>
                 <span className="material-symbols-outlined" aria-hidden>content_copy</span>
-                {mcpCopied === "prompt" ? "已复制 Prompt" : "复制 AI 配置 Prompt"}
+                {mcpCopied === "prompt" ? "已复制 Prompt" : mcpCopied === "copy-failed" ? "复制失败" : "复制 AI 配置 Prompt"}
               </button>
             </div>
+            {mcpCopied === "copy-failed" ? (
+              <p className="af-mcp-error">浏览器禁止访问剪贴板，请手动选中下面的 Prompt 复制。</p>
+            ) : null}
 
             <label className="af-set-label-sm" htmlFor="af-mcp-ai-prompt">
               AI 配置 Prompt
