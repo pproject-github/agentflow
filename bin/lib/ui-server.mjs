@@ -1682,6 +1682,103 @@ function writeUserWorkspaces(userCtx = {}, entries = []) {
   return workspaces;
 }
 
+function redactWorkspaceSecret(text = "", secret = "") {
+  let out = String(text || "");
+  const raw = String(secret || "");
+  if (!raw) return out;
+  out = out.split(raw).join("<redacted>");
+  try {
+    out = out.split(encodeURIComponent(raw)).join("<redacted>");
+  } catch {
+    // ignore invalid encoding edge cases
+  }
+  return out;
+}
+
+function workspaceRepoUrlWithCredential(repoUrl = "", credential = "") {
+  const token = String(credential || "").trim();
+  if (!token) return String(repoUrl || "").trim();
+  try {
+    const u = new URL(String(repoUrl || "").trim());
+    if (!/^https?:$/.test(u.protocol)) return String(repoUrl || "").trim();
+    if (!u.username) u.username = "oauth2";
+    u.password = token;
+    return u.toString();
+  } catch {
+    return String(repoUrl || "").trim();
+  }
+}
+
+function gitWorkspaceCommandOrThrow(args, cwd, label, secret = "") {
+  const result = runGit(args, cwd);
+  if (result.status !== 0) {
+    const message = redactWorkspaceSecret(result.stderr || result.stdout || result.error?.message || "unknown error", secret);
+    throw new Error(`${label} failed: ${message}`);
+  }
+  return {
+    stdout: redactWorkspaceSecret(result.stdout || "", secret),
+    stderr: redactWorkspaceSecret(result.stderr || "", secret),
+  };
+}
+
+function syncGitWorkspace(entry = {}, userCtx = {}) {
+  const workspace = normalizeWorkspaceEntry(entry, 0, userCtx);
+  if (!workspace || workspace.kind !== "git") throw new Error("只能拉取 Git 工作区");
+  if (!workspace.repoUrl) throw new Error("Git 工作区缺少 repoUrl");
+  const env = readMergedEnvObject(userCtx.userId || "");
+  const token = workspace.credentialRef ? String(env[workspace.credentialRef] || "").trim() : "";
+  const repoUrl = workspaceRepoUrlWithCredential(workspace.repoUrl, token);
+  const targetDir = path.resolve(workspace.path);
+  const parentDir = path.dirname(targetDir);
+  fs.mkdirSync(parentDir, { recursive: true });
+
+  const lines = [];
+  let changed = false;
+  if (fs.existsSync(path.join(targetDir, ".git"))) {
+    const originalRemote = runGit(["remote", "get-url", "origin"], targetDir).stdout.trim();
+    try {
+      if (token) gitWorkspaceCommandOrThrow(["remote", "set-url", "origin", repoUrl], targetDir, "git remote set-url", token);
+      const before = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+      gitWorkspaceCommandOrThrow(["fetch", "origin", "--prune"], targetDir, "git fetch", token);
+      if (workspace.branch) {
+        const checkout = runGit(["checkout", workspace.branch], targetDir);
+        if (checkout.status !== 0) {
+          gitWorkspaceCommandOrThrow(["checkout", "-b", workspace.branch, `origin/${workspace.branch}`], targetDir, "git checkout", token);
+        }
+        gitWorkspaceCommandOrThrow(["pull", "--ff-only", "origin", workspace.branch], targetDir, "git pull", token);
+      } else {
+        gitWorkspaceCommandOrThrow(["pull", "--ff-only"], targetDir, "git pull", token);
+      }
+      const after = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+      changed = before !== after;
+      lines.push(changed ? `updated ${before.slice(0, 8)} -> ${after.slice(0, 8)}` : `already up to date ${after.slice(0, 8)}`);
+    } finally {
+      if (token && originalRemote) runGit(["remote", "set-url", "origin", originalRemote], targetDir);
+    }
+  } else {
+    if (fs.existsSync(targetDir) && fs.readdirSync(targetDir).length > 0) {
+      throw new Error(`目标路径已存在但不是 Git 仓库：${targetDir}`);
+    }
+    const args = ["clone"];
+    if (workspace.branch) args.push("--branch", workspace.branch);
+    args.push(repoUrl, targetDir);
+    gitWorkspaceCommandOrThrow(args, parentDir, "git clone", token);
+    const commit = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+    changed = true;
+    lines.push(`cloned ${commit.slice(0, 8)}`);
+    if (token) runGit(["remote", "set-url", "origin", workspace.repoUrl], targetDir);
+  }
+  const branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], targetDir).stdout.trim();
+  const commit = runGit(["rev-parse", "HEAD"], targetDir).stdout.trim();
+  return {
+    workspace: normalizeWorkspaceEntry({ ...workspace, path: targetDir }, 0, userCtx),
+    changed,
+    branch,
+    commit,
+    message: lines.join("\n"),
+  };
+}
+
 function listConfiguredWorkspaces(root, scopedRoot, userCtx = {}) {
   const currentRoot = path.resolve(scopedRoot || root);
   const homeRoot = path.resolve(os.homedir());
@@ -7673,6 +7770,29 @@ export function startUiServer({
           path: userWorkspacesPath(userCtx),
           workspaces: listConfiguredWorkspaces(root, root, userCtx),
           customWorkspaces,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspaces/sync") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const id = String(payload?.id || "").trim();
+        const workspaces = readUserWorkspaces(userCtx);
+        const workspace = workspaces.find((entry) => String(entry.id || "") === id);
+        if (!workspace) {
+          json(res, 404, { error: "工作区不存在" });
+          return;
+        }
+        const result = syncGitWorkspace(workspace, userCtx);
+        json(res, 200, {
+          ok: true,
+          ...result,
+          workspaces: listConfiguredWorkspaces(root, root, userCtx),
+          customWorkspaces: readUserWorkspaces(userCtx),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
