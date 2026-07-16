@@ -3263,10 +3263,10 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       setViewMode("config");
       return;
     }
-    if (!running && (data?.nodeStatus === "success" || data?.contextRunResultNonce || viewMode !== "config")) {
+    if (!running) {
       setViewMode("result");
     }
-  }, [data?.contextRunResultNonce, data?.nodeStatus, hasResult, outputPreview, running]);
+  }, [hasResult, outputPreview, running]);
   useEffect(() => {
     if (!(viewMode === "result" && hasResult)) return undefined;
     data?.onEnsureWorkspaceNodeDisplaySize?.(id, resultDisplaySize);
