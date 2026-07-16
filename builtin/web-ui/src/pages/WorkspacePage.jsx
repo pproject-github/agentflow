@@ -4620,6 +4620,15 @@ function selectedSkillKeysFromConfigSlots(data) {
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
+function compactSelectionSummary(items, emptyLabel, maxVisible = 2) {
+  const names = (Array.isArray(items) ? items : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (!names.length) return emptyLabel;
+  const head = names.slice(0, maxVisible).join("、");
+  return names.length > maxVisible ? `${head} 等 ${names.length} 个` : head;
+}
+
 function serializeSkillKeys(keys) {
   return JSON.stringify(Array.from(new Set((keys || []).map(String).filter(Boolean))));
 }
@@ -4952,6 +4961,8 @@ function WorkspaceLoadSkillsNode({
   const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
   const keys = useMemo(() => new Set(selectedSkillKeysFromNodeData(data)), [data]);
   const byKey = useMemo(() => new Map(skillsList.map((skill) => [skill.key, skill])), [skillsList]);
+  const selectedSkillNames = useMemo(() => Array.from(keys).map((key) => byKey.get(key)?.name || key), [byKey, keys]);
+  const selectedSkillSummary = useMemo(() => compactSelectionSummary(selectedSkillNames, "选择 Skills"), [selectedSkillNames]);
   const groups = useMemo(() => {
     const used = new Set();
     const collectionGroups = collectionsList
@@ -5134,7 +5145,9 @@ function WorkspaceLoadSkillsNode({
           if (!open) data?.onRefreshSkills?.();
           setOpen((v) => !v);
         }}>
-          <span>{keys.size > 0 ? `${keys.size} skills selected` : "选择 Skills"}</span>
+          <span className="af-work-load-skills-card__summary" title={selectedSkillNames.join(", ")}>
+            {selectedSkillSummary}
+          </span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
         {open ? (
@@ -5409,7 +5422,8 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
     return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath].join(" ").toLowerCase().includes(q));
   }, [search, workspaceList]);
   const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
-  const title = selectedKeys.size ? `${selectedKeys.size} 个知识库` : "选择知识库";
+  const selectedWorkspaceNames = useMemo(() => (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path), [selectedKnowledge.sources]);
+  const title = useMemo(() => compactSelectionSummary(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
   const toggleWorkspace = (workspace, checked) => {
     const key = workspace?.id || workspace?.path || "";
     const selectedItems = workspaceList.filter((item) => {
@@ -5474,7 +5488,9 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
           if (!open) onRefreshWorkspaces?.();
           setOpen((v) => !v);
         }}>
-          <span>{title}</span>
+          <span className="af-work-load-skills-card__summary" title={selectedWorkspaceNames.join(", ")}>
+            {title}
+          </span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
         {selectedKnowledge.sources?.length ? <div className="af-work-load-workspace-card__path">{selectedKnowledge.sources.map((item) => item.label || item.id || item.mountPath).join(", ")}</div> : null}

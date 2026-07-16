@@ -9090,7 +9090,15 @@ button.af-project-card {
 }
 
 .af-work-load-skills-card__select .material-symbols-outlined {
+  flex: 0 0 auto;
   font-size: 1.05rem;
+}
+
+.af-work-load-skills-card__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .af-work-load-workspace-card__path {
