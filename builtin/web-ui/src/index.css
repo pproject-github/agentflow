@@ -2377,12 +2377,25 @@ button.af-project-card {
   margin-bottom: 2.5rem;
 }
 
+.af-settings-hero--compact {
+  margin: 2rem 0 1rem;
+}
+
 .af-settings-h1 {
   margin: 0 0 0.5rem;
   font-family: var(--af-headline);
   font-size: clamp(1.85rem, 3vw, 2.25rem);
   font-weight: 700;
   letter-spacing: -0.04em;
+  color: var(--af-on-surface);
+}
+
+.af-settings-h2 {
+  margin: 0 0 0.45rem;
+  font-family: var(--af-headline);
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0;
   color: var(--af-on-surface);
 }
 

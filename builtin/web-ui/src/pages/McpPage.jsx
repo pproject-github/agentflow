@@ -96,6 +96,83 @@ function backendLabel(backend, fallback) {
   return backend.label || fallback;
 }
 
+function mcpTokenValue(token) {
+  const trimmed = String(token || "").trim();
+  return trimmed || "<AGENTFLOW_TOKEN>";
+}
+
+function buildAgentflowCursorMcpConfig({ baseUrl = "", token = "" }) {
+  return JSON.stringify({
+    mcpServers: {
+      agentflow: {
+        command: "agentflow",
+        args: ["mcp"],
+        env: {
+          AGENTFLOW_BASE_URL: String(baseUrl || "http://127.0.0.1:8875"),
+          AGENTFLOW_TOKEN: mcpTokenValue(token),
+        },
+      },
+    },
+  }, null, 2);
+}
+
+function buildAgentflowCodexMcpConfig({ baseUrl = "", token = "" }) {
+  const quotedBaseUrl = JSON.stringify(String(baseUrl || "http://127.0.0.1:8875"));
+  const quotedToken = JSON.stringify(mcpTokenValue(token));
+  return [
+    "[mcp_servers.agentflow]",
+    "command = \"agentflow\"",
+    "args = [\"mcp\"]",
+    "",
+    "[mcp_servers.agentflow.env]",
+    `AGENTFLOW_BASE_URL = ${quotedBaseUrl}`,
+    `AGENTFLOW_TOKEN = ${quotedToken}`,
+  ].join("\n");
+}
+
+function buildAgentflowMcpPrompt({ baseUrl = "", token = "" }) {
+  const url = String(baseUrl || "http://127.0.0.1:8875");
+  const cursorConfig = buildAgentflowCursorMcpConfig({ baseUrl: url, token });
+  const codexConfig = buildAgentflowCodexMcpConfig({ baseUrl: url, token });
+  return [
+    "你是一个 AI Coding Agent。请帮我把 AgentFlow 配置成当前开发环境可用的 MCP server。",
+    "",
+    "这是一项配置任务，不是调用任务：请修改 Cursor 或 Codex 的 MCP 配置文件，让它们能连接本机 AgentFlow。",
+    "",
+    "AgentFlow MCP server 信息：",
+    "- server name: agentflow",
+    "- command: agentflow",
+    "- args: [\"mcp\"]",
+    `- env.AGENTFLOW_BASE_URL: ${url}`,
+    `- env.AGENTFLOW_TOKEN: ${mcpTokenValue(token)}`,
+    "",
+    "Cursor 配置片段（合并到 .cursor/mcp.json 或 ~/.cursor/mcp.json）：",
+    "```json",
+    cursorConfig,
+    "```",
+    "",
+    "Codex 配置片段（合并到 ~/.codex/config.toml 的 mcp_servers 配置）：",
+    "```toml",
+    codexConfig,
+    "```",
+    "",
+    "配置要求：",
+    "1. 先判断当前仓库主要使用 Cursor、Codex，还是两者都需要配置。",
+    "2. 不要覆盖已有 MCP server；只新增或更新名为 `agentflow` 的 server。",
+    "3. 保留已有配置文件里的其他字段、注释和 server。",
+    "4. 如果配置文件不存在，请创建父目录和配置文件。",
+    "5. 不要把 token 打印到最终回复里；如果需要说明，只写 `AGENTFLOW_TOKEN 已写入配置`。",
+    "6. 如果 token 仍是 `<AGENTFLOW_TOKEN>` 占位符，请提醒用户需要在配置文件中替换成真实 token，或回到 AgentFlow 的 MCP 页面点击“使用当前登录 Token”后重新复制。",
+    "",
+    "配置后验证：",
+    "- 确认 `agentflow` 命令在 PATH 中可用。",
+    "- 通过 MCP 客户端刷新或重启后，确认 `agentflow` server 出现在 MCP server 列表。",
+    "- 如果可以做工具探测，只验证 `tools/list` 能看到 `agentflow_list_flows`、`agentflow_run_flow`、`agentflow_get_display_outputs`。",
+    "",
+    "最终回复只需要说明：配置了哪些文件、是否验证成功、如果失败下一步该检查什么。",
+  ].join("\n");
+}
+
 function BackendMatrix({ server }) {
   const backends = server?.backends || {};
   const rows = [
@@ -164,8 +241,25 @@ export default function McpPage() {
   const [checks, setChecks] = useState({});
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [agentflowMcpBaseUrl, setAgentflowMcpBaseUrl] = useState(() =>
+    typeof window !== "undefined" && window.location?.origin ? window.location.origin : "http://127.0.0.1:8875",
+  );
+  const [agentflowMcpToken, setAgentflowMcpToken] = useState("");
+  const [mcpCopied, setMcpCopied] = useState("");
   const selected = useMemo(() => servers.find((server) => server.name === selectedName) || null, [selectedName, servers]);
   const selectedCheck = selected ? checks[selected.name] || null : null;
+  const agentflowCursorMcpConfig = useMemo(() => buildAgentflowCursorMcpConfig({
+    baseUrl: agentflowMcpBaseUrl,
+    token: agentflowMcpToken,
+  }), [agentflowMcpBaseUrl, agentflowMcpToken]);
+  const agentflowCodexMcpConfig = useMemo(() => buildAgentflowCodexMcpConfig({
+    baseUrl: agentflowMcpBaseUrl,
+    token: agentflowMcpToken,
+  }), [agentflowMcpBaseUrl, agentflowMcpToken]);
+  const mcpPrompt = useMemo(() => buildAgentflowMcpPrompt({
+    baseUrl: agentflowMcpBaseUrl,
+    token: agentflowMcpToken,
+  }), [agentflowMcpBaseUrl, agentflowMcpToken]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -204,6 +298,39 @@ export default function McpPage() {
     setStatus("");
     setError("");
   };
+
+  const copyMcpPrompt = useCallback(() => {
+    if (!mcpPrompt) return;
+    void navigator.clipboard?.writeText(mcpPrompt);
+    setMcpCopied("prompt");
+    window.setTimeout(() => setMcpCopied(""), 1200);
+  }, [mcpPrompt]);
+
+  const copyCursorMcpConfig = useCallback(() => {
+    void navigator.clipboard?.writeText(agentflowCursorMcpConfig);
+    setMcpCopied("cursor");
+    window.setTimeout(() => setMcpCopied(""), 1200);
+  }, [agentflowCursorMcpConfig]);
+
+  const copyCodexMcpConfig = useCallback(() => {
+    void navigator.clipboard?.writeText(agentflowCodexMcpConfig);
+    setMcpCopied("codex");
+    window.setTimeout(() => setMcpCopied(""), 1200);
+  }, [agentflowCodexMcpConfig]);
+
+  const fillCurrentSessionToken = useCallback(async () => {
+    try {
+      const r = await fetch("/api/auth/session-token");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      setAgentflowMcpToken(String(j.token || ""));
+      setMcpCopied("token");
+      window.setTimeout(() => setMcpCopied(""), 1200);
+    } catch (e) {
+      setMcpCopied("");
+      setError(String(e.message || e));
+    }
+  }, []);
 
   const checkServers = async (name = "") => {
     setChecking(true);
@@ -316,7 +443,97 @@ export default function McpPage() {
         <div className="af-settings-inner">
           <section className="af-settings-hero">
             <h1 className="af-settings-h1">MCP 管理</h1>
-            <p className="af-settings-lead">新增、编辑和删除 Cursor MCP server。当前配置文件：<span className="af-settings-code">{configPath || "~/.cursor/mcp.json"}</span></p>
+            <p className="af-settings-lead">管理 AgentFlow 暴露给外部 Agent 的 MCP 接入方式，以及 AgentFlow 自身可调用的外部 MCP server。</p>
+          </section>
+
+          <section className="af-set-card af-set-card--wide af-set-card--low af-set-mcp-personal">
+            <div className="af-set-env-head">
+              <div className="af-set-card-head">
+                <div className="af-set-env-icon-wrap">
+                  <span className="material-symbols-outlined af-set-icon--primary">lan</span>
+                </div>
+                <div>
+                  <h2 className="af-set-h2">我的 MCP</h2>
+                  <p className="af-set-card-subtitle">给 Cursor、Codex 等外部 Agent 配置 AgentFlow MCP，用来运行流程并读取 display 结果。</p>
+                </div>
+              </div>
+              <span className="af-set-badge af-set-badge--ok">AgentFlow as MCP</span>
+            </div>
+
+            <p className="af-set-hint">
+              这里生成的是让其他 Agent 连接本平台的配置；下方“外部 MCP Servers”管理的是 AgentFlow 运行时可调用的外部工具。
+            </p>
+
+            <div className="af-set-mcp-connect-grid">
+              <label className="af-set-mcp-field">
+                <span>Base URL</span>
+                <input
+                  className="af-set-input af-set-input--mono"
+                  value={agentflowMcpBaseUrl}
+                  onChange={(e) => setAgentflowMcpBaseUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:8875"
+                />
+              </label>
+              <label className="af-set-mcp-field">
+                <span>Token</span>
+                <div className="af-set-mcp-token-row">
+                  <input
+                    className="af-set-input af-set-input--mono"
+                    type="password"
+                    value={agentflowMcpToken}
+                    onChange={(e) => setAgentflowMcpToken(e.target.value)}
+                    placeholder="<AGENTFLOW_TOKEN>"
+                  />
+                  <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={fillCurrentSessionToken}>
+                    {mcpCopied === "token" ? "已填入" : "使用当前登录 Token"}
+                  </button>
+                </div>
+              </label>
+            </div>
+
+            <div className="af-set-mcp-snippet-grid">
+              <div>
+                <div className="af-set-mcp-snippet-head">
+                  <span>Cursor mcp.json</span>
+                  <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={copyCursorMcpConfig}>
+                    {mcpCopied === "cursor" ? "已复制" : "复制"}
+                  </button>
+                </div>
+                <pre className="af-set-mcp-code">{agentflowCursorMcpConfig}</pre>
+              </div>
+              <div>
+                <div className="af-set-mcp-snippet-head">
+                  <span>Codex config.toml</span>
+                  <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={copyCodexMcpConfig}>
+                    {mcpCopied === "codex" ? "已复制" : "复制"}
+                  </button>
+                </div>
+                <pre className="af-set-mcp-code">{agentflowCodexMcpConfig}</pre>
+              </div>
+            </div>
+
+            <div className="af-set-mcp-copy-row">
+              <button type="button" className="af-set-footer-primary" onClick={copyMcpPrompt}>
+                <span className="material-symbols-outlined" aria-hidden>content_copy</span>
+                {mcpCopied === "prompt" ? "已复制 Prompt" : "复制 AI 配置 Prompt"}
+              </button>
+            </div>
+
+            <label className="af-set-label-sm" htmlFor="af-mcp-ai-prompt">
+              AI 配置 Prompt
+            </label>
+            <textarea
+              id="af-mcp-ai-prompt"
+              className="af-set-input af-set-input--mono af-set-mcp-prompt"
+              rows={12}
+              readOnly
+              value={mcpPrompt}
+            />
+          </section>
+
+          <section className="af-settings-hero af-settings-hero--compact">
+            <h2 className="af-settings-h2">外部 MCP Servers</h2>
+            <p className="af-settings-lead">新增、编辑和删除 AgentFlow 可调用的外部 MCP server。当前配置文件：<span className="af-settings-code">{configPath || "~/.cursor/mcp.json"}</span></p>
           </section>
 
           <div className="af-mcp-layout">
