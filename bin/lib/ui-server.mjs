@@ -7667,7 +7667,7 @@ export function startUiServer({
 
     if (req.method === "POST" && url.pathname === "/api/workspaces") {
       try {
-        const payload = await readJson(req);
+        const payload = JSON.parse(await readBody(req));
         const customWorkspaces = writeUserWorkspaces(userCtx, payload?.workspaces || payload?.customWorkspaces || []);
         json(res, 200, {
           path: userWorkspacesPath(userCtx),
