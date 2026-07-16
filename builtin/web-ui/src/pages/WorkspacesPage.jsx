@@ -8,6 +8,26 @@ function isValidEnvKey(key) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key || "").trim());
 }
 
+function suggestMountPathFromRepoUrl(repoUrl) {
+  const raw = String(repoUrl || "").trim();
+  if (!raw) return "";
+  let pathname = raw;
+  try {
+    pathname = new URL(raw).pathname;
+  } catch (_) {
+    pathname = raw.split("?")[0].split("#")[0];
+  }
+  const name = pathname
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter(Boolean)
+    .pop() || "";
+  return name
+    .replace(/\.git$/i, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function suggestCredentialRef(draft = {}, payload = {}) {
   const seed = String(draft.mountPath || payload.mountPath || draft.label || payload.label || draft.id || payload.id || "workspace")
     .trim()
@@ -52,14 +72,18 @@ function toDraft(item = {}) {
 
 function draftToPayload(draft) {
   const kind = draft.kind === "local" ? "local" : "git";
+  const repoUrl = kind === "git" ? String(draft.repoUrl || "").trim() : "";
+  const mountPath = kind === "git"
+    ? String(draft.mountPath || suggestMountPathFromRepoUrl(repoUrl) || "").trim()
+    : "";
   return {
     id: String(draft.id || "").trim(),
     label: String(draft.label || "").trim(),
     kind,
     path: String(draft.path || "").trim(),
-    repoUrl: kind === "git" ? String(draft.repoUrl || "").trim() : "",
+    repoUrl,
     branch: kind === "git" ? String(draft.branch || "master").trim() || "master" : "",
-    mountPath: kind === "git" ? String(draft.mountPath || "").trim() : "",
+    mountPath,
     credentialRef: kind === "git" ? String(draft.credentialRef || "").trim() : "",
     type: String(draft.type || (kind === "local" ? "local" : "code")).trim(),
     description: String(draft.description || "").trim(),
@@ -417,7 +441,21 @@ export default function WorkspacesPage() {
                   <>
                     <label className="af-workspaces-form__wide">
                       <span>Git URL</span>
-                      <input value={draft.repoUrl} disabled={editingReadonly} onChange={(e) => patchDraft({ repoUrl: e.target.value })} placeholder="https://git.example.com/group/repo.git" />
+                      <input
+                        value={draft.repoUrl}
+                        disabled={editingReadonly}
+                        onChange={(e) => {
+                          const nextRepoUrl = e.target.value;
+                          const previousSuggestion = suggestMountPathFromRepoUrl(draft.repoUrl);
+                          const currentMountPath = String(draft.mountPath || "").trim();
+                          const shouldUpdateMountPath = !currentMountPath || currentMountPath === previousSuggestion;
+                          patchDraft({
+                            repoUrl: nextRepoUrl,
+                            ...(shouldUpdateMountPath ? { mountPath: suggestMountPathFromRepoUrl(nextRepoUrl) } : {}),
+                          });
+                        }}
+                        placeholder="https://git.example.com/group/repo.git"
+                      />
                     </label>
                     <label>
                       <span>分支</span>
@@ -425,7 +463,7 @@ export default function WorkspacesPage() {
                     </label>
                     <label>
                       <span>挂载目录</span>
-                      <input value={draft.mountPath} disabled={editingReadonly} onChange={(e) => patchDraft({ mountPath: e.target.value })} placeholder="likee_android" />
+                      <input value={draft.mountPath} disabled={editingReadonly} onChange={(e) => patchDraft({ mountPath: e.target.value })} placeholder={suggestMountPathFromRepoUrl(draft.repoUrl) || "repo_name"} />
                     </label>
                     <label className="af-workspaces-form__wide">
                       <span>凭证环境变量</span>

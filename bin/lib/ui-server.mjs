@@ -1643,6 +1643,22 @@ function isLegacyDefaultWorkspaceGitPath(rawPath = "", id = "", userCtx = {}) {
   }
 }
 
+function workspaceRepoNameFromUrl(repoUrl = "") {
+  const raw = String(repoUrl || "").trim();
+  if (!raw) return "";
+  let pathname = raw;
+  try {
+    pathname = new URL(raw).pathname;
+  } catch {
+    pathname = raw.split("?")[0].split("#")[0];
+  }
+  const name = pathname.replace(/\/+$/, "").split("/").filter(Boolean).pop() || "";
+  return name
+    .replace(/\.git$/i, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
   const label = String(entry?.label || entry?.name || "").trim();
   const kindRaw = String(entry?.kind || entry?.source || "").trim().toLowerCase();
@@ -1654,7 +1670,8 @@ function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
   if (!rawPath && kind !== "git") return null;
   const idRaw = String(entry?.id || label || mountPathRaw || repoUrl || rawPath || `workspace_${index + 1}`).trim().toLowerCase();
   const id = idRaw.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64) || `workspace_${index + 1}`;
-  const mountPath = (mountPathRaw || id).replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "").trim() || id;
+  const suggestedMountPath = kind === "git" ? workspaceRepoNameFromUrl(repoUrl) : "";
+  const mountPath = (mountPathRaw || suggestedMountPath || id).replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "").trim() || id;
   const defaultGitPath = defaultWorkspaceGitPath(id);
   const explicitPath = kind === "git" && isLegacyDefaultWorkspaceGitPath(rawPath, id, userCtx) ? "" : rawPath;
   const absPath = path.resolve((explicitPath || defaultGitPath).replace(/^~(?=$|\/|\\)/, os.homedir()));
