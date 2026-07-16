@@ -2546,6 +2546,7 @@ function workspaceNodeOwnedOutputPaths(nodeId, data) {
   const owner = workspaceNodeOutputOwnerSegment(nodeId);
   const paths = new Set();
   const kind = workspaceDisplayKindFromData(data) || "";
+  if (owner && isOneClickTaskDefinitionId(data?.definitionId)) paths.add(`outputs/${owner}`);
   const contentPath = workspaceSafeOutputPath(displayContent(data), kind);
   if (contentPath) paths.add(contentPath);
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
@@ -4062,8 +4063,10 @@ function WorkspaceFlowNode(props) {
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
     props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
-    setNodes((list) => list.filter((node) => node.id !== nodeId));
-    setEdges((list) => list.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
+    const linkedDisplayId = isOneClickTaskDefinitionId(props.data?.definitionId) ? contextRunLinkedDisplayNodeId(nodeId) : "";
+    const deleteIds = new Set([nodeId, linkedDisplayId].filter(Boolean));
+    setNodes((list) => list.filter((node) => !deleteIds.has(node.id)));
+    setEdges((list) => list.filter((edge) => !deleteIds.has(edge.source) && !deleteIds.has(edge.target)));
   }, [props.data, readOnly, setEdges, setNodes]);
   const onSelectNodePointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
@@ -4603,6 +4606,37 @@ function contextRunDisplayDefinitionId(displayType) {
   if (kind === "ascii") return "display_ascii";
   if (kind === "mermaid") return "display_mermaid";
   return "display_markdown";
+}
+
+function contextRunLinkedDisplayNodeId(nodeId) {
+  return `${String(nodeId || "context_run").trim() || "context_run"}__display`;
+}
+
+function contextRunDisplayPrimarySlotName(displayDefinitionId) {
+  return displayDefinitionId === "display_image" ? "src" : "content";
+}
+
+function contextRunDisplaySlots(definitionSlots, displayDefinitionId, content) {
+  const primaryName = contextRunDisplayPrimarySlotName(displayDefinitionId);
+  const list = cloneSlots(definitionSlots);
+  let hasPrimary = false;
+  const next = list.map((slot) => {
+    if (slot?.name === primaryName) {
+      hasPrimary = true;
+      return { ...slot, default: content, value: content, showOnNode: slot.showOnNode !== false };
+    }
+    if (slot?.name === "filePath") return { ...slot, default: "", value: "" };
+    return slot;
+  });
+  if (!hasPrimary) next.push({ type: "text", name: primaryName, default: content, value: content, required: true, showOnNode: true });
+  return next;
+}
+
+function clearContextRunOutputSlots(slots) {
+  return (Array.isArray(slots) ? slots : []).map((slot) => {
+    if (slot?.type === "node" || slot?.name === "next") return slot;
+    return { ...slot, default: "", value: "" };
+  });
 }
 
 function contextRunResultContentFromData(data) {
@@ -6215,46 +6249,109 @@ function WorkspacePageInner() {
           return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
         }));
       };
-    const patchContextRunResult = (nodeId, rawContent) => {
+    const ensureContextRunResultDisplay = (nodeId, rawContent) => {
       const id = String(nodeId || "").trim();
       const content = String(rawContent || "").trim();
       if (!id || !content) return;
       const currentInstance = instancesRef.current?.[id];
       if (!isOneClickTaskDefinitionId(currentInstance?.definitionId)) return;
       const displayType = workspaceSlotConfigValue(currentInstance?.input, "displayType", "markdown");
-      const patchOutputs = (slots) => {
-        const list = Array.isArray(slots) ? slots : [];
-        let hasContent = false;
-        let hasDisplayType = false;
-        const next = list.map((slot) => {
-          if (slot?.name === "content" || slot?.name === "result") {
-            hasContent = true;
-            return { ...slot, value: content, default: content };
-          }
-          if (slot?.name === "displayType") {
-            hasDisplayType = true;
-            return { ...slot, value: normalizeContextRunDisplayType(displayType), default: normalizeContextRunDisplayType(displayType) };
-          }
-          return slot;
-        });
-        if (!hasContent) next.push({ type: "text", name: "content", value: content, default: content, showOnNode: true });
-        if (!hasDisplayType) next.push({ type: "text", name: "displayType", value: normalizeContextRunDisplayType(displayType), default: normalizeContextRunDisplayType(displayType), showOnNode: false });
-        return next;
-      };
+      const displayDefinitionId = contextRunDisplayDefinitionId(displayType);
+      const displayId = contextRunLinkedDisplayNodeId(id);
+      const displayDef = palette.find((node) => node.id === displayDefinitionId);
+      const input = contextRunDisplaySlots(displayDef?.inputs, displayDefinitionId, content);
+      const output = contextRunDisplaySlots(displayDef?.outputs, displayDefinitionId, content);
+      const displayLabel = String(currentInstance?.label || id || "一键任务").trim();
       const nextInstances = {
         ...(instancesRef.current || {}),
         [id]: {
           ...(currentInstance || {}),
-          output: patchOutputs(currentInstance?.output),
+          output: clearContextRunOutputSlots(currentInstance?.output),
+        },
+        [displayId]: {
+          ...(instancesRef.current?.[displayId] || {}),
+          definitionId: displayDefinitionId,
+          label: displayLabel,
+          role: "normal",
+          body: content,
+          input,
+          output,
+          sourceContextRunNodeId: id,
+          displayReloadKey: String(Date.now()),
         },
       };
       instancesRef.current = nextInstances;
       setInstances(nextInstances);
-      setNodes((currentNodes) => currentNodes.map((node) => (
-        node.id === id
-          ? { ...node, data: { ...node.data, outputs: patchOutputs(node.data?.outputs), contextRunResultNonce: Date.now() } }
-          : node
-      )));
+      const currentNodes = nodesRef.current || [];
+      const sourceNode = currentNodes.find((node) => node.id === id);
+      const existingDisplayNode = currentNodes.find((node) => node.id === displayId);
+      const sourceWidth = Number(sourceNode?.measured?.width || sourceNode?.width || sourceNode?.data?.nodeSize?.width || 520);
+      const position = existingDisplayNode?.position || {
+        x: Number(sourceNode?.position?.x || 0) + sourceWidth + 120,
+        y: Number(sourceNode?.position?.y || 0),
+      };
+      const displaySize = existingDisplayNode?.data?.displaySize || existingDisplayNode?.data?.nodeSize || { width: DEFAULT_WORKSPACE_DISPLAY_WIDTH, height: DEFAULT_WORKSPACE_DISPLAY_HEIGHT };
+      const displayNode = mergeNodeWithPalette({
+        id: displayId,
+        type: FLOW_NODE_TYPE,
+        position,
+        width: Number(displaySize.width) || DEFAULT_WORKSPACE_DISPLAY_WIDTH,
+        height: Number(displaySize.height) || DEFAULT_WORKSPACE_DISPLAY_HEIGHT,
+        data: {
+          label: displayLabel,
+          definitionId: displayDefinitionId,
+          role: "normal",
+          body: content,
+          inputs: input,
+          outputs: output,
+          sourceContextRunNodeId: id,
+          displayReloadKey: nextInstances[displayId].displayReloadKey,
+          nodeSize: displaySize,
+          displaySize,
+        },
+      }, nextInstances, palette);
+      const nextNodes = currentNodes.map((node) => {
+        if (node.id === id) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              outputs: clearContextRunOutputSlots(node.data?.outputs),
+              contextRunResultNonce: Date.now(),
+            },
+          };
+        }
+        if (node.id === displayId) {
+          return {
+            ...displayNode,
+            selected: node.selected,
+          };
+        }
+        return node;
+      });
+      if (!existingDisplayNode) nextNodes.push(displayNode);
+      nodesRef.current = nextNodes;
+      setNodes(nextNodes);
+      const currentEdges = edgesRef.current || [];
+      if (!currentEdges.some((edge) => edge.source === id && edge.target === displayId)) {
+        const nextEdges = [
+          ...currentEdges,
+          {
+            id: `we-${id}-${displayId}`,
+            source: id,
+            target: displayId,
+            sourceHandle: "output-0",
+            targetHandle: "input-0",
+            markerEnd: { type: MarkerType.ArrowClosed },
+          },
+        ];
+        edgesRef.current = nextEdges;
+        setEdges(nextEdges);
+      }
+      window.requestAnimationFrame(() => {
+        updateNodeInternals(id);
+        updateNodeInternals(displayId);
+      });
     };
 
     const patchContextRunResultsFromGraph = (nextGraph, touchedNodeIds = null) => {
@@ -6264,7 +6361,7 @@ function WorkspacePageInner() {
         if (scopedIds && !scopedIds.has(instanceId)) continue;
         if (!isOneClickTaskDefinitionId(instance?.definitionId)) continue;
         const content = contextRunResultContentFromData({ outputs: instance.output });
-        if (content) patchContextRunResult(instanceId, content);
+        if (content) ensureContextRunResultDisplay(instanceId, content);
       }
     };
 
@@ -6552,7 +6649,7 @@ function WorkspacePageInner() {
           }
           if (event.type === "node-done") {
             const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
-            if (finalText) patchContextRunResult(event.nodeId, finalText);
+            if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
             markNodeDone(event.nodeId);
             updateRunStep(event.nodeId, event.definitionId, "done");
           }
@@ -6606,7 +6703,7 @@ function WorkspacePageInner() {
         }
         if (event.type === "node-done") {
           const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
-          if (finalText) patchContextRunResult(event.nodeId, finalText);
+          if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
           markNodeDone(event.nodeId);
           updateRunStep(event.nodeId, event.definitionId, "done");
         }
@@ -6649,18 +6746,25 @@ function WorkspacePageInner() {
         removeSessionExecutingNodes(plannedNodeIds);
         markSessionNodesFinal(plannedNodeIds, "stopped");
       }
-      setStatus(
-        isRunStopped()
-          ? `Workspace run stopped: ${runNodeId}`
-          : finalPauseNodeIds.length
-          ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
-          : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`
-      );
+      const finalStatusMessage = isRunStopped()
+        ? `Workspace run stopped: ${runNodeId}`
+        : finalPauseNodeIds.length
+        ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
+        : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`;
+      setStatus(finalStatusMessage);
       if (!isRunStopped()) {
         markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "paused" : "success");
       }
       markRunSessionStatus(isRunStopped() ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
-      if (!isRunStopped()) await loadFiles();
+      if (!isRunStopped()) {
+        try {
+          await saveGraph(nodesRef.current, edgesRef.current);
+          setStatus(finalStatusMessage);
+        } catch (saveError) {
+          setStatus(`${finalStatusMessage}，但保存结果失败：${String(saveError.message || saveError)}`);
+        }
+        await loadFiles();
+      }
     } catch (e) {
       if (isRunStopped() || e?.name === "AbortError") {
         removeSessionExecutingNodes(plannedNodeIds);
@@ -6697,7 +6801,7 @@ function WorkspacePageInner() {
       workspaceRunStoppedRef.current.delete(runSessionId);
       removeSessionExecutingNodes(plannedNodeIds);
     }
-  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, saveGraph, selectedSkills, setEdges, setNodes, setRunningRunSessionsSynced, workspaceWritable]);
+  }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, saveGraph, selectedSkills, setEdges, setNodes, setRunningRunSessionsSynced, updateNodeInternals, workspaceWritable]);
 
   const refreshSkills = useCallback(async () => {
     try {
