@@ -12688,6 +12688,18 @@ button.af-project-card {
   color: rgba(229, 226, 225, 0.75);
 }
 
+.af-composer-session-tab:focus-visible {
+  outline: 2px solid rgba(124, 77, 255, 0.58);
+  outline-offset: -2px;
+}
+
+.af-composer-session-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .af-composer-session-tab--active {
   background: rgba(42, 42, 42, 0.78);
   color: rgba(229, 226, 225, 0.92);
@@ -12749,6 +12761,10 @@ button.af-project-card {
 .af-composer-session-close:focus-visible {
   opacity: 1 !important;
   background: rgba(255, 255, 255, 0.1);
+}
+
+.af-composer-session-close .material-symbols-outlined {
+  font-size: 0.82rem;
 }
 
 .af-composer-session-add {

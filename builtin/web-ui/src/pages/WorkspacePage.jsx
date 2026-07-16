@@ -5762,6 +5762,8 @@ function WorkspacePageInner() {
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
+  const composerSidebarThreadRef = useRef(null);
+  const composerActiveSessionTabRef = useRef(null);
   const [workspaceRunLogsTarget, setWorkspaceRunLogsTarget] = useState(null);
   const [composerMinimized, setComposerMinimized] = useState(true);
   const [activeNodeChatId, setActiveNodeChatId] = useState("");
@@ -5992,12 +5994,31 @@ function WorkspacePageInner() {
     [flowParams, loadWorkspace],
   );
 
-  const openComposerLogPanel = useCallback((sessionId = "workspace") => {
+  const latestComposerSessionId = useCallback((sessions = composerRunSessions) => {
+    const list = Array.isArray(sessions) ? sessions : [];
+    const running = [...list].reverse().find((session) => session?.status === "running");
+    const latest = running || [...list].reverse().find((session) => session?.id);
+    return String(latest?.id || "workspace");
+  }, [composerRunSessions]);
+
+  const closeComposerRunSession = useCallback((sessionId) => {
+    const id = String(sessionId || "").trim();
+    if (!id || id === "workspace") return;
+    setComposerRunSessions((list) => {
+      const next = (Array.isArray(list) ? list : []).filter((session) => session.id !== id);
+      setActiveComposerSessionId((current) => (
+        current === id ? latestComposerSessionId(next) : current
+      ));
+      return next;
+    });
+  }, [latestComposerSessionId]);
+
+  const openComposerLogPanel = useCallback((sessionId = "") => {
     setComposerSidebarOpen(true);
     setWorkspaceRunLogsTarget(null);
     setNodePropDraft(null);
-    setActiveComposerSessionId(sessionId || "workspace");
-  }, []);
+    setActiveComposerSessionId(sessionId || latestComposerSessionId());
+  }, [latestComposerSessionId]);
 
   const openWorkspaceRunLogs = useCallback((target = {}) => {
     setWorkspaceRunLogsTarget({
@@ -9849,6 +9870,26 @@ function WorkspacePageInner() {
       : composerMessages.length > 0
         ? "Workspace conversation"
         : "Ready";
+  useEffect(() => {
+    if (activeComposerSessionId === "workspace") return;
+    if (composerRunSessions.some((session) => session.id === activeComposerSessionId)) return;
+    setActiveComposerSessionId(latestComposerSessionId());
+  }, [activeComposerSessionId, composerRunSessions, latestComposerSessionId]);
+  useEffect(() => {
+    if (!composerSidebarOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      const thread = composerSidebarThreadRef.current;
+      if (thread) thread.scrollTop = thread.scrollHeight;
+      composerActiveSessionTabRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeComposerMessages.length,
+    activeComposerSessionId,
+    activeComposerStatus,
+    activeComposerTechnicalMessages.length,
+    composerSidebarOpen,
+  ]);
   const workspaceProjectTitle = String(flowParams.flowId || "").trim() || "Workspace";
   const singleNodeDisplayShare = displayShareDraft?.mode === "single-node";
   const displayShareSourceNode = singleNodeDisplayShare
@@ -9959,7 +10000,10 @@ function WorkspacePageInner() {
             disabled={isDisplayMode}
             onClick={() => {
               setWorkspaceRunLogsTarget(null);
-              setComposerSidebarOpen((v) => !v);
+              setComposerSidebarOpen((v) => {
+                if (!v) setActiveComposerSessionId(latestComposerSessionId());
+                return !v;
+              });
             }}
           >
             AI
@@ -10708,24 +10752,46 @@ function WorkspacePageInner() {
                 <button
                   type="button"
                   className={"af-composer-session-tab" + (activeComposerSessionId === "workspace" ? " af-composer-session-tab--active" : "")}
+                  ref={activeComposerSessionId === "workspace" ? composerActiveSessionTabRef : null}
                   onClick={() => setActiveComposerSessionId("workspace")}
                 >
                   <span className="af-composer-session-label">Workspace</span>
                 </button>
                 {composerRunSessions.map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    type="button"
+                    role="tab"
+                    tabIndex={0}
+                    ref={activeComposerSessionId === session.id ? composerActiveSessionTabRef : null}
                     className={
                       "af-composer-session-tab" +
                       (activeComposerSessionId === session.id ? " af-composer-session-tab--active" : "") +
                       (session.status === "running" ? " af-composer-session-tab--running" : "")
                     }
                     onClick={() => setActiveComposerSessionId(session.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setActiveComposerSessionId(session.id);
+                      }
+                    }}
                     title={session.runNodeId || session.label}
                   >
                     <span className="af-composer-session-label">{session.label}</span>
-                  </button>
+                    <button
+                      type="button"
+                      className="af-composer-session-close"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeComposerRunSession(session.id);
+                      }}
+                      aria-label={`关闭 ${session.label}`}
+                      title="关闭 tab"
+                    >
+                      <span className="material-symbols-outlined" aria-hidden>close</span>
+                    </button>
+                  </div>
                 ))}
               </div>
               <div
@@ -10735,14 +10801,14 @@ function WorkspacePageInner() {
               >
                 {activeComposerStatus}
               </div>
-              <div className="af-composer-sidebar-thread">
+              <div className="af-composer-sidebar-thread" ref={composerSidebarThreadRef}>
                 <WorkspaceComposerThread
                   messages={activeComposerConversationMessages}
                   running={activeComposerRunning}
                   showRunningIndicator={!activeRunSession}
                 />
                 {activeComposerTechnicalMessages.length > 0 ? (
-                  <details className="af-composer-sidebar-log-details">
+                  <details className="af-composer-sidebar-log-details" {...(activeComposerRunning ? { open: true } : {})}>
                     <summary>执行日志</summary>
                     <WorkspaceComposerThread
                       messages={activeComposerTechnicalMessages}
