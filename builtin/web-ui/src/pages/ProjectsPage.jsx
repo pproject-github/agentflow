@@ -9,7 +9,7 @@ import { ImportFlowModal } from "../ImportFlowModal.jsx";
 import { NewPipelineModal } from "../NewPipelineModal.jsx";
 import { preferredFlowUrl } from "../pipelineViewPreference.js";
 import SkillHubPanel from "../components/SkillHubPanel.jsx";
-import { normalizeSkillCollections, skillCollectionConfig } from "../skillCollections.js";
+import { collectionSkillKeys, normalizeSkillCollections, skillCollectionConfig } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 
 function badgeClass(tone) {
@@ -791,10 +791,10 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const skillCollectionSkillSets = useMemo(() => {
     const map = new Map();
     for (const collection of skillCollections) {
-      map.set(collection.id, new Set(collection.skillKeys || []));
+      map.set(collection.id, new Set(collectionSkillKeys(collection, globalSkills)));
     }
     return map;
-  }, [skillCollections]);
+  }, [globalSkills, skillCollections]);
 
   const skillResourceFilters = useMemo(
     () => [
@@ -802,12 +802,12 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       ...skillCollections.map((collection) => ({
         id: `collection:${collection.id}`,
         label: collection.name,
-        count: collection.skillKeys.length,
+        count: skillCollectionSkillSets.get(collection.id)?.size || 0,
         collection,
       })),
       { id: "ungrouped", label: "未分组" },
     ],
-    [skillCollections],
+    [skillCollectionSkillSets, skillCollections],
   );
 
   const filteredSkills = useMemo(
@@ -1347,41 +1347,45 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
           ) : filter === "skills" ? (
             <div className="af-resource-grid">
               {filteredSkills.length > 0 ? (
-                filteredSkills.map((s) => (
-                  <button
-                    key={s.key || `${s.source}:${s.name}`}
-                    type="button"
-                    className={"af-resource-card" + (selectedSkill && resourceKey(s) === resourceKey(selectedSkill) ? " af-resource-card--active" : "")}
-                    onClick={() => setSelectedResourceKey(resourceKey(s))}
-                  >
-                    <div className="af-resource-card-head">
-                      <span className={badgeClass(s.source === "builtin" ? "muted" : "primary")}>
-                        <HighlightMatch query={pipelineSearch}>{s.sourceLabel || s.source || "skill"}</HighlightMatch>
-                      </span>
-                      <span className="af-resource-source">{t("project:skill")}</span>
-                    </div>
-                    <h3 className="af-project-title">
-                      <HighlightMatch query={pipelineSearch}>{s.name || s.id}</HighlightMatch>
-                    </h3>
-                    <p className="af-project-desc">
-                      <HighlightMatch query={pipelineSearch}>{s.description || t("project:noDescription")}</HighlightMatch>
-                    </p>
-                    <div className="af-project-path">
-                      <span className="material-symbols-outlined af-path-icon">extension</span>
-                      <span className="af-path-text">
-                        <HighlightMatch query={pipelineSearch}>{s.path || s.key || ""}</HighlightMatch>
-                      </span>
-                    </div>
-                    <div className="af-skill-card-collections">
-                      {skillCollections.filter((collection) => collection.skillKeys.includes(resourceKey(s))).slice(0, 3).map((collection) => (
-                        <span key={collection.id}>{collection.name}</span>
-                      ))}
-                      {skillCollections.filter((collection) => collection.skillKeys.includes(resourceKey(s))).length === 0 ? (
-                        <span className="af-skill-card-collection-empty">未分组</span>
-                      ) : null}
-                    </div>
-                  </button>
-                ))
+                filteredSkills.map((s) => {
+                  const key = resourceKey(s);
+                  const memberships = skillCollections.filter((collection) => skillCollectionSkillSets.get(collection.id)?.has(key));
+                  return (
+                    <button
+                      key={s.key || `${s.source}:${s.name}`}
+                      type="button"
+                      className={"af-resource-card" + (selectedSkill && key === resourceKey(selectedSkill) ? " af-resource-card--active" : "")}
+                      onClick={() => setSelectedResourceKey(key)}
+                    >
+                      <div className="af-resource-card-head">
+                        <span className={badgeClass(s.source === "builtin" ? "muted" : "primary")}>
+                          <HighlightMatch query={pipelineSearch}>{s.sourceLabel || s.source || "skill"}</HighlightMatch>
+                        </span>
+                        <span className="af-resource-source">{t("project:skill")}</span>
+                      </div>
+                      <h3 className="af-project-title">
+                        <HighlightMatch query={pipelineSearch}>{s.name || s.id}</HighlightMatch>
+                      </h3>
+                      <p className="af-project-desc">
+                        <HighlightMatch query={pipelineSearch}>{s.description || t("project:noDescription")}</HighlightMatch>
+                      </p>
+                      <div className="af-project-path">
+                        <span className="material-symbols-outlined af-path-icon">extension</span>
+                        <span className="af-path-text">
+                          <HighlightMatch query={pipelineSearch}>{s.path || s.key || ""}</HighlightMatch>
+                        </span>
+                      </div>
+                      <div className="af-skill-card-collections">
+                        {memberships.slice(0, 3).map((collection) => (
+                          <span key={collection.id}>{collection.name}</span>
+                        ))}
+                        {memberships.length === 0 ? (
+                          <span className="af-skill-card-collection-empty">未分组</span>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })
               ) : !resourcesLoaded ? (
                 <div className="af-projects-empty-block">
                   <p className="af-projects-empty">{t("project:loadingResources")}</p>
@@ -1827,7 +1831,8 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                     <div className="af-skill-detail-collections">
                       {skillCollections.map((collection) => {
                         const key = resourceKey(selectedSkill);
-                        const checked = collection.skillKeys.includes(key);
+                        const resolvedKeys = skillCollectionSkillSets.get(collection.id) || new Set();
+                        const checked = resolvedKeys.has(key);
                         return (
                           <label key={collection.id} className="af-composer-skill-option af-skill-detail-collection-option">
                             <input
@@ -1838,7 +1843,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                             />
                             <span className="af-composer-skill-option-main">
                               <span className="af-composer-skill-option-title">{collection.name}</span>
-                              <span className="af-composer-skill-option-desc">{collection.skillKeys.length} skills</span>
+                              <span className="af-composer-skill-option-desc">{resolvedKeys.size} skills</span>
                             </span>
                           </label>
                         );
