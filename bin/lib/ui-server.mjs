@@ -2980,6 +2980,114 @@ function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   return { root: path.resolve(result.path), flowId, flowSource, archived };
 }
 
+function workspaceConversationsPath(scopedRoot) {
+  return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "conversations.json");
+}
+
+function workspaceConversationText(value, max = 4000) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]` : text;
+}
+
+function normalizeWorkspaceConversationMessage(message = {}) {
+  const text = workspaceConversationText(message?.text, 4000);
+  if (!text) return null;
+  const role = String(message?.role || "assistant").trim() === "user" ? "user" : "assistant";
+  const kind = String(message?.kind || "").trim();
+  return {
+    role,
+    ...(kind ? { kind } : {}),
+    text,
+    ...(message?.error ? { error: true } : {}),
+    at: Number.isFinite(Number(message?.at)) ? Number(message.at) : Date.now(),
+  };
+}
+
+function normalizeWorkspaceConversationMessages(messages, limit = 80) {
+  return (Array.isArray(messages) ? messages : [])
+    .map(normalizeWorkspaceConversationMessage)
+    .filter(Boolean)
+    .slice(-limit);
+}
+
+function normalizeWorkspaceNodeChatSessions(nodeChats = {}) {
+  const source = nodeChats && typeof nodeChats === "object" && !Array.isArray(nodeChats) ? nodeChats : {};
+  const entries = Object.entries(source).slice(-80);
+  const next = {};
+  for (const [nodeId, session] of entries) {
+    if (!session || typeof session !== "object" || Array.isArray(session)) continue;
+    const id = String(nodeId || "").trim();
+    if (!id) continue;
+    const messages = normalizeWorkspaceConversationMessages(session.messages, 40);
+    const draft = workspaceConversationText(session.draft || "", 2000);
+    if (!messages.length && !draft) continue;
+    next[id] = {
+      sessionId: String(session.sessionId || `nodechat_${id}`).trim(),
+      messages,
+      ...(draft ? { draft } : {}),
+      candidateContent: "",
+      running: false,
+      error: "",
+    };
+  }
+  return next;
+}
+
+function normalizeWorkspaceComposerRunSessions(sessions = []) {
+  return (Array.isArray(sessions) ? sessions : [])
+    .map((session) => {
+      if (!session || typeof session !== "object" || Array.isArray(session)) return null;
+      const id = String(session.id || "").trim();
+      if (!id) return null;
+      const messages = normalizeWorkspaceConversationMessages(session.messages, 80);
+      if (!messages.length) return null;
+      const status = String(session.status || "done").trim();
+      return {
+        id,
+        label: workspaceConversationText(session.label || id, 120),
+        status: status === "failed" ? "failed" : "done",
+        messages,
+      };
+    })
+    .filter(Boolean)
+    .slice(-20);
+}
+
+function normalizeWorkspaceConversations(raw = {}) {
+  const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const composer = data.composer && typeof data.composer === "object" && !Array.isArray(data.composer) ? data.composer : {};
+  const activeSessionId = String(composer.activeSessionId || "workspace").trim() || "workspace";
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    composer: {
+      activeSessionId,
+      messages: normalizeWorkspaceConversationMessages(composer.messages, 100),
+      runSessions: normalizeWorkspaceComposerRunSessions(composer.runSessions),
+    },
+    nodeChats: normalizeWorkspaceNodeChatSessions(data.nodeChats),
+  };
+}
+
+function readWorkspaceConversations(scopedRoot) {
+  const filePath = workspaceConversationsPath(scopedRoot);
+  if (!fs.existsSync(filePath)) return normalizeWorkspaceConversations({});
+  try {
+    return normalizeWorkspaceConversations(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+  } catch {
+    return normalizeWorkspaceConversations({});
+  }
+}
+
+function writeWorkspaceConversations(scopedRoot, raw) {
+  const filePath = workspaceConversationsPath(scopedRoot);
+  const conversations = normalizeWorkspaceConversations(raw);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(conversations, null, 2) + "\n", "utf-8");
+  return conversations;
+}
+
 function workspaceSearchGuardrailsBlock() {
   return [
     "## 检索约束",
@@ -8805,6 +8913,47 @@ export function startUiServer({
         json(res, 200, { ok: true, path: rel });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/conversations") {
+      let payload = {};
+      if (req.method === "POST") {
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+      } else if (req.method !== "GET") {
+        json(res, 405, { error: "Method not allowed" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: req.method === "POST" ? (payload.flowId || "") : (url.searchParams.get("flowId") || ""),
+          flowSource: req.method === "POST" ? (payload.flowSource || "user") : (url.searchParams.get("flowSource") || "user"),
+          archived: req.method === "POST"
+            ? (payload.archived === true || payload.flowArchived === true)
+            : (url.searchParams.get("archived") === "1" || url.searchParams.get("flowArchived") === "1"),
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (req.method === "GET") {
+          json(res, 200, { ok: true, conversations: readWorkspaceConversations(scoped.root) });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+          json(res, 400, { error: "Cannot write conversations for builtin or archived pipeline workspace" });
+          return;
+        }
+        const conversations = writeWorkspaceConversations(scoped.root, payload.conversations || payload);
+        json(res, 200, { ok: true, conversations });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
       }
       return;
     }
