@@ -177,6 +177,84 @@ function flowParamsQuery(params) {
   return q;
 }
 
+function clipConversationText(value, max = 4000) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]` : text;
+}
+
+function normalizeConversationMessage(message) {
+  const text = clipConversationText(message?.text, 4000);
+  if (!text) return null;
+  return {
+    role: message?.role === "user" ? "user" : "assistant",
+    ...(message?.kind ? { kind: String(message.kind) } : {}),
+    text,
+    ...(message?.error ? { error: true } : {}),
+    at: Number.isFinite(Number(message?.at)) ? Number(message.at) : Date.now(),
+  };
+}
+
+function normalizeConversationMessages(messages, limit = 80) {
+  return (Array.isArray(messages) ? messages : [])
+    .map(normalizeConversationMessage)
+    .filter(Boolean)
+    .slice(-limit);
+}
+
+function normalizeNodeChatSessionsForPersistence(sessions) {
+  const source = sessions && typeof sessions === "object" && !Array.isArray(sessions) ? sessions : {};
+  const next = {};
+  for (const [nodeId, session] of Object.entries(source).slice(-80)) {
+    const id = String(nodeId || "").trim();
+    if (!id || !session || typeof session !== "object") continue;
+    const messages = normalizeConversationMessages(session.messages, 40);
+    const draft = clipConversationText(session.draft || "", 2000);
+    if (!messages.length && !draft) continue;
+    next[id] = {
+      sessionId: String(session.sessionId || `nodechat_${id}`),
+      messages,
+      ...(draft ? { draft } : {}),
+      candidateContent: "",
+      running: false,
+      error: "",
+    };
+  }
+  return next;
+}
+
+function normalizeComposerRunSessionsForPersistence(sessions) {
+  return (Array.isArray(sessions) ? sessions : [])
+    .map((session) => {
+      const id = String(session?.id || "").trim();
+      if (!id) return null;
+      const messages = normalizeConversationMessages(session?.messages, 80);
+      if (!messages.length) return null;
+      const status = String(session?.status || "done");
+      return {
+        id,
+        label: clipConversationText(session?.label || id, 120),
+        status: status === "failed" ? "failed" : "done",
+        messages,
+      };
+    })
+    .filter(Boolean)
+    .slice(-20);
+}
+
+function normalizeWorkspaceConversationsForUi(raw) {
+  const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const composer = data.composer && typeof data.composer === "object" && !Array.isArray(data.composer) ? data.composer : {};
+  return {
+    composer: {
+      activeSessionId: String(composer.activeSessionId || "workspace").trim() || "workspace",
+      messages: normalizeConversationMessages(composer.messages, 100),
+      runSessions: normalizeComposerRunSessionsForPersistence(composer.runSessions),
+    },
+    nodeChats: normalizeNodeChatSessionsForPersistence(data.nodeChats),
+  };
+}
+
 function isWorkspaceImageFile(file) {
   if (!file) return false;
   const type = String(file.type || "");
@@ -5487,6 +5565,8 @@ function WorkspacePageInner() {
   const instancesRef = useRef({});
   const loadedRef = useRef(false);
   const saveTimerRef = useRef(null);
+  const conversationsLoadedRef = useRef(false);
+  const conversationsSaveTimerRef = useRef(null);
   const [palette, setPalette] = useState([]);
   const [paletteSearch, setPaletteSearch] = useState("");
   const [paletteMode, setPaletteMode] = useState("nodes");
@@ -5644,6 +5724,9 @@ function WorkspacePageInner() {
   useEffect(() => () => {
     if (flowSnippetToastTimerRef.current) {
       window.clearTimeout(flowSnippetToastTimerRef.current);
+    }
+    if (conversationsSaveTimerRef.current) {
+      window.clearTimeout(conversationsSaveTimerRef.current);
     }
   }, []);
   const [collapsedSkillCollections, setCollapsedSkillCollections] = useState(() => new Set());
@@ -6885,8 +6968,13 @@ function WorkspacePageInner() {
       const j = await r.json().catch(() => ({}));
       const list = Array.isArray(j.workspaces) ? j.workspaces.map((item) => ({
         id: String(item?.id || ""),
-        label: String(item?.label || item?.name || "Workspace"),
+        label: String(item?.label || item?.name || "知识库"),
         path: String(item?.path || ""),
+        kind: item?.kind === "git" ? "git" : "local",
+        repoUrl: String(item?.repoUrl || ""),
+        branch: String(item?.branch || ""),
+        mountPath: String(item?.mountPath || ""),
+        type: String(item?.type || ""),
         builtin: item?.builtin === true,
         exists: item?.exists !== false,
       })).filter((item) => item.path) : [];
@@ -6896,8 +6984,56 @@ function WorkspacePageInner() {
     }
   }, [flowParams]);
 
+  const loadWorkspaceConversations = useCallback(async () => {
+    conversationsLoadedRef.current = false;
+    try {
+      const q = flowParamsQuery(flowParams);
+      const r = await fetch(`/api/workspace/conversations?${q.toString()}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const normalized = normalizeWorkspaceConversationsForUi(j.conversations || {});
+      setComposerMessages(normalized.composer.messages);
+      setComposerRunSessions(normalized.composer.runSessions);
+      setActiveComposerSessionId(normalized.composer.activeSessionId || "workspace");
+      setNodeChatSessions(normalized.nodeChats);
+    } catch {
+      setComposerMessages([]);
+      setComposerRunSessions([]);
+      setActiveComposerSessionId("workspace");
+      setNodeChatSessions({});
+    } finally {
+      conversationsLoadedRef.current = true;
+    }
+  }, [flowParams]);
+
+  const saveWorkspaceConversations = useCallback(async () => {
+    if (!workspaceWritable || flowParams.archived) return;
+    const conversations = normalizeWorkspaceConversationsForUi({
+      composer: {
+        activeSessionId: activeComposerSessionId,
+        messages: composerMessages,
+        runSessions: composerRunSessions,
+      },
+      nodeChats: nodeChatSessions,
+    });
+    await fetch("/api/workspace/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...flowParams,
+        conversations,
+      }),
+    }).then(async (res) => {
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+    });
+  }, [activeComposerSessionId, composerMessages, composerRunSessions, flowParams, nodeChatSessions, workspaceWritable]);
+
   useEffect(() => {
     loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+    void loadWorkspaceConversations();
     void loadFlowSnippets();
     fetch("/api/model-lists").then((r) => r.json()).then((j) => setModelLists({
       cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
@@ -6923,7 +7059,7 @@ function WorkspacePageInner() {
         setAuthUser(null);
         setAuthResolved(true);
       });
-  }, [loadWorkspace, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
+  }, [loadWorkspace, loadWorkspaceConversations, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
@@ -7025,6 +7161,18 @@ function WorkspacePageInner() {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
   }, [nodes, edges, displayPage, saveGraph, workspaceWritable]);
+
+  useEffect(() => {
+    if (!conversationsLoadedRef.current) return undefined;
+    if (!workspaceWritable || flowParams.archived) return undefined;
+    if (conversationsSaveTimerRef.current) window.clearTimeout(conversationsSaveTimerRef.current);
+    conversationsSaveTimerRef.current = window.setTimeout(() => {
+      saveWorkspaceConversations().catch((e) => setStatus(String(e.message || e)));
+    }, 900);
+    return () => {
+      if (conversationsSaveTimerRef.current) window.clearTimeout(conversationsSaveTimerRef.current);
+    };
+  }, [activeComposerSessionId, composerMessages, composerRunSessions, flowParams.archived, nodeChatSessions, saveWorkspaceConversations, workspaceWritable]);
 
   const scheduledRunConfigs = useMemo(() => (
     nodes
