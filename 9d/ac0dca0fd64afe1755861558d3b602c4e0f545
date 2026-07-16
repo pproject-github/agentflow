@@ -1,0 +1,50 @@
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_f2dd7a237fc27d::t_c5829a59445454 781
+bin/lib/ui-server.mjs
+  s_f2dd7a237fc27d::t_87f801d6a6837b 5014-5016
+  s_f2dd7a237fc27d::t_bd17674599cec7 4156,4989-5013,5017-5058,5062-5063,5066-5068,5080-5081,5104
+  s_f2dd7a237fc27d::t_7440f36c20f1ae 6309
+  s_f2dd7a237fc27d::t_d09c85615c5c53 5892,5894-5895,5897-5913,5917-5923,5926-5928,5931-5934,5936
+builtin/nodes/control_cd_workspace.md
+  s_f2dd7a237fc27d::t_0c300d32c9e0eb 2,4,6-9,13-15,17,21,25,29,33,39,43-46,50,54,56
+builtin/web-ui/src/pages/WorkspacesPage.jsx
+  s_f2dd7a237fc27d::t_e3aac0709248b6 245,249,288,292
+  s_f2dd7a237fc27d::t_8b761fdc0c70ae 110,327,330,341-342,366,380,384,400-401,438,481,487
+builtin/web-ui/dist/assets/index-C53EslEz.js
+  s_f2dd7a237fc27d::t_e89436b4b5a57f 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91-95,98-100,102,181-184,188,190,193,237-238,240,242-246,250-251,253,257,259,274,276,280,288,290,294,302-310,314,340
+builtin/web-ui/src/mergeFlowNodes.js
+  s_f2dd7a237fc27d::t_75a63896ac4537 29
+builtin/web-ui/dist/index.html
+  s_f2dd7a237fc27d::t_e89436b4b5a57f 18
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_f2dd7a237fc27d::t_58382d8e1c29cf 8
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f2dd7a237fc27d::t_469eb76d8dfe0b 4715-4716
+  s_f2dd7a237fc27d::t_36c75d3f7cb21f 4682-4684
+  s_f2dd7a237fc27d::t_ddd6938b2752aa 106-108,114,119-120,135
+  s_f2dd7a237fc27d::t_5c5089f2fd6f56 5314,5318,5333-5343,5387,5402,5411,5414,5425,5432-5434,5448,5450
+  s_f2dd7a237fc27d::t_565be2e3c3027c 7171,7176-7184,7186-7188,7191-7195,7199-7200,7204-7209,7216,7218,7229,7231,7238,7256-7258,7264
+  s_f2dd7a237fc27d::t_cd5b62421ab63e 3146
+  s_f2dd7a237fc27d::t_932c7b05e66ce2 4649-4650,4655-4656,4677-4681,4685-4704,4706-4711,4714,4718
+  s_f2dd7a237fc27d::t_97d7445b8eb149 3484
+  s_f2dd7a237fc27d::t_0e305431464aca 3269-3270,3320-3328,3330-3332,3634-3635,3646,3649,3660,3667-3668,3670,3684,3686
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9dac0dca0fd64afe1755861558d3b602c4e0f545",
+  "prompts": {},
+  "logical_commit_id": "9dac0dca0fd64afe1755861558d3b602c4e0f545",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 34286,
+      "total_deletions": 1822
+    }
+  }
+}
