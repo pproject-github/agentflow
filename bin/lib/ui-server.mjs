@@ -1617,8 +1617,30 @@ const DISPLAY_SHARE_ALLOWED_EXPIRY_DAYS = new Set([1, 7, 30, 90, 365]);
 const NODE_STUDIO_DRAFTS_DIRNAME = "node-studio/drafts";
 const USER_WORKSPACES_FILENAME = "workspaces.json";
 
-function userWorkspacesPath(userCtx = {}) {
+function workspacesPath() {
+  return path.join(getAgentflowDataRoot(), USER_WORKSPACES_FILENAME);
+}
+
+function legacyUserWorkspacesPath(userCtx = {}) {
   return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), USER_WORKSPACES_FILENAME);
+}
+
+function defaultWorkspaceGitPath(id) {
+  return path.join(getAgentflowDataRoot(), "workspaces", "repos", id);
+}
+
+function legacyDefaultWorkspaceGitPath(userCtx = {}, id = "") {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), "workspaces", "repos", id);
+}
+
+function isLegacyDefaultWorkspaceGitPath(rawPath = "", id = "", userCtx = {}) {
+  const raw = String(rawPath || "").trim();
+  if (!raw || !id) return false;
+  try {
+    return path.resolve(raw.replace(/^~(?=$|\/|\\)/, os.homedir())) === path.resolve(legacyDefaultWorkspaceGitPath(userCtx, id));
+  } catch {
+    return false;
+  }
 }
 
 function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
@@ -1633,8 +1655,9 @@ function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
   const idRaw = String(entry?.id || label || mountPathRaw || repoUrl || rawPath || `workspace_${index + 1}`).trim().toLowerCase();
   const id = idRaw.replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64) || `workspace_${index + 1}`;
   const mountPath = (mountPathRaw || id).replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "").trim() || id;
-  const defaultGitPath = path.join(getAgentflowUserDataRoot(userCtx.userId || ""), "workspaces", "repos", id);
-  const absPath = path.resolve((rawPath || defaultGitPath).replace(/^~(?=$|\/|\\)/, os.homedir()));
+  const defaultGitPath = defaultWorkspaceGitPath(id);
+  const explicitPath = kind === "git" && isLegacyDefaultWorkspaceGitPath(rawPath, id, userCtx) ? "" : rawPath;
+  const absPath = path.resolve((explicitPath || defaultGitPath).replace(/^~(?=$|\/|\\)/, os.homedir()));
   const exists = fs.existsSync(absPath) && fs.statSync(absPath).isDirectory();
   return {
     id,
@@ -1653,8 +1676,7 @@ function normalizeWorkspaceEntry(entry = {}, index = 0, userCtx = {}) {
   };
 }
 
-function readUserWorkspaces(userCtx = {}) {
-  const p = userWorkspacesPath(userCtx);
+function readWorkspacesFromPath(p, userCtx = {}) {
   if (!fs.existsSync(p)) return [];
   try {
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
@@ -1663,6 +1685,12 @@ function readUserWorkspaces(userCtx = {}) {
   } catch {
     return [];
   }
+}
+
+function readUserWorkspaces(userCtx = {}) {
+  const globalPath = workspacesPath();
+  if (fs.existsSync(globalPath)) return readWorkspacesFromPath(globalPath, userCtx);
+  return readWorkspacesFromPath(legacyUserWorkspacesPath(userCtx), userCtx);
 }
 
 function writeUserWorkspaces(userCtx = {}, entries = []) {
@@ -1676,7 +1704,7 @@ function writeUserWorkspaces(userCtx = {}, entries = []) {
       seen.add(key);
       return true;
     });
-  const p = userWorkspacesPath(userCtx);
+  const p = workspacesPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify({ version: 1, workspaces }, null, 2) + "\n", "utf-8");
   return workspaces;
@@ -7752,7 +7780,7 @@ export function startUiServer({
         }, userCtx);
         const scopedRoot = scoped.error ? root : scoped.root;
         json(res, 200, {
-          path: userWorkspacesPath(userCtx),
+          path: workspacesPath(),
           workspaces: listConfiguredWorkspaces(root, scopedRoot, userCtx),
           customWorkspaces: readUserWorkspaces(userCtx),
         });
@@ -7767,7 +7795,7 @@ export function startUiServer({
         const payload = JSON.parse(await readBody(req));
         const customWorkspaces = writeUserWorkspaces(userCtx, payload?.workspaces || payload?.customWorkspaces || []);
         json(res, 200, {
-          path: userWorkspacesPath(userCtx),
+          path: workspacesPath(),
           workspaces: listConfiguredWorkspaces(root, root, userCtx),
           customWorkspaces,
         });
