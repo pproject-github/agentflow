@@ -131,20 +131,23 @@ function htmlContentProblem(content) {
 function htmlDisplaySrcDoc(content) {
   const html = normalizeHtmlDisplayContent(content);
   if (!html.trim()) return "";
-  const guard = `<base target="_self"><script>
+  const guard = `<base target="_blank"><script data-agentflow-display-link-guard="1">
 (() => {
   document.addEventListener("click", (event) => {
     const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
     if (!link) return;
     const rawHref = String(link.getAttribute("href") || "").trim();
     if (!rawHref || rawHref.startsWith("#")) return;
-    if (/^(?:javascript|mailto|tel):/i.test(rawHref)) return;
+    if (/^javascript:/i.test(rawHref)) {
+      event.preventDefault();
+      return;
+    }
     event.preventDefault();
-    window.location.href = link.href;
+    window.open(link.href, "_blank", "noopener,noreferrer");
   }, true);
 })();
 </script>`;
-  if (/<script\b[^>]*>\s*\(\(\)\s*=>\s*\{\s*document\.addEventListener\("click"/i.test(html)) return html;
+  if (/data-agentflow-display-link-guard=["']1["']/i.test(html)) return html;
   if (/<head\b[^>]*>/i.test(html)) {
     return html.replace(/<head\b([^>]*)>/i, `<head$1>${guard}`);
   }
@@ -291,8 +294,8 @@ function DisplayNode({ node, shareId, style, bare = false }) {
           <div className="af-public-display-empty">{contentProblem}</div>
         ) : content.trim() ? (
           <>
-            {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
-            {node.kind === "react" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={reactAppDisplaySrcDoc(content)} /> : null}
+            {node.kind === "html" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={htmlDisplaySrcDoc(content)} /> : null}
+            {node.kind === "react" ? <iframe title={node.label || node.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={reactAppDisplaySrcDoc(content)} /> : null}
             {node.kind === "image" ? <img src={displayFileUrl(content, shareId)} alt={node.label || node.id} loading="lazy" /> : null}
             {node.kind === "markdown" ? (
               <div className="af-public-display-markdown">
