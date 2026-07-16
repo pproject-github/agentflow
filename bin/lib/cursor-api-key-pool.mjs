@@ -61,6 +61,7 @@ export function isCursorQuotaError(error = "") {
     /usage\s+limit/i,
     /limit\s+(?:exceeded|reached)/i,
     /exceeded\s+(?:your\s+)?limit/i,
+    /resource[_\s-]*exhausted/i,
     /ActionRequiredError/i,
   ].some((pattern) => pattern.test(text));
 }
