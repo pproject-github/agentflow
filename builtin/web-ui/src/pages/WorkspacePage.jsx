@@ -4632,6 +4632,19 @@ function contextRunDisplaySlots(definitionSlots, displayDefinitionId, content) {
   return next;
 }
 
+function contextRunSlotHandleId(slots, prefix, preferredNames = [], preferredTypes = []) {
+  const list = Array.isArray(slots) ? slots : [];
+  const names = new Set((Array.isArray(preferredNames) ? preferredNames : []).map((name) => String(name || "").trim()).filter(Boolean));
+  const types = new Set((Array.isArray(preferredTypes) ? preferredTypes : []).map((type) => String(type || "").trim()).filter(Boolean));
+  const visible = (slot) => slot?.showOnNode !== false;
+  let index = list.findIndex((slot) => visible(slot) && names.has(String(slot?.name || "").trim()));
+  if (index < 0) index = list.findIndex((slot) => names.has(String(slot?.name || "").trim()));
+  if (index < 0) index = list.findIndex((slot) => visible(slot) && types.has(String(slot?.type || "").trim()));
+  if (index < 0) index = list.findIndex((slot) => visible(slot));
+  if (index < 0) index = 0;
+  return `${prefix}-${index}`;
+}
+
 function clearContextRunOutputSlots(slots) {
   return (Array.isArray(slots) ? slots : []).map((slot) => {
     if (slot?.type === "node" || slot?.name === "next") return slot;
@@ -6333,21 +6346,23 @@ function WorkspacePageInner() {
       nodesRef.current = nextNodes;
       setNodes(nextNodes);
       const currentEdges = edgesRef.current || [];
-      if (!currentEdges.some((edge) => edge.source === id && edge.target === displayId)) {
-        const nextEdges = [
-          ...currentEdges,
-          {
-            id: `we-${id}-${displayId}`,
-            source: id,
-            target: displayId,
-            sourceHandle: "output-0",
-            targetHandle: "input-0",
-            markerEnd: { type: MarkerType.ArrowClosed },
-          },
-        ];
-        edgesRef.current = nextEdges;
-        setEdges(nextEdges);
-      }
+      const primaryName = contextRunDisplayPrimarySlotName(displayDefinitionId);
+      const sourceHandle = contextRunSlotHandleId(currentInstance?.output || sourceNode?.data?.outputs, "output", ["content", "result"], ["text"]);
+      const targetHandle = contextRunSlotHandleId(input, "input", [primaryName, "content"], ["text"]);
+      const linkedEdge = {
+        id: `we-${id}-${displayId}`,
+        source: id,
+        target: displayId,
+        sourceHandle,
+        targetHandle,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      };
+      const nextEdges = [
+        ...currentEdges.filter((edge) => !(edge.source === id && edge.target === displayId)),
+        linkedEdge,
+      ];
+      edgesRef.current = nextEdges;
+      setEdges(nextEdges);
       window.requestAnimationFrame(() => {
         updateNodeInternals(id);
         updateNodeInternals(displayId);
