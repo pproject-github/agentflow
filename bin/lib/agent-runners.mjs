@@ -10,6 +10,14 @@ import { appendRunLogLine } from "./run-events.mjs";
 import { writeWithPrefix } from "./terminal.mjs";
 import { t } from "./i18n.mjs";
 import { readMergedEnvObject } from "./user-env.mjs";
+import {
+  createCursorApiKeyAttempts,
+  cursorApiKeyCooldownMinutes,
+  cursorApiKeyEnv,
+  cursorApiKeyLabel,
+  isCursorQuotaError,
+  markCursorApiKeyQuotaBlocked,
+} from "./cursor-api-key-pool.mjs";
 import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 function shouldPassCursorModelArg(model) {
@@ -21,6 +29,45 @@ function childEnv(options = {}, extra = {}) {
   const optEnv = options && options.env && typeof options.env === "object" ? options.env : {};
   const userId = optEnv.AGENTFLOW_USER_ID || process.env.AGENTFLOW_USER_ID || "";
   return { ...process.env, ...readMergedEnvObject(userId), ...optEnv, ...extra };
+}
+
+function cursorAttemptOptions(options = {}) {
+  const baseEnv = childEnv(options);
+  const attempts = Array.isArray(options._agentflowCursorApiKeyAttempts)
+    ? options._agentflowCursorApiKeyAttempts
+    : createCursorApiKeyAttempts(baseEnv);
+  const attemptIndex = Math.max(0, Number(options._agentflowCursorApiKeyAttemptIndex || 0) || 0);
+  const selection = attempts[attemptIndex];
+  return { baseEnv, attempts, attemptIndex, selection };
+}
+
+function nextCursorAttemptOptions(options = {}, attempts = [], attemptIndex = 0) {
+  return {
+    ...options,
+    _agentflowCursorApiKeyAttempts: attempts,
+    _agentflowCursorApiKeyAttemptIndex: attemptIndex + 1,
+  };
+}
+
+function cursorResultErrorText(event) {
+  if (!event || typeof event !== "object") return "";
+  const candidates = [
+    event.result,
+    event.message,
+    event.error,
+    event.error?.message,
+    event.error?.error,
+    event.data?.error,
+    event.data?.message,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value;
+    if (value && typeof value === "object") {
+      const nested = value.message || value.error || value.result;
+      if (typeof nested === "string" && nested.trim()) return nested;
+    }
+  }
+  return "";
 }
 
 function writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, text) {
@@ -298,6 +345,12 @@ export function runCursorAgentForNode(
   const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
   const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
   const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
+  const {
+    baseEnv: cursorBaseEnv,
+    attempts: cursorAttempts,
+    attemptIndex: cursorAttemptIndex,
+    selection: cursorSelection,
+  } = cursorAttemptOptions(options);
 
   return new Promise((resolve, reject) => {
     const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
@@ -310,6 +363,15 @@ export function runCursorAgentForNode(
     if (options.flowName && options.uuid) {
       const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
       appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI 完整参数: ${agentCmd} ${JSON.stringify(argvLog)}`);
+      if (cursorAttempts.length > 1) {
+        appendRunLogLine(
+          workspaceRoot,
+          options.flowName,
+          options.uuid,
+          "cli-raw",
+          `Cursor API Key 尝试: ${cursorApiKeyLabel(cursorSelection)} / ${cursorAttempts.length}`,
+        );
+      }
       appendRunLogLine(
         workspaceRoot,
         options.flowName,
@@ -324,11 +386,12 @@ export function runCursorAgentForNode(
       cwd: execWorkspaceRoot,
       stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
       shell: false,
-      env: childEnv(options),
+      env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
     });
 
     let lastResult = null;
     let hadError = false;
+    let hadToolActivity = false;
     const assistantTextChunks = [];
     const STDERR_CAP_BYTES = 1024 * 1024;
     const stderrChunks = [];
@@ -419,6 +482,7 @@ export function runCursorAgentForNode(
               if (out) writeStdout(out);
             }
           } else if (event.type === "tool_call") {
+            hadToolActivity = true;
             const toolName =
               event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
             const subtype = event.subtype ?? "";
@@ -438,6 +502,7 @@ export function runCursorAgentForNode(
         } catch (_) {
           let out;
           if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
+            hadToolActivity = true;
             let subtype = "?";
             try {
               const ev = JSON.parse(line);
@@ -480,9 +545,27 @@ export function runCursorAgentForNode(
       if (coloredPrefix && stderrLineBuffer) {
         writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
       }
+      const retryCursorQuota = (errorText) => {
+        if (!cursorSelection) return false;
+        if (cursorAttemptIndex >= cursorAttempts.length - 1) return false;
+        if (hadToolActivity) return false;
+        if (!isCursorQuotaError(errorText)) return false;
+        markCursorApiKeyQuotaBlocked(cursorSelection, cursorApiKeyCooldownMinutes(cursorBaseEnv));
+        const nextOptions = nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex);
+        const line = `[agentflow] Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached quota, retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}...\n`;
+        writeStdout(line);
+        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", line.trim());
+        runCursorAgentForNode(
+          workspaceRoot,
+          { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
+          nextOptions,
+        ).then(resolve).catch(reject);
+        return true;
+      };
       if (code !== 0 && lastResult == null) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        if (retryCursorQuota(stderrTail)) return;
         const autoOnly =
           /named models unavailable/i.test(stderrTail) ||
           (/free plans?/i.test(stderrTail) && /only use auto/i.test(stderrTail)) ||
@@ -506,7 +589,9 @@ export function runCursorAgentForNode(
         return;
       }
       if (hadError || (lastResult && lastResult.is_error)) {
-        reject(new Error(lastResult?.result || "Agent reported error."));
+        const errorText = cursorResultErrorText(lastResult) || "Agent reported error.";
+        if (retryCursorQuota(errorText)) return;
+        reject(new Error(errorText));
         return;
       }
       writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, assistantTextChunks.join("") || lastResult?.result || "");
@@ -1225,6 +1310,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   const ws = path.resolve(cliWorkspace);
   const model = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
   const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
+  const {
+    baseEnv: cursorBaseEnv,
+    attempts: cursorAttempts,
+    attemptIndex: cursorAttemptIndex,
+    selection: cursorSelection,
+  } = cursorAttemptOptions(options);
   // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
   const args = ["--print", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--workspace", ws];
   const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
@@ -1238,11 +1329,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     cwd: ws,
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
-    env: childEnv(options),
+    env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
   });
 
   let lastResult = null;
   let hadError = false;
+  let hadToolActivity = false;
   const STDERR_CAP_BYTES = 1024 * 1024;
   const stderrChunks = [];
   let stderrTotalBytes = 0;
@@ -1253,6 +1345,13 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       onStreamEvent?.(payload);
     } catch (_) {}
   };
+
+  if (cursorAttempts.length > 1) {
+    emit({
+      type: "status",
+      line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} / ${cursorAttempts.length}`,
+    });
+  }
 
   if (!useStderrInherit) {
     child.stderr.on("data", (chunk) => {
@@ -1314,6 +1413,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
             emit({ type: "status", line: t("runner.generating_reply") });
           }
         } else if (event.type === "tool_call") {
+          hadToolActivity = true;
           const toolName =
             event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
           const subtype = event.subtype ?? "";
@@ -1347,6 +1447,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       } catch (_) {
         emit({ type: "raw", source: "cursor", stream: "stdout", eventType: "line", text: rawTraceText(line) });
         if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
+          hadToolActivity = true;
           let subtype = "?";
           try {
             const ev = JSON.parse(line);
@@ -1389,9 +1490,28 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         const rest = stderrComposerBuffer.trim();
         emit({ type: "status", line: `[stderr] ${truncateComposerLine(rest)}` });
       }
+      const retryCursorQuota = (errorText) => {
+        if (!cursorSelection) return false;
+        if (cursorAttemptIndex >= cursorAttempts.length - 1) return false;
+        if (hadToolActivity) return false;
+        if (!isCursorQuotaError(errorText)) return false;
+        markCursorApiKeyQuotaBlocked(cursorSelection, cursorApiKeyCooldownMinutes(cursorBaseEnv));
+        emit({
+          type: "status",
+          line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached quota, retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}`,
+        });
+        const next = runCursorAgentWithPrompt(
+          cliWorkspace,
+          promptText,
+          nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex),
+        );
+        next.finished.then(resolve).catch(reject);
+        return true;
+      };
       if (code !== 0 && lastResult == null) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
+        if (retryCursorQuota(stderrTail)) return;
         const err = new Error(`Cursor CLI exited ${code}. ${stderrTail || "No result event received."}`);
         err.cursorStderrTail = stderrTail;
         emit({ type: "status", line: truncateComposerLine(err.message) });
@@ -1399,7 +1519,8 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         return;
       }
       if (hadError || (lastResult && lastResult.is_error)) {
-        const msg = lastResult?.result || "Agent reported error.";
+        const msg = cursorResultErrorText(lastResult) || "Agent reported error.";
+        if (retryCursorQuota(msg)) return;
         emit({ type: "status", line: truncateComposerLine(msg) });
         reject(new Error(msg));
         return;
