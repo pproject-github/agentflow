@@ -12,6 +12,7 @@ input:
   - type: text
     name: skillsContext
     default: ""
+    showOnNode: true
   - type: text
     name: mcpContext
     default: ""
