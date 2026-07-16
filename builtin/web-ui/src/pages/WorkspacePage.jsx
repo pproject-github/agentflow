@@ -103,19 +103,21 @@ const WORKSPACE_LOAD_MCP_DEFINITION = {
 };
 const WORKSPACE_LOAD_WORKSPACE_DEFINITION = {
   id: "control_cd_workspace",
-  displayName: "Load Workspace",
-  label: "Load Workspace",
-  description: "Select a configured workspace directory and pass workspaceContext to downstream nodes.",
+  displayName: "加载知识库",
+  label: "加载知识库",
+  description: "Select one or more knowledge sources and pass knowledgeContext to downstream nodes.",
   type: "control",
   inputs: [
     { type: "node", name: "prev", default: "" },
     { type: "text", name: "path", default: "", showOnNode: false },
     { type: "text", name: "label", default: "", showOnNode: false },
+    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
     { type: "text", name: "workspaceContext", default: "", showOnNode: false },
   ],
   outputs: [
     { type: "node", name: "next", default: "" },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: true },
+    { type: "text", name: "knowledgeContext", default: "", showOnNode: true },
+    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
     { type: "file", name: "cwd", default: "", showOnNode: false },
   ],
 };
@@ -130,6 +132,7 @@ const WORKSPACE_CONTEXT_RUN_DEFINITION = {
     { type: "text", name: "skillKeys", default: "", showOnNode: false },
     { type: "bool", name: "includeWorkspaceContext", default: "true", showOnNode: false },
     { type: "text", name: "displayType", default: "markdown", showOnNode: false },
+    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
     { type: "text", name: "workspaceContext", default: "", showOnNode: false },
   ],
   outputs: [
@@ -3140,7 +3143,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
     .map((item) => ({
       id: String(item?.id || ""),
-      label: String(item?.label || item?.name || "Workspace"),
+      label: String(item?.label || item?.name || "知识库"),
       kind: item?.kind === "git" ? "git" : "local",
       path: String(item?.path || ""),
       repoUrl: String(item?.repoUrl || ""),
@@ -3263,11 +3266,8 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
     if (!q) return workspaceList;
     return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath, item.type].join(" ").toLowerCase().includes(q));
   }, [workspaceList, workspaceSearch]);
-  const selectedWorkspace = useMemo(() => {
-    const cwd = String(config.workspaceContext?.cwd || config.workspaceContext?.workspaceRoot || "").trim();
-    const idValue = String(config.workspaceContext?.id || "").trim();
-    return workspaceList.find((item) => (idValue && item.id === idValue) || (cwd && item.path === cwd)) || null;
-  }, [config.workspaceContext, workspaceList]);
+  const selectedKnowledgeSources = useMemo(() => knowledgeSourcesFromContext(config.knowledgeContext), [config.knowledgeContext]);
+  const selectedKnowledgeKeys = useMemo(() => new Set(selectedKnowledgeSources.map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledgeSources]);
   useEffect(() => {
     if (config.task === lastConfigTaskRef.current) return;
     lastConfigTaskRef.current = config.task;
@@ -3317,21 +3317,18 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       return next;
     });
   };
-  const selectWorkspace = (workspace) => {
-    const workspaceContext = workspace ? {
-      version: 1,
-      id: workspace.id || "",
-      label: workspace.label || "Workspace",
-      kind: workspace.kind || "local",
-      cwd: workspace.path || "",
-      workspaceRoot: workspace.path || "",
-      repoUrl: workspace.repoUrl || "",
-      branch: workspace.branch || "",
-      mountPath: workspace.mountPath || "",
-      type: workspace.type || "",
-    } : null;
-    updateConfig({ includeWorkspaceContext: Boolean(workspace), workspaceContext });
-    setWorkspaceOpen(false);
+  const toggleKnowledgeSource = (workspace, checked) => {
+    const key = workspace?.id || workspace?.path || "";
+    if (!key) return;
+    const selected = workspaceList.filter((item) => {
+      const itemKey = item.id || item.path || "";
+      if (itemKey === key) return checked;
+      return selectedKnowledgeKeys.has(itemKey);
+    });
+    updateConfig({ knowledgeContext: knowledgeContextFromWorkspaces(selected) });
+  };
+  const clearKnowledgeSources = () => {
+    updateConfig({ knowledgeContext: null });
   };
   if (viewMode === "result" && hasResult) {
     return (
@@ -3484,7 +3481,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
             <textarea
           value={taskDraft}
           disabled={readOnly}
-          placeholder="输入任务，例如：基于当前 workspace 总结需求并生成展示页"
+          placeholder="输入任务，例如：基于选中的知识库总结需求并生成展示页"
           onCompositionStart={() => {
             composingTaskRef.current = true;
           }}
@@ -3634,8 +3631,8 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                 setWorkspaceOpen((open) => !open);
               }}
             >
-              <span className="material-symbols-outlined">{selectedWorkspace ? "folder_open" : "folder_off"}</span>
-              <span>{selectedWorkspace?.label || "Workspace"}</span>
+              <span className="material-symbols-outlined">{selectedKnowledgeSources.length ? "folder_open" : "folder_off"}</span>
+              <span>{selectedKnowledgeSources.length ? `${selectedKnowledgeSources.length} 知识库` : "知识库"}</span>
               <span className="material-symbols-outlined">expand_more</span>
             </button>
             {workspaceOpen ? (
@@ -3646,10 +3643,10 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                     type="search"
                     value={workspaceSearch}
                     onChange={(event) => setWorkspaceSearch(event.target.value)}
-                    placeholder="搜索 Workspace..."
+                    placeholder="搜索知识库..."
                     spellCheck={false}
                     autoComplete="off"
-                    aria-label="搜索 Workspace"
+                    aria-label="搜索知识库"
                   />
                   {workspaceSearch ? (
                     <button type="button" onClick={() => setWorkspaceSearch("")} aria-label="清空搜索">
@@ -3660,18 +3657,17 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                 <div className="af-work-load-skills-menu af-work-context-run-card__menu-scroll">
                   <section className="af-work-load-skills-menu__group">
                     <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
-                      <span>Workspace</span>
+                      <span>知识库</span>
                       <small>{filteredWorkspaces.length}</small>
                     </div>
                     <div className="af-work-load-skills-menu__options">
                       {filteredWorkspaces.map((item) => (
                         <label key={`${item.id}:${item.path}`} className="af-work-load-skills-menu__option">
                           <input
-                            type="radio"
-                            name={`context-workspace-${id}`}
-                            checked={selectedWorkspace?.path === item.path}
+                            type="checkbox"
+                            checked={selectedKnowledgeKeys.has(item.id || item.path)}
                             disabled={readOnly}
-                            onChange={() => selectWorkspace(item)}
+                            onChange={(event) => toggleKnowledgeSource(item, event.target.checked)}
                           />
                           <span className="af-work-load-skills-menu__option-main">
                             <span className="af-work-load-skills-menu__option-title">{item.label}</span>
@@ -3685,9 +3681,9 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                     </div>
                   </section>
                   {filteredWorkspaces.length === 0 ? (
-                    <div className="af-work-load-skills-menu__empty">没有匹配的 Workspace</div>
+                    <div className="af-work-load-skills-menu__empty">没有匹配的知识库</div>
                   ) : null}
-                  <button type="button" className="af-work-load-skills-menu__clear" onClick={() => selectWorkspace(null)}>不加载 Workspace</button>
+                  <button type="button" className="af-work-load-skills-menu__clear" onClick={clearKnowledgeSources}>清空知识库</button>
                 </div>
               </div>
             ) : null}
@@ -4650,11 +4646,14 @@ function contextRunResultContentFromData(data) {
 function contextRunConfigFromData(data) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const includeRaw = workspaceSlotConfigValue(inputs, "includeWorkspaceContext", "true").toLowerCase();
+  const knowledgeContext = workspaceSlotConfigJsonValue(inputs, "knowledgeContext");
+  const legacyWorkspaceContext = workspaceSlotConfigJsonValue(inputs, "workspaceContext");
   return {
     task: String(data?.body || ""),
     skillKeys: selectedSkillKeysFromConfigSlots(data),
     includeWorkspaceContext: includeRaw !== "false" && includeRaw !== "0" && includeRaw !== "off",
-    workspaceContext: workspaceSlotConfigJsonValue(inputs, "workspaceContext"),
+    knowledgeContext: knowledgeContext || (legacyWorkspaceContext ? knowledgeContextFromWorkspaces([legacyWorkspaceContext]) : null),
+    workspaceContext: legacyWorkspaceContext,
     displayType: normalizeContextRunDisplayType(workspaceSlotConfigValue(inputs, "displayType", "markdown")),
     model: String(data?.model || "").trim(),
   };
@@ -4677,9 +4676,46 @@ function serializeMcpNames(names) {
   return JSON.stringify(Array.from(new Set((names || []).map(String).filter(Boolean))));
 }
 
+function knowledgeSourceFromWorkspace(workspace = {}, role = "context") {
+  const cwd = String(workspace?.cwd || workspace?.workspaceRoot || workspace?.path || "").trim();
+  const id = String(workspace?.id || "").trim();
+  const rawLabel = String(workspace?.label || workspace?.name || "").trim();
+  if (!cwd && !id && !rawLabel) return null;
+  const label = String(rawLabel || id || "知识库").trim();
+  return {
+    id,
+    label,
+    kind: workspace?.kind === "git" ? "git" : "local",
+    type: String(workspace?.type || ""),
+    repoPath: cwd,
+    path: cwd,
+    mountPath: String(workspace?.mountPath || id || label).trim(),
+    repoUrl: String(workspace?.repoUrl || "").trim(),
+    branch: String(workspace?.branch || "").trim(),
+    readonly: true,
+    role,
+  };
+}
+
+function knowledgeContextFromWorkspaces(workspaces = []) {
+  const sources = (Array.isArray(workspaces) ? workspaces : [workspaces])
+    .map((workspace, index) => knowledgeSourceFromWorkspace(workspace, index === 0 ? "primary" : "context"))
+    .filter(Boolean);
+  return sources.length ? { version: 1, sources } : null;
+}
+
+function knowledgeSourcesFromContext(value) {
+  const sources = value && typeof value === "object" && Array.isArray(value.sources) ? value.sources : [];
+  return sources.map((source) => knowledgeSourceFromWorkspace(source, source?.role || "context")).filter(Boolean);
+}
+
 function workspaceSelectionFromNodeData(data) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const knowledge = workspaceSlotConfigJsonValue(inputs, "knowledgeContext");
+  const legacyWorkspace = workspaceSlotConfigJsonValue(inputs, "workspaceContext");
+  const sources = knowledgeSourcesFromContext(knowledge || (legacyWorkspace ? knowledgeContextFromWorkspaces([legacyWorkspace]) : null));
   return {
+    sources,
     path: workspaceSlotConfigValue(inputs, "path", ""),
     label: workspaceSlotConfigValue(inputs, "label", ""),
   };
@@ -5275,11 +5311,11 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const selectedWorkspace = workspaceSelectionFromNodeData(data);
+  const selectedKnowledge = workspaceSelectionFromNodeData(data);
   const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
     .map((item) => ({
       id: String(item?.id || ""),
-      label: String(item?.label || item?.name || "Workspace"),
+      label: String(item?.label || item?.name || "知识库"),
       kind: item?.kind === "git" ? "git" : "local",
       path: String(item?.path || ""),
       repoUrl: String(item?.repoUrl || ""),
@@ -5294,8 +5330,17 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
     if (!q) return workspaceList;
     return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath].join(" ").toLowerCase().includes(q));
   }, [search, workspaceList]);
-  const current = workspaceList.find((item) => item.path === selectedWorkspace.path) || null;
-  const title = current?.label || selectedWorkspace.label || "选择 Workspace";
+  const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
+  const title = selectedKeys.size ? `${selectedKeys.size} 个知识库` : "选择知识库";
+  const toggleWorkspace = (workspace, checked) => {
+    const key = workspace?.id || workspace?.path || "";
+    const selectedItems = workspaceList.filter((item) => {
+      const itemKey = item.id || item.path || "";
+      if (itemKey === key) return checked;
+      return selectedKeys.has(itemKey);
+    });
+    onChangeWorkspace?.(id, selectedItems);
+  };
   return (
     <div
       className={"af-work-load-skills-card af-work-load-workspace-card" + (selected ? " af-work-load-skills-card--selected" : "")}
@@ -5339,7 +5384,7 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
       })}
       <div className="af-work-load-skills-card__head">
         <span className="material-symbols-outlined">folder_managed</span>
-        <strong>{data?.label || "Load Workspace"}</strong>
+        <strong>{data?.label || "加载知识库"}</strong>
         <span>{data?.definitionId || "control_cd_workspace"}</span>
         <button type="button" className="af-work-display-card__close nodrag" onClick={() => deleteNode?.(id)} aria-label="删除节点">
           <span className="material-symbols-outlined">close</span>
@@ -5354,7 +5399,7 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
           <span>{title}</span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
-        {selectedWorkspace.path ? <div className="af-work-load-workspace-card__path">{selectedWorkspace.path}</div> : null}
+        {selectedKnowledge.sources?.length ? <div className="af-work-load-workspace-card__path">{selectedKnowledge.sources.map((item) => item.label || item.id || item.mountPath).join(", ")}</div> : null}
         {open ? (
           <div className="af-work-load-skills-menu-shell" onClick={(event) => event.stopPropagation()}>
             <div className="af-work-load-skills-search">
@@ -5363,10 +5408,10 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="搜索 Workspace..."
+                placeholder="搜索知识库..."
                 spellCheck={false}
                 autoComplete="off"
-                aria-label="搜索 Workspace"
+                aria-label="搜索知识库"
               />
               {search ? (
                 <button type="button" onClick={() => setSearch("")} aria-label="清空搜索">
@@ -5377,20 +5422,16 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
             <div className="af-work-load-skills-menu">
               <section className="af-work-load-skills-menu__group">
                 <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
-                  <span>Workspace</span>
+                  <span>知识库</span>
                   <small>{filteredWorkspaces.length}</small>
                 </div>
                 <div className="af-work-load-skills-menu__options">
                   {filteredWorkspaces.map((item) => (
                     <label key={`${item.id}:${item.path}`} className="af-work-load-skills-menu__option">
                       <input
-                        type="radio"
-                        name={`workspace-${id}`}
-                        checked={item.path === selectedWorkspace.path}
-                        onChange={() => {
-                          onChangeWorkspace?.(id, item);
-                          setOpen(false);
-                        }}
+                        type="checkbox"
+                        checked={selectedKeys.has(item.id || item.path)}
+                        onChange={(event) => toggleWorkspace(item, event.target.checked)}
                       />
                       <span className="af-work-load-skills-menu__option-main">
                         <span className="af-work-load-skills-menu__option-title">{item.label}</span>
@@ -5404,8 +5445,9 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
                 </div>
               </section>
               {filteredWorkspaces.length === 0 ? (
-                <div className="af-work-load-skills-menu__empty">没有匹配的 Workspace</div>
+                <div className="af-work-load-skills-menu__empty">没有匹配的知识库</div>
               ) : null}
+              <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeWorkspace?.(id, [])}>清空知识库</button>
             </div>
           </div>
         ) : null}
@@ -7126,31 +7168,43 @@ function WorkspacePageInner() {
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
 
-  const changeLoadWorkspace = useCallback((nodeId, workspace) => {
+  const changeLoadWorkspace = useCallback((nodeId, workspaceOrList) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
     }
-    const pathValue = String(workspace?.path || "").trim();
-    if (!pathValue) return;
-    const labelValue = String(workspace?.label || workspace?.id || "Workspace").trim();
-    const contextValue = JSON.stringify({
+    const selected = (Array.isArray(workspaceOrList) ? workspaceOrList : (workspaceOrList ? [workspaceOrList] : []))
+      .filter((item) => String(item?.path || "").trim());
+    const primary = selected[0] || null;
+    const pathValue = String(primary?.path || "").trim();
+    const labelValue = selected.length === 1
+      ? String(primary?.label || primary?.id || "知识库").trim()
+      : (selected.length ? `${selected.length} 个知识库` : "");
+    const knowledgeContextValue = selected.length ? JSON.stringify(knowledgeContextFromWorkspaces(selected)) : "";
+    const legacyWorkspaceContextValue = primary ? JSON.stringify({
       version: 1,
-      id: workspace?.id || "",
-      label: labelValue,
-      kind: workspace?.kind || "local",
+      id: primary?.id || "",
+      label: String(primary?.label || primary?.id || "知识库").trim(),
+      kind: primary?.kind || "local",
       cwd: pathValue,
       workspaceRoot: pathValue,
-      repoUrl: workspace?.repoUrl || "",
-      branch: workspace?.branch || "",
-      mountPath: workspace?.mountPath || "",
-      type: workspace?.type || "",
-    });
+      repoUrl: primary?.repoUrl || "",
+      branch: primary?.branch || "",
+      mountPath: primary?.mountPath || "",
+      type: primary?.type || "",
+    }) : "";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
       if (slot?.name === "path") return { ...slot, default: pathValue, value: pathValue };
       if (slot?.name === "label") return { ...slot, default: labelValue, value: labelValue };
-      if (slot?.name === "workspaceContext") return { ...slot, default: contextValue, value: contextValue };
+      if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
+      if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue };
       if (slot?.name === "mode") return { ...slot, default: "set", value: "set" };
+      return slot;
+    }) : []);
+    const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
+      if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue };
+      if (slot?.name === "cwd") return { ...slot, default: pathValue, value: pathValue };
       return slot;
     }) : []);
     const nextNodes = nodes.map((node) => (
@@ -7159,8 +7213,9 @@ function WorkspacePageInner() {
             ...node,
             data: {
               ...node.data,
-              label: node.data?.label || "Load Workspace",
+              label: node.data?.label || "加载知识库",
               inputs: patchInputSlots(node.data?.inputs),
+              outputs: patchOutputSlots(node.data?.outputs),
             },
           }
         : node
@@ -7171,15 +7226,16 @@ function WorkspacePageInner() {
       ...currentInstances,
       [nodeId]: {
         ...base,
-        label: base.label || "Load Workspace",
+        label: base.label || "加载知识库",
         input: patchInputSlots(base.input),
+        output: patchOutputSlots(base.output),
       },
     };
     instancesRef.current = nextInstances;
     setNodes(nextNodes);
     setInstances(nextInstances);
     setNodePropDraft((draft) => (
-      draft?.id === nodeId ? { ...draft, inputs: patchInputSlots(draft.inputs) } : draft
+      draft?.id === nodeId ? { ...draft, inputs: patchInputSlots(draft.inputs), outputs: patchOutputSlots(draft.outputs) } : draft
     ));
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
   }, [edges, nodes, saveGraph, setNodes, workspaceWritable]);
@@ -7198,10 +7254,14 @@ function WorkspacePageInner() {
     const workspaceContextValue = config?.workspaceContext && typeof config.workspaceContext === "object"
       ? JSON.stringify(config.workspaceContext)
       : "";
+    const knowledgeContextValue = config?.knowledgeContext && typeof config.knowledgeContext === "object"
+      ? JSON.stringify(config.knowledgeContext)
+      : "";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
       if (slot?.name === "skillKeys") return { ...slot, default: serializedSkills, value: serializedSkills };
       if (slot?.name === "displayType") return { ...slot, default: displayType, value: displayType };
       if (slot?.name === "includeWorkspaceContext") return { ...slot, default: includeWorkspace, value: includeWorkspace };
+      if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
       if (slot?.name === "workspaceContext") return { ...slot, default: workspaceContextValue, value: workspaceContextValue };
       return slot;
     }) : []);

@@ -26,7 +26,7 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   control_agent_toBool: ["Agent ToBool"],
   control_anyOne: ["Any One"],
   control_cancelled: ["Cancelled", "Cancel Check"],
-  control_cd_workspace: ["CD Workspace"],
+  control_cd_workspace: ["CD Workspace", "Load Workspace"],
   control_delay: ["Delay"],
   control_if: ["If Branch"],
   control_interval_loop: ["Interval Loop"],
