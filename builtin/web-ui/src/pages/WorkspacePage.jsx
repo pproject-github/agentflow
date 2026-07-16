@@ -2048,29 +2048,9 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
       ? normalizeReactAppDisplayContent(resolvedContent)
       : displayOutputEnvelopeContent(resolvedContent);
   const htmlFrameIdRef = useRef("");
-  const [htmlFrameHeight, setHtmlFrameHeight] = useState(0);
   if (!htmlFrameIdRef.current) {
     htmlFrameIdRef.current = `html-display-${Math.random().toString(36).slice(2, 10)}`;
   }
-  useEffect(() => {
-    if (kind !== "html" && kind !== "react") {
-      setHtmlFrameHeight(0);
-      return undefined;
-    }
-    const frameId = htmlFrameIdRef.current;
-    const onMessage = (event) => {
-      const iframe = htmlFrameRef.current;
-      if (!iframe || event.source !== iframe.contentWindow) return;
-      const payload = event.data && typeof event.data === "object" ? event.data : null;
-      if (!payload || payload.source !== "agentflow-html-display-size" || payload.frameId !== frameId) return;
-      const nextHeight = Math.ceil(Number(payload.height || 0));
-      if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
-      setHtmlFrameHeight(Math.min(200000, Math.max(220, nextHeight)));
-    };
-    setHtmlFrameHeight(0);
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [content, htmlFrameRef, htmlFrameVersion, kind]);
   if (!kind) return null;
   const contentProblem = validateDisplayContentForWrite(kind, content);
   if (fileLoading) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
@@ -2079,17 +2059,16 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (!content.trim()) return <VisibleScrollFrame className="af-work-display-empty">No display content</VisibleScrollFrame>;
   if (kind === "html" || kind === "react") {
     return (
-      <VisibleScrollFrame className="af-work-display-body af-work-display-body--html">
+      <div className="af-work-display-body af-work-display-body--html">
         <iframe
           key={htmlFrameVersion}
           ref={htmlFrameRef}
           className="af-work-display-html-frame"
-          style={htmlFrameHeight > 0 ? { height: `${htmlFrameHeight}px` } : undefined}
           title={data?.label || (kind === "react" ? "React app preview" : "HTML preview")}
           sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
           srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content, htmlFrameIdRef.current) : htmlDisplaySrcDoc(content, htmlFrameIdRef.current)}
         />
-      </VisibleScrollFrame>
+      </div>
     );
   }
   if (kind === "image") {
