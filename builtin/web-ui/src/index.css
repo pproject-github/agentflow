@@ -9096,9 +9096,21 @@ button.af-project-card {
 
 .af-work-load-skills-card__summary {
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.af-work-load-skills-card__summary-main {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.af-work-load-skills-card__summary-extra {
+  flex: 0 0 auto;
 }
 
 .af-work-load-workspace-card__path {

@@ -4620,13 +4620,17 @@ function selectedSkillKeysFromConfigSlots(data) {
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
-function compactSelectionSummary(items, emptyLabel, maxVisible = 2) {
+function compactSelectionParts(items, emptyLabel, maxVisible = 1) {
   const names = (Array.isArray(items) ? items : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
-  if (!names.length) return emptyLabel;
+  if (!names.length) return { head: emptyLabel, extra: "", title: "" };
   const head = names.slice(0, maxVisible).join("、");
-  return names.length > maxVisible ? `${head} 等 ${names.length} 个` : head;
+  return {
+    head,
+    extra: names.length > maxVisible ? `等 ${names.length} 个` : "",
+    title: names.join(", "),
+  };
 }
 
 function serializeSkillKeys(keys) {
@@ -4962,7 +4966,7 @@ function WorkspaceLoadSkillsNode({
   const keys = useMemo(() => new Set(selectedSkillKeysFromNodeData(data)), [data]);
   const byKey = useMemo(() => new Map(skillsList.map((skill) => [skill.key, skill])), [skillsList]);
   const selectedSkillNames = useMemo(() => Array.from(keys).map((key) => byKey.get(key)?.name || key), [byKey, keys]);
-  const selectedSkillSummary = useMemo(() => compactSelectionSummary(selectedSkillNames, "选择 Skills"), [selectedSkillNames]);
+  const selectedSkillSummary = useMemo(() => compactSelectionParts(selectedSkillNames, "选择 Skills"), [selectedSkillNames]);
   const groups = useMemo(() => {
     const used = new Set();
     const collectionGroups = collectionsList
@@ -5145,8 +5149,9 @@ function WorkspaceLoadSkillsNode({
           if (!open) data?.onRefreshSkills?.();
           setOpen((v) => !v);
         }}>
-          <span className="af-work-load-skills-card__summary" title={selectedSkillNames.join(", ")}>
-            {selectedSkillSummary}
+          <span className="af-work-load-skills-card__summary" title={selectedSkillSummary.title}>
+            <span className="af-work-load-skills-card__summary-main">{selectedSkillSummary.head}</span>
+            {selectedSkillSummary.extra ? <span className="af-work-load-skills-card__summary-extra">{selectedSkillSummary.extra}</span> : null}
           </span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
@@ -5423,7 +5428,7 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   }, [search, workspaceList]);
   const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
   const selectedWorkspaceNames = useMemo(() => (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path), [selectedKnowledge.sources]);
-  const title = useMemo(() => compactSelectionSummary(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
+  const title = useMemo(() => compactSelectionParts(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
   const toggleWorkspace = (workspace, checked) => {
     const key = workspace?.id || workspace?.path || "";
     const selectedItems = workspaceList.filter((item) => {
@@ -5488,8 +5493,9 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
           if (!open) onRefreshWorkspaces?.();
           setOpen((v) => !v);
         }}>
-          <span className="af-work-load-skills-card__summary" title={selectedWorkspaceNames.join(", ")}>
-            {title}
+          <span className="af-work-load-skills-card__summary" title={title.title}>
+            <span className="af-work-load-skills-card__summary-main">{title.head}</span>
+            {title.extra ? <span className="af-work-load-skills-card__summary-extra">{title.extra}</span> : null}
           </span>
           <span className="material-symbols-outlined" aria-hidden>{open ? "expand_less" : "expand_more"}</span>
         </button>
