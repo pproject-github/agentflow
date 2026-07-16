@@ -7556,6 +7556,16 @@ button.af-project-card {
   overflow: hidden;
 }
 
+.af-work-display-body--html {
+  width: 100%;
+  height: min(30rem, 70vh);
+  min-height: 220px;
+}
+
+.af-work-display-card--sized .af-work-display-body--html {
+  height: auto;
+}
+
 .af-work-display-html-frame {
   display: block;
   width: 100%;
