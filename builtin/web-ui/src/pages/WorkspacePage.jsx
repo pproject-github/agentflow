@@ -1588,7 +1588,7 @@ function htmlDisplaySrcDoc(content, frameId = "") {
   const html = normalizeHtmlDisplayContent(content);
   if (!html.trim()) return "";
   const frameIdJson = JSON.stringify(String(frameId || ""));
-  const guard = `<base target="_self"><script>
+  const guard = `<base target="_blank"><script data-agentflow-display-link-guard="1">
 (() => {
   const frameId = ${frameIdJson};
   const postSize = () => {
@@ -1610,9 +1610,12 @@ function htmlDisplaySrcDoc(content, frameId = "") {
     if (!link) return;
     const rawHref = String(link.getAttribute("href") || "").trim();
     if (!rawHref || rawHref.startsWith("#")) return;
-    if (/^(?:javascript|mailto|tel):/i.test(rawHref)) return;
+    if (/^javascript:/i.test(rawHref)) {
+      event.preventDefault();
+      return;
+    }
     event.preventDefault();
-    window.location.href = link.href;
+    window.open(link.href, "_blank", "noopener,noreferrer");
   }, true);
   window.addEventListener("load", postSize);
   window.addEventListener("resize", postSize);
@@ -1630,7 +1633,7 @@ function htmlDisplaySrcDoc(content, frameId = "") {
   }
 })();
 </script>`;
-  if (/<script\b[^>]*>\s*\(\(\)\s*=>\s*\{\s*document\.addEventListener\("click"/i.test(html)) return html;
+  if (/data-agentflow-display-link-guard=["']1["']/i.test(html)) return html;
   if (/<head\b[^>]*>/i.test(html)) {
     return html.replace(/<head\b([^>]*)>/i, `<head$1>${guard}`);
   }
@@ -2083,7 +2086,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
           className="af-work-display-html-frame"
           style={htmlFrameHeight > 0 ? { height: `${htmlFrameHeight}px` } : undefined}
           title={data?.label || (kind === "react" ? "React app preview" : "HTML preview")}
-          sandbox="allow-scripts allow-forms allow-modals"
+          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
           srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content, htmlFrameIdRef.current) : htmlDisplaySrcDoc(content, htmlFrameIdRef.current)}
         />
       </VisibleScrollFrame>
@@ -2194,7 +2197,7 @@ function DisplayPickerPreview({ node }) {
   if (contentProblem) return <div className="af-display-picker-preview__empty">{contentProblem}</div>;
   if (!content.trim()) return <div className="af-display-picker-preview__empty">No content</div>;
   if (kind === "html" || kind === "react") {
-    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals" srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content) : htmlDisplaySrcDoc(content)} />;
+    return <iframe title={node?.data?.label || node?.id} sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" srcDoc={kind === "react" ? reactAppDisplaySrcDoc(content) : htmlDisplaySrcDoc(content)} />;
   }
   if (kind === "image") {
     return <img src={workspaceRawFileUrl(content, node?.data?.flowParams)} alt={node?.data?.label || node?.id} loading="lazy" />;

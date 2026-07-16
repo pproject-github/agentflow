@@ -103,7 +103,7 @@ export function reactAppDisplaySrcDoc(content, frameId = "") {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <base target="_self" />
+  <base target="_blank" />
   <title>${title.replace(/[<&>]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]))}</title>
   <style>${cssText.replace(/<\/style/gi, "<\\/style")}</style>
 </head>
@@ -120,6 +120,18 @@ export function reactAppDisplaySrcDoc(content, frameId = "") {
         root.innerHTML = '<pre style="margin:16px;padding:16px;border:1px solid rgba(255,117,117,.35);border-radius:8px;background:rgba(127,29,29,.18);color:#ffb8b8;white-space:pre-wrap;">' + String(event.message || event.error || 'React app failed').replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch])) + '</pre>';
       }
     });
+    document.addEventListener("click", (event) => {
+      const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+      if (!link) return;
+      const rawHref = String(link.getAttribute("href") || "").trim();
+      if (!rawHref || rawHref.startsWith("#")) return;
+      if (/^javascript:/i.test(rawHref)) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      window.open(link.href, "_blank", "noopener,noreferrer");
+    }, true);
   </script>
   <script type="text/babel">
     const { useCallback, useEffect, useMemo, useRef, useState } = React;
