@@ -1061,11 +1061,12 @@ function graphToFlow(graph, palette) {
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
     const size = normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
+    const useSize = size && !isOneClickTaskDefinitionId(runtimeDefinitionId);
     return {
       id,
       type: FLOW_NODE_TYPE,
       position: pos,
-      ...(size ? { width: size.width, height: size.height } : {}),
+      ...(useSize ? { width: size.width, height: size.height } : {}),
       data: {
         label: inst.label || labelForDefinition(def) || labelForDefinition(runtimeDef) || id,
         definitionId: runtimeDefinitionId,
@@ -1081,8 +1082,8 @@ function graphToFlow(graph, palette) {
         implementationRef: inst.implementationRef || "",
         implementationMode: inst.implementationMode || "",
         displayReloadKey: inst.displayReloadKey || "",
-        ...(size ? { nodeSize: size } : {}),
-        ...(isDisplay && size ? { displaySize: size } : {}),
+        ...(useSize ? { nodeSize: size } : {}),
+        ...(isDisplay && useSize ? { displaySize: size } : {}),
       },
     };
   });
@@ -1317,6 +1318,7 @@ function contextRunResultDisplaySizeFromData(data, displayDefinitionId = "") {
 }
 
 function persistedWorkspaceNodeSize(node) {
+  if (isOneClickTaskDefinitionId(node?.data?.definitionId)) return null;
   const isDisplay = Boolean(workspaceDisplayKindFromData(node?.data));
   const width = Number(node?.data?.displaySize?.width || node?.data?.nodeSize?.width || node?.width || (isDisplay ? node?.measured?.width : 0) || 0);
   const height = Number(node?.data?.displaySize?.height || node?.data?.nodeSize?.height || node?.height || (isDisplay ? node?.measured?.height : 0) || 0);
@@ -6304,11 +6306,13 @@ function WorkspacePageInner() {
       }, nextInstances, palette);
       const nextNodes = currentNodes.map((node) => {
         if (node.id === id) {
+          const { width: _width, height: _height, measured: _measured, ...sourceNodeRest } = node;
+          const { nodeSize: _nodeSize, displaySize: _displaySize, ...sourceDataRest } = node.data || {};
           return {
-            ...node,
+            ...sourceNodeRest,
             data: {
-              ...node.data,
-              outputs: clearContextRunOutputSlots(node.data?.outputs),
+              ...sourceDataRest,
+              outputs: clearContextRunOutputSlots(sourceDataRest?.outputs),
               contextRunResultNonce: Date.now(),
             },
           };
