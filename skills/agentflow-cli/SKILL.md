@@ -13,6 +13,28 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs <command> [options]
 
 If the skill is installed outside this repository, resolve the script path relative to this `SKILL.md`.
 
+## Installation
+
+Install from SkillHub before using this skill in another agent environment:
+
+```bash
+skillhub install agentflow-cli --global --agent codex
+```
+
+For a project-local install:
+
+```bash
+skillhub install agentflow-cli --dir .agents/skills
+```
+
+For other SkillHub-supported agents, change the agent name:
+
+```bash
+skillhub install agentflow-cli --global --agent claude-code
+```
+
+After installation, configure only the direct API token. Do not add an MCP server for this skill.
+
 ## Configuration
 
 The CLI reads configuration in this order:
