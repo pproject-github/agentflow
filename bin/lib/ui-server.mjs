@@ -7260,6 +7260,13 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     meta.issueKey ? `issue ${meta.issueKey}` : "",
     meta.createdAt || "",
   ].filter(Boolean).join(" · "));
+  const durability = String(meta.durability || "").trim().toLowerCase();
+  const lifecycle = [
+    durability === "temporary" ? "Temporary review link" : durability === "durable" ? "Durable preview" : "",
+    meta.expiresAt ? `Expires ${meta.expiresAt}` : "",
+    meta.persistence ? `persistence ${meta.persistence}` : "",
+  ].filter(Boolean).join(" · ");
+  const escapedLifecycle = htmlEscapeAttribute(lifecycle);
   const renderedMarkdown = prdWorkflowReviewMarkdownToHtml(markdown || "");
   const rawHref = htmlEscapeAttribute(meta.rawHref || "?raw=1");
   return `<!doctype html>
@@ -7321,6 +7328,7 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
     .raw, .theme-toggle { border: 1px solid rgba(124,58,237,.34); border-radius: 999px; color: var(--button-text); background: var(--button); padding: 9px 14px; text-decoration: none; font-size: 13px; font-weight: 800; line-height: 1.2; }
     .theme-toggle { cursor: pointer; font-family: inherit; }
+    .lifecycle { margin-top: 10px; display: inline-flex; max-width: 100%; border: 1px solid rgba(124,58,237,.30); border-radius: 999px; background: rgba(124,58,237,.12); color: var(--button-text); padding: 6px 10px; font-size: 12px; font-weight: 800; line-height: 1.35; overflow-wrap: anywhere; }
     article { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 28px 80px var(--shadow); padding: clamp(20px, 4vw, 34px); }
     article > *:first-child { margin-top: 0; }
     article > *:last-child { margin-bottom: 0; }
@@ -7355,6 +7363,7 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       <div>
         <h1>${escapedTitle}</h1>
         ${escapedMeta ? `<p class="meta">${escapedMeta}</p>` : ""}
+        ${escapedLifecycle ? `<p class="lifecycle">${escapedLifecycle}</p>` : ""}
       </div>
       <div class="toolbar">
         <button class="theme-toggle" type="button" data-theme-toggle>明亮模式</button>
