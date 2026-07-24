@@ -134,6 +134,8 @@ const MIME = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".markdown": "text/markdown; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -1072,9 +1074,10 @@ async function checkCursorMcpServers(name = "", userCtx = {}) {
   return { results };
 }
 
-function readModelListsFromDisk(workspaceRoot) {
-  const p = getModelListsAbs();
-  const empty = {
+const MODEL_LIST_KEYS = ["cursor", "opencode", "claudeCode", "codex"];
+
+function emptyModelLists() {
+  return {
     cursor: [],
     opencode: [],
     claudeCode: [],
@@ -1084,6 +1087,62 @@ function readModelListsFromDisk(workspaceRoot) {
     claudeCodeFetchedAt: null,
     codexFetchedAt: null,
   };
+}
+
+function modelListEntryId(entry) {
+  const text = String(entry || "").trim();
+  const idx = text.indexOf(" - ");
+  return idx >= 0 ? text.slice(0, idx).trim() : text;
+}
+
+function normalizeHiddenModelConfig(raw) {
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const key of MODEL_LIST_KEYS) {
+    out[key] = Array.isArray(src[key])
+      ? [...new Set(src[key].map(modelListEntryId).filter(Boolean))]
+      : [];
+  }
+  return out;
+}
+
+function readHiddenModelConfig() {
+  const cfg = readAgentflowUserConfigObject();
+  const visibility = cfg.modelVisibility && typeof cfg.modelVisibility === "object" && !Array.isArray(cfg.modelVisibility)
+    ? cfg.modelVisibility
+    : {};
+  return normalizeHiddenModelConfig(visibility.hiddenModels);
+}
+
+function writeHiddenModelConfig(hiddenModels) {
+  const cfgPath = getAgentflowUserConfigAbs();
+  const prev = readAgentflowUserConfigObject();
+  const next = {
+    ...prev,
+    modelVisibility: {
+      ...(prev.modelVisibility && typeof prev.modelVisibility === "object" && !Array.isArray(prev.modelVisibility) ? prev.modelVisibility : {}),
+      hiddenModels: normalizeHiddenModelConfig(hiddenModels),
+    },
+  };
+  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+  fs.writeFileSync(cfgPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  return next.modelVisibility.hiddenModels;
+}
+
+function applyModelVisibility(modelLists, hiddenModels) {
+  const hidden = normalizeHiddenModelConfig(hiddenModels);
+  const out = { ...modelLists };
+  for (const key of MODEL_LIST_KEYS) {
+    const hiddenIds = new Set(hidden[key]);
+    out[key] = (Array.isArray(modelLists[key]) ? modelLists[key] : [])
+      .filter((entry) => !hiddenIds.has(modelListEntryId(entry)));
+  }
+  return out;
+}
+
+function readRawModelListsFromDisk() {
+  const p = getModelListsAbs();
+  const empty = emptyModelLists();
   try {
     if (!fs.existsSync(p)) return empty;
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
@@ -1100,6 +1159,12 @@ function readModelListsFromDisk(workspaceRoot) {
   } catch {
     return empty;
   }
+}
+
+function readModelListsFromDisk(_workspaceRoot, opts = {}) {
+  const raw = readRawModelListsFromDisk();
+  if (opts.raw) return raw;
+  return applyModelVisibility(raw, readHiddenModelConfig());
 }
 
 const SKILLHUB_TIMEOUT_MS = 60_000;
@@ -1412,6 +1477,19 @@ function htmlEscapeAttribute(value) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function prdWorkflowReviewNormalizeText(value) {
+  return String(value || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#x22;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function fileUrlFromPath(absPath) {
@@ -3831,7 +3909,11 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
     throw new Error(`Invalid node output path: ${clean}`);
   }
   if (!fs.existsSync(src) || !fs.statSync(src).isFile()) {
-    throw new Error(`Agent returned resultFile but did not create it under node outputs: ${clean}`);
+    throw new Error(
+      `Agent returned resultFile but did not create it under this node's outputs: ${clean}\n` +
+      `Expected file: ${src}\n` +
+      `Write outputs using a relative path from the node cwd, or use AGENTFLOW_OUTPUTS_DIR.`
+    );
   }
   const nodePart = workspaceSanitizeTmpSegment(runPackage?.nodeId || "node", "node");
   const destRel = clean.slice("outputs/".length).replace(/^\/+/, "");
@@ -4050,6 +4132,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     "## 输出",
     "",
     `请把${resultKindText}结果写入 \`${resultFile}\`。${resultGuidance}`,
+    `必须先在当前执行目录下创建 \`${resultFile}\`，不要写到绝对路径或其它 run 目录；然后再返回下面的 agentflow envelope。`,
     downstreamInputRequirements ? `\n${downstreamInputRequirements}` : "",
     ...(slots.length ? [`额外输出：${slots.map((name) => `\`${name}\``).join("、")}。短值可写在 \`outParams\`，文件值写成 \`outParams.<name>File\`。`] : []),
     "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
@@ -4291,6 +4374,7 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
     Object.keys(runPackage?.inputMounts || {}).length ? "- 已挂载的输入文件位于本任务 `inputs/`；`inputs/` 只用于读取，正式产物仍写入 `outputs/`。" : "",
     `- 正式产物写入本任务 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时仍使用 \`${outputsRel}/...\` 相对路径。`,
+    `- 写正式产物时不要手写或复制上面的绝对路径；请在当前执行目录下使用相对路径 \`${outputsRel}/...\`，或使用环境变量 \`AGENTFLOW_OUTPUTS_DIR\`。`,
     "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
   ].filter(Boolean).join("\n");
@@ -5164,11 +5248,70 @@ function workspaceKnowledgeContextBlockFromSources(sources = []) {
   return lines.join("\n");
 }
 
+function workspaceDedupeKnowledgeSources(sources = []) {
+  const seen = new Set();
+  const out = [];
+  for (const source of Array.isArray(sources) ? sources : []) {
+    if (!source || typeof source !== "object") continue;
+    const key = [
+      path.resolve(String(source.path || source.repoPath || "")),
+      String(source.mountPath || ""),
+      String(source.repoUrl || ""),
+      String(source.branch || ""),
+    ].join("\n");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(source);
+  }
+  return out;
+}
+
+function workspaceGlobalKnowledgeNodeIds(graph) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  return Object.entries(instances)
+    .filter(([id, instance]) => {
+      if (String(instance?.definitionId || "") !== "control_cd_workspace") return false;
+      if (String(id || "") === "background_knowledge") return true;
+      if (instance?.globalContext === true || instance?.globalKnowledge === true) return true;
+      const scope = String(instance?.scope || workspaceSlotValue(workspaceSlotByName(instance, "scope")) || "").trim().toLowerCase();
+      return scope === "global" || scope === "workspace";
+    })
+    .map(([id]) => id);
+}
+
+function workspaceKnowledgeSourcesFromInstance(instance, baseCwd = "", scopedRoot = "") {
+  const knowledgeText = workspaceSlotValue(workspaceSlotByName(instance, "knowledgeContext"));
+  let sources = workspaceKnowledgeSourcesFromText(knowledgeText, baseCwd || scopedRoot, scopedRoot);
+  if (sources.length) return sources;
+  const pathText = workspaceSlotValue(workspaceSlotByName(instance, "path")) ||
+    workspaceSlotValue(workspaceSlotByName(instance, "target")) ||
+    workspaceInstanceText(instance);
+  sources = workspaceKnowledgeSourcesFromText(pathText, baseCwd || scopedRoot, scopedRoot);
+  const label = workspaceSlotValue(workspaceSlotByName(instance, "label"));
+  if (!label) return sources;
+  return sources.map((source) => ({ ...source, label }));
+}
+
+function workspaceGlobalKnowledgeSources(graph, scopedRoot = "", logicalCwd = "", excludeNodeId = "") {
+  const root = scopedRoot ? path.resolve(scopedRoot) : "";
+  const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  return workspaceDedupeKnowledgeSources(
+    workspaceGlobalKnowledgeNodeIds(graph)
+      .filter((id) => String(id) !== String(excludeNodeId || ""))
+      .flatMap((id) => workspaceKnowledgeSourcesFromInstance(instances[id], cwd || root, root))
+  );
+}
+
 function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot = "", logicalCwd = "") {
   const root = scopedRoot ? path.resolve(scopedRoot) : "";
   const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
   const knowledgeText = workspaceSemanticInputText(graph, nodeId, outputs, "knowledgeContext", scopedRoot);
   let knowledgeSources = workspaceKnowledgeSourcesFromText(knowledgeText, cwd || root, scopedRoot);
+  knowledgeSources = workspaceDedupeKnowledgeSources([
+    ...workspaceGlobalKnowledgeSources(graph, scopedRoot, logicalCwd, nodeId),
+    ...knowledgeSources,
+  ]);
   const workspaceText = workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot);
   let workspaceContext = workspaceContextObjectFromText(workspaceText, cwd || root, scopedRoot);
   if (!knowledgeSources.length && workspaceContext?.cwd) {
@@ -6414,8 +6557,13 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
     let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
-    if (!isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true) && !workspaceContextBlock) {
-      workspaceContextBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
+    if (!isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true)) {
+      const defaultWorkspaceBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
+      if (!workspaceContextBlock) {
+        workspaceContextBlock = defaultWorkspaceBlock;
+      } else if (defaultWorkspaceBlock && !workspaceContextBlock.includes("## Workspace 上下文")) {
+        workspaceContextBlock = [workspaceContextBlock, defaultWorkspaceBlock].filter(Boolean).join("\n\n");
+      }
     }
     const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, workspaceContextBlock);
     try {
@@ -6725,11 +6873,1755 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 const activeFlowRuns = new Map();
 /** 正在执行的 Workspace 临时 run（runId/sessionId → { controller, child, runNodeId, startedAt, plannedNodeIds }） */
 const activeWorkspaceRuns = new Map();
+const prdWorkflowSubscribers = new Map();
+const prdWorkflowIdempotency = new Map();
+const prdWorkflowActionLocks = new Map();
+const PRD_WORKFLOW_IDEMPOTENCY_MAX = 1000;
+const PRD_WORKFLOW_RUNTIME_EVENTS_MAX = 1000;
 const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
 const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
 const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = true;
 const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
 const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
+
+function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId = "") {
+  return [
+    String(userCtx?.userId || ""),
+    String(flowSource || "user"),
+    String(flowId || ""),
+    String(tapdId || ""),
+  ].join("\t");
+}
+
+function prdWorkflowBroadcast(key, event = {}) {
+  const set = prdWorkflowSubscribers.get(String(key || ""));
+  if (!set || set.size === 0) return;
+  const chunk = `data: ${JSON.stringify({ ...event, ts: Date.now() })}\n\n`;
+  for (const clientRes of set) {
+    try {
+      clientRes.write(chunk);
+    } catch (_) {}
+  }
+}
+
+function prdWorkflowCollaborationState(userCtx = {}, flowSource = "user", flowId = "", tapdId = "") {
+  const key = prdWorkflowKey(userCtx, flowSource, flowId, tapdId);
+  const active = prdWorkflowActionLocks.get(key) || null;
+  const subscribers = prdWorkflowSubscribers.get(key);
+  return {
+    subscribers: subscribers ? subscribers.size : 0,
+    activeAction: active ? {
+      action: String(active.action || ""),
+      tapdId: String(active.tapdId || tapdId || ""),
+      title: String(active.title || active.action || ""),
+      stage: String(active.stage || ""),
+      issueKey: String(active.issueKey || ""),
+      startedAt: active.startedAt || 0,
+      startedAtIso: active.startedAt ? new Date(active.startedAt).toISOString() : "",
+      id: String(active.id || ""),
+      userId: String(active.userId || userCtx?.userId || ""),
+    } : null,
+  };
+}
+
+function prdWorkflowCliCandidates(root, scopedRoot) {
+  const fromEnv = String(process.env.PRD_FLOW_CLI || "").trim();
+  return [
+    fromEnv,
+    scopedRoot ? path.join(scopedRoot, ".workspace", "prd-flow", "bin", "prd-flow") : "",
+    root ? path.join(root, ".workspace", "prd-flow", "bin", "prd-flow") : "",
+    scopedRoot ? path.join(scopedRoot, ".agents", "skills", "prd-flow", "bin", "prd-flow") : "",
+    root ? path.join(root, ".agents", "skills", "prd-flow", "bin", "prd-flow") : "",
+    "prd-flow",
+  ].filter(Boolean);
+}
+
+function prdWorkflowResolveCli(root, scopedRoot) {
+  const candidates = prdWorkflowCliCandidates(root, scopedRoot);
+  for (const candidate of candidates) {
+    if (candidate === "prd-flow") return { command: candidate, source: "PATH" };
+    try {
+      if (fs.existsSync(candidate)) return { command: candidate, source: candidate };
+    } catch (_) {}
+  }
+  return { command: "prd-flow", source: "PATH" };
+}
+
+function prdWorkflowFallbackSnapshot(tapdId, phase, message, patch = {}) {
+  const now = new Date().toISOString();
+  return {
+    tapdId: String(tapdId || ""),
+    phase: String(phase || "unavailable"),
+    pointer: String(message || "PRD workflow unavailable"),
+    revision: "",
+    nextAction: null,
+    actions: [],
+    milestones: [],
+    issues: [],
+    artifacts: [],
+    optionalGaps: [{ severity: "warn", text: String(message || "PRD workflow unavailable") }],
+    sources: { checkedAt: now },
+    ...patch,
+  };
+}
+
+function prdWorkflowStableValue(value) {
+  if (Array.isArray(value)) return value.map((item) => prdWorkflowStableValue(item));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if ([
+        "checkedAt",
+        "updatedAt",
+        "createdAt",
+        "clientReportedAt",
+        "cacheUpdatedAt",
+        "runtimeEventsUpdatedAt",
+        "collaboration",
+        "sources",
+        "rawOutput",
+      ].includes(key)) continue;
+      out[key] = prdWorkflowStableValue(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function prdWorkflowRevisionHash(value) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(prdWorkflowStableValue(value)))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function prdWorkflowSnapshotRevision(snapshot = {}) {
+  const explicit = String(snapshot?.revision || snapshot?.prd?.revision || snapshot?.next?.revision || "").trim();
+  if (explicit) return explicit;
+  return `snap:${prdWorkflowRevisionHash({
+    tapdId: snapshot?.tapdId || snapshot?.tapd_id || snapshot?.prd?.tapd_id || "",
+    phase: snapshot?.phase || snapshot?.workflow_stage || snapshot?.next?.code || "",
+    pointer: snapshot?.pointer || snapshot?.current || snapshot?.status || snapshot?.next?.title || "",
+    next: snapshot?.nextAction || snapshot?.next || null,
+    actions: snapshot?.actions || snapshot?.workflowActions || snapshot?.workflow_actions || [],
+    milestones: snapshot?.milestones || [],
+    epics: snapshot?.epics || snapshot?.epicGroups || snapshot?.prd?.epics || [],
+    issues: snapshot?.issues || snapshot?.issueGroups || snapshot?.prd?.issues || [],
+    artifacts: snapshot?.artifacts || snapshot?.outputs || [],
+    prd: snapshot?.prd || null,
+  })}`;
+}
+
+function prdWorkflowSafeStateId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 128) || "unknown";
+}
+
+function prdWorkflowStatePath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.json`);
+}
+
+function prdWorkflowCachePath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.cache.json`);
+}
+
+function prdWorkflowProjectPath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.project.json`);
+}
+
+function prdWorkflowClientsPath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.clients.json`);
+}
+
+function prdWorkflowEventsPath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.events.json`);
+}
+
+function prdWorkflowReviewDir(scopedRoot, tapdId) {
+  const rootDir = path.resolve(scopedRoot || process.cwd());
+  return path.join(rootDir, ".workspace", "prd-flow", "reviews", prdWorkflowSafeStateId(tapdId));
+}
+
+function prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId) {
+  const dir = prdWorkflowReviewDir(scopedRoot, tapdId);
+  const safeId = prdWorkflowSafeStateId(reviewId);
+  return {
+    dir,
+    id: safeId,
+    markdownPath: path.join(dir, `${safeId}.md`),
+    metaPath: path.join(dir, `${safeId}.json`),
+  };
+}
+
+function prdWorkflowPruneReviews(scopedRoot, tapdId, maxReviews = 200) {
+  try {
+    const dir = prdWorkflowReviewDir(scopedRoot, tapdId);
+    if (!fs.existsSync(dir)) return;
+    const now = Date.now();
+    const entries = fs.readdirSync(dir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => {
+        const abs = path.join(dir, name);
+        let mtimeMs = 0;
+        try { mtimeMs = fs.statSync(abs).mtimeMs; } catch (_) {}
+        let meta = {};
+        try { meta = JSON.parse(fs.readFileSync(abs, "utf-8")); } catch (_) {}
+        const expiresMs = Date.parse(meta?.expiresAt || "");
+        return { name, abs, id: name.replace(/\.json$/i, ""), mtimeMs, expiresMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of entries.filter((item) => Number.isFinite(item.expiresMs) && item.expiresMs < now)) {
+      try { fs.unlinkSync(entry.abs); } catch (_) {}
+      try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+    }
+    for (const entry of entries.filter((item) => !(Number.isFinite(item.expiresMs) && item.expiresMs < now)).slice(maxReviews)) {
+      try { fs.unlinkSync(entry.abs); } catch (_) {}
+      try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+function prdWorkflowReviewInlineMarkdown(text) {
+  const codeSpans = [];
+  let escaped = htmlEscapeAttribute(prdWorkflowReviewNormalizeText(text || "")).replace(/`([^`]+)`/g, (_m, code) => {
+    const token = `@@CODE${codeSpans.length}@@`;
+    codeSpans.push(`<code>${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(code))}</code>`);
+    return token;
+  });
+  escaped = escaped
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]+|file:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  codeSpans.forEach((html, index) => {
+    escaped = escaped.replaceAll(`@@CODE${index}@@`, html);
+  });
+  return escaped;
+}
+
+function prdWorkflowReviewSplitFrontmatter(markdown) {
+  const text = String(markdown || "");
+  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+  if (!match) return { frontmatter: "", body: text };
+  return { frontmatter: match[1].trim(), body: text.slice(match[0].length) };
+}
+
+function prdWorkflowReviewRenderFrontmatter(frontmatter) {
+  if (!String(frontmatter || "").trim()) return "";
+  const rows = String(frontmatter || "").split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^([^:]+):\s*(.*)$/);
+      if (!match) return `<tr><td colspan="2">${prdWorkflowReviewInlineMarkdown(line)}</td></tr>`;
+      return `<tr><th>${htmlEscapeAttribute(match[1].trim())}</th><td>${prdWorkflowReviewInlineMarkdown(match[2].trim())}</td></tr>`;
+    })
+    .join("");
+  return `<details class="frontmatter" open><summary>文档元数据</summary><table>${rows}</table></details>`;
+}
+
+function prdWorkflowReviewRenderTable(lines) {
+  const splitRow = (line) => String(line || "")
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  const headers = splitRow(lines[0]);
+  const body = lines.slice(2).map(splitRow);
+  return [
+    '<div class="table-wrap"><table>',
+    `<thead><tr>${headers.map((cell) => `<th>${prdWorkflowReviewInlineMarkdown(cell)}</th>`).join("")}</tr></thead>`,
+    `<tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${prdWorkflowReviewInlineMarkdown(cell)}</td>`).join("")}</tr>`).join("")}</tbody>`,
+    "</table></div>",
+  ].join("");
+}
+
+function prdWorkflowReviewMarkdownToHtml(markdown) {
+  const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let paragraph = [];
+  let list = [];
+  let code = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${prdWorkflowReviewInlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list.length) return;
+    html.push(`<ul>${list.map((item) => `<li>${item}</li>`).join("")}</ul>`);
+    list = [];
+  };
+  const flushBlocks = () => {
+    flushParagraph();
+    flushList();
+  };
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const fence = trimmed.match(/^```(\w+)?\s*$/);
+    if (code) {
+      if (fence) {
+        html.push(`<pre><code>${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(code.lines.join("\n")))}</code></pre>`);
+        code = null;
+      } else {
+        code.lines.push(line);
+      }
+      continue;
+    }
+    if (fence) {
+      flushBlocks();
+      code = { lang: fence[1] || "", lines: [] };
+      continue;
+    }
+    if (!trimmed) {
+      flushBlocks();
+      continue;
+    }
+    if (/^\|.+\|\s*$/.test(trimmed) && i + 1 < lines.length && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i + 1].trim())) {
+      flushBlocks();
+      const tableLines = [line, lines[i + 1]];
+      i += 2;
+      while (i < lines.length && /^\|.+\|\s*$/.test(lines[i].trim())) {
+        tableLines.push(lines[i]);
+        i += 1;
+      }
+      i -= 1;
+      html.push(prdWorkflowReviewRenderTable(tableLines));
+      continue;
+    }
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushBlocks();
+      const level = Math.min(6, heading[1].length);
+      html.push(`<h${level}>${prdWorkflowReviewInlineMarkdown(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+    const quote = trimmed.match(/^>\s+(.+)$/);
+    if (quote) {
+      flushBlocks();
+      html.push(`<blockquote>${prdWorkflowReviewInlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(?:\[( |x|X)\]\s+)?(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      const checked = bullet[1] ? `<input type="checkbox" disabled${bullet[1].toLowerCase() === "x" ? " checked" : ""}> ` : "";
+      list.push(`${checked}${prdWorkflowReviewInlineMarkdown(bullet[2])}`);
+      continue;
+    }
+    paragraph.push(trimmed);
+  }
+  if (code) html.push(`<pre><code>${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(code.lines.join("\n")))}</code></pre>`);
+  flushBlocks();
+  return [prdWorkflowReviewRenderFrontmatter(frontmatter), ...html].filter(Boolean).join("\n");
+}
+
+function prdWorkflowReviewHtml(title, markdown, meta = {}) {
+  const escapedTitle = htmlEscapeAttribute(title || "PRD Workflow Review");
+  const escapedMeta = htmlEscapeAttribute([
+    meta.tapdId ? `TAPD ${meta.tapdId}` : "",
+    meta.stage ? `stage ${meta.stage}` : "",
+    meta.issueKey ? `issue ${meta.issueKey}` : "",
+    meta.createdAt || "",
+  ].filter(Boolean).join(" · "));
+  const renderedMarkdown = prdWorkflowReviewMarkdownToHtml(markdown || "");
+  const rawHref = htmlEscapeAttribute(meta.rawHref || "?raw=1");
+  return `<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapedTitle}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #0b1020;
+      --bg-radial: rgba(124,58,237,.18);
+      --panel: rgba(15,23,42,.68);
+      --panel-strong: rgba(15,23,42,.88);
+      --panel-soft: rgba(30,41,59,.74);
+      --border: rgba(148,163,184,.20);
+      --border-soft: rgba(148,163,184,.14);
+      --text: #e5e7eb;
+      --heading: #f8fafc;
+      --muted: #94a3b8;
+      --body: #dbe4f0;
+      --link: #c4b5fd;
+      --button: rgba(124,58,237,.16);
+      --button-text: #ddd6fe;
+      --code-bg: rgba(2,6,23,.58);
+      --code-block: rgba(2,6,23,.72);
+      --shadow: rgba(0,0,0,.28);
+      background: var(--bg);
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --bg-radial: rgba(124,58,237,.12);
+      --panel: rgba(255,255,255,.92);
+      --panel-strong: rgba(255,255,255,.98);
+      --panel-soft: rgba(241,245,249,.96);
+      --border: rgba(100,116,139,.24);
+      --border-soft: rgba(100,116,139,.18);
+      --text: #0f172a;
+      --heading: #020617;
+      --muted: #64748b;
+      --body: #1e293b;
+      --link: #6d28d9;
+      --button: rgba(124,58,237,.10);
+      --button-text: #4c1d95;
+      --code-bg: rgba(226,232,240,.76);
+      --code-block: rgba(241,245,249,.92);
+      --shadow: rgba(15,23,42,.10);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { overflow-x: hidden; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, var(--bg-radial), transparent 34rem), var(--bg); color: var(--text); }
+    main { width: min(100%, 1120px); margin: 0 auto; padding: 40px 24px 72px; min-width: 0; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 22px; }
+    h1 { margin: 0 0 10px; font-size: clamp(28px, 5vw, 56px); line-height: 1.05; letter-spacing: 0; }
+    .meta { margin: 0; color: var(--muted); font-size: 14px; }
+    .toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+    .raw, .theme-toggle { border: 1px solid rgba(124,58,237,.34); border-radius: 999px; color: var(--button-text); background: var(--button); padding: 9px 14px; text-decoration: none; font-size: 13px; font-weight: 800; line-height: 1.2; }
+    .theme-toggle { cursor: pointer; font-family: inherit; }
+    article { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 28px 80px var(--shadow); padding: clamp(20px, 4vw, 34px); }
+    article > *:first-child { margin-top: 0; }
+    article > *:last-child { margin-bottom: 0; }
+    h2, h3, h4, h5, h6 { margin: 1.7em 0 .65em; line-height: 1.25; letter-spacing: 0; color: var(--heading); overflow-wrap: anywhere; }
+    h2 { padding-bottom: .4rem; border-bottom: 1px solid var(--border-soft); font-size: 1.5rem; }
+    h3 { font-size: 1.2rem; }
+    p, li, td, th, blockquote { font-size: 15px; line-height: 1.8; overflow-wrap: anywhere; word-break: break-word; }
+    p { margin: .75rem 0; color: var(--body); }
+    ul { margin: .65rem 0 1rem; padding-left: 1.35rem; }
+    li { margin: .28rem 0; color: var(--body); }
+    li input { margin-right: .38rem; transform: translateY(1px); }
+    code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--code-bg); color: var(--heading); padding: .1rem .34rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    pre { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--code-block); padding: 16px; line-height: 1.65; }
+    pre code { border: 0; background: transparent; padding: 0; white-space: pre; overflow-wrap: normal; word-break: normal; }
+    blockquote { margin: 1rem 0; border-left: 3px solid rgba(124,58,237,.72); background: rgba(124,58,237,.10); padding: .75rem 1rem; color: var(--body); }
+    a { color: var(--link); text-decoration-thickness: .08em; text-underline-offset: .16em; overflow-wrap: anywhere; }
+    .table-wrap { max-width: 100%; overflow-x: auto; margin: 1rem 0 1.25rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); }
+    table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { min-width: 0; border-bottom: 1px solid var(--border-soft); padding: .65rem .8rem; text-align: left; vertical-align: top; }
+    th { background: var(--panel-soft); color: var(--heading); font-weight: 800; }
+    tr:last-child td { border-bottom: 0; }
+    .frontmatter { margin: 0 0 1.35rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); padding: .75rem .9rem; }
+    .frontmatter summary { cursor: pointer; color: var(--body); font-weight: 800; }
+    .frontmatter table { min-width: 0; margin-top: .7rem; }
+    .frontmatter th { width: min(34%, 12rem); background: var(--panel-soft); color: var(--body); }
+    @media (max-width: 720px) { main { padding: 28px 14px 48px; } header { display: block; } .toolbar { justify-content: flex-start; margin-top: 14px; } article { padding: 18px; } th, td { padding: .58rem .65rem; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>${escapedTitle}</h1>
+        ${escapedMeta ? `<p class="meta">${escapedMeta}</p>` : ""}
+      </div>
+      <div class="toolbar">
+        <button class="theme-toggle" type="button" data-theme-toggle>明亮模式</button>
+        <a class="raw" href="${rawHref}">Raw Markdown</a>
+      </div>
+    </header>
+    <article>${renderedMarkdown}</article>
+  </main>
+  <script>
+    (() => {
+      const key = "prd-workflow-review-theme";
+      const root = document.documentElement;
+      const button = document.querySelector("[data-theme-toggle]");
+      const apply = (theme) => {
+        root.dataset.theme = theme;
+        if (button) button.textContent = theme === "light" ? "暗黑模式" : "明亮模式";
+        try { window.localStorage.setItem(key, theme); } catch (_) {}
+      };
+      let saved = "dark";
+      try { saved = window.localStorage.getItem(key) || "dark"; } catch (_) {}
+      apply(saved === "light" ? "light" : "dark");
+      if (button) button.addEventListener("click", () => apply(root.dataset.theme === "light" ? "dark" : "light"));
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "") {
+  const content = String(payload.markdown || payload.content || payload.rawOutput || "").slice(0, 500000);
+  if (!content.trim()) throw new Error("Missing review markdown");
+  const requestedReviewId = String(payload.reviewId || payload.review_id || "").trim();
+  const reviewId = requestedReviewId
+    ? prdWorkflowSafeStateId(requestedReviewId)
+    : `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+  const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
+  const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
+  const durability = String(payload.durability || (payload.durable === true || payload.permanent === true ? "durable" : "temporary")).trim().toLowerCase() || "temporary";
+  const ttlDaysRaw = Number(payload.ttlDays || payload.ttl_days || (durability === "temporary" ? 7 : 0));
+  const ttlDays = Number.isFinite(ttlDaysRaw) && ttlDaysRaw > 0 ? ttlDaysRaw : 0;
+  const createdAt = new Date();
+  const explicitExpiresAt = String(payload.expiresAt || payload.expires_at || "").trim();
+  const expiresAt = durability === "temporary"
+    ? (explicitExpiresAt || new Date(createdAt.getTime() + ttlDays * 86400000).toISOString())
+    : "";
+  const meta = {
+    id: paths.id,
+    tapdId: String(tapdId || ""),
+    title,
+    stage: String(payload.stage || payload.stageKey || payload.stage_key || "").trim(),
+    action: String(payload.action || payload.actionId || payload.action_id || "").trim(),
+    issueKey: String(payload.issueKey || payload.issue_key || payload.issue || "").trim(),
+    durability,
+    persistence: "runtime",
+    source: payload.source && typeof payload.source === "object" && !Array.isArray(payload.source)
+      ? payload.source
+      : {
+          kind: durability === "durable" ? "ai-doc" : "local-draft",
+          durability,
+        },
+    ttlDays,
+    expiresAt,
+    createdAt: createdAt.toISOString(),
+  };
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.markdownPath, content.trimEnd() + "\n", "utf-8");
+  fs.writeFileSync(paths.metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
+  prdWorkflowPruneReviews(scopedRoot, tapdId);
+  const url = `${String(urlBase || "").replace(/\/+$/, "")}/api/prd-workflow/review/${encodeURIComponent(prdWorkflowSafeStateId(tapdId))}/${encodeURIComponent(paths.id)}`;
+  return { ...meta, url, markdownPath: paths.markdownPath };
+}
+
+function prdWorkflowReadCachedSnapshotFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowReadCachedSnapshot(scopedRoot, tapdId) {
+  const cache = prdWorkflowReadCachedSnapshotFile(prdWorkflowCachePath(scopedRoot, tapdId));
+  if (cache) return { ...cache, cacheKind: "projection-cache" };
+  const legacy = prdWorkflowReadCachedSnapshotFile(prdWorkflowStatePath(scopedRoot, tapdId));
+  return legacy ? { ...legacy, cacheKind: "legacy-projection-cache" } : null;
+}
+
+function prdWorkflowReadCachedSnapshotWithFallback(root, scopedRoot, tapdId) {
+  const scoped = prdWorkflowReadCachedSnapshot(scopedRoot, tapdId);
+  if (scoped) return { ...scoped, cacheScope: "scoped", cacheRoot: scopedRoot };
+  if (root && path.resolve(root) !== path.resolve(scopedRoot || root)) {
+    const global = prdWorkflowReadCachedSnapshot(root, tapdId);
+    if (global) return { ...global, cacheScope: "global", cacheRoot: root };
+  }
+  return null;
+}
+
+function prdWorkflowReadJsonFile(filePath, fallback = null) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function prdWorkflowWriteJsonFile(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmp, filePath);
+  return data;
+}
+
+function prdWorkflowReadProjectState(scopedRoot, tapdId) {
+  return prdWorkflowReadJsonFile(prdWorkflowProjectPath(scopedRoot, tapdId), {
+    version: 1,
+    tapdId: String(tapdId || ""),
+    updatedAt: "",
+    snapshot: null,
+    conflicts: [],
+  });
+}
+
+function prdWorkflowReadProjectStateWithFallback(root, scopedRoot, tapdId) {
+  const scoped = prdWorkflowReadProjectState(scopedRoot, tapdId);
+  if (scoped?.snapshot) return { ...scoped, cacheScope: "scoped", cacheRoot: scopedRoot };
+  if (root && path.resolve(root) !== path.resolve(scopedRoot || root)) {
+    const global = prdWorkflowReadProjectState(root, tapdId);
+    if (global?.snapshot) return { ...global, cacheScope: "global", cacheRoot: root };
+  }
+  return scoped?.snapshot ? scoped : null;
+}
+
+function prdWorkflowWriteProjectState(scopedRoot, tapdId, snapshot, patch = {}) {
+  const prev = prdWorkflowReadProjectState(scopedRoot, tapdId);
+  return prdWorkflowWriteJsonFile(prdWorkflowProjectPath(scopedRoot, tapdId), {
+    version: 1,
+    tapdId: String(tapdId || ""),
+    updatedAt: new Date().toISOString(),
+    snapshot,
+    conflicts: Array.isArray(patch.conflicts) ? patch.conflicts : Array.isArray(prev.conflicts) ? prev.conflicts : [],
+    sources: patch.sources && typeof patch.sources === "object" ? patch.sources : prev.sources || {},
+  });
+}
+
+function prdWorkflowReadClientState(scopedRoot, tapdId) {
+  const data = prdWorkflowReadJsonFile(prdWorkflowClientsPath(scopedRoot, tapdId), null);
+  if (!data) return { version: 1, tapdId: String(tapdId || ""), updatedAt: "", clients: {} };
+  const clients = data.clients && typeof data.clients === "object" && !Array.isArray(data.clients)
+    ? data.clients
+    : {};
+  return { ...data, clients };
+}
+
+function prdWorkflowReadClientStateWithFallback(root, scopedRoot, tapdId) {
+  const merged = { version: 1, tapdId: String(tapdId || ""), updatedAt: "", clients: {} };
+  const add = (state, cacheScope) => {
+    if (!state?.clients) return;
+    if (state.updatedAt && (!merged.updatedAt || Date.parse(state.updatedAt) > Date.parse(merged.updatedAt))) {
+      merged.updatedAt = state.updatedAt;
+    }
+    for (const [clientId, item] of Object.entries(state.clients)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const prev = merged.clients[clientId];
+      const itemTime = Date.parse(item.reportedAt || item.observedAt || "");
+      const prevTime = Date.parse(prev?.reportedAt || prev?.observedAt || "");
+      if (!prev || !Number.isFinite(prevTime) || (Number.isFinite(itemTime) && itemTime >= prevTime)) {
+        merged.clients[clientId] = { ...item, cacheScope };
+      }
+    }
+  };
+  if (root && path.resolve(root) !== path.resolve(scopedRoot || root)) {
+    add(prdWorkflowReadClientState(root, tapdId), "global");
+  }
+  add(prdWorkflowReadClientState(scopedRoot, tapdId), "scoped");
+  return merged;
+}
+
+function prdWorkflowWriteClientObservation(scopedRoot, tapdId, meta, snapshot) {
+  const state = prdWorkflowReadClientState(scopedRoot, tapdId);
+  const clientId = prdWorkflowSafeStateId(meta.clientId || "anonymous");
+  const nextClients = {
+    ...state.clients,
+    [clientId]: {
+      clientId: String(meta.clientId || clientId),
+      userId: String(meta.userId || ""),
+      observedAt: String(meta.observedAt || ""),
+      reportedAt: String(meta.reportedAt || new Date().toISOString()),
+      revision: String(snapshot?.revision || ""),
+      phase: String(snapshot?.phase || ""),
+      pointer: String(snapshot?.pointer || ""),
+      nextAction: snapshot?.nextAction || null,
+      issues: Array.isArray(snapshot?.issues) ? snapshot.issues : [],
+      artifacts: Array.isArray(snapshot?.artifacts) ? snapshot.artifacts : [],
+      snapshot,
+    },
+  };
+  return prdWorkflowWriteJsonFile(prdWorkflowClientsPath(scopedRoot, tapdId), {
+    version: 1,
+    tapdId: String(tapdId || ""),
+    updatedAt: new Date().toISOString(),
+    clients: nextClients,
+  });
+}
+
+const PRD_WORKFLOW_PROJECTION_SOURCE_KEYS = new Set([
+  "projectionMode",
+  "projectCacheScope",
+  "legacyCacheScope",
+  "clientsUpdatedAt",
+  "runtimeEventsUpdatedAt",
+]);
+
+function prdWorkflowStoredObservationSources(...sourcesList) {
+  const out = {};
+  for (const sources of sourcesList) {
+    if (!sources || typeof sources !== "object" || Array.isArray(sources)) continue;
+    for (const [key, value] of Object.entries(sources)) {
+      if (PRD_WORKFLOW_PROJECTION_SOURCE_KEYS.has(key)) continue;
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function prdWorkflowStoredObservationSnapshot(snapshot, sourcePatch = {}) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return snapshot;
+  const clean = { ...snapshot };
+  delete clean.events;
+  delete clean.runtimeEvents;
+  delete clean.runtime_events;
+  delete clean.collaboration;
+  delete clean.clientObservations;
+  delete clean.clients;
+  clean.sources = prdWorkflowStoredObservationSources(snapshot.sources, sourcePatch);
+  return clean;
+}
+
+function prdWorkflowProjectFactSource(payload = {}, rawSnapshot = {}) {
+  const sources = rawSnapshot?.sources && typeof rawSnapshot.sources === "object" && !Array.isArray(rawSnapshot.sources)
+    ? rawSnapshot.sources
+    : {};
+  const truth = String(payload.truth || rawSnapshot.truth || sources.truth || "").trim().toLowerCase();
+  if (!["durable_fact", "project_fact"].includes(truth)) return null;
+  return {
+    truth,
+    authority: String(payload.authority || rawSnapshot.authority || sources.authority || "ai-doc").trim() || "ai-doc",
+    persistence: String(payload.persistence || rawSnapshot.persistence || sources.persistence || "ai-doc").trim() || "ai-doc",
+  };
+}
+
+function prdWorkflowSnapshotMetaFromReport(payload = {}, rawSnapshot = {}, req = null, userCtx = {}) {
+  const sources = rawSnapshot.sources && typeof rawSnapshot.sources === "object" && !Array.isArray(rawSnapshot.sources)
+    ? rawSnapshot.sources
+    : {};
+  const headerClientId = req?.headers?.["x-agentflow-client-id"];
+  const headerObservedAt = req?.headers?.["x-agentflow-observed-at"];
+  const reportedAt = new Date().toISOString();
+  return {
+    reportedAt,
+    observedAt: String(payload.observedAt || payload.observed_at || rawSnapshot.observedAt || rawSnapshot.observed_at || sources.observedAt || sources.checkedAt || headerObservedAt || reportedAt),
+    clientId: String(payload.clientId || payload.client_id || sources.clientId || headerClientId || userCtx?.userId || "anonymous").slice(0, 160),
+    userId: String(userCtx?.userId || payload.userId || payload.user_id || "").slice(0, 160),
+    baseRevision: String(payload.baseRevision || payload.base_revision || payload.expectedRevision || payload.expected_revision || rawSnapshot.baseRevision || sources.baseRevision || "").trim(),
+    scope: String(payload.scope || rawSnapshot.scope || rawSnapshot.next?.scope || sources.scope || "client").trim().toLowerCase() || "client",
+    platform: String(payload.platform || rawSnapshot.platform || rawSnapshot.next?.platform || sources.platform || "").trim(),
+    issueKey: String(payload.issueKey || payload.issue_key || rawSnapshot.issueKey || rawSnapshot.issue_key || rawSnapshot.next?.issue || rawSnapshot.next?.issueKey || "").trim(),
+    stageKey: String(payload.stageKey || payload.stage_key || rawSnapshot.stageKey || rawSnapshot.stage_key || rawSnapshot.next?.code || "").trim(),
+    force: payload.force === true || payload.force === "1",
+  };
+}
+
+function prdWorkflowSnapshotReportConflict(existingRecord, incomingSnapshot, meta) {
+  if (!existingRecord?.snapshot || meta.force) return null;
+  const current = existingRecord.snapshot;
+  const currentRevision = String(current.revision || "").trim();
+  const incomingRevision = String(incomingSnapshot?.revision || "").trim();
+  if (meta.baseRevision && currentRevision && meta.baseRevision !== currentRevision) {
+    return {
+      reason: "base-revision-mismatch",
+      message: `snapshot base revision ${meta.baseRevision} is stale; current revision is ${currentRevision}`,
+      expectedRevision: meta.baseRevision,
+      currentRevision,
+      incomingRevision,
+    };
+  }
+  const incomingObservedAt = Date.parse(meta.observedAt || "");
+  const currentObservedAt = Date.parse(
+    current?.sources?.clientObservedAt ||
+    current?.sources?.clientReportedAt ||
+    existingRecord.updatedAt ||
+    "",
+  );
+  if (
+    Number.isFinite(incomingObservedAt) &&
+    Number.isFinite(currentObservedAt) &&
+    incomingObservedAt + 1000 < currentObservedAt &&
+    incomingRevision !== currentRevision
+  ) {
+    return {
+      reason: "older-observation",
+      message: "snapshot was observed before the current cached workflow state",
+      currentRevision,
+      incomingRevision,
+      currentObservedAt: new Date(currentObservedAt).toISOString(),
+      incomingObservedAt: new Date(incomingObservedAt).toISOString(),
+    };
+  }
+  return null;
+}
+
+function prdWorkflowClientObservationRows(root, scopedRoot, tapdId) {
+  const state = prdWorkflowReadClientStateWithFallback(root, scopedRoot, tapdId);
+  return Object.values(state.clients || {})
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .sort((a, b) => Date.parse(b.reportedAt || b.observedAt || "") - Date.parse(a.reportedAt || a.observedAt || ""));
+}
+
+function prdWorkflowLatestClientSnapshot(root, scopedRoot, tapdId) {
+  const latest = prdWorkflowClientObservationRows(root, scopedRoot, tapdId)[0];
+  return latest?.snapshot && typeof latest.snapshot === "object" && !Array.isArray(latest.snapshot)
+    ? latest.snapshot
+    : null;
+}
+
+function prdWorkflowMergedClientIssues(clientRows = []) {
+  const out = [];
+  const seen = new Map();
+  for (const client of clientRows) {
+    const issues = Array.isArray(client.snapshot?.issues) ? client.snapshot.issues : Array.isArray(client.issues) ? client.issues : [];
+    for (const issue of issues) {
+      if (!issue || typeof issue !== "object" || Array.isArray(issue)) continue;
+      const key = String(issue.key || issue.issueKey || issue.issue_key || issue.id || issue.title || "").trim();
+      const platform = String(issue.platform || "").trim();
+      const mergeKey = [key || "issue", platform || "all"].join("|");
+      const prevIndex = seen.get(mergeKey);
+      const next = {
+        ...issue,
+        key: key || issue.key,
+        platform: platform || issue.platform,
+        observedBy: client.clientId || "",
+        observedAt: client.observedAt || client.reportedAt || "",
+      };
+      if (prevIndex != null) out[prevIndex] = { ...out[prevIndex], ...next };
+      else {
+        seen.set(mergeKey, out.length);
+        out.push(next);
+      }
+    }
+  }
+  return out;
+}
+
+function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, opts = {}) {
+  const flowSource = String(opts.flowSource || "user").trim() || "user";
+  const flowId = String(opts.flowId || "").trim();
+  const project = prdWorkflowReadProjectStateWithFallback(root, scopedRoot, tapdId);
+  const legacy = prdWorkflowReadCachedSnapshotWithFallback(root, scopedRoot, tapdId);
+  const latestClient = prdWorkflowLatestClientSnapshot(root, scopedRoot, tapdId);
+  const base = (
+    project?.snapshot ||
+    latestClient ||
+    legacy?.snapshot ||
+    prdWorkflowFallbackSnapshot(tapdId, "client_snapshot_required", "等待客户端 prd-flow skill 上报 Workflow snapshot", {
+      optionalGaps: [{
+        severity: "warn",
+        text: "Workflow 服务端不会执行客户端 workspace 里的 prd-flow。请在客户端运行 prd-flow current <tapd_id>，并用 AGENTFLOW_BASE_URL + AGENTFLOW_TOKEN 上报到 /api/prd-workflow/snapshot。",
+      }],
+      sources: { executionMode: "client-report" },
+    })
+  );
+  const clientObservations = prdWorkflowClientObservationRows(root, scopedRoot, tapdId).map((item) => ({
+    clientId: item.clientId,
+    userId: item.userId || "",
+    phase: item.phase || "",
+    pointer: item.pointer || "",
+    revision: item.revision || "",
+    observedAt: item.observedAt || "",
+    reportedAt: item.reportedAt || "",
+    nextAction: item.nextAction || null,
+    cacheScope: item.cacheScope || "",
+  }));
+  const clientRows = prdWorkflowClientObservationRows(root, scopedRoot, tapdId);
+  const clientIssues = prdWorkflowMergedClientIssues(clientRows);
+  const materialized = prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, {
+    ...base,
+    issues: project?.snapshot ? base.issues : clientIssues.length ? clientIssues : base.issues,
+    issueGroups: project?.snapshot ? base.issueGroups : clientIssues.length ? clientIssues : base.issueGroups,
+    collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, tapdId),
+    clientObservations,
+    clients: clientObservations,
+    sources: {
+      ...(base.sources && typeof base.sources === "object" ? base.sources : {}),
+      projectionMode: project?.snapshot ? "project" : latestClient ? "client-observations" : legacy?.snapshot ? "legacy-cache" : "empty",
+      projectCacheScope: project?.cacheScope || "",
+      legacyCacheScope: legacy?.cacheScope || "",
+      clientsUpdatedAt: prdWorkflowReadClientStateWithFallback(root, scopedRoot, tapdId).updatedAt || "",
+      checkedAt: new Date().toISOString(),
+    },
+  });
+  if (!project?.snapshot && latestClient) {
+    materialized.optionalGaps = [
+      ...(Array.isArray(materialized.optionalGaps) ? materialized.optionalGaps : []),
+      { severity: "info", text: "当前展示来自最新客户端观察；尚未形成独立 project materialized view。" },
+    ];
+  }
+  return materialized;
+}
+
+function prdWorkflowNormalizeStoredRuntimeEvent(tapdId, event = {}) {
+  if (!event || typeof event !== "object" || Array.isArray(event)) return null;
+  const out = { ...event };
+  const type = String(out.type || out.kind || "").trim();
+  const source = String(out.source || "").trim();
+  const idem = String(out.idempotencyKey || out.idempotency_key || "").trim();
+  const status = String(out.status || "").trim().toLowerCase();
+  const isSnapshotObservation =
+    idem.startsWith("snapshot-action:") ||
+    (!out.truth && source === "prd-flow-client" && type === "workflow-action");
+  if (isSnapshotObservation) {
+    out.truth = out.truth || "observation";
+    out.persistence = out.persistence || "runtime";
+    out.authority = out.authority || "client";
+    if (["done", "success", "completed", "passed"].includes(status)) out.status = "observed";
+  } else {
+    out.truth = out.truth || (type === "review-link" ? "runtime_event" : "runtime_event");
+    out.persistence = out.persistence || "runtime";
+    out.authority = out.authority || source || "agentflow";
+  }
+  if (type === "review-link") {
+    const durability = String(out.durability || "").trim().toLowerCase();
+    const sourceArtifact = out.sourceArtifact && typeof out.sourceArtifact === "object" && !Array.isArray(out.sourceArtifact)
+      ? out.sourceArtifact
+      : {
+          kind: durability === "durable" ? "ai-doc" : "local-draft",
+          durability: durability || "temporary",
+        };
+    out.truth = out.truth || "runtime_event";
+    out.persistence = "runtime";
+    out.sourceArtifact = sourceArtifact;
+    const normalizeReviewRef = (item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const kind = String(item.kind || "").trim();
+      const hasReviewUrl = /\/api\/prd-workflow\/review\//.test(String(item.url || item.href || ""));
+      if (!kind && !hasReviewUrl) return item;
+      return {
+        ...item,
+        persistence: item.persistence || "runtime",
+        source: item.source && typeof item.source === "object" && !Array.isArray(item.source) ? item.source : sourceArtifact,
+      };
+    };
+    if (Array.isArray(out.artifacts)) out.artifacts = out.artifacts.map(normalizeReviewRef);
+    if (Array.isArray(out.links)) out.links = out.links.map(normalizeReviewRef);
+  }
+  out.tapdId = String(out.tapdId || out.tapd_id || tapdId || "");
+  return out;
+}
+
+function prdWorkflowReadRuntimeEvents(scopedRoot, tapdId) {
+  try {
+    const p = prdWorkflowEventsPath(scopedRoot, tapdId);
+    if (!fs.existsSync(p)) return { version: 1, tapdId: String(tapdId || ""), events: [] };
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    const events = Array.isArray(data?.events)
+      ? data.events
+          .map((item) => prdWorkflowNormalizeStoredRuntimeEvent(data?.tapdId || tapdId, item))
+          .filter((item) => item && typeof item === "object")
+      : [];
+    return {
+      version: 1,
+      tapdId: String(data?.tapdId || tapdId || ""),
+      updatedAt: data?.updatedAt || "",
+      events,
+    };
+  } catch {
+    return { version: 1, tapdId: String(tapdId || ""), events: [] };
+  }
+}
+
+function prdWorkflowWriteRuntimeEvents(scopedRoot, tapdId, events) {
+  const p = prdWorkflowEventsPath(scopedRoot, tapdId);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const data = {
+    version: 1,
+    tapdId: String(tapdId || ""),
+    updatedAt: new Date().toISOString(),
+    events: Array.isArray(events) ? events.slice(-PRD_WORKFLOW_RUNTIME_EVENTS_MAX) : [],
+  };
+  const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmp, p);
+  return data;
+}
+
+function prdWorkflowRuntimeEventStatus(type, status) {
+  const s = String(status || "").trim().toLowerCase();
+  if (s) return s;
+  const t = String(type || "").trim().toLowerCase();
+  if (t.includes("done") || t.includes("success") || t.includes("completed")) return "done";
+  if (t.includes("error") || t.includes("failed") || t.includes("conflict")) return "error";
+  if (t.includes("start") || t.includes("running")) return "running";
+  return "pending";
+}
+
+function prdWorkflowRuntimeEventCanonicalStage(event = {}) {
+  const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
+  const action = String(event.action || event.actionId || event.action_id || "").trim();
+  const rawStage = String(event.stage || event.stageKey || event.stage_key || event.phase || event.code || action || "").trim();
+  const text = [rawStage, action, event.code, event.type, event.title].map((value) => String(value || "")).join(" ").toLowerCase();
+  if (issue) {
+    if (/plan_draft_local|submit-plan|plan-doc/.test(text)) return `issue-plan:${issue}`;
+    if (/gitlab_issue_missing|ensure-gitlab-issue/.test(text)) return `issue-gitlab:${issue}`;
+  }
+  return rawStage || action;
+}
+
+function prdWorkflowRuntimeEventId(event = {}) {
+  const stage = prdWorkflowRuntimeEventCanonicalStage(event);
+  const action = String(event.action || event.actionId || event.action_id || "").trim();
+  const scope = String(event.scope || "").trim();
+  const platform = String(event.platform || "").trim();
+  const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
+  if ((stage || action) && aggregateByStage) {
+    const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
+    const key = [scope, issue, platform, stage || action].filter(Boolean).join(":");
+    return `stage_${prdWorkflowSafeStateId(key)}`;
+  }
+  const existing = String(event.id || event.eventId || event.event_id || "").trim();
+  if (existing) return existing.slice(0, 160);
+  if (stage || action) {
+    const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
+    const key = [scope, issue, platform, stage || action].filter(Boolean).join(":");
+    return `stage_${prdWorkflowSafeStateId(key)}`;
+  }
+  return `evt_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function prdWorkflowCompactRuntimeValue(value, maxChars = 24000) {
+  if (value == null) return value;
+  try {
+    const text = JSON.stringify(value);
+    if (!text || text.length <= maxChars) return value;
+    return { truncated: true, preview: text.slice(0, maxChars) };
+  } catch {
+    const text = String(value || "");
+    return text.length <= maxChars ? text : { truncated: true, preview: text.slice(0, maxChars) };
+  }
+}
+
+function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
+  const now = new Date().toISOString();
+  const type = String(event.type || event.kind || "workflow-event").trim().slice(0, 120);
+  const action = String(event.action || event.actionId || event.action_id || "").trim().slice(0, 160);
+  const stage = String(event.stage || event.stageKey || event.stage_key || event.phase || action || "").trim().slice(0, 160);
+  const scope = String(event.scope || "").trim().slice(0, 80);
+  const platform = String(event.platform || "").trim().slice(0, 80);
+  const status = prdWorkflowRuntimeEventStatus(type, event.status);
+  const source = String(event.source || "agentflow").trim().slice(0, 80) || "agentflow";
+  const truth = String(
+    event.truth ||
+    event.stateTruth ||
+    event.state_truth ||
+    (type === "review-link" ? "runtime_event" : source === "prd-flow-client" && type === "workflow-action" ? "observation" : "runtime_event"),
+  ).trim();
+  const persistence = String(event.persistence || event.storage || "runtime").trim();
+  const authority = String(event.authority || (truth === "observation" ? "client" : source)).trim();
+  const entry = {
+    ...event,
+    id: prdWorkflowRuntimeEventId(event),
+    source,
+    runtime: event.runtime !== false,
+    type,
+    tapdId: String(event.tapdId || event.tapd_id || tapdId || ""),
+    status,
+    truth,
+    persistence,
+    authority,
+    updatedAt: now,
+  };
+  const sourceEventId = String(event.id || event.eventId || event.event_id || "").trim();
+  if (sourceEventId && sourceEventId !== entry.id) entry.sourceEventId = sourceEventId.slice(0, 160);
+  if (action) {
+    entry.action = action;
+    entry.actionId = String(event.actionId || event.action_id || action);
+  }
+  if (stage) {
+    entry.stage = stage;
+    entry.stageKey = String(event.stageKey || event.stage_key || stage);
+  }
+  if (scope) entry.scope = scope;
+  if (platform) entry.platform = platform;
+  if (!entry.createdAt) entry.createdAt = event.startedAt || now;
+  if (!entry.title && (stage || action)) entry.title = stage || action;
+  if (!entry.detail && event.message) entry.detail = String(event.message || "").slice(0, 4000);
+  if (entry.rawOutput) entry.rawOutput = String(entry.rawOutput).slice(0, 12000);
+  if (entry.error) entry.error = String(entry.error).slice(0, 4000);
+  if (entry.output != null) entry.output = prdWorkflowCompactRuntimeValue(entry.output);
+  if (entry.result != null) entry.result = prdWorkflowCompactRuntimeValue(entry.result);
+  const history = Array.isArray(event.idempotencyHistory) ? event.idempotencyHistory : [];
+  const idem = String(event.idempotencyKey || "").trim();
+  if (idem && !history.includes(idem)) entry.idempotencyHistory = [...history, idem].slice(-50);
+  return entry;
+}
+
+function prdWorkflowMergeRuntimeEventArrays(left, right) {
+  const out = [];
+  const seen = new Set();
+  for (const value of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
+    if (value == null) continue;
+    let key = "";
+    try {
+      key = typeof value === "string" ? value : JSON.stringify(value);
+    } catch {
+      key = String(value);
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function prdWorkflowRuntimeEventArtifactSignature(event = {}) {
+  const explicit = String(event.artifactHash || event.artifact_hash || event.hash || "").trim();
+  if (explicit) return explicit;
+  const parts = [
+    event.artifact,
+    event.artifactUrl || event.artifact_url,
+    event.url,
+    event.reviewUrl || event.review_url,
+    event.planDoc || event.plan_doc,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  if (parts.length) return parts.join("|");
+  const artifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
+  const urls = artifacts
+    .map((item) => String(item?.url || item?.href || item?.path || item?.label || "").trim())
+    .filter(Boolean);
+  return urls.length ? urls.join("|") : "";
+}
+
+function prdWorkflowRuntimeEventShouldConflictOnArtifact(event = {}) {
+  if (event.conflictOnArtifact === true || event.conflict_on_artifact === true) return true;
+  if (event.conflictOnArtifact === false || event.conflict_on_artifact === false) return false;
+  if (String(event.type || "") === "review-link") return false;
+  if ((Array.isArray(event.artifacts) ? event.artifacts : []).some((item) => String(item?.kind || "") === "temporary-review")) return false;
+  const stage = String(event.stage || event.stageKey || event.stage_key || event.action || "").toLowerCase();
+  return /submit-plan|project-plan|tech-design|plan/.test(stage);
+}
+
+function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
+  try {
+    const current = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
+    const entry = prdWorkflowNormalizeRuntimeEvent(tapdId, event);
+    const entryIdem = String(entry.idempotencyKey || "").trim();
+    const index = current.events.findIndex((item) => {
+      if (String(item?.id || "") === entry.id) return true;
+      if (!entryIdem) return false;
+      if (String(item?.idempotencyKey || "").trim() === entryIdem) return true;
+      return Array.isArray(item?.idempotencyHistory) && item.idempotencyHistory.includes(entryIdem);
+    });
+    const events = [...current.events];
+    if (index >= 0) {
+      const prevArtifact = prdWorkflowRuntimeEventArtifactSignature(events[index]);
+      const nextArtifact = prdWorkflowRuntimeEventArtifactSignature(entry);
+      const artifactConflict = prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
+        prdWorkflowRuntimeEventShouldConflictOnArtifact(events[index]) &&
+        prdWorkflowRuntimeEventShouldConflictOnArtifact(entry);
+      const idempotencyHistory = [
+        ...(events[index].idempotencyKey ? [events[index].idempotencyKey] : []),
+        ...(entry.idempotencyKey ? [entry.idempotencyKey] : []),
+        ...(Array.isArray(events[index].idempotencyHistory) ? events[index].idempotencyHistory : []),
+        ...(Array.isArray(entry.idempotencyHistory) ? entry.idempotencyHistory : []),
+      ];
+      events[index] = {
+        ...events[index],
+        ...entry,
+        links: prdWorkflowMergeRuntimeEventArrays(events[index].links, entry.links),
+        artifacts: prdWorkflowMergeRuntimeEventArrays(events[index].artifacts, entry.artifacts),
+        outputs: prdWorkflowMergeRuntimeEventArrays(events[index].outputs, entry.outputs),
+        results: prdWorkflowMergeRuntimeEventArrays(events[index].results, entry.results),
+        createdAt: events[index].createdAt || entry.createdAt,
+        startedAt: events[index].startedAt || entry.startedAt,
+        idempotencyHistory: [...new Set(idempotencyHistory)].slice(-50),
+      };
+      if (artifactConflict) {
+        events[index] = {
+          ...events[index],
+          type: "same-platform-stage-conflict",
+          status: "conflict",
+          conflict: {
+            type: "same-platform-stage-conflict",
+            previousArtifact: prevArtifact,
+            incomingArtifact: nextArtifact,
+            message: "同一 issue/platform/stage 上报了不同产物，需要本地 agent 拉取后 review。",
+          },
+        };
+      }
+    } else {
+      events.push(entry);
+    }
+    prdWorkflowWriteRuntimeEvents(scopedRoot, tapdId, events);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey) {
+  const key = String(idempotencyKey || "").trim();
+  if (!key) return null;
+  const events = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId).events;
+  return [...events].reverse().find((event) => (
+    (String(event?.idempotencyKey || "") === key || (Array.isArray(event?.idempotencyHistory) && event.idempotencyHistory.includes(key))) &&
+    ["done", "success", "completed"].includes(String(event?.status || "").toLowerCase())
+  )) || null;
+}
+
+function prdWorkflowRuntimeEventDedupeKey(event = {}, index = 0) {
+  const stage = prdWorkflowRuntimeEventCanonicalStage(event);
+  const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
+  if (stage) {
+    const issue = event?.issueKey || event?.issue_key || event?.issue;
+    const platform = event?.platform;
+    if (aggregateByStage || issue || platform) {
+      return ["stage", event?.scope, issue, platform, stage]
+        .map((value) => String(value || "").trim())
+        .join(":");
+    }
+  }
+  const id = String(event?.id || event?.eventId || event?.event_id || "").trim();
+  if (id) return `id:${id}`;
+  if (stage) {
+    return ["stage", event?.scope, event?.issueKey || event?.issue_key || event?.issue, event?.platform, stage]
+      .map((value) => String(value || "").trim())
+      .join(":");
+  }
+  return `idx:${index}`;
+}
+
+function prdWorkflowMergeRuntimeEventList(snapshotEvents = [], runtimeEvents = []) {
+  const out = [];
+  const seen = new Map();
+  for (const event of [...(Array.isArray(snapshotEvents) ? snapshotEvents : []), ...(Array.isArray(runtimeEvents) ? runtimeEvents : [])]) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    const key = prdWorkflowRuntimeEventDedupeKey(event, out.length);
+    const index = seen.get(key);
+    if (index == null) {
+      seen.set(key, out.length);
+      out.push(event);
+    } else {
+      out[index] = {
+        ...out[index],
+        ...event,
+        links: prdWorkflowMergeRuntimeEventArrays(out[index].links, event.links),
+        artifacts: prdWorkflowMergeRuntimeEventArrays(out[index].artifacts, event.artifacts),
+        outputs: prdWorkflowMergeRuntimeEventArrays(out[index].outputs, event.outputs),
+        results: prdWorkflowMergeRuntimeEventArrays(out[index].results, event.results),
+      };
+    }
+  }
+  return out;
+}
+
+function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
+  const runtime = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
+  const runtimeEvents = runtime.events;
+  if (!runtimeEvents.length) return snapshot;
+  const events = prdWorkflowMergeRuntimeEventList(snapshot?.events, runtimeEvents);
+  return {
+    ...snapshot,
+    runtimeEvents,
+    events,
+    sources: {
+      ...(snapshot?.sources && typeof snapshot.sources === "object" ? snapshot.sources : {}),
+      runtimeEventsUpdatedAt: runtime.updatedAt || "",
+    },
+  };
+}
+
+function prdWorkflowMockSnapshot(scopedRoot, tapdId = "mock-prd") {
+  const id = String(tapdId || "mock-prd");
+  const now = new Date().toISOString();
+  return prdWorkflowMergeRuntimeEvents(scopedRoot, id, {
+    tapdId: id,
+    phase: "implementing",
+    pointer: "实现中：Tunnel ConfigV3 支持",
+    revision: "mock:tapd-ai-doc-gitlab-runtime",
+    actions: [
+      {
+        id: "stage_tech_design",
+        stage: "tech_design",
+        action: "submit-tech-design",
+        title: "确认技术方案",
+        detail: "tech_design.md 与 TAPD baseline 已归档",
+        status: "done",
+        updatedAt: now,
+        artifacts: [{ label: "技术方案", url: "https://example.com/ai-doc/stories/mock/tech_design.md" }],
+      },
+      {
+        id: "stage_plan_android",
+        stage: "submit-plan",
+        action: "submit-plan",
+        issueKey: "tunnel-config-v3",
+        title: "提交 Android 实施计划",
+        detail: "计划已确认，GitLab Issue 已绑定",
+        status: "done",
+        updatedAt: now,
+        artifacts: [{ label: "Android Plan", url: "https://example.com/ai-doc/stories/mock/android-plan.md" }],
+      },
+      {
+        id: "stage_implementation_tunnel-config-v3",
+        stage: "implementation",
+        action: "mark",
+        issueKey: "tunnel-config-v3",
+        title: "实现 Tunnel ConfigV3",
+        detail: "Android MR 已创建，iOS 待处理",
+        status: "current",
+        updatedAt: now,
+        dryRunSupported: true,
+      },
+    ],
+    nextAction: {
+      action: "mark",
+      actionId: "mark-impl-mr",
+      stage: "implementation",
+      issueKey: "tunnel-config-v3",
+      title: "记录实现 MR",
+      detail: "验证 GitLab Issue/MR 关联后写入 Workflow runtime",
+      dryRunSupported: true,
+    },
+    epics: [
+      {
+        key: "network-governance",
+        title: "网络治理",
+        issues: [
+          {
+            key: "tunnel-config-v3",
+            title: "Tunnel ConfigV3 URI 云控支持",
+            platform: "all",
+            status: "implementing",
+            issueUrl: "https://example.com/gitlab/issues/101",
+            planDocUrl: "https://example.com/ai-doc/stories/mock/android-plan.md",
+            mrs: [
+              { label: "Android MR", platform: "android", url: "https://example.com/gitlab/mr/1", status: "opened" },
+              { label: "iOS MR", platform: "ios", url: "https://example.com/gitlab/mr/2", status: "todo" },
+            ],
+          },
+          {
+            key: "self-test-package",
+            parentKey: "tunnel-config-v3",
+            title: "自测包与验证记录",
+            platform: "all",
+            status: "pending",
+            links: [{ label: "临时 review", url: "https://example.com/review/mock" }],
+          },
+        ],
+      },
+    ],
+    issues: [
+      {
+        key: "tunnel-config-v3",
+        epicKey: "network-governance",
+        title: "Tunnel ConfigV3 URI 云控支持",
+        platform: "all",
+        status: "implementing",
+      },
+    ],
+    artifacts: [
+      { label: "TAPD 需求", kind: "tapd", url: "https://example.com/tapd/mock" },
+      { label: "技术方案", kind: "ai-doc", url: "https://example.com/ai-doc/stories/mock/tech_design.md" },
+    ],
+    optionalGaps: [{ severity: "info", text: "Mock snapshot: 用于验证 Workflow 阶段、Epic/Issue 层级和 MR 归类。" }],
+    sources: { checkedAt: now, mock: true },
+  });
+}
+
+function prdWorkflowWriteCachedSnapshot(scopedRoot, tapdId, snapshot) {
+  try {
+    const p = prdWorkflowCachePath(scopedRoot, tapdId);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const data = {
+      version: 1,
+      tapdId: String(tapdId || ""),
+      updatedAt: new Date().toISOString(),
+      snapshot,
+      sources: {
+        truth: "projection",
+        authority: "agentflow-runtime",
+        persistence: "cache",
+      },
+    };
+    const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    fs.renameSync(tmp, p);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowFallbackWithCache(scopedRoot, tapdId, fallback, userCtx = {}, flowSource = "user", flowId = "") {
+  const cached = prdWorkflowReadCachedSnapshot(scopedRoot, tapdId);
+  const snapshot = cached?.snapshot && typeof cached.snapshot === "object" && !Array.isArray(cached.snapshot)
+    ? cached.snapshot
+    : null;
+  if (!snapshot) {
+    return {
+      ...fallback,
+      collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, tapdId),
+    };
+  }
+  const optionalGaps = [
+    ...(Array.isArray(fallback?.optionalGaps) ? fallback.optionalGaps : []),
+    ...(Array.isArray(snapshot.optionalGaps) ? snapshot.optionalGaps : []),
+  ];
+  return prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, {
+    ...snapshot,
+    stale: true,
+    runtimeStatus: fallback?.phase || "unavailable",
+    runtimeMessage: fallback?.pointer || fallback?.error || "",
+    optionalGaps,
+    collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, tapdId),
+    sources: {
+      ...(snapshot.sources && typeof snapshot.sources === "object" ? snapshot.sources : {}),
+      cacheUpdatedAt: cached.updatedAt || "",
+      checkedAt: new Date().toISOString(),
+    },
+  });
+}
+
+function prdWorkflowWithAgentflowTokenDiagnostic(snapshot, sessionToken = "") {
+  const current = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : {};
+  const tokenPresent = Boolean(String(sessionToken || "").trim());
+  const optionalGaps = Array.isArray(current.optionalGaps) ? [...current.optionalGaps] : [];
+  const hasTokenHint = optionalGaps.some((gap) => /AgentFlow runtime token|AGENTFLOW_BASE_URL|AGENTFLOW_TOKEN|session token/i.test(String(gap?.text || gap || "")));
+  if (!hasTokenHint) {
+    optionalGaps.push({
+      severity: "info",
+      text: tokenPresent
+        ? "当前浏览器会话已有 AgentFlow token。客户端 prd-flow skill/CLI 同步 Workflow 时还需要 AGENTFLOW_BASE_URL，并使用 AGENTFLOW_TOKEN 或 PRD_FLOW_RUNTIME_EVENT_TOKEN 上报 snapshot/event；不要把 token 写入 ai-doc 或 prd-flow config。"
+        : "当前请求没有 AgentFlow session token。客户端 prd-flow skill/CLI 要同步 Workflow 时，需要在客户端 .env 配置 AGENTFLOW_BASE_URL 和 AGENTFLOW_TOKEN，或配置 PRD_FLOW_RUNTIME_BASE_URL 和 PRD_FLOW_RUNTIME_EVENT_TOKEN。",
+    });
+  }
+  return {
+    ...current,
+    optionalGaps,
+    sources: {
+      ...(current.sources && typeof current.sources === "object" ? current.sources : {}),
+      agentflowRuntimeToken: tokenPresent ? "session" : "not-required-for-local-ui",
+    },
+  };
+}
+
+function prdWorkflowAllowServerExec() {
+  return parseBool(process.env.AGENTFLOW_PRD_WORKFLOW_SERVER_EXEC, false);
+}
+
+function prdWorkflowParseJson(stdout) {
+  const text = String(stdout || "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (_) {}
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try {
+      return JSON.parse(text.slice(first, last + 1));
+    } catch (_) {}
+  }
+  return null;
+}
+
+function prdWorkflowFirstArray(...values) {
+  const value = values.find((item) => Array.isArray(item));
+  return value ? [...value] : [];
+}
+
+function prdWorkflowSplitCommand(command) {
+  const text = String(command || "").trim();
+  if (!text || /[\0\r\n]/.test(text) || text.length > 4000) return [];
+  const tokens = [];
+  let current = "";
+  let quote = "";
+  let escaping = false;
+  for (const ch of text) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (escaping) current += "\\";
+  if (quote) return [];
+  if (current) tokens.push(current);
+  return tokens.filter(Boolean);
+}
+
+function prdWorkflowCommandArgs(command) {
+  const tokens = prdWorkflowSplitCommand(command);
+  if (!tokens.length) return [];
+  const first = tokens[0] || "";
+  const start = path.basename(first) === "prd-flow" ? 1 : 0;
+  const args = tokens.slice(start);
+  const action = String(args[0] || "");
+  if (!action || action.startsWith("-") || /[\/\\]/.test(action)) return [];
+  return args;
+}
+
+function prdWorkflowCommandTapdId(args = []) {
+  for (const arg of args.slice(1)) {
+    const value = String(arg || "").trim();
+    if (!value || value.startsWith("-")) continue;
+    return value;
+  }
+  return "";
+}
+
+function prdWorkflowNormalizeNextAction(parsed = {}, fallbackTapdId = "") {
+  const raw = parsed.nextAction || parsed.next_action || parsed.currentAction || parsed.current_action || parsed.next || null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const command = String(raw.command || raw.nextCommand || raw.next_command || "").trim();
+  const args = prdWorkflowCommandArgs(command);
+  const action = String(raw.action || raw.actionId || raw.action_id || args[0] || raw.code || raw.id || "").trim();
+  const issue = raw.issue && typeof raw.issue === "object" && !Array.isArray(raw.issue)
+    ? String(raw.issue.key || raw.issue.id || raw.issue.title || "").trim()
+    : String(raw.issue || raw.issueKey || raw.issue_key || "").trim();
+  const title = String(raw.title || raw.label || raw.name || raw.code || action || "下一步").trim();
+  return {
+    ...raw,
+    id: String(raw.id || raw.code || action || "next"),
+    action,
+    actionId: String(raw.actionId || raw.action_id || action),
+    command,
+    label: String(raw.label || title),
+    title,
+    detail: String(raw.detail || raw.description || raw.user_hint || raw.userHint || ""),
+    issueKey: issue,
+    tapdId: String(raw.tapdId || raw.tapd_id || prdWorkflowCommandTapdId(args) || fallbackTapdId || ""),
+    dryRunSupported: raw.dryRunSupported !== false && raw.dry_run_supported !== false,
+    dryRunMode: command ? "preview" : raw.dryRunMode || raw.dry_run_mode || "",
+  };
+}
+
+async function runPrdWorkflowCommand(root, scopedRoot, args = [], userCtx = {}, options = {}) {
+  const cli = prdWorkflowResolveCli(root, scopedRoot);
+  const cwd = scopedRoot || root || process.cwd();
+  const env = runtimeEnvForUser(userCtx, {
+    PRD_FLOW_WORKSPACE: path.join(cwd, ".workspace", "prd-flow"),
+    ...(options.env && typeof options.env === "object" && !Array.isArray(options.env) ? options.env : {}),
+  });
+  const result = await execFileBuffered(cli.command, args, {
+    cwd,
+    env,
+    timeout: Number(options.timeout || 120000),
+    maxBuffer: Number(options.maxBuffer || 4 * 1024 * 1024),
+  });
+  return { ...result, cli };
+}
+
+function prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, parsed = {}, userCtx = {}, opts = {}) {
+  const id = String(tapdId || parsed?.tapdId || parsed?.tapd_id || parsed?.prd?.tapd_id || parsed?.prd?.tapdId || "").trim();
+  const flowSource = String(opts.flowSource || "user").trim() || "user";
+  const flowId = String(opts.flowId || "").trim();
+  const nextAction = prdWorkflowNormalizeNextAction(parsed, id);
+  const prd = parsed.prd && typeof parsed.prd === "object" && !Array.isArray(parsed.prd) ? parsed.prd : {};
+  const actions = prdWorkflowFirstArray(parsed.actions, parsed.workflowActions, parsed.workflow_actions);
+  const epics = prdWorkflowFirstArray(parsed.epics, parsed.epicGroups, parsed.epic_groups, prd.epics, prd.epicGroups, prd.epic_groups);
+  const issues = prdWorkflowFirstArray(parsed.issues, parsed.issueGroups, parsed.issue_groups, prd.issues, prd.issueGroups, prd.issue_groups);
+  const optionalGaps = prdWorkflowFirstArray(parsed.optionalGaps, parsed.optional_gaps);
+  if (!actions.length && !nextAction) {
+    optionalGaps.push({ severity: "warn", text: "prd-flow current --json 未返回 actions/nextAction，Workflow 时间线只能显示 runtime 或空状态。" });
+  }
+  if (!epics.length && !issues.length) {
+    optionalGaps.push({ severity: "info", text: "prd-flow current --json 未返回 epics/issues，Issue 整合区暂为空。" });
+  }
+  const snapshot = {
+    tapdId: String(parsed.tapdId || parsed.tapd_id || prd.tapd_id || prd.tapdId || id),
+    phase: String(parsed.phase || parsed.workflow_stage || nextAction?.id || parsed.next?.code || "unknown"),
+    pointer: String(parsed.pointer || parsed.current || parsed.status || nextAction?.title || ""),
+    revision: String(parsed.revision || prd.revision || parsed.next?.revision || ""),
+    nextAction,
+    actions,
+    workflowActions: actions,
+    timeline: prdWorkflowFirstArray(parsed.timeline),
+    events: prdWorkflowFirstArray(parsed.events),
+    history: prdWorkflowFirstArray(parsed.history),
+    milestones: prdWorkflowFirstArray(parsed.milestones),
+    epics,
+    epicGroups: epics,
+    issues,
+    issueGroups: issues,
+    artifacts: prdWorkflowFirstArray(parsed.artifacts, parsed.outputs),
+    dependencies: prdWorkflowFirstArray(parsed.dependencies),
+    optionalGaps,
+    sources: parsed.sources && typeof parsed.sources === "object" ? parsed.sources : {},
+    raw: parsed,
+    collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, id),
+  };
+  snapshot.revision = prdWorkflowSnapshotRevision(snapshot);
+  return snapshot;
+}
+
+async function prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx = {}, opts = {}) {
+  const id = String(tapdId || "").trim();
+  const flowSource = String(opts.flowSource || "user").trim() || "user";
+  const flowId = String(opts.flowId || "").trim();
+  if (!id) {
+    return {
+      ...prdWorkflowFallbackSnapshot("", "unselected", "输入 TAPD ID 后读取 Workflow 状态"),
+      collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, ""),
+    };
+  }
+  if (!prdWorkflowAllowServerExec()) {
+    return prdWorkflowMaterializeSnapshot(root, scopedRoot, id, userCtx, { flowSource, flowId });
+  }
+  try {
+    const result = await runPrdWorkflowCommand(root, scopedRoot, ["current", id, "--json"], userCtx, { timeout: 120000 });
+    const parsed = prdWorkflowParseJson(result.stdout);
+    if (!parsed) {
+      return prdWorkflowFallbackWithCache(scopedRoot, id, prdWorkflowFallbackSnapshot(id, "json_unsupported", "prd-flow current --json 暂不可用或未返回 JSON", {
+        rawOutput: String(result.stdout || result.stderr || "").slice(0, 8000),
+        cli: result.cli,
+      }), userCtx, flowSource, flowId);
+    }
+    const snapshot = {
+      ...prdWorkflowSnapshotFromParsed(scopedRoot, id, parsed, userCtx, opts),
+      cli: result.cli,
+    };
+    const mergedSnapshot = prdWorkflowMergeRuntimeEvents(scopedRoot, id, snapshot);
+    prdWorkflowWriteCachedSnapshot(scopedRoot, id, mergedSnapshot);
+    return mergedSnapshot;
+  } catch (e) {
+    const code = e?.code || "";
+    const stdout = String(e?.stdout || "");
+    const stderr = String(e?.stderr || "");
+    const missing = code === "ENOENT";
+    return prdWorkflowFallbackWithCache(scopedRoot, id, prdWorkflowFallbackSnapshot(
+      id,
+      missing ? "unavailable" : "command_failed",
+      missing ? "未找到 prd-flow CLI，请先在 workspace 配置 .workspace/prd-flow/bin/prd-flow 或设置 PRD_FLOW_CLI" : `prd-flow current --json 执行失败：${String(e?.message || e)}`,
+      {
+        rawOutput: `${stdout}${stdout && stderr ? "\n" : ""}${stderr}`.slice(0, 8000),
+        error: String(e?.message || e),
+      },
+    ), userCtx, flowSource, flowId);
+  }
+}
+
+function normalizePrdWorkflowActionArgs(payload = {}) {
+  const command = String(payload.command || payload.nextCommand || payload.next_command || "").trim();
+  const commandArgs = prdWorkflowCommandArgs(command);
+  const action = String(payload.action || payload.actionId || commandArgs[0] || "").trim();
+  if (!action || action.startsWith("-") || /[\0\r\n]/.test(action) || action.length > 160) {
+    return { error: "Invalid prd-flow action" };
+  }
+  const tapdId = String(payload.tapdId || payload.tapd_id || prdWorkflowCommandTapdId(commandArgs)).trim();
+  if (!tapdId) return { error: "Missing tapdId" };
+  if (commandArgs.length) {
+    const expectedRevision = String(payload.expectedRevision || "").trim();
+    const idempotencyKey = String(payload.idempotencyKey || "").trim();
+    const args = [...commandArgs];
+    if (expectedRevision && !args.includes("--expected-revision")) args.push("--expected-revision", expectedRevision);
+    if (idempotencyKey && !args.includes("--idempotency-key")) args.push("--idempotency-key", idempotencyKey);
+    return {
+      action,
+      tapdId,
+      args,
+      idempotencyKey,
+      command,
+      previewOnly: payload.dryRun === true || payload.dry_run === true,
+      fromCommand: true,
+    };
+  }
+  const args = [action, tapdId];
+  const issue = String(payload.issueKey || payload.issue || "").trim();
+  if (issue) args.push("--issue", issue);
+  const summary = String(payload.summary || "").trim();
+  if (summary && action === "start-fix") args.push("--summary", summary);
+  const testEnv = String(payload.testEnv || payload.test_environment || "").trim();
+  if (testEnv && action === "submit-test") args.push("--test-env", testEnv);
+  const mr = String(payload.mr || payload.url || "").trim();
+  if (mr && action === "submit-test") args.push("--mr", mr);
+  if (payload.confirm === true) args.push("--confirm");
+  if (payload.dryRun === true || payload.dry_run === true) args.push("--dry-run");
+  if (payload.allowMissingImplementation === true) args.push("--allow-missing-implementation");
+  const expectedRevision = String(payload.expectedRevision || "").trim();
+  if (expectedRevision) args.push("--expected-revision", expectedRevision);
+  const idempotencyKey = String(payload.idempotencyKey || "").trim();
+  if (idempotencyKey) args.push("--idempotency-key", idempotencyKey);
+  args.push("--json");
+  return { action, tapdId, args, idempotencyKey };
+}
+
+function prdWorkflowActionText(payload = {}, normalized = {}) {
+  return [
+    normalized?.action,
+    payload.action,
+    payload.actionId,
+    payload.action_id,
+    payload.command,
+    payload.marker,
+    payload.flag,
+    payload.stage,
+    payload.stageKey,
+    payload.stage_key,
+    payload.title,
+    payload.label,
+  ].map((value) => String(value || "").trim()).filter(Boolean).join(" ");
+}
+
+function prdWorkflowFirstString(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function prdWorkflowMarkerEventSpec(payload = {}, normalized = {}) {
+  const text = prdWorkflowActionText(payload, normalized).toLowerCase().replace(/[_\s]+/g, "-");
+  const explicitRuntimeOnly = payload.runtimeOnly === true || payload.runtime_only === true ||
+    payload.markerOnly === true || payload.marker_only === true;
+  const specs = [
+    { re: /(^|-)mark-impl-mr($|-)|(^|-)record-impl-mr($|-)|--impl-mr\b/, stage: "implementation", title: "记录实现 MR", kind: "impl-mr" },
+    { re: /(^|-)mark-fix-mr($|-)|(^|-)record-fix-mr($|-)|--fix-mr\b/, stage: "bugfix", title: "记录修复 MR", kind: "fix-mr" },
+    { re: /(^|-)mark-impl-done($|-)|--impl-done\b/, stage: "implementation", title: "实现完成标记", kind: "impl-done" },
+    { re: /(^|-)mark-impl-merged($|-)|--impl-merged\b/, stage: "implementation", title: "实现 MR 合并标记", kind: "impl-merged" },
+    { re: /(^|-)mark-integration-mr($|-)|(^|-)record-integration-mr($|-)|--integration-mr\b/, stage: "submit-test", title: "记录集成 MR", kind: "integration-mr" },
+    { re: /(^|-)mark-integrated($|-)|--integrated\b/, stage: "submit-test", title: "集成完成标记", kind: "integrated" },
+    { re: /(^|-)retry-jenkins($|-)|(^|-)retry-jenkins-build($|-)|(^|-)record-jenkins($|-)/, stage: "self-test", title: "Jenkins 构建记录", kind: "jenkins" },
+    { re: /(^|-)record-test-mr($|-)|(^|-)test-mr($|-)/, stage: "submit-test", title: "记录提测 MR", kind: "test-mr" },
+  ];
+  let matched = specs.find((spec) => spec.re.test(text));
+  if (!matched && explicitRuntimeOnly) {
+    matched = {
+      stage: prdWorkflowFirstString(payload.stageKey, payload.stage_key, payload.stage, normalized.action, payload.action, "workflow"),
+      title: prdWorkflowFirstString(payload.title, payload.label, normalized.action, payload.action, "Workflow runtime action"),
+      kind: "runtime",
+    };
+  }
+  if (!matched) return null;
+  const issueKey = prdWorkflowFirstString(payload.issueKey, payload.issue_key, payload.issue);
+  const url = prdWorkflowFirstString(payload.url, payload.href, payload.mr, payload.mrUrl, payload.mr_url, payload.mergeRequestUrl, payload.merge_request_url);
+  const links = Array.isArray(payload.links) ? payload.links : [];
+  const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  const title = prdWorkflowFirstString(payload.title, payload.label, matched.title);
+  const stage = prdWorkflowFirstString(payload.stageKey, payload.stage_key, payload.stage, matched.stage);
+  const linkArtifacts = url ? [{ kind: matched.kind, label: title, url }] : [];
+  return {
+    runtimeOnly: true,
+    kind: matched.kind,
+    stage,
+    title,
+    issueKey,
+    detail: prdWorkflowFirstString(payload.detail, payload.description, payload.summary, url ? "记录外部系统事实，不写 ai-doc marker" : "记录运行态事实，不写 ai-doc marker"),
+    links,
+    artifacts: [...artifacts, ...linkArtifacts],
+  };
+}
+
+function prunePrdWorkflowIdempotency() {
+  if (prdWorkflowIdempotency.size <= PRD_WORKFLOW_IDEMPOTENCY_MAX) return;
+  const entries = Array.from(prdWorkflowIdempotency.entries())
+    .sort((a, b) => Number(a[1]?.at || 0) - Number(b[1]?.at || 0));
+  for (const [key] of entries.slice(0, Math.max(1, entries.length - PRD_WORKFLOW_IDEMPOTENCY_MAX))) {
+    prdWorkflowIdempotency.delete(key);
+  }
+}
 
 function workspaceIntervalMinutesToCron(intervalMinutes) {
   const n = Number(intervalMinutes);
@@ -7501,6 +9393,857 @@ export function startUiServer({
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/prd-workflow/snapshot") {
+      try {
+        const tapdId = String(url.searchParams.get("tapdId") || "").trim();
+        const flowId = String(url.searchParams.get("flowId") || "").trim();
+        const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const archived = url.searchParams.get("archived") === "1";
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const useMock = url.searchParams.get("mock") === "1" || parseBool(process.env.AGENTFLOW_PRD_WORKFLOW_MOCK, false);
+        const runtimeOnly = url.searchParams.get("runtimeOnly") === "1" ||
+          url.searchParams.get("runtime_only") === "1" ||
+          url.searchParams.get("cached") === "1";
+        const baseSnapshot = useMock
+          ? prdWorkflowMockSnapshot(scopedRoot, tapdId || "mock-prd")
+          : runtimeOnly
+            ? prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId })
+            : await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId });
+        const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+          baseSnapshot,
+          getSessionTokenFromRequest(req) || "",
+        );
+        json(res, 200, { ok: true, snapshot });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/snapshot") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const tapdId = String(payload.tapdId || payload.tapd_id || payload?.snapshot?.tapdId || payload?.snapshot?.tapd_id || payload?.snapshot?.prd?.tapd_id || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
+          ? payload.snapshot
+          : payload.prd || payload.next ? payload : null;
+        if (!rawSnapshot) {
+          json(res, 400, { error: "Missing snapshot" });
+          return;
+        }
+        const normalizedSnapshot = {
+          ...prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, rawSnapshot, userCtx, { flowSource, flowId }),
+          clientReportedAt: new Date().toISOString(),
+          sources: {
+            ...(rawSnapshot.sources && typeof rawSnapshot.sources === "object" ? rawSnapshot.sources : {}),
+            executionMode: "client-report",
+          },
+        };
+        const reportMeta = prdWorkflowSnapshotMetaFromReport(payload, rawSnapshot, req, userCtx);
+        const reportSource = {
+          ...(normalizedSnapshot.sources && typeof normalizedSnapshot.sources === "object" ? normalizedSnapshot.sources : {}),
+          executionMode: "client-report",
+          truth: "observation",
+          authority: "client",
+          persistence: "runtime",
+          clientId: reportMeta.clientId,
+          clientUserId: reportMeta.userId,
+          clientReportedAt: reportMeta.reportedAt,
+          clientObservedAt: reportMeta.observedAt,
+          baseRevision: reportMeta.baseRevision,
+          scope: reportMeta.scope,
+          platform: reportMeta.platform,
+          issueKey: reportMeta.issueKey,
+          stageKey: reportMeta.stageKey,
+        };
+        const storedObservationSnapshot = prdWorkflowStoredObservationSnapshot(normalizedSnapshot, reportSource);
+        prdWorkflowWriteClientObservation(scopedRoot, tapdId, reportMeta, storedObservationSnapshot);
+
+        const projectFactSource = reportMeta.scope === "project"
+          ? prdWorkflowProjectFactSource(payload, rawSnapshot)
+          : null;
+        const projectFactSnapshot = projectFactSource
+          ? prdWorkflowStoredObservationSnapshot(normalizedSnapshot, {
+              ...reportSource,
+              ...projectFactSource,
+            })
+          : null;
+        const projectRecord = prdWorkflowReadProjectStateWithFallback(root, scopedRoot, tapdId);
+        const projectConflict = projectFactSnapshot
+          ? prdWorkflowSnapshotReportConflict(projectRecord, projectFactSnapshot, reportMeta)
+          : null;
+        if (projectConflict) {
+          prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+            id: "stage_project_plan_conflict",
+            type: "project-plan-conflict",
+            scope: "project",
+            stage: reportMeta.stageKey || "project-plan",
+            title: "主 Project Plan 冲突",
+            detail: projectConflict.message,
+            status: "conflict",
+            source: "agentflow",
+            expectedRevision: projectConflict.expectedRevision || reportMeta.baseRevision || "",
+            currentRevision: projectConflict.currentRevision || "",
+            incomingRevision: projectConflict.incomingRevision || projectFactSnapshot.revision || "",
+            clientId: reportMeta.clientId,
+            observedAt: reportMeta.observedAt,
+            currentSnapshot: prdWorkflowCompactRuntimeValue(projectRecord?.snapshot || null, 12000),
+            incomingSnapshot: prdWorkflowCompactRuntimeValue(projectFactSnapshot, 12000),
+          });
+          const currentSnapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+            prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+            getSessionTokenFromRequest(req) || "",
+          );
+          json(res, 409, {
+            ok: false,
+            error: projectConflict.message,
+            conflict: {
+              ...projectConflict,
+              tapdId,
+              type: "project-plan-conflict",
+              currentPhase: String(currentSnapshot?.phase || ""),
+              currentPointer: String(currentSnapshot?.pointer || ""),
+            },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
+        if (projectFactSnapshot) {
+          prdWorkflowWriteProjectState(scopedRoot, tapdId, projectFactSnapshot, {
+            sources: {
+              ...projectFactSource,
+              clientId: reportMeta.clientId,
+              observedAt: reportMeta.observedAt,
+            },
+          });
+        }
+        const materialized = prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId });
+        const withDiagnostic = prdWorkflowWithAgentflowTokenDiagnostic(materialized, getSessionTokenFromRequest(req) || "");
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "snapshot-report", tapdId, snapshot: withDiagnostic });
+        json(res, 200, { ok: true, snapshot: withDiagnostic });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/action") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      let actionScopedRoot = root;
+      let normalizedForCatch = null;
+      let actionRunId = "";
+      try {
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        actionScopedRoot = scopedRoot;
+        const normalized = normalizePrdWorkflowActionArgs(payload);
+        normalizedForCatch = normalized;
+        if (normalized.error) {
+          json(res, 400, { error: normalized.error });
+          return;
+        }
+        const idem = String(normalized.idempotencyKey || "").trim();
+        const idemKey = idem ? prdWorkflowKey(userCtx, flowSource, flowId, `${normalized.tapdId}:${idem}`) : "";
+        if (idemKey && prdWorkflowIdempotency.has(idemKey)) {
+          json(res, 200, { ok: true, alreadyApplied: true, ...prdWorkflowIdempotency.get(idemKey)?.result });
+          return;
+        }
+        const completedEvent = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, normalized.tapdId, idem);
+        if (completedEvent) {
+          const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+            await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+            getSessionTokenFromRequest(req) || "",
+          );
+          const result = {
+            ok: true,
+            alreadyApplied: true,
+            action: normalized.action,
+            tapdId: normalized.tapdId,
+            output: completedEvent.output || null,
+            rawOutput: completedEvent.rawOutput || "",
+            snapshot,
+          };
+          if (idemKey) {
+            prdWorkflowIdempotency.set(idemKey, { at: Date.now(), result });
+            prunePrdWorkflowIdempotency();
+          }
+          json(res, 200, result);
+          return;
+        }
+        const eventKey = prdWorkflowKey(userCtx, flowSource, flowId, normalized.tapdId);
+        if (prdWorkflowActionLocks.has(eventKey)) {
+          json(res, 409, { error: "Another workflow action is already running for this TAPD ID" });
+          return;
+        }
+        const startedAtMs = Date.now();
+        const startedAt = new Date(startedAtMs).toISOString();
+        const issueKey = String(payload?.issueKey || payload?.issue_key || payload?.issue || "").trim();
+        const dryRun = payload?.dryRun === true || payload?.dry_run === true;
+        const stageKey = String(payload?.stageKey || payload?.stage_key || payload?.stage || payload?.phase || normalized.action || "").trim();
+        const actionTitle = String(payload?.title || payload?.label || payload?.actionLabel || payload?.action_label || stageKey || normalized.action).trim();
+        actionRunId = `stage_${prdWorkflowSafeStateId([stageKey || normalized.action, issueKey].filter(Boolean).join(":"))}`;
+        prdWorkflowActionLocks.set(eventKey, {
+          action: normalized.action,
+          tapdId: normalized.tapdId,
+          title: actionTitle,
+          stage: stageKey || normalized.action,
+          issueKey,
+          startedAt: startedAtMs,
+          id: actionRunId,
+          userId: String(userCtx?.userId || ""),
+        });
+        let result;
+        try {
+          const forceRuntimeMarker = payload?.runtimeOnly === true || payload?.runtime_only === true ||
+            payload?.markerOnly === true || payload?.marker_only === true;
+          const markerEvent = (!normalized.fromCommand || forceRuntimeMarker)
+            ? prdWorkflowMarkerEventSpec(payload, normalized)
+            : null;
+          if (!dryRun && (markerEvent || normalized.fromCommand)) {
+            const expectedRevision = String(payload?.expectedRevision || "").trim();
+            if (expectedRevision) {
+            const latestForMarker = prdWorkflowWithAgentflowTokenDiagnostic(
+              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              getSessionTokenFromRequest(req) || "",
+            );
+              const latestRevision = String(latestForMarker?.revision || "").trim();
+              if (latestRevision && latestRevision !== expectedRevision) {
+                const err = new Error(`expected revision ${expectedRevision} but current revision is ${latestRevision}`);
+                err.latestSnapshot = latestForMarker;
+                throw err;
+              }
+            }
+          }
+          const startEvent = prdWorkflowAppendRuntimeEvent(scopedRoot, normalized.tapdId, {
+            id: actionRunId,
+            type: "action-start",
+            action: normalized.action,
+            stage: markerEvent?.stage || stageKey || normalized.action,
+            title: markerEvent?.title || actionTitle,
+            detail: dryRun ? "预演中" : "执行中",
+            status: "running",
+            startedAt,
+            dryRun,
+            issueKey: markerEvent?.issueKey || issueKey,
+            expectedRevision: payload?.expectedRevision || "",
+            idempotencyKey: idem,
+          });
+          prdWorkflowBroadcast(eventKey, startEvent || { type: "action-start", action: normalized.action, tapdId: normalized.tapdId });
+          if (markerEvent) {
+            const output = {
+              runtimeOnly: true,
+              kind: markerEvent.kind,
+              message: dryRun
+                ? "该动作将记录为 Workflow runtime event，不会写 ai-doc marker commit。"
+                : "已记录为 Workflow runtime event，未写 ai-doc marker commit。",
+              stage: markerEvent.stage,
+              issueKey: markerEvent.issueKey || issueKey,
+              artifacts: markerEvent.artifacts,
+              links: markerEvent.links,
+            };
+            prdWorkflowAppendRuntimeEvent(scopedRoot, normalized.tapdId, {
+              id: actionRunId,
+              type: dryRun ? "action-preview" : "action-done",
+              source: "agentflow",
+              action: normalized.action,
+              stage: markerEvent.stage || stageKey || normalized.action,
+              title: markerEvent.title || actionTitle,
+              detail: markerEvent.detail,
+              status: dryRun ? "current" : "done",
+              startedAt,
+              completedAt: new Date().toISOString(),
+              dryRun,
+              issueKey: markerEvent.issueKey || issueKey,
+              expectedRevision: payload?.expectedRevision || "",
+              idempotencyKey: idem,
+              output,
+              artifacts: markerEvent.artifacts,
+              links: markerEvent.links,
+            });
+            const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              getSessionTokenFromRequest(req) || "",
+            );
+            result = {
+              ok: true,
+              runtimeOnly: true,
+              action: normalized.action,
+              tapdId: normalized.tapdId,
+              output,
+              rawOutput: "",
+              snapshot,
+            };
+            if (idemKey) {
+              prdWorkflowIdempotency.set(idemKey, { at: Date.now(), result });
+              prunePrdWorkflowIdempotency();
+            }
+            prdWorkflowBroadcast(eventKey, { type: "action-done", action: normalized.action, tapdId: normalized.tapdId, snapshot });
+            json(res, 200, result);
+            return;
+          }
+          if (normalized.fromCommand && dryRun) {
+            const output = {
+              preview: true,
+              command: normalized.command || `prd-flow ${normalized.args.join(" ")}`,
+              message: "预演模式只展示将执行的客户端 prd-flow 命令；确认后会登记 action request，等待客户端 skill 执行并上报结果。",
+              args: normalized.args,
+            };
+            prdWorkflowAppendRuntimeEvent(scopedRoot, normalized.tapdId, {
+              id: actionRunId,
+              type: "action-preview",
+              source: "agentflow",
+              action: normalized.action,
+              stage: stageKey || normalized.action,
+              title: actionTitle,
+              detail: output.message,
+              status: "current",
+              startedAt,
+              completedAt: new Date().toISOString(),
+              dryRun,
+              issueKey,
+              expectedRevision: payload?.expectedRevision || "",
+              idempotencyKey: idem,
+              output,
+            });
+            const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              getSessionTokenFromRequest(req) || "",
+            );
+            result = {
+              ok: true,
+              preview: true,
+              action: normalized.action,
+              tapdId: normalized.tapdId,
+              output,
+              rawOutput: "",
+              snapshot,
+            };
+            prdWorkflowBroadcast(eventKey, { type: "action-preview", action: normalized.action, tapdId: normalized.tapdId, snapshot });
+            json(res, 200, result);
+            return;
+          }
+          if (normalized.fromCommand && !prdWorkflowAllowServerExec()) {
+            const output = {
+              clientExecutionRequired: true,
+              command: normalized.command || `prd-flow ${normalized.args.join(" ")}`,
+              message: "已登记 Workflow action request；服务端不会执行客户端 prd-flow。请客户端 skill 使用 AGENTFLOW_BASE_URL + AGENTFLOW_TOKEN 执行该命令并上报 snapshot/event。",
+              args: normalized.args,
+            };
+            prdWorkflowAppendRuntimeEvent(scopedRoot, normalized.tapdId, {
+              id: actionRunId,
+              type: "action-request",
+              source: "agentflow",
+              action: normalized.action,
+              stage: stageKey || normalized.action,
+              title: actionTitle,
+              detail: output.message,
+              status: "current",
+              startedAt,
+              completedAt: new Date().toISOString(),
+              dryRun: false,
+              issueKey,
+              expectedRevision: payload?.expectedRevision || "",
+              idempotencyKey: idem,
+              output,
+              command: output.command,
+            });
+            const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              getSessionTokenFromRequest(req) || "",
+            );
+            result = {
+              ok: true,
+              actionRequested: true,
+              action: normalized.action,
+              tapdId: normalized.tapdId,
+              output,
+              rawOutput: "",
+              snapshot,
+            };
+            if (idemKey) {
+              prdWorkflowIdempotency.set(idemKey, { at: Date.now(), result });
+              prunePrdWorkflowIdempotency();
+            }
+            prdWorkflowBroadcast(eventKey, { type: "action-request", action: normalized.action, tapdId: normalized.tapdId, snapshot });
+            json(res, 200, result);
+            return;
+          }
+          const runtimeEventUrl = `http://${host}:${uiPort}/api/prd-workflow/event`;
+          const commandResult = await runPrdWorkflowCommand(root, scopedRoot, normalized.args, userCtx, {
+            timeout: 300000,
+            env: {
+              PRD_FLOW_RUNTIME_EVENT_URL: runtimeEventUrl,
+              PRD_FLOW_RUNTIME_EVENT_TOKEN: getSessionTokenFromRequest(req) || "",
+              PRD_FLOW_RUNTIME_TAPD_ID: normalized.tapdId,
+              PRD_FLOW_RUNTIME_STAGE_KEY: stageKey || normalized.action,
+              PRD_FLOW_RUNTIME_ISSUE_KEY: issueKey,
+              PRD_FLOW_RUNTIME_FLOW_ID: flowId,
+              PRD_FLOW_RUNTIME_FLOW_SOURCE: flowSource,
+              PRD_FLOW_MARKER_POLICY: "runtime-only",
+              PRD_FLOW_SUPPRESS_AI_DOC_MARKERS: "1",
+            },
+          });
+          const parsed = prdWorkflowParseJson(commandResult.stdout);
+          const rawOutput = parsed ? "" : String(commandResult.stdout || commandResult.stderr || "").slice(0, 12000);
+          prdWorkflowAppendRuntimeEvent(scopedRoot, normalized.tapdId, {
+            id: actionRunId,
+            type: "action-done",
+            action: normalized.action,
+            stage: stageKey || normalized.action,
+            title: actionTitle,
+            detail: parsed?.message || parsed?.summary || (dryRun ? "预演完成，等待确认" : "阶段完成"),
+            status: dryRun ? "current" : "done",
+            startedAt,
+            completedAt: new Date().toISOString(),
+            dryRun,
+            issueKey,
+            expectedRevision: payload?.expectedRevision || "",
+            idempotencyKey: idem,
+            output: parsed || null,
+            rawOutput,
+            artifacts: Array.isArray(parsed?.artifacts) ? parsed.artifacts : [],
+            links: Array.isArray(parsed?.links) ? parsed.links : [],
+          });
+          const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+            await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+            getSessionTokenFromRequest(req) || "",
+          );
+          result = {
+            ok: true,
+            action: normalized.action,
+            tapdId: normalized.tapdId,
+            output: parsed || null,
+            rawOutput,
+            snapshot,
+          };
+          if (idemKey) {
+            prdWorkflowIdempotency.set(idemKey, { at: Date.now(), result });
+            prunePrdWorkflowIdempotency();
+          }
+          prdWorkflowBroadcast(eventKey, { type: "action-done", action: normalized.action, tapdId: normalized.tapdId, snapshot });
+        } finally {
+          prdWorkflowActionLocks.delete(eventKey);
+        }
+        json(res, 200, result);
+      } catch (e) {
+        const status = /expected revision|stale|conflict|not allow|precondition/i.test(String(e?.message || e)) ? 409 : 500;
+        const tapdId = String(normalizedForCatch?.tapdId || payload?.tapdId || payload?.tapd_id || "").trim();
+        const flowId = String(payload?.flowId || "").trim();
+        const flowSource = String(payload?.flowSource || "user").trim() || "user";
+        const errorText = (e && e.message) || String(e);
+        if (tapdId) {
+          const issueKey = String(payload?.issueKey || payload?.issue_key || payload?.issue || "").trim();
+          const stageKey = String(payload?.stageKey || payload?.stage_key || payload?.stage || payload?.phase || normalizedForCatch?.action || payload?.action || payload?.actionId || "").trim();
+          prdWorkflowAppendRuntimeEvent(actionScopedRoot, tapdId, {
+            id: actionRunId || `stage_${prdWorkflowSafeStateId([stageKey || payload?.action || payload?.actionId || "workflow-action", issueKey].filter(Boolean).join(":"))}`,
+            type: status === 409 ? "action-conflict" : "action-error",
+            action: String(normalizedForCatch?.action || payload?.action || payload?.actionId || ""),
+            stage: stageKey || String(normalizedForCatch?.action || payload?.action || payload?.actionId || ""),
+            title: String(payload?.title || payload?.label || normalizedForCatch?.action || payload?.action || payload?.actionId || "workflow action"),
+            detail: errorText,
+            status: status === 409 ? "conflict" : "error",
+            completedAt: new Date().toISOString(),
+            dryRun: payload?.dryRun === true || payload?.dry_run === true,
+            issueKey,
+            expectedRevision: payload?.expectedRevision || "",
+            idempotencyKey: payload?.idempotencyKey || "",
+            error: errorText,
+            rawOutput: `${String(e?.stdout || "")}${String(e?.stderr || "")}`.slice(0, 12000),
+          });
+        }
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), {
+          type: "action-error",
+          action: String(payload?.action || payload?.actionId || ""),
+          tapdId,
+          error: errorText,
+        });
+        let latestSnapshot = null;
+        if (status === 409 && tapdId) {
+          try {
+            latestSnapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+              await prdWorkflowSnapshot(root, actionScopedRoot, tapdId, userCtx, { flowSource, flowId }),
+              getSessionTokenFromRequest(req) || "",
+            );
+          } catch (_) {}
+        }
+        const conflict = status === 409 ? {
+          action: String(normalizedForCatch?.action || payload?.action || payload?.actionId || ""),
+          tapdId,
+          expectedRevision: String(payload?.expectedRevision || ""),
+          currentRevision: String(latestSnapshot?.revision || ""),
+          currentPhase: String(latestSnapshot?.phase || ""),
+          currentPointer: String(latestSnapshot?.pointer || ""),
+          message: errorText,
+        } : null;
+        json(res, status, {
+          error: errorText,
+          rawOutput: `${String(e?.stdout || "")}${String(e?.stderr || "")}`.slice(0, 12000),
+          snapshot: latestSnapshot,
+          conflict,
+        });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/prd-workflow/idempotency") {
+      try {
+        const tapdId = String(url.searchParams.get("tapdId") || url.searchParams.get("tapd_id") || "").trim();
+        const idempotencyKey = String(url.searchParams.get("key") || url.searchParams.get("idempotencyKey") || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        if (!idempotencyKey) {
+          json(res, 400, { error: "Missing idempotency key" });
+          return;
+        }
+        const flowId = String(url.searchParams.get("flowId") || "").trim();
+        const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const archived = url.searchParams.get("archived") === "1";
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const event = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey);
+        json(res, 200, {
+          ok: true,
+          found: !!event,
+          result: event?.output || event?.result || null,
+          rawOutput: event?.rawOutput || "",
+          event: event || null,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/idempotency") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const tapdId = String(payload.tapdId || payload.tapd_id || "").trim();
+        const idempotencyKey = String(payload.key || payload.idempotencyKey || payload.idempotency_key || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        if (!idempotencyKey) {
+          json(res, 400, { error: "Missing idempotency key" });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const existing = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey);
+        if (existing) {
+          json(res, 200, { ok: true, found: true, event: existing, result: existing.output || existing.result || null });
+          return;
+        }
+        const command = String(payload.command || "").slice(0, 1000);
+        const result = payload.result && typeof payload.result === "object" && !Array.isArray(payload.result)
+          ? payload.result
+          : { message: String(payload.message || "already completed") };
+        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+          type: "idempotent-command-completed",
+          source: "prd-flow-client",
+          auxiliary: true,
+          aggregateByStage: false,
+          conflictOnArtifact: false,
+          action: payload.action || "",
+          stage: payload.stage || payload.stageKey || payload.stage_key || "idempotency",
+          title: payload.title || "prd-flow command completed",
+          detail: command ? `Command completed: ${command}` : "Command completed",
+          status: "done",
+          completedAt: new Date().toISOString(),
+          idempotencyKey,
+          command,
+          output: result,
+          result,
+        });
+        json(res, 200, { ok: true, found: true, event, result });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/event") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const tapdId = String(payload.tapdId || payload.tapd_id || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const eventPayload = payload.event && typeof payload.event === "object" && !Array.isArray(payload.event)
+          ? payload.event
+          : payload;
+        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+          ...eventPayload,
+          tapdId,
+          type: eventPayload.type || "workflow-event",
+        });
+        const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+          await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+          getSessionTokenFromRequest(req) || "",
+        );
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "runtime-event", tapdId, event, snapshot });
+        json(res, 200, { ok: true, event, snapshot });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/review-link") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const tapdId = String(payload.tapdId || payload.tapd_id || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            json(res, 400, { error: scoped.error });
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, `http://${host}:${uiPort}`);
+        const query = new URLSearchParams();
+        if (flowId) query.set("flowId", flowId);
+        if (flowSource) query.set("flowSource", flowSource);
+        if (archived) query.set("archived", "1");
+        const reviewUrl = query.toString() ? `${review.url}?${query.toString()}` : review.url;
+        const durability = review.durability || "temporary";
+        const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
+          ? review.source
+          : { kind: durability === "durable" ? "ai-doc" : "local-draft", durability };
+        const artifact = {
+          label: payload.artifactLabel || "Markdown Review",
+          kind: durability === "temporary" ? "temporary-review" : "review",
+          persistence: "runtime",
+          durability,
+          source: reviewSource,
+          confirmed: payload.confirmed === true || payload.confirmed === "1",
+          url: reviewUrl,
+          expiresAt: review.expiresAt || "",
+        };
+        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+          type: "review-link",
+          auxiliary: true,
+          conflictOnArtifact: false,
+          truth: "runtime_event",
+          persistence: "runtime",
+          action: payload.action || payload.actionId || "",
+          stage: payload.stage || payload.stageKey || payload.stage_key || "review",
+          title: payload.title || "临时 Markdown Review",
+          detail: "已生成临时 Markdown review 链接",
+          status: "current",
+          issueKey: payload.issueKey || payload.issue_key || "",
+          durability,
+          sourceArtifact: reviewSource,
+          expiresAt: review.expiresAt || "",
+          artifacts: [artifact],
+          links: [{ label: "Markdown Review", url: reviewUrl, persistence: "runtime", durability, source: reviewSource, expiresAt: review.expiresAt || "" }],
+          reviewId: review.id,
+        });
+        const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+          await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+          getSessionTokenFromRequest(req) || "",
+        );
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "review-link", tapdId, event, snapshot });
+        json(res, 200, { ok: true, review: { ...review, url: reviewUrl }, event, snapshot });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/prd-workflow/events") {
+      const tapdId = String(url.searchParams.get("tapdId") || "").trim();
+      const flowId = String(url.searchParams.get("flowId") || "").trim();
+      const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+      const key = prdWorkflowKey(userCtx, flowSource, flowId, tapdId);
+      let set = prdWorkflowSubscribers.get(key);
+      if (!set) {
+        set = new Set();
+        prdWorkflowSubscribers.set(key, set);
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.write(": connected\n\n");
+      set.add(res);
+      const detach = () => {
+        try {
+          set.delete(res);
+          if (set.size === 0) prdWorkflowSubscribers.delete(key);
+        } catch (_) {}
+      };
+      req.on("close", detach);
+      res.on("close", detach);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/prd-workflow/review/")) {
+      try {
+        const parts = url.pathname.split("/").filter(Boolean);
+        const tapdId = decodeURIComponent(parts[3] || "");
+        const reviewId = decodeURIComponent(parts[4] || "");
+        if (!tapdId || !reviewId) {
+          res.writeHead(404);
+          res.end("Not found");
+          return;
+        }
+        const flowId = String(url.searchParams.get("flowId") || "").trim();
+        const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const archived = url.searchParams.get("archived") === "1";
+        let scopedRoot = root;
+        if (flowId) {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
+          if (scoped.error) {
+            res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+            res.end(scoped.error);
+            return;
+          }
+          scopedRoot = scoped.root;
+        }
+        const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
+        if (!fs.existsSync(paths.markdownPath) || !fs.statSync(paths.markdownPath).isFile()) {
+          res.writeHead(404);
+          res.end("Not found");
+          return;
+        }
+        const markdown = fs.readFileSync(paths.markdownPath, "utf-8");
+        let meta = {};
+        try {
+          if (fs.existsSync(paths.metaPath)) meta = JSON.parse(fs.readFileSync(paths.metaPath, "utf-8"));
+        } catch (_) {}
+        const expiresMs = Date.parse(meta?.expiresAt || "");
+        if (Number.isFinite(expiresMs) && expiresMs < Date.now()) {
+          res.writeHead(410, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Review link expired");
+          return;
+        }
+        const rawParams = new URLSearchParams(url.searchParams);
+        rawParams.set("raw", "1");
+        meta = { ...(meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {}), rawHref: `${url.pathname}?${rawParams.toString()}` };
+        if (url.searchParams.get("raw") === "1") {
+          const data = Buffer.from(markdown, "utf-8");
+          res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Content-Length": data.length });
+          res.end(data);
+          return;
+        }
+        const html = Buffer.from(prdWorkflowReviewHtml(meta.title || "PRD Workflow Review", markdown, meta), "utf-8");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": html.length });
+        res.end(html);
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end((e && e.message) || String(e));
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/display/shares") {
       try {
         if (!authUser?.userId) {
@@ -9230,6 +11973,52 @@ export function startUiServer({
     if (req.method === "GET" && url.pathname === "/api/model-lists") {
       try {
         json(res, 200, readModelListsFromDisk(root));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/model-visibility") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        const allModelLists = readModelListsFromDisk(root, { raw: true });
+        const hiddenModels = readHiddenModelConfig();
+        json(res, 200, {
+          allModelLists,
+          modelLists: applyModelVisibility(allModelLists, hiddenModels),
+          hiddenModels,
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/model-visibility") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const hiddenModels = writeHiddenModelConfig(payload?.hiddenModels || {});
+        const allModelLists = readModelListsFromDisk(root, { raw: true });
+        json(res, 200, {
+          success: true,
+          allModelLists,
+          modelLists: applyModelVisibility(allModelLists, hiddenModels),
+          hiddenModels,
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }

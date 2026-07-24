@@ -6,20 +6,42 @@ import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
 const CURSOR_API_KEYS_ENV = "CURSOR_API_KEYS";
 const CURSOR_API_KEY_COOLDOWN_ENV = "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES";
+const MODEL_LIST_KEYS = ["cursor", "opencode", "claudeCode", "codex"];
+
+function emptyModelListsPayload() {
+  return {
+    cursor: [],
+    opencode: [],
+    claudeCode: [],
+    codex: [],
+    cursorFetchedAt: null,
+    opencodeFetchedAt: null,
+    claudeCodeFetchedAt: null,
+    codexFetchedAt: null,
+  };
+}
+
+function modelEntryId(entry) {
+  const text = String(entry || "").trim();
+  const idx = text.indexOf(" - ");
+  return idx >= 0 ? text.slice(0, idx).trim() : text;
+}
+
+function normalizeHiddenModelsPayload(raw) {
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const key of MODEL_LIST_KEYS) {
+    out[key] = Array.isArray(src[key])
+      ? [...new Set(src[key].map(modelEntryId).filter(Boolean))]
+      : [];
+  }
+  return out;
+}
 
 /** @param {unknown} ml */
 function normalizeModelListsPayload(ml) {
   if (!ml || typeof ml !== "object") {
-    return {
-      cursor: [],
-      opencode: [],
-      claudeCode: [],
-      codex: [],
-      cursorFetchedAt: null,
-      opencodeFetchedAt: null,
-      claudeCodeFetchedAt: null,
-      codexFetchedAt: null,
-    };
+    return emptyModelListsPayload();
   }
   const o = /** @type {{ cursor?: unknown, opencode?: unknown, claudeCode?: unknown, codex?: unknown, cursorFetchedAt?: unknown, opencodeFetchedAt?: unknown, claudeCodeFetchedAt?: unknown, codexFetchedAt?: unknown }} */ (ml);
   return {
@@ -171,6 +193,10 @@ export default function SettingsPage({ authUser }) {
       codexFetchedAt: null,
     }),
   );
+  const [allModelLists, setAllModelLists] = useState(emptyModelListsPayload());
+  const [hiddenModels, setHiddenModels] = useState(() => normalizeHiddenModelsPayload({}));
+  const [modelVisibilitySaving, setModelVisibilitySaving] = useState(false);
+  const [modelVisibilityErr, setModelVisibilityErr] = useState("");
   const [listsErr, setListsErr] = useState("");
   const [listsLoading, setListsLoading] = useState(false);
   const [opencodeSaving, setOpencodeSaving] = useState(false);
@@ -221,17 +247,27 @@ export default function SettingsPage({ authUser }) {
   const loadLists = useCallback(async () => {
     setListsErr("");
     setListsLoading(true);
+    setModelVisibilityErr("");
     try {
-      const r = await fetch("/api/model-lists");
+      const r = await fetch(authUser?.isAdmin ? "/api/model-visibility" : "/api/model-lists");
       if (!r.ok) throw new Error("HTTP " + r.status);
       const j = await r.json();
-      setModelLists(normalizeModelListsPayload(j));
+      if (authUser?.isAdmin) {
+        setModelLists(normalizeModelListsPayload(j.modelLists));
+        setAllModelLists(normalizeModelListsPayload(j.allModelLists));
+        setHiddenModels(normalizeHiddenModelsPayload(j.hiddenModels));
+      } else {
+        const normalized = normalizeModelListsPayload(j);
+        setModelLists(normalized);
+        setAllModelLists(normalized);
+        setHiddenModels(normalizeHiddenModelsPayload({}));
+      }
     } catch (e) {
       setListsErr(String(/** @type {{ message?: string }} */ (e).message || e));
     } finally {
       setListsLoading(false);
     }
-  }, []);
+  }, [authUser?.isAdmin]);
 
   const loadUserEnv = useCallback(async () => {
     setEnvErr("");
@@ -382,12 +418,53 @@ export default function SettingsPage({ authUser }) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
       setModelLists(normalizeModelListsPayload(j.modelLists));
+      if (authUser?.isAdmin) {
+        await loadLists();
+      } else {
+        setAllModelLists(normalizeModelListsPayload(j.modelLists));
+      }
     } catch (e) {
       setListsErr(String(/** @type {{ message?: string }} */ (e).message || e));
     } finally {
       setListsLoading(false);
     }
-  }, [opcodeDraft]);
+  }, [authUser?.isAdmin, loadLists, opcodeDraft]);
+
+  const saveHiddenModels = useCallback(async (nextHiddenModels) => {
+    if (!authUser?.isAdmin) return;
+    const normalizedHidden = normalizeHiddenModelsPayload(nextHiddenModels);
+    setHiddenModels(normalizedHidden);
+    setModelVisibilitySaving(true);
+    setModelVisibilityErr("");
+    try {
+      const r = await fetch("/api/model-visibility", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiddenModels: normalizedHidden }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      setModelLists(normalizeModelListsPayload(j.modelLists));
+      setAllModelLists(normalizeModelListsPayload(j.allModelLists));
+      setHiddenModels(normalizeHiddenModelsPayload(j.hiddenModels));
+    } catch (e) {
+      setModelVisibilityErr(String(/** @type {{ message?: string }} */ (e).message || e));
+      void loadLists();
+    } finally {
+      setModelVisibilitySaving(false);
+    }
+  }, [authUser?.isAdmin, loadLists]);
+
+  const setModelVisible = useCallback((provider, entry, visible) => {
+    const key = MODEL_LIST_KEYS.includes(provider) ? provider : "cursor";
+    const id = modelEntryId(entry);
+    if (!id) return;
+    const current = normalizeHiddenModelsPayload(hiddenModels);
+    const hiddenSet = new Set(current[key]);
+    if (visible) hiddenSet.delete(id);
+    else hiddenSet.add(id);
+    void saveHiddenModels({ ...current, [key]: Array.from(hiddenSet) });
+  }, [hiddenModels, saveHiddenModels]);
 
   useEffect(() => {
     loadContext();
@@ -458,6 +535,11 @@ export default function SettingsPage({ authUser }) {
           } catch (_) {}
           if (j.modelLists) {
             setModelLists(normalizeModelListsPayload(j.modelLists));
+            if (authUser?.isAdmin) {
+              void loadLists();
+            } else {
+              setAllModelLists(normalizeModelListsPayload(j.modelLists));
+            }
           }
         } catch (e) {
           setOpencodeErr(String(/** @type {{ message?: string }} */ (e).message || e));
@@ -467,12 +549,56 @@ export default function SettingsPage({ authUser }) {
       })();
     }, 450);
     return () => clearTimeout(t);
-  }, [opcodeDraft]);
+  }, [authUser?.isAdmin, loadLists, opcodeDraft]);
 
-  const cursorReady = modelLists.cursor.length > 0;
-  const opencodeReady = modelLists.opencode.length > 0;
-  const claudeCodeReady = modelLists.claudeCode.length > 0;
-  const codexReady = modelLists.codex.length > 0;
+  const modelListSource = authUser?.isAdmin ? allModelLists : modelLists;
+  const cursorReady = modelListSource.cursor.length > 0;
+  const opencodeReady = modelListSource.opencode.length > 0;
+  const claudeCodeReady = modelListSource.claudeCode.length > 0;
+  const codexReady = modelListSource.codex.length > 0;
+  const modelVisibilityHidden = normalizeHiddenModelsPayload(hiddenModels);
+  const modelVisibleCounts = {
+    cursor: modelLists.cursor.length,
+    opencode: modelLists.opencode.length,
+    claudeCode: modelLists.claudeCode.length,
+    codex: modelLists.codex.length,
+  };
+  const renderModelListPreview = useCallback((provider, entries, ariaLabel) => {
+    const list = Array.isArray(entries) ? entries : [];
+    if (!authUser?.isAdmin) {
+      return (
+        <pre className="af-set-model-preview" aria-label={ariaLabel}>
+          {list.join("\n")}
+        </pre>
+      );
+    }
+    const hiddenSet = new Set(modelVisibilityHidden[provider] || []);
+    return (
+      <div className="af-set-model-visibility" aria-label={ariaLabel}>
+        <div className="af-set-model-visibility-head">
+          <span>展示 {modelVisibleCounts[provider] || 0} / {list.length}</span>
+          <span>{modelVisibilitySaving ? "保存中" : "取消勾选后从模型下拉隐藏"}</span>
+        </div>
+        <div className="af-set-model-visibility-list">
+          {list.map((entry) => {
+            const id = modelEntryId(entry);
+            const visible = !hiddenSet.has(id);
+            return (
+              <label key={`${provider}-${entry}`} className="af-set-model-visibility-row">
+                <input
+                  type="checkbox"
+                  checked={visible}
+                  disabled={modelVisibilitySaving}
+                  onChange={(e) => setModelVisible(provider, entry, e.target.checked)}
+                />
+                <span>{entry}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }, [authUser?.isAdmin, modelVisibilityHidden, modelVisibilitySaving, modelVisibleCounts, setModelVisible]);
   const allowlistEnabled = allowlistFileUsers.length > 0 || allowlistEnvUsers.length > 0;
   const cursorApiKeyScope = authUser?.isAdmin && cursorApiKeyGlobal ? "global" : "user";
   const cursorApiKeyRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEYS_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
@@ -681,19 +807,18 @@ export default function SettingsPage({ authUser }) {
                     <p className="af-set-cli-mono">
                       {cursorReady
                         ? t("settings:cursor.modelList.count", { count: modelLists.cursor.length }) +
+                            (authUser?.isAdmin ? ` / ${modelListSource.cursor.length}` : "") +
                             " · " +
                             getFetchedAtText(modelLists.cursorFetchedAt)
                         : t("settings:cursor.modelList.refresh")}
                     </p>
                   </div>
                 </div>
-                {cursorReady ? (
-                  <pre
-                    className="af-set-model-preview"
-                    aria-label={t("settings:cursor.modelPreviewLabel")}
-                  >
-                    {modelLists.cursor.join("\n")}
-                  </pre>
+                {cursorReady ? renderModelListPreview("cursor", modelListSource.cursor, t("settings:cursor.modelPreviewLabel")) : null}
+                {modelVisibilityErr ? (
+                  <p className="af-err af-set-hint af-set-hint--inline" role="alert">
+                    {modelVisibilityErr}
+                  </p>
                 ) : null}
                 <button
                   type="button"
@@ -849,15 +974,11 @@ export default function SettingsPage({ authUser }) {
                   <>
                     <p className="af-set-cli-mono af-set-cli-mono--block">
                       {t("settings:cursor.modelList.count", { count: modelLists.opencode.length }) +
+                        (authUser?.isAdmin ? ` / ${modelListSource.opencode.length}` : "") +
                         " · " +
                         getFetchedAtText(modelLists.opencodeFetchedAt)}
                     </p>
-                    <pre
-                      className="af-set-model-preview"
-                      aria-label={t("settings:opencode.modelPreviewLabel")}
-                    >
-                      {modelLists.opencode.join("\n")}
-                    </pre>
+                    {renderModelListPreview("opencode", modelListSource.opencode, t("settings:opencode.modelPreviewLabel"))}
                   </>
                 ) : null}
                 <button
@@ -898,6 +1019,7 @@ export default function SettingsPage({ authUser }) {
                     <p className="af-set-cli-mono">
                       {claudeCodeReady
                         ? t("settings:cursor.modelList.count", { count: modelLists.claudeCode.length }) +
+                          (authUser?.isAdmin ? ` / ${modelListSource.claudeCode.length}` : "") +
                           " · " +
                           getFetchedAtText(modelLists.claudeCodeFetchedAt)
                         : t("settings:cursor.modelList.refresh")}
@@ -905,14 +1027,7 @@ export default function SettingsPage({ authUser }) {
                   </div>
                 </div>
                 <p className="af-set-p">{t("settings:claudeCode.description")}</p>
-                {claudeCodeReady ? (
-                  <pre
-                    className="af-set-model-preview"
-                    aria-label={t("settings:claudeCode.modelPreviewLabel")}
-                  >
-                    {modelLists.claudeCode.join("\n")}
-                  </pre>
-                ) : null}
+                {claudeCodeReady ? renderModelListPreview("claudeCode", modelListSource.claudeCode, t("settings:claudeCode.modelPreviewLabel")) : null}
                 <button
                   type="button"
                   className="af-set-btn-outline"
@@ -949,6 +1064,7 @@ export default function SettingsPage({ authUser }) {
                     <p className="af-set-cli-mono">
                       {codexReady
                         ? t("settings:cursor.modelList.count", { count: modelLists.codex.length }) +
+                          (authUser?.isAdmin ? ` / ${modelListSource.codex.length}` : "") +
                           " · " +
                           getFetchedAtText(modelLists.codexFetchedAt)
                         : t("settings:cursor.modelList.refresh")}
@@ -956,14 +1072,7 @@ export default function SettingsPage({ authUser }) {
                   </div>
                 </div>
                 <p className="af-set-p">{t("settings:codex.description")}</p>
-                {codexReady ? (
-                  <pre
-                    className="af-set-model-preview"
-                    aria-label={t("settings:codex.modelPreviewLabel")}
-                  >
-                    {modelLists.codex.join("\n")}
-                  </pre>
-                ) : null}
+                {codexReady ? renderModelListPreview("codex", modelListSource.codex, t("settings:codex.modelPreviewLabel")) : null}
                 <button
                   type="button"
                   className="af-set-btn-outline"
