@@ -8134,6 +8134,11 @@ button.af-project-card {
   height: max-content;
   min-width: 100%;
   min-height: 100%;
+  overflow: visible;
+}
+
+.af-workspace-canvas .react-flow__node {
+  overflow: visible;
 }
 
 .af-work-flow-node .af-flow-node {
@@ -8180,7 +8185,7 @@ button.af-project-card {
   width: 31rem;
   overflow: visible;
   isolation: isolate;
-  contain: layout paint;
+  contain: layout;
   transform: translateZ(0);
   backface-visibility: hidden;
   display: flex;
