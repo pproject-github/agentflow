@@ -7445,13 +7445,15 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
 function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "") {
   const content = String(payload.markdown || payload.content || payload.rawOutput || "").slice(0, 500000);
   if (!content.trim()) throw new Error("Missing review markdown");
-  const requestedReviewId = String(payload.reviewId || payload.review_id || "").trim();
-  const reviewId = requestedReviewId
-    ? prdWorkflowSafeStateId(requestedReviewId)
-    : `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
-  const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
   const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
   const durability = String(payload.durability || (payload.durable === true || payload.permanent === true ? "durable" : "temporary")).trim().toLowerCase() || "temporary";
+  const requestedReviewId = String(payload.reviewId || payload.review_id || "").trim();
+  const reviewId = durability === "temporary"
+    ? `r-${crypto.randomBytes(5).toString("hex")}`
+    : requestedReviewId
+      ? prdWorkflowSafeStateId(requestedReviewId)
+      : `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+  const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
   const ttlDaysRaw = Number(payload.ttlDays || payload.ttl_days || (durability === "temporary" ? 7 : 0));
   const ttlDays = Number.isFinite(ttlDaysRaw) && ttlDaysRaw > 0 ? ttlDaysRaw : 0;
   const createdAt = new Date();
