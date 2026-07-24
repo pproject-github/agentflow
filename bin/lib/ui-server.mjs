@@ -3923,6 +3923,31 @@ function workspaceSafeNodeOutputRelPath(value) {
   return clean;
 }
 
+function workspaceDescribeNodeOutputsDir(nodeRunDir, maxEntries = 30) {
+  const outputsDir = path.resolve(nodeRunDir || "", "outputs");
+  if (!nodeRunDir || !fs.existsSync(outputsDir)) return "Current node outputs directory is missing.";
+  const entries = [];
+  const walk = (dir, rel = "") => {
+    if (entries.length >= maxEntries) return;
+    let children = [];
+    try {
+      children = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      if (entries.length >= maxEntries) break;
+      const childRel = rel ? path.posix.join(rel, child.name) : child.name;
+      entries.push(child.isDirectory() ? `${childRel}/` : childRel);
+      if (child.isDirectory()) walk(path.join(dir, child.name), childRel);
+    }
+  };
+  walk(outputsDir);
+  if (!entries.length) return "Current node outputs directory is empty.";
+  const suffix = entries.length >= maxEntries ? `\n...showing first ${maxEntries} entries` : "";
+  return `Current node outputs entries:\n${entries.map((entry) => `- outputs/${entry}`).join("\n")}${suffix}`;
+}
+
 function workspacePublishNodeOutputFile(runPackage, relPath) {
   if (!String(relPath || "").trim()) return "";
   const clean = workspaceSafeNodeOutputRelPath(relPath);
@@ -3939,6 +3964,7 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
     throw new Error(
       `Agent returned resultFile but did not create it under this node's outputs: ${clean}\n` +
       `Expected file: ${src}\n` +
+      `${workspaceDescribeNodeOutputsDir(nodeRunDir)}\n` +
       `Write outputs using a relative path from the node cwd, or use AGENTFLOW_OUTPUTS_DIR.`
     );
   }
@@ -4160,6 +4186,8 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     "",
     `请把${resultKindText}结果写入 \`${resultFile}\`。${resultGuidance}`,
     `必须先在当前执行目录下创建 \`${resultFile}\`，不要写到绝对路径或其它 run 目录；然后再返回下面的 agentflow envelope。`,
+    `只在最终回复里写 \`resultFile: ${resultFile}\` 不会创建文件；必须通过工具或脚本实际写入该文件。`,
+    `返回前请确认 \`${resultFile}\` 已存在且非空（例如执行 \`test -s ${resultFile}\` 或等价检查）；如果无法创建文件，不要返回成功 envelope。`,
     downstreamInputRequirements ? `\n${downstreamInputRequirements}` : "",
     ...(slots.length ? [`额外输出：${slots.map((name) => `\`${name}\``).join("、")}。短值可写在 \`outParams\`，文件值写成 \`outParams.<name>File\`。`] : []),
     "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
@@ -7057,6 +7085,24 @@ function prdWorkflowSafeStateId(value) {
     .slice(0, 128) || "unknown";
 }
 
+function prdWorkflowReviewIdFromRequest(tapdId, payload = {}, durability = "temporary") {
+  if (durability === "temporary") return `r-${crypto.randomBytes(5).toString("hex")}`;
+  const requested = String(payload.reviewId || payload.review_id || "").trim();
+  if (!requested) return `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+  const safeRequested = prdWorkflowSafeStateId(requested);
+  if (safeRequested.length <= 48) return safeRequested;
+  const stage = String(payload.stage || payload.stageKey || payload.stage_key || "review").trim();
+  const action = String(payload.action || payload.actionId || payload.action_id || "").trim();
+  const issueKey = String(payload.issueKey || payload.issue_key || payload.issue || "").trim();
+  const stageHead = prdWorkflowSafeStateId(stage.split(":")[0] || stage || "review").slice(0, 20);
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ tapdId: String(tapdId || ""), requested, stage, action, issueKey }))
+    .digest("hex")
+    .slice(0, 10);
+  return prdWorkflowSafeStateId(["review", tapdId, stageHead, digest].filter(Boolean).join("-")).slice(0, 64);
+}
+
 function prdWorkflowStatePath(scopedRoot, tapdId) {
   const rootDir = scopedRoot || process.cwd();
   return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.json`);
@@ -7447,12 +7493,7 @@ function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "")
   if (!content.trim()) throw new Error("Missing review markdown");
   const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
   const durability = String(payload.durability || (payload.durable === true || payload.permanent === true ? "durable" : "temporary")).trim().toLowerCase() || "temporary";
-  const requestedReviewId = String(payload.reviewId || payload.review_id || "").trim();
-  const reviewId = durability === "temporary"
-    ? `r-${crypto.randomBytes(5).toString("hex")}`
-    : requestedReviewId
-      ? prdWorkflowSafeStateId(requestedReviewId)
-      : `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+  const reviewId = prdWorkflowReviewIdFromRequest(tapdId, payload, durability);
   const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
   const ttlDaysRaw = Number(payload.ttlDays || payload.ttl_days || (durability === "temporary" ? 7 : 0));
   const ttlDays = Number.isFinite(ttlDaysRaw) && ttlDaysRaw > 0 ? ttlDaysRaw : 0;
