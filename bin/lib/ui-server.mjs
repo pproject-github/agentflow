@@ -7073,6 +7073,11 @@ function prdWorkflowEventsPath(scopedRoot, tapdId) {
   return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.events.json`);
 }
 
+function prdWorkflowAuditPath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.audit.jsonl`);
+}
+
 function prdWorkflowReviewDir(scopedRoot, tapdId) {
   const rootDir = path.resolve(scopedRoot || process.cwd());
   return path.join(rootDir, ".workspace", "prd-flow", "reviews", prdWorkflowSafeStateId(tapdId));
@@ -7468,6 +7473,19 @@ function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "")
   fs.writeFileSync(paths.markdownPath, content.trimEnd() + "\n", "utf-8");
   fs.writeFileSync(paths.metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
   prdWorkflowPruneReviews(scopedRoot, tapdId);
+  prdWorkflowAppendAudit(scopedRoot, tapdId, {
+    type: "review-created",
+    reviewId: paths.id,
+    title,
+    stage: meta.stage,
+    action: meta.action,
+    issueKey: meta.issueKey,
+    durability,
+    persistence: "runtime",
+    sourceKind: String(meta.source?.kind || ""),
+    expiresAt,
+    contentBytes: Buffer.byteLength(content, "utf-8"),
+  });
   const url = `${String(urlBase || "").replace(/\/+$/, "")}/api/prd-workflow/review/${encodeURIComponent(prdWorkflowSafeStateId(tapdId))}/${encodeURIComponent(paths.id)}`;
   return { ...meta, url, markdownPath: paths.markdownPath };
 }
@@ -7515,6 +7533,19 @@ function prdWorkflowWriteJsonFile(filePath, data) {
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
   fs.renameSync(tmp, filePath);
   return data;
+}
+
+function prdWorkflowAppendAudit(scopedRoot, tapdId, event = {}) {
+  try {
+    const p = prdWorkflowAuditPath(scopedRoot, tapdId);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const entry = {
+      at: new Date().toISOString(),
+      tapdId: String(tapdId || ""),
+      ...event,
+    };
+    fs.appendFileSync(p, JSON.stringify(entry) + "\n", "utf-8");
+  } catch (_) {}
 }
 
 function prdWorkflowReadProjectState(scopedRoot, tapdId) {
@@ -7757,12 +7788,25 @@ function prdWorkflowMergedClientIssues(clientRows = []) {
   return out;
 }
 
+function prdWorkflowArrayCount(value) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function prdWorkflowSnapshotActionCount(snapshot = {}) {
+  return prdWorkflowArrayCount(snapshot?.actions) +
+    prdWorkflowArrayCount(snapshot?.workflowActions) +
+    prdWorkflowArrayCount(snapshot?.workflow_actions) +
+    prdWorkflowArrayCount(snapshot?.timeline) +
+    prdWorkflowArrayCount(snapshot?.history);
+}
+
 function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, opts = {}) {
   const flowSource = String(opts.flowSource || "user").trim() || "user";
   const flowId = String(opts.flowId || "").trim();
   const project = prdWorkflowReadProjectStateWithFallback(root, scopedRoot, tapdId);
   const legacy = prdWorkflowReadCachedSnapshotWithFallback(root, scopedRoot, tapdId);
   const latestClient = prdWorkflowLatestClientSnapshot(root, scopedRoot, tapdId);
+  const baseSource = project?.snapshot ? "project" : latestClient ? "client-observations" : legacy?.snapshot ? "legacy-cache" : "empty";
   const base = (
     project?.snapshot ||
     latestClient ||
@@ -7788,6 +7832,45 @@ function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, 
   }));
   const clientRows = prdWorkflowClientObservationRows(root, scopedRoot, tapdId);
   const clientIssues = prdWorkflowMergedClientIssues(clientRows);
+  const runtimeState = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
+  const projectionAudit = [
+    {
+      step: "select-base",
+      source: baseSource,
+      reason: project?.snapshot
+        ? "project materialized snapshot is available"
+        : latestClient
+          ? "no project snapshot; latest client current observation is used as display base"
+          : legacy?.snapshot
+            ? "no project/client snapshot; legacy projection cache is used"
+            : "no stored workflow projection exists",
+      projectSnapshot: Boolean(project?.snapshot),
+      latestClientSnapshot: Boolean(latestClient),
+      legacySnapshot: Boolean(legacy?.snapshot),
+      clientObservationCount: clientRows.length,
+      runtimeEventCount: runtimeState.events.length,
+      baseActionCount: prdWorkflowSnapshotActionCount(base),
+      latestClientRevision: String(latestClient?.revision || ""),
+      projectRevision: String(project?.snapshot?.revision || ""),
+    },
+    {
+      step: "merge-client-issues",
+      source: "clients",
+      applied: !project?.snapshot && clientIssues.length > 0,
+      issueCount: clientIssues.length,
+      reason: project?.snapshot
+        ? "project snapshot owns issue projection"
+        : clientIssues.length
+          ? "merged issue views from client observations"
+          : "no client issue projection available",
+    },
+    {
+      step: "merge-runtime-events",
+      source: "runtime-events",
+      eventCount: runtimeState.events.length,
+      reason: "runtime events are merged after base selection and must not replace durable facts",
+    },
+  ];
   const materialized = prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, {
     ...base,
     issues: project?.snapshot ? base.issues : clientIssues.length ? clientIssues : base.issues,
@@ -7803,6 +7886,32 @@ function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, 
       clientsUpdatedAt: prdWorkflowReadClientStateWithFallback(root, scopedRoot, tapdId).updatedAt || "",
       checkedAt: new Date().toISOString(),
     },
+    projectionAudit,
+  });
+  materialized.projectionAudit = [
+    ...projectionAudit,
+    {
+      step: "result",
+      source: "materialized",
+      phase: String(materialized.phase || ""),
+      pointer: String(materialized.pointer || ""),
+      actionCount: prdWorkflowSnapshotActionCount(materialized) + prdWorkflowArrayCount(materialized.runtimeEvents) + prdWorkflowArrayCount(materialized.runtime_events),
+      revision: String(materialized.revision || ""),
+    },
+  ];
+  prdWorkflowAppendAudit(scopedRoot, tapdId, {
+    type: "projection-materialized",
+    flowSource,
+    flowId,
+    baseSource,
+    projectSnapshot: Boolean(project?.snapshot),
+    latestClientSnapshot: Boolean(latestClient),
+    legacySnapshot: Boolean(legacy?.snapshot),
+    clientObservationCount: clientRows.length,
+    runtimeEventCount: runtimeState.events.length,
+    baseActionCount: prdWorkflowSnapshotActionCount(base),
+    resultActionCount: prdWorkflowSnapshotActionCount(materialized) + prdWorkflowArrayCount(materialized.runtimeEvents) + prdWorkflowArrayCount(materialized.runtime_events),
+    revision: String(materialized.revision || ""),
   });
   if (!project?.snapshot && latestClient) {
     materialized.optionalGaps = [
@@ -8064,13 +8173,15 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
       if (String(item?.idempotencyKey || "").trim() === entryIdem) return true;
       return Array.isArray(item?.idempotencyHistory) && item.idempotencyHistory.includes(entryIdem);
     });
+    const updatedExisting = index >= 0;
+    let artifactConflict = false;
     const events = [...current.events];
     if (index >= 0) {
       const prevArtifact = prdWorkflowRuntimeEventArtifactSignature(events[index]);
       const nextArtifact = prdWorkflowRuntimeEventArtifactSignature(entry);
-      const artifactConflict = prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
+      artifactConflict = Boolean(prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
         prdWorkflowRuntimeEventShouldConflictOnArtifact(events[index]) &&
-        prdWorkflowRuntimeEventShouldConflictOnArtifact(entry);
+        prdWorkflowRuntimeEventShouldConflictOnArtifact(entry));
       const idempotencyHistory = [
         ...(events[index].idempotencyKey ? [events[index].idempotencyKey] : []),
         ...(entry.idempotencyKey ? [entry.idempotencyKey] : []),
@@ -8105,6 +8216,26 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
       events.push(entry);
     }
     prdWorkflowWriteRuntimeEvents(scopedRoot, tapdId, events);
+    prdWorkflowAppendAudit(scopedRoot, tapdId, {
+      type: "runtime-event-stored",
+      eventId: entry.id,
+      eventType: entry.type,
+      source: entry.source,
+      scope: entry.scope || "",
+      issueKey: entry.issueKey || entry.issue_key || entry.issue || "",
+      platform: entry.platform || "",
+      stage: entry.stage || entry.stageKey || entry.stage_key || "",
+      action: entry.action || entry.actionId || entry.action_id || "",
+      status: entry.status || "",
+      truth: entry.truth || "",
+      authority: entry.authority || "",
+      persistence: entry.persistence || "",
+      idempotencyKey: entry.idempotencyKey || "",
+      updatedExisting,
+      artifactConflict,
+      eventCount: events.length,
+      note: "runtime event stored as append-only workflow event; projection may merge it into the visible timeline",
+    });
     return entry;
   } catch {
     return null;
@@ -9560,6 +9691,23 @@ export function startUiServer({
         };
         const storedObservationSnapshot = prdWorkflowStoredObservationSnapshot(normalizedSnapshot, reportSource);
         prdWorkflowWriteClientObservation(scopedRoot, tapdId, reportMeta, storedObservationSnapshot);
+        prdWorkflowAppendAudit(scopedRoot, tapdId, {
+          type: "client-observation-stored",
+          flowSource,
+          flowId,
+          clientId: reportMeta.clientId,
+          userId: reportMeta.userId,
+          observedAt: reportMeta.observedAt,
+          reportedAt: reportMeta.reportedAt,
+          phase: String(storedObservationSnapshot?.phase || ""),
+          pointer: String(storedObservationSnapshot?.pointer || ""),
+          revision: String(storedObservationSnapshot?.revision || ""),
+          actionCount: prdWorkflowSnapshotActionCount(storedObservationSnapshot),
+          truth: "observation",
+          authority: "client",
+          persistence: "runtime",
+          note: "ordinary current snapshot stored as client observation; it must not overwrite project state",
+        });
 
         const projectFactSource = reportMeta.scope === "project"
           ? prdWorkflowProjectFactSource(payload, rawSnapshot)
@@ -9617,6 +9765,20 @@ export function startUiServer({
               clientId: reportMeta.clientId,
               observedAt: reportMeta.observedAt,
             },
+          });
+          prdWorkflowAppendAudit(scopedRoot, tapdId, {
+            type: "project-fact-stored",
+            flowSource,
+            flowId,
+            clientId: reportMeta.clientId,
+            observedAt: reportMeta.observedAt,
+            phase: String(projectFactSnapshot?.phase || ""),
+            pointer: String(projectFactSnapshot?.pointer || ""),
+            revision: String(projectFactSnapshot?.revision || ""),
+            actionCount: prdWorkflowSnapshotActionCount(projectFactSnapshot),
+            truth: projectFactSource.truth,
+            authority: projectFactSource.authority,
+            persistence: projectFactSource.persistence,
           });
         }
         const materialized = prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId });
