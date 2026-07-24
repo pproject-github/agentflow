@@ -7143,13 +7143,48 @@ function prdWorkflowReviewSplitFrontmatter(markdown) {
 
 function prdWorkflowReviewRenderFrontmatter(frontmatter) {
   if (!String(frontmatter || "").trim()) return "";
-  const rows = String(frontmatter || "").split(/\r?\n/)
-    .map((line) => {
-      const match = line.match(/^([^:]+):\s*(.*)$/);
-      if (!match) return `<tr><td colspan="2">${prdWorkflowReviewInlineMarkdown(line)}</td></tr>`;
-      return `<tr><th>${htmlEscapeAttribute(match[1].trim())}</th><td>${prdWorkflowReviewInlineMarkdown(match[2].trim())}</td></tr>`;
-    })
-    .join("");
+  const rows = [];
+  const lines = String(frontmatter || "").split(/\r?\n/);
+  let current = null;
+  const flush = () => {
+    if (!current) return;
+    let valueHtml = "";
+    if (current.items.length) {
+      valueHtml = `<ul class="frontmatter-list">${current.items.map((item) => `<li>${prdWorkflowReviewInlineMarkdown(item)}</li>`).join("")}</ul>`;
+    } else {
+      valueHtml = prdWorkflowReviewInlineMarkdown(current.value);
+    }
+    rows.push(`<tr><th>${htmlEscapeAttribute(current.key)}</th><td>${valueHtml}</td></tr>`);
+    current = null;
+  };
+  for (const rawLine of lines) {
+    const line = String(rawLine || "");
+    const keyValue = line.match(/^([^:\s][^:]*):\s*(.*)$/);
+    if (keyValue) {
+      flush();
+      const key = keyValue[1].trim();
+      const value = keyValue[2].trim();
+      const inlineList = value.match(/^\[(.*)\]$/);
+      current = {
+        key,
+        value: inlineList ? "" : value,
+        items: inlineList
+          ? inlineList[1].split(",").map((item) => item.trim()).filter(Boolean)
+          : [],
+      };
+      continue;
+    }
+    const listItem = line.match(/^\s*-\s+(.+)$/);
+    if (listItem && current) {
+      current.items.push(listItem[1].trim());
+      continue;
+    }
+    if (line.trim()) {
+      flush();
+      rows.push(`<tr><td colspan="2">${prdWorkflowReviewInlineMarkdown(line.trim())}</td></tr>`);
+    }
+  }
+  flush();
   return `<details class="frontmatter" open><summary>文档元数据</summary><table>${rows}</table></details>`;
 }
 
@@ -7354,6 +7389,7 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .frontmatter summary { cursor: pointer; color: var(--body); font-weight: 800; }
     .frontmatter table { min-width: 0; margin-top: .7rem; }
     .frontmatter th { width: min(34%, 12rem); background: var(--panel-soft); color: var(--body); }
+    .frontmatter-list { margin: 0; padding-left: 1.1rem; }
     @media (max-width: 720px) { main { padding: 28px 14px 48px; } header { display: block; } .toolbar { justify-content: flex-start; margin-top: 14px; } article { padding: 18px; } th, td { padding: .58rem .65rem; } }
   </style>
 </head>
