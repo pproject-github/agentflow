@@ -2,12 +2,63 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { parseChartSpec } from "./chartSpec.js";
 
+function isMarkdownEscapedAt(text, index) {
+  let slashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function readBacktickRun(text, start) {
+  let end = start;
+  while (end < text.length && text[end] === "`") end += 1;
+  return end - start;
+}
+
 function splitMarkdownTableRow(line) {
   let text = String(line || "").trim();
   if (!text.includes("|")) return [];
   if (text.startsWith("|")) text = text.slice(1);
-  if (text.endsWith("|")) text = text.slice(0, -1);
-  return text.split("|").map((cell) => cell.trim());
+  if (text.endsWith("|") && !isMarkdownEscapedAt(text, text.length - 1)) text = text.slice(0, -1);
+
+  const cells = [];
+  let cell = "";
+  let codeTickRun = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "`" && !isMarkdownEscapedAt(text, i)) {
+      const run = readBacktickRun(text, i);
+      cell += text.slice(i, i + run);
+      if (codeTickRun === 0) codeTickRun = run;
+      else if (codeTickRun === run) codeTickRun = 0;
+      i += run - 1;
+      continue;
+    }
+    if (codeTickRun === 0 && ch === "|" && !isMarkdownEscapedAt(text, i)) {
+      cells.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    if (codeTickRun === 0 && ch === "\\" && text[i + 1] === "|" && isMarkdownEscapedAt(text, i + 1)) {
+      cell += "|";
+      i += 1;
+      continue;
+    }
+    cell += ch;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function normalizeMarkdownTableRow(cells, width) {
+  if (!width) return cells;
+  const row = cells.slice(0, width);
+  if (cells.length > width) {
+    row[width - 1] = [cells[width - 1], ...cells.slice(width)].filter(Boolean).join(" | ");
+  }
+  while (row.length < width) row.push("");
+  return row;
 }
 
 function isMarkdownTableSeparator(line) {
@@ -253,7 +304,7 @@ function parseMarkdownDisplayBlocks(markdown) {
       const rows = [];
       i += 2;
       while (i < lines.length && lines[i].trim() && splitMarkdownTableRow(lines[i]).length > 1) {
-        rows.push(splitMarkdownTableRow(lines[i]));
+        rows.push(normalizeMarkdownTableRow(splitMarkdownTableRow(lines[i]), headers.length));
         i++;
       }
       blocks.push({ type: "table", headers, align, rows });
@@ -539,7 +590,7 @@ function parseTableDisplayContent(content) {
     const align = markdownTableAlignments(lines[1]);
     return {
       columns: headers.map((label, idx) => ({ key: String(idx), label, align: align[idx] || "left" })),
-      rows: lines.slice(2).map((line) => splitMarkdownTableRow(line)),
+      rows: lines.slice(2).map((line) => normalizeMarkdownTableRow(splitMarkdownTableRow(line), headers.length)),
       error: "",
     };
   }

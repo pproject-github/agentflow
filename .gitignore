@@ -3,6 +3,9 @@ node_modules/
 
 # AgentFlow run 目录（intermediate、output、logs）
 .workspace/
+.agents/
+tmp/
+workspace.graph.json
 
 # Env / local
 .env

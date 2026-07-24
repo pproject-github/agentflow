@@ -429,6 +429,829 @@ function formatWorkspaceRunDuration(ms) {
   return `${minutes}m${seconds ? `${seconds}s` : ""}`;
 }
 
+function prdWorkflowPhaseLabel(phase) {
+  const key = String(phase || "").trim().toLowerCase();
+  const labels = {
+    unselected: "未选择需求",
+    unavailable: "未连接",
+    json_unsupported: "待升级",
+    command_failed: "读取失败",
+    uninitialized: "未初始化",
+    preflight_blocked: "环境阻塞",
+    tech_design_missing: "缺技术方案",
+    tech_design_draft_review: "方案待确认",
+    tech_design_confirmed: "方案已确认",
+    baseline_missing: "缺基线",
+    plan_missing: "缺计划",
+    plan_draft_review: "计划待确认",
+    issue_binding_missing: "待绑定 Issue",
+    ready_for_implementation: "待实现",
+    implementation_ready: "待实现",
+    implementing: "实现中",
+    implementation_in_progress: "实现中",
+    implementation_review: "实现待审",
+    self_test_ready: "待自测",
+    bugfix: "修 Bug",
+    fix_ready: "待修复",
+    fix_in_progress: "修复中",
+    testing: "已提测",
+    done: "完成",
+    blocked: "阻塞",
+    conflict: "冲突",
+    requirement_changed: "需求变更",
+  };
+  return labels[key] || key || "未知";
+}
+
+function prdWorkflowFlowStepIndex(phase) {
+  const key = String(phase || "").trim().toLowerCase();
+  if (!key || ["unselected", "unavailable", "json_unsupported", "command_failed", "uninitialized", "preflight_blocked"].includes(key)) return -1;
+  if (/done|complete|closed|finished/.test(key)) return 3;
+  if (/bug|fix|testing|test|self_test|submit_test/.test(key)) return 2;
+  if (/implement|development|ready_for_implementation|issue_binding|gitlab|mr/.test(key)) return 1;
+  return 0;
+}
+
+function prdWorkflowFlowSteps(phase) {
+  const current = prdWorkflowFlowStepIndex(phase);
+  return ["方案确定", "开发", "Bug 修复", "完成"].map((label, index) => {
+    let status = "pending";
+    if (current > index) status = "done";
+    else if (current === index) status = index === 3 ? "done" : "current";
+    return { label, status };
+  });
+}
+
+function prdWorkflowMilestoneStatus(status) {
+  const s = String(status || "").trim().toLowerCase();
+  if (["done", "success", "completed"].includes(s)) return "done";
+  if (["current", "running", "active"].includes(s)) return "current";
+  if (["blocked", "failed", "error"].includes(s)) return "blocked";
+  return "pending";
+}
+
+function prdWorkflowActionLabel(action) {
+  if (!action || typeof action !== "object") return "";
+  return String(action.label || action.title || action.name || action.id || action.action || "").trim();
+}
+
+function prdWorkflowArtifactHref(item) {
+  const url = String(item?.url || item?.href || "").trim();
+  if (url) return url;
+  const p = String(item?.path || "").trim();
+  return p ? `file://${p}` : "";
+}
+
+function prdWorkflowActionStatus(status) {
+  const s = String(status || "").trim().toLowerCase();
+  if (["done", "success", "completed", "passed"].includes(s)) return "done";
+  if (["current", "running", "active", "next"].includes(s)) return "current";
+  if (["observed", "observation"].includes(s)) return "observed";
+  if (["superseded", "stale", "replaced"].includes(s)) return "superseded";
+  if (["blocked", "failed", "error", "conflict"].includes(s)) return "blocked";
+  return "pending";
+}
+
+function prdWorkflowActionTruth(item) {
+  if (!item || typeof item !== "object") return "";
+  const explicit = String(item.truth || item.stateTruth || item.state_truth || "").trim().toLowerCase();
+  if (explicit) return explicit;
+  const idem = String(item.idempotencyKey || item.idempotency_key || "").trim();
+  if (idem.startsWith("snapshot-action:")) return "observation";
+  if (String(item.source || "") === "prd-flow-client" && String(item.type || "") === "workflow-action") return "observation";
+  if (String(item.type || "") === "review-link") return "runtime_event";
+  return "";
+}
+
+function prdWorkflowActionCountsAsDone(item) {
+  return prdWorkflowActionStatus(item?.status) === "done" && prdWorkflowActionTruth(item) !== "observation";
+}
+
+function prdWorkflowActionTitle(item, index) {
+  if (!item || typeof item !== "object") return `Action ${index + 1}`;
+  return String(item.title || item.label || item.name || item.actionLabel || item.action_label || item.id || item.action || `Action ${index + 1}`);
+}
+
+function prdWorkflowActionDetail(item) {
+  if (!item || typeof item !== "object") return "";
+  return String(item.detail || item.description || item.summary || item.message || item.reason || "");
+}
+
+function prdWorkflowActionCodeText(item) {
+  if (!item || typeof item !== "object") return "";
+  return [
+    item.code,
+    item.action,
+    item.actionId,
+    item.action_id,
+    item.stage,
+    item.stageKey,
+    item.stage_key,
+    item.type,
+    item.title,
+  ].map((value) => String(value || "")).join(" ").toLowerCase();
+}
+
+function prdWorkflowActionIssueLabel(item, fallback = "当前任务") {
+  const source = [
+    item?.issueLabel,
+    item?.issue_label,
+    item?.title,
+    item?.label,
+    item?.name,
+  ].map((value) => String(value || "")).join(" ");
+  const match = source.match(/\b(Issue\d+|Bug\d+)\b/i);
+  if (match) return match[1].replace(/^issue/i, "Issue").replace(/^bug/i, "Bug");
+  return fallback;
+}
+
+function prdWorkflowActionDisplayTitle(item, index) {
+  const title = prdWorkflowActionTitle(item, index);
+  const status = prdWorkflowActionStatus(item?.status);
+  const durableDone = prdWorkflowActionCountsAsDone(item);
+  const stage = prdWorkflowStageKey(item);
+  const text = `${stage} ${prdWorkflowActionCodeText(item)}`;
+  const label = prdWorkflowActionIssueLabel(item);
+  if (/issue-plan:|plan_draft_local|submit-plan|plan-doc|plan_doc_confirmed/.test(text)) {
+    if (durableDone) return `${label} 方案已确认`;
+    if (status === "observed" || status === "superseded" || prdWorkflowActionTruth(item) === "observation") return `${label} 方案状态已观察`;
+    if (status === "current" && /^确认\s+/.test(title)) return title;
+  }
+  if (/issue-gitlab:|gitlab_issue_missing|ensure-gitlab-issue/.test(text)) {
+    if (durableDone) return `已为 ${label} 创建/绑定 GitLab Issue`;
+    if (status === "observed" || status === "superseded" || prdWorkflowActionTruth(item) === "observation") return `${label} GitLab Issue 状态已观察`;
+  }
+  if (/implementation_in_progress|impl_in_progress/.test(text)) return `正在实现 ${label}`;
+  if (/implementation_ready/.test(text)) return `可以开始实现 ${label}`;
+  return title;
+}
+
+function prdWorkflowActionDisplayDetail(item) {
+  if (!item || typeof item !== "object") return "";
+  const status = prdWorkflowActionStatus(item.status);
+  const truth = prdWorkflowActionTruth(item);
+  const durableDone = prdWorkflowActionCountsAsDone(item);
+  const stage = prdWorkflowStageKey(item);
+  const text = `${stage} ${prdWorkflowActionCodeText(item)}`;
+  const links = prdWorkflowActionLinks(item);
+  const hasPlan = links.some((link) => /方案|plan|markdown|review|预览/i.test(String(link.label || "")));
+  const hasGitlabIssue = links.some((link) => /gitlab issue/i.test(String(link.label || "")));
+  const hasGitlabEpic = links.some((link) => /gitlab epic/i.test(String(link.label || "")));
+  if (/issue-plan:|plan_draft_local|submit-plan|plan-doc|plan_doc_confirmed/.test(text)) {
+    if (durableDone) {
+      return hasPlan ? "方案已确认并归档；可从下方打开方案文档预览。" : "方案已确认并归档。";
+    }
+    if (truth === "observation" || status === "observed") return "客户端上报了当前方案阶段；这不是 ai-doc 确认结果。";
+    if (status === "superseded") return "该客户端观察已被更新状态替代，仅保留为运行态记录。";
+    if (status === "current") return "方案草稿已生成，等待确认；确认后会归档为正式方案。";
+    return "方案草稿已生成，等待确认。";
+  }
+  if (/issue-gitlab:|gitlab_issue_missing|ensure-gitlab-issue/.test(text)) {
+    if (durableDone) {
+      if (hasGitlabIssue && hasGitlabEpic) return "GitLab Issue 和 Epic 已绑定；可从下方打开关联链接。";
+      if (hasGitlabIssue) return "GitLab Issue 已绑定；可从下方打开关联链接。";
+      return "GitLab Issue 绑定步骤已完成。";
+    }
+    if (truth === "observation" || status === "observed") return "客户端上报了 GitLab Issue 阶段；是否已绑定以 GitLab/ai-doc 事实为准。";
+    if (status === "superseded") return "该客户端观察已被更新状态替代，仅保留为运行态记录。";
+    return "方案文档已归档，等待创建或绑定 GitLab Issue。";
+  }
+  if (/implementation_in_progress|impl_in_progress/.test(text)) {
+    return "需求分支已就绪，当前处于实现中；实现 MR 创建后会记录到本 Issue。";
+  }
+  if (/implementation_ready/.test(text)) {
+    return "方案文档和 GitLab Issue 已就绪，等待开始实现。";
+  }
+  const raw = prdWorkflowActionDetail(item);
+  if (!raw) return "";
+  if (raw.length > 180 && links.length) return "相关结果和产物已更新；可从下方链接查看。";
+  return raw;
+}
+
+function prdWorkflowActionTime(item) {
+  if (!item || typeof item !== "object") return "";
+  return String(
+    item.time ||
+    item.at ||
+    item.observedAt ||
+    item.observed_at ||
+    item.reportedAt ||
+    item.reported_at ||
+    item.startedAt ||
+    item.started_at ||
+    item.completedAt ||
+    item.completed_at ||
+    item.updatedAt ||
+    item.updated_at ||
+    item.createdAt ||
+    item.created_at ||
+    "",
+  );
+}
+
+const PRD_WORKFLOW_TIME_ZONE = "Asia/Shanghai";
+const PRD_WORKFLOW_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: PRD_WORKFLOW_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const PRD_WORKFLOW_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: PRD_WORKFLOW_TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function prdWorkflowDateFromAction(item) {
+  const raw = prdWorkflowActionTime(item);
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
+function prdWorkflowBeijingDateLabel(item) {
+  const date = prdWorkflowDateFromAction(item);
+  if (!date) return "无时间";
+  return PRD_WORKFLOW_DATE_FORMATTER.format(date).replace(/\//g, "-");
+}
+
+function prdWorkflowBeijingTimeLabel(item) {
+  const date = prdWorkflowDateFromAction(item);
+  if (!date) return "";
+  return PRD_WORKFLOW_TIME_FORMATTER.format(date);
+}
+
+function prdWorkflowActionDayGroups(rows = []) {
+  const groups = [];
+  (Array.isArray(rows) ? rows : []).forEach((item, index) => {
+    const day = prdWorkflowBeijingDateLabel(item);
+    let group = groups[groups.length - 1];
+    if (!group || group.day !== day) {
+      group = { day, items: [] };
+      groups.push(group);
+    }
+    group.items.push({ item, index });
+  });
+  return groups;
+}
+
+function prdWorkflowActionStatusText(status) {
+  const normalized = prdWorkflowActionStatus(status);
+  if (normalized === "done") return "完成";
+  if (normalized === "current") return "当前";
+  if (normalized === "observed") return "已观察";
+  if (normalized === "superseded") return "已更新";
+  if (normalized === "blocked") return "阻塞";
+  return "待处理";
+}
+
+function prdWorkflowActionDisplayStatus(item) {
+  const status = prdWorkflowActionStatus(item?.status);
+  if (prdWorkflowActionTruth(item) === "observation" && status === "done") return "已观察";
+  return prdWorkflowActionStatusText(status);
+}
+
+function prdWorkflowActionTagEntries(item) {
+  if (!item || typeof item !== "object") return [];
+  const out = [];
+  const push = (type, label, value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    out.push({ key: `${type}:${text}`, type, label: String(label || text), value: text });
+  };
+  const status = prdWorkflowActionStatus(item.status);
+  const tagStatus = prdWorkflowActionTruth(item) === "observation" && status === "done" ? "observed" : status;
+  push("status", prdWorkflowActionStatusText(tagStatus), tagStatus);
+  push("issue", item.issueKey || item.issue_key || item.issue, item.issueKey || item.issue_key || item.issue);
+  push("platform", item.platform, item.platform);
+  return out;
+}
+
+function prdWorkflowActionFilterTags(rows = []) {
+  const seen = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((item) => {
+    prdWorkflowActionTagEntries(item).forEach((tag) => {
+      const prev = seen.get(tag.key);
+      seen.set(tag.key, { ...tag, count: (prev?.count || 0) + 1 });
+    });
+  });
+  return Array.from(seen.values()).sort((a, b) => {
+    const order = { status: 0, issue: 1, platform: 2, source: 3, actor: 4 };
+    return (order[a.type] ?? 9) - (order[b.type] ?? 9) || b.count - a.count || a.label.localeCompare(b.label);
+  });
+}
+
+function prdWorkflowActionMatchesFilter(item, filterKey) {
+  const key = String(filterKey || "all");
+  if (!key || key === "all") return true;
+  return prdWorkflowActionTagEntries(item).some((tag) => tag.key === key);
+}
+
+function prdWorkflowActionMeta(item) {
+  if (!item || typeof item !== "object") return [];
+  const out = [];
+  const push = (label, value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    out.push({ label, value: text });
+  };
+  push("Issue", item.issueKey || item.issue_key || item.issue);
+  push("端", item.platform);
+  return out;
+}
+
+function prdWorkflowActionLinks(item) {
+  const out = [];
+  const push = (label, href) => {
+    const cleanHref = String(href || "").trim();
+    if (!cleanHref) return;
+    out.push({ label: String(label || cleanHref).trim() || cleanHref, href: cleanHref });
+  };
+  const collect = (value, labelHint = "链接", depth = 0) => {
+    if (depth > 3 || value == null) return;
+    if (typeof value === "string") {
+      if (/^(https?:\/\/|file:\/\/)/i.test(value) || value.startsWith("/")) push(labelHint, value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => collect(entry, `${labelHint} ${index + 1}`, depth + 1));
+      return;
+    }
+    if (typeof value !== "object") return;
+    const label = value.label || value.title || value.name || value.kind || value.type || labelHint;
+    push(label, value.url || value.href || value.path || value.file || value.filePath || value.file_path);
+    for (const key of ["links", "urls", "artifacts", "outputs", "output", "results", "result", "files"]) {
+      if (value[key] != null) collect(value[key], key, depth + 1);
+    }
+  };
+  const links = Array.isArray(item?.links) ? item.links : [];
+  for (const link of links) {
+    if (typeof link === "string") push("链接", link);
+    else push(link?.label || link?.title || link?.kind || "链接", link?.url || link?.href);
+  }
+  for (const artifact of Array.isArray(item?.artifacts) ? item.artifacts : []) {
+    push(artifact?.label || artifact?.title || artifact?.kind || "Artifact", prdWorkflowArtifactHref(artifact));
+  }
+  push("TAPD", item?.tapdUrl || item?.tapd_url);
+  push("ai-doc", item?.docUrl || item?.doc_url || item?.aiDocUrl || item?.ai_doc_url);
+  push("Plan", item?.planDocUrl || item?.plan_doc_url || item?.planUrl || item?.plan_url);
+  push("Issue", item?.issueUrl || item?.issue_url);
+  push("GitLab Issue", item?.gitlabIssue || item?.gitlab_issue);
+  push("GitLab Epic", item?.gitlabEpic || item?.gitlab_epic);
+  push("MR", item?.mrUrl || item?.mr_url || item?.mergeRequestUrl || item?.merge_request_url);
+  push("实现 MR", item?.implMr || item?.impl_mr);
+  push("修复 MR", item?.fixMr || item?.fix_mr);
+  push("提测 MR", item?.testMr || item?.test_mr);
+  push("集成 MR", item?.integrationMr || item?.integration_mr);
+  push("Jenkins", item?.jenkinsUrl || item?.jenkins_url || item?.jenkinsBuildUrl || item?.jenkins_build_url);
+  push("安装包", item?.jenkinsPackageUrl || item?.jenkins_package_url);
+  push("二维码", item?.jenkinsQrUrl || item?.jenkins_qr_url);
+  push("调整", item?.editUrl || item?.edit_url || item?.adjustUrl || item?.adjust_url);
+  push("链接", item?.url || item?.href);
+  collect(item?.urls, "URL");
+  collect(item?.outputs, "产物");
+  collect(item?.output, "产物");
+  collect(item?.results, "结果");
+  collect(item?.result, "结果");
+  collect(item?.files, "文件");
+  const reviewKey = (href) => {
+    const text = String(href || "").trim();
+    try {
+      const url = new URL(text, window.location.origin);
+      return `${url.origin}${url.pathname}`;
+    } catch (_) {
+      return text.split(/[?#]/)[0];
+    }
+  };
+  const reviewRank = (label) => {
+    const text = String(label || "");
+    if (/方案文档/.test(text)) return 50;
+    if (/临时/.test(text)) return 40;
+    if (/Markdown Review/i.test(text)) return 20;
+    if (/预览|review/i.test(text)) return 10;
+    return 0;
+  };
+  const seen = new Map();
+  for (const link of out) {
+    const isReview = /\/api\/prd-workflow\/review\//.test(String(link.href || ""));
+    const key = isReview ? `review:${reviewKey(link.href)}` : `${link.label}\n${link.href}`;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, link);
+      continue;
+    }
+    if (isReview) {
+      const existingRank = reviewRank(existing.label);
+      const nextRank = reviewRank(link.label);
+      if (nextRank > existingRank || (nextRank === existingRank && String(link.label || "").length > String(existing.label || "").length)) {
+        seen.set(key, link);
+      }
+    }
+  }
+  return Array.from(seen.values());
+}
+
+function prdWorkflowActionPayloadExtras(item) {
+  if (!item || typeof item !== "object") return {};
+  return {
+    marker: item.marker || item.flag || "",
+    command: item.command || item.nextCommand || item.next_command || "",
+    runtimeOnly: item.runtimeOnly === true || item.runtime_only === true,
+    markerOnly: item.markerOnly === true || item.marker_only === true,
+    url: item.url || item.href || item.mrUrl || item.mr_url || item.mergeRequestUrl || item.merge_request_url || "",
+    mr: item.mr || item.mrUrl || item.mr_url || item.mergeRequestUrl || item.merge_request_url || "",
+    testEnv: item.testEnv || item.test_environment || "",
+    summary: item.summary || item.detail || item.description || "",
+    links: Array.isArray(item.links) ? item.links : [],
+    artifacts: Array.isArray(item.artifacts) ? item.artifacts : [],
+    outputs: Array.isArray(item.outputs) ? item.outputs : [],
+    results: Array.isArray(item.results) ? item.results : [],
+  };
+}
+
+function prdWorkflowIssueKey(item, index = 0) {
+  return String(item?.key || item?.issueKey || item?.issue_key || item?.id || item?.iid || item?.title || `issue-${index + 1}`).trim();
+}
+
+function prdWorkflowIssueTitle(item, index = 0) {
+  return String(item?.title || item?.name || item?.label || item?.summary || prdWorkflowIssueKey(item, index) || `Issue ${index + 1}`).trim();
+}
+
+function prdWorkflowIssueEpicKey(item) {
+  return String(item?.epicKey || item?.epic_key || item?.epic || item?.epicTitle || item?.epic_title || item?.parentEpic || item?.parent_epic || "未归类").trim();
+}
+
+function prdWorkflowIssueParentKey(item) {
+  return String(item?.parentKey || item?.parent_key || item?.parent || item?.parentIssue || item?.parent_issue || "").trim();
+}
+
+function prdWorkflowIssueLinks(item) {
+  const links = prdWorkflowActionLinks(item);
+  const pushList = (list, fallbackLabel) => {
+    if (!Array.isArray(list)) return;
+    for (const entry of list) {
+      if (!entry) continue;
+      if (typeof entry === "string") {
+        links.push({ label: fallbackLabel, href: entry });
+      } else {
+        const href = entry.url || entry.href || entry.webUrl || entry.web_url || entry.mrUrl || entry.mr_url || entry.issueUrl || entry.issue_url;
+        if (href) links.push({ label: entry.label || entry.title || entry.platform || entry.kind || fallbackLabel, href });
+      }
+    }
+  };
+  pushList(item?.mrs, "MR");
+  pushList(item?.mergeRequests, "MR");
+  pushList(item?.merge_requests, "MR");
+  pushList(item?.implMrs, "MR");
+  pushList(item?.impl_mrs, "MR");
+  pushList(item?.platformMrs, "MR");
+  pushList(item?.platform_mrs, "MR");
+  const seen = new Set();
+  return links.filter((link) => {
+    const href = String(link.href || "").trim();
+    if (!href) return false;
+    const key = `${link.label}\n${href}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function prdWorkflowIssueGroups(snapshot) {
+  const directEpics = Array.isArray(snapshot?.epics) ? snapshot.epics : Array.isArray(snapshot?.epicGroups) ? snapshot.epicGroups : Array.isArray(snapshot?.epic_groups) ? snapshot.epic_groups : [];
+  const flatIssues = [];
+  const groups = new Map();
+  const ensureGroup = (key, title = "") => {
+    const cleanKey = String(key || "未归类").trim() || "未归类";
+    if (!groups.has(cleanKey)) {
+      groups.set(cleanKey, { key: cleanKey, title: String(title || cleanKey), issues: [] });
+    } else if (title && groups.get(cleanKey).title === cleanKey) {
+      groups.get(cleanKey).title = String(title);
+    }
+    return groups.get(cleanKey);
+  };
+  for (const epic of directEpics) {
+    const key = String(epic?.key || epic?.id || epic?.title || epic?.name || "未归类").trim();
+    const group = ensureGroup(key, epic?.title || epic?.name || key);
+    const list = Array.isArray(epic?.issues) ? epic.issues : Array.isArray(epic?.children) ? epic.children : Array.isArray(epic?.items) ? epic.items : [];
+    for (const issue of list) {
+      if (issue && typeof issue === "object") group.issues.push({ ...issue, epicKey: key });
+    }
+  }
+  for (const item of Array.isArray(snapshot?.issues) ? snapshot.issues : []) {
+    if (item && typeof item === "object") flatIssues.push(item);
+  }
+  for (const item of flatIssues) {
+    ensureGroup(prdWorkflowIssueEpicKey(item)).issues.push(item);
+  }
+  const buildIssueTree = (list) => {
+    const byKey = new Map();
+    const rows = [];
+    list.forEach((issue, index) => {
+      const key = prdWorkflowIssueKey(issue, index);
+      byKey.set(key, { issue, children: [] });
+    });
+    list.forEach((issue, index) => {
+      const key = prdWorkflowIssueKey(issue, index);
+      const parent = prdWorkflowIssueParentKey(issue);
+      const row = byKey.get(key);
+      if (parent && byKey.has(parent)) byKey.get(parent).children.push(row);
+      else rows.push(row);
+    });
+    return rows;
+  };
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    issues: buildIssueTree(group.issues),
+  }));
+}
+
+function prdWorkflowActionId(item) {
+  return String(item?.actionId || item?.action_id || item?.action || item?.id || "").trim();
+}
+
+function prdWorkflowStageKey(item) {
+  if (!item || typeof item !== "object") return "";
+  const issue = String(item.issueKey || item.issue_key || item.issue || "").trim();
+  const action = String(item.action || item.actionId || item.action_id || prdWorkflowActionId(item) || "").trim();
+  const rawStage = String(item.stageKey || item.stage_key || item.stage || item.phase || item.code || item.pointer || action).trim();
+  const text = [rawStage, action, item.code, item.type, item.title].map((value) => String(value || "")).join(" ").toLowerCase();
+  if (issue) {
+    if (/plan_draft_local|submit-plan|plan-doc/.test(text)) return `issue-plan:${issue}`;
+    if (/gitlab_issue_missing|ensure-gitlab-issue/.test(text)) return `issue-gitlab:${issue}`;
+  }
+  return rawStage;
+}
+
+function prdWorkflowActionSortTime(item) {
+  const time = prdWorkflowActionTime(item) ||
+    String(item?.startedAt || item?.started_at || item?.createdAt || item?.created_at || item?.updatedAt || item?.updated_at || "");
+  const ts = Date.parse(time);
+  return Number.isFinite(ts) ? ts : NaN;
+}
+
+function prdWorkflowFlattenIssuesFromSnapshot(snapshot) {
+  const out = [];
+  const visitIssue = (issue) => {
+    if (issue && typeof issue === "object" && !Array.isArray(issue)) out.push(issue);
+  };
+  const visitGroup = (group) => {
+    if (!group || typeof group !== "object" || Array.isArray(group)) return;
+    const list = Array.isArray(group.issues) ? group.issues : Array.isArray(group.children) ? group.children : Array.isArray(group.items) ? group.items : [];
+    for (const item of list) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      if (item.issue && typeof item.issue === "object") {
+        visitIssue(item.issue);
+        if (Array.isArray(item.children)) item.children.forEach((child) => visitIssue(child?.issue || child));
+      } else {
+        visitIssue(item);
+      }
+    }
+  };
+  [
+    snapshot?.issues,
+    snapshot?.raw?.issues,
+    snapshot?.raw?.prd?.issues,
+  ].forEach((list) => {
+    if (Array.isArray(list)) list.forEach(visitIssue);
+  });
+  [
+    snapshot?.epics,
+    snapshot?.epicGroups,
+    snapshot?.epic_groups,
+    snapshot?.raw?.epics,
+    snapshot?.raw?.epicGroups,
+    snapshot?.raw?.epic_groups,
+    snapshot?.raw?.prd?.epics,
+    snapshot?.raw?.prd?.epicGroups,
+    snapshot?.raw?.prd?.epic_groups,
+  ].forEach((list) => {
+    if (Array.isArray(list)) list.forEach(visitGroup);
+  });
+  return out;
+}
+
+function prdWorkflowFindSnapshotIssue(snapshot, issueKey) {
+  const key = String(issueKey || "").trim();
+  if (!key) return null;
+  return prdWorkflowFlattenIssuesFromSnapshot(snapshot).find((issue, index) => prdWorkflowIssueKey(issue, index) === key) || null;
+}
+
+function prdWorkflowSnapshotGitlabEpic(snapshot) {
+  return String(
+    snapshot?.gitlabEpic ||
+    snapshot?.gitlab_epic ||
+    snapshot?.prd?.gitlabEpic ||
+    snapshot?.prd?.gitlab_epic ||
+    snapshot?.raw?.gitlabEpic ||
+    snapshot?.raw?.gitlab_epic ||
+    snapshot?.raw?.prd?.gitlabEpic ||
+    snapshot?.raw?.prd?.gitlab_epic ||
+    "",
+  ).trim();
+}
+
+function prdWorkflowEnrichActionWithSnapshotFacts(snapshot, item) {
+  if (!item || typeof item !== "object") return item;
+  const issueKey = String(item.issueKey || item.issue_key || item.issue || "").trim();
+  const issue = prdWorkflowFindSnapshotIssue(snapshot, issueKey);
+  const gitlabIssue = String(issue?.gitlabIssue || issue?.gitlab_issue || item.gitlabIssue || item.gitlab_issue || "").trim();
+  const gitlabEpic = prdWorkflowSnapshotGitlabEpic(snapshot);
+  if (!gitlabIssue && !gitlabEpic) return item;
+  const stage = prdWorkflowStageKey(item);
+  const stageText = `${stage} ${prdWorkflowActionCodeText(item)}`;
+  const shouldAttachGitlabArtifacts = /issue-gitlab:|gitlab_issue_missing|ensure-gitlab-issue|implementation|impl_|fix_|testing|submit-test|self-test/i.test(stageText);
+  if (!shouldAttachGitlabArtifacts) return item;
+  const artifacts = [];
+  if (gitlabIssue) artifacts.push({ label: "GitLab Issue", kind: "gitlab-issue", durability: "durable", url: gitlabIssue });
+  if (gitlabEpic) artifacts.push({ label: "GitLab Epic", kind: "gitlab-epic", durability: "durable", url: gitlabEpic });
+  const status = prdWorkflowActionStatus(item.status);
+  const shouldRetitle = gitlabIssue && status === "done" && /^issue-gitlab:/.test(stage) && /需要.*GitLab Issue/.test(String(item.title || item.label || ""));
+  return {
+    ...item,
+    ...(gitlabIssue ? { gitlabIssue, gitlab_issue: gitlabIssue } : {}),
+    ...(gitlabEpic ? { gitlabEpic, gitlab_epic: gitlabEpic } : {}),
+    ...(shouldRetitle ? {
+      title: String(item.title || item.label || "GitLab Issue 已绑定")
+        .replace(/^需要为/, "已为")
+        .replace("创建或绑定", "创建/绑定"),
+      label: String(item.label || item.title || "GitLab Issue 已绑定")
+        .replace(/^需要为/, "已为")
+        .replace("创建或绑定", "创建/绑定"),
+    } : {}),
+    artifacts: prdWorkflowMergeActionLists(item.artifacts, artifacts),
+  };
+}
+
+function prdWorkflowMergeActionLists(left, right) {
+  const out = [];
+  const seen = new Set();
+  const push = (entry) => {
+    if (!entry) return;
+    const key = typeof entry === "string" ? entry : JSON.stringify(entry);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(entry);
+  };
+  (Array.isArray(left) ? left : []).forEach(push);
+  (Array.isArray(right) ? right : []).forEach(push);
+  return out;
+}
+
+function prdWorkflowMergeActionRecord(prev, next) {
+  const nextTime = prdWorkflowActionSortTime(next);
+  const prevTime = prdWorkflowActionSortTime(prev);
+  const latest = Number.isFinite(nextTime) && (!Number.isFinite(prevTime) || nextTime >= prevTime) ? next : prev;
+  const status = latest?.status || next?.status || prev?.status;
+  return {
+    ...prev,
+    ...next,
+    title: prdWorkflowActionTitle(latest, 0) || prdWorkflowActionTitle(next, 0) || prdWorkflowActionTitle(prev, 0),
+    detail: prdWorkflowActionDetail(latest) || prdWorkflowActionDetail(next) || prdWorkflowActionDetail(prev),
+    status,
+    links: prdWorkflowMergeActionLists(prev?.links, next?.links),
+    artifacts: prdWorkflowMergeActionLists(prev?.artifacts, next?.artifacts),
+    outputs: prdWorkflowMergeActionLists(prev?.outputs, next?.outputs),
+    results: prdWorkflowMergeActionLists(prev?.results, next?.results),
+    events: prdWorkflowMergeActionLists(prev?.events, next?.events),
+    createdAt: prev?.createdAt || prev?.created_at || next?.createdAt || next?.created_at,
+    startedAt: prev?.startedAt || prev?.started_at || next?.startedAt || next?.started_at,
+    updatedAt: latest?.updatedAt || latest?.updated_at || next?.updatedAt || next?.updated_at || prev?.updatedAt || prev?.updated_at,
+  };
+}
+
+function prdWorkflowActionRows(snapshot, nextAction) {
+  const rows = [];
+  const seenByStage = new Map();
+  const seenById = new Map();
+  const pendingExtrasByStage = new Map();
+  const shouldSkipRow = (item) => {
+    if (!item || typeof item !== "object") return true;
+    if (item.auxiliary === true || item.auxiliary_event === true) return true;
+    if (String(item.type || "") === "review-link") return true;
+    if (String(item.type || "") === "action-preview" || item.preview === true) return true;
+    if (
+      String(item.type || "") === "same-platform-stage-conflict" &&
+      /\/api\/prd-workflow\/review\//.test(String(item.conflict?.previousArtifact || item.conflict?.incomingArtifact || ""))
+    ) {
+      return true;
+    }
+    return false;
+  };
+  const mergeOnlyExtras = (base, extras) => ({
+    ...base,
+    links: prdWorkflowMergeActionLists(base?.links, extras?.links),
+    artifacts: prdWorkflowMergeActionLists(base?.artifacts, extras?.artifacts),
+    outputs: prdWorkflowMergeActionLists(base?.outputs, extras?.outputs),
+    results: prdWorkflowMergeActionLists(base?.results, extras?.results),
+  });
+  const rememberExtras = (stageKey, item) => {
+    if (!stageKey) return;
+    const index = seenByStage.get(stageKey);
+    if (index != null) {
+      rows[index] = mergeOnlyExtras(rows[index], item);
+      return;
+    }
+    pendingExtrasByStage.set(stageKey, mergeOnlyExtras(pendingExtrasByStage.get(stageKey) || {}, item));
+  };
+  const applyPendingExtras = (stageKey, item) => (
+    stageKey && pendingExtrasByStage.has(stageKey)
+      ? mergeOnlyExtras(item, pendingExtrasByStage.get(stageKey))
+      : item
+  );
+  const addRows = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const stageKey = prdWorkflowStageKey(item);
+      if (shouldSkipRow(item)) {
+        rememberExtras(stageKey, item);
+        continue;
+      }
+      const idKey = String(item.id || item.eventId || item.event_id || item.actionId || item.action_id || "").trim();
+      const key = stageKey || idKey;
+      const index = key ? (seenByStage.get(key) ?? seenById.get(idKey)) : null;
+      if (key && index != null) {
+        rows[index] = applyPendingExtras(stageKey, prdWorkflowMergeActionRecord(rows[index], item));
+        if (stageKey) seenByStage.set(stageKey, index);
+        if (idKey) seenById.set(idKey, index);
+      } else {
+        if (key) seenByStage.set(key, rows.length);
+        if (idKey) seenById.set(idKey, rows.length);
+        rows.push(applyPendingExtras(stageKey, item));
+      }
+    }
+  };
+  addRows(snapshot?.actions);
+  addRows(snapshot?.workflowActions);
+  addRows(snapshot?.workflow_actions);
+  addRows(snapshot?.timeline);
+  addRows(snapshot?.history);
+  addRows(snapshot?.events);
+  addRows(snapshot?.runtimeEvents);
+  addRows(snapshot?.runtime_events);
+  if (nextAction && typeof nextAction === "object") {
+    const nextId = prdWorkflowActionId(nextAction);
+    const nextStage = prdWorkflowStageKey(nextAction);
+    const index = nextStage ? seenByStage.get(nextStage) : nextId ? seenById.get(nextId) : null;
+    const nextRow = { ...nextAction, status: nextAction.status || "next", kind: "next_action" };
+    if (index != null) rows[index] = prdWorkflowMergeActionRecord(rows[index], nextRow);
+    else rows.push(nextRow);
+  }
+  return rows
+    .map((item, index) => ({ item, index, ts: prdWorkflowActionSortTime(item) }))
+    .sort((a, b) => {
+      const at = Number.isFinite(a.ts);
+      const bt = Number.isFinite(b.ts);
+      if (at && bt) return b.ts - a.ts || a.index - b.index;
+      if (at) return -1;
+      if (bt) return 1;
+      return a.index - b.index;
+    })
+    .map((entry) => prdWorkflowEnrichActionWithSnapshotFacts(snapshot, entry.item));
+}
+
+function prdWorkflowRuntimeAuditRows(snapshot) {
+  const rows = Array.isArray(snapshot?.runtimeEvents)
+    ? snapshot.runtimeEvents
+    : Array.isArray(snapshot?.runtime_events)
+      ? snapshot.runtime_events
+      : [];
+  return rows
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({ item, index, ts: prdWorkflowActionSortTime(item) }))
+    .sort((a, b) => {
+      const at = Number.isFinite(a.ts);
+      const bt = Number.isFinite(b.ts);
+      if (at && bt) return b.ts - a.ts || b.index - a.index;
+      if (at) return -1;
+      if (bt) return 1;
+      return b.index - a.index;
+    })
+    .slice(0, 8)
+    .map((entry) => entry.item);
+}
+
+function prdWorkflowAuditMatchesFilter(item, filter) {
+  const f = String(filter || "all");
+  if (f === "all") return true;
+  const text = [
+    item?.status,
+    item?.type,
+    item?.kind,
+    item?.title,
+    item?.detail,
+    item?.error,
+    JSON.stringify(item?.links || []),
+    JSON.stringify(item?.artifacts || []),
+  ].join(" ").toLowerCase();
+  if (f === "errors") return /error|failed|conflict|blocked|stale|revision|冲突|失败/.test(text);
+  if (f === "review") return /review|temporary-review|临时/.test(text);
+  if (f === "external") return /mr|merge request|gitlab|jenkins|package|build|tapd/.test(text);
+  return true;
+}
+
 function workspaceRunActivityLine(item, index) {
   const text = typeof item === "string" ? item : String(item?.text || "");
   const stepMs = typeof item === "object" ? Number(item?.stepMs) : NaN;
@@ -1113,6 +1936,18 @@ function workspaceNodeLayoutSignature(node) {
     data?.nodeStatus || "",
     data?.runningRunNodeIds?.has?.(node?.id) ? "running-run" : "",
   ].join("::");
+}
+
+function workspaceHydratedNodeRuntimeEqual(a, b) {
+  if (!a || !b) return false;
+  return a.selected === b.selected &&
+    a.isExecuting === b.isExecuting &&
+    a.nodeStatus === b.nodeStatus &&
+    a.nodeElapsed === b.nodeElapsed &&
+    a.optimizingRun === b.optimizingRun &&
+    a.scheduledRunState === b.scheduledRunState &&
+    a.nodeChatActive === b.nodeChatActive &&
+    a.nodeChat === b.nodeChat;
 }
 
 function graphToFlow(graph, palette) {
@@ -2190,13 +3025,54 @@ function DisplayFullscreenPreview({ node, onClose }) {
   const htmlFrameRef = useRef(null);
   const kind = workspaceDisplayKindFromData(node?.data);
   const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : "Display 预览");
+  const readOnly = Boolean(node?.data?.readOnly);
+  const [markdownEditing, setMarkdownEditing] = useState(false);
+  const [markdownDraft, setMarkdownDraft] = useState("");
+  const [markdownFileContent, setMarkdownFileContent] = useState("");
+  const [markdownFileLoading, setMarkdownFileLoading] = useState(false);
+  const currentDisplayContent = displayContent(node?.data);
+  const markdownSourceContent = kind === "markdown" ? displayOutputEnvelopeContent(currentDisplayContent) : "";
+  const markdownFilePath = kind === "markdown" ? displayTextFilePath(markdownSourceContent, "markdown") : "";
+  const markdownContent = kind === "markdown" ? (markdownFilePath ? markdownFileContent : markdownSourceContent) : "";
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (event.key === "Escape") onClose?.();
+      if (event.key !== "Escape") return;
+      if (markdownEditing) {
+        setMarkdownDraft(String(markdownContent || ""));
+        setMarkdownEditing(false);
+        return;
+      }
+      onClose?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [markdownContent, markdownEditing, onClose]);
+  useEffect(() => {
+    let cancelled = false;
+    if (kind !== "markdown" || !markdownFilePath) {
+      setMarkdownFileContent("");
+      setMarkdownFileLoading(false);
+      return () => { cancelled = true; };
+    }
+    setMarkdownFileLoading(true);
+    readWorkspaceTextFile(node?.data?.flowParams || {}, markdownFilePath)
+      .then((text) => {
+        if (!cancelled) setMarkdownFileContent(text);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setMarkdownFileContent("");
+          node?.data?.onStatus?.(String(error.message || error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMarkdownFileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [kind, markdownFilePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
+  useEffect(() => {
+    if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
+  }, [markdownContent, markdownEditing]);
   if (!node) return null;
   return createPortal(
     <div className="af-display-preview-overlay" role="dialog" aria-modal="true" aria-label="全屏预览">
@@ -2207,12 +3083,73 @@ function DisplayFullscreenPreview({ node, onClose }) {
             <strong>{title}</strong>
             <span>{node.id}</span>
           </div>
-          <button type="button" className="af-display-preview-close" onClick={onClose} aria-label="关闭全屏预览" title="关闭">
-            <span className="material-symbols-outlined" aria-hidden>close</span>
-          </button>
+          <div className="af-display-preview-actions">
+            {kind === "markdown" ? (
+              markdownEditing ? (
+                <>
+                  <button
+                    type="button"
+                    className="af-display-preview-action"
+                    disabled={readOnly || markdownFileLoading}
+                    onClick={async () => {
+                      try {
+                        await saveMarkdownDisplayEdit({
+                          nodeId: node.id,
+                          data: node.data,
+                          filePath: markdownFilePath,
+                          content: markdownDraft,
+                          setFileContent: setMarkdownFileContent,
+                        });
+                        setMarkdownEditing(false);
+                      } catch (error) {
+                        node?.data?.onStatus?.(String(error.message || error));
+                      }
+                    }}
+                    aria-label="保存并预览"
+                    title="保存并预览"
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>done</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="af-display-preview-action"
+                    onClick={() => {
+                      setMarkdownDraft(String(markdownContent || ""));
+                      setMarkdownEditing(false);
+                    }}
+                    aria-label="取消编辑"
+                    title="取消编辑"
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>close</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="af-display-preview-action"
+                  disabled={readOnly || markdownFileLoading}
+                  onClick={() => {
+                    setMarkdownDraft(String(markdownContent || ""));
+                    setMarkdownEditing(true);
+                  }}
+                  aria-label="编辑 Markdown"
+                  title="编辑 Markdown"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>edit</span>
+                </button>
+              )
+            ) : null}
+            <button type="button" className="af-display-preview-action" onClick={onClose} aria-label="关闭全屏预览" title="关闭">
+              <span className="material-symbols-outlined" aria-hidden>close_fullscreen</span>
+            </button>
+          </div>
         </div>
         <div className="af-display-preview-content">
-          <DisplayBody data={node.data} flowParams={node.data?.flowParams} htmlFrameRef={htmlFrameRef} />
+          {kind === "markdown" && markdownEditing ? (
+            <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={node.data?.onUploadWorkspaceImage} readOnly={readOnly} />
+          ) : (
+            <DisplayBody data={node.data} flowParams={node.data?.flowParams} htmlFrameRef={htmlFrameRef} />
+          )}
         </div>
       </div>
     </div>,
@@ -2505,7 +3442,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
           <span className="material-symbols-outlined" aria-hidden>close</span>
         </button>
       </div>
-      {(messages.length > 0 || running || error || candidate.trim()) ? (
+      {(messages.length > 0 || running || error) ? (
         <div className="af-work-node-chat__messages">
           {visibleMessages.map((msg, index) => (
             <div key={`${msg.at || index}-${index}`} className={`af-work-node-chat__msg af-work-node-chat__msg--${msg.role === "assistant" ? "assistant" : "user"}`}>
@@ -2559,14 +3496,14 @@ function WorkspaceNodeChat({ nodeId, data }) {
           <span className="material-symbols-outlined" aria-hidden>arrow_upward</span>
         </button>
       </div>
-      <div className="af-work-node-chat__actions">
-        <button type="button" disabled={running || readOnly || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "replace")}>
-          替换当前内容
-        </button>
-        <button type="button" disabled={running || readOnly || !candidate.trim()} onClick={() => data?.onApplyNodeChatCandidate?.(nodeId, "append")}>
-          追加
-        </button>
-      </div>
+      {candidate.trim() ? (
+        <div className="af-work-node-chat__messages">
+          <div className="af-work-node-chat__msg af-work-node-chat__msg--assistant">
+            <span>AI</span>
+            <p>{candidate}</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2626,6 +3563,23 @@ function suggestDisplayFilePath(id, data) {
   const kind = workspaceDisplayKindFromData(data) || "markdown";
   const stem = displayFileStem(data?.label || id || kind);
   return `outputs/${stem}.${displayFileExtension(kind)}`;
+}
+
+async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFileContent }) {
+  if (filePath) {
+    const savedPath = await writeWorkspaceTextFile(data?.flowParams || {}, filePath, content);
+    setFileContent?.(content);
+    data?.onSetDisplayNodeContent?.(nodeId, savedPath, "replace", {
+      logChat: false,
+      reloadDisplay: true,
+      statusMessage: `已更新 ${savedPath}`,
+    });
+    return;
+  }
+  data?.onSetDisplayNodeContent?.(nodeId, content, "replace", {
+    logChat: false,
+    statusMessage: "已更新 Markdown 内容",
+  });
 }
 
 function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
@@ -2950,26 +3904,18 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
                 className="af-work-display-card__action"
                 disabled={readOnly || markdownFileLoading}
                 onClick={async () => {
-                  if (markdownFilePath) {
-                    try {
-                      const savedPath = await writeWorkspaceTextFile(data?.flowParams || {}, markdownFilePath, markdownDraft);
-                      setMarkdownFileContent(markdownDraft);
-                      data?.onSetDisplayNodeContent?.(id, savedPath, "replace", {
-                        logChat: false,
-                        reloadDisplay: true,
-                        statusMessage: `已更新 ${savedPath}`,
-                      });
-                      setMarkdownEditing(false);
-                    } catch (error) {
-                      data?.onStatus?.(String(error.message || error));
-                    }
-                    return;
+                  try {
+                    await saveMarkdownDisplayEdit({
+                      nodeId: id,
+                      data,
+                      filePath: markdownFilePath,
+                      content: markdownDraft,
+                      setFileContent: setMarkdownFileContent,
+                    });
+                    setMarkdownEditing(false);
+                  } catch (error) {
+                    data?.onStatus?.(String(error.message || error));
                   }
-                  data?.onSetDisplayNodeContent?.(id, markdownDraft, "replace", {
-                    logChat: false,
-                    statusMessage: "已更新 Markdown 内容",
-                  });
-                  setMarkdownEditing(false);
                 }}
                 aria-label="保存并预览"
                 title="保存并预览"
@@ -3339,6 +4285,13 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
       .filter((group) => group.skills.length > 0);
     return { collectionGroups, ungrouped: skillGroups.ungrouped.filter(matchesSkill) };
   }, [skillGroups, skillsSearch]);
+  const skillsMenuScrollbar = useWorkspaceMenuScrollbar(skillsOpen, [
+    filteredSkillGroups.collectionGroups.length,
+    filteredSkillGroups.ungrouped.length,
+    collapsedSkillGroups.size,
+    config.skillKeys.length,
+    skillsSearch,
+  ]);
   const filteredWorkspaces = useMemo(() => {
     const q = workspaceSearch.trim().toLowerCase();
     if (!q) return workspaceList;
@@ -3346,6 +4299,11 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
   }, [workspaceList, workspaceSearch]);
   const selectedKnowledgeSources = useMemo(() => knowledgeSourcesFromContext(config.knowledgeContext), [config.knowledgeContext]);
   const selectedKnowledgeKeys = useMemo(() => new Set(selectedKnowledgeSources.map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledgeSources]);
+  const workspaceMenuScrollbar = useWorkspaceMenuScrollbar(workspaceOpen, [
+    filteredWorkspaces.length,
+    selectedKnowledgeSources.length,
+    workspaceSearch,
+  ]);
   useEffect(() => {
     if (config.task === lastConfigTaskRef.current) return;
     lastConfigTaskRef.current = config.task;
@@ -3608,7 +4566,11 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                     </button>
                   ) : null}
                 </div>
-                <div className="af-work-load-skills-menu af-work-context-run-card__menu-scroll">
+                <div
+                  ref={skillsMenuScrollbar.menuRef}
+                  className="af-work-load-skills-menu af-work-context-run-card__menu-scroll"
+                  onScroll={skillsMenuScrollbar.updateMenuScrollbar}
+                >
                   {filteredSkillGroups.collectionGroups.map((group) => {
                     const groupKeys = group.skills.map((skill) => skill.key);
                     const checkedCount = groupKeys.filter((key) => selectedSkillSet.has(key)).length;
@@ -3695,6 +4657,14 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                   ) : null}
                   <button type="button" className="af-work-load-skills-menu__clear" onClick={() => updateConfig({ skillKeys: [] })}>清空</button>
                 </div>
+                <div
+                  ref={skillsMenuScrollbar.scrollbarTrackRef}
+                  className={"af-work-load-skills-scrollbar" + (skillsMenuScrollbar.scrollbar.visible ? " af-work-load-skills-scrollbar--visible" : "")}
+                  onPointerDown={skillsMenuScrollbar.handleScrollbarPointerDown}
+                  aria-hidden="true"
+                >
+                  <span style={{ height: `${skillsMenuScrollbar.scrollbar.height}%`, top: `${skillsMenuScrollbar.scrollbar.top}%` }} />
+                </div>
               </div>
             ) : null}
           </div>
@@ -3732,7 +4702,11 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                     </button>
                   ) : null}
                 </div>
-                <div className="af-work-load-skills-menu af-work-context-run-card__menu-scroll">
+                <div
+                  ref={workspaceMenuScrollbar.menuRef}
+                  className="af-work-load-skills-menu af-work-context-run-card__menu-scroll"
+                  onScroll={workspaceMenuScrollbar.updateMenuScrollbar}
+                >
                   <section className="af-work-load-skills-menu__group">
                     <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
                       <span>知识库</span>
@@ -3762,6 +4736,14 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
                     <div className="af-work-load-skills-menu__empty">没有匹配的知识库</div>
                   ) : null}
                   <button type="button" className="af-work-load-skills-menu__clear" onClick={clearKnowledgeSources}>清空知识库</button>
+                </div>
+                <div
+                  ref={workspaceMenuScrollbar.scrollbarTrackRef}
+                  className={"af-work-load-skills-scrollbar" + (workspaceMenuScrollbar.scrollbar.visible ? " af-work-load-skills-scrollbar--visible" : "")}
+                  onPointerDown={workspaceMenuScrollbar.handleScrollbarPointerDown}
+                  aria-hidden="true"
+                >
+                  <span style={{ height: `${workspaceMenuScrollbar.scrollbar.height}%`, top: `${workspaceMenuScrollbar.scrollbar.top}%` }} />
                 </div>
               </div>
             ) : null}
@@ -4069,7 +5051,7 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
   const onSelectGroupPointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".af-work-group-node__resize, .af-work-group-node__delete")) return;
-    setNodes((list) => selectSingleCanvasNode(list, id));
+    setNodes((list) => selectSingleCanvasNodeUnlessDraggingSelection(list, id));
   }, [id, setNodes]);
   return (
     <div
@@ -4126,7 +5108,7 @@ function WorkspaceFlowNode(props) {
   const onSelectNodePointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".react-flow__handle, .af-work-display-resize")) return;
-    setNodes((list) => selectSingleCanvasNode(list, props.id));
+    setNodes((list) => selectSingleCanvasNodeUnlessDraggingSelection(list, props.id));
     setEdges((list) => clearSelectedCanvasEdges(list));
   }, [props.id, setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
@@ -4229,7 +5211,11 @@ function WorkspaceFlowNode(props) {
       className={
         "af-work-flow-node" +
         (props.selected ? " af-work-flow-node--selected" : "") +
-        (resizingFlowNode ? " af-work-flow-node--resizing" : "")
+        (resizingFlowNode ? " af-work-flow-node--resizing" : "") +
+        (props.data?.isExecuting || props.data?.nodeStatus === "running" ? " af-work-flow-node--executing" : "") +
+        (props.data?.nodeStatus === "success" ? " af-work-flow-node--done" : "") +
+        (props.data?.nodeStatus === "failed" ? " af-work-flow-node--failed" : "") +
+        (props.data?.nodeStatus === "stopped" ? " af-work-flow-node--stopped" : "")
       }
       style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
       onPointerDownCapture={onSelectNodePointerDown}
@@ -4319,6 +5305,14 @@ function selectSingleCanvasNode(nodes, nodeId) {
     return { ...node, selected };
   });
   return changed ? nextNodes : nodes;
+}
+
+function selectSingleCanvasNodeUnlessDraggingSelection(nodes, nodeId) {
+  const id = String(nodeId || "");
+  const clickedNode = (nodes || []).find((node) => node.id === id);
+  const selectedCount = (nodes || []).reduce((count, node) => count + (node.selected ? 1 : 0), 0);
+  if (clickedNode?.selected && selectedCount > 1) return nodes;
+  return selectSingleCanvasNode(nodes, id);
 }
 
 function clearSelectedCanvasEdges(edges) {
@@ -4944,6 +5938,76 @@ function mergeUntouchedPropDraft(current, previousNodeDraft, nextNodeDraft) {
   return next;
 }
 
+function useWorkspaceMenuScrollbar(open, refreshDeps = []) {
+  const menuRef = useRef(null);
+  const scrollbarTrackRef = useRef(null);
+  const [scrollbar, setScrollbar] = useState({ visible: false, top: 0, height: 100 });
+  const updateMenuScrollbar = useCallback(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const scrollHeight = Math.max(1, el.scrollHeight);
+    const clientHeight = Math.max(1, el.clientHeight);
+    const visible = scrollHeight > clientHeight + 1;
+    const height = visible ? Math.max(12, (clientHeight / scrollHeight) * 100) : 100;
+    const maxTop = Math.max(0, 100 - height);
+    const top = visible ? Math.min(maxTop, (el.scrollTop / Math.max(1, scrollHeight - clientHeight)) * maxTop) : 0;
+    setScrollbar({ visible, top, height });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const frame = requestAnimationFrame(updateMenuScrollbar);
+    return () => cancelAnimationFrame(frame);
+  }, [open, updateMenuScrollbar, ...refreshDeps]);
+
+  const scrollMenuToRatio = useCallback((ratio) => {
+    const el = menuRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(1, Math.max(0, ratio)) * maxScroll;
+    updateMenuScrollbar();
+  }, [updateMenuScrollbar]);
+
+  const pointerRatioFromTrack = useCallback((clientY, grabOffsetPx = 0) => {
+    const track = scrollbarTrackRef.current;
+    if (!track) return 0;
+    const rect = track.getBoundingClientRect();
+    const thumbPx = (scrollbar.height / 100) * rect.height;
+    const maxTopPx = Math.max(1, rect.height - thumbPx);
+    return (clientY - rect.top - grabOffsetPx) / maxTopPx;
+  }, [scrollbar.height]);
+
+  const handleScrollbarPointerDown = useCallback((event) => {
+    if (!scrollbar.visible) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = scrollbarTrackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const thumbTopPx = (scrollbar.top / 100) * rect.height;
+    const thumbHeightPx = (scrollbar.height / 100) * rect.height;
+    const insideThumb = event.clientY >= rect.top + thumbTopPx && event.clientY <= rect.top + thumbTopPx + thumbHeightPx;
+    const grabOffsetPx = insideThumb ? event.clientY - rect.top - thumbTopPx : thumbHeightPx / 2;
+    scrollMenuToRatio(pointerRatioFromTrack(event.clientY, grabOffsetPx));
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture?.(pointerId);
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      scrollMenuToRatio(pointerRatioFromTrack(moveEvent.clientY, grabOffsetPx));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [pointerRatioFromTrack, scrollMenuToRatio, scrollbar.height, scrollbar.top, scrollbar.visible]);
+
+  return { menuRef, scrollbarTrackRef, scrollbar, updateMenuScrollbar, handleScrollbarPointerDown };
+}
+
 function WorkspaceLoadSkillsNode({
   id,
   data,
@@ -5437,6 +6501,11 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
   const selectedWorkspaceNames = useMemo(() => (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path), [selectedKnowledge.sources]);
   const title = useMemo(() => compactSelectionParts(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
+  const workspaceMenuScrollbar = useWorkspaceMenuScrollbar(open, [
+    filteredWorkspaces.length,
+    selectedWorkspaceNames.length,
+    search,
+  ]);
   const toggleWorkspace = (workspace, checked) => {
     const key = workspace?.id || workspace?.path || "";
     const selectedItems = workspaceList.filter((item) => {
@@ -5530,7 +6599,11 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
                 </button>
               ) : null}
             </div>
-            <div className="af-work-load-skills-menu">
+            <div
+              ref={workspaceMenuScrollbar.menuRef}
+              className="af-work-load-skills-menu"
+              onScroll={workspaceMenuScrollbar.updateMenuScrollbar}
+            >
               <section className="af-work-load-skills-menu__group">
                 <div className="af-work-load-skills-menu__group-head af-work-load-skills-menu__group-head--plain">
                   <span>知识库</span>
@@ -5560,10 +6633,558 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
               ) : null}
               <button type="button" className="af-work-load-skills-menu__clear" onClick={() => onChangeWorkspace?.(id, [])}>清空知识库</button>
             </div>
+            <div
+              ref={workspaceMenuScrollbar.scrollbarTrackRef}
+              className={"af-work-load-skills-scrollbar" + (workspaceMenuScrollbar.scrollbar.visible ? " af-work-load-skills-scrollbar--visible" : "")}
+              onPointerDown={workspaceMenuScrollbar.handleScrollbarPointerDown}
+              aria-hidden="true"
+            >
+              <span style={{ height: `${workspaceMenuScrollbar.scrollbar.height}%`, top: `${workspaceMenuScrollbar.scrollbar.top}%` }} />
+            </div>
           </div>
         ) : null}
       </div>
     </div>
+  );
+}
+
+function PrdWorkflowPanel({
+  tapdId,
+  setTapdId,
+  snapshot,
+  loading,
+  error,
+  actionRunning,
+  actionOutput,
+  pendingConfirm,
+  conflict,
+  reviewPublishing,
+  onRefresh,
+  onRunDryRun,
+  onConfirmAction,
+  onRetryConflict,
+  onPublishReview,
+}) {
+  const [auditFilter, setAuditFilter] = useState("all");
+  const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
+  const milestones = Array.isArray(snapshot?.milestones) ? snapshot.milestones : [];
+  const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
+  const artifacts = Array.isArray(snapshot?.artifacts) ? snapshot.artifacts : [];
+  const gaps = Array.isArray(snapshot?.optionalGaps) ? snapshot.optionalGaps : [];
+  const nextAction = snapshot?.nextAction && typeof snapshot.nextAction === "object" ? snapshot.nextAction : null;
+  const actionLabel = prdWorkflowActionLabel(nextAction);
+  const canDryRun = Boolean(nextAction?.dryRunSupported || nextAction?.dry_run_supported);
+  const rawOutput = String(snapshot?.rawOutput || "");
+  return (
+    <main className="af-prd-workflow" aria-label="PRD Workflow">
+      <section className="af-prd-workflow__hero">
+        <div>
+          <span className="af-prd-workflow__eyebrow">PRD Workflow</span>
+          <h1>需求流程状态机</h1>
+          <p>从 TAPD、ai-doc、GitLab 和本地草稿推导状态；Workflow 只保存协作运行态。</p>
+        </div>
+        <form className="af-prd-workflow__lookup" onSubmit={(event) => {
+          event.preventDefault();
+          onRefresh?.();
+        }}>
+          <label>
+            <span>TAPD ID</span>
+            <input
+              value={tapdId}
+              onChange={(event) => setTapdId(event.target.value)}
+              placeholder="输入需求 ID"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <button type="submit" disabled={loading}>
+            <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "sync"}</span>
+            {loading ? "读取中" : "刷新"}
+          </button>
+        </form>
+      </section>
+
+      <section className="af-prd-workflow__grid">
+        <article className="af-prd-workflow-card af-prd-workflow-card--status">
+          <div className="af-prd-workflow-card__head">
+            <span className={`af-prd-workflow-phase af-prd-workflow-phase--${phase.toLowerCase().replace(/[^a-z0-9_-]+/gi, "_")}`}>
+              {prdWorkflowPhaseLabel(phase)}
+            </span>
+            {snapshot?.revision ? <code>{snapshot.revision}</code> : null}
+          </div>
+          <h2>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "输入 TAPD ID 开始")}</h2>
+          {error ? <p className="af-prd-workflow-error">{error}</p> : null}
+          {nextAction ? (
+            <div className="af-prd-workflow-next">
+              <span>下一步</span>
+              <strong>{actionLabel || nextAction.id}</strong>
+              {nextAction.issueKey || nextAction.issue_key ? <small>{nextAction.issueKey || nextAction.issue_key}</small> : null}
+              {nextAction.command ? <code>{nextAction.command}</code> : null}
+            </div>
+          ) : (
+            <p className="af-prd-workflow-muted">暂无可执行动作。</p>
+          )}
+        </article>
+
+        <article className="af-prd-workflow-card">
+          <div className="af-prd-workflow-card__head">
+            <h2>状态线</h2>
+            <span>{milestones.length}</span>
+          </div>
+          <div className="af-prd-workflow-timeline">
+            {milestones.length ? milestones.map((item, index) => {
+              const st = prdWorkflowMilestoneStatus(item.status);
+              return (
+                <div key={item.id || `${item.label}-${index}`} className={`af-prd-workflow-step af-prd-workflow-step--${st}`}>
+                  <span className="af-prd-workflow-step__dot" />
+                  <div>
+                    <strong>{item.label || item.id || `Step ${index + 1}`}</strong>
+                    {item.detail || item.description ? <small>{item.detail || item.description}</small> : null}
+                  </div>
+                </div>
+              );
+            }) : (
+              <p className="af-prd-workflow-muted">状态线会在 `prd-flow current --json` 可用后展示。</p>
+            )}
+          </div>
+        </article>
+
+        <article className="af-prd-workflow-card">
+          <div className="af-prd-workflow-card__head">
+            <h2>Artifacts</h2>
+            <span>{artifacts.length}</span>
+          </div>
+          <div className="af-prd-workflow-list">
+            {artifacts.length ? artifacts.map((item, index) => {
+              const href = prdWorkflowArtifactHref(item);
+              const label = String(item.label || item.title || item.kind || href || `Artifact ${index + 1}`);
+              return href ? (
+                <a key={`${href}-${index}`} href={href} target="_blank" rel="noreferrer">
+                  <span>{label}</span>
+                  <small>{item.kind || href}</small>
+                </a>
+              ) : (
+                <div key={`${label}-${index}`}>
+                  <span>{label}</span>
+                  <small>{item.kind || ""}</small>
+                </div>
+              );
+            }) : (
+              <p className="af-prd-workflow-muted">暂无归档链接。</p>
+            )}
+          </div>
+        </article>
+
+        <article className="af-prd-workflow-card">
+          <div className="af-prd-workflow-card__head">
+            <h2>Issues</h2>
+            <span>{issues.length}</span>
+          </div>
+          <div className="af-prd-workflow-issues">
+            {issues.length ? issues.map((item, index) => (
+              <div key={item.key || `${item.title}-${index}`} className="af-prd-workflow-issue">
+                <strong>{item.title || item.key || `Issue ${index + 1}`}</strong>
+                <small>{[item.key, item.platform, item.status].filter(Boolean).join(" · ")}</small>
+              </div>
+            )) : (
+              <p className="af-prd-workflow-muted">暂无 Issue 信息。</p>
+            )}
+          </div>
+        </article>
+      </section>
+
+      {(gaps.length || rawOutput || actionOutput) ? (
+        <section className="af-prd-workflow__details">
+          {gaps.length ? (
+            <article className="af-prd-workflow-card">
+              <div className="af-prd-workflow-card__head">
+                <h2>Optional</h2>
+                <span>{gaps.length}</span>
+              </div>
+              <div className="af-prd-workflow-gap-list">
+                {gaps.map((gap, index) => (
+                  <p key={`${gap.text || gap}-${index}`}>{typeof gap === "string" ? gap : gap.text || JSON.stringify(gap)}</p>
+                ))}
+              </div>
+            </article>
+          ) : null}
+          {rawOutput || actionOutput ? (
+            <article className="af-prd-workflow-card af-prd-workflow-card--raw">
+              <div className="af-prd-workflow-card__head">
+                <h2>Raw</h2>
+                <button type="button" disabled={reviewPublishing || !(rawOutput || actionOutput)} onClick={() => onPublishReview?.()}>
+                  <span className="material-symbols-outlined" aria-hidden>{reviewPublishing ? "hourglass_empty" : "ios_share"}</span>
+                  {reviewPublishing ? "生成中" : "生成 Review 链接"}
+                </button>
+              </div>
+              <pre>{actionOutput || rawOutput}</pre>
+            </article>
+          ) : null}
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function PrdWorkflowTimelinePanel({
+  projectId,
+  tapdId,
+  setTapdId,
+  snapshot,
+  loading,
+  error,
+  actionRunning,
+  actionOutput,
+  pendingConfirm,
+  conflict,
+  reviewPublishing,
+  onRefresh,
+  onRunDryRun,
+  onConfirmAction,
+  onRetryConflict,
+  onPublishReview,
+}) {
+  const [auditFilter, setAuditFilter] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
+  const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
+  const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
+  const issueGroups = prdWorkflowIssueGroups(snapshot);
+  const issueCount = issueGroups.reduce((total, group) => total + group.issues.reduce((n, row) => n + 1 + (Array.isArray(row.children) ? row.children.length : 0), 0), 0);
+  const artifacts = Array.isArray(snapshot?.artifacts) ? snapshot.artifacts : [];
+  const gaps = Array.isArray(snapshot?.optionalGaps) ? snapshot.optionalGaps : [];
+  const nextAction = snapshot?.nextAction && typeof snapshot.nextAction === "object" ? snapshot.nextAction : null;
+  const actionRows = prdWorkflowActionRows(snapshot, nextAction);
+  const actionFilterTags = useMemo(() => prdWorkflowActionFilterTags(actionRows), [actionRows]);
+  useEffect(() => {
+    if (actionFilter === "all") return;
+    if (!actionFilterTags.some((tag) => tag.key === actionFilter)) setActionFilter("all");
+  }, [actionFilter, actionFilterTags]);
+  const filteredActionRows = actionRows.filter((item) => prdWorkflowActionMatchesFilter(item, actionFilter));
+  const actionDayGroups = prdWorkflowActionDayGroups(filteredActionRows);
+  const allAuditRows = prdWorkflowRuntimeAuditRows(snapshot);
+  const auditRows = allAuditRows.filter((item) => prdWorkflowAuditMatchesFilter(item, auditFilter));
+  const completedCount = filteredActionRows.filter((item) => prdWorkflowActionCountsAsDone(item)).length;
+  const collaboration = snapshot?.collaboration && typeof snapshot.collaboration === "object" ? snapshot.collaboration : {};
+  const activeAction = collaboration.activeAction && typeof collaboration.activeAction === "object" ? collaboration.activeAction : null;
+  const clientObservations = Array.isArray(snapshot?.clientObservations) ? snapshot.clientObservations : [];
+  const rawOutput = String(snapshot?.rawOutput || "");
+  const workflowSteps = prdWorkflowFlowSteps(phase);
+  return (
+    <main className="af-prd-workflow af-prd-workflow--timeline" aria-label="PRD Workflow">
+      <section className="af-prd-workflow__statusbar">
+        <div className="af-prd-workflow__status-main">
+          <span className={`af-prd-workflow-phase af-prd-workflow-phase--${phase.toLowerCase().replace(/[^a-z0-9_-]+/gi, "_")}`}>
+            {prdWorkflowPhaseLabel(phase)}
+          </span>
+          <h1>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "绑定 TAPD 需求后读取状态")}</h1>
+          <p className="af-prd-workflow__status-subtitle">
+            Project <strong>{projectId || "Workspace"}</strong>
+            {tapdId ? <> · TAPD <strong>{tapdId}</strong></> : <> · 未绑定 TAPD</>}
+          </p>
+          {error ? <p className="af-prd-workflow-error">{error}</p> : null}
+          {(activeAction || collaboration.subscribers) ? (
+            <div className="af-prd-workflow-collab">
+              {activeAction ? (
+                <span>
+                  <span className="material-symbols-outlined" aria-hidden>lock</span>
+                  {activeAction.title || activeAction.action || "Workflow action"} 执行中
+                  {activeAction.userId ? <small>{activeAction.userId}</small> : null}
+                </span>
+              ) : null}
+              {collaboration.subscribers ? (
+                <span>
+                  <span className="material-symbols-outlined" aria-hidden>group</span>
+                  {collaboration.subscribers} 个连接
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <form className="af-prd-workflow__lookup" onSubmit={(event) => {
+          event.preventDefault();
+          onRefresh?.();
+        }}>
+          <div className="af-prd-workflow-flow" aria-label="需求流程阶段">
+            {workflowSteps.map((step) => (
+              <div key={step.label} className={`af-prd-workflow-flow__step af-prd-workflow-flow__step--${step.status}`}>
+                <span aria-hidden="true" />
+                <small>{step.label}</small>
+              </div>
+            ))}
+          </div>
+          <div className="af-prd-workflow__lookup-row">
+            <label>
+              <span>Project 绑定 TAPD</span>
+              <input
+                value={tapdId}
+                onChange={(event) => setTapdId(event.target.value)}
+                placeholder="输入需求 ID"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <button type="submit" disabled={loading}>
+              <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "sync"}</span>
+              {loading ? "读取中" : tapdId ? "刷新" : "绑定"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {conflict ? (
+        <section className="af-prd-workflow-conflict" aria-label="Workflow conflict">
+          <div>
+            <span className="material-symbols-outlined" aria-hidden>sync_problem</span>
+            <div>
+              <strong>状态已变化，需要重新确认</strong>
+              <p>{conflict.message || "当前 workflow 状态和执行前不一致。"}</p>
+            </div>
+          </div>
+          <dl>
+            <div>
+              <dt>执行时 revision</dt>
+              <dd>{conflict.expectedRevision || "空"}</dd>
+            </div>
+            <div>
+              <dt>当前 revision</dt>
+              <dd>{conflict.currentRevision || "未知"}</dd>
+            </div>
+            <div>
+              <dt>当前状态</dt>
+              <dd>{[prdWorkflowPhaseLabel(conflict.currentPhase), conflict.currentPointer].filter(Boolean).join(" · ") || "未知"}</dd>
+            </div>
+          </dl>
+          <div className="af-prd-workflow-conflict__actions">
+            <button type="button" onClick={() => onRefresh?.()} disabled={loading || actionRunning}>刷新状态</button>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="af-prd-workflow__main">
+        <article className="af-prd-workflow-actions" aria-label="Workflow actions">
+          <div className="af-prd-workflow-actions__head">
+            <div>
+              <h2>Action 时间线</h2>
+              <p>{actionRows.length ? `${completedCount}/${filteredActionRows.length} 已完成${actionFilter !== "all" ? ` · 共 ${actionRows.length}` : ""}` : "等待 prd-flow 返回 action 列表"}</p>
+            </div>
+            {nextAction && prdWorkflowActionId(nextAction) ? (
+              <div className="af-prd-workflow-local-command">
+                <span>本地 agent 执行</span>
+                <code>{nextAction.command || prdWorkflowActionTitle(nextAction, 0)}</code>
+              </div>
+            ) : null}
+          </div>
+          {actionFilterTags.length ? (
+            <div className="af-prd-workflow-action-filters" aria-label="Action tag filters">
+              <button
+                type="button"
+                className={actionFilter === "all" ? "is-active" : ""}
+                aria-pressed={actionFilter === "all"}
+                onClick={() => setActionFilter("all")}
+              >
+                全部 <span>{actionRows.length}</span>
+              </button>
+              {actionFilterTags.map((tag) => (
+                <button
+                  key={tag.key}
+                  type="button"
+                  className={actionFilter === tag.key ? "is-active" : ""}
+                  aria-pressed={actionFilter === tag.key}
+                  onClick={() => setActionFilter(tag.key)}
+                >
+                  {tag.label} <span>{tag.count}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="af-prd-workflow-action-list">
+            {filteredActionRows.length ? actionDayGroups.map((group) => (
+              <section key={group.day} className="af-prd-workflow-action-day">
+                <div className="af-prd-workflow-action-day__label">
+                  <span>{group.day}</span>
+                  <small>北京时间</small>
+                </div>
+                <div className="af-prd-workflow-action-day__items">
+                  {group.items.map(({ item, index }) => {
+                    const rawStatus = prdWorkflowActionStatus(item.status);
+                    const status = prdWorkflowActionTruth(item) === "observation" && rawStatus === "done" ? "observed" : rawStatus;
+                    const links = prdWorkflowActionLinks(item);
+                    const time = prdWorkflowBeijingTimeLabel(item);
+                    const meta = prdWorkflowActionMeta(item);
+                    const title = prdWorkflowActionDisplayTitle(item, index);
+                    const detail = prdWorkflowActionDisplayDetail(item);
+                    return (
+                      <div key={item.id || item.actionId || `${prdWorkflowActionTitle(item, index)}-${index}`} className={`af-prd-workflow-action af-prd-workflow-action--${status}`}>
+                        <div className="af-prd-workflow-action__rail">
+                          <span className="af-prd-workflow-action__dot" />
+                        </div>
+                        <div className="af-prd-workflow-action__body">
+                          <div className="af-prd-workflow-action__top">
+                            <div>
+                              <div className="af-prd-workflow-action__title">
+                                {time ? <time dateTime={prdWorkflowActionTime(item)}>{time}</time> : null}
+                                <strong>{title}</strong>
+                              </div>
+                              {detail ? <p>{detail}</p> : null}
+                              {meta.length ? (
+                                <div className="af-prd-workflow-action__meta">
+                                  {meta.map((entry) => (
+                                    <span key={`${entry.label}-${entry.value}`}>
+                                      <b>{entry.label}</b>
+                                      {entry.value}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                            <span className="af-prd-workflow-action__status">{prdWorkflowActionDisplayStatus(item)}</span>
+                          </div>
+                          {links.length ? (
+                            <div className="af-prd-workflow-action__links">
+                              {links.map((link) => (
+                                <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">
+                                  <span>{link.label}</span>
+                                  <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )) : (
+              <div className="af-prd-workflow-action-empty">
+                <strong>{tapdId ? (actionRows.length ? "当前 tag 下暂无 action" : "暂无 prd-flow 上报 action") : "先绑定 TAPD 需求"}</strong>
+                <p>{tapdId ? (actionRows.length ? "切换到其它 tag 或查看全部。" : "Workflow tab 不会生成默认步骤；需要 prd-flow snapshot 返回 actions/timeline/events/history 或 nextAction。") : "绑定后从 prd-flow 读取真实 action、产物和 URL。"}</p>
+              </div>
+            )}
+          </div>
+        </article>
+
+        <aside className="af-prd-workflow-side" aria-label="Workflow related links">
+          {artifacts.length ? (
+            <article className="af-prd-workflow-card">
+              <div className="af-prd-workflow-card__head">
+                <h2>关联产物</h2>
+                <span>{artifacts.length}</span>
+              </div>
+              <div className="af-prd-workflow-list">
+                {artifacts.map((item, index) => {
+                  const href = prdWorkflowArtifactHref(item);
+                  const label = String(item.label || item.title || item.kind || href || `Artifact ${index + 1}`);
+                  return href ? (
+                    <a key={`${href}-${index}`} href={href} target="_blank" rel="noreferrer">
+                      <span>{label}</span>
+                      <small>{item.kind || href}</small>
+                    </a>
+                  ) : (
+                    <div key={`${label}-${index}`}>
+                      <span>{label}</span>
+                      <small>{item.kind || ""}</small>
+                    </div>
+                  );
+                })}
+              </div>
+            </article>
+          ) : null}
+          <article className="af-prd-workflow-card">
+            <div className="af-prd-workflow-card__head">
+              <h2>Issues</h2>
+              <span>{issueCount || issues.length}</span>
+            </div>
+            <div className="af-prd-workflow-issues">
+              {issueGroups.length ? issueGroups.map((group) => (
+                <div key={group.key} className="af-prd-workflow-epic">
+                  <div className="af-prd-workflow-epic__head">
+                    <strong>{group.title || group.key}</strong>
+                    <small>{group.issues.length}</small>
+                  </div>
+                  {group.issues.map((row, index) => {
+                    const issue = row.issue || {};
+                    const links = prdWorkflowIssueLinks(issue);
+                    return (
+                      <div key={prdWorkflowIssueKey(issue, index)} className="af-prd-workflow-issue">
+                        <strong>{prdWorkflowIssueTitle(issue, index)}</strong>
+                        <small>{[prdWorkflowIssueKey(issue, index), issue.platform, issue.status].filter(Boolean).join(" · ")}</small>
+                        {links.length ? (
+                          <div className="af-prd-workflow-issue__links">
+                            {links.map((link) => (
+                              <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
+                            ))}
+                          </div>
+                        ) : null}
+                        {row.children?.length ? (
+                          <div className="af-prd-workflow-issue__children">
+                            {row.children.map((child, childIndex) => {
+                              const childIssue = child.issue || {};
+                              const childLinks = prdWorkflowIssueLinks(childIssue);
+                              return (
+                                <div key={prdWorkflowIssueKey(childIssue, childIndex)} className="af-prd-workflow-issue af-prd-workflow-issue--child">
+                                  <strong>{prdWorkflowIssueTitle(childIssue, childIndex)}</strong>
+                                  <small>{[prdWorkflowIssueKey(childIssue, childIndex), childIssue.platform, childIssue.status].filter(Boolean).join(" · ")}</small>
+                                  {childLinks.length ? (
+                                    <div className="af-prd-workflow-issue__links">
+                                      {childLinks.map((link) => (
+                                        <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )) : (
+                <p className="af-prd-workflow-muted">暂无 Issue 信息。</p>
+              )}
+            </div>
+          </article>
+          <article className="af-prd-workflow-card">
+            <div className="af-prd-workflow-card__head">
+              <h2>运行审计</h2>
+              <span>{auditRows.length}/{allAuditRows.length}</span>
+            </div>
+            <div className="af-prd-workflow-audit-filter" role="tablist" aria-label="运行审计筛选">
+              {[
+                ["all", "全部"],
+                ["errors", "异常"],
+                ["review", "Review"],
+                ["external", "外部"],
+              ].map(([key, label]) => (
+                <button key={key} type="button" className={auditFilter === key ? "is-active" : ""} onClick={() => setAuditFilter(key)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="af-prd-workflow-audit">
+              {auditRows.length ? auditRows.map((item, index) => (
+                <div key={item.id || `${item.type}-${index}`}>
+                  <strong>{prdWorkflowActionTitle(item, index)}</strong>
+                  <small>{[item.status, item.type, prdWorkflowActionTime(item)].filter(Boolean).join(" · ")}</small>
+                </div>
+              )) : (
+                <p className="af-prd-workflow-muted">暂无运行事件。</p>
+              )}
+            </div>
+          </article>
+          {rawOutput || actionOutput ? (
+            <article className="af-prd-workflow-card af-prd-workflow-card--raw">
+              <div className="af-prd-workflow-card__head">
+                <h2>Raw</h2>
+              </div>
+              <pre>{actionOutput || rawOutput}</pre>
+            </article>
+          ) : null}
+        </aside>
+      </section>
+    </main>
   );
 }
 
@@ -5574,7 +7195,10 @@ function WorkspacePageInner() {
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const [workspaceMode, setWorkspaceMode] = useState(() => (
-    new URLSearchParams(window.location.search).get("view") === "display" ? "display" : "workspace"
+    (() => {
+      const view = new URLSearchParams(window.location.search).get("view");
+      return view === "display" || view === "workflow" ? view : "workspace";
+    })()
   ));
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -5668,6 +7292,23 @@ function WorkspacePageInner() {
   const [skillCollectionsLoaded, setSkillCollectionsLoaded] = useState(false);
   const [mcpServers, setMcpServers] = useState([]);
   const [workspaceTargets, setWorkspaceTargets] = useState([]);
+  const [workflowTapdId, setWorkflowTapdId] = useState(() => {
+    try {
+      const fromUrl = String(new URLSearchParams(window.location.search).get("tapdId") || "").trim();
+      if (fromUrl) return fromUrl;
+      return String(window.localStorage.getItem(`agentflow.workflow.tapdId:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`) || "").trim();
+    } catch {
+      return "";
+    }
+  });
+  const [workflowSnapshot, setWorkflowSnapshot] = useState(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowError, setWorkflowError] = useState("");
+  const [workflowActionRunning, setWorkflowActionRunning] = useState(false);
+  const [workflowActionOutput, setWorkflowActionOutput] = useState("");
+  const [workflowPendingConfirm, setWorkflowPendingConfirm] = useState(null);
+  const [workflowReviewPublishing, setWorkflowReviewPublishing] = useState(false);
+  const [workflowConflict, setWorkflowConflict] = useState(null);
 
   const showFlowSnippetToast = useCallback((message) => {
     if (flowSnippetToastTimerRef.current) {
@@ -5973,6 +7614,136 @@ function WorkspacePageInner() {
     setStatus(writable ? "Workspace ready" : "Readonly workspace");
     loadedRef.current = true;
   }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes]);
+
+  const loadPrdWorkflowSnapshot = useCallback(async (tapdIdOverride = workflowTapdId) => {
+    const tapdId = String(tapdIdOverride || "").trim();
+    setWorkflowLoading(true);
+    setWorkflowError("");
+    try {
+      const q = flowParamsQuery(flowParams);
+      q.set("tapdId", tapdId);
+      const res = await fetch(`/api/prd-workflow/snapshot?${q.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "读取 PRD Workflow 失败");
+      setWorkflowSnapshot(data.snapshot || null);
+      setWorkflowActionOutput("");
+      setWorkflowPendingConfirm(null);
+      setWorkflowConflict(null);
+      try {
+        const key = `agentflow.workflow.tapdId:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`;
+        if (tapdId) window.localStorage.setItem(key, tapdId);
+        else window.localStorage.removeItem(key);
+      } catch {
+        /* ignore storage */
+      }
+    } catch (e) {
+      setWorkflowError(String(e.message || e));
+    } finally {
+      setWorkflowLoading(false);
+    }
+  }, [flowParams, workflowTapdId]);
+
+  const runPrdWorkflowAction = useCallback(async (actionOverride = null, options = {}) => {
+    const targetAction = actionOverride && typeof actionOverride === "object" ? actionOverride : workflowSnapshot?.nextAction;
+    const action = prdWorkflowActionId(targetAction);
+    if (!action || workflowActionRunning) return;
+    const confirm = options?.confirm === true;
+    const expectedRevision = String(options?.expectedRevision || workflowSnapshot?.revision || "");
+    setWorkflowActionRunning(true);
+    setWorkflowError("");
+    if (!confirm) {
+      setWorkflowActionOutput("");
+      setWorkflowPendingConfirm(null);
+      setWorkflowConflict(null);
+    }
+    try {
+      const res = await fetch("/api/prd-workflow/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          tapdId: workflowTapdId,
+          action,
+          stage: prdWorkflowStageKey(targetAction),
+          title: prdWorkflowActionTitle(targetAction, 0),
+          ...prdWorkflowActionPayloadExtras(targetAction),
+          dryRun: !confirm,
+          confirm,
+          issueKey: targetAction.issueKey || targetAction.issue_key || "",
+          expectedRevision,
+          idempotencyKey: `workflow-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        if (data.snapshot) setWorkflowSnapshot(data.snapshot);
+        if (data.conflict) setWorkflowConflict({ ...data.conflict, action: targetAction });
+        throw new Error(data.error || "执行 PRD Workflow action 失败");
+      }
+      setWorkflowActionOutput(data.rawOutput || (data.output ? JSON.stringify(data.output, null, 2) : ""));
+      setWorkflowSnapshot(data.snapshot || workflowSnapshot);
+      setWorkflowConflict(null);
+      if (confirm) setWorkflowPendingConfirm(null);
+      else setWorkflowPendingConfirm({ action: targetAction, output: data.output || null, expectedRevision, at: new Date().toISOString() });
+    } catch (e) {
+      setWorkflowError(String(e.message || e));
+    } finally {
+      setWorkflowActionRunning(false);
+    }
+  }, [flowParams, workflowActionRunning, workflowSnapshot, workflowTapdId]);
+
+  const runPrdWorkflowDryRun = useCallback((actionOverride = null) => (
+    runPrdWorkflowAction(actionOverride, { confirm: false })
+  ), [runPrdWorkflowAction]);
+
+  const confirmPrdWorkflowAction = useCallback(() => {
+    const target = workflowPendingConfirm?.action || workflowSnapshot?.nextAction;
+    return runPrdWorkflowAction(target, { confirm: true, expectedRevision: workflowPendingConfirm?.expectedRevision || "" });
+  }, [runPrdWorkflowAction, workflowPendingConfirm, workflowSnapshot]);
+
+  const retryPrdWorkflowConflict = useCallback(() => {
+    const target = workflowConflict?.action || workflowSnapshot?.nextAction;
+    setWorkflowConflict(null);
+    return runPrdWorkflowAction(target, { confirm: false });
+  }, [runPrdWorkflowAction, workflowConflict, workflowSnapshot]);
+
+  const publishPrdWorkflowReviewLink = useCallback(async () => {
+    const content = String(workflowActionOutput || workflowSnapshot?.rawOutput || "").trim();
+    if (!content || workflowReviewPublishing) return;
+    const targetAction = workflowPendingConfirm?.action || workflowSnapshot?.nextAction || {};
+    const title = `Review: ${prdWorkflowActionTitle(targetAction, 0) || workflowSnapshot?.pointer || workflowTapdId || "PRD Workflow"}`;
+    const looksJson = /^[\[{]/.test(content);
+    const markdown = content.startsWith("#")
+      ? content
+      : `# ${title}\n\n${looksJson ? `\`\`\`json\n${content}\n\`\`\`` : content}`;
+    setWorkflowReviewPublishing(true);
+    setWorkflowError("");
+    try {
+      const res = await fetch("/api/prd-workflow/review-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...flowParams,
+          tapdId: workflowTapdId,
+          title,
+          markdown,
+          action: prdWorkflowActionId(targetAction),
+          stage: prdWorkflowStageKey(targetAction),
+          issueKey: targetAction.issueKey || targetAction.issue_key || "",
+          artifactLabel: "临时 Review",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.error || "生成 Review 链接失败");
+      setWorkflowSnapshot(data.snapshot || workflowSnapshot);
+      const reviewUrl = data.review?.url || "";
+      if (reviewUrl) setWorkflowActionOutput((prev) => `${prev || content}\n\nReview link: ${reviewUrl}`);
+    } catch (e) {
+      setWorkflowError(String(e.message || e));
+    } finally {
+      setWorkflowReviewPublishing(false);
+    }
+  }, [flowParams, workflowActionOutput, workflowPendingConfirm, workflowReviewPublishing, workflowSnapshot, workflowTapdId]);
 
   const publishNodeToMarketplace = useCallback(
     async (draft, definitionId) => {
@@ -7554,6 +9325,8 @@ function WorkspacePageInner() {
     }));
   }, []);
 
+  const closeNodeChat = useCallback(() => setActiveNodeChatId(""), []);
+
   const updateNodeChatDraft = useCallback((nodeId, draft) => {
     const id = String(nodeId || "").trim();
     if (!id) return;
@@ -7736,13 +9509,6 @@ function WorkspacePageInner() {
       });
     }
   }, [setDisplayNodeContent, uploadWorkspaceImage]);
-
-  const applyNodeChatCandidate = useCallback((nodeId, mode = "replace") => {
-    const id = String(nodeId || "").trim();
-    const candidate = String(nodeChatSessions[id]?.candidateContent || "").trim();
-    if (!id || !candidate) return;
-    setDisplayNodeContent(id, candidate, mode);
-  }, [nodeChatSessions, setDisplayNodeContent]);
 
   const sendNodeChat = useCallback(async (nodeId, messageOverride = undefined) => {
     if (!workspaceWritable) {
@@ -8031,60 +9797,90 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, workspaceWritable]);
 
-  const hydratedNodes = useMemo(() => nodes.map((node) => ({
-    ...node,
-    data: {
-      ...node.data,
-      selected: node.selected === true,
-      modelLists,
-      showBodyPreview: true,
-      isExecuting: workspaceExecutingNodes.has(node.id),
-      nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
-      nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
-      flowParams,
-      readOnly: !workspaceWritable,
-      onRunWorkspaceNode: runWorkspaceNode,
-      onStopWorkspaceNode: stopWorkspaceRun,
-      onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
-      onOptimizeWorkspaceRun: optimizeWorkspaceRun,
-      onOptimizeWorkspaceSchedule: optimizeWorkspaceRun,
-      optimizingRun: optimizingRunNodeId === node.id,
-      runningRunNodeIds,
-      scheduledRunState: scheduledRunState[node.id] || null,
-      onChangeScheduledRunConfig: changeScheduledRunConfig,
-      onChangeContextRunConfig: changeContextRunConfig,
-      skills,
-      skillCollections,
-      onChangeLoadSkillKeys: changeLoadSkillKeys,
-      onRefreshSkills: refreshSkills,
-      mcpServers,
-      onChangeLoadMcpNames: changeLoadMcpNames,
-      onRefreshMcps: refreshMcps,
-      workspaceTargets,
-      onChangeLoadWorkspace: changeLoadWorkspace,
-      onRefreshWorkspaces: refreshWorkspaces,
-      onSaveDisplayNodeToFile: saveDisplayNodeToFile,
-      onShareDisplayNode: shareDisplayNode,
-      onOpenDisplayPreview: setDisplayPreviewNodeId,
-      onRefreshNodeInternals: refreshNodeInternals,
-      onEnsureWorkspaceNodeDisplaySize: ensureWorkspaceNodeDisplaySize,
-      sharingDisplayNodeId,
-      onUploadWorkspaceImage: uploadWorkspaceImage,
-      onUploadImageToDisplayNode: uploadImageToDisplayNode,
-      onOpenProvideFilePicker: openProvideFilePicker,
-      onStatus: setStatus,
-      nodeChatActive: activeNodeChatId === node.id,
-      nodeChat: nodeChatSessions[node.id] || null,
-      onSetDisplayNodeContent: setDisplayNodeContent,
-      onToggleNodeChat: toggleNodeChat,
-      onCloseNodeChat: () => setActiveNodeChatId(""),
-      onUpdateNodeChatDraft: updateNodeChatDraft,
-      onSendNodeChat: sendNodeChat,
-      onApplyNodeChatCandidate: applyNodeChatCandidate,
-      onSyncNodePropDraft: syncNodePropDraft,
-      onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
-    },
-  })), [activeNodeChatId, applyNodeChatCandidate, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, nodeChatSessions, nodes, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, optimizingRunNodeId, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, scheduledRunState, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceExecutingNodes, workspaceNodeRunStatus, workspaceTargets, workspaceWritable]);
+  const hydratedNodeCommonData = useMemo(() => ({
+    modelLists,
+    showBodyPreview: true,
+    flowParams,
+    readOnly: !workspaceWritable,
+    onRunWorkspaceNode: runWorkspaceNode,
+    onStopWorkspaceNode: stopWorkspaceRun,
+    onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
+    onOptimizeWorkspaceRun: optimizeWorkspaceRun,
+    onOptimizeWorkspaceSchedule: optimizeWorkspaceRun,
+    runningRunNodeIds,
+    onChangeScheduledRunConfig: changeScheduledRunConfig,
+    onChangeContextRunConfig: changeContextRunConfig,
+    skills,
+    skillCollections,
+    onChangeLoadSkillKeys: changeLoadSkillKeys,
+    onRefreshSkills: refreshSkills,
+    mcpServers,
+    onChangeLoadMcpNames: changeLoadMcpNames,
+    onRefreshMcps: refreshMcps,
+    workspaceTargets,
+    onChangeLoadWorkspace: changeLoadWorkspace,
+    onRefreshWorkspaces: refreshWorkspaces,
+    onSaveDisplayNodeToFile: saveDisplayNodeToFile,
+    onShareDisplayNode: shareDisplayNode,
+    onOpenDisplayPreview: setDisplayPreviewNodeId,
+    onRefreshNodeInternals: refreshNodeInternals,
+    onEnsureWorkspaceNodeDisplaySize: ensureWorkspaceNodeDisplaySize,
+    sharingDisplayNodeId,
+    onUploadWorkspaceImage: uploadWorkspaceImage,
+    onUploadImageToDisplayNode: uploadImageToDisplayNode,
+    onOpenProvideFilePicker: openProvideFilePicker,
+    onStatus: setStatus,
+    onSetDisplayNodeContent: setDisplayNodeContent,
+    onToggleNodeChat: toggleNodeChat,
+    onCloseNodeChat: closeNodeChat,
+    onUpdateNodeChatDraft: updateNodeChatDraft,
+    onSendNodeChat: sendNodeChat,
+    onSyncNodePropDraft: syncNodePropDraft,
+    onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
+  }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
+
+  const hydratedNodeCacheRef = useRef(new Map());
+  const hydratedNodes = useMemo(() => {
+    const cache = hydratedNodeCacheRef.current;
+    const seen = new Set();
+    const nextNodes = nodes.map((node) => {
+      const runtime = {
+        selected: node.selected === true,
+        isExecuting: workspaceExecutingNodes.has(node.id),
+        nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
+        nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
+        optimizingRun: optimizingRunNodeId === node.id,
+        scheduledRunState: scheduledRunState[node.id] || null,
+        nodeChatActive: activeNodeChatId === node.id,
+        nodeChat: nodeChatSessions[node.id] || null,
+      };
+      const cached = cache.get(node.id);
+      if (
+        cached &&
+        cached.source === node &&
+        cached.commonData === hydratedNodeCommonData &&
+        workspaceHydratedNodeRuntimeEqual(cached.runtime, runtime)
+      ) {
+        seen.add(node.id);
+        return cached.node;
+      }
+      const hydrated = {
+        ...node,
+        data: {
+          ...node.data,
+          ...hydratedNodeCommonData,
+          ...runtime,
+        },
+      };
+      cache.set(node.id, { source: node, commonData: hydratedNodeCommonData, runtime, node: hydrated });
+      seen.add(node.id);
+      return hydrated;
+    });
+    for (const id of cache.keys()) {
+      if (!seen.has(id)) cache.delete(id);
+    }
+    return nextNodes;
+  }, [activeNodeChatId, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const hydratedNodeById = useMemo(
     () => new Map(hydratedNodes.map((node) => [node.id, node])),
@@ -8128,6 +9924,7 @@ function WorkspacePageInner() {
   );
 
   const isDisplayMode = workspaceMode === "display";
+  const isWorkflowMode = workspaceMode === "workflow";
 
   useEffect(() => {
     if (!isDisplayMode || !displayPage.viewport) return undefined;
@@ -8144,7 +9941,7 @@ function WorkspacePageInner() {
   }, [displayPage.viewport, isDisplayMode, reactFlow]);
 
   useEffect(() => {
-    if (isDisplayMode || !workspaceViewport) return undefined;
+    if (isDisplayMode || isWorkflowMode || !workspaceViewport) return undefined;
     const viewport = workspaceViewport;
     const apply = () => {
       try {
@@ -8155,7 +9952,26 @@ function WorkspacePageInner() {
     };
     const raf = window.requestAnimationFrame(() => window.requestAnimationFrame(apply));
     return () => window.cancelAnimationFrame(raf);
-  }, [isDisplayMode, reactFlow, workspaceViewport]);
+  }, [isDisplayMode, isWorkflowMode, reactFlow, workspaceViewport]);
+
+  useEffect(() => {
+    if (!isWorkflowMode) return;
+    void loadPrdWorkflowSnapshot(workflowTapdId);
+  }, [isWorkflowMode]);
+
+  useEffect(() => {
+    if (!isWorkflowMode || !workflowTapdId) return undefined;
+    const q = flowParamsQuery(flowParams);
+    q.set("tapdId", workflowTapdId);
+    const events = new EventSource(`/api/prd-workflow/events?${q.toString()}`);
+    events.onmessage = () => {
+      void loadPrdWorkflowSnapshot(workflowTapdId);
+    };
+    events.onerror = () => {
+      events.close();
+    };
+    return () => events.close();
+  }, [flowParams, isWorkflowMode, loadPrdWorkflowSnapshot, workflowTapdId]);
 
   useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
@@ -8535,7 +10351,7 @@ function WorkspacePageInner() {
   );
 
   const switchWorkspaceMode = useCallback((mode) => {
-    const nextMode = mode === "display" ? "display" : "workspace";
+    const nextMode = mode === "display" ? "display" : mode === "workflow" ? "workflow" : "workspace";
     setWorkspaceMode(nextMode);
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
@@ -8544,9 +10360,13 @@ function WorkspacePageInner() {
     setDisplayPickerOpen(false);
     const q = flowParamsQuery(flowParams);
     if (nextMode === "display") q.set("view", "display");
+    if (nextMode === "workflow") {
+      q.set("view", "workflow");
+      if (workflowTapdId.trim()) q.set("tapdId", workflowTapdId.trim());
+    }
     const url = `/workspace${q.toString() ? `?${q.toString()}` : ""}`;
     window.history.pushState({}, "", url);
-  }, [flowParams]);
+  }, [flowParams, workflowTapdId]);
 
   const addDisplayPageNode = useCallback((sourceId) => {
     const id = String(sourceId || "").trim();
@@ -9398,12 +11218,12 @@ function WorkspacePageInner() {
   }, [insertFlowSnippet, quickAddNodePosition]);
 
   const focusWorkspaceCanvasForShortcuts = useCallback((event) => {
-    if (isDisplayMode) return;
+    if (isDisplayMode || isWorkflowMode) return;
     const target = event?.target;
     if (isEditableShortcutTarget(target)) return;
     if (target?.closest?.("button, a, [role='button'], .react-flow__handle")) return;
     workspaceCanvasRef.current?.focus?.({ preventScroll: true });
-  }, [isDisplayMode]);
+  }, [isDisplayMode, isWorkflowMode]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -9937,6 +11757,13 @@ function WorkspacePageInner() {
             >
               Display
             </button>
+            <button
+              type="button"
+              className={workspaceMode === "workflow" ? "af-view-switch__active" : ""}
+              onClick={() => switchWorkspaceMode("workflow")}
+            >
+              Workflow
+            </button>
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
@@ -10009,7 +11836,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
-            disabled={isDisplayMode}
+            disabled={isDisplayMode || isWorkflowMode}
             onClick={() => {
               setWorkspaceRunLogsTarget(null);
               setComposerSidebarOpen((v) => {
@@ -10038,12 +11865,13 @@ function WorkspacePageInner() {
 	      <div
 	        className={
 	          "af-workspace-body" +
-	          (!isDisplayMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
-	          (!isDisplayMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
-	          (isDisplayMode ? " af-workspace-body--display-mode" : "")
+	          (!isDisplayMode && !isWorkflowMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
+	          (!isDisplayMode && !isWorkflowMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
+	          (isDisplayMode ? " af-workspace-body--display-mode" : "") +
+	          (isWorkflowMode ? " af-workspace-body--workflow-mode" : "")
 	        }
 	      >
-        {!isDisplayMode && workspaceSidebarCollapsed ? (
+        {!isDisplayMode && !isWorkflowMode && workspaceSidebarCollapsed ? (
           <nav className="af-workspace-rail" aria-label="Workspace sidebar">
             <div className="af-workspace-rail__stack">
               <button
@@ -10078,7 +11906,7 @@ function WorkspacePageInner() {
             </div>
           </nav>
         ) : null}
-        {!isDisplayMode ? <aside
+        {!isDisplayMode && !isWorkflowMode ? <aside
           ref={workspaceSidebarRef}
           className={"af-workspace-sidebar" + (workspaceSidebarResizing ? " af-workspace-sidebar--resizing" : "")}
           aria-hidden={workspaceSidebarCollapsed}
@@ -10320,6 +12148,26 @@ function WorkspacePageInner() {
 
         </aside> : null}
 
+        {isWorkflowMode ? (
+          <PrdWorkflowTimelinePanel
+            projectId={workspaceProjectTitle}
+            tapdId={workflowTapdId}
+            setTapdId={setWorkflowTapdId}
+            snapshot={workflowSnapshot}
+            loading={workflowLoading}
+            error={workflowError}
+            actionRunning={workflowActionRunning}
+            actionOutput={workflowActionOutput}
+            pendingConfirm={workflowPendingConfirm}
+            conflict={workflowConflict}
+            reviewPublishing={workflowReviewPublishing}
+            onRefresh={() => loadPrdWorkflowSnapshot(workflowTapdId)}
+            onRunDryRun={runPrdWorkflowDryRun}
+            onConfirmAction={confirmPrdWorkflowAction}
+            onRetryConflict={retryPrdWorkflowConflict}
+            onPublishReview={publishPrdWorkflowReviewLink}
+          />
+        ) : (
         <main
           ref={workspaceCanvasRef}
           className="af-workspace-canvas"
@@ -10538,7 +12386,7 @@ function WorkspacePageInner() {
             );
           })() : null}
 
-          {!isDisplayMode && !composerMinimized ? (
+          {!isDisplayMode && !isWorkflowMode && !composerMinimized ? (
           <div className="af-workspace-composer af-bottom-composer-stack af-flow-bottom-composer">
             <div className="af-pipeline-composer-inner">
               <button
@@ -10734,7 +12582,7 @@ function WorkspacePageInner() {
               </div>
             </div>
           </div>
-          ) : !isDisplayMode ? (
+          ) : !isDisplayMode && !isWorkflowMode ? (
             <button
               type="button"
               className="af-workspace-composer-fab"
@@ -10746,7 +12594,8 @@ function WorkspacePageInner() {
             </button>
           ) : null}
         </main>
-        {!isDisplayMode && composerSidebarOpen ? (
+        )}
+        {!isDisplayMode && !isWorkflowMode && composerSidebarOpen ? (
           <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workspace-composer-drawer" aria-label="Workspace AI Composer">
             <div className="af-composer-sidebar">
               <div className="af-pipeline-drawer-head">
@@ -10857,7 +12706,7 @@ function WorkspacePageInner() {
               </div>
             </div>
           </aside>
-        ) : !isDisplayMode && nodePropDraft && selectedNode ? (
+        ) : !isDisplayMode && !isWorkflowMode && nodePropDraft && selectedNode ? (
           <aside className="af-pipeline-drawer af-workspace-node-drawer" aria-label="Workspace Node Properties">
             <NodePropertiesPanel
               draft={nodePropDraft}
@@ -10877,7 +12726,7 @@ function WorkspacePageInner() {
             />
           </aside>
         ) : null}
-        {!isDisplayMode && workspaceRunLogsTarget ? createPortal(
+        {!isDisplayMode && !isWorkflowMode && workspaceRunLogsTarget ? createPortal(
           <div className="af-workspace-run-logs-overlay" role="presentation" onMouseDown={() => setWorkspaceRunLogsTarget(null)}>
             <aside className="af-workspace-run-logs-drawer" aria-label="Workspace Run Logs" onMouseDown={(event) => event.stopPropagation()}>
               <WorkspaceRunLogsDrawer
@@ -11347,7 +13196,7 @@ function WorkspacePageInner() {
           />,
           document.body,
         ) : null}
-        {!isDisplayMode && quickAddOpen ? createPortal(
+        {!isDisplayMode && !isWorkflowMode && quickAddOpen ? createPortal(
           <div className="af-workspace-quick-add-backdrop" onMouseDown={() => setQuickAddOpen(false)}>
             <div className="af-workspace-quick-add" role="dialog" aria-modal="true" aria-label="Add workspace node" onMouseDown={(event) => event.stopPropagation()}>
               <div className="af-workspace-quick-add__tabs" role="tablist" aria-label="选择添加类型">
