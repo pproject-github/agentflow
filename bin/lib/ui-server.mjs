@@ -10353,7 +10353,7 @@ export function startUiServer({
         const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
         const query = new URLSearchParams();
         if (flowId) query.set("flowId", flowId);
-        if (flowSource) query.set("flowSource", flowSource);
+        if (flowId && flowSource && flowSource !== "user") query.set("flowSource", flowSource);
         if (archived) query.set("archived", "1");
         const reviewUrl = query.toString() ? `${review.url}?${query.toString()}` : review.url;
         const durability = review.durability || "temporary";
