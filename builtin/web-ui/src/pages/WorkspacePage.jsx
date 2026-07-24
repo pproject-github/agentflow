@@ -7218,7 +7218,7 @@ function WorkspacePageInner() {
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [nodes, setNodes] = useNodesState([]);
-  const [edges, setEdges, rawOnEdgesChange] = useEdgesState([]);
+  const [edges, setEdges] = useEdgesState([]);
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
   const workspaceCanvasRef = useRef(null);
@@ -8008,8 +8008,8 @@ function WorkspacePageInner() {
       setStatus(`Workspace run already running: ${runNodeId}`);
       return;
     }
-    let runNodes = nodes;
-    let runEdges = edges;
+    let runNodes = nodesRef.current;
+    let runEdges = edgesRef.current;
     let runInstances = instancesRef.current;
     const draft = nodePropDraftRef.current;
     if (draft?.id) {
@@ -8032,6 +8032,8 @@ function WorkspacePageInner() {
         runEdges = applied.edges;
         runInstances = applied.instances;
         instancesRef.current = runInstances;
+        nodesRef.current = runNodes;
+        edgesRef.current = runEdges;
         setInstances(runInstances);
         setNodes(runNodes);
         setEdges(runEdges);
@@ -11011,12 +11013,20 @@ function WorkspacePageInner() {
     if (!workspaceWritable) {
       const selectionChanges = (changes || []).filter((change) => change?.type === "select");
       if (selectionChanges.length > 0) {
-        setEdges((current) => applyEdgeChanges(selectionChanges, current));
+        setEdges((current) => {
+          const next = applyEdgeChanges(selectionChanges, current);
+          edgesRef.current = next;
+          return next;
+        });
       }
       return;
     }
-    rawOnEdgesChange(changes);
-  }, [rawOnEdgesChange, setEdges, workspaceMode, workspaceWritable]);
+    setEdges((current) => {
+      const next = applyEdgeChanges(changes, current);
+      edgesRef.current = next;
+      return next;
+    });
+  }, [setEdges, workspaceMode, workspaceWritable]);
 
   const defaultWorkspaceNodePosition = useCallback(() => {
     const wrap = document.querySelector(".af-workspace-canvas .react-flow");
@@ -11112,7 +11122,9 @@ function WorkspacePageInner() {
       const filtered = current.filter(
         (edge) => !(edge.target === params.target && edge.targetHandle === params.targetHandle)
       );
-      return addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      const next = addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      edgesRef.current = next;
+      return next;
     });
   }, [setEdges, setNodes, workspaceWritable]);
 
@@ -11191,7 +11203,9 @@ function WorkspacePageInner() {
       const filtered = current.filter(
         (edge) => !(edge.target === nextConnection.target && edge.targetHandle === nextConnection.targetHandle)
       );
-      return addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      const next = addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      edgesRef.current = next;
+      return next;
     });
     setConnectionMenu(null);
   }, [addNodeFromDefinition, setEdges, workspaceWritable]);
@@ -11213,7 +11227,9 @@ function WorkspacePageInner() {
       const filtered = current.filter(
         (edge) => !(edge.target === nextConnection.target && edge.targetHandle === nextConnection.targetHandle)
       );
-      return addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      const next = addEdge({ ...nextConnection, markerEnd: { type: MarkerType.ArrowClosed } }, filtered);
+      edgesRef.current = next;
+      return next;
     });
     setConnectionMenu(null);
   }, [setEdges, setNodes, workspaceWritable]);
