@@ -495,9 +495,24 @@ function prdWorkflowActionLabel(action) {
   return String(action.label || action.title || action.name || action.id || action.action || "").trim();
 }
 
+function prdWorkflowNormalizeHref(href) {
+  const clean = String(href || "").trim();
+  if (!/^https?:\/\//i.test(clean)) return clean;
+  try {
+    const url = new URL(clean);
+    if (url.hostname === "0.0.0.0" || url.hostname === "::" || url.hostname === "[::]") {
+      const currentHost = window.location.hostname;
+      url.hostname = currentHost && currentHost !== "0.0.0.0" && currentHost !== "::" ? currentHost : "127.0.0.1";
+    }
+    return url.href;
+  } catch (_) {
+    return clean;
+  }
+}
+
 function prdWorkflowArtifactHref(item) {
   const url = String(item?.url || item?.href || "").trim();
-  if (url) return url;
+  if (url) return prdWorkflowNormalizeHref(url);
   const p = String(item?.path || "").trim();
   return p ? `file://${p}` : "";
 }
@@ -765,7 +780,7 @@ function prdWorkflowActionMeta(item) {
 function prdWorkflowActionLinks(item) {
   const out = [];
   const push = (label, href) => {
-    const cleanHref = String(href || "").trim();
+    const cleanHref = prdWorkflowNormalizeHref(href);
     if (!cleanHref) return;
     out.push({ label: String(label || cleanHref).trim() || cleanHref, href: cleanHref });
   };

@@ -2713,15 +2713,42 @@ function displayShareOutputUrl(shareId, baseUrl = "") {
   }
 }
 
+function normalizePublicBaseUrl(baseUrl = "") {
+  const raw = String(baseUrl || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (url.hostname === "0.0.0.0" || url.hostname === "::" || url.hostname === "[::]") {
+      url.hostname = "127.0.0.1";
+    }
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
 function requestPublicBaseUrl(req) {
   const origin = String(req?.headers?.origin || "").trim();
-  if (/^https?:\/\//i.test(origin)) return origin;
+  if (/^https?:\/\//i.test(origin)) return normalizePublicBaseUrl(origin);
   const forwardedHost = String(req?.headers?.["x-forwarded-host"] || "").split(",")[0].trim();
   const host = forwardedHost || String(req?.headers?.host || "").trim();
   if (!host) return "";
   const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim();
   const proto = /^https?$/i.test(forwardedProto) ? forwardedProto.toLowerCase() : "http";
-  return `${proto}://${host}`;
+  return normalizePublicBaseUrl(`${proto}://${host}`);
+}
+
+function configuredPublicBaseUrl(payload = null) {
+  const envBase = normalizePublicBaseUrl(process.env.AGENTFLOW_PUBLIC_BASE_URL || process.env.AGENTFLOW_SHARE_BASE_URL || "");
+  if (envBase) return envBase;
+  const payloadBase = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? normalizePublicBaseUrl(payload.publicBaseUrl || payload.public_base_url || payload.reviewBaseUrl || payload.review_base_url || "")
+    : "";
+  return payloadBase;
+}
+
+function serverPublicBaseUrl(req, host, port, payload = null) {
+  return configuredPublicBaseUrl(payload) || requestPublicBaseUrl(req) || normalizePublicBaseUrl(`http://${host}:${port}`);
 }
 
 function normalizeRunEnvKey(key) {
@@ -9814,7 +9841,7 @@ export function startUiServer({
             json(res, 200, result);
             return;
           }
-          const runtimeEventUrl = `http://${host}:${uiPort}/api/prd-workflow/event`;
+          const runtimeEventUrl = `${serverPublicBaseUrl(req, host, uiPort)}/api/prd-workflow/event`;
           const commandResult = await runPrdWorkflowCommand(root, scopedRoot, normalized.args, userCtx, {
             timeout: 300000,
             env: {
@@ -10105,7 +10132,7 @@ export function startUiServer({
           }
           scopedRoot = scoped.root;
         }
-        const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, `http://${host}:${uiPort}`);
+        const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
         const query = new URLSearchParams();
         if (flowId) query.set("flowId", flowId);
         if (flowSource) query.set("flowSource", flowSource);
