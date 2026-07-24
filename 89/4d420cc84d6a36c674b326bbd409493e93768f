@@ -1,0 +1,23 @@
+bin/lib/ui-server.mjs
+  s_12672461dab029::t_a45290789654b8 7146-7187
+  s_12672461dab029::t_908e89a01b0aff 7392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "894d420cc84d6a36c674b326bbd409493e93768f",
+  "prompts": {},
+  "logical_commit_id": "894d420cc84d6a36c674b326bbd409493e93768f",
+  "sessions": {
+    "s_12672461dab029": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f91f1-ac7e-7383-8c12-7bde31e6d2b4",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 7383,
+      "total_deletions": 654
+    }
+  }
+}
