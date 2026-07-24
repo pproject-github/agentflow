@@ -4347,13 +4347,17 @@ function workspaceCachedOutputValueExists(value, scopedRoot = "") {
 }
 
 function workspaceUpstreamText(graph, nodeId, outputs, scopedRoot = "") {
+  const contentEdge = workspaceContentInputEdge(graph, nodeId);
+  if (!contentEdge) return "";
+  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
+}
+
+function workspaceContentInputEdge(graph, nodeId) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const incoming = edges
     .filter((edge) => String(edge?.target || "") === String(nodeId))
     .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
-  const contentEdge = incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0];
-  if (!contentEdge) return "";
-  return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
+  return incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0] || null;
 }
 
 function workspaceHandleIndex(handle, prefix) {
@@ -6089,6 +6093,11 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
 
     if (workspaceDisplayKind(defId)) {
+      if (!workspaceContentInputEdge(graph, nodeId)) {
+        emit({ type: "status", nodeId, line: "Display unchanged: no content input edge" });
+        emit({ type: "node-done", nodeId, definitionId: defId, unchanged: true });
+        continue;
+      }
       const content = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
       const updatedDisplays = publishNodeOutput(nodeId, content);
