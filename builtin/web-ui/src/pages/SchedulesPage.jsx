@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRoute } from "../routeContext.jsx";
+import { scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -24,6 +26,7 @@ function statusLabel(schedule) {
 }
 
 export default function SchedulesPage() {
+  const { navigate } = useRoute();
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -116,6 +119,7 @@ export default function SchedulesPage() {
             {schedules.map((schedule) => {
               const key = `${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
               const busy = updatingKey === key;
+              const targetUrl = scheduleTargetUrl(schedule);
               return (
                 <article key={key} className="af-schedule-card">
                   <div className="af-schedule-card__main">
@@ -140,6 +144,17 @@ export default function SchedulesPage() {
                     {schedule.lastError ? <p className="af-schedule-card__error">{schedule.lastError}</p> : null}
                   </div>
                   <div className="af-schedule-card__actions">
+                    {targetUrl ? (
+                      <button
+                        type="button"
+                        className="af-schedule-open"
+                        title={scheduleTargetLabel(schedule)}
+                        onClick={() => navigate(targetUrl)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                        {scheduleTargetLabel(schedule)}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className={schedule.enabled ? "af-schedule-toggle af-schedule-toggle--on" : "af-schedule-toggle af-schedule-toggle--off"}

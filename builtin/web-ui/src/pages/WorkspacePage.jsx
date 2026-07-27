@@ -39,7 +39,18 @@ import {
 } from "../nodeSchema.js";
 import { recordPipelineView } from "../pipelineViewPreference.js";
 import {
+  diffWorkspaceGraphsForUi,
+  reconcileWorkspaceEdges,
+  reconcileWorkspaceInstances,
+  reconcileWorkspaceNodes,
+  workspaceValueEqual,
+} from "../workspaceGraphDelta.js";
+import {
+  coalesceWorkspaceSaveRequest,
+  shouldSkipWorkspaceRemoteRefresh,
+  workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
+  workspaceLoadResourcePlan,
   workspaceSaveBaselineAfterSuccess,
 } from "../workspaceSyncGuard.js";
 import {
@@ -899,12 +910,28 @@ function prdWorkflowIsAiDocLink(item) {
 
 function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
   const candidates = [];
+  const issueTitleByKey = new Map();
+  for (const issue of prdWorkflowFlattenIssuesFromSnapshot(snapshot)) {
+    const issueKey = prdWorkflowIssueKey(issue);
+    const issueTitle = String(issue?.title || issue?.name || issue?.summary || "").trim();
+    if (issueKey && issueTitle) issueTitleByKey.set(issueKey, issueTitle);
+  }
   const collect = (item, context = {}) => {
     const pushCandidate = (link) => {
+      const issueKey = String(context.issueKey || item?.issueKey || item?.issue_key || item?.issue || "").trim();
+      const rawTitle = String(
+        context.documentTitle
+        || link.title
+        || item?.documentTitle
+        || item?.document_title
+        || item?.title
+        || "",
+      ).trim();
       const candidate = {
         label: String(link.label || "ai-doc").trim() || "ai-doc",
         href: String(link.href || link.url || "").trim(),
         kind: String(link.kind || link.type || "").trim(),
+        title: rawTitle || issueTitleByKey.get(issueKey) || "",
       };
       if (candidate.href && prdWorkflowIsAiDocLink(candidate)) {
         candidates.push({
@@ -932,13 +959,25 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
       issueKey: String(item?.issueKey || item?.issue_key || item?.issue || "").trim(),
       platform: prdWorkflowPlatformLabel(item?.platform),
       displayKind: "Workflow 文档",
+      documentTitle: String(item?.documentTitle || item?.document_title || item?.title || "").trim(),
     });
+  }
+  for (const key of ["actions", "workflowActions", "workflow_actions", "timeline", "history", "events", "runtimeEvents", "runtime_events"]) {
+    for (const item of Array.isArray(snapshot?.[key]) ? snapshot[key] : []) {
+      collect(item, {
+        issueKey: String(item?.issueKey || item?.issue_key || item?.issue || "").trim(),
+        platform: prdWorkflowPlatformLabel(item?.platform),
+        displayKind: "Workflow 文档",
+        documentTitle: String(item?.documentTitle || item?.document_title || item?.title || "").trim(),
+      });
+    }
   }
   for (const issue of prdWorkflowFlattenIssuesFromSnapshot(snapshot)) {
     collect(issue, {
       issueKey: prdWorkflowIssueKey(issue),
       platform: prdWorkflowPlatformLabel(issue?.platform),
       displayKind: "Issue 文档",
+      documentTitle: String(issue?.title || issue?.name || issue?.summary || "").trim(),
     });
   }
 
@@ -958,14 +997,39 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
     if (/markdown review|文档预览/i.test(value)) return 20;
     return 10;
   };
+  const titleRank = (title) => {
+    const value = String(title || "").trim();
+    if (!value) return 0;
+    const normalized = value.replace(/^Issue\s*\d+\s*/i, "").trim();
+    if (/^(方案文档预览|方案文档|技术方案|设计文档|代码审查|Markdown Review|文档预览)$/i.test(normalized)) {
+      return 10;
+    }
+    return 100 + Math.min(value.length, 100);
+  };
   const seen = new Map();
   for (const candidate of candidates) {
     const key = reviewKey(candidate.href);
     const existing = seen.get(key);
-    if (!existing || labelRank(candidate.label) > labelRank(existing.label)) {
+    if (!existing) {
       const { displayKind: _displayKind, ...entry } = candidate;
       seen.set(key, entry);
+      continue;
     }
+    const preferredLabel = labelRank(candidate.label) > labelRank(existing.label)
+      ? candidate.label
+      : existing.label;
+    const preferredTitle = titleRank(candidate.title) > titleRank(existing.title)
+      ? candidate.title
+      : existing.title;
+    seen.set(key, {
+      ...candidate,
+      ...existing,
+      label: preferredLabel,
+      title: preferredTitle,
+      issueKey: existing.issueKey || candidate.issueKey,
+      platform: existing.platform || candidate.platform,
+      kind: existing.kind || candidate.kind,
+    });
   }
   return Array.from(seen.values());
 }
@@ -7215,12 +7279,20 @@ function PrdWorkflowTimelinePanel({
               <span>{aiDocLinks.length}</span>
             </div>
             <div className="af-prd-workflow-list">
-              {aiDocLinks.length ? aiDocLinks.map((item) => (
-                <a key={item.href} href={item.href} target="_blank" rel="noreferrer">
-                  <span>{item.label}</span>
-                  <small>{[item.issueKey, item.platform, item.kind].filter(Boolean).join(" · ") || "ai-doc"}</small>
-                </a>
-              )) : (
+              {aiDocLinks.length ? aiDocLinks.map((item) => {
+                const title = String(item.title || item.label || "ai-doc").trim();
+                const meta = [
+                  item.label && item.label !== title ? item.label : "",
+                  item.platform,
+                  item.issueKey,
+                ].filter(Boolean);
+                return (
+                  <a className="af-prd-ai-doc" key={item.href} href={item.href} target="_blank" rel="noreferrer" title={title}>
+                    <span className="af-prd-ai-doc__title">{title}</span>
+                    <small className="af-prd-ai-doc__meta">{meta.join(" · ") || item.kind || "ai-doc"}</small>
+                  </a>
+                );
+              }) : (
                 <p className="af-prd-workflow-muted">暂无 ai-doc 文档。</p>
               )}
             </div>
@@ -7369,6 +7441,7 @@ function WorkspacePageInner() {
   const reactFlow = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
+  const initialFocusNodeIdRef = useRef(new URLSearchParams(window.location.search).get("focusNodeId") || "");
   const workspaceViewportStorageKey = useMemo(
     () => (
       flowParams.workspaceId
@@ -7409,10 +7482,17 @@ function WorkspacePageInner() {
   const workspaceRevisionRef = useRef("");
   const workspaceBaseGraphRef = useRef(null);
   const workspaceSaveChainRef = useRef(Promise.resolve());
+  const workspaceSaveQueueRef = useRef({ running: false, pending: null });
   const workspaceEditVersionRef = useRef(0);
   const workspaceDirtyRef = useRef(false);
   const workspaceLoadRequestRef = useRef(0);
+  const workspaceRemoteRefreshTimerRef = useRef(null);
+  const workspaceRemoteRefreshInFlightRef = useRef(false);
+  const workspaceRemoteRefreshQueuedRef = useRef(false);
+  const workspaceRemoteRefreshTargetRevisionRef = useRef("");
   const skipNextWorkspaceAutosaveRef = useRef(false);
+  const workspaceCanvasInteractionActiveRef = useRef(false);
+  const workspaceFlushAfterInteractionRef = useRef(false);
   const collaborationClientIdRef = useRef(
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
@@ -7421,6 +7501,7 @@ function WorkspacePageInner() {
   const conversationsLoadedRef = useRef(false);
   const conversationsSaveTimerRef = useRef(null);
   const [palette, setPalette] = useState([]);
+  const paletteRef = useRef([]);
   const [paletteSearch, setPaletteSearch] = useState("");
   const [paletteMode, setPaletteMode] = useState("nodes");
   const [flowSnippets, setFlowSnippets] = useState([]);
@@ -7852,19 +7933,59 @@ function WorkspacePageInner() {
   }, [flowParams, palette, setEdges, setNodes, workspaceWritable]);
 
   const saveGraph = useCallback((nextNodes = nodes, nextEdges = edges) => {
-    const saveEditVersion = workspaceEditVersionRef.current;
+    const queue = workspaceSaveQueueRef.current;
+    const request = {
+      nextNodes,
+      nextEdges,
+      saveEditVersion: workspaceEditVersionRef.current,
+      waiters: [],
+    };
+    const resultPromise = new Promise((resolve, reject) => {
+      request.waiters.push({ resolve, reject });
+    });
+
+    if (queue.running) {
+      queue.pending = coalesceWorkspaceSaveRequest(queue.pending, request);
+      return resultPromise;
+    }
+
+    queue.running = true;
+    const drainQueue = async () => {
+      let current = request;
+      while (current) {
+        if (queue.pending) {
+          current = coalesceWorkspaceSaveRequest(current, queue.pending);
+          queue.pending = null;
+        }
+        try {
+          const result = await performSaveGraph(
+            current.nextNodes,
+            current.nextEdges,
+            current.saveEditVersion,
+          );
+          current.waiters.forEach(({ resolve }) => resolve(result));
+        } catch (error) {
+          if (error?.code !== "WORKSPACE_REVISION_CONFLICT") {
+            setWorkspaceSyncPhase("error");
+            setWorkspaceSyncDetail(String(error.message || error));
+          }
+          current.waiters.forEach(({ reject }) => reject(error));
+          if (error?.code === "WORKSPACE_REVISION_CONFLICT" && queue.pending) {
+            queue.pending.waiters.forEach(({ reject }) => reject(error));
+            queue.pending = null;
+          }
+        }
+        current = queue.pending;
+        queue.pending = null;
+      }
+      queue.running = false;
+    };
+
     const queuedSave = workspaceSaveChainRef.current
       .catch(() => undefined)
-      .then(() => performSaveGraph(nextNodes, nextEdges, saveEditVersion));
-    const observedSave = queuedSave.catch((error) => {
-      if (error?.code !== "WORKSPACE_REVISION_CONFLICT") {
-        setWorkspaceSyncPhase("error");
-        setWorkspaceSyncDetail(String(error.message || error));
-      }
-      throw error;
-    });
-    workspaceSaveChainRef.current = observedSave;
-    return observedSave;
+      .then(drainQueue);
+    workspaceSaveChainRef.current = queuedSave;
+    return resultPromise;
   }, [edges, nodes, performSaveGraph]);
 
   const restoreCanvasSnapshot = useCallback((snapshot) => {
@@ -7900,17 +8021,25 @@ function WorkspacePageInner() {
     const startedEditVersion = workspaceEditVersionRef.current;
     const startedRevision = workspaceRevisionRef.current;
     if (!background) loadedRef.current = false;
+    const resources = workspaceLoadResourcePlan({ background });
     const q = flowParamsQuery(flowParams);
-    const nodeQ = flowParamsQuery(flowParams);
-    nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
-    const [nodesRes, graphRes] = await Promise.all([
-      fetch(`/api/nodes?${nodeQ.toString()}`),
-      fetch(`/api/workspace/graph?${q.toString()}`),
-      loadFiles(),
-    ]);
-    const nodesJson = await nodesRes.json();
+    let nodesJson = null;
+    let graphRes;
+    if (!resources.nodes && !resources.files) {
+      graphRes = await fetch(`/api/workspace/graph?${q.toString()}`);
+    } else {
+      const nodeQ = flowParamsQuery(flowParams);
+      nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
+      const [nodesRes, nextGraphRes] = await Promise.all([
+        fetch(`/api/nodes?${nodeQ.toString()}`),
+        fetch(`/api/workspace/graph?${q.toString()}`),
+        loadFiles(),
+      ]);
+      nodesJson = await nodesRes.json();
+      if (!nodesRes.ok) throw new Error(nodesJson.error || "读取节点定义失败");
+      graphRes = nextGraphRes;
+    }
     const graphJson = await graphRes.json();
-    if (!nodesRes.ok) throw new Error(nodesJson.error || "读取节点定义失败");
     if (!graphRes.ok) throw new Error(graphJson.error || "读取 workspace graph 失败");
     const skipReason = workspaceBackgroundLoadSkipReason({
       background,
@@ -7929,16 +8058,21 @@ function WorkspacePageInner() {
       setStatus("检测到远端更新；本地修改将在保存时自动合并");
       return { skipped: true, reason: skipReason };
     }
-    const paletteList = [
-      ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
-      WORKSPACE_CONTEXT_RUN_DEFINITION,
-      WORKSPACE_LOAD_WORKSPACE_DEFINITION,
-      WORKSPACE_LOAD_SKILLS_DEFINITION,
-      WORKSPACE_LOAD_MCP_DEFINITION,
-      WORKSPACE_RUN_DEFINITION,
-      WORKSPACE_SCHEDULED_RUN_DEFINITION,
-    ];
-    setPalette(paletteList);
+    const paletteList = background
+      ? paletteRef.current
+      : [
+          ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
+          WORKSPACE_CONTEXT_RUN_DEFINITION,
+          WORKSPACE_LOAD_WORKSPACE_DEFINITION,
+          WORKSPACE_LOAD_SKILLS_DEFINITION,
+          WORKSPACE_LOAD_MCP_DEFINITION,
+          WORKSPACE_RUN_DEFINITION,
+          WORKSPACE_SCHEDULED_RUN_DEFINITION,
+        ];
+    if (!background) {
+      paletteRef.current = paletteList;
+      setPalette(paletteList);
+    }
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
     const flow = graphToFlow(graph, paletteList);
     const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
@@ -7954,27 +8088,82 @@ function WorkspacePageInner() {
       nextWorkspaceViewport = normalizeCanvasViewport(savedWorkspaceViewport)
         || normalizeCanvasViewport(graph?.ui?.viewport);
     }
-    instancesRef.current = flow.instances;
-    setInstances(flow.instances);
-    setNodes(flow.nodes);
-    setEdges(flow.edges);
-    setScheduledRunState(scheduledRunStateFromServer(graphJson.workspaceSchedules || []));
+    const delta = background
+      ? diffWorkspaceGraphsForUi(workspaceBaseGraphRef.current, graph)
+      : null;
+    if (background && delta?.safe) {
+      const nextNodes = delta.nodesChanged
+        ? reconcileWorkspaceNodes(nodesRef.current, flow.nodes, delta.changedNodeIds)
+        : nodesRef.current;
+      const nextEdges = delta.edgesChanged
+        ? reconcileWorkspaceEdges(edgesRef.current, flow.edges)
+        : edgesRef.current;
+      const displayPageChanged = delta.displayPageChanged
+        || !workspaceValueEqual(displayPageRef.current, nextDisplayPage);
+      const graphStateChanged = delta.nodesChanged || delta.edgesChanged || displayPageChanged;
+      if (graphStateChanged) skipNextWorkspaceAutosaveRef.current = true;
+      if (delta.nodesChanged) {
+        const nextInstances = reconcileWorkspaceInstances(
+          instancesRef.current,
+          flow.instances,
+          delta.changedNodeIds,
+        );
+        instancesRef.current = nextInstances;
+        nodesRef.current = nextNodes;
+        setInstances(nextInstances);
+        setNodes(nextNodes);
+      }
+      if (delta.edgesChanged) {
+        edgesRef.current = nextEdges;
+        setEdges(nextEdges);
+      }
+      if (displayPageChanged) {
+        displayPageRef.current = nextDisplayPage;
+        setDisplayPage(nextDisplayPage);
+      }
+      if (graphStateChanged) {
+        resetCanvasHistory(nextNodes, nextEdges, {
+          instances: delta.nodesChanged ? instancesRef.current : flow.instances,
+        });
+      }
+      if (delta.nodesChanged || displayPageChanged) {
+        const validDisplayNodeIds = new Set(nextDisplayPage.nodeIds);
+        setSelectedDisplayNodeIds((current) => {
+          const filtered = current.filter((id) => validDisplayNodeIds.has(id));
+          return filtered.length === current.length ? current : filtered;
+        });
+      }
+    } else {
+      instancesRef.current = flow.instances;
+      nodesRef.current = flow.nodes;
+      edgesRef.current = flow.edges;
+      displayPageRef.current = nextDisplayPage;
+      skipNextWorkspaceAutosaveRef.current = true;
+      setInstances(flow.instances);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setDisplayPage(nextDisplayPage);
+      setSelectedDisplayNodeIds([]);
+      resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
+    }
+    const nextScheduledRunState = scheduledRunStateFromServer(graphJson.workspaceSchedules || []);
+    setScheduledRunState((current) => (
+      workspaceValueEqual(current, nextScheduledRunState) ? current : nextScheduledRunState
+    ));
     workspaceRevisionRef.current = String(graphJson.revision || "");
     workspaceBaseGraphRef.current = graph;
     workspaceDirtyRef.current = false;
-    setWorkspaceCollaboration(graphJson.collaboration || null);
+    const nextCollaboration = graphJson.collaboration || null;
+    setWorkspaceCollaboration((current) => (
+      workspaceValueEqual(current, nextCollaboration) ? current : nextCollaboration
+    ));
     setWorkspaceConflict(null);
-    setDisplayPage(nextDisplayPage);
-    displayPageRef.current = nextDisplayPage;
     if (shouldInitializeWorkspaceViewport) {
       setWorkspaceViewport(nextWorkspaceViewport);
       workspaceViewportRef.current = nextWorkspaceViewport;
       workspaceViewportInitializedRef.current = true;
     }
-    setSelectedDisplayNodeIds([]);
-    resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     const writable = graphJson.writable !== false;
-    skipNextWorkspaceAutosaveRef.current = true;
     setWorkspaceWritable(writable);
     setStatus(writable ? "Workspace ready" : "Readonly workspace");
     setWorkspaceSyncPhase(writable ? "synced" : "readonly");
@@ -7982,6 +8171,62 @@ function WorkspacePageInner() {
     loadedRef.current = true;
     return { skipped: false };
   }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
+
+  const scheduleWorkspaceRemoteRefresh = useCallback((event = {}) => {
+    if (!loadedRef.current) return;
+    const revision = String(event.revision || "");
+    const isGraphCommit = event.type === "graph.committed";
+    const refreshPending = Boolean(
+      workspaceRemoteRefreshTimerRef.current
+      || workspaceRemoteRefreshInFlightRef.current
+      || workspaceRemoteRefreshQueuedRef.current
+    );
+    if (shouldSkipWorkspaceRemoteRefresh({
+      eventType: event.type,
+      revision,
+      currentRevision: workspaceRevisionRef.current,
+      targetRevision: workspaceRemoteRefreshTargetRevisionRef.current,
+      refreshPending,
+    })) {
+      return;
+    }
+    if (isGraphCommit && revision) {
+      workspaceRemoteRefreshTargetRevisionRef.current = revision;
+    }
+    if (workspaceDirtyRef.current) {
+      workspaceRemoteRefreshQueuedRef.current = false;
+      setStatus("检测到其他成员的更新；保存时将自动合并");
+      return;
+    }
+
+    workspaceRemoteRefreshQueuedRef.current = true;
+    if (workspaceRemoteRefreshTimerRef.current || workspaceRemoteRefreshInFlightRef.current) return;
+
+    const runRefresh = async () => {
+      workspaceRemoteRefreshTimerRef.current = null;
+      if (workspaceDirtyRef.current) {
+        workspaceRemoteRefreshQueuedRef.current = false;
+        setStatus("检测到其他成员的更新；保存时将自动合并");
+        return;
+      }
+      workspaceRemoteRefreshQueuedRef.current = false;
+      workspaceRemoteRefreshInFlightRef.current = true;
+      try {
+        await loadWorkspace({ background: true });
+        workspaceRemoteRefreshTargetRevisionRef.current = workspaceRevisionRef.current;
+      } catch (error) {
+        workspaceRemoteRefreshTargetRevisionRef.current = "";
+        setStatus(String(error.message || error));
+      } finally {
+        workspaceRemoteRefreshInFlightRef.current = false;
+        if (workspaceRemoteRefreshQueuedRef.current && !workspaceDirtyRef.current) {
+          workspaceRemoteRefreshTimerRef.current = window.setTimeout(runRefresh, 40);
+        }
+      }
+    };
+
+    workspaceRemoteRefreshTimerRef.current = window.setTimeout(runRefresh, 40);
+  }, [loadWorkspace]);
 
   const loadPrdWorkflowSnapshot = useCallback(async (tapdIdOverride = workflowTapdId) => {
     const tapdId = String(tapdIdOverride || "").trim();
@@ -9432,15 +9677,21 @@ function WorkspacePageInner() {
   useEffect(() => {
     if (!loadedRef.current) return;
     if (!workspaceWritable) return;
+    if (workspaceCanvasInteractionActiveRef.current) {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      return;
+    }
     if (skipNextWorkspaceAutosaveRef.current) {
       skipNextWorkspaceAutosaveRef.current = false;
       return;
     }
     markWorkspaceDirty();
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    const saveDelayMs = workspaceFlushAfterInteractionRef.current ? 0 : 650;
+    workspaceFlushAfterInteractionRef.current = false;
     saveTimerRef.current = window.setTimeout(() => {
       saveGraph().catch((e) => setStatus(String(e.message || e)));
-    }, 650);
+    }, saveDelayMs);
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
@@ -10442,17 +10693,11 @@ function WorkspacePageInner() {
       try { event = JSON.parse(message.data || "{}"); } catch { event = null; }
       if (!event || event.clientId === collaborationClientIdRef.current) return;
       if (event.type === "graph.committed") {
-        if (workspaceDirtyRef.current) {
-          setStatus("检测到其他成员的更新；保存时将自动合并");
-          return;
-        }
-        void loadWorkspace({ background: true }).catch((e) => setStatus(String(e.message || e)));
+        scheduleWorkspaceRemoteRefresh(event);
         return;
       }
       if (event.type === "runtime.committed") {
-        if (!workspaceDirtyRef.current) {
-          void loadWorkspace({ background: true }).catch((e) => setStatus(String(e.message || e)));
-        }
+        scheduleWorkspaceRemoteRefresh(event);
         return;
       }
       if (String(event.type || "").startsWith("file.")) {
@@ -10463,8 +10708,15 @@ function WorkspacePageInner() {
         void refreshWorkspaceRunStatus();
       }
     };
-    return () => events.close();
-  }, [flowParams, loadFiles, loadWorkspace, refreshWorkspaceRunStatus]);
+    return () => {
+      events.close();
+      if (workspaceRemoteRefreshTimerRef.current) {
+        window.clearTimeout(workspaceRemoteRefreshTimerRef.current);
+        workspaceRemoteRefreshTimerRef.current = null;
+      }
+      workspaceRemoteRefreshQueuedRef.current = false;
+    };
+  }, [flowParams, loadFiles, refreshWorkspaceRunStatus, scheduleWorkspaceRemoteRefresh]);
 
   useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
@@ -10620,6 +10872,15 @@ function WorkspacePageInner() {
     };
     window.requestAnimationFrame(() => window.requestAnimationFrame(center));
   }, [isDisplayMode, reactFlow, setEdges, setNodes]);
+
+  useEffect(() => {
+    const focusNodeId = String(initialFocusNodeIdRef.current || "").trim();
+    if (!focusNodeId || !loadedRef.current || workspaceMode !== "workspace") return;
+    if (!hydratedNodes.some((node) => node.id === focusNodeId)) return;
+    initialFocusNodeIdRef.current = "";
+    skipNextWorkspaceAutosaveRef.current = true;
+    jumpToWorkspaceNodeById(focusNodeId);
+  }, [hydratedNodes, jumpToWorkspaceNodeById, workspaceMode]);
 
   const lockCurrentViewport = useCallback(() => {
     const viewport = reactFlow.getViewport();
@@ -11543,14 +11804,18 @@ function WorkspacePageInner() {
   }, [skillsOpen, updateSkillsMenuPosition]);
 
   const handleNodesChange = useCallback((changes) => {
+    const interaction = workspaceCanvasInteractionPhase(changes);
+    if (interaction.active) {
+      if (!workspaceCanvasInteractionActiveRef.current) markWorkspaceDirty();
+      workspaceCanvasInteractionActiveRef.current = true;
+    } else if (interaction.finished && workspaceCanvasInteractionActiveRef.current) {
+      workspaceCanvasInteractionActiveRef.current = false;
+      workspaceFlushAfterInteractionRef.current = true;
+    }
     if (workspaceMode === "display") {
       const nextSelected = [];
       let shouldUpdateLayout = false;
-      const hasLayoutMutation = (changes || []).some((change) => (
-        (change?.type === "position" && Boolean(change.position))
-        || (change?.type === "dimensions" && change.resizing === true)
-      ));
-      if (hasLayoutMutation) markWorkspaceDirty();
+      if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
       setDisplayPage((prev) => {
         const nodePositions = { ...prev.nodePositions };
         const nodeSizes = { ...prev.nodeSizes };
@@ -11591,14 +11856,7 @@ function WorkspacePageInner() {
       }
       return;
     }
-    const hasGraphMutation = (changes || []).some((change) => (
-      change?.type === "add"
-      || change?.type === "remove"
-      || change?.type === "replace"
-      || (change?.type === "position" && Boolean(change.position))
-      || (change?.type === "dimensions" && change.resizing === true)
-    ));
-    if (hasGraphMutation) markWorkspaceDirty();
+    if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
     const resized = new Map();
     for (const change of changes || []) {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {

@@ -3561,9 +3561,13 @@ button.af-project-card {
 }
 
 .af-schedule-card__actions {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
   justify-content: flex-end;
 }
 
+.af-schedule-open,
 .af-schedule-toggle {
   gap: 0.45rem;
   min-width: 6.5rem;
@@ -3575,6 +3579,17 @@ button.af-project-card {
   color: var(--af-on-surface);
   font-weight: 700;
   cursor: pointer;
+}
+
+.af-schedule-open {
+  display: inline-flex;
+  align-items: center;
+  color: #9ecfff;
+}
+
+.af-schedule-open:hover {
+  border-color: rgba(98, 174, 255, 0.38);
+  background: rgba(98, 174, 255, 0.1);
 }
 
 .af-schedule-toggle--on {
@@ -3603,6 +3618,8 @@ button.af-project-card {
   }
 
   .af-schedule-card__actions {
+    flex-direction: row;
+    align-items: center;
     justify-content: flex-start;
   }
 }
@@ -6805,6 +6822,23 @@ button.af-project-card {
 .af-prd-workflow-list a:hover {
   border-color: rgba(167, 139, 250, 0.34);
   background: rgba(124, 77, 255, 0.1);
+}
+
+.af-prd-workflow-list .af-prd-ai-doc {
+  gap: 0.4rem;
+  padding: 0.8rem;
+}
+
+.af-prd-workflow-list .af-prd-ai-doc__title {
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 0.94rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.af-prd-workflow-list .af-prd-ai-doc__meta {
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 0.7rem;
 }
 
 .af-prd-workflow-epic {
