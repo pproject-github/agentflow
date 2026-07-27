@@ -67,3 +67,38 @@ test("uses a terminal-inspired document palette with semantic accent colors", ()
   assert.doesNotMatch(html, /radial-gradient/);
   assert.doesNotMatch(html, /border-left: 3px solid var\(--action-accent\)/);
 });
+
+test("promotes the leading markdown H1 to the single page title", () => {
+  const html = prdWorkflowReviewHtml(
+    "Payload fallback title",
+    [
+      "---",
+      "tapd_id: 1015046",
+      "---",
+      "",
+      "# **Markdown** `Review` Title",
+      "",
+      "正文内容。",
+      "",
+      "## 审查范围",
+    ].join("\n"),
+  );
+
+  assert.match(html, /<title>Markdown Review Title<\/title>/);
+  assert.match(html, /<h1>Markdown Review Title<\/h1>/);
+  assert.equal((html.match(/<h1>/g) || []).length, 1);
+  assert.doesNotMatch(html, /Payload fallback title/);
+  assert.doesNotMatch(html, /<article>[\s\S]*<h1>/);
+  assert.match(html, /<article>[\s\S]*正文内容。[\s\S]*<h2>审查范围<\/h2>/);
+});
+
+test("uses the payload title when markdown does not start with an H1", () => {
+  const html = prdWorkflowReviewHtml(
+    "Payload fallback title",
+    "正文在前。\n\n# Later heading",
+  );
+
+  assert.match(html, /<title>Payload fallback title<\/title>/);
+  assert.match(html, /<h1>Payload fallback title<\/h1>/);
+  assert.match(html, /<article>[\s\S]*<h1>Later heading<\/h1>/);
+});
