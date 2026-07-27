@@ -39,6 +39,10 @@ import {
 } from "../nodeSchema.js";
 import { recordPipelineView } from "../pipelineViewPreference.js";
 import {
+  workspaceBackgroundLoadSkipReason,
+  workspaceSaveBaselineAfterSuccess,
+} from "../workspaceSyncGuard.js";
+import {
   addSkillKeys,
   collectionSelectionState,
   collectionSkillKeys,
@@ -7366,7 +7370,11 @@ function WorkspacePageInner() {
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const workspaceViewportStorageKey = useMemo(
-    () => `agentflow.workspace.viewport:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`,
+    () => (
+      flowParams.workspaceId
+        ? `agentflow.workspace.viewport:shared:${flowParams.workspaceId}`
+        : `agentflow.workspace.viewport:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`
+    ),
     [flowParams],
   );
   const [workspaceMode, setWorkspaceMode] = useState(() => (
@@ -7386,6 +7394,7 @@ function WorkspacePageInner() {
   const displayPageRef = useRef(displayPage);
   const [workspaceViewport, setWorkspaceViewport] = useState(null);
   const workspaceViewportRef = useRef(null);
+  const workspaceViewportInitializedRef = useRef(false);
   const [selectedDisplayNodeIds, setSelectedDisplayNodeIds] = useState([]);
   const nodeHandleSignaturesRef = useRef(new Map());
   const renderedNodeLayoutSignaturesRef = useRef(new Map());
@@ -7402,6 +7411,8 @@ function WorkspacePageInner() {
   const workspaceSaveChainRef = useRef(Promise.resolve());
   const workspaceEditVersionRef = useRef(0);
   const workspaceDirtyRef = useRef(false);
+  const workspaceLoadRequestRef = useRef(0);
+  const skipNextWorkspaceAutosaveRef = useRef(false);
   const collaborationClientIdRef = useRef(
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
@@ -7688,6 +7699,14 @@ function WorkspacePageInner() {
     error: "同步失败",
     readonly: "只读",
   }[workspaceSyncPhase] || "同步状态";
+  const markWorkspaceDirty = useCallback(() => {
+    if (!loadedRef.current || !workspaceWritable) return;
+    skipNextWorkspaceAutosaveRef.current = false;
+    workspaceEditVersionRef.current += 1;
+    workspaceDirtyRef.current = true;
+    setWorkspaceSyncPhase("dirty");
+    setWorkspaceSyncDetail("本地修改等待同步");
+  }, [workspaceWritable]);
   useEffect(() => {
     if (!flowParams.flowId) return;
     recordPipelineView(flowParams.flowId, flowParams.flowSource || "user", "workspace", Boolean(flowParams.archived));
@@ -7796,11 +7815,17 @@ function WorkspacePageInner() {
       throw saveError;
     }
     const hasNewerLocalEdits = workspaceEditVersionRef.current !== saveEditVersion;
+    const savedBaseline = workspaceSaveBaselineAfterSuccess({
+      savedGraph: json.graph,
+      sentGraph: graph,
+      savedRevision: json.revision,
+      currentRevision: workspaceRevisionRef.current,
+    });
+    workspaceRevisionRef.current = savedBaseline.revision;
+    workspaceBaseGraphRef.current = savedBaseline.graph;
     if (!hasNewerLocalEdits) {
       instancesRef.current = json.graph?.instances || graph.instances;
       setInstances(instancesRef.current);
-      workspaceRevisionRef.current = String(json.revision || workspaceRevisionRef.current);
-      workspaceBaseGraphRef.current = json.graph || graph;
       if (json.merged && json.graph) {
         const mergedFlow = graphToFlow(json.graph, palette);
         const mergedDisplayPage = normalizeDisplayPageState(json.graph?.ui?.displayPage, mergedFlow.nodes);
@@ -7868,8 +7893,13 @@ function WorkspacePageInner() {
     redo: redoCanvas,
   } = canvasHistory;
 
-  const loadWorkspace = useCallback(async () => {
-    loadedRef.current = false;
+  const loadWorkspace = useCallback(async (options = {}) => {
+    const background = options?.background === true;
+    const requestId = workspaceLoadRequestRef.current + 1;
+    workspaceLoadRequestRef.current = requestId;
+    const startedEditVersion = workspaceEditVersionRef.current;
+    const startedRevision = workspaceRevisionRef.current;
+    if (!background) loadedRef.current = false;
     const q = flowParamsQuery(flowParams);
     const nodeQ = flowParamsQuery(flowParams);
     nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
@@ -7882,6 +7912,23 @@ function WorkspacePageInner() {
     const graphJson = await graphRes.json();
     if (!nodesRes.ok) throw new Error(nodesJson.error || "读取节点定义失败");
     if (!graphRes.ok) throw new Error(graphJson.error || "读取 workspace graph 失败");
+    const skipReason = workspaceBackgroundLoadSkipReason({
+      background,
+      requestId,
+      currentRequestId: workspaceLoadRequestRef.current,
+      dirty: workspaceDirtyRef.current,
+      startedEditVersion,
+      currentEditVersion: workspaceEditVersionRef.current,
+      startedRevision,
+      currentRevision: workspaceRevisionRef.current,
+    });
+    if (skipReason === "superseded") {
+      return { skipped: true, reason: skipReason };
+    }
+    if (skipReason === "local-edits") {
+      setStatus("检测到远端更新；本地修改将在保存时自动合并");
+      return { skipped: true, reason: skipReason };
+    }
     const paletteList = [
       ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
       WORKSPACE_CONTEXT_RUN_DEFINITION,
@@ -7895,14 +7942,18 @@ function WorkspacePageInner() {
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
     const flow = graphToFlow(graph, paletteList);
     const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
-    let savedWorkspaceViewport = null;
-    try {
-      savedWorkspaceViewport = JSON.parse(window.localStorage.getItem(workspaceViewportStorageKey) || "null");
-    } catch {
-      savedWorkspaceViewport = null;
+    const shouldInitializeWorkspaceViewport = !workspaceViewportInitializedRef.current;
+    let nextWorkspaceViewport = workspaceViewportRef.current;
+    if (shouldInitializeWorkspaceViewport) {
+      let savedWorkspaceViewport = null;
+      try {
+        savedWorkspaceViewport = JSON.parse(window.localStorage.getItem(workspaceViewportStorageKey) || "null");
+      } catch {
+        savedWorkspaceViewport = null;
+      }
+      nextWorkspaceViewport = normalizeCanvasViewport(savedWorkspaceViewport)
+        || normalizeCanvasViewport(graph?.ui?.viewport);
     }
-    const nextWorkspaceViewport = normalizeCanvasViewport(savedWorkspaceViewport)
-      || normalizeCanvasViewport(graph?.ui?.viewport);
     instancesRef.current = flow.instances;
     setInstances(flow.instances);
     setNodes(flow.nodes);
@@ -7915,16 +7966,21 @@ function WorkspacePageInner() {
     setWorkspaceConflict(null);
     setDisplayPage(nextDisplayPage);
     displayPageRef.current = nextDisplayPage;
-    setWorkspaceViewport(nextWorkspaceViewport);
-    workspaceViewportRef.current = nextWorkspaceViewport;
+    if (shouldInitializeWorkspaceViewport) {
+      setWorkspaceViewport(nextWorkspaceViewport);
+      workspaceViewportRef.current = nextWorkspaceViewport;
+      workspaceViewportInitializedRef.current = true;
+    }
     setSelectedDisplayNodeIds([]);
     resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     const writable = graphJson.writable !== false;
+    skipNextWorkspaceAutosaveRef.current = true;
     setWorkspaceWritable(writable);
     setStatus(writable ? "Workspace ready" : "Readonly workspace");
     setWorkspaceSyncPhase(writable ? "synced" : "readonly");
     setWorkspaceSyncDetail(writable ? "所有修改已同步" : "只读 Project");
     loadedRef.current = true;
+    return { skipped: false };
   }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
 
   const loadPrdWorkflowSnapshot = useCallback(async (tapdIdOverride = workflowTapdId) => {
@@ -9376,10 +9432,11 @@ function WorkspacePageInner() {
   useEffect(() => {
     if (!loadedRef.current) return;
     if (!workspaceWritable) return;
-    workspaceEditVersionRef.current += 1;
-    workspaceDirtyRef.current = true;
-    setWorkspaceSyncPhase("dirty");
-    setWorkspaceSyncDetail("本地修改等待同步");
+    if (skipNextWorkspaceAutosaveRef.current) {
+      skipNextWorkspaceAutosaveRef.current = false;
+      return;
+    }
+    markWorkspaceDirty();
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveGraph().catch((e) => setStatus(String(e.message || e)));
@@ -9387,7 +9444,7 @@ function WorkspacePageInner() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [nodes, edges, displayPage, saveGraph, workspaceWritable]);
+  }, [nodes, edges, displayPage, markWorkspaceDirty, saveGraph, workspaceWritable]);
 
   useEffect(() => {
     if (!conversationsLoadedRef.current) return undefined;
@@ -10389,12 +10446,12 @@ function WorkspacePageInner() {
           setStatus("检测到其他成员的更新；保存时将自动合并");
           return;
         }
-        void loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+        void loadWorkspace({ background: true }).catch((e) => setStatus(String(e.message || e)));
         return;
       }
       if (event.type === "runtime.committed") {
         if (!workspaceDirtyRef.current) {
-          void loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+          void loadWorkspace({ background: true }).catch((e) => setStatus(String(e.message || e)));
         }
         return;
       }
@@ -11489,6 +11546,11 @@ function WorkspacePageInner() {
     if (workspaceMode === "display") {
       const nextSelected = [];
       let shouldUpdateLayout = false;
+      const hasLayoutMutation = (changes || []).some((change) => (
+        (change?.type === "position" && Boolean(change.position))
+        || (change?.type === "dimensions" && change.resizing === true)
+      ));
+      if (hasLayoutMutation) markWorkspaceDirty();
       setDisplayPage((prev) => {
         const nodePositions = { ...prev.nodePositions };
         const nodeSizes = { ...prev.nodeSizes };
@@ -11529,6 +11591,14 @@ function WorkspacePageInner() {
       }
       return;
     }
+    const hasGraphMutation = (changes || []).some((change) => (
+      change?.type === "add"
+      || change?.type === "remove"
+      || change?.type === "replace"
+      || (change?.type === "position" && Boolean(change.position))
+      || (change?.type === "dimensions" && change.resizing === true)
+    ));
+    if (hasGraphMutation) markWorkspaceDirty();
     const resized = new Map();
     for (const change of changes || []) {
       if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
@@ -11587,7 +11657,7 @@ function WorkspacePageInner() {
       window.requestAnimationFrame(refresh);
       window.setTimeout(refresh, 80);
     }
-  }, [nodes, setNodes, updateNodeInternals, workspaceMode, workspaceWritable]);
+  }, [markWorkspaceDirty, nodes, setNodes, updateNodeInternals, workspaceMode, workspaceWritable]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (workspaceMode === "display") return;
@@ -11602,12 +11672,13 @@ function WorkspacePageInner() {
       }
       return;
     }
+    if ((changes || []).some((change) => change?.type !== "select")) markWorkspaceDirty();
     setEdges((current) => {
       const next = applyEdgeChanges(changes, current);
       edgesRef.current = next;
       return next;
     });
-  }, [setEdges, workspaceMode, workspaceWritable]);
+  }, [markWorkspaceDirty, setEdges, workspaceMode, workspaceWritable]);
 
   const defaultWorkspaceNodePosition = useCallback(() => {
     const wrap = document.querySelector(".af-workspace-canvas .react-flow");
@@ -11681,10 +11752,11 @@ function WorkspacePageInner() {
       },
     };
     const merged = { ...mergeNodeWithPalette(node, { ...instancesRef.current, [id]: instance }, palette), selected: true };
+    markWorkspaceDirty();
     setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
     if (overrides.openProperties) setSelectedNodeId(id);
     return id;
-  }, [defaultWorkspaceNodePosition, nodes, palette, setNodes, workspaceWritable]);
+  }, [defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setNodes, workspaceWritable]);
 
   const isValidConnection = useCallback((params) => workspaceConnectionCompatible(params, nodesRef.current), []);
 
@@ -11698,6 +11770,7 @@ function WorkspacePageInner() {
       return;
     }
     setConnectionMenu(null);
+    markWorkspaceDirty();
     setNodes((current) => revealConnectedSlots(current, params));
     setEdges((current) => {
       const filtered = current.filter(
@@ -11707,7 +11780,7 @@ function WorkspacePageInner() {
       edgesRef.current = next;
       return next;
     });
-  }, [setEdges, setNodes, workspaceWritable]);
+  }, [markWorkspaceDirty, setEdges, setNodes, workspaceWritable]);
 
   const handleConnectStart = useCallback((event, params) => {
     if (!workspaceWritable) return;
