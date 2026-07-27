@@ -128,6 +128,7 @@ import {
   listWorkspaceRunLogs,
   readWorkspaceRunLogEvents,
 } from "./workspace-run-logs.mjs";
+import { createWorkspaceRunController } from "./workspace-run-controller.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -4947,6 +4948,8 @@ async function workspaceGeneratePlannedImplementationMarkdown({
     prompt,
     modelKey,
     agentflowUserId: userCtx?.userId || "",
+    detached: process.platform !== "win32",
+    onChild: onActiveChild,
     extraEnv: runtimeEnvForUser(userCtx, {
       AGENTFLOW_IMPLEMENTATION_REF: implementationPath || "",
       AGENTFLOW_NODE_RUN_DIR: runPackage?.nodeRunDir || "",
@@ -4967,7 +4970,6 @@ async function workspaceGeneratePlannedImplementationMarkdown({
       emit?.({ type: "status", nodeId, line: `优化工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
     },
   });
-  if (typeof onActiveChild === "function") onActiveChild(handle.child || null);
   try {
     await handle.finished;
   } finally {
@@ -5009,6 +5011,8 @@ async function workspaceGenerateImplementationMarkdown({
     prompt,
     modelKey,
     agentflowUserId: userCtx?.userId || "",
+    detached: process.platform !== "win32",
+    onChild: onActiveChild,
     extraEnv: runtimeEnvForUser(userCtx, {
       AGENTFLOW_IMPLEMENTATION_REF: implementationPath || "",
       AGENTFLOW_NODE_RUN_DIR: runPackage?.nodeRunDir || "",
@@ -5029,7 +5033,6 @@ async function workspaceGenerateImplementationMarkdown({
       emit?.({ type: "status", line: `总结方案工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
     },
   });
-  if (typeof onActiveChild === "function") onActiveChild(handle.child || null);
   try {
     await handle.finished;
   } finally {
@@ -5994,6 +5997,8 @@ async function workspaceRunToolNodejsScript({
   userCtx,
   envOverlay = {},
   emit,
+  signal,
+  onActiveChild,
 }) {
   const scriptRef = String(instance?.scriptRef || "").trim();
   const scriptAbs = scriptRef ? workspaceResolveFlowFile(scopedRoot, scriptRef, "scriptRef") : "";
@@ -6041,14 +6046,24 @@ async function workspaceRunToolNodejsScript({
 
   const started = Date.now();
   return await new Promise((resolve, reject) => {
+    const processGroup = process.platform !== "win32";
     const child = spawn(command, [], {
       cwd: runPackage.nodeRunDir,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
       env,
+      detached: processGroup,
     });
+    if (typeof onActiveChild === "function") onActiveChild(child, { processGroup });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (typeof onActiveChild === "function") onActiveChild(null);
+      callback();
+    };
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => {
@@ -6057,19 +6072,27 @@ async function workspaceRunToolNodejsScript({
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
+    child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => {
+      if (signal?.aborted) {
+        finish(() => {
+          const error = new Error("Workspace run stopped");
+          error.code = "WORKSPACE_RUN_ABORTED";
+          reject(error);
+        });
+        return;
+      }
       if (stderr.trim()) {
         emit?.({ type: "natural", kind: "warning", text: `[script stderr]\n${stderr.trim().slice(-4000)}` });
       }
       if (code !== 0) {
-        reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`));
+        finish(() => reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`)));
         return;
       }
       const elapsedMs = Math.max(0, Date.now() - started);
       emit?.({ type: "status", line: `Timing script: ${elapsedMs}ms`, timing: { label: "script", elapsedMs } });
       const content = stdout.trim() || workspaceEnvelopeFromOutputFiles(outputRefs, runPackage.nodeRunDir);
-      resolve(content);
+      finish(() => resolve(content));
     });
   });
 }
@@ -6691,6 +6714,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         userCtx,
         envOverlay: runEnv,
         emit: (event) => emit({ ...event, nodeId }),
+        signal,
+        onActiveChild: opts.onActiveChild,
       });
       const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
       const resultContent = normalizedAgentOutput.result || content;
@@ -6787,6 +6812,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
           prompt,
           modelKey: nodeModelKey,
           agentflowUserId: userCtx.userId || "",
+          detached: process.platform !== "win32",
+          onChild: opts.onActiveChild,
           extraEnv: runtimeEnv({
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,
             AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
@@ -6823,7 +6850,6 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             emit({ type: "status", nodeId, line: `工具 ${tool || "thinking"}${sub ? ` (${sub})` : ""}` });
           },
         });
-        if (typeof opts.onActiveChild === "function") opts.onActiveChild(handle.child || null);
         emitTiming(nodeId, "spawn-agent", spawnStartedAt, { attempt });
         try {
           await handle.finished;
@@ -9026,6 +9052,14 @@ function workspaceRunEntryKey(scopeKey, runId) {
   return `${scopeKey}:${String(runId || "").trim() || runLedgerId("workspace")}`;
 }
 
+function workspaceRunControl(abortController) {
+  return createWorkspaceRunController({
+    abortController,
+    gracefulTimeoutMs: 3_000,
+    forceTimeoutMs: 1_500,
+  });
+}
+
 function workspaceRuntimeNodeLabel(graph, nodeId, fallback = "Workspace Run") {
   const id = String(nodeId || "").trim();
   const instance = graph?.instances && typeof graph.instances === "object" ? graph.instances[id] : null;
@@ -9463,11 +9497,12 @@ async function runWorkspaceScheduledEntry(root, entry) {
   }
 
   const controller = new AbortController();
+  const runControl = workspaceRunControl(controller);
   const runKey = workspaceRunEntryKey(scopeKey, runId);
   const runEntry = {
     scopeKey,
     controller,
-    child: null,
+    runControl,
     runId,
     userId: userCtx.userId,
     username: String(authUser.username || entry.username || userCtx.userId),
@@ -9478,11 +9513,6 @@ async function runWorkspaceScheduledEntry(root, entry) {
     plannedNodeIds,
     startedAt: Date.now(),
     scheduled: true,
-    stopChild() {
-      if (this.child && !this.child.killed) {
-        try { this.child.kill("SIGTERM"); } catch (_) {}
-      }
-    },
   };
   activeWorkspaceRuns.set(runKey, runEntry);
   appendWorkspaceRunStarted(runEntry);
@@ -9496,9 +9526,8 @@ async function runWorkspaceScheduledEntry(root, entry) {
     timezone: config.timezone,
     lastError: "",
   });
-  const setActiveChild = (child) => {
-    runEntry.child = child || null;
-    if (controller.signal.aborted) runEntry.stopChild();
+  const setActiveChild = (child, childOptions = {}) => {
+    runControl.setChild(child, childOptions);
   };
   try {
     const result = await runWorkspaceGraph(root, scoped.root, {
@@ -9531,23 +9560,28 @@ async function runWorkspaceScheduledEntry(root, entry) {
   } catch (e) {
     const endedAt = Date.now();
     const error = (e && e.message) || String(e);
-    appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "failed");
-    appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error, ts: endedAt });
-    finishWorkspaceRunLogSession(runLog.runId, "failed", {
+    const stopped = isWorkspaceRunAbortError(e) || controller.signal.aborted;
+    const finalStatus = stopped ? "stopped" : "failed";
+    appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, finalStatus);
+    appendWorkspaceRunLogEvent(runLog.runId, stopped
+      ? { type: "stopped", message: "Workspace run stopped", ts: endedAt }
+      : { type: "error", error, ts: endedAt });
+    finishWorkspaceRunLogSession(runLog.runId, finalStatus, {
       endedAt,
       durationMs: endedAt - runEntry.startedAt,
       runNodeId: targetRunNodeId,
-      error,
+      error: stopped ? "" : error,
     });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
-      lastStatus: "failed",
-      lastError: error,
-      lastErrorAt: endedAt,
+      lastStatus: finalStatus,
+      lastError: stopped ? "" : error,
+      ...(stopped ? {} : { lastErrorAt: endedAt }),
     });
-    log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${error}`);
+    if (!stopped) log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${error}`);
   } finally {
+    runControl.finish(controller.signal.aborted ? "stopped" : "finished");
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
   }
 }
@@ -11516,13 +11550,14 @@ export function startUiServer({
           return;
         }
         const controller = new AbortController();
+        const runControl = workspaceRunControl(controller);
         const runId = String(payload.runSessionId || payload.runId || "").trim() || runLedgerId("workspace");
         const runKey = workspaceRunEntryKey(scopeKey, runId);
         const runAlias = String(payload.runAlias || "").trim() || workspaceRuntimeNodeLabel(runtimeGraph, runNodeId, "Workspace Run");
         const runEntry = {
           scopeKey,
           controller,
-          child: null,
+          runControl,
           runId,
           userId: String(userCtx.userId || ""),
           username: String(authUser?.username || userCtx.userId || ""),
@@ -11532,11 +11567,6 @@ export function startUiServer({
           flowSource: scoped.flowSource || payload.flowSource || "user",
           plannedNodeIds,
           startedAt: Date.now(),
-          stopChild() {
-            if (this.child && !this.child.killed) {
-              try { this.child.kill("SIGTERM"); } catch (_) {}
-            }
-          },
         };
         const runLog = createWorkspaceRunLogSession({
           runId,
@@ -11553,11 +11583,11 @@ export function startUiServer({
         });
         activeWorkspaceRuns.set(runKey, runEntry);
         appendWorkspaceRunStarted(runEntry);
-        const setActiveChild = (child) => {
-          runEntry.child = child || null;
-          if (controller.signal.aborted) runEntry.stopChild();
+        const setActiveChild = (child, childOptions = {}) => {
+          runControl.setChild(child, childOptions);
         };
-        const clearActiveRun = () => {
+        const clearActiveRun = (status = "finished") => {
+          runControl.finish(status);
           if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
         };
         if (wantsStream) {
@@ -11626,7 +11656,7 @@ export function startUiServer({
             }
             res.end();
           } finally {
-            clearActiveRun();
+            clearActiveRun(controller.signal.aborted ? "stopped" : "finished");
           }
           return;
         }
@@ -11684,7 +11714,7 @@ export function startUiServer({
             throw e;
           }
         } finally {
-          clearActiveRun();
+          clearActiveRun(controller.signal.aborted ? "stopped" : "finished");
         }
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -11750,6 +11780,7 @@ export function startUiServer({
       const entry = entries[0] || null;
       json(res, 200, {
         running: entries.length > 0,
+        state: entry?.runControl?.state || (entries.length > 0 ? "running" : "idle"),
         flowId,
         flowSource,
         runNodeId: entry?.runNodeId || "",
@@ -11762,6 +11793,7 @@ export function startUiServer({
           startedAt: item?.startedAt || null,
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
           scheduled: item?.scheduled === true,
+          state: item?.runControl?.state || "running",
         })),
       });
       return;
@@ -11792,9 +11824,38 @@ export function startUiServer({
         json(res, 404, { error: "该 Workspace 未在运行" });
         return;
       }
-      try { entry.controller?.abort(); } catch (_) {}
-      try { entry.stopChild?.(); } catch (_) {}
-      json(res, 200, { ok: true, stopped: true });
+      appendWorkspaceRunLogEvent(entry.runId, {
+        type: "stop-requested",
+        runNodeId: entry.runNodeId || "",
+        ts: Date.now(),
+      });
+      const result = await entry.runControl.stop();
+      if (!result.stopped) {
+        appendWorkspaceRunLogEvent(entry.runId, {
+          type: "stop-failed",
+          runNodeId: entry.runNodeId || "",
+          reason: result.timedOut ? "timeout" : "unknown",
+          ts: Date.now(),
+        });
+        json(res, 409, {
+          error: "停止请求已发送，但运行进程未能退出",
+          ok: false,
+          stopped: false,
+          state: entry.runControl.state,
+        });
+        return;
+      }
+      appendWorkspaceRunLogEvent(entry.runId, {
+        type: "stop-completed",
+        runNodeId: entry.runNodeId || "",
+        forced: result.forced === true,
+        ts: Date.now(),
+      });
+      json(res, 200, {
+        ok: true,
+        stopped: true,
+        forced: result.forced === true,
+      });
       return;
     }
 
