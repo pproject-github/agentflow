@@ -1212,17 +1212,12 @@ function prdWorkflowActionRows(snapshot, nextAction) {
     const index = nextStage ? seenByStage.get(nextStage) : nextId ? seenById.get(nextId) : null;
     const nextRow = { ...nextAction, status: nextAction.status || "next", kind: "next_action" };
     if (index != null) rows[index] = prdWorkflowMergeActionRecord(rows[index], nextRow);
-    else rows.push(nextRow);
   }
   return rows
     .map((item, index) => ({ item, index, ts: prdWorkflowActionSortTime(item) }))
+    .filter((entry) => Number.isFinite(entry.ts))
     .sort((a, b) => {
-      const at = Number.isFinite(a.ts);
-      const bt = Number.isFinite(b.ts);
-      if (at && bt) return b.ts - a.ts || a.index - b.index;
-      if (at) return -1;
-      if (bt) return 1;
-      return a.index - b.index;
+      return b.ts - a.ts || a.index - b.index;
     })
     .map((entry) => prdWorkflowEnrichActionWithSnapshotFacts(snapshot, entry.item));
 }
@@ -7794,7 +7789,7 @@ function WorkspacePageInner() {
 
   const latestComposerSessionId = useCallback((sessions = composerRunSessions) => {
     const list = Array.isArray(sessions) ? sessions : [];
-    const running = [...list].reverse().find((session) => session?.status === "running");
+    const running = [...list].reverse().find((session) => session?.status === "running" || session?.status === "stopping");
     const latest = running || [...list].reverse().find((session) => session?.id);
     return String(latest?.id || "workspace");
   }, [composerRunSessions]);
@@ -7877,57 +7872,100 @@ function WorkspacePageInner() {
     const sessionId = match?.[0] || "";
     const session = match?.[1] || null;
     const runNodeId = String(session?.runNodeId || requestedId || "").trim();
+    if (session?.status === "stopping") return;
     const affectedIds = new Set([
       runNodeId,
       ...(Array.isArray(session?.plannedNodeIds) ? session.plannedNodeIds : []),
     ].map((id) => String(id || "").trim()).filter(Boolean));
-    if (sessionId) workspaceRunStoppedRef.current.add(sessionId);
-    const abortController = sessionId ? workspaceRunAbortRefs.current.get(sessionId) : null;
-    if (abortController) {
-      abortController.abort();
-      workspaceRunAbortRefs.current.delete(sessionId);
-    }
     if (sessionId) {
       setRunningRunSessionsSynced((current) => {
         const next = { ...current };
-        delete next[sessionId];
+        if (next[sessionId]) next[sessionId] = { ...next[sessionId], status: "stopping" };
         return next;
       });
     }
-    setWorkspaceExecutingNodes((current) => {
-      const next = new Set(current);
-      for (const id of affectedIds) next.delete(id);
-      return next;
-    });
-    setWorkspaceNodeRunStatus((current) => {
-      const next = { ...current };
-      for (const id of affectedIds) {
-        if (!id) continue;
-        if (!next[id] || next[id]?.status === "running") next[id] = { status: "stopped" };
-      }
-      return next;
-    });
-    setStatus(runNodeId ? `Workspace run stopped: ${runNodeId}` : "Workspace run stopped");
+    setStatus(runNodeId ? `Stopping Workspace run: ${runNodeId}...` : "Stopping Workspace run...");
     setComposerRunSessions((list) => list.map((item) => (
       (sessionId ? item.id === sessionId : (!runNodeId || item.runNodeId === runNodeId)) && item.status === "running"
         ? {
             ...item,
-            status: "stopped",
-            endedAt: Date.now(),
-            messages: [
-              ...(Array.isArray(item.messages) ? item.messages : []),
-              { role: "assistant", kind: "status", text: "Workspace run stopped.", at: Date.now() },
-            ].slice(-160),
+            status: "stopping",
           }
         : item
     )));
     try {
-      await fetch("/api/workspace/run/stop", {
+      const res = await fetch("/api/workspace/run/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...flowParams, runId: sessionId, runNodeId }),
       });
-    } catch (_) {}
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.stopped !== true) {
+        throw new Error(json.error || "Workspace run stop failed");
+      }
+
+      const abortController = sessionId ? workspaceRunAbortRefs.current.get(sessionId) : null;
+      if (abortController) {
+        abortController.abort();
+        workspaceRunAbortRefs.current.delete(sessionId);
+      }
+      if (sessionId) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          delete next[sessionId];
+          return next;
+        });
+      }
+      setWorkspaceExecutingNodes((current) => {
+        const next = new Set(current);
+        for (const id of affectedIds) next.delete(id);
+        return next;
+      });
+      setWorkspaceNodeRunStatus((current) => {
+        const next = { ...current };
+        for (const id of affectedIds) {
+          if (!id) continue;
+          if (!next[id] || next[id]?.status === "running") next[id] = { status: "stopped" };
+        }
+        return next;
+      });
+      setStatus(runNodeId ? `Workspace run stopped: ${runNodeId}` : "Workspace run stopped");
+      setComposerRunSessions((list) => list.map((item) => (
+        (sessionId ? item.id === sessionId : (!runNodeId || item.runNodeId === runNodeId))
+          ? {
+              ...item,
+              status: "stopped",
+              endedAt: Date.now(),
+              messages: [
+                ...(Array.isArray(item.messages) ? item.messages : []),
+                { role: "assistant", kind: "status", text: "Workspace run stopped.", at: Date.now() },
+              ].slice(-160),
+            }
+          : item
+      )));
+    } catch (error) {
+      if (sessionId) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          if (next[sessionId]) next[sessionId] = { ...next[sessionId], status: "running" };
+          return next;
+        });
+      }
+      const message = String(error?.message || error || "Workspace run stop failed");
+      setStatus(`停止失败：${message}`);
+      setComposerRunSessions((list) => list.map((item) => (
+        (sessionId ? item.id === sessionId : (!runNodeId || item.runNodeId === runNodeId))
+          ? {
+              ...item,
+              status: "running",
+              messages: [
+                ...(Array.isArray(item.messages) ? item.messages : []),
+                { role: "assistant", kind: "error", error: true, text: `停止失败：${message}`, at: Date.now() },
+              ].slice(-160),
+            }
+          : item
+      )));
+    }
   }, [flowParams, setRunningRunSessionsSynced]);
 
   const refreshWorkspaceRunStatus = useCallback(async () => {
@@ -7952,6 +7990,7 @@ function WorkspacePageInner() {
           id: sessionId,
           runNodeId,
           label: alias,
+          status: item?.state === "stopping" ? "stopping" : "running",
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
           startedAt: item?.startedAt || Date.now(),
         };
@@ -7973,7 +8012,7 @@ function WorkspacePageInner() {
       setComposerRunSessions((list) => {
         const next = [...list];
         for (const [sessionId, sessionInfo] of Object.entries(restoredSessions)) {
-          if (next.some((session) => session.id === sessionId || (session.status === "running" && session.runNodeId === sessionInfo.runNodeId))) continue;
+          if (next.some((session) => session.id === sessionId || (["running", "stopping"].includes(session.status) && session.runNodeId === sessionInfo.runNodeId))) continue;
           const runNodeId = String(sessionInfo.runNodeId || "");
           const alias = String(sessionInfo.label || "").trim() || workspaceRunNodeAlias(nodesRef.current, instancesRef.current, runNodeId, "Workspace Run");
           next.push({
@@ -7981,10 +8020,17 @@ function WorkspacePageInner() {
             label: workspaceRunNameWithId(alias, runNodeId, "Workspace Run"),
             alias,
             runNodeId,
-            status: "running",
+            status: sessionInfo.status,
             startedAt: sessionInfo.startedAt || Date.now(),
             steps: runNodeId ? [{ id: runNodeId, label: workspaceRunNameWithId(alias, runNodeId, "Workspace Run"), status: "running" }] : [],
-            messages: [{ role: "assistant", kind: "run-summary", text: "Workspace run is still running in the background.", at: Date.now() }],
+            messages: [{
+              role: "assistant",
+              kind: "run-summary",
+              text: sessionInfo.status === "stopping"
+                ? "Workspace run is stopping in the background."
+                : "Workspace run is still running in the background.",
+              at: Date.now(),
+            }],
           });
         }
         return [
@@ -11633,7 +11679,7 @@ function WorkspacePageInner() {
     const prompt = composerText.trim();
     const targetSessionId = activeComposerSessionId;
     const targetRunSession = composerRunSessions.find((session) => session.id === targetSessionId) || null;
-    if (!prompt || composerRunning || targetRunSession?.status === "running") return;
+    if (!prompt || composerRunning || targetRunSession?.status === "running" || targetRunSession?.status === "stopping") return;
     const previousMessages = targetRunSession
       ? (Array.isArray(targetRunSession.messages) ? targetRunSession.messages : [])
       : composerMessages;
@@ -11717,11 +11763,15 @@ function WorkspacePageInner() {
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
   const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
-  const activeComposerRunning = activeRunSession ? (activeRunSession.status === "running" || composerRunning) : composerRunning;
+  const activeComposerRunning = activeRunSession
+    ? (activeRunSession.status === "running" || activeRunSession.status === "stopping" || composerRunning)
+    : composerRunning;
   const activeComposerConversationMessages = workspaceComposerConversationMessages(activeComposerMessages, activeComposerRunning);
   const activeComposerTechnicalMessages = workspaceComposerTechnicalMessages(activeComposerMessages);
   const activeComposerStatus = activeRunSession
-    ? activeRunSession.status === "running"
+    ? activeRunSession.status === "stopping"
+      ? `${activeRunSession.label} stopping`
+      : activeRunSession.status === "running"
       ? `${activeRunSession.label} running`
       : activeRunSession.status === "paused"
         ? `${activeRunSession.label} paused`
@@ -12658,7 +12708,7 @@ function WorkspacePageInner() {
                     className={
                       "af-composer-session-tab" +
                       (activeComposerSessionId === session.id ? " af-composer-session-tab--active" : "") +
-                      (session.status === "running" ? " af-composer-session-tab--running" : "")
+                      (session.status === "running" || session.status === "stopping" ? " af-composer-session-tab--running" : "")
                     }
                     onClick={() => setActiveComposerSessionId(session.id)}
                     onKeyDown={(event) => {

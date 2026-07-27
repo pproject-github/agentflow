@@ -417,6 +417,8 @@ export function startComposerAgent(opts) {
   const common = {
     onStreamEvent: opts.onStreamEvent,
     onToolCall: opts.onToolCall,
+    onChild: opts.onChild,
+    detached: Boolean(opts.detached),
     force: Boolean(opts.force),
     env,
   };

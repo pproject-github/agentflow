@@ -31,6 +31,17 @@ function childEnv(options = {}, extra = {}) {
   return { ...process.env, ...readMergedEnvObject(userId), ...optEnv, ...extra };
 }
 
+function notifyPromptAgentChild(options, child) {
+  if (typeof options?.onChild !== "function") return;
+  try {
+    options.onChild(child || null, {
+      processGroup: Boolean(options.detached) && process.platform !== "win32",
+    });
+  } catch {
+    // Child tracking must not interfere with the runner.
+  }
+}
+
 function cursorAttemptOptions(options = {}) {
   const baseEnv = childEnv(options);
   const attempts = Array.isArray(options._agentflowCursorApiKeyAttempts)
@@ -1330,7 +1341,9 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
     env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
+    detached: Boolean(options.detached) && process.platform !== "win32",
   });
+  notifyPromptAgentChild(options, child);
 
   let lastResult = null;
   let hadError = false;
@@ -1551,6 +1564,7 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
     env: childEnv(options),
+    detached: Boolean(options.detached) && process.platform !== "win32",
   };
   if (options.force) {
     spawnOpts.env = {
@@ -1562,6 +1576,7 @@ export function runOpenCodeAgentWithPrompt(cliWorkspace, promptText, options = {
   }
 
   const child = spawn(opencodeCmd, args, spawnOpts);
+  notifyPromptAgentChild(options, child);
 
   const emit = (payload) => {
     try {
@@ -1664,7 +1679,9 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
     env: childEnv(options),
+    detached: Boolean(options.detached) && process.platform !== "win32",
   });
+  notifyPromptAgentChild(options, child);
 
   let lastResult = null;
   let hadError = false;
@@ -1845,7 +1862,9 @@ export function runCodexAgentWithPrompt(cliWorkspace, promptText, options = {}) 
     stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
     shell: false,
     env: childEnv(options),
+    detached: Boolean(options.detached) && process.platform !== "win32",
   });
+  notifyPromptAgentChild(options, child);
 
   let hadError = false;
   let emittedNatural = false;
