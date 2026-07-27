@@ -148,6 +148,15 @@ import {
   workspaceCollaborationAccess,
   workspaceCollaborationSummary,
 } from "./workspace-collaboration.mjs";
+import {
+  addPrdWorkflowCollaborationMember,
+  ensurePrdWorkflowCollaboration,
+  getPrdWorkflowCollaborationById,
+  getPrdWorkflowCollaborationForUser,
+  prdWorkflowCollaborationAccess,
+  prdWorkflowCollaborationSummary,
+  removePrdWorkflowCollaborationMember,
+} from "./prd-workflow-collaboration.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -164,6 +173,16 @@ const MIME = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
 };
+
+const UI_SERVER_STARTED_AT = new Date().toISOString();
+const UI_SERVER_APP_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf-8"));
+    return String(pkg?.version || "0.0.0").trim() || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 function execFileBuffered(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -3182,6 +3201,20 @@ function findWorkspaceShareUser(username) {
 
 function workspaceCollaborationSummaryWithUsers(record, userId) {
   const summary = workspaceCollaborationSummary(record, userId);
+  if (!summary) return null;
+  const users = readAuthUsers();
+  return {
+    ...summary,
+    ownerUsername: String(users[summary.ownerId]?.username || summary.ownerId),
+    members: (summary.members || []).map((member) => ({
+      ...member,
+      username: String(users[member.userId]?.username || member.userId),
+    })),
+  };
+}
+
+function prdWorkflowCollaborationSummaryWithUsers(record, userId) {
+  const summary = prdWorkflowCollaborationSummary(record, userId);
   if (!summary) return null;
   const users = readAuthUsers();
   return {
@@ -7215,14 +7248,56 @@ const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = true;
 const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
 const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
 
+function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capability = "read") {
+  const tapdId = String(params.tapdId || params.tapd_id || "").trim();
+  const flowId = String(params.flowId || "").trim();
+  const flowSource = String(params.flowSource || "user").trim() || "user";
+  const archived = params.archived === true || params.archived === "1" || params.flowArchived === true;
+  const collaboration = tapdId
+    ? getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId)
+    : null;
+  const access = prdWorkflowCollaborationAccess(collaboration, userCtx?.userId);
+  if (collaboration && !access.allowed) {
+    return { error: "PRD Workflow collaboration permission denied", status: 403 };
+  }
+  if (capability === "write" && collaboration && !access.writable) {
+    return { error: "PRD Workflow collaboration edit permission denied", status: 403 };
+  }
+  const ownerId = String(collaboration?.ownerId || userCtx?.userId || "").trim();
+  const stateRoot = path.resolve(getAgentflowUserDataRoot(ownerId));
+  let executionRoot = path.resolve(workspaceRoot);
+  if (flowId) {
+    const projectScope = resolveWorkspaceScopeRoot(workspaceRoot, {
+      flowId,
+      flowSource,
+      workspaceId: params.workspaceId || "",
+      archived,
+    }, userCtx);
+    if (projectScope.error) {
+      if (!collaboration || capability !== "read") return projectScope;
+      executionRoot = stateRoot;
+    } else {
+      executionRoot = projectScope.root;
+    }
+  }
+  return {
+    tapdId,
+    executionRoot,
+    stateRoot,
+    ownerId,
+    collaboration,
+    collaborationAccess: access,
+    flowId,
+    flowSource,
+    archived,
+  };
+}
+
 function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId = "") {
-  const actorScope = flowSource === "workspace" ? "shared" : String(userCtx?.userId || "");
-  return [
-    actorScope,
-    String(flowSource || "user"),
-    String(flowId || ""),
-    String(tapdId || ""),
-  ].join("\t");
+  const id = String(tapdId || "").trim();
+  const collaboration = getPrdWorkflowCollaborationForUser(id, userCtx?.userId);
+  const actorScope = `user:${String(collaboration?.ownerId || userCtx?.userId || "")}`;
+  return [actorScope, id].join("\t");
 }
 
 function prdWorkflowBroadcast(key, event = {}) {
@@ -7240,8 +7315,10 @@ function prdWorkflowCollaborationState(userCtx = {}, flowSource = "user", flowId
   const key = prdWorkflowKey(userCtx, flowSource, flowId, tapdId);
   const active = prdWorkflowActionLocks.get(key) || null;
   const subscribers = prdWorkflowSubscribers.get(key);
+  const workflowCollaboration = getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId);
   return {
     subscribers: subscribers ? subscribers.size : 0,
+    workflow: prdWorkflowCollaborationSummaryWithUsers(workflowCollaboration, userCtx?.userId),
     activeAction: active ? {
       action: String(active.action || ""),
       tapdId: String(active.tapdId || tapdId || ""),
@@ -7415,6 +7492,35 @@ function prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId) {
     markdownPath: path.join(dir, `${safeId}.md`),
     metaPath: path.join(dir, `${safeId}.json`),
   };
+}
+
+function prdWorkflowMigrateLegacyState(legacyRoot, stateRoot, tapdId) {
+  const sourceRoot = path.resolve(legacyRoot || "");
+  const destinationRoot = path.resolve(stateRoot || "");
+  if (!tapdId || sourceRoot === destinationRoot) return;
+  const pairs = [
+    [prdWorkflowStatePath(sourceRoot, tapdId), prdWorkflowStatePath(destinationRoot, tapdId)],
+    [prdWorkflowCachePath(sourceRoot, tapdId), prdWorkflowCachePath(destinationRoot, tapdId)],
+    [prdWorkflowProjectPath(sourceRoot, tapdId), prdWorkflowProjectPath(destinationRoot, tapdId)],
+    [prdWorkflowClientsPath(sourceRoot, tapdId), prdWorkflowClientsPath(destinationRoot, tapdId)],
+    [prdWorkflowEventsPath(sourceRoot, tapdId), prdWorkflowEventsPath(destinationRoot, tapdId)],
+    [prdWorkflowAuditPath(sourceRoot, tapdId), prdWorkflowAuditPath(destinationRoot, tapdId)],
+  ];
+  for (const [source, destination] of pairs) {
+    try {
+      if (!fs.existsSync(source) || fs.existsSync(destination)) continue;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(source, destination);
+    } catch (_) {}
+  }
+  try {
+    const sourceReviews = prdWorkflowReviewDir(sourceRoot, tapdId);
+    const destinationReviews = prdWorkflowReviewDir(destinationRoot, tapdId);
+    if (fs.existsSync(sourceReviews) && !fs.existsSync(destinationReviews)) {
+      fs.mkdirSync(path.dirname(destinationReviews), { recursive: true });
+      fs.cpSync(sourceReviews, destinationReviews, { recursive: true, errorOnExist: false });
+    }
+  } catch (_) {}
 }
 
 function prdWorkflowPruneReviews(scopedRoot, tapdId, maxReviews = 200) {
@@ -8681,6 +8787,19 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
     let artifactConflict = false;
     const events = [...current.events];
     if (index >= 0) {
+      const previousImplementationMetadata =
+        events[index]?.implementationMetadata || events[index]?.implementation_metadata;
+      const incomingImplementationMetadata =
+        entry?.implementationMetadata || entry?.implementation_metadata;
+      const mergedImplementationMetadata =
+        incomingImplementationMetadata && typeof incomingImplementationMetadata === "object" && !Array.isArray(incomingImplementationMetadata)
+          ? prdWorkflowOverallMerge(
+              previousImplementationMetadata && typeof previousImplementationMetadata === "object" && !Array.isArray(previousImplementationMetadata)
+                ? previousImplementationMetadata
+                : {},
+              incomingImplementationMetadata,
+            )
+          : previousImplementationMetadata;
       const prevArtifact = prdWorkflowRuntimeEventArtifactSignature(events[index]);
       const nextArtifact = prdWorkflowRuntimeEventArtifactSignature(entry);
       artifactConflict = Boolean(prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
@@ -8703,6 +8822,9 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
         startedAt: events[index].startedAt || entry.startedAt,
         idempotencyHistory: [...new Set(idempotencyHistory)].slice(-50),
       };
+      if (mergedImplementationMetadata && typeof mergedImplementationMetadata === "object" && !Array.isArray(mergedImplementationMetadata)) {
+        events[index].implementationMetadata = mergedImplementationMetadata;
+      }
       if (artifactConflict) {
         events[index] = {
           ...events[index],
@@ -8802,13 +8924,212 @@ function prdWorkflowMergeRuntimeEventList(snapshotEvents = [], runtimeEvents = [
   return out;
 }
 
+function prdWorkflowOverallPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function prdWorkflowOverallMerge(base, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return base;
+  const out = { ...prdWorkflowOverallPlainObject(base) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      delete out[key];
+      continue;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = prdWorkflowOverallMerge(out[key], value);
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function prdWorkflowOverallDeletePath(value, rawPath) {
+  const pathParts = String(rawPath || "").split(".").map((part) => part.trim()).filter(Boolean);
+  if (!pathParts.length) return value;
+  const root = prdWorkflowOverallPlainObject(value);
+  let cursor = root;
+  for (const part of pathParts.slice(0, -1)) {
+    if (!cursor[part] || typeof cursor[part] !== "object" || Array.isArray(cursor[part])) return root;
+    cursor = cursor[part];
+  }
+  delete cursor[pathParts[pathParts.length - 1]];
+  return root;
+}
+
+function prdWorkflowOverallValueKey(value) {
+  if (typeof value === "string") return value.trim().toLowerCase();
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function prdWorkflowOverallUnique(values = []) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const key = prdWorkflowOverallValueKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function prdWorkflowOverallFilterValues(filters, key) {
+  if (!filters || typeof filters !== "object" || Array.isArray(filters)) return [];
+  const aliases = {
+    countries: ["countries", "country", "countryFilters", "country_filters"],
+    users: ["users", "user", "uids", "uid", "userFilters", "user_filters"],
+    versions: ["versions", "version", "versionFilters", "version_filters"],
+  };
+  for (const alias of aliases[key] || [key]) {
+    const value = filters[alias];
+    if (Array.isArray(value)) return value;
+    if (value != null && value !== "") return [value];
+  }
+  return [];
+}
+
+function prdWorkflowFinalizeOverall(tapdId, value) {
+  const overall = prdWorkflowOverallPlainObject(value);
+  const requirement = {
+    ...prdWorkflowOverallPlainObject(overall.requirement),
+    tapdId: String(overall?.requirement?.tapdId || overall?.requirement?.tapd_id || tapdId || ""),
+  };
+  const platforms = {};
+  for (const [rawPlatform, rawValue] of Object.entries(prdWorkflowOverallPlainObject(overall.platforms))) {
+    const platform = String(rawPlatform || "").trim().toLowerCase();
+    if (!platform) continue;
+    const platformValue = prdWorkflowOverallPlainObject(rawValue);
+    const issues = prdWorkflowOverallPlainObject(platformValue.issues);
+    const implementations = Object.values(issues)
+      .map((issue) => prdWorkflowOverallPlainObject(issue).implementation)
+      .filter((item) => item && typeof item === "object" && !Array.isArray(item));
+    const filters = implementations.map((item) => prdWorkflowOverallPlainObject(item.filters));
+    platforms[platform] = {
+      ...platformValue,
+      tags: prdWorkflowOverallUnique([
+        ...(Array.isArray(platformValue.tags) ? platformValue.tags : []),
+        ...implementations.flatMap((item) => Array.isArray(item.tags) ? item.tags : []),
+      ]),
+      experiments: prdWorkflowOverallUnique([
+        ...(Array.isArray(platformValue.experiments) ? platformValue.experiments : []),
+        ...implementations.flatMap((item) => Array.isArray(item.experiments) ? item.experiments : []),
+      ]),
+      settings: prdWorkflowOverallUnique([
+        ...(Array.isArray(platformValue.settings) ? platformValue.settings : []),
+        ...implementations.flatMap((item) => Array.isArray(item.settings) ? item.settings : []),
+      ]),
+      filters: {
+        ...prdWorkflowOverallPlainObject(platformValue.filters),
+        countries: prdWorkflowOverallUnique([
+          ...prdWorkflowOverallFilterValues(platformValue.filters, "countries"),
+          ...filters.flatMap((item) => prdWorkflowOverallFilterValues(item, "countries")),
+        ]),
+        users: prdWorkflowOverallUnique([
+          ...prdWorkflowOverallFilterValues(platformValue.filters, "users"),
+          ...filters.flatMap((item) => prdWorkflowOverallFilterValues(item, "users")),
+        ]),
+        versions: prdWorkflowOverallUnique([
+          ...prdWorkflowOverallFilterValues(platformValue.filters, "versions"),
+          ...filters.flatMap((item) => prdWorkflowOverallFilterValues(item, "versions")),
+        ]),
+      },
+      rules: prdWorkflowOverallUnique([
+        ...(Array.isArray(platformValue.rules) ? platformValue.rules : []),
+        ...implementations.flatMap((item) => Array.isArray(item.rules) ? item.rules : []),
+      ]),
+      issues,
+    };
+  }
+  return {
+    ...overall,
+    requirement,
+    platforms,
+  };
+}
+
+function prdWorkflowOverallFromEvents(tapdId, snapshot = {}, runtimeEvents = []) {
+  const rawOverall =
+    snapshot?.overall ||
+    snapshot?.prdOverall ||
+    snapshot?.prd_overall ||
+    snapshot?.raw?.overall ||
+    snapshot?.raw?.prdOverall ||
+    snapshot?.raw?.prd_overall ||
+    snapshot?.raw?.prd?.overall ||
+    {};
+  let overall = prdWorkflowOverallMerge({}, rawOverall);
+  const events = [...(Array.isArray(runtimeEvents) ? runtimeEvents : [])].sort((left, right) => {
+    const leftAt = Date.parse(left?.updatedAt || left?.completedAt || left?.createdAt || left?.observedAt || "");
+    const rightAt = Date.parse(right?.updatedAt || right?.completedAt || right?.createdAt || right?.observedAt || "");
+    if (!Number.isFinite(leftAt) && !Number.isFinite(rightAt)) return 0;
+    if (!Number.isFinite(leftAt)) return -1;
+    if (!Number.isFinite(rightAt)) return 1;
+    return leftAt - rightAt;
+  });
+  for (const event of events) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    const patch = event.overallPatch || event.overall_patch;
+    if (patch && typeof patch === "object" && !Array.isArray(patch)) {
+      overall = prdWorkflowOverallMerge(overall, patch);
+    }
+    const platform = String(event.platform || "").trim().toLowerCase();
+    const issueKey = String(event.issueKey || event.issue_key || event.issue || "").trim();
+    const actor = prdWorkflowOverallPlainObject(event.actor);
+    if ((event.overallOwnerFromActor === true || event.overall_owner_from_actor === true) && platform && (actor.userId || actor.username)) {
+      overall = prdWorkflowOverallMerge(overall, {
+        platforms: {
+          [platform]: {
+            owner: {
+              userId: String(actor.userId || ""),
+              username: String(actor.username || actor.userId || ""),
+              source: "latest-confirmed-plan",
+              planVersion: event.planVersion || event.plan_version || "",
+              updatedAt: event.updatedAt || event.completedAt || "",
+            },
+          },
+        },
+      });
+    }
+    const implementation = event.implementationMetadata || event.implementation_metadata;
+    if (platform && issueKey && implementation && typeof implementation === "object" && !Array.isArray(implementation)) {
+      overall = prdWorkflowOverallMerge(overall, {
+        platforms: {
+          [platform]: {
+            issues: {
+              [issueKey]: {
+                title: String(event.issueTitle || event.issue_title || event.title || ""),
+                implementation,
+                mr: String(event?.changes?.impl_mr || event?.implMr || event?.impl_mr || ""),
+                updatedAt: event.updatedAt || event.completedAt || "",
+              },
+            },
+          },
+        },
+      });
+    }
+    const removePaths = event.overallRemove || event.overall_remove;
+    for (const removePath of Array.isArray(removePaths) ? removePaths : []) {
+      overall = prdWorkflowOverallDeletePath(overall, removePath);
+    }
+  }
+  return prdWorkflowFinalizeOverall(tapdId, overall);
+}
+
 function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   const runtime = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
   const runtimeEvents = runtime.events;
-  if (!runtimeEvents.length) return snapshot;
   const events = prdWorkflowMergeRuntimeEventList(snapshot?.events, runtimeEvents);
   return {
     ...snapshot,
+    overall: prdWorkflowOverallFromEvents(tapdId, snapshot, runtimeEvents),
     runtimeEvents,
     events,
     sources: {
@@ -9156,6 +9477,9 @@ function prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, parsed = {}, userCtx 
     dependencies: prdWorkflowFirstArray(parsed.dependencies),
     optionalGaps,
     sources: parsed.sources && typeof parsed.sources === "object" ? parsed.sources : {},
+    overall: prdWorkflowOverallFromEvents(id, {
+      overall: parsed.overall || parsed.prdOverall || parsed.prd_overall || prd.overall || {},
+    }, []),
     raw: parsed,
     collaboration: prdWorkflowCollaborationState(userCtx, flowSource, flowId, id),
   };
@@ -10122,6 +10446,15 @@ export function startUiServer({
       return;
     }
 
+    if (url.pathname === "/api/app-version" && req.method === "GET") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      json(res, 200, {
+        version: UI_SERVER_APP_VERSION,
+        startedAt: UI_SERVER_STARTED_AT,
+      });
+      return;
+    }
+
     if (url.pathname === "/api/auth/login" && req.method === "POST") {
       let payload;
       try {
@@ -10167,21 +10500,136 @@ export function startUiServer({
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/prd-workflow/collaboration") {
+      const tapdId = String(url.searchParams.get("tapdId") || "").trim();
+      if (!tapdId) {
+        json(res, 400, { error: "Missing tapdId" });
+        return;
+      }
+      const record = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+      json(res, 200, {
+        ok: true,
+        collaboration: prdWorkflowCollaborationSummaryWithUsers(record, userCtx.userId),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/collaboration/share") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+        if (!tapdId) {
+          json(res, 400, { error: "Missing tapdId" });
+          return;
+        }
+        const existing = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+        if (existing && prdWorkflowCollaborationAccess(existing, userCtx.userId).role !== "owner") {
+          json(res, 403, { error: "仅 Workflow 所有者可以添加成员" });
+          return;
+        }
+        const ensured = ensurePrdWorkflowCollaboration({ tapdId, userId: userCtx.userId });
+        if (ensured.error) {
+          json(res, ensured.status || 400, { error: ensured.error });
+          return;
+        }
+        const targetUser = findWorkspaceShareUser(payload?.username || payload?.userId);
+        if (!targetUser) {
+          json(res, 404, { error: "未找到该用户名，请确认对方已经登录或注册 AgentFlow" });
+          return;
+        }
+        if (targetUser.userId === userCtx.userId) {
+          json(res, 400, { error: "无需将 Workflow 分享给自己" });
+          return;
+        }
+        const added = addPrdWorkflowCollaborationMember({
+          workflowId: ensured.workflow.id,
+          userId: userCtx.userId,
+          memberUserId: targetUser.userId,
+          role: payload?.role,
+        });
+        if (added.error) {
+          json(res, added.status || 400, { error: added.error });
+          return;
+        }
+        const scope = resolvePrdWorkflowScope(root, { ...payload, tapdId }, userCtx, "write");
+        if (!scope.error) prdWorkflowMigrateLegacyState(scope.executionRoot, scope.stateRoot, tapdId);
+        const record = getPrdWorkflowCollaborationById(ensured.workflow.id);
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, "", "", tapdId), {
+          type: "member.added",
+          tapdId,
+          memberUserId: targetUser.userId,
+        });
+        json(res, 200, {
+          ok: true,
+          collaboration: prdWorkflowCollaborationSummaryWithUsers(record, userCtx.userId),
+          member: { userId: targetUser.userId, username: targetUser.username, role: "editor" },
+        });
+      } catch (error) {
+        json(res, 400, { error: (error && error.message) || String(error) });
+      }
+      return;
+    }
+    if (req.method === "DELETE" && url.pathname === "/api/prd-workflow/collaboration/share") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+        const record = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+        if (!record) {
+          json(res, 404, { error: "PRD Workflow collaboration not found" });
+          return;
+        }
+        const requestedUser = String(payload?.username || payload?.memberUserId || "").trim();
+        const targetUser = requestedUser ? findWorkspaceShareUser(requestedUser) : null;
+        if (requestedUser && !targetUser) {
+          json(res, 404, { error: "未找到该用户" });
+          return;
+        }
+        const removed = removePrdWorkflowCollaborationMember({
+          workflowId: record.id,
+          userId: userCtx.userId,
+          memberUserId: targetUser?.userId || userCtx.userId,
+        });
+        if (removed.error) {
+          json(res, removed.status || 400, { error: removed.error });
+          return;
+        }
+        const nextRecord = getPrdWorkflowCollaborationById(record.id);
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, "", "", tapdId), {
+          type: removed.left ? "member.left" : "member.removed",
+          tapdId,
+          memberUserId: removed.removedUserId || "",
+        });
+        json(res, 200, {
+          ok: true,
+          left: removed.left === true,
+          removedUserId: removed.removedUserId || "",
+          collaboration: removed.left
+            ? null
+            : prdWorkflowCollaborationSummaryWithUsers(nextRecord, userCtx.userId),
+        });
+      } catch (error) {
+        json(res, 400, { error: (error && error.message) || String(error) });
+      }
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/prd-workflow/snapshot") {
       try {
         const tapdId = String(url.searchParams.get("tapdId") || "").trim();
         const flowId = String(url.searchParams.get("flowId") || "").trim();
         const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
         const archived = url.searchParams.get("archived") === "1";
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+          workspaceId: url.searchParams.get("workspaceId") || "",
+        }, userCtx);
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const useMock = url.searchParams.get("mock") === "1" || parseBool(process.env.AGENTFLOW_PRD_WORKFLOW_MOCK, false);
         const runtimeOnly = url.searchParams.get("runtimeOnly") === "1" ||
           url.searchParams.get("runtime_only") === "1" ||
@@ -10189,8 +10637,8 @@ export function startUiServer({
         const baseSnapshot = useMock
           ? prdWorkflowMockSnapshot(scopedRoot, tapdId || "mock-prd")
           : runtimeOnly
-            ? prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId })
-            : await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId });
+            ? prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId })
+            : await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId });
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
           baseSnapshot,
           getSessionTokenFromRequest(req) || "",
@@ -10219,15 +10667,19 @@ export function startUiServer({
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
           ? payload.snapshot
           : payload.prd || payload.next ? payload : null;
@@ -10312,7 +10764,7 @@ export function startUiServer({
             incomingSnapshot: prdWorkflowCompactRuntimeValue(projectFactSnapshot, 12000),
           });
           const currentSnapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-            prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+            prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
             getSessionTokenFromRequest(req) || "",
           );
           json(res, 409, {
@@ -10352,7 +10804,7 @@ export function startUiServer({
             persistence: projectFactSource.persistence,
           });
         }
-        const materialized = prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId });
+        const materialized = prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId });
         const withDiagnostic = prdWorkflowWithAgentflowTokenDiagnostic(materialized, getSessionTokenFromRequest(req) || "");
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "snapshot-report", tapdId, snapshot: withDiagnostic });
         json(res, 200, { ok: true, snapshot: withDiagnostic });
@@ -10371,30 +10823,36 @@ export function startUiServer({
         return;
       }
       let actionScopedRoot = root;
+      let actionExecutionRoot = root;
       let normalizedForCatch = null;
       let actionRunId = "";
       try {
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
-        }
-        actionScopedRoot = scopedRoot;
         const normalized = normalizePrdWorkflowActionArgs(payload);
         normalizedForCatch = normalized;
         if (normalized.error) {
           json(res, 400, { error: normalized.error });
           return;
         }
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId: normalized.tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
+        }
+        const scopedRoot = workflowScope.stateRoot;
+        actionScopedRoot = scopedRoot;
+        actionExecutionRoot = workflowScope.executionRoot;
+        prdWorkflowMigrateLegacyState(actionExecutionRoot, scopedRoot, normalized.tapdId);
         const idem = String(normalized.idempotencyKey || "").trim();
-        const idemKey = idem ? prdWorkflowKey(userCtx, flowSource, flowId, `${normalized.tapdId}:${idem}`) : "";
+        const idemKey = idem ? `${prdWorkflowKey(userCtx, flowSource, flowId, normalized.tapdId)}\t${idem}` : "";
         if (idemKey && prdWorkflowIdempotency.has(idemKey)) {
           json(res, 200, { ok: true, alreadyApplied: true, ...prdWorkflowIdempotency.get(idemKey)?.result });
           return;
@@ -10402,7 +10860,7 @@ export function startUiServer({
         const completedEvent = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, normalized.tapdId, idem);
         if (completedEvent) {
           const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-            await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+            await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
             getSessionTokenFromRequest(req) || "",
           );
           const result = {
@@ -10454,7 +10912,7 @@ export function startUiServer({
             const expectedRevision = String(payload?.expectedRevision || "").trim();
             if (expectedRevision) {
             const latestForMarker = prdWorkflowWithAgentflowTokenDiagnostic(
-              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
               getSessionTokenFromRequest(req) || "",
             );
               const latestRevision = String(latestForMarker?.revision || "").trim();
@@ -10512,7 +10970,7 @@ export function startUiServer({
               links: markerEvent.links,
             });
             const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
               getSessionTokenFromRequest(req) || "",
             );
             result = {
@@ -10557,7 +11015,7 @@ export function startUiServer({
               output,
             });
             const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
               getSessionTokenFromRequest(req) || "",
             );
             result = {
@@ -10599,7 +11057,7 @@ export function startUiServer({
               command: output.command,
             });
             const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-              await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+              await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
               getSessionTokenFromRequest(req) || "",
             );
             result = {
@@ -10620,7 +11078,7 @@ export function startUiServer({
             return;
           }
           const runtimeEventUrl = `${serverPublicBaseUrl(req, host, uiPort)}/api/prd-workflow/event`;
-          const commandResult = await runPrdWorkflowCommand(root, scopedRoot, normalized.args, userCtx, {
+          const commandResult = await runPrdWorkflowCommand(actionExecutionRoot, scopedRoot, normalized.args, userCtx, {
             timeout: 300000,
             env: {
               PRD_FLOW_RUNTIME_EVENT_URL: runtimeEventUrl,
@@ -10656,7 +11114,7 @@ export function startUiServer({
             links: Array.isArray(parsed?.links) ? parsed.links : [],
           });
           const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-            await prdWorkflowSnapshot(root, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
+            await prdWorkflowSnapshot(actionExecutionRoot, scopedRoot, normalized.tapdId, userCtx, { flowSource, flowId }),
             getSessionTokenFromRequest(req) || "",
           );
           result = {
@@ -10712,7 +11170,7 @@ export function startUiServer({
         if (status === 409 && tapdId) {
           try {
             latestSnapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-              await prdWorkflowSnapshot(root, actionScopedRoot, tapdId, userCtx, { flowSource, flowId }),
+              await prdWorkflowSnapshot(actionExecutionRoot, actionScopedRoot, tapdId, userCtx, { flowSource, flowId }),
               getSessionTokenFromRequest(req) || "",
             );
           } catch (_) {}
@@ -10751,15 +11209,19 @@ export function startUiServer({
         const flowId = String(url.searchParams.get("flowId") || "").trim();
         const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
         const archived = url.searchParams.get("archived") === "1";
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+          workspaceId: url.searchParams.get("workspaceId") || "",
+        }, userCtx);
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const event = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey);
         json(res, 200, {
           ok: true,
@@ -10796,15 +11258,19 @@ export function startUiServer({
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const existing = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey);
         if (existing) {
           json(res, 200, { ok: true, found: true, event: existing, result: existing.output || existing.result || null });
@@ -10855,15 +11321,19 @@ export function startUiServer({
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const eventPayload = payload.event && typeof payload.event === "object" && !Array.isArray(payload.event)
           ? payload.event
           : payload;
@@ -10871,9 +11341,13 @@ export function startUiServer({
           ...eventPayload,
           tapdId,
           type: eventPayload.type || "workflow-event",
+          actor: {
+            userId: String(userCtx?.userId || ""),
+            username: String(authUser?.username || userCtx?.userId || ""),
+          },
         });
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-          await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+          prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "runtime-event", tapdId, event, snapshot });
@@ -10901,21 +11375,21 @@ export function startUiServer({
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            json(res, 400, { error: scoped.error });
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
-        const query = new URLSearchParams();
-        if (flowId) query.set("flowId", flowId);
-        if (flowId && flowSource && flowSource !== "user") query.set("flowSource", flowSource);
-        if (archived) query.set("archived", "1");
-        const reviewUrl = query.toString() ? `${review.url}?${query.toString()}` : review.url;
+        const reviewUrl = review.url;
         const durability = review.durability || "temporary";
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
@@ -10950,7 +11424,7 @@ export function startUiServer({
           reviewId: review.id,
         });
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
-          await prdWorkflowSnapshot(root, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
+          await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "review-link", tapdId, event, snapshot });
@@ -11003,16 +11477,20 @@ export function startUiServer({
         const flowId = String(url.searchParams.get("flowId") || "").trim();
         const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
         const archived = url.searchParams.get("archived") === "1";
-        let scopedRoot = root;
-        if (flowId) {
-          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource, archived }, userCtx);
-          if (scoped.error) {
-            res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-            res.end(scoped.error);
-            return;
-          }
-          scopedRoot = scoped.root;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+          workspaceId: url.searchParams.get("workspaceId") || "",
+        }, userCtx);
+        if (workflowScope.error) {
+          res.writeHead(workflowScope.status || 400, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(workflowScope.error);
+          return;
         }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
         if (!fs.existsSync(paths.markdownPath) || !fs.statSync(paths.markdownPath).isFile()) {
           res.writeHead(404);

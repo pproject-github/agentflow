@@ -14,6 +14,7 @@ import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
+import AppVersionNotice from "./components/AppVersionNotice.jsx";
 
 function isLikeeContextPath(path) {
   return path === "/likee-context" || path === "/likee_context";
@@ -196,6 +197,7 @@ export default function App() {
     <UiErrorBoundary>
       <RouteProvider>
         <PublicOrAuthedApp />
+        <AppVersionNotice />
       </RouteProvider>
     </UiErrorBoundary>
   );

@@ -39,6 +39,14 @@ import {
 } from "../nodeSchema.js";
 import { recordPipelineView } from "../pipelineViewPreference.js";
 import {
+  sortWorkflowIssueLinks,
+  workflowIssueIsLogicalParent,
+  workflowIssueLinkKind,
+  workflowIssueMrStatus,
+  workflowIssueParentKey,
+  workflowIssueTreeCount,
+} from "../prdWorkflowIssuePresentation.js";
+import {
   diffWorkspaceGraphsForUi,
   reconcileWorkspaceEdges,
   reconcileWorkspaceInstances,
@@ -1065,7 +1073,16 @@ function prdWorkflowIssueEpicKey(item) {
 }
 
 function prdWorkflowIssueParentKey(item) {
-  return String(item?.parentKey || item?.parent_key || item?.parent || item?.parentIssue || item?.parent_issue || "").trim();
+  return String(
+    item?.sourceIssue
+    || item?.source_issue
+    || item?.parentKey
+    || item?.parent_key
+    || item?.parent
+    || item?.parentIssue
+    || item?.parent_issue
+    || "",
+  ).trim();
 }
 
 function prdWorkflowIssueLinks(item) {
@@ -1130,13 +1147,14 @@ function prdWorkflowIssueGroups(snapshot) {
   const buildIssueTree = (list) => {
     const byKey = new Map();
     const rows = [];
+    const availableKeys = list.map((issue, index) => prdWorkflowIssueKey(issue, index));
     list.forEach((issue, index) => {
       const key = prdWorkflowIssueKey(issue, index);
       byKey.set(key, { issue, children: [] });
     });
     list.forEach((issue, index) => {
       const key = prdWorkflowIssueKey(issue, index);
-      const parent = prdWorkflowIssueParentKey(issue);
+      const parent = prdWorkflowIssueParentKey(issue) || workflowIssueParentKey(issue, availableKeys);
       const row = byKey.get(key);
       if (parent && byKey.has(parent)) byKey.get(parent).children.push(row);
       else rows.push(row);
@@ -7004,8 +7022,158 @@ function PrdWorkflowPanel({
   );
 }
 
+function PrdWorkflowIssueCard({ row, index = 0, child = false }) {
+  const issue = row?.issue || {};
+  const logicalParent = workflowIssueIsLogicalParent(issue);
+  const allLinks = sortWorkflowIssueLinks(prdWorkflowIssueLinks(issue));
+  const visibleLinks = logicalParent
+    ? allLinks.filter((link) => !["issue", "mr"].includes(workflowIssueLinkKind(link)))
+    : allLinks;
+  const mrStatus = workflowIssueMrStatus(issue, allLinks);
+  const issueKey = prdWorkflowIssueKey(issue, index);
+  const platform = logicalParent ? "" : prdWorkflowPlatformLabel(issue.platform);
+  const childCount = Array.isArray(row?.children) ? row.children.length : 0;
+  const meta = [
+    issueKey,
+    logicalParent && childCount ? `${childCount} 个端侧 Issue` : platform,
+    issue.status,
+  ].filter(Boolean);
+
+  return (
+    <div className={`af-prd-workflow-issue${child ? " af-prd-workflow-issue--child" : ""}${logicalParent ? " af-prd-workflow-issue--aggregate" : ""}`}>
+      <strong>{prdWorkflowIssueTitle(issue, index)}</strong>
+      <small>{meta.join(" · ")}</small>
+      <div className="af-prd-workflow-issue__state-row">
+        <span className={`af-prd-workflow-issue__state af-prd-workflow-issue__state--${mrStatus.kind}`}>
+          {mrStatus.label}
+        </span>
+        {mrStatus.detail ? <small>{mrStatus.detail}</small> : null}
+      </div>
+      {visibleLinks.length ? (
+        <div className="af-prd-workflow-issue__links">
+          {visibleLinks.map((link) => (
+            <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
+          ))}
+        </div>
+      ) : null}
+      {childCount ? (
+        <div className="af-prd-workflow-issue__children">
+          {row.children.map((childRow, childIndex) => (
+            <PrdWorkflowIssueCard
+              key={prdWorkflowIssueKey(childRow?.issue || {}, childIndex)}
+              row={childRow}
+              index={childIndex}
+              child
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function prdWorkflowOverallDisplayValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") return String(value).trim();
+  if (typeof value !== "object" || Array.isArray(value)) return "";
+  return String(value.label || value.name || value.value || value.key || value.code || value.username || value.userId || "").trim();
+}
+
+function prdWorkflowOverallDisplayList(value) {
+  const list = Array.isArray(value) ? value : value == null || value === "" ? [] : [value];
+  return list.map((item) => prdWorkflowOverallDisplayValue(item)).filter(Boolean);
+}
+
+function prdWorkflowOverallExperimentLabel(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return prdWorkflowOverallDisplayValue(value);
+  const name = prdWorkflowOverallDisplayValue(value);
+  const groups = prdWorkflowOverallDisplayList(value.groups || value.variants || value.buckets);
+  return [name, groups.length ? groups.join(" / ") : ""].filter(Boolean).join(" · ");
+}
+
+function prdWorkflowOverallSettingLabel(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return prdWorkflowOverallDisplayValue(value);
+  const name = prdWorkflowOverallDisplayValue(value);
+  const defaultValue = value.defaultValue ?? value.default_value ?? value.default;
+  return [name, defaultValue != null && defaultValue !== "" ? `默认 ${String(defaultValue)}` : ""].filter(Boolean).join(" · ");
+}
+
+function PrdWorkflowOverallPlatform({ platform, value }) {
+  const owner = prdWorkflowOverallDisplayValue(value?.owner);
+  const tags = prdWorkflowOverallDisplayList(value?.tags);
+  const experiments = (Array.isArray(value?.experiments) ? value.experiments : []).map(prdWorkflowOverallExperimentLabel).filter(Boolean);
+  const settings = (Array.isArray(value?.settings) ? value.settings : []).map(prdWorkflowOverallSettingLabel).filter(Boolean);
+  const countries = prdWorkflowOverallDisplayList(value?.filters?.countries);
+  const users = prdWorkflowOverallDisplayList(value?.filters?.users);
+  const versions = prdWorkflowOverallDisplayList(value?.filters?.versions);
+  const rules = prdWorkflowOverallDisplayList(value?.rules);
+  const rows = [
+    ["Tag", tags],
+    ["AB 实验", experiments],
+    ["Settings", settings],
+    ["国家过滤", countries],
+    ["用户过滤", users],
+    ["版本过滤", versions],
+  ].filter(([, values]) => values.length);
+  if (!owner && !rows.length && !rules.length) return null;
+  return (
+    <section className="af-prd-overall-platform">
+      <div className="af-prd-overall-platform__head">
+        <strong>{prdWorkflowPlatformLabel(platform) || platform}</strong>
+        {owner ? <span><span className="material-symbols-outlined" aria-hidden>person</span>{owner}</span> : null}
+      </div>
+      {rows.map(([label, values]) => (
+        <div className="af-prd-overall-platform__row" key={label}>
+          <small>{label}</small>
+          <div>{values.map((item) => <span key={`${label}-${item}`}>{item}</span>)}</div>
+        </div>
+      ))}
+      {rules.length ? (
+        <div className="af-prd-overall-platform__rules">
+          <small>实现规则</small>
+          <ul>{rules.map((rule) => <li key={rule}>{rule}</li>)}</ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function PrdWorkflowOverallCard({ overall }) {
+  const requirement = overall?.requirement && typeof overall.requirement === "object" ? overall.requirement : {};
+  const platforms = overall?.platforms && typeof overall.platforms === "object" ? overall.platforms : {};
+  const title = String(requirement.title || requirement.name || "").trim();
+  const tapdUrl = String(requirement.tapdUrl || requirement.tapd_url || requirement.url || "").trim();
+  const status = prdWorkflowOverallDisplayValue(requirement.status || requirement.tapdStatus || requirement.tapd_status);
+  const platformEntries = Object.entries(platforms).filter(([platform, value]) => (
+    platform && value && typeof value === "object" && !Array.isArray(value)
+  ));
+  if (!title && !tapdUrl && !status && !platformEntries.length) return null;
+  return (
+    <article className="af-prd-workflow-card af-prd-overall">
+      <div className="af-prd-workflow-card__head">
+        <h2>需求概览</h2>
+        {status ? <span className="af-prd-overall__status">{status}</span> : null}
+      </div>
+      {(title || tapdUrl) ? (
+        <div className="af-prd-overall__requirement">
+          {tapdUrl ? (
+            <a href={tapdUrl} target="_blank" rel="noreferrer">
+              <strong>{title || `TAPD ${requirement.tapdId || ""}`}</strong>
+              <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+            </a>
+          ) : <strong>{title}</strong>}
+        </div>
+      ) : null}
+      <div className="af-prd-overall__platforms">
+        {platformEntries.map(([platform, value]) => (
+          <PrdWorkflowOverallPlatform key={platform} platform={platform} value={value} />
+        ))}
+      </div>
+    </article>
+  );
+}
+
 function PrdWorkflowTimelinePanel({
-  projectId,
   tapdId,
   setTapdId,
   snapshot,
@@ -7024,10 +7192,16 @@ function PrdWorkflowTimelinePanel({
 }) {
   const [auditFilter, setAuditFilter] = useState("all");
   const [actionFilter, setActionFilter] = useState("all");
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [shareUsername, setShareUsername] = useState("");
+  const [sharing, setSharing] = useState(null);
   const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
   const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
   const issueGroups = prdWorkflowIssueGroups(snapshot);
-  const issueCount = issueGroups.reduce((total, group) => total + group.issues.reduce((n, row) => n + 1 + (Array.isArray(row.children) ? row.children.length : 0), 0), 0);
+  const issueCount = issueGroups.reduce((total, group) => total + workflowIssueTreeCount(group.issues), 0);
   const artifacts = Array.isArray(snapshot?.artifacts) ? snapshot.artifacts : [];
   const gaps = Array.isArray(snapshot?.optionalGaps) ? snapshot.optionalGaps : [];
   const nextAction = snapshot?.nextAction && typeof snapshot.nextAction === "object" ? snapshot.nextAction : null;
@@ -7051,7 +7225,77 @@ function PrdWorkflowTimelinePanel({
   const activeAction = collaboration.activeAction && typeof collaboration.activeAction === "object" ? collaboration.activeAction : null;
   const clientObservations = Array.isArray(snapshot?.clientObservations) ? snapshot.clientObservations : [];
   const rawOutput = String(snapshot?.rawOutput || "");
+  const overall = snapshot?.overall && typeof snapshot.overall === "object" ? snapshot.overall : null;
   const workflowSteps = prdWorkflowFlowSteps(phase);
+  const loadSharing = useCallback(async () => {
+    const id = String(tapdId || "").trim();
+    if (!id) {
+      setSharing(null);
+      return;
+    }
+    setShareLoading(true);
+    setShareError("");
+    try {
+      const query = new URLSearchParams({ tapdId: id });
+      const response = await fetch(`/api/prd-workflow/collaboration?${query.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "读取 Workflow 分享状态失败");
+      setSharing(payload.collaboration || null);
+    } catch (shareLoadError) {
+      setShareError(String(shareLoadError.message || shareLoadError));
+    } finally {
+      setShareLoading(false);
+    }
+  }, [tapdId]);
+  useEffect(() => {
+    setSharing(snapshot?.collaboration?.workflow || null);
+  }, [snapshot?.collaboration?.workflow]);
+  const openSharing = () => {
+    setShareOpen(true);
+    setShareUsername("");
+    void loadSharing();
+  };
+  const addSharingMember = async () => {
+    const username = shareUsername.trim();
+    if (!username || !tapdId || shareBusy) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      const response = await fetch("/api/prd-workflow/collaboration/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, username, role: "editor" }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "添加 Workflow 协作成员失败");
+      setSharing(payload.collaboration || null);
+      setShareUsername("");
+    } catch (shareAddError) {
+      setShareError(String(shareAddError.message || shareAddError));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+  const removeSharingMember = async (memberUserId = "") => {
+    if (!tapdId || shareBusy) return;
+    setShareBusy(true);
+    setShareError("");
+    try {
+      const response = await fetch("/api/prd-workflow/collaboration/share", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, ...(memberUserId ? { memberUserId } : {}) }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "取消 Workflow 分享失败");
+      setSharing(payload.collaboration || null);
+      if (payload.left) setShareOpen(false);
+    } catch (shareRemoveError) {
+      setShareError(String(shareRemoveError.message || shareRemoveError));
+    } finally {
+      setShareBusy(false);
+    }
+  };
   return (
     <main className="af-prd-workflow af-prd-workflow--timeline" aria-label="PRD Workflow">
       <section className="af-prd-workflow__statusbar">
@@ -7059,10 +7303,9 @@ function PrdWorkflowTimelinePanel({
           <span className={`af-prd-workflow-phase af-prd-workflow-phase--${phase.toLowerCase().replace(/[^a-z0-9_-]+/gi, "_")}`}>
             {prdWorkflowPhaseLabel(phase)}
           </span>
-          <h1>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "绑定 TAPD 需求后读取状态")}</h1>
+          <h1>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "选择 TAPD 需求后读取状态")}</h1>
           <p className="af-prd-workflow__status-subtitle">
-            Project <strong>{projectId || "Workspace"}</strong>
-            {tapdId ? <> · TAPD <strong>{tapdId}</strong></> : <> · 未绑定 TAPD</>}
+            {tapdId ? <>TAPD <strong>{tapdId}</strong> · 独立需求 Workflow</> : <>尚未选择 TAPD 需求</>}
           </p>
           {error ? <p className="af-prd-workflow-error">{error}</p> : null}
           {(activeAction || collaboration.subscribers) ? (
@@ -7097,7 +7340,7 @@ function PrdWorkflowTimelinePanel({
           </div>
           <div className="af-prd-workflow__lookup-row">
             <label>
-              <span>Project 绑定 TAPD</span>
+              <span>TAPD Workflow</span>
               <input
                 value={tapdId}
                 onChange={(event) => setTapdId(event.target.value)}
@@ -7108,7 +7351,11 @@ function PrdWorkflowTimelinePanel({
             </label>
             <button type="submit" disabled={loading}>
               <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "sync"}</span>
-              {loading ? "读取中" : tapdId ? "刷新" : "绑定"}
+              {loading ? "读取中" : tapdId ? "刷新" : "读取"}
+            </button>
+            <button type="button" disabled={!tapdId} onClick={openSharing}>
+              <span className="material-symbols-outlined" aria-hidden>group_add</span>
+              分享{sharing?.memberCount > 1 ? ` ${sharing.memberCount - 1}` : ""}
             </button>
           </div>
         </form>
@@ -7240,14 +7487,15 @@ function PrdWorkflowTimelinePanel({
               </section>
             )) : (
               <div className="af-prd-workflow-action-empty">
-                <strong>{tapdId ? (actionRows.length ? "当前 tag 下暂无 action" : "暂无 prd-flow 上报 action") : "先绑定 TAPD 需求"}</strong>
-                <p>{tapdId ? (actionRows.length ? "切换到其它 tag 或查看全部。" : "Workflow tab 不会生成默认步骤；需要 prd-flow snapshot 返回 actions/timeline/events/history 或 nextAction。") : "绑定后从 prd-flow 读取真实 action、产物和 URL。"}</p>
+                <strong>{tapdId ? (actionRows.length ? "当前 tag 下暂无 action" : "暂无 prd-flow 上报 action") : "先选择 TAPD 需求"}</strong>
+                <p>{tapdId ? (actionRows.length ? "切换到其它 tag 或查看全部。" : "Workflow tab 不会生成默认步骤；需要 prd-flow snapshot 返回 actions/timeline/events/history 或 nextAction。") : "选择后从 prd-flow 读取真实 action、产物和 URL。"}</p>
               </div>
             )}
           </div>
         </article>
 
         <aside className="af-prd-workflow-side" aria-label="Workflow related links">
+          <PrdWorkflowOverallCard overall={overall} />
           {otherArtifacts.length ? (
             <article className="af-prd-workflow-card">
               <div className="af-prd-workflow-card__head">
@@ -7307,46 +7555,15 @@ function PrdWorkflowTimelinePanel({
                 <div key={group.key} className="af-prd-workflow-epic">
                   <div className="af-prd-workflow-epic__head">
                     <strong>{group.title || group.key}</strong>
-                    <small>{group.issues.length}</small>
+                    <small>{workflowIssueTreeCount(group.issues)}</small>
                   </div>
-                  {group.issues.map((row, index) => {
-                    const issue = row.issue || {};
-                    const links = prdWorkflowIssueLinks(issue);
-                    return (
-                      <div key={prdWorkflowIssueKey(issue, index)} className="af-prd-workflow-issue">
-                        <strong>{prdWorkflowIssueTitle(issue, index)}</strong>
-                        <small>{[prdWorkflowIssueKey(issue, index), issue.platform, issue.status].filter(Boolean).join(" · ")}</small>
-                        {links.length ? (
-                          <div className="af-prd-workflow-issue__links">
-                            {links.map((link) => (
-                              <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
-                            ))}
-                          </div>
-                        ) : null}
-                        {row.children?.length ? (
-                          <div className="af-prd-workflow-issue__children">
-                            {row.children.map((child, childIndex) => {
-                              const childIssue = child.issue || {};
-                              const childLinks = prdWorkflowIssueLinks(childIssue);
-                              return (
-                                <div key={prdWorkflowIssueKey(childIssue, childIndex)} className="af-prd-workflow-issue af-prd-workflow-issue--child">
-                                  <strong>{prdWorkflowIssueTitle(childIssue, childIndex)}</strong>
-                                  <small>{[prdWorkflowIssueKey(childIssue, childIndex), childIssue.platform, childIssue.status].filter(Boolean).join(" · ")}</small>
-                                  {childLinks.length ? (
-                                    <div className="af-prd-workflow-issue__links">
-                                      {childLinks.map((link) => (
-                                        <a key={`${link.label}-${link.href}`} href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                  {group.issues.map((row, index) => (
+                    <PrdWorkflowIssueCard
+                      key={prdWorkflowIssueKey(row?.issue || {}, index)}
+                      row={row}
+                      index={index}
+                    />
+                  ))}
                 </div>
               )) : (
                 <p className="af-prd-workflow-muted">暂无 Issue 信息。</p>
@@ -7391,6 +7608,80 @@ function PrdWorkflowTimelinePanel({
           ) : null}
         </aside>
       </section>
+      {shareOpen ? createPortal(
+        <div className="af-flow-snippet-modal-overlay">
+          <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="分享需求 Workflow">
+            <div className="af-flow-snippet-modal__head">
+              <span className="af-flow-snippet-modal__title">
+                <span className="material-symbols-outlined" aria-hidden>group_add</span>
+                分享需求 Workflow
+              </span>
+              <button type="button" className="af-flow-snippet-modal__close" onClick={() => setShareOpen(false)} aria-label="关闭">
+                <span className="material-symbols-outlined" aria-hidden>close</span>
+              </button>
+            </div>
+            <div className="af-flow-snippet-modal__body">
+              <p className="af-display-link-modal__empty">
+                按 TAPD {tapdId} 分享需求流程；不会分享当前 Project、画布或项目文件。
+              </p>
+              {sharing?.role && sharing.role !== "owner" ? (
+                <div className="af-prd-workflow-share-note">你是该 Workflow 的协作成员，可以查看和推进需求状态。</div>
+              ) : (
+                <div className="af-workspace-member-add">
+                  <input
+                    type="text"
+                    value={shareUsername}
+                    onChange={(event) => setShareUsername(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && shareUsername.trim() && !shareBusy) {
+                        event.preventDefault();
+                        void addSharingMember();
+                      }
+                    }}
+                    placeholder="输入已注册用户名"
+                    autoFocus
+                  />
+                  <button type="button" disabled={shareBusy || !shareUsername.trim()} onClick={() => void addSharingMember()}>
+                    {shareBusy ? "添加中..." : "添加成员"}
+                  </button>
+                </div>
+              )}
+              {shareError ? <div className="af-flow-snippet-error">{shareError}</div> : null}
+              {shareLoading ? <div className="af-display-link-modal__empty">正在读取分享成员...</div> : null}
+              <div className="af-workspace-member-list">
+                {(sharing?.members || []).map((member) => {
+                  const isOwner = member.userId === sharing?.ownerId || member.role === "owner";
+                  return (
+                    <div className="af-workspace-member-row" key={member.userId}>
+                      <span className="material-symbols-outlined" aria-hidden>{isOwner ? "shield_person" : "person"}</span>
+                      <div>
+                        <strong>{member.username || member.userId}</strong>
+                        <small>{isOwner ? "所有者" : member.role === "viewer" ? "只读成员" : "编辑成员"}</small>
+                      </div>
+                      {sharing?.role === "owner" && !isOwner ? (
+                        <button type="button" disabled={shareBusy} onClick={() => void removeSharingMember(member.userId)}>
+                          取消分享
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="af-flow-snippet-modal__foot">
+              {sharing?.role && sharing.role !== "owner" ? (
+                <button type="button" className="af-flow-snippet-modal__btn" disabled={shareBusy} onClick={() => void removeSharingMember()}>
+                  退出分享
+                </button>
+              ) : null}
+              <button type="button" className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary" onClick={() => setShareOpen(false)}>
+                完成
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </main>
   );
 }
@@ -8235,6 +8526,7 @@ function WorkspacePageInner() {
     try {
       const q = flowParamsQuery(flowParams);
       q.set("tapdId", tapdId);
+      q.set("runtimeOnly", "1");
       const res = await fetch(`/api/prd-workflow/snapshot?${q.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "读取 PRD Workflow 失败");
@@ -13136,7 +13428,6 @@ function WorkspacePageInner() {
 
         {isWorkflowMode ? (
           <PrdWorkflowTimelinePanel
-            projectId={workspaceProjectTitle}
             tapdId={workflowTapdId}
             setTapdId={setWorkflowTapdId}
             snapshot={workflowSnapshot}
