@@ -67,6 +67,7 @@ export function flowUrlForView(flow, view = "workspace") {
     flowId: flow.id,
     flowSource: flow.source ?? "user",
   });
+  if (flow.collaboration?.id) q.set("workspaceId", flow.collaboration.id);
   if (flow.archived) q.set("archived", "1");
   if (normalizedView === "display") q.set("view", "display");
   return `/workspace?${q.toString()}`;

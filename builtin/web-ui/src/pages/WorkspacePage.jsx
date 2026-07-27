@@ -165,6 +165,7 @@ function readFlowParamsFromUrl() {
   return {
     flowId: sp.get("flowId") || "",
     flowSource: sp.get("flowSource") || "user",
+    workspaceId: sp.get("workspaceId") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
   };
 }
@@ -173,6 +174,7 @@ function flowParamsQuery(params) {
   const q = new URLSearchParams();
   if (params.flowId) q.set("flowId", params.flowId);
   if (params.flowSource) q.set("flowSource", params.flowSource);
+  if (params.workspaceId) q.set("workspaceId", params.workspaceId);
   if (params.archived) q.set("archived", "1");
   return q;
 }
@@ -7317,12 +7319,56 @@ function PrdWorkflowTimelinePanel({
   );
 }
 
+function workspaceConflictValueText(item, side) {
+  if (!item?.[`has${side[0].toUpperCase()}${side.slice(1)}`]) return "（删除该字段）";
+  const value = item?.[side];
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function workspaceConflictManualText(item) {
+  if (!item?.hasIncoming) return "null";
+  try {
+    return JSON.stringify(item.incoming, null, 2);
+  } catch {
+    return JSON.stringify(String(item.incoming));
+  }
+}
+
+function applyWorkspaceConflictPath(graph, pathParts, value, exists = true) {
+  const next = JSON.parse(JSON.stringify(graph || {}));
+  const parts = Array.isArray(pathParts) ? pathParts : [];
+  if (!parts.length) return exists ? value : {};
+  let cursor = next;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index];
+    const following = parts[index + 1];
+    if (!cursor[part] || typeof cursor[part] !== "object") {
+      cursor[part] = Number.isInteger(following) ? [] : {};
+    }
+    cursor = cursor[part];
+  }
+  const finalPart = parts[parts.length - 1];
+  if (exists) cursor[finalPart] = value;
+  else if (Array.isArray(cursor) && Number.isInteger(finalPart)) cursor.splice(finalPart, 1);
+  else delete cursor[finalPart];
+  return next;
+}
+
 function WorkspacePageInner() {
   const { t, i18n } = useTranslation();
   const { navigate } = useRoute();
   const reactFlow = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
+  const workspaceViewportStorageKey = useMemo(
+    () => `agentflow.workspace.viewport:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`,
+    [flowParams],
+  );
   const [workspaceMode, setWorkspaceMode] = useState(() => (
     (() => {
       const view = new URLSearchParams(window.location.search).get("view");
@@ -7351,6 +7397,16 @@ function WorkspacePageInner() {
   const instancesRef = useRef({});
   const loadedRef = useRef(false);
   const saveTimerRef = useRef(null);
+  const workspaceRevisionRef = useRef("");
+  const workspaceBaseGraphRef = useRef(null);
+  const workspaceSaveChainRef = useRef(Promise.resolve());
+  const workspaceEditVersionRef = useRef(0);
+  const workspaceDirtyRef = useRef(false);
+  const collaborationClientIdRef = useRef(
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   const conversationsLoadedRef = useRef(false);
   const conversationsSaveTimerRef = useRef(null);
   const [palette, setPalette] = useState([]);
@@ -7394,6 +7450,17 @@ function WorkspacePageInner() {
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaceWritable, setWorkspaceWritable] = useState(true);
+  const [workspaceCollaboration, setWorkspaceCollaboration] = useState(null);
+  const [workspaceShareOpen, setWorkspaceShareOpen] = useState(false);
+  const [workspaceShareBusy, setWorkspaceShareBusy] = useState(false);
+  const [workspaceShareError, setWorkspaceShareError] = useState("");
+  const [workspaceShareUsername, setWorkspaceShareUsername] = useState("");
+  const [workspaceShareRemovingUserId, setWorkspaceShareRemovingUserId] = useState("");
+  const [workspaceConflict, setWorkspaceConflict] = useState(null);
+  const [workspaceConflictOpen, setWorkspaceConflictOpen] = useState(false);
+  const [workspaceConflictChoices, setWorkspaceConflictChoices] = useState({});
+  const [workspaceConflictBusy, setWorkspaceConflictBusy] = useState(false);
+  const [workspaceConflictError, setWorkspaceConflictError] = useState("");
   const [fileFilter, setFileFilter] = useState("");
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set());
   const [selectedWorkspaceFilePath, setSelectedWorkspaceFilePath] = useState("");
@@ -7580,6 +7647,8 @@ function WorkspacePageInner() {
   const [workspaceNodeRunStatus, setWorkspaceNodeRunStatus] = useState({});
   const [optimizingRunNodeId, setOptimizingRunNodeId] = useState("");
   const [status, setStatus] = useState("");
+  const [workspaceSyncPhase, setWorkspaceSyncPhase] = useState("loading");
+  const [workspaceSyncDetail, setWorkspaceSyncDetail] = useState("正在载入 Project");
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
   const flowSource = flowParams.flowSource || "user";
@@ -7599,8 +7668,26 @@ function WorkspacePageInner() {
   const canManageCurrentFlow = Boolean(
     flowParams.flowId &&
     !flowParams.archived &&
-    (flowSource === "user" || flowSource === "workspace"),
+    (
+      workspaceCollaboration?.role
+        ? workspaceCollaboration.role === "owner"
+        : flowSource === "user" || flowSource === "workspace"
+    ),
   );
+  const canLeaveSharedFlow = Boolean(
+    flowSource === "workspace"
+    && workspaceCollaboration?.role
+    && workspaceCollaboration.role !== "owner"
+  );
+  const workspaceSyncLabel = {
+    loading: "载入中",
+    dirty: "有未同步修改",
+    saving: "同步中",
+    synced: "已同步",
+    conflict: "同步冲突",
+    error: "同步失败",
+    readonly: "只读",
+  }[workspaceSyncPhase] || "同步状态";
   useEffect(() => {
     if (!flowParams.flowId) return;
     recordPipelineView(flowParams.flowId, flowParams.flowSource || "user", "workspace", Boolean(flowParams.archived));
@@ -7648,30 +7735,112 @@ function WorkspacePageInner() {
     }
   }, []);
 
-  const saveGraph = useCallback(async (nextNodes = nodes, nextEdges = edges) => {
+  const performSaveGraph = useCallback(async (nextNodes, nextEdges, saveEditVersion) => {
     if (!loadedRef.current) return;
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
+      setWorkspaceSyncPhase("readonly");
+      setWorkspaceSyncDetail("只读 Project");
       throw new Error("Readonly workspace");
     }
+    setWorkspaceSyncPhase("saving");
+    setWorkspaceSyncDetail("正在同步修改");
     const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current);
     graph.ui = {
       ...(graph.ui || {}),
-      ...(workspaceViewportRef.current ? { viewport: workspaceViewportRef.current } : {}),
       displayPage: displayPageForGraph(displayPageRef.current, nextNodes),
     };
     const res = await fetch("/api/workspace/graph", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...flowParams, graph }),
+      body: JSON.stringify({
+        ...flowParams,
+        graph,
+        baseRevision: workspaceRevisionRef.current,
+        baseGraph: workspaceBaseGraphRef.current,
+        clientId: collaborationClientIdRef.current,
+      }),
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "保存 workspace graph 失败");
-    instancesRef.current = json.graph?.instances || graph.instances;
-    setInstances(instancesRef.current);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 409 || res.status === 428) {
+        const conflictItems = Array.isArray(json.conflictItems) ? json.conflictItems : [];
+        setWorkspaceConflict({
+          currentRevision: String(json.currentRevision || ""),
+          message: json.error || "Workspace 已被其他成员更新",
+          conflictPaths: Array.isArray(json.conflictPaths) ? json.conflictPaths : [],
+          conflictItems,
+          mergeGraph: json.mergeGraph || null,
+          currentGraph: json.currentGraph || null,
+        });
+        setWorkspaceConflictChoices(Object.fromEntries(conflictItems.map((item, index) => [
+          String(index),
+          { mode: "local", manual: workspaceConflictManualText(item) },
+        ])));
+        setWorkspaceConflictError("");
+        setWorkspaceConflictOpen(conflictItems.length > 0);
+        setWorkspaceSyncPhase("conflict");
+        setWorkspaceSyncDetail(json.error || "存在需要处理的字段冲突");
+        const conflictPaths = Array.isArray(json.conflictPaths) ? json.conflictPaths : [];
+        const conflictMessage = conflictPaths.length
+          ? `${json.error || "Workspace 已被其他成员更新"}：${conflictPaths.join("、")}`
+          : json.error || "Workspace 已被其他成员更新";
+        const conflictError = new Error(conflictMessage);
+        conflictError.code = "WORKSPACE_REVISION_CONFLICT";
+        conflictError.currentRevision = json.currentRevision || "";
+        throw conflictError;
+      }
+      const saveError = new Error(json.error || "保存 workspace graph 失败");
+      setWorkspaceSyncPhase("error");
+      setWorkspaceSyncDetail(saveError.message);
+      throw saveError;
+    }
+    const hasNewerLocalEdits = workspaceEditVersionRef.current !== saveEditVersion;
+    if (!hasNewerLocalEdits) {
+      instancesRef.current = json.graph?.instances || graph.instances;
+      setInstances(instancesRef.current);
+      workspaceRevisionRef.current = String(json.revision || workspaceRevisionRef.current);
+      workspaceBaseGraphRef.current = json.graph || graph;
+      if (json.merged && json.graph) {
+        const mergedFlow = graphToFlow(json.graph, palette);
+        const mergedDisplayPage = normalizeDisplayPageState(json.graph?.ui?.displayPage, mergedFlow.nodes);
+        instancesRef.current = mergedFlow.instances;
+        setInstances(mergedFlow.instances);
+        setNodes(mergedFlow.nodes);
+        setEdges(mergedFlow.edges);
+        displayPageRef.current = mergedDisplayPage;
+        setDisplayPage(mergedDisplayPage);
+      }
+      workspaceDirtyRef.current = false;
+    }
     setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
-    setStatus("Workspace graph saved");
-  }, [edges, flowParams, nodes, workspaceWritable]);
+    setWorkspaceConflict(null);
+    setWorkspaceConflictOpen(false);
+    setWorkspaceSyncPhase(hasNewerLocalEdits ? "dirty" : "synced");
+    setWorkspaceSyncDetail(hasNewerLocalEdits ? "本地仍有修改等待同步" : "所有修改已同步");
+    setStatus(
+      hasNewerLocalEdits
+        ? "已保存上一版，本地新修改正在排队"
+        : json.merged ? "Workspace graph merged and saved" : "Workspace graph saved",
+    );
+    return json;
+  }, [flowParams, palette, setEdges, setNodes, workspaceWritable]);
+
+  const saveGraph = useCallback((nextNodes = nodes, nextEdges = edges) => {
+    const saveEditVersion = workspaceEditVersionRef.current;
+    const queuedSave = workspaceSaveChainRef.current
+      .catch(() => undefined)
+      .then(() => performSaveGraph(nextNodes, nextEdges, saveEditVersion));
+    const observedSave = queuedSave.catch((error) => {
+      if (error?.code !== "WORKSPACE_REVISION_CONFLICT") {
+        setWorkspaceSyncPhase("error");
+        setWorkspaceSyncDetail(String(error.message || error));
+      }
+      throw error;
+    });
+    workspaceSaveChainRef.current = observedSave;
+    return observedSave;
+  }, [edges, nodes, performSaveGraph]);
 
   const restoreCanvasSnapshot = useCallback((snapshot) => {
     const nextInstances = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
@@ -7726,12 +7895,24 @@ function WorkspacePageInner() {
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
     const flow = graphToFlow(graph, paletteList);
     const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
-    const nextWorkspaceViewport = normalizeCanvasViewport(graph?.ui?.viewport);
+    let savedWorkspaceViewport = null;
+    try {
+      savedWorkspaceViewport = JSON.parse(window.localStorage.getItem(workspaceViewportStorageKey) || "null");
+    } catch {
+      savedWorkspaceViewport = null;
+    }
+    const nextWorkspaceViewport = normalizeCanvasViewport(savedWorkspaceViewport)
+      || normalizeCanvasViewport(graph?.ui?.viewport);
     instancesRef.current = flow.instances;
     setInstances(flow.instances);
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setScheduledRunState(scheduledRunStateFromServer(graphJson.workspaceSchedules || []));
+    workspaceRevisionRef.current = String(graphJson.revision || "");
+    workspaceBaseGraphRef.current = graph;
+    workspaceDirtyRef.current = false;
+    setWorkspaceCollaboration(graphJson.collaboration || null);
+    setWorkspaceConflict(null);
     setDisplayPage(nextDisplayPage);
     displayPageRef.current = nextDisplayPage;
     setWorkspaceViewport(nextWorkspaceViewport);
@@ -7741,8 +7922,10 @@ function WorkspacePageInner() {
     const writable = graphJson.writable !== false;
     setWorkspaceWritable(writable);
     setStatus(writable ? "Workspace ready" : "Readonly workspace");
+    setWorkspaceSyncPhase(writable ? "synced" : "readonly");
+    setWorkspaceSyncDetail(writable ? "所有修改已同步" : "只读 Project");
     loadedRef.current = true;
-  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes]);
+  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
 
   const loadPrdWorkflowSnapshot = useCallback(async (tapdIdOverride = workflowTapdId) => {
     const tapdId = String(tapdIdOverride || "").trim();
@@ -8313,6 +8496,8 @@ function WorkspacePageInner() {
           runNodeId,
           runAlias,
           runSessionId,
+          expectedRevision: workspaceRevisionRef.current,
+          clientId: collaborationClientIdRef.current,
           model: effectiveModel,
           selectedSkills,
           stream: true,
@@ -8808,7 +8993,9 @@ function WorkspacePageInner() {
             patchContextRunResultsFromGraph(event.graph, touchedIds);
           }
           if (event.type === "done") {
+            if (event.revision) workspaceRevisionRef.current = String(event.revision);
             if (event.graph) {
+              workspaceBaseGraphRef.current = event.graph;
               const touchedIds = eventTouchedNodeIds(event);
               applyGraph(event.graph, touchedIds);
               patchContextRunResultsFromGraph(event.graph, touchedIds);
@@ -8862,7 +9049,9 @@ function WorkspacePageInner() {
           patchContextRunResultsFromGraph(event.graph, touchedIds);
         }
         if (event.type === "done") {
+          if (event.revision) workspaceRevisionRef.current = String(event.revision);
           if (event.graph) {
+            workspaceBaseGraphRef.current = event.graph;
             const touchedIds = eventTouchedNodeIds(event);
             applyGraph(event.graph, touchedIds);
             patchContextRunResultsFromGraph(event.graph, touchedIds);
@@ -9039,8 +9228,32 @@ function WorkspacePageInner() {
   }, [activeComposerSessionId, composerMessages, composerRunSessions, flowParams, nodeChatSessions, workspaceWritable]);
 
   useEffect(() => {
-    loadWorkspace().catch((e) => setStatus(String(e.message || e)));
-    void loadWorkspaceConversations();
+    let cancelled = false;
+    const bootstrapWorkspace = async () => {
+      const currentUrl = new URL(window.location.href);
+      const invite = String(currentUrl.searchParams.get("invite") || "").trim();
+      if (invite) {
+        setStatus("正在加入共享 Workspace...");
+        const accepted = await fetch("/api/workspace/collaboration/accept", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: invite }),
+        });
+        const acceptedJson = await accepted.json().catch(() => ({}));
+        if (!accepted.ok) throw new Error(acceptedJson.error || "加入共享 Workspace 失败");
+        currentUrl.searchParams.delete("invite");
+        window.history.replaceState({}, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
+      }
+      if (cancelled) return;
+      await loadWorkspace();
+      if (!cancelled) await loadWorkspaceConversations();
+    };
+    bootstrapWorkspace().catch((e) => {
+      const message = String(e.message || e);
+      setStatus(message);
+      setWorkspaceSyncPhase("error");
+      setWorkspaceSyncDetail(message);
+    });
     void loadFlowSnippets();
     fetch("/api/model-lists").then((r) => r.json()).then((j) => setModelLists({
       cursor: Array.isArray(j.cursor) ? j.cursor.map(String) : [],
@@ -9066,6 +9279,9 @@ function WorkspacePageInner() {
         setAuthUser(null);
         setAuthResolved(true);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [loadWorkspace, loadWorkspaceConversations, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
 
   useEffect(() => {
@@ -9160,6 +9376,10 @@ function WorkspacePageInner() {
   useEffect(() => {
     if (!loadedRef.current) return;
     if (!workspaceWritable) return;
+    workspaceEditVersionRef.current += 1;
+    workspaceDirtyRef.current = true;
+    setWorkspaceSyncPhase("dirty");
+    setWorkspaceSyncDetail("本地修改等待同步");
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveGraph().catch((e) => setStatus(String(e.message || e)));
@@ -10156,6 +10376,40 @@ function WorkspacePageInner() {
   }, [flowParams, isWorkflowMode, loadPrdWorkflowSnapshot, workflowTapdId]);
 
   useEffect(() => {
+    if (!flowParams.flowId) return undefined;
+    const q = flowParamsQuery(flowParams);
+    q.set("clientId", collaborationClientIdRef.current);
+    const events = new EventSource(`/api/workspace/events?${q.toString()}`);
+    events.onmessage = (message) => {
+      let event = null;
+      try { event = JSON.parse(message.data || "{}"); } catch { event = null; }
+      if (!event || event.clientId === collaborationClientIdRef.current) return;
+      if (event.type === "graph.committed") {
+        if (workspaceDirtyRef.current) {
+          setStatus("检测到其他成员的更新；保存时将自动合并");
+          return;
+        }
+        void loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+        return;
+      }
+      if (event.type === "runtime.committed") {
+        if (!workspaceDirtyRef.current) {
+          void loadWorkspace().catch((e) => setStatus(String(e.message || e)));
+        }
+        return;
+      }
+      if (String(event.type || "").startsWith("file.")) {
+        void loadFiles();
+        return;
+      }
+      if (String(event.type || "").startsWith("run.")) {
+        void refreshWorkspaceRunStatus();
+      }
+    };
+    return () => events.close();
+  }, [flowParams, loadFiles, loadWorkspace, refreshWorkspaceRunStatus]);
+
+  useEffect(() => {
     const prev = renderedNodeLayoutSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
@@ -10328,10 +10582,16 @@ function WorkspacePageInner() {
     } else {
       workspaceViewportRef.current = normalized;
       setWorkspaceViewport(normalized);
+      try {
+        window.localStorage.setItem(workspaceViewportStorageKey, JSON.stringify(normalized));
+      } catch {
+        /* ignore storage */
+      }
       setStatus("已固定 Workspace 进入视角");
+      return;
     }
     saveGraph(nodesRef.current, edgesRef.current).catch((e) => setStatus(String(e.message || e)));
-  }, [isDisplayMode, reactFlow, saveGraph]);
+  }, [isDisplayMode, reactFlow, saveGraph, workspaceViewportStorageKey]);
 
   const groupedPalette = useMemo(() => {
     const q = paletteSearch.trim().toLowerCase();
@@ -10842,6 +11102,162 @@ function WorkspacePageInner() {
       setPublishSnippetBusy(false);
     }
   }, [loadFlowSnippets, publishSnippetDraft, selectedCanvasInternalEdges, selectedCanvasNodes, showFlowSnippetToast]);
+
+  const shareWorkspaceWithUser = useCallback(async () => {
+    const username = workspaceShareUsername.trim();
+    if (!username) return;
+    setWorkspaceShareBusy(true);
+    setWorkspaceShareError("");
+    try {
+      const res = await fetch("/api/workspace/collaboration/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, username, role: "editor" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "添加协作成员失败");
+      setWorkspaceCollaboration(json.workspace || null);
+      setWorkspaceShareUsername("");
+      setStatus(`已将 Workspace 分享给 ${json.member?.username || username}`);
+    } catch (e) {
+      setWorkspaceShareError(String(e.message || e));
+    } finally {
+      setWorkspaceShareBusy(false);
+    }
+  }, [flowParams, workspaceShareUsername]);
+
+  const openWorkspaceShareDialog = useCallback(() => {
+    setWorkspaceShareError("");
+    setWorkspaceShareOpen(true);
+  }, []);
+
+  const removeWorkspaceSharedMember = useCallback(async (member) => {
+    const memberUserId = String(member?.userId || "").trim();
+    if (!memberUserId || memberUserId === workspaceCollaboration?.ownerId) return;
+    setWorkspaceShareRemovingUserId(memberUserId);
+    setWorkspaceShareError("");
+    try {
+      const res = await fetch("/api/workspace/collaboration/share", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, memberUserId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "取消成员分享失败");
+      setWorkspaceCollaboration(json.workspace || null);
+      setStatus(`已取消对 ${member?.username || memberUserId} 的分享`);
+    } catch (error) {
+      setWorkspaceShareError(String(error.message || error));
+    } finally {
+      setWorkspaceShareRemovingUserId("");
+    }
+  }, [flowParams, workspaceCollaboration?.ownerId]);
+
+  const backupDraftAndReloadWorkspace = useCallback(async () => {
+    const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+    graph.ui = {
+      ...(graph.ui || {}),
+      ...(workspaceViewportRef.current ? { viewport: workspaceViewportRef.current } : {}),
+      displayPage: displayPageForGraph(displayPageRef.current, nodesRef.current),
+    };
+    const blob = new Blob([`${JSON.stringify(graph, null, 2)}\n`], { type: "application/json" });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `${flowParams.flowId || "workspace"}-conflict-draft-${Date.now()}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(href);
+    await loadWorkspace();
+    setWorkspaceConflict(null);
+    setWorkspaceConflictOpen(false);
+    setStatus("已备份本地草稿并载入远端最新版本");
+  }, [edgesRef, flowParams.flowId, loadWorkspace, nodesRef]);
+
+  const resolveWorkspaceConflict = useCallback(async () => {
+    const conflictItems = Array.isArray(workspaceConflict?.conflictItems)
+      ? workspaceConflict.conflictItems
+      : [];
+    if (!conflictItems.length || !workspaceConflict?.mergeGraph || !workspaceConflict?.currentGraph) {
+      setWorkspaceConflictError("当前冲突缺少字段合并数据，请改用“备份并载入远端”。");
+      return;
+    }
+    let resolvedGraph = workspaceConflict.mergeGraph;
+    try {
+      conflictItems.forEach((item, index) => {
+        const choice = workspaceConflictChoices[String(index)] || { mode: "local" };
+        let value;
+        let exists = true;
+        if (choice.mode === "remote") {
+          value = item.current;
+          exists = item.hasCurrent !== false;
+        } else if (choice.mode === "manual") {
+          value = JSON.parse(String(choice.manual || ""));
+        } else {
+          value = item.incoming;
+          exists = item.hasIncoming !== false;
+        }
+        resolvedGraph = applyWorkspaceConflictPath(resolvedGraph, item.pathParts, value, exists);
+      });
+    } catch (error) {
+      setWorkspaceConflictError(`手动值不是有效 JSON：${String(error.message || error)}`);
+      return;
+    }
+
+    setWorkspaceConflictBusy(true);
+    setWorkspaceConflictError("");
+    setWorkspaceSyncPhase("saving");
+    setWorkspaceSyncDetail("正在提交冲突解决结果");
+    const queuedResolve = workspaceSaveChainRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const res = await fetch("/api/workspace/graph", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...flowParams,
+            graph: resolvedGraph,
+            baseRevision: workspaceConflict.currentRevision,
+            baseGraph: workspaceConflict.currentGraph,
+            clientId: collaborationClientIdRef.current,
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 409 && Array.isArray(json.conflictItems)) {
+            const conflictItemsNext = json.conflictItems;
+            setWorkspaceConflict({
+              currentRevision: String(json.currentRevision || ""),
+              message: json.error || "Workspace 再次出现冲突",
+              conflictPaths: Array.isArray(json.conflictPaths) ? json.conflictPaths : [],
+              conflictItems: conflictItemsNext,
+              mergeGraph: json.mergeGraph || null,
+              currentGraph: json.currentGraph || null,
+            });
+            setWorkspaceConflictChoices(Object.fromEntries(conflictItemsNext.map((item, index) => [
+              String(index),
+              { mode: "local", manual: workspaceConflictManualText(item) },
+            ])));
+          }
+          throw new Error(json.error || "提交冲突解决结果失败");
+        }
+        await loadWorkspace();
+        setWorkspaceConflict(null);
+        setWorkspaceConflictOpen(false);
+        setStatus("冲突已解决并保存");
+      });
+    workspaceSaveChainRef.current = queuedResolve;
+    try {
+      await queuedResolve;
+    } catch (error) {
+      setWorkspaceConflictError(String(error.message || error));
+      setWorkspaceSyncPhase("error");
+      setWorkspaceSyncDetail(String(error.message || error));
+    } finally {
+      setWorkspaceConflictBusy(false);
+    }
+  }, [flowParams, loadWorkspace, workspaceConflict, workspaceConflictChoices]);
 
   const openDisplayShareDialog = useCallback(() => {
     if (workspaceDisplayNodes.length === 0) {
@@ -11967,7 +12383,34 @@ function WorkspacePageInner() {
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
-          <span className="af-workspace-save-status">{status}</span>
+          <span
+            className={`af-workspace-sync-light is-${workspaceSyncPhase}`}
+            title={`${workspaceSyncLabel} · ${workspaceSyncDetail}`}
+            role="status"
+            aria-label={`${workspaceSyncLabel}：${workspaceSyncDetail}`}
+          >
+            <span className="af-workspace-sync-light__dot" aria-hidden />
+          </span>
+          {workspaceConflict ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn"
+              onClick={() => {
+                if (workspaceConflict.conflictItems?.length) {
+                  setWorkspaceConflictOpen(true);
+                } else {
+                  void backupDraftAndReloadWorkspace();
+                }
+              }}
+              title={[
+                "先下载当前本地草稿，再载入远端最新版本",
+                ...(workspaceConflict.conflictPaths || []),
+              ].join("\n")}
+            >
+              <span className="material-symbols-outlined" aria-hidden>difference</span>
+              处理冲突
+            </button>
+          ) : null}
           {isDisplayMode ? (
             <>
               <button
@@ -11998,6 +12441,18 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-workspace-display-share-btn"
+            disabled={Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
+            onClick={openWorkspaceShareDialog}
+            title={workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
+              ? "仅 Workspace 所有者可以创建邀请"
+              : "邀请其他成员协作编辑"}
+          >
+            <span className="material-symbols-outlined" aria-hidden>group_add</span>
+            协作分享
+          </button>
+          <button
+            type="button"
+            className="af-workspace-display-share-btn"
             onClick={openDisplaySharesPanel}
             title="查看我的展示分享"
           >
@@ -12017,12 +12472,12 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-icon-btn af-icon-btn--danger"
-            disabled={!canManageCurrentFlow}
+            disabled={!canManageCurrentFlow && !canLeaveSharedFlow}
             onClick={() => setDeleteModalOpen(true)}
-            aria-label={t("flow:topbar.deletePipeline")}
-            title={t("flow:topbar.deletePipeline")}
+            aria-label={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
+            title={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
           >
-            <span className="material-symbols-outlined">delete_forever</span>
+            <span className="material-symbols-outlined">{canLeaveSharedFlow ? "logout" : "delete_forever"}</span>
           </button>
           <button
             type="button"
@@ -12964,11 +13419,144 @@ function WorkspacePageInner() {
           flowId={flowParams.flowId || ""}
           flowSource={flowSource}
           flowArchived={Boolean(flowParams.archived)}
+          workspaceId={flowParams.workspaceId || ""}
+          leaveShared={canLeaveSharedFlow}
           onDeleted={async () => {
             setDeleteModalOpen(false);
             navigate("/projects");
           }}
         />
+        {workspaceConflictOpen && workspaceConflict ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-workspace-conflict-modal" role="dialog" aria-modal="true" aria-label="解决 Workspace 冲突">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>difference</span>
+                  解决 {workspaceConflict.conflictItems?.length || 0} 处字段冲突
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setWorkspaceConflictOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <div className="af-workspace-conflict-summary">
+                  未冲突的改动已经自动合并。这里只需要决定双方同时修改的字段。
+                  <div className="af-workspace-conflict-bulk">
+                    <button
+                      type="button"
+                      onClick={() => setWorkspaceConflictChoices(Object.fromEntries(
+                        (workspaceConflict.conflictItems || []).map((item, index) => [
+                          String(index),
+                          { mode: "local", manual: workspaceConflictManualText(item) },
+                        ]),
+                      ))}
+                    >
+                      全部保留我的
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWorkspaceConflictChoices(Object.fromEntries(
+                        (workspaceConflict.conflictItems || []).map((item, index) => [
+                          String(index),
+                          { mode: "remote", manual: workspaceConflictManualText(item) },
+                        ]),
+                      ))}
+                    >
+                      全部使用远端
+                    </button>
+                  </div>
+                </div>
+                {(workspaceConflict.conflictItems || []).map((item, index) => {
+                  const choice = workspaceConflictChoices[String(index)] || {
+                    mode: "local",
+                    manual: workspaceConflictManualText(item),
+                  };
+                  return (
+                    <section className="af-workspace-conflict-item" key={`${item.path || "conflict"}-${index}`}>
+                      <code className="af-workspace-conflict-path">{item.path}</code>
+                      <div className="af-workspace-conflict-options">
+                        {[
+                          ["local", "保留我的"],
+                          ["remote", "使用远端"],
+                          ["manual", "手动编辑"],
+                        ].map(([mode, label]) => (
+                          <button
+                            type="button"
+                            key={mode}
+                            className={choice.mode === mode ? "is-active" : ""}
+                            onClick={() => setWorkspaceConflictChoices((current) => ({
+                              ...current,
+                              [String(index)]: { ...choice, mode },
+                            }))}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="af-workspace-conflict-values">
+                        <div className={choice.mode === "local" ? "is-selected" : ""}>
+                          <span>我的修改</span>
+                          <pre>{workspaceConflictValueText(item, "incoming")}</pre>
+                        </div>
+                        <div className={choice.mode === "remote" ? "is-selected" : ""}>
+                          <span>远端修改</span>
+                          <pre>{workspaceConflictValueText(item, "current")}</pre>
+                        </div>
+                      </div>
+                      {choice.mode === "manual" ? (
+                        <label className="af-workspace-conflict-manual">
+                          <span>最终值（JSON）</span>
+                          <textarea
+                            value={choice.manual}
+                            onChange={(event) => setWorkspaceConflictChoices((current) => ({
+                              ...current,
+                              [String(index)]: { ...choice, manual: event.target.value },
+                            }))}
+                            rows={5}
+                          />
+                        </label>
+                      ) : null}
+                    </section>
+                  );
+                })}
+                {workspaceConflictError ? <div className="af-flow-snippet-error">{workspaceConflictError}</div> : null}
+              </div>
+              <div className="af-flow-snippet-modal__foot af-workspace-conflict-foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  disabled={workspaceConflictBusy}
+                  onClick={() => void backupDraftAndReloadWorkspace()}
+                >
+                  备份并载入远端
+                </button>
+                <span className="af-workspace-conflict-foot__spacer" />
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  disabled={workspaceConflictBusy}
+                  onClick={() => setWorkspaceConflictOpen(false)}
+                >
+                  稍后处理
+                </button>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                  disabled={workspaceConflictBusy || !(workspaceConflict.conflictItems || []).length}
+                  onClick={() => void resolveWorkspaceConflict()}
+                >
+                  {workspaceConflictBusy ? "保存中..." : "应用选择并保存"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
         {publishSnippetOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
             <div className="af-flow-snippet-modal" role="dialog" aria-modal="true" aria-label="发布流程片段">
@@ -13244,6 +13832,87 @@ function WorkspacePageInner() {
                   onClick={() => void publishCurrentDisplayPage()}
                 >
                   {displayShareBusy ? "生成中..." : displayShareResult?.absoluteUrl ? "更新链接" : "生成链接"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {workspaceShareOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="协作分享">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>group_add</span>
+                  协作分享
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setWorkspaceShareOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <p className="af-display-link-modal__empty">
+                  输入已注册用户名。添加后，这个 Workspace 会直接出现在对方的项目列表中。
+                </p>
+                <div className="af-workspace-member-add">
+                  <input
+                    type="text"
+                    value={workspaceShareUsername}
+                    onChange={(event) => setWorkspaceShareUsername(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && workspaceShareUsername.trim() && !workspaceShareBusy) {
+                        event.preventDefault();
+                        void shareWorkspaceWithUser();
+                      }
+                    }}
+                    placeholder="输入用户名"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    disabled={workspaceShareBusy || !workspaceShareUsername.trim()}
+                    onClick={() => void shareWorkspaceWithUser()}
+                  >
+                    {workspaceShareBusy ? "添加中..." : "添加成员"}
+                  </button>
+                </div>
+                {workspaceShareError ? <div className="af-flow-snippet-error">{workspaceShareError}</div> : null}
+                <div className="af-workspace-member-list">
+                  {(workspaceCollaboration?.members || []).map((member) => {
+                    const isOwner = member.userId === workspaceCollaboration?.ownerId || member.role === "owner";
+                    return (
+                      <div className="af-workspace-member-row" key={member.userId}>
+                        <span className="material-symbols-outlined" aria-hidden>{isOwner ? "shield_person" : "person"}</span>
+                        <div>
+                          <strong>{member.username || member.userId}</strong>
+                          <small>{isOwner ? "所有者" : member.role === "viewer" ? "只读成员" : "编辑成员"}</small>
+                        </div>
+                        {!isOwner ? (
+                          <button
+                            type="button"
+                            disabled={workspaceShareRemovingUserId === member.userId}
+                            onClick={() => void removeWorkspaceSharedMember(member)}
+                          >
+                            {workspaceShareRemovingUserId === member.userId ? "移除中..." : "取消分享"}
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  onClick={() => setWorkspaceShareOpen(false)}
+                >
+                  完成
                 </button>
               </div>
             </div>

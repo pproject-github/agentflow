@@ -8,10 +8,12 @@ import { useTranslation } from "react-i18next";
  *   flowId: string,
  *   flowSource: string,
  *   flowArchived?: boolean,
+ *   workspaceId?: string,
+ *   leaveShared?: boolean,
  *   onDeleted: () => void,
  * }} props
  */
-export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArchived = false, onDeleted }) {
+export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArchived = false, workspaceId = "", leaveShared = false, onDeleted }) {
   const { t } = useTranslation();
   const titleId = useId();
   const panelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
@@ -31,7 +33,7 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
   if (!open) return null;
 
   const trimmed = confirmText.trim();
-  const matches = trimmed === flowId;
+  const matches = leaveShared || trimmed === flowId;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -48,8 +50,9 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
         body: JSON.stringify({
           flowId,
           flowSource,
-          confirmFlowId: trimmed,
+          confirmFlowId: leaveShared ? flowId : trimmed,
           flowArchived,
+          workspaceId,
         }),
         signal: ac.signal,
       });
@@ -106,7 +109,7 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
       >
         <div className="af-shortcuts-panel__head">
           <h2 id={titleId} className="af-shortcuts-panel__title">
-            {t("project:deleteModal.title")}
+            {leaveShared ? "退出共享 Workspace" : t("project:deleteModal.title")}
           </h2>
           <button type="button" className="af-shortcuts-panel__close af-icon-btn" onClick={onClose} aria-label={t("project:deleteModal.close")}>
             <span className="material-symbols-outlined">close</span>
@@ -115,21 +118,25 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
 
         <form className="af-shortcuts-panel__body af-new-pipeline-form" onSubmit={handleSubmit}>
           <p className="af-new-pipeline-lead">
-            {t("project:deleteModal.lead", { flowId })}
+            {leaveShared
+              ? `退出后，${flowId} 将从你的项目列表移除；源项目和其他成员的数据不会被删除。`
+              : t("project:deleteModal.lead", { flowId })}
           </p>
-          <label className="af-new-pipeline-field">
-            <span className="af-pipeline-drawer-label">{t("project:deleteModal.confirmLabel")}</span>
-            <input
-              type="text"
-              className="af-new-pipeline-input"
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder={flowId}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={trimmed.length > 0 && !matches}
-            />
-          </label>
+          {!leaveShared ? (
+            <label className="af-new-pipeline-field">
+              <span className="af-pipeline-drawer-label">{t("project:deleteModal.confirmLabel")}</span>
+              <input
+                type="text"
+                className="af-new-pipeline-input"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={flowId}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={trimmed.length > 0 && !matches}
+              />
+            </label>
+          ) : null}
 
           {error ? <p className="af-err af-new-pipeline-err">{error}</p> : null}
 
@@ -138,7 +145,9 @@ export function DeletePipelineModal({ open, onClose, flowId, flowSource, flowArc
               {t("project:deleteModal.cancel")}
             </button>
             <button type="submit" className="af-btn-primary af-btn-destructive" disabled={!matches || submitting}>
-              {submitting ? t("project:deleteModal.deleting") : t("project:deleteModal.confirmDelete")}
+              {submitting
+                ? leaveShared ? "退出中..." : t("project:deleteModal.deleting")
+                : leaveShared ? "确认退出" : t("project:deleteModal.confirmDelete")}
             </button>
           </div>
         </form>

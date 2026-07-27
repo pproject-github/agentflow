@@ -102,7 +102,12 @@ export default function WorkspaceRunLogsDrawer({
     }
     setLoadingDetail(true);
     try {
-      const res = await fetch(`/api/workspace/run-logs/${encodeURIComponent(runId)}`);
+      const q = new URLSearchParams({
+        flowId: flowParams?.flowId || "",
+        flowSource: flowParams?.flowSource || "user",
+      });
+      if (flowParams?.archived) q.set("archived", "1");
+      const res = await fetch(`/api/workspace/run-logs/${encodeURIComponent(runId)}?${q.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "读取日志详情失败");
       setDetail(json);
@@ -111,7 +116,7 @@ export default function WorkspaceRunLogsDrawer({
     } finally {
       setLoadingDetail(false);
     }
-  }, []);
+  }, [flowParams?.archived, flowParams?.flowId, flowParams?.flowSource]);
 
   useEffect(() => {
     void loadRuns();

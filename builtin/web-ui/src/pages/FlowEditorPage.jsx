@@ -1757,6 +1757,7 @@ export default function FlowEditorPage() {
   const hasLoadedRef = useRef(false);
   const loadEpochRef = useRef(0);
   const lastPersistedYamlRef = useRef("");
+  const lastPersistedRevisionRef = useRef("");
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const nodesRef = useRef(nodes);
@@ -2264,6 +2265,7 @@ export default function FlowEditorPage() {
       viewport: normalizeFlowViewport(result.viewport),
       nodes: mergedNodes,
       edges: validEdges,
+      revision: String(flowRes.revision || ""),
     };
   }, [i18n.language, t]);
 
@@ -2407,6 +2409,7 @@ export default function FlowEditorPage() {
         } catch {
           lastPersistedYamlRef.current = "";
         }
+        lastPersistedRevisionRef.current = nextGraph.revision || "";
         hasLoadedRef.current = true;
       } catch (e) {
         setLoadError(String(e.message || e));
@@ -2956,12 +2959,14 @@ export default function FlowEditorPage() {
             flowId: selected.id,
             flowSource: writeSource,
             flowYaml: yaml,
+            baseRevision: lastPersistedRevisionRef.current,
             ...(selected.archived ? { flowArchived: true } : {}),
           }),
         });
         const data = await r.json();
 if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFailed"));
         lastPersistedYamlRef.current = yaml;
+        lastPersistedRevisionRef.current = String(data.revision || lastPersistedRevisionRef.current);
         setSaveStatus(t("flow:status.saved"));
         if (isReadonlyBuiltinFlowSource(selected.source) && writeSource === "workspace") {
           const next = { id: selected.id, source: "workspace", path: undefined };

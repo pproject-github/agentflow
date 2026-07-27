@@ -39,6 +39,9 @@ function sourceBadgeMeta(source, t) {
 
 /** @param {{ source?: string, id: string, archived?: boolean }} f */
 function sourcePathHint(f) {
+  if (f.collaboration?.role && f.collaboration.role !== "owner") {
+    return `共享 Project / ${f.collaboration.ownerUsername || f.collaboration.ownerId} / ${f.id}`;
+  }
   const s = f.source ?? "user";
   if (s === "builtin") return `builtin/pipelines / ${f.id}`;
   if (s === "admin") return `admin builtin / ${f.ownerUserId || "-"} / ${f.id}`;
@@ -1433,7 +1436,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   const busyAction = adminBuiltinBusy.endsWith(`:${f.source}:${f.id}`);
                   return (
                   <div
-                    key={`${f.id}:${f.source ?? "user"}:${f.archived ? "a" : ""}`}
+                    key={`${f.id}:${f.source ?? "user"}:${f.archived ? "a" : ""}:${f.collaboration?.id || "own"}`}
                     className={projectCardClass(f.source)}
                     role="button"
                     tabIndex={0}
@@ -1449,6 +1452,13 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                       <span className={badgeClass(sourceBadgeMeta(f.source, t).tone)}>
                         <HighlightMatch query={pipelineSearch}>{sourceBadgeMeta(f.source, t).label}</HighlightMatch>
                       </span>
+                      {f.source === "workspace" && f.collaboration?.role ? (
+                        <span className={badgeClass(f.collaboration.role === "owner" ? "primary" : "muted")}>
+                          {f.collaboration.role === "owner"
+                            ? "我创建的"
+                            : `${f.collaboration.ownerUsername || f.collaboration.ownerId} 分享`}
+                        </span>
+                      ) : null}
                       {f.archived ? (
                         <span className={badgeClass("muted")}>
                           <HighlightMatch query={pipelineSearch}>{t("project:archived")}</HighlightMatch>
