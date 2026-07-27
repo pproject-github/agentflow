@@ -46,6 +46,7 @@
     "reference"
   ],
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "postinstall": "node bin/ensure-workspace-reference.mjs",
     "build:web-ui": "cd builtin/web-ui && npm install && npm run build",
     "build:website": "cd website && npm install && npm run build",

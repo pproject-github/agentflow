@@ -3701,7 +3701,7 @@ function workspaceCanonicalAgentOutput(content) {
   return raw;
 }
 
-function workspaceStructuredAgentOutput(content) {
+export function workspaceStructuredAgentOutput(content) {
   const raw = workspaceCanonicalAgentOutput(content);
   const agentflowEnvelope = workspaceExtractAgentflowEnvelope(raw);
   if (agentflowEnvelope) return agentflowEnvelope;
@@ -3981,7 +3981,66 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
   return publishedRel;
 }
 
-function workspacePublishAgentOutputFiles(structured, runPackage) {
+export function workspaceMaterializeAgentResultFile(structured, runPackage) {
+  if (!structured || !runPackage) return structured;
+  const configured = workspaceSafeNodeOutputRelPath(runPackage.resultFileRel || "") || "outputs/result.txt";
+  const rawDeclared = String(structured.resultFile || "").trim();
+  const declared = workspaceSafeNodeOutputRelPath(rawDeclared);
+  if (rawDeclared && !declared) return structured;
+  const relPath = declared || configured;
+  const abs = path.resolve(runPackage.nodeRunDir || "", relPath);
+  const nodeRunDir = path.resolve(runPackage.nodeRunDir || "");
+  const nodeRootWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+  if (!nodeRunDir || (abs !== nodeRunDir && !abs.startsWith(nodeRootWithSep))) return structured;
+
+  const explicitInlineResult = structured.parsed && typeof structured.parsed === "object"
+    ? String(structured.parsed.result ?? "")
+    : "";
+  const content = declared ? explicitInlineResult : String(structured.result ?? "");
+  let primaryReady = fs.existsSync(abs) && fs.statSync(abs).isFile();
+  if (!primaryReady && content.trim()) {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      fs.writeFileSync(tmp, content, "utf-8");
+      fs.renameSync(tmp, abs);
+      primaryReady = true;
+    } finally {
+      try {
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+      } catch {
+        // Best-effort cleanup; the node run directory is removed after the run.
+      }
+    }
+  }
+  const outParams = { ...(structured.outParams || {}) };
+  let outParamsChanged = false;
+  for (const [name, configuredRel] of Object.entries(runPackage.outParamFiles || {})) {
+    const fileKey = `${name}File`;
+    if (String(outParams[fileKey] || "").trim()) continue;
+    const outputContent = String(outParams[name] ?? "");
+    if (!outputContent.trim()) continue;
+    const outputRel = workspaceSafeNodeOutputRelPath(configuredRel);
+    if (!outputRel) continue;
+    const outputAbs = path.resolve(nodeRunDir, outputRel);
+    if (outputAbs !== nodeRunDir && !outputAbs.startsWith(nodeRootWithSep)) continue;
+    fs.mkdirSync(path.dirname(outputAbs), { recursive: true });
+    fs.writeFileSync(outputAbs, outputContent, "utf-8");
+    delete outParams[name];
+    outParams[fileKey] = outputRel;
+    outParamsChanged = true;
+  }
+  if (!primaryReady && !outParamsChanged) return structured;
+  return {
+    ...structured,
+    result: primaryReady ? relPath : structured.result,
+    resultFile: primaryReady ? relPath : structured.resultFile,
+    outParams,
+    structured: true,
+  };
+}
+
+export function workspacePublishAgentOutputFiles(structured, runPackage) {
   if (!structured?.structured || !runPackage) return structured;
   const resultFile = workspacePublishNodeOutputFile(runPackage, structured.resultFile);
   const outParams = { ...(structured.outParams || {}) };
@@ -4122,6 +4181,60 @@ function workspaceDownstreamOutputKindForField(graph, nodeId, field) {
   return "";
 }
 
+function workspaceResultOutputSpec(graph, nodeId) {
+  const instance = graph?.instances?.[nodeId] || {};
+  const displayBindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  const displayByField = new Map();
+  for (const binding of displayBindings) {
+    if (!displayByField.has(binding.field)) displayByField.set(binding.field, binding.kind);
+  }
+  const configuredResultKind = isWorkspaceOneClickTaskDefinitionId(instance.definitionId)
+    ? workspaceContextRunDisplayKind(instance)
+    : "";
+  const kind = displayByField.get("result") || workspaceDownstreamOutputKindForField(graph, nodeId, "result") || configuredResultKind || "";
+  const extByKind = {
+    html: "html",
+    react: "json",
+    markdown: "md",
+    mermaid: "mmd",
+    ascii: "txt",
+    chart: "json",
+    table: "json",
+  };
+  return {
+    kind,
+    extByKind,
+    resultFile: `outputs/result.${extByKind[kind] || "txt"}`,
+  };
+}
+
+function workspaceOutParamFileSpecs(graph, nodeId) {
+  const instance = graph?.instances?.[nodeId] || {};
+  const outputSlots = Array.isArray(instance.output) ? instance.output : [];
+  const displayBindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
+  const displayByField = new Map();
+  for (const binding of displayBindings) {
+    if (!displayByField.has(binding.field)) displayByField.set(binding.field, binding.kind);
+  }
+  const extByKind = workspaceResultOutputSpec(graph, nodeId).extByKind;
+  const specs = {};
+  for (let index = 0; index < outputSlots.length; index += 1) {
+    const slot = outputSlots[index];
+    const name = String(slot?.name || "").trim();
+    const type = String(slot?.type || "").trim().toLowerCase();
+    if (!name || isWorkspaceSemanticOutputSlot(slot) || name === "result" || name === "content" || index === 0) continue;
+    const kind = displayByField.get(`outParams.${name}`) || "";
+    const fileLike = ["file", "image", "audio", "video", "binary"].includes(type);
+    if (!fileLike && !kind) continue;
+    const safeName = workspaceSanitizeTmpSegment(name, `output-${index}`);
+    const existingExt = path.posix.extname(safeName).replace(/^\./, "");
+    const ext = existingExt || extByKind[kind] || "txt";
+    const fileName = existingExt ? safeName : `${safeName}.${ext}`;
+    specs[name] = `outputs/${fileName}`;
+  }
+  return specs;
+}
+
 function workspaceDownstreamInputDescription(target, slot) {
   const description = String(slot?.description || "").trim();
   if (description) return description;
@@ -4143,22 +4256,13 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
       const type = String(slot?.type || "");
       return name && type !== "node" && name !== "next" && name !== "result" && name !== "content" && name !== "displayType";
     })
-    .map((slot) => String(slot.name).trim());
-  const configuredResultKind = isWorkspaceOneClickTaskDefinitionId(instance.definitionId)
-    ? workspaceContextRunDisplayKind(instance)
-    : "";
-  const resultKind = displayByField.get("result") || workspaceDownstreamOutputKindForField(graph, nodeId, "result") || configuredResultKind || "";
-  const resultExtByKind = {
-    html: "html",
-    react: "json",
-    markdown: "md",
-    mermaid: "mmd",
-    ascii: "txt",
-    chart: "json",
-    table: "json",
-  };
-  const resultExt = resultExtByKind[resultKind] || "txt";
-  const resultFile = `outputs/result.${resultExt}`;
+    .map((slot) => ({
+      name: String(slot.name).trim(),
+      type: String(slot.type || "").trim().toLowerCase(),
+    }));
+  const resultSpec = workspaceResultOutputSpec(graph, nodeId);
+  const resultKind = resultSpec.kind;
+  const resultFile = resultSpec.resultFile;
   const resultKindText = resultKind ? ` ${resultKind}` : "";
   const resultGuidance = {
     html: "内容必须是可直接放入 iframe 渲染的 HTML；不要使用 Markdown 代码围栏。",
@@ -4172,27 +4276,36 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   }[resultKind] || "内容应满足任务要求。";
   const envelopeExample = [
     "---agentflow",
-    `resultFile: ${resultFile}`,
-    slots.length ? "outParams:" : "",
-    ...slots.slice(0, 3).map((name) => {
-      const kind = displayByField.get(`outParams.${name}`) || "";
-      const ext = resultExtByKind[kind] || "txt";
-      return kind ? `  ${name}File: outputs/${name}.${ext}` : `  ${name}: <${name} 的短值>`;
+    "result: |",
+    `  <完整${resultKindText || "结果"}正文，每行缩进两个空格>`,
+    "outParams:",
+    ...slots.slice(0, 3).map((slot) => {
+      const kind = displayByField.get(`outParams.${slot.name}`) || "";
+      const fileLike = ["file", "image", "audio", "video", "binary"].includes(slot.type);
+      return kind || fileLike
+        ? `  ${slot.name}: |\n    <完整${kind ? ` ${kind}` : ""}正文，每行缩进四个空格>`
+        : `  ${slot.name}: <${slot.name} 的短值>`;
     }),
     "---end",
-  ].filter(Boolean).join("\n");
+  ].join("\n");
+  const finalInstructions = slots.length
+    ? [
+        `AgentFlow 会自动把 \`result\` 正文写入 \`${resultFile}\`；不要自行创建该文件，也不要返回 \`resultFile\`。`,
+        `额外输出：${slots.map((slot) => `\`${slot.name}\``).join("、")}。文件型或展示型内容也直接内联，AgentFlow 负责落盘和传递。`,
+        "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
+        "",
+        envelopeExample,
+      ]
+    : [
+        `AgentFlow 会自动把最终回复写入 \`${resultFile}\`；不要自行创建该文件，不要返回路径或 agentflow envelope。`,
+        "最终回复只输出完整结果正文，不要附加解释、进度或其它文字。",
+      ];
   return [
     "## 输出",
     "",
-    `请把${resultKindText}结果写入 \`${resultFile}\`。${resultGuidance}`,
-    `必须先在当前执行目录下创建 \`${resultFile}\`，不要写到绝对路径或其它 run 目录；然后再返回下面的 agentflow envelope。`,
-    `只在最终回复里写 \`resultFile: ${resultFile}\` 不会创建文件；必须通过工具或脚本实际写入该文件。`,
-    `返回前请确认 \`${resultFile}\` 已存在且非空（例如执行 \`test -s ${resultFile}\` 或等价检查）；如果无法创建文件，不要返回成功 envelope。`,
+    `请返回完整${resultKindText}结果。${resultGuidance}`,
     downstreamInputRequirements ? `\n${downstreamInputRequirements}` : "",
-    ...(slots.length ? [`额外输出：${slots.map((name) => `\`${name}\``).join("、")}。短值可写在 \`outParams\`，文件值写成 \`outParams.<name>File\`。`] : []),
-    "最终只输出下面的 agentflow envelope，不要输出解释、进度或其它文字：",
-    "",
-    envelopeExample,
+    ...finalInstructions,
   ].join("\n");
 }
 
@@ -4432,8 +4545,8 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
     nodeRunDir ? `- 当前执行目录：\`${nodeRunDir}\`。` : "",
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
     Object.keys(runPackage?.inputMounts || {}).length ? "- 已挂载的输入文件位于本任务 `inputs/`；`inputs/` 只用于读取，正式产物仍写入 `outputs/`。" : "",
-    `- 正式产物写入本任务 \`${outputsRel}/\`，例如 \`${outputsRel}/result.html\`、\`${outputsRel}/result.md\`；返回时仍使用 \`${outputsRel}/...\` 相对路径。`,
-    `- 写正式产物时不要手写或复制上面的绝对路径；请在当前执行目录下使用相对路径 \`${outputsRel}/...\`，或使用环境变量 \`AGENTFLOW_OUTPUTS_DIR\`。`,
+    "- 主文本结果和内联额外输出由 AgentFlow 在任务结束后自动写入、发布和清理，无需自行创建结果文件。",
+    `- 任务若必须直接生成二进制或工程文件，只能写入本任务 \`${outputsRel}/\`；可使用 \`AGENTFLOW_OUTPUTS_DIR\` 获取绝对目录。`,
     "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
   ].filter(Boolean).join("\n");
@@ -5696,12 +5809,20 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "" } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {} } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
   const outputsDir = path.join(nodeRunDir, "outputs");
   const workspaceRoot = path.resolve(scopedRoot);
   const workspaceOutputsDir = path.join(workspaceRoot, "outputs");
+  const resultFileRel = workspaceSafeNodeOutputRelPath(resultFile) || "";
+  const resultFileAbs = resultFileRel ? path.resolve(nodeRunDir, resultFileRel) : "";
+  const safeOutParamFiles = {};
+  for (const [name, rel] of Object.entries(outParamFiles || {})) {
+    const cleanName = String(name || "").trim();
+    const cleanRel = workspaceSafeNodeOutputRelPath(rel);
+    if (cleanName && cleanRel) safeOutParamFiles[cleanName] = cleanRel;
+  }
   fs.mkdirSync(nodeTmpDir, { recursive: true });
   fs.mkdirSync(outputsDir, { recursive: true });
   fs.mkdirSync(workspaceOutputsDir, { recursive: true });
@@ -5713,6 +5834,9 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
     outputsDir,
     workspaceRoot,
     executionCwd: cwd ? path.resolve(cwd) : workspaceRoot,
+    resultFileRel,
+    resultFileAbs,
+    outParamFiles: safeOutParamFiles,
     createdAt: new Date().toISOString(),
   };
   const materializedInputs = workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues);
@@ -6600,6 +6724,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const ownSkillBlock = isContextRunNode ? loadSkillsBlockForKeys(selectedSkillKeysFromConfigSlots(instance)) : "";
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(ownSkillBlock, upstreamSkillBlocks);
     const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
+    const resultOutputSpec = workspaceResultOutputSpec(graph, nodeId);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
       scopedRoot,
       cwd,
@@ -6607,6 +6732,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       inputValues: relevantInputs.values,
       skillsBlock: promptSkillsBlock,
       mcpBlock: promptMcpBlock,
+      resultFile: resultOutputSpec.resultFile,
+      outParamFiles: workspaceOutParamFileSpecs(graph, nodeId),
     });
     const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
     const body = workspaceResolveBodyPlaceholders(instance.body || "", runtimeInputValues).trim();
@@ -6665,6 +6792,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
             AGENTFLOW_NODE_RUN_DIR: runPackage.nodeRunDir,
             AGENTFLOW_NODE_TMP_DIR: runPackage.nodeTmpDir,
             AGENTFLOW_OUTPUTS_DIR: runPackage.outputsDir,
+            AGENTFLOW_RESULT_FILE: runPackage.resultFileAbs,
+            AGENTFLOW_OUTPUT_FILES_JSON: JSON.stringify(runPackage.outParamFiles || {}),
           }),
           onStreamEvent: (ev) => {
             if (!firstAgentEventSeen) {
@@ -6718,7 +6847,8 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         throw e;
       }
     }
-    const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
+    const materializedAgentOutput = workspaceMaterializeAgentResultFile(workspaceStructuredAgentOutput(content), runPackage);
+    const normalizedAgentOutput = workspacePublishAgentOutputFiles(materializedAgentOutput, runPackage);
     const resultContent = normalizedAgentOutput.result || content;
     recordNodeOutput(nodeId, resultContent);
     const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
