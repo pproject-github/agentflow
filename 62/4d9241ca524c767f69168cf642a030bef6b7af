@@ -1,0 +1,69 @@
+test/schedule-navigation.test.mjs
+  s_d99100a467f052::t_59f82aae301058 1-42
+builtin/web-ui/src/workspaceSyncGuard.js
+  s_d99100a467f052::t_632c1df2d45cdd 34-55
+  s_d99100a467f052::t_0e70415178843e 56-85
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_d99100a467f052::t_828138c02c7409 10881
+  s_d99100a467f052::t_f1492fd3f29df8 7485,7489-7491,7504
+  s_d99100a467f052::t_9bb03d3a50c244 7290-7292
+  s_d99100a467f052::t_db9ec056e96f20 8091-8147,8176
+  s_d99100a467f052::t_3b3e8d1ac34974 10696,10700,10711-10719
+  s_d99100a467f052::t_055e6fae18e520 8175,8177-8178,8193-8230
+  s_d99100a467f052::t_9dcd34014a8b3d 42-48
+  s_d99100a467f052::t_632c1df2d45cdd 51,7494-7495,8090,9680-9683,9690-9691,9694,11807-11814,11818,11859
+  s_d99100a467f052::t_fc20b4a85db3b1 8026-8027,8029-8041,8060-8074
+  s_d99100a467f052::t_af464156912cba 913-918,921-929,934,962,964-973,980,1000-1008,1013,1016,1018-1032,7282-7289,7293-7295
+  s_d99100a467f052::t_59f82aae301058 7444,10876-10880,10882-10883
+  s_d99100a467f052::t_0a8565a1c5c31c 7936-7947,7949-7956,7958-7983,7987-7988
+  s_d99100a467f052::t_93f3d23d0d1b03 7986
+  s_d99100a467f052::t_0e70415178843e 49-50,53,7948,7957,8024,8028,8179-8192
+  s_d99100a467f052::t_d8724a2cb19ac1 8149-8152,8156-8159
+  s_d99100a467f052::t_0460a93e3e61a2 7492
+  s_d99100a467f052::t_e758758e31f8c3 8174
+  s_d99100a467f052::t_039cc32ef886e9 10884
+test/workspace-sync-guard.test.mjs
+  s_d99100a467f052::t_0e70415178843e 5-6,9,83-134
+  s_d99100a467f052::t_632c1df2d45cdd 7,53-82
+builtin/web-ui/src/workspaceGraphDelta.js
+  s_d99100a467f052::t_d8724a2cb19ac1 27-50,109
+  s_d99100a467f052::t_d0ceccff9eb0b0 1-26,51-108,110-191
+bin/lib/ui-server.mjs
+  s_d99100a467f052::t_59f82aae301058 9573
+test/workspace-graph-delta.test.mjs
+  s_d99100a467f052::t_8a441bc68f602f 1-131,136
+  s_d99100a467f052::t_d8724a2cb19ac1 132-135
+builtin/web-ui/dist/assets/index-Bf-_uWZy.css
+  s_d99100a467f052::t_adf0e0a3fc1a84 1
+builtin/web-ui/dist/assets/index-D0WZXUWr.js
+  s_d99100a467f052::t_adf0e0a3fc1a84 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-73,75,78-79,83-84,86-87,89,91-95,98-100,102,113-114,144,181-187,191-193,196,240-241,245,249,251-255,259-260,262-264,268-270,285,287,291,299,301,305,313-318,322,348
+builtin/web-ui/src/scheduleNavigation.js
+  s_d99100a467f052::t_59f82aae301058 1-22
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_adf0e0a3fc1a84 18-19
+builtin/web-ui/src/pages/SchedulesPage.jsx
+  s_d99100a467f052::t_59f82aae301058 2-3,29,122,147-157
+builtin/web-ui/src/index.css
+  s_d99100a467f052::t_9bb03d3a50c244 6825,6827-6841,6843
+  s_d99100a467f052::t_59f82aae301058 3564-3566,3570,3582-3587,3589-3594,3621-3622
+  s_d99100a467f052::t_f6a470c44b0b19 6826
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "624d9241ca524c767f69168cf642a030bef6b7af",
+  "prompts": {},
+  "logical_commit_id": "624d9241ca524c767f69168cf642a030bef6b7af",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 15481,
+      "total_deletions": 775
+    }
+  }
+}
