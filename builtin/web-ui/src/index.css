@@ -8118,13 +8118,56 @@ button.af-project-card {
   background-size: 24px 24px;
 }
 
-.af-workspace-save-status {
-  max-width: 20rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: rgba(255, 255, 255, 0.52);
-  font-size: 0.78rem;
+.af-workspace-sync-light {
+  --sync-color: rgba(202, 195, 216, 0.48);
+  display: inline-grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  cursor: help;
+}
+
+.af-workspace-sync-light__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--sync-color);
+  box-shadow: 0 0 0.45rem color-mix(in srgb, var(--sync-color) 34%, transparent);
+}
+
+.af-workspace-sync-light.is-synced {
+  --sync-color: #73daca;
+}
+
+.af-workspace-sync-light.is-saving,
+.af-workspace-sync-light.is-loading {
+  --sync-color: #7dcfff;
+}
+
+.af-workspace-sync-light.is-dirty {
+  --sync-color: #e0af68;
+}
+
+.af-workspace-sync-light.is-conflict,
+.af-workspace-sync-light.is-error {
+  --sync-color: #f7768e;
+}
+
+.af-workspace-sync-light.is-readonly {
+  --sync-color: #9aa5ce;
+}
+
+.af-workspace-sync-light.is-saving .af-workspace-sync-light__dot,
+.af-workspace-sync-light.is-loading .af-workspace-sync-light__dot {
+  animation: af-workspace-sync-pulse 1s ease-in-out infinite;
+}
+
+@keyframes af-workspace-sync-pulse {
+  50% {
+    opacity: 0.52;
+    transform: scale(0.82);
+  }
 }
 
 .af-work-flow-node {
@@ -19345,6 +19388,225 @@ button.af-exec-history-card {
 
 .af-display-share-modal {
   width: min(36rem, calc(100vw - 2rem));
+}
+
+.af-workspace-conflict-modal {
+  width: min(52rem, calc(100vw - 2rem));
+  max-height: min(92vh, 48rem);
+}
+
+.af-workspace-conflict-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: rgba(232, 227, 239, 0.72);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.af-workspace-conflict-bulk,
+.af-workspace-conflict-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.af-workspace-conflict-bulk button,
+.af-workspace-conflict-options button {
+  border: 1px solid rgba(125, 207, 255, 0.2);
+  border-radius: 0.4rem;
+  background: rgba(125, 207, 255, 0.06);
+  color: rgba(232, 227, 239, 0.76);
+  font: 600 0.65rem/1 var(--af-headline);
+  padding: 0.48rem 0.62rem;
+  cursor: pointer;
+}
+
+.af-workspace-conflict-options button.is-active {
+  border-color: rgba(125, 207, 255, 0.68);
+  background: rgba(125, 207, 255, 0.18);
+  color: #eaf7ff;
+}
+
+.af-workspace-conflict-item {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 0.65rem;
+  background: rgba(8, 10, 18, 0.34);
+}
+
+.af-workspace-conflict-path {
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #7dcfff;
+  font: 600 0.7rem/1.4 var(--af-mono);
+}
+
+.af-workspace-conflict-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.af-workspace-conflict-values > div {
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.af-workspace-conflict-values > div.is-selected {
+  border-color: rgba(125, 207, 255, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(125, 207, 255, 0.08);
+}
+
+.af-workspace-conflict-values span,
+.af-workspace-conflict-manual > span {
+  display: block;
+  margin-bottom: 0.38rem;
+  color: rgba(232, 227, 239, 0.58);
+  font: 700 0.62rem/1.3 var(--af-headline);
+}
+
+.af-workspace-conflict-values pre {
+  max-height: 9rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(232, 227, 239, 0.88);
+  font: 0.68rem/1.5 var(--af-mono);
+}
+
+.af-workspace-conflict-manual textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(125, 207, 255, 0.28);
+  border-radius: 0.45rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  font: 0.7rem/1.5 var(--af-mono);
+  padding: 0.55rem 0.65rem;
+  outline: none;
+}
+
+.af-workspace-conflict-foot__spacer {
+  flex: 1;
+}
+
+.af-workspace-member-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.af-workspace-member-add input {
+  min-width: 0;
+  height: 2.35rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(125, 207, 255, 0.22);
+  border-radius: 0.45rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  padding: 0 0.7rem;
+  outline: none;
+}
+
+.af-workspace-member-add input:focus {
+  border-color: rgba(125, 207, 255, 0.58);
+  box-shadow: 0 0 0 2px rgba(125, 207, 255, 0.12);
+}
+
+.af-workspace-member-add button,
+.af-workspace-member-row button {
+  border: 1px solid rgba(125, 207, 255, 0.25);
+  border-radius: 0.45rem;
+  background: rgba(125, 207, 255, 0.1);
+  color: #eaf7ff;
+  font: 700 0.68rem/1 var(--af-headline);
+  padding: 0 0.8rem;
+  cursor: pointer;
+}
+
+.af-workspace-member-add button:disabled,
+.af-workspace-member-row button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.af-workspace-member-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.af-workspace-member-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.af-workspace-member-row > .material-symbols-outlined {
+  color: #7dcfff;
+  font-size: 19px;
+}
+
+.af-workspace-member-row div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.af-workspace-member-row strong {
+  overflow: hidden;
+  color: rgba(232, 227, 239, 0.92);
+  font: 700 0.74rem/1.3 var(--af-headline);
+  text-overflow: ellipsis;
+}
+
+.af-workspace-member-row small {
+  color: rgba(232, 227, 239, 0.5);
+  font-size: 0.64rem;
+}
+
+.af-workspace-member-row button {
+  height: 1.9rem;
+  border-color: rgba(255, 117, 127, 0.22);
+  background: rgba(255, 117, 127, 0.08);
+  color: #ffb4ab;
+}
+
+@media (max-width: 720px) {
+  .af-workspace-conflict-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .af-workspace-conflict-values {
+    grid-template-columns: 1fr;
+  }
+
+  .af-workspace-conflict-foot {
+    flex-wrap: wrap;
+  }
+
+  .af-workspace-member-add {
+    grid-template-columns: 1fr;
+  }
+
+  .af-workspace-member-add button {
+    height: 2.35rem;
+  }
 }
 
 .af-display-preview-overlay {

@@ -85,6 +85,11 @@ import { runNodeScript } from "./pipeline-scripts.mjs";
 import { computeNextRunAt, readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
 import { listScheduleStatuses } from "./scheduler.mjs";
 import {
+  mergeWorkspaceGraphs,
+  workspaceDesignRevision,
+  workspaceRuntimeRevision,
+} from "./workspace-graph-merge.mjs";
+import {
   deleteMarketplaceFlowSnippetPackage,
   deleteMarketplaceNodePackage,
   installFlowDependency,
@@ -129,6 +134,20 @@ import {
   readWorkspaceRunLogEvents,
 } from "./workspace-run-logs.mjs";
 import { createWorkspaceRunController } from "./workspace-run-controller.mjs";
+import {
+  acceptWorkspaceCollaborationInvite,
+  addWorkspaceCollaborationMember,
+  deleteWorkspaceCollaborationById,
+  deleteWorkspaceCollaborationForFlow,
+  ensureWorkspaceCollaboration,
+  getWorkspaceCollaborationByFlow,
+  getWorkspaceCollaborationForProject,
+  listWorkspaceCollaborationsForUser,
+  removeWorkspaceCollaborationMember,
+  updateWorkspaceCollaborationFlow,
+  workspaceCollaborationAccess,
+  workspaceCollaborationSummary,
+} from "./workspace-collaboration.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -1668,6 +1687,13 @@ function workspaceGraphPath(workspaceRoot) {
   return path.join(path.resolve(workspaceRoot), WORKSPACE_GRAPH_FILENAME);
 }
 
+function writeWorkspaceGraphAtomic(graphPath, graph) {
+  fs.mkdirSync(path.dirname(graphPath), { recursive: true });
+  const tmp = `${graphPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(graph, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmp, graphPath);
+}
+
 function emptyWorkspaceGraph() {
   return { version: 1, instances: {}, edges: [], ui: { nodePositions: {} } };
 }
@@ -3079,11 +3105,93 @@ function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   if (!isValidFlowSourceRead(flowSource)) {
     return { root: "", error: "Invalid flowSource" };
   }
-  const result = getPipelineFiles(workspaceRoot, flowId, flowSource, archived, opts);
+  const workspaceId = String(params.workspaceId || "").trim();
+  let collaboration = getWorkspaceCollaborationForProject({
+    workspaceId,
+    flowId,
+    flowSource,
+    archived,
+    ownerId: workspaceId ? "" : opts.userId,
+  });
+  if (!collaboration && !workspaceId) {
+    collaboration = listWorkspaceCollaborationsForUser(opts.userId).find((record) => (
+      record.flowId === flowId
+      && record.archived === archived
+      && (record.projectSource || record.flowSource || "workspace") === flowSource
+    )) || null;
+  }
+  if (!collaboration && flowSource === "workspace") {
+    collaboration = getWorkspaceCollaborationByFlow(flowId, archived);
+  }
+  if (collaboration) {
+    const access = workspaceCollaborationAccess(collaboration, opts.userId);
+    if (!access.allowed) {
+      return { root: "", error: "Workspace collaboration permission denied", status: 403 };
+    }
+  }
+  const physicalFlowSource = collaboration?.projectSource || collaboration?.flowSource || flowSource;
+  const physicalOpts = collaboration && physicalFlowSource === "user"
+    ? { ...opts, userId: collaboration.ownerId }
+    : opts;
+  const result = getPipelineFiles(workspaceRoot, flowId, physicalFlowSource, archived, physicalOpts);
   if (result.error || !result.path) {
     return { root: "", error: result.error || "Pipeline workspace not found" };
   }
-  return { root: path.resolve(result.path), flowId, flowSource, archived };
+  return {
+    root: path.resolve(result.path),
+    flowId,
+    flowSource: physicalFlowSource,
+    requestedFlowSource: flowSource,
+    workspaceId: collaboration?.id || workspaceId,
+    archived,
+    collaboration,
+    collaborationAccess: workspaceCollaborationAccess(collaboration, opts.userId),
+  };
+}
+
+function workspaceFlowCollaborationGuard(flowId, flowSource, archived, userCtx = {}, capability = "read") {
+  if (flowSource !== "workspace") return null;
+  const collaboration = getWorkspaceCollaborationByFlow(flowId, archived === true);
+  if (!collaboration) return null;
+  const access = workspaceCollaborationAccess(collaboration, userCtx.userId);
+  if (!access.allowed) return { error: "Workspace collaboration permission denied", status: 403 };
+  if (capability === "write" && !access.writable) {
+    return { error: "Workspace collaboration edit permission denied", status: 403 };
+  }
+  if (capability === "run" && !access.runnable) {
+    return { error: "Workspace collaboration run permission denied", status: 403 };
+  }
+  if (capability === "owner" && access.role !== "owner") {
+    return { error: "Only the workspace owner can manage this workflow", status: 403 };
+  }
+  return null;
+}
+
+function findWorkspaceShareUser(username) {
+  const query = String(username || "").trim().toLowerCase();
+  if (!query) return null;
+  const users = readAuthUsers();
+  for (const [userId, user] of Object.entries(users)) {
+    const storedUsername = String(user?.username || userId).trim();
+    if (String(userId).toLowerCase() === query || storedUsername.toLowerCase() === query) {
+      return { userId: String(userId), username: storedUsername };
+    }
+  }
+  return null;
+}
+
+function workspaceCollaborationSummaryWithUsers(record, userId) {
+  const summary = workspaceCollaborationSummary(record, userId);
+  if (!summary) return null;
+  const users = readAuthUsers();
+  return {
+    ...summary,
+    ownerUsername: String(users[summary.ownerId]?.username || summary.ownerId),
+    members: (summary.members || []).map((member) => ({
+      ...member,
+      username: String(users[member.userId]?.username || member.userId),
+    })),
+  };
 }
 
 function workspaceConversationsPath(scopedRoot) {
@@ -7069,7 +7177,8 @@ const flowEditorSyncSubscribers = new Map();
 const flowEditorSyncVersions = new Map();
 
 function flowEditorSyncKey(flowId, flowSource, flowArchived, userId = "") {
-  return `${String(userId || "")}\t${String(flowId)}\t${String(flowSource)}\t${flowArchived ? "1" : "0"}`;
+  const actorScope = flowSource === "workspace" ? "" : String(userId || "");
+  return `${actorScope}\t${String(flowId)}\t${String(flowSource)}\t${flowArchived ? "1" : "0"}`;
 }
 
 function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userId = "") {
@@ -7093,6 +7202,8 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
 const activeFlowRuns = new Map();
 /** 正在执行的 Workspace 临时 run（runId/sessionId → { controller, child, runNodeId, startedAt, plannedNodeIds }） */
 const activeWorkspaceRuns = new Map();
+const workspaceCollaborationSubscribers = new Map();
+const workspaceCollaborationSequences = new Map();
 const prdWorkflowSubscribers = new Map();
 const prdWorkflowIdempotency = new Map();
 const prdWorkflowActionLocks = new Map();
@@ -7105,8 +7216,9 @@ const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
 const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
 
 function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId = "") {
+  const actorScope = flowSource === "workspace" ? "shared" : String(userCtx?.userId || "");
   return [
-    String(userCtx?.userId || ""),
+    actorScope,
     String(flowSource || "user"),
     String(flowId || ""),
     String(tapdId || ""),
@@ -9229,7 +9341,45 @@ function workspaceIntervalMinutesToCron(intervalMinutes) {
 }
 
 function workspaceRunKey(userCtx, flowSource, flowId) {
-  return `${userCtx?.userId || ""}:${flowSource || "user"}:${flowId}`;
+  const source = flowSource || "user";
+  const collaboration = listWorkspaceCollaborationsForUser(userCtx?.userId).find((record) => (
+    record.flowId === flowId
+    && record.archived !== true
+    && (record.projectSource || record.flowSource || "workspace") === source
+  ));
+  if (collaboration?.id) return `shared:${collaboration.id}`;
+  const actorScope = source === "workspace" ? "shared" : userCtx?.userId || "";
+  return `${actorScope}:${source}:${flowId}`;
+}
+
+function workspaceCollaborationEventKey(userCtx, flowSource, flowId, archived = false) {
+  const source = flowSource || "user";
+  const collaboration = listWorkspaceCollaborationsForUser(userCtx?.userId).find((record) => (
+    record.flowId === flowId
+    && record.archived === (archived === true)
+    && (record.projectSource || record.flowSource || "workspace") === source
+  ));
+  if (collaboration?.id) return `shared:${collaboration.id}:${archived ? "1" : "0"}`;
+  const actorScope = source === "workspace" ? "shared" : userCtx?.userId || "";
+  return `${actorScope}:${source}:${flowId}:${archived ? "1" : "0"}`;
+}
+
+function broadcastWorkspaceCollaborationEvent(userCtx, flowSource, flowId, archived, event = {}) {
+  const key = workspaceCollaborationEventKey(userCtx, flowSource, flowId, archived);
+  const seq = (workspaceCollaborationSequences.get(key) || 0) + 1;
+  workspaceCollaborationSequences.set(key, seq);
+  const payload = JSON.stringify({
+    seq,
+    at: new Date().toISOString(),
+    ...event,
+  });
+  const subscribers = workspaceCollaborationSubscribers.get(key);
+  if (!subscribers?.size) return seq;
+  const chunk = `id: ${seq}\ndata: ${payload}\n\n`;
+  for (const clientRes of subscribers) {
+    try { clientRes.write(chunk); } catch (_) {}
+  }
+  return seq;
 }
 
 function workspaceRunEntryKey(scopeKey, runId) {
@@ -9353,9 +9503,19 @@ function workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId) {
   ].join(":");
 }
 
+function workspaceScheduleOwnerUserId(userCtx = {}, flowSource = "user", flowId = "") {
+  const collaboration = listWorkspaceCollaborationsForUser(userCtx.userId).find((record) => (
+    record.flowId === flowId
+    && record.archived !== true
+    && (record.projectSource || record.flowSource || "workspace") === flowSource
+  ));
+  if (collaboration?.ownerId) return String(collaboration.ownerId);
+  return String(userCtx.userId || "");
+}
+
 function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user", flowId = "") {
   const registry = readWorkspaceScheduleRegistry();
-  const userId = String(userCtx.userId || "");
+  const userId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId);
   return Object.values(registry.schedules || {})
     .filter((entry) => (
       String(entry?.userId || "") === userId &&
@@ -9367,13 +9527,13 @@ function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user",
 
 function listWorkspaceScheduleStatuses(root, userCtx = {}) {
   const registry = readWorkspaceScheduleRegistry();
-  const userId = String(userCtx.userId || "");
   const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
     .filter((flow) => !flow.archived && !isReadonlyBuiltinFlowSource(flow.source || "user"));
   const rows = [];
   for (const flow of flows) {
     const flowId = String(flow.id || "");
     const flowSource = String(flow.source || "user");
+    const scheduleUserId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId);
     const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
     if (scoped.error || !scoped.root) continue;
     let graph;
@@ -9386,7 +9546,7 @@ function listWorkspaceScheduleStatuses(root, userCtx = {}) {
     for (const [scheduleNodeId, instance] of Object.entries(instances)) {
       if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
       const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
-      const key = workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId);
+      const key = workspaceScheduleKey(scheduleUserId, flowSource, flowId, scheduleNodeId);
       const current = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
       const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
       const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
@@ -9475,15 +9635,25 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
 function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
   const flowId = String(scoped?.flowId || "").trim();
   const flowSource = String(scoped?.flowSource || "user");
-  const userId = String(userCtx.userId || authUser?.userId || "");
+  const userId = workspaceScheduleOwnerUserId(
+    { userId: userCtx.userId || authUser?.userId || "" },
+    flowSource,
+    flowId,
+  );
   if (!flowId || !userId) return [];
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const registry = readWorkspaceScheduleRegistry();
   const schedules = { ...(registry.schedules || {}) };
   const prefix = `${userId}:${flowSource}:${flowId}:`;
-  for (const key of Object.keys(schedules)) {
-    if (key.startsWith(prefix)) delete schedules[key];
+  for (const [key, entry] of Object.entries(schedules)) {
+    const sameSharedFlow = (
+      flowSource === "workspace"
+      && scoped?.collaboration
+      && String(entry?.flowSource || "") === flowSource
+      && String(entry?.flowId || "") === flowId
+    );
+    if (sameSharedFlow || key.startsWith(prefix)) delete schedules[key];
   }
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   for (const [scheduleNodeId, instance] of Object.entries(instances)) {
@@ -11155,7 +11325,49 @@ export function startUiServer({
     if (url.pathname === "/api/flows") {
       if (req.method === "GET") {
         try {
-          json(res, 200, listFlowsJson(root, userCtx));
+          const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
+            .filter((flow) => (
+              !workspaceFlowCollaborationGuard(
+                flow.id,
+                flow.source || "user",
+                flow.archived === true,
+                userCtx,
+                "read",
+              )
+            ))
+            .map((flow) => {
+              const source = flow.source || "user";
+              const collaboration = source === "workspace"
+                ? getWorkspaceCollaborationByFlow(flow.id, flow.archived === true)
+                : getWorkspaceCollaborationForProject({
+                  flowId: flow.id,
+                  flowSource: source,
+                  archived: flow.archived === true,
+                  ownerId: userCtx.userId,
+                });
+              return collaboration
+                ? { ...flow, collaboration: workspaceCollaborationSummaryWithUsers(collaboration, userCtx.userId) }
+                : flow;
+            });
+          const existingCollaborationIds = new Set(flows.map((flow) => flow.collaboration?.id).filter(Boolean));
+          for (const record of listWorkspaceCollaborationsForUser(userCtx.userId)) {
+            const source = record.projectSource || record.flowSource || "workspace";
+            if (source !== "user" || record.ownerId === userCtx.userId) continue;
+            if (existingCollaborationIds.has(record.id)) continue;
+            const ownerFlow = listFlowsJson(root, { userId: record.ownerId })
+              .find((flow) => (
+                flow.id === record.flowId
+                && (flow.source || "user") === "user"
+                && Boolean(flow.archived) === Boolean(record.archived)
+              ));
+            if (!ownerFlow) continue;
+            flows.push({
+              ...ownerFlow,
+              collaboration: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
+            });
+            existingCollaborationIds.add(record.id);
+          }
+          json(res, 200, flows);
         } catch (e) {
           json(res, 500, { error: (e && e.message) || String(e) });
         }
@@ -11206,6 +11418,9 @@ export function startUiServer({
         if (!result.success) {
           json(res, 400, result);
           return;
+        }
+        if (targetSpace === "workspace") {
+          ensureWorkspaceCollaboration({ flowId, userId: userCtx.userId });
         }
         json(res, 200, { success: true, flowId, flowSource: targetSpace });
         return;
@@ -11286,6 +11501,9 @@ export function startUiServer({
       if (!w.success) {
         json(res, 400, { error: w.error });
         return;
+      }
+      if (targetSpace === "workspace") {
+        ensureWorkspaceCollaboration({ flowId, userId: userCtx.userId });
       }
       json(res, 200, { success: true, flowId, flowSource: targetSpace });
       return;
@@ -11391,11 +11609,188 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/collaboration/accept") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const accepted = acceptWorkspaceCollaborationInvite({
+          token: payload?.token,
+          userId: userCtx.userId,
+        });
+        if (accepted.error) {
+          json(res, accepted.status || 400, { error: accepted.error });
+          return;
+        }
+        json(res, 200, { ok: true, workspace: accepted.workspace });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/collaboration/share") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const flowId = String(payload?.flowId || "").trim();
+        const flowSource = String(payload?.flowSource || "user").trim();
+        const archived = payload?.archived === true || payload?.flowArchived === true;
+        if (flowSource !== "workspace" && flowSource !== "user") {
+          json(res, 400, { error: "当前 Project 不支持协作分享" });
+          return;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource,
+          workspaceId: payload.workspaceId || "",
+          archived,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        const ensured = ensureWorkspaceCollaboration({
+          flowId,
+          flowSource,
+          archived,
+          userId: userCtx.userId,
+        });
+        if (ensured.error) {
+          json(res, ensured.status || 400, { error: ensured.error });
+          return;
+        }
+        const targetUser = findWorkspaceShareUser(payload?.username || payload?.userId);
+        if (!targetUser) {
+          json(res, 404, { error: "未找到该用户名，请确认对方已经登录或注册 AgentFlow" });
+          return;
+        }
+        const added = addWorkspaceCollaborationMember({
+          workspaceId: ensured.workspace.id,
+          userId: userCtx.userId,
+          memberUserId: targetUser.userId,
+          role: payload?.role,
+        });
+        if (added.error) {
+          json(res, added.status || 400, { error: added.error });
+          return;
+        }
+        const record = getWorkspaceCollaborationForProject({ workspaceId: ensured.workspace.id });
+        broadcastWorkspaceCollaborationEvent(userCtx, flowSource, flowId, archived, {
+          type: "member.added",
+          actorId: userCtx.userId || "",
+          memberUserId: targetUser.userId,
+        });
+        json(res, 200, {
+          ok: true,
+          workspace: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
+          member: { userId: targetUser.userId, username: targetUser.username, role: "editor" },
+        });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/workspace/collaboration/share") {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const flowId = String(payload?.flowId || "").trim();
+        const flowSource = String(payload?.flowSource || "user").trim();
+        const archived = payload?.archived === true || payload?.flowArchived === true;
+        if (!flowId || (flowSource !== "workspace" && flowSource !== "user")) {
+          json(res, 400, { error: "Missing shared project" });
+          return;
+        }
+        const record = getWorkspaceCollaborationForProject({
+          workspaceId: payload.workspaceId || "",
+          flowId,
+          flowSource,
+          archived,
+          ownerId: userCtx.userId,
+        }) || listWorkspaceCollaborationsForUser(userCtx.userId).find((item) => (
+          item.flowId === flowId
+          && (item.projectSource || item.flowSource || "workspace") === flowSource
+          && item.archived === archived
+        ));
+        if (!record) {
+          json(res, 404, { error: "Workspace collaboration not found" });
+          return;
+        }
+        const requestedUser = String(payload?.username || payload?.memberUserId || "").trim();
+        const targetUser = requestedUser ? findWorkspaceShareUser(requestedUser) : null;
+        if (requestedUser && !targetUser) {
+          json(res, 404, { error: "未找到该用户" });
+          return;
+        }
+        const removed = removeWorkspaceCollaborationMember({
+          workspaceId: record.id,
+          userId: userCtx.userId,
+          memberUserId: targetUser?.userId || userCtx.userId,
+        });
+        if (removed.error) {
+          json(res, removed.status || 400, { error: removed.error });
+          return;
+        }
+        broadcastWorkspaceCollaborationEvent(userCtx, flowSource, flowId, archived, {
+          type: removed.left ? "member.left" : "member.removed",
+          actorId: userCtx.userId || "",
+          memberUserId: removed.removedUserId || "",
+        });
+        const nextRecord = getWorkspaceCollaborationForProject({ workspaceId: record.id });
+        json(res, 200, {
+          ok: true,
+          left: removed.left === true,
+          removedUserId: removed.removedUserId || "",
+          workspace: removed.left ? null : workspaceCollaborationSummaryWithUsers(nextRecord, userCtx.userId),
+        });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/events") {
+      const scoped = resolveWorkspaceScopeRoot(root, {
+        flowId: url.searchParams.get("flowId") || "",
+        flowSource: url.searchParams.get("flowSource") || "user",
+        workspaceId: url.searchParams.get("workspaceId") || "",
+        archived: url.searchParams.get("archived") === "1",
+      }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
+      const key = workspaceCollaborationEventKey(userCtx, scoped.flowSource, scoped.flowId, scoped.archived);
+      let subscribers = workspaceCollaborationSubscribers.get(key);
+      if (!subscribers) {
+        subscribers = new Set();
+        workspaceCollaborationSubscribers.set(key, subscribers);
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: connected\ndata: ${JSON.stringify({ seq: workspaceCollaborationSequences.get(key) || 0 })}\n\n`);
+      subscribers.add(res);
+      const heartbeat = setInterval(() => {
+        try { res.write(`: heartbeat ${Date.now()}\n\n`); } catch (_) {}
+      }, 15_000);
+      const detach = () => {
+        clearInterval(heartbeat);
+        subscribers.delete(res);
+        if (subscribers.size === 0) workspaceCollaborationSubscribers.delete(key);
+      };
+      req.on("close", detach);
+      res.on("close", detach);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace/files") {
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: url.searchParams.get("flowId") || "",
           flowSource: url.searchParams.get("flowSource") || "user",
+          workspaceId: url.searchParams.get("workspaceId") || "",
           archived: url.searchParams.get("archived") === "1",
         }, userCtx);
         if (scoped.error) {
@@ -11414,6 +11809,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: url.searchParams.get("flowId") || "",
           flowSource: url.searchParams.get("flowSource") || "user",
+          workspaceId: url.searchParams.get("workspaceId") || "",
           archived: url.searchParams.get("archived") === "1",
         }, userCtx);
         const scopedRoot = scoped.error ? root : scoped.root;
@@ -11471,23 +11867,30 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: url.searchParams.get("flowId") || "",
           flowSource: url.searchParams.get("flowSource") || "user",
+          workspaceId: url.searchParams.get("workspaceId") || "",
           archived: url.searchParams.get("archived") === "1",
         }, userCtx);
         if (scoped.error) {
-          json(res, 400, { error: scoped.error });
+          json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
         const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
         const hydratedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, graph, userCtx);
+        const collaborationAccess = scoped.collaborationAccess || workspaceCollaborationAccess(null, userCtx.userId);
         json(res, 200, {
           ok: true,
           graph: hydratedGraph,
+          revision: workspaceDesignRevision(hydratedGraph),
+          designRevision: workspaceDesignRevision(hydratedGraph),
+          runtimeRevision: workspaceRuntimeRevision(hydratedGraph),
           path: graphPath,
           root: scoped.root,
           flowId: scoped.flowId,
           flowSource: scoped.flowSource,
           archived: scoped.archived,
-          writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)),
+          writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource))
+            && collaborationAccess.writable !== false,
+          collaboration: workspaceCollaborationSummaryWithUsers(scoped.collaboration, userCtx.userId),
           workspaceSchedules: listWorkspaceScheduleStatusesForFlow(userCtx, scoped.flowSource || "user", scoped.flowId || ""),
         });
       } catch (e) {
@@ -11508,6 +11911,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -11552,23 +11956,106 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
-          json(res, 400, { error: scoped.error });
+          json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.writable === false
+        ) {
           json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
           return;
         }
         const submittedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || payload, userCtx);
         const graphPath = workspaceGraphPath(scoped.root);
-        const currentGraph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
-        const graph = mergeWorkspacePersistentNodeRefs(submittedGraph, currentGraph);
-        fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2) + "\n", "utf-8");
+        const currentStoredGraph = readWorkspaceGraph(scoped.root).graph;
+        const currentGraph = hydrateWorkspaceGraphForRuntime(root, scoped, currentStoredGraph, userCtx);
+        const currentRevision = workspaceDesignRevision(currentGraph);
+        const baseRevision = String(payload.baseRevision || "").trim();
+        if (scoped.collaboration && !baseRevision) {
+          json(res, 428, {
+            error: "Shared workspace save requires baseRevision",
+            currentRevision,
+          });
+          return;
+        }
+        let nextGraph = submittedGraph;
+        let merged = false;
+        const baseGraph = payload.baseGraph;
+        if (baseRevision && baseGraph && typeof baseGraph === "object") {
+          const actualBaseRevision = workspaceDesignRevision(baseGraph);
+          if (actualBaseRevision !== baseRevision) {
+            json(res, 400, {
+              error: "Workspace 合并基线与 baseRevision 不匹配",
+              conflict: "invalid-merge-base",
+              expectedRevision: baseRevision,
+              actualBaseRevision,
+              currentRevision,
+            });
+            return;
+          }
+          const mergeResult = mergeWorkspaceGraphs({
+            baseGraph,
+            currentGraph,
+            incomingGraph: submittedGraph,
+          });
+          if (mergeResult.conflicts.length) {
+            json(res, 409, {
+              error: `Workspace 存在 ${mergeResult.conflicts.length} 处同字段冲突`,
+              conflict: "field-conflict",
+              expectedRevision: baseRevision,
+              currentRevision,
+              conflictPaths: mergeResult.conflicts.map((item) => item.path),
+              conflictItems: mergeResult.conflicts,
+              mergeGraph: mergeResult.graph,
+              currentGraph,
+            });
+            return;
+          }
+          nextGraph = mergeResult.graph;
+          merged = baseRevision !== currentRevision
+            || workspaceRuntimeRevision(baseGraph) !== workspaceRuntimeRevision(currentGraph);
+        } else if (baseRevision && baseRevision !== currentRevision) {
+          json(res, 409, {
+            error: "Workspace 已被其他成员更新，当前客户端缺少合并基线，请刷新后重试",
+            conflict: "missing-merge-base",
+            expectedRevision: baseRevision,
+            currentRevision,
+          });
+          return;
+        }
+        const graph = mergeWorkspacePersistentNodeRefs(nextGraph, currentGraph);
+        writeWorkspaceGraphAtomic(graphPath, graph);
+        const revision = workspaceDesignRevision(graph);
+        const runtimeRevision = workspaceRuntimeRevision(graph);
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
-        json(res, 200, { ok: true, path: graphPath, graph, workspaceSchedules });
+        broadcastWorkspaceCollaborationEvent(
+          userCtx,
+          scoped.flowSource,
+          scoped.flowId,
+          scoped.archived,
+          {
+            type: "graph.committed",
+            revision,
+            actorId: userCtx.userId || "",
+            clientId: String(payload.clientId || ""),
+          },
+        );
+        json(res, 200, {
+          ok: true,
+          path: graphPath,
+          graph,
+          revision,
+          designRevision: revision,
+          runtimeRevision,
+          merged,
+          workspaceSchedules,
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -11604,6 +12091,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -11651,13 +12139,18 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.writable === false
+        ) {
           json(res, 400, { error: "Cannot optimize workspace graph for builtin or archived pipeline" });
           return;
         }
@@ -11673,12 +12166,20 @@ export function startUiServer({
         const currentGraph = readWorkspaceGraph(scoped.root).graph;
         const touchedIds = new Set((result.optimized || []).map((item) => item.nodeId).filter(Boolean));
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-        fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+        writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+        const revision = workspaceDesignRevision(mergedGraph);
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, mergedGraph, authUser, userCtx);
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "graph.committed",
+          revision,
+          actorId: userCtx.userId || "",
+          clientId: String(payload.clientId || ""),
+        });
         json(res, 200, {
           ok: true,
           path: graphPath,
           graph: mergedGraph,
+          revision,
           order: result.order,
           optimized: result.optimized,
           skipped: result.skipped,
@@ -11702,13 +12203,18 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.runnable === false
+        ) {
           json(res, 400, { error: "Cannot run workspace graph for builtin or archived pipeline" });
           return;
         }
@@ -11718,7 +12224,27 @@ export function startUiServer({
           json(res, 400, { error: "Missing flowId" });
           return;
         }
-        const runtimeGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || {}, userCtx);
+        const canonicalStoredGraph = readWorkspaceGraph(scoped.root).graph;
+        const canonicalGraph = hydrateWorkspaceGraphForRuntime(
+          root,
+          scoped,
+          canonicalStoredGraph,
+          userCtx,
+        );
+        const canonicalRevision = workspaceDesignRevision(canonicalGraph);
+        const expectedRevision = String(payload.expectedRevision || payload.baseRevision || "").trim();
+        if (scoped.collaboration && expectedRevision && expectedRevision !== canonicalRevision) {
+          json(res, 409, {
+            error: "Workspace 已更新，请刷新后再运行",
+            conflict: "revision-mismatch",
+            expectedRevision,
+            currentRevision: canonicalRevision,
+          });
+          return;
+        }
+        const runtimeGraph = scoped.collaboration
+          ? canonicalGraph
+          : hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || canonicalGraph, userCtx);
         const runNodeId = String(payload.runNodeId || "").trim();
         const plan = workspaceRunPlan(runtimeGraph, runNodeId, scoped.root);
         const plannedNodeIds = workspaceRunPlanNodeIds(runNodeId, plan);
@@ -11767,12 +12293,27 @@ export function startUiServer({
         });
         activeWorkspaceRuns.set(runKey, runEntry);
         appendWorkspaceRunStarted(runEntry);
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "run.started",
+          runId,
+          runNodeId,
+          plannedNodeIds,
+          revision: canonicalRevision,
+          actorId: userCtx.userId || "",
+        });
         const setActiveChild = (child, childOptions = {}) => {
           runControl.setChild(child, childOptions);
         };
         const clearActiveRun = (status = "finished") => {
           runControl.finish(status);
           if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
+          broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+            type: "run.finished",
+            status,
+            runId,
+            runNodeId,
+            actorId: userCtx.userId || "",
+          });
         };
         if (wantsStream) {
           const graphPath = workspaceGraphPath(scoped.root);
@@ -11795,7 +12336,12 @@ export function startUiServer({
             const currentGraph = readWorkspaceGraph(scoped.root).graph;
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-            fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+            writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+            const revision = workspaceDesignRevision(mergedGraph);
+            const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
+            const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
+              ? "runtime.committed"
+              : "graph.committed";
             const endedAt = Date.now();
             appendWorkspaceRunFinished({
               ...runEntry,
@@ -11807,7 +12353,14 @@ export function startUiServer({
               durationMs: endedAt - runEntry.startedAt,
               runNodeId,
             });
-            writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
+            broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+              type: collaborationEventType,
+              revision,
+              runtimeRevision,
+              actorId: userCtx.userId || "",
+              source: "run",
+            });
+            writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, revision, runtimeRevision, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
             const endedAt = Date.now();
@@ -11854,7 +12407,12 @@ export function startUiServer({
           const currentGraph = readWorkspaceGraph(scoped.root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-          fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+          writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+          const revision = workspaceDesignRevision(mergedGraph);
+          const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
+          const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
+            ? "runtime.committed"
+            : "graph.committed";
           const endedAt = Date.now();
           appendWorkspaceRunFinished({
             ...runEntry,
@@ -11866,7 +12424,14 @@ export function startUiServer({
             durationMs: endedAt - runEntry.startedAt,
             runNodeId,
           });
-          json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, touchedNodeIds: Array.from(touchedIds) });
+          broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+            type: collaborationEventType,
+            revision,
+            runtimeRevision,
+            actorId: userCtx.userId || "",
+            source: "run",
+          });
+          json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, revision, runtimeRevision, touchedNodeIds: Array.from(touchedIds) });
         } catch (e) {
           const endedAt = Date.now();
           if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {
@@ -11913,9 +12478,18 @@ export function startUiServer({
         const scheduleNodeId = url.searchParams.get("scheduleNodeId") || "";
         const runNodeId = url.searchParams.get("runNodeId") || "";
         const limit = Number(url.searchParams.get("limit") || 50);
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource: flowSource || "user",
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
         json(res, 200, {
           runs: listWorkspaceRunLogs({
-            userId: userCtx.userId || "",
+            userId: flowSource === "workspace" ? "" : userCtx.userId || "",
             flowId,
             flowSource,
             scheduleNodeId,
@@ -11936,7 +12510,23 @@ export function startUiServer({
           json(res, 400, { error: "Missing runId" });
           return;
         }
-        const run = listWorkspaceRunLogs({ userId: userCtx.userId || "", limit: 200 })
+        const flowId = url.searchParams.get("flowId") || "";
+        const flowSource = url.searchParams.get("flowSource") || "user";
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource,
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        const run = listWorkspaceRunLogs({
+          userId: flowSource === "workspace" ? "" : userCtx.userId || "",
+          flowId,
+          flowSource,
+          limit: 200,
+        })
           .find((item) => String(item.runId || "") === runId);
         if (!run) {
           json(res, 404, { error: "Run log not found" });
@@ -11959,6 +12549,15 @@ export function startUiServer({
         return;
       }
       const flowSource = url.searchParams.get("flowSource") || "user";
+      const scoped = resolveWorkspaceScopeRoot(root, {
+        flowId,
+        flowSource,
+        archived: url.searchParams.get("archived") === "1",
+      }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
       const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
       const entries = workspaceActiveRunsForScope(scopeKey).map(([, entry]) => entry);
       const entry = entries[0] || null;
@@ -11996,7 +12595,21 @@ export function startUiServer({
         json(res, 400, { error: "Missing flowId" });
         return;
       }
-      const scopeKey = workspaceRunKey(userCtx, payload.flowSource || "user", flowId);
+      const flowSource = payload.flowSource || "user";
+      const scoped = resolveWorkspaceScopeRoot(root, {
+        flowId,
+        flowSource,
+        archived: payload.archived === true || payload.flowArchived === true,
+      }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
+      if (scoped.collaborationAccess?.runnable === false) {
+        json(res, 403, { error: "Workspace collaboration run permission denied" });
+        return;
+      }
+      const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
       const runId = String(payload.runId || payload.runSessionId || "").trim();
       const runNodeId = String(payload.runNodeId || "").trim();
       const entries = workspaceActiveRunsForScope(scopeKey);
@@ -12012,6 +12625,12 @@ export function startUiServer({
         type: "stop-requested",
         runNodeId: entry.runNodeId || "",
         ts: Date.now(),
+      });
+      broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+        type: "run.stop-requested",
+        runId: entry.runId,
+        runNodeId: entry.runNodeId || "",
+        actorId: userCtx.userId || "",
       });
       const result = await entry.runControl.stop();
       if (!result.stopped) {
@@ -12064,7 +12683,13 @@ export function startUiServer({
           json(res, 413, { error: "File too large" });
           return;
         }
-        json(res, 200, { path: rel, content: fs.readFileSync(abs, "utf-8"), size: stat.size });
+        const content = fs.readFileSync(abs, "utf-8");
+        json(res, 200, {
+          path: rel,
+          content,
+          size: stat.size,
+          revision: crypto.createHash("sha256").update(content).digest("hex"),
+        });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
       }
@@ -12185,7 +12810,11 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.writable === false
+        ) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -12194,9 +12823,39 @@ export function startUiServer({
           json(res, 400, { error: "Missing path" });
           return;
         }
+        const content = String(payload.content ?? "");
+        const baseRevision = String(payload.baseRevision || "").trim();
+        if (baseRevision && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+          const currentContent = fs.readFileSync(abs, "utf-8");
+          const currentRevision = crypto.createHash("sha256").update(currentContent).digest("hex");
+          if (currentRevision !== baseRevision) {
+            json(res, 409, {
+              error: "文件已被其他成员更新，请处理冲突后重试",
+              conflict: "revision-mismatch",
+              currentRevision,
+            });
+            return;
+          }
+        }
         fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, String(payload.content ?? ""), "utf-8");
-        json(res, 200, { ok: true, path: rel });
+        const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tmp, content, "utf-8");
+        fs.renameSync(tmp, abs);
+        const revision = crypto.createHash("sha256").update(content).digest("hex");
+        broadcastWorkspaceCollaborationEvent(
+          userCtx,
+          scoped.flowSource,
+          scoped.flowId,
+          scoped.archived,
+          {
+            type: "file.committed",
+            path: rel,
+            revision,
+            actorId: userCtx.userId || "",
+            clientId: String(payload.clientId || ""),
+          },
+        );
+        json(res, 200, { ok: true, path: rel, revision });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
       }
@@ -12225,7 +12884,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -12235,6 +12894,11 @@ export function startUiServer({
         const target = uniqueWorkspaceRelPath(scoped.root, targetRel);
         fs.mkdirSync(path.dirname(target.abs), { recursive: true });
         fs.writeFileSync(target.abs, parsed.file);
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "file.committed",
+          path: target.rel,
+          actorId: userCtx.userId || "",
+        });
         json(res, 200, {
           ok: true,
           path: target.rel,
@@ -12265,7 +12929,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -12275,6 +12939,11 @@ export function startUiServer({
           return;
         }
         fs.mkdirSync(abs, { recursive: true });
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "file.tree-changed",
+          path: rel,
+          actorId: userCtx.userId || "",
+        });
         json(res, 200, { ok: true, path: rel });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
@@ -12300,7 +12969,7 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
           json(res, 400, { error: "Cannot write to builtin or archived pipeline workspace" });
           return;
         }
@@ -12314,6 +12983,12 @@ export function startUiServer({
           return;
         }
         fs.rmSync(abs, { recursive: true, force: true });
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "file.tree-changed",
+          path: rel,
+          deleted: true,
+          actorId: userCtx.userId || "",
+        });
         json(res, 200, { ok: true, path: rel });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
@@ -12350,7 +13025,7 @@ export function startUiServer({
           json(res, 200, { ok: true, conversations: readWorkspaceConversations(scoped.root) });
           return;
         }
-        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
           json(res, 400, { error: "Cannot write conversations for builtin or archived pipeline workspace" });
           return;
         }
@@ -12383,6 +13058,10 @@ export function startUiServer({
         }, userCtx);
         if (scoped.error) {
           json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Workspace collaboration edit permission denied" });
           return;
         }
         const selectedSkillKeys = Array.isArray(payload?.selectedSkills)
@@ -12471,10 +13150,14 @@ export function startUiServer({
           json(res, 400, { error: scoped.error });
           return;
         }
+        if (scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Workspace collaboration edit permission denied" });
+          return;
+        }
         const targetFilePath = String(payload?.targetFilePath || "").trim();
         let targetFile = null;
         if (targetFilePath) {
-          if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+          if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
             json(res, 400, { error: "Cannot edit builtin or archived pipeline workspace" });
             return;
           }
@@ -13335,12 +14018,26 @@ export function startUiServer({
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        flowArchived,
+        userCtx,
+        "read",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const result = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (result.error) {
         json(res, 404, result);
         return;
       }
-      json(res, 200, result);
+      json(res, 200, {
+        ...result,
+        revision: crypto.createHash("sha256").update(String(result.flowYaml || "")).digest("hex").slice(0, 24),
+      });
       return;
     }
 
@@ -13519,12 +14216,53 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = Boolean(payload.flowArchived);
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        flowArchived,
+        userCtx,
+        "write",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
+      if (flowSource === "workspace" && getWorkspaceCollaborationByFlow(flowId, flowArchived)) {
+        const current = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
+        if (current.error) {
+          json(res, 404, current);
+          return;
+        }
+        const currentRevision = crypto.createHash("sha256")
+          .update(String(current.flowYaml || ""))
+          .digest("hex")
+          .slice(0, 24);
+        const baseRevision = String(payload.baseRevision || "").trim();
+        if (!baseRevision) {
+          json(res, 428, { error: "Shared workspace save requires baseRevision", currentRevision });
+          return;
+        }
+        if (baseRevision !== currentRevision) {
+          json(res, 409, {
+            error: "Workflow 已被其他成员更新，请处理冲突后重试",
+            conflict: "revision-mismatch",
+            expectedRevision: baseRevision,
+            currentRevision,
+          });
+          return;
+        }
+      }
       const result = writeFlowYaml(root, flowId, flowSource, flowYaml, { archived: flowArchived, ...userCtx });
       if (!result.success) {
         json(res, 400, result);
         return;
       }
-      json(res, 200, { success: true });
+      broadcastFlowEditorSync(flowId, flowSource, flowArchived, userCtx.userId);
+      const saved = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
+      json(res, 200, {
+        success: true,
+        revision: crypto.createHash("sha256").update(String(saved.flowYaml || "")).digest("hex").slice(0, 24),
+      });
       return;
     }
 
@@ -13547,6 +14285,17 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = Boolean(payload.flowArchived);
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        flowArchived,
+        userCtx,
+        "read",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       broadcastFlowEditorSync(flowId, flowSource, flowArchived, userCtx.userId);
       json(res, 200, { ok: true });
       return;
@@ -13564,6 +14313,17 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        flowArchived,
+        userCtx,
+        "read",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const key = flowEditorSyncKey(flowId, flowSource, flowArchived, userCtx.userId);
       let set = flowEditorSyncSubscribers.get(key);
       if (!set) {
@@ -13598,6 +14358,17 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowArchived = url.searchParams.get("archived") === "1";
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        flowArchived,
+        userCtx,
+        "read",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const key = flowEditorSyncKey(flowId, flowSource, flowArchived, userCtx.userId);
       const serverVer = flowEditorSyncVersions.get(key) ?? 0;
       const clientVer = parseInt(url.searchParams.get("v") ?? "0", 10) || 0;
@@ -13628,10 +14399,20 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Invalid toSource" });
         return;
       }
+      const collaborationDenied = workspaceFlowCollaborationGuard(flowId, fromSource, false, userCtx, "owner");
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const result = moveFlowDirectory(root, flowId.trim(), fromSource, toSource, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "Move failed" });
         return;
+      }
+      if (fromSource === "workspace" && toSource !== "workspace") {
+        deleteWorkspaceCollaborationForFlow(flowId.trim(), false);
+      } else if (fromSource !== "workspace" && toSource === "workspace") {
+        ensureWorkspaceCollaboration({ flowId: flowId.trim(), userId: userCtx.userId });
       }
       json(res, 200, { success: true, flowId: flowId.trim(), flowSource: result.flowSource });
       return;
@@ -13656,6 +14437,11 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "仅支持重命名用户目录或工作区流水线" });
         return;
       }
+      const collaborationDenied = workspaceFlowCollaborationGuard(flowId, flowSource, false, userCtx, "owner");
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const validation = validateUserPipelineId(newFlowId);
       if (!validation.ok) {
         json(res, 400, { error: validation.error });
@@ -13678,6 +14464,12 @@ finishedAt: "${new Date().toISOString()}"
       }
       try {
         fs.renameSync(fromDir, toDir);
+        updateWorkspaceCollaborationFlow({
+          previousFlowId: flowId,
+          flowSource,
+          ownerId: userCtx.userId,
+          flowId: validation.flowId,
+        });
         json(res, 200, { success: true, flowId: validation.flowId, flowSource });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -13708,11 +14500,24 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "仅支持归档用户目录或工作区流水线" });
         return;
       }
+      const collaborationDenied = workspaceFlowCollaborationGuard(flowId, flowSource, false, userCtx, "owner");
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const result = archiveFlowPipeline(root, flowId, flowSource, userCtx);
       if (!result.success) {
         json(res, 400, { error: result.error || "归档失败" });
         return;
       }
+      updateWorkspaceCollaborationFlow({
+        previousFlowId: flowId,
+        previousArchived: false,
+        flowSource,
+        ownerId: userCtx.userId,
+        flowId,
+        archived: true,
+      });
       json(res, 200, { success: true, flowId, flowSource, archived: true });
       return;
     }
@@ -13741,11 +14546,53 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "仅支持删除用户目录或工作区流水线" });
         return;
       }
+      const collaboration = getWorkspaceCollaborationForProject({
+        workspaceId: payload.workspaceId || "",
+        flowId,
+        flowSource,
+        archived: flowArchived,
+        ownerId: userCtx.userId,
+      }) || listWorkspaceCollaborationsForUser(userCtx.userId).find((record) => (
+        record.flowId === flowId
+        && record.archived === flowArchived
+        && (record.projectSource || record.flowSource || "workspace") === flowSource
+      )) || null;
+      const collaborationAccess = workspaceCollaborationAccess(collaboration, userCtx.userId);
+      if (collaboration && collaborationAccess.allowed && collaborationAccess.role !== "owner") {
+        const left = removeWorkspaceCollaborationMember({
+          workspaceId: collaboration.id,
+          userId: userCtx.userId,
+        });
+        if (left.error) {
+          json(res, left.status || 400, { error: left.error });
+          return;
+        }
+        broadcastWorkspaceCollaborationEvent(userCtx, flowSource, flowId, flowArchived, {
+          type: "member.left",
+          actorId: userCtx.userId || "",
+          memberUserId: userCtx.userId || "",
+        });
+        json(res, 200, {
+          success: true,
+          flowId,
+          flowSource,
+          deleted: false,
+          left: true,
+        });
+        return;
+      }
+      const collaborationDenied = workspaceFlowCollaborationGuard(flowId, flowSource, flowArchived, userCtx, "owner");
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const result = deleteFlowPipeline(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
       if (!result.success) {
         json(res, 400, { error: result.error || "删除失败" });
         return;
       }
+      if (collaboration?.id) deleteWorkspaceCollaborationById(collaboration.id);
+      else deleteWorkspaceCollaborationForFlow(flowId, flowArchived);
       json(res, 200, { success: true, flowId, flowSource, deleted: true });
       return;
     }
@@ -14008,8 +14855,20 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Missing flowId" });
         return;
       }
+      const flowSource = payload.flowSource || "user";
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        false,
+        userCtx,
+        "run",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
       const runUuid = typeof payload.uuid === "string" ? payload.uuid.trim() : "";
-      const runKey = `${userCtx.userId || ""}:${payload.flowSource || "user"}:${flowId}`;
+      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
       if (activeFlowRuns.has(runKey)) {
         json(res, 409, { error: "该流水线已在运行中" });
         return;
@@ -14088,7 +14947,7 @@ finishedAt: "${new Date().toISOString()}"
       }
 
       /** @type {{ child: import("child_process").ChildProcess, runUuid: string | null }} */
-      const runEntry = { child, runUuid: runUuid || null };
+      const runEntry = { child, runUuid: runUuid || null, userId: userCtx.userId || "" };
       activeFlowRuns.set(runKey, runEntry);
       log.debug(`[ui] flow/run: spawned pid=${child.pid} flowId=${flowId}${runUuid ? ` uuid=${runUuid}` : ""}`);
 
@@ -14162,7 +15021,19 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "Missing flowId" });
         return;
       }
-      const runKey = `${userCtx.userId || ""}:${payload.flowSource || "user"}:${flowId}`;
+      const flowSource = payload.flowSource || "user";
+      const collaborationDenied = workspaceFlowCollaborationGuard(
+        flowId,
+        flowSource,
+        false,
+        userCtx,
+        "run",
+      );
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
+      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
       const entry = activeFlowRuns.get(runKey);
       if (!entry || !entry.child) {
         json(res, 404, { error: "该流水线未在运行" });
@@ -14184,7 +15055,7 @@ finishedAt: "${new Date().toISOString()}"
       activeFlowRuns.delete(runKey);
       if (uuid) {
         try {
-          const runDir = getRunDir(root, flowId, uuid, userCtx);
+          const runDir = getRunDir(root, flowId, uuid, { userId: entry.userId || userCtx.userId || "" });
           fs.mkdirSync(runDir, { recursive: true });
           fs.writeFileSync(
             path.join(runDir, RUN_INTERRUPTED_FILENAME),
