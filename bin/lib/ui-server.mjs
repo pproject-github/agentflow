@@ -7607,8 +7607,38 @@ export function prdWorkflowReviewMarkdownToHtml(markdown) {
   ].filter(Boolean).join("\n");
 }
 
+function prdWorkflowReviewExtractPageTitle(markdown, fallbackTitle) {
+  const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const firstContentIndex = lines.findIndex((line) => String(line || "").trim());
+  const heading = firstContentIndex >= 0
+    ? String(lines[firstContentIndex] || "").trim().match(/^#\s+(.+)$/)
+    : null;
+  if (!heading) {
+    return {
+      markdown: String(markdown || ""),
+      title: String(fallbackTitle || "PRD Workflow Review"),
+    };
+  }
+
+  lines.splice(firstContentIndex, 1);
+  const markdownTitle = prdWorkflowReviewNormalizeText(heading[1])
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[`*_~]/g, "")
+    .trim();
+  const bodyWithoutTitle = lines.join("\n").replace(/^\n+/, "");
+  return {
+    markdown: [
+      frontmatter ? `---\n${frontmatter}\n---` : "",
+      bodyWithoutTitle,
+    ].filter(Boolean).join("\n\n"),
+    title: markdownTitle || String(fallbackTitle || "PRD Workflow Review"),
+  };
+}
+
 export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
-  const escapedTitle = htmlEscapeAttribute(title || "PRD Workflow Review");
+  const page = prdWorkflowReviewExtractPageTitle(markdown, title);
+  const escapedTitle = htmlEscapeAttribute(page.title);
   const escapedMeta = htmlEscapeAttribute([
     meta.tapdId ? `TAPD ${meta.tapdId}` : "",
     meta.stage ? `stage ${meta.stage}` : "",
@@ -7622,7 +7652,7 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     meta.persistence ? `persistence ${meta.persistence}` : "",
   ].filter(Boolean).join(" · ");
   const escapedLifecycle = htmlEscapeAttribute(lifecycle);
-  const renderedMarkdown = prdWorkflowReviewMarkdownToHtml(markdown || "");
+  const renderedMarkdown = prdWorkflowReviewMarkdownToHtml(page.markdown);
   const rawHref = htmlEscapeAttribute(meta.rawHref || "?raw=1");
   return `<!doctype html>
 <html lang="zh-CN" data-theme="dark">

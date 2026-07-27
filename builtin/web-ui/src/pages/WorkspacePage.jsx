@@ -722,6 +722,15 @@ function prdWorkflowActionStatusText(status) {
   return "待处理";
 }
 
+function prdWorkflowPlatformLabel(platform) {
+  const value = String(platform || "").trim();
+  const normalized = value.toLowerCase();
+  if (normalized === "android") return "Android";
+  if (normalized === "ios") return "iOS";
+  if (["all", "both", "cross-platform", "cross_platform"].includes(normalized)) return "双端";
+  return value;
+}
+
 function prdWorkflowActionDisplayStatus(item) {
   const status = prdWorkflowActionStatus(item?.status);
   if (prdWorkflowActionTruth(item) === "observation" && status === "done") return "已观察";
@@ -740,7 +749,7 @@ function prdWorkflowActionTagEntries(item) {
   const tagStatus = prdWorkflowActionTruth(item) === "observation" && status === "done" ? "observed" : status;
   push("status", prdWorkflowActionStatusText(tagStatus), tagStatus);
   push("issue", item.issueKey || item.issue_key || item.issue, item.issueKey || item.issue_key || item.issue);
-  push("platform", item.platform, item.platform);
+  push("platform", prdWorkflowPlatformLabel(item.platform), item.platform);
   return out;
 }
 
@@ -773,7 +782,7 @@ function prdWorkflowActionMeta(item) {
     out.push({ label, value: text });
   };
   push("Issue", item.issueKey || item.issue_key || item.issue);
-  push("端", item.platform);
+  push("平台", prdWorkflowPlatformLabel(item.platform));
   return out;
 }
 
@@ -863,6 +872,93 @@ function prdWorkflowActionLinks(item) {
       if (nextRank > existingRank || (nextRank === existingRank && String(link.label || "").length > String(existing.label || "").length)) {
         seen.set(key, link);
       }
+    }
+  }
+  return Array.from(seen.values());
+}
+
+function prdWorkflowIsAiDocLink(item) {
+  const href = String(item?.href || item?.url || "").trim();
+  const text = [
+    item?.label,
+    item?.title,
+    item?.kind,
+    item?.type,
+    item?.source,
+    href,
+  ].map((value) => String(value || "")).join(" ");
+  if (/gitlab|merge[_ -]?request|jenkins|tapd/i.test(text)) return false;
+  return /ai[-_ ]?doc|方案文档|技术方案|设计文档|代码审查|code review|markdown review|文档预览|\/api\/prd-workflow\/review\//i.test(text);
+}
+
+function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
+  const candidates = [];
+  const collect = (item, context = {}) => {
+    const pushCandidate = (link) => {
+      const candidate = {
+        label: String(link.label || "ai-doc").trim() || "ai-doc",
+        href: String(link.href || link.url || "").trim(),
+        kind: String(link.kind || link.type || "").trim(),
+      };
+      if (candidate.href && prdWorkflowIsAiDocLink(candidate)) {
+        candidates.push({
+          ...context,
+          ...candidate,
+          kind: context.displayKind || candidate.kind || "ai-doc",
+        });
+      }
+    };
+    for (const artifact of Array.isArray(item?.artifacts) ? item.artifacts : []) {
+      if (!artifact || typeof artifact !== "object") continue;
+      pushCandidate({
+        ...artifact,
+        label: artifact.label || artifact.title || artifact.kind || "ai-doc",
+        href: prdWorkflowArtifactHref(artifact),
+      });
+    }
+    for (const link of prdWorkflowActionLinks(item)) {
+      pushCandidate(link);
+    }
+  };
+  collect(snapshot, { displayKind: "ai-doc" });
+  for (const item of Array.isArray(actionRows) ? actionRows : []) {
+    collect(item, {
+      issueKey: String(item?.issueKey || item?.issue_key || item?.issue || "").trim(),
+      platform: prdWorkflowPlatformLabel(item?.platform),
+      displayKind: "Workflow 文档",
+    });
+  }
+  for (const issue of prdWorkflowFlattenIssuesFromSnapshot(snapshot)) {
+    collect(issue, {
+      issueKey: prdWorkflowIssueKey(issue),
+      platform: prdWorkflowPlatformLabel(issue?.platform),
+      displayKind: "Issue 文档",
+    });
+  }
+
+  const reviewKey = (href) => {
+    try {
+      const url = new URL(String(href || ""), window.location.origin);
+      return `${url.origin}${url.pathname}`;
+    } catch (_) {
+      return String(href || "").split(/[?#]/)[0];
+    }
+  };
+  const labelRank = (label) => {
+    const value = String(label || "");
+    if (/技术方案|方案文档/.test(value)) return 50;
+    if (/代码审查|code review/i.test(value)) return 40;
+    if (/设计文档/.test(value)) return 30;
+    if (/markdown review|文档预览/i.test(value)) return 20;
+    return 10;
+  };
+  const seen = new Map();
+  for (const candidate of candidates) {
+    const key = reviewKey(candidate.href);
+    const existing = seen.get(key);
+    if (!existing || labelRank(candidate.label) > labelRank(existing.label)) {
+      const { displayKind: _displayKind, ...entry } = candidate;
+      seen.set(key, entry);
     }
   }
   return Array.from(seen.values());
@@ -1072,31 +1168,33 @@ function prdWorkflowEnrichActionWithSnapshotFacts(snapshot, item) {
   if (!item || typeof item !== "object") return item;
   const issueKey = String(item.issueKey || item.issue_key || item.issue || "").trim();
   const issue = prdWorkflowFindSnapshotIssue(snapshot, issueKey);
-  const gitlabIssue = String(issue?.gitlabIssue || issue?.gitlab_issue || item.gitlabIssue || item.gitlab_issue || "").trim();
+  const platform = String(item.platform || issue?.platform || "").trim();
+  const enrichedItem = platform && !item.platform ? { ...item, platform } : item;
+  const gitlabIssue = String(issue?.gitlabIssue || issue?.gitlab_issue || enrichedItem.gitlabIssue || enrichedItem.gitlab_issue || "").trim();
   const gitlabEpic = prdWorkflowSnapshotGitlabEpic(snapshot);
-  if (!gitlabIssue && !gitlabEpic) return item;
-  const stage = prdWorkflowStageKey(item);
-  const stageText = `${stage} ${prdWorkflowActionCodeText(item)}`;
+  if (!gitlabIssue && !gitlabEpic) return enrichedItem;
+  const stage = prdWorkflowStageKey(enrichedItem);
+  const stageText = `${stage} ${prdWorkflowActionCodeText(enrichedItem)}`;
   const shouldAttachGitlabArtifacts = /issue-gitlab:|gitlab_issue_missing|ensure-gitlab-issue|implementation|impl_|fix_|testing|submit-test|self-test/i.test(stageText);
-  if (!shouldAttachGitlabArtifacts) return item;
+  if (!shouldAttachGitlabArtifacts) return enrichedItem;
   const artifacts = [];
   if (gitlabIssue) artifacts.push({ label: "GitLab Issue", kind: "gitlab-issue", durability: "durable", url: gitlabIssue });
   if (gitlabEpic) artifacts.push({ label: "GitLab Epic", kind: "gitlab-epic", durability: "durable", url: gitlabEpic });
-  const status = prdWorkflowActionStatus(item.status);
-  const shouldRetitle = gitlabIssue && status === "done" && /^issue-gitlab:/.test(stage) && /需要.*GitLab Issue/.test(String(item.title || item.label || ""));
+  const status = prdWorkflowActionStatus(enrichedItem.status);
+  const shouldRetitle = gitlabIssue && status === "done" && /^issue-gitlab:/.test(stage) && /需要.*GitLab Issue/.test(String(enrichedItem.title || enrichedItem.label || ""));
   return {
-    ...item,
+    ...enrichedItem,
     ...(gitlabIssue ? { gitlabIssue, gitlab_issue: gitlabIssue } : {}),
     ...(gitlabEpic ? { gitlabEpic, gitlab_epic: gitlabEpic } : {}),
     ...(shouldRetitle ? {
-      title: String(item.title || item.label || "GitLab Issue 已绑定")
+      title: String(enrichedItem.title || enrichedItem.label || "GitLab Issue 已绑定")
         .replace(/^需要为/, "已为")
         .replace("创建或绑定", "创建/绑定"),
-      label: String(item.label || item.title || "GitLab Issue 已绑定")
+      label: String(enrichedItem.label || enrichedItem.title || "GitLab Issue 已绑定")
         .replace(/^需要为/, "已为")
         .replace("创建或绑定", "创建/绑定"),
     } : {}),
-    artifacts: prdWorkflowMergeActionLists(item.artifacts, artifacts),
+    artifacts: prdWorkflowMergeActionLists(enrichedItem.artifacts, artifacts),
   };
 }
 
@@ -6864,6 +6962,11 @@ function PrdWorkflowTimelinePanel({
   const gaps = Array.isArray(snapshot?.optionalGaps) ? snapshot.optionalGaps : [];
   const nextAction = snapshot?.nextAction && typeof snapshot.nextAction === "object" ? snapshot.nextAction : null;
   const actionRows = prdWorkflowActionRows(snapshot, nextAction);
+  const aiDocLinks = prdWorkflowAiDocLinks(snapshot, actionRows);
+  const otherArtifacts = artifacts.filter((item) => !prdWorkflowIsAiDocLink({
+    ...item,
+    href: prdWorkflowArtifactHref(item),
+  }));
   const actionFilterTags = useMemo(() => prdWorkflowActionFilterTags(actionRows), [actionRows]);
   useEffect(() => {
     if (actionFilter === "all") return;
@@ -7075,14 +7178,14 @@ function PrdWorkflowTimelinePanel({
         </article>
 
         <aside className="af-prd-workflow-side" aria-label="Workflow related links">
-          {artifacts.length ? (
+          {otherArtifacts.length ? (
             <article className="af-prd-workflow-card">
               <div className="af-prd-workflow-card__head">
                 <h2>关联产物</h2>
-                <span>{artifacts.length}</span>
+                <span>{otherArtifacts.length}</span>
               </div>
               <div className="af-prd-workflow-list">
-                {artifacts.map((item, index) => {
+                {otherArtifacts.map((item, index) => {
                   const href = prdWorkflowArtifactHref(item);
                   const label = String(item.label || item.title || item.kind || href || `Artifact ${index + 1}`);
                   return href ? (
@@ -7100,6 +7203,22 @@ function PrdWorkflowTimelinePanel({
               </div>
             </article>
           ) : null}
+          <article className="af-prd-workflow-card">
+            <div className="af-prd-workflow-card__head">
+              <h2>AI Docs</h2>
+              <span>{aiDocLinks.length}</span>
+            </div>
+            <div className="af-prd-workflow-list">
+              {aiDocLinks.length ? aiDocLinks.map((item) => (
+                <a key={item.href} href={item.href} target="_blank" rel="noreferrer">
+                  <span>{item.label}</span>
+                  <small>{[item.issueKey, item.platform, item.kind].filter(Boolean).join(" · ") || "ai-doc"}</small>
+                </a>
+              )) : (
+                <p className="af-prd-workflow-muted">暂无 ai-doc 文档。</p>
+              )}
+            </div>
+          </article>
           <article className="af-prd-workflow-card">
             <div className="af-prd-workflow-card__head">
               <h2>Issues</h2>
