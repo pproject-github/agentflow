@@ -7421,9 +7421,7 @@ function prdWorkflowReviewRenderTable(lines) {
   ].join("");
 }
 
-function prdWorkflowReviewMarkdownToHtml(markdown) {
-  const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
-  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+function prdWorkflowReviewMarkdownLinesToHtml(lines) {
   const html = [];
   let paragraph = [];
   let list = [];
@@ -7500,10 +7498,116 @@ function prdWorkflowReviewMarkdownToHtml(markdown) {
   }
   if (code) html.push(`<pre><code>${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(code.lines.join("\n")))}</code></pre>`);
   flushBlocks();
-  return [prdWorkflowReviewRenderFrontmatter(frontmatter), ...html].filter(Boolean).join("\n");
+  return html.join("\n");
 }
 
-function prdWorkflowReviewHtml(title, markdown, meta = {}) {
+function prdWorkflowReviewActionLine(line) {
+  const match = String(line || "").match(/^\s*[-*]\s+(?:\[( |x|X)\]\s+)?(A\d+|Action\s*\d+)(?=\s|[（(：:.-]|$)(.*)$/i);
+  if (!match) return null;
+  return {
+    checked: match[1] ? match[1].toLowerCase() === "x" : null,
+    label: match[2].replace(/\s+/g, " ").toUpperCase(),
+    title: String(match[3] || "").replace(/^\s*[-:：]\s*/, "").trim(),
+  };
+}
+
+function prdWorkflowReviewIsActionsHeading(line) {
+  const heading = String(line || "").trim().match(/^(#{1,6})\s+(.+)$/);
+  if (!heading) return null;
+  const title = heading[2].replace(/[*_`]/g, "").trim();
+  if (!/(?:\bTODO\s+Actions?\b|\bActions?\b|待办(?:事项|行动)?|行动项)/i.test(title)) return null;
+  return { level: heading[1].length };
+}
+
+function prdWorkflowReviewRenderActionSection(lines, sectionIndex) {
+  const actionStarts = [];
+  lines.forEach((line, index) => {
+    const action = prdWorkflowReviewActionLine(line);
+    if (action) actionStarts.push({ index, action });
+  });
+  if (!actionStarts.length) return prdWorkflowReviewMarkdownLinesToHtml(lines);
+
+  const ids = new Map();
+  const actions = actionStarts.map(({ index, action }, actionIndex) => {
+    const nextStart = actionStarts[actionIndex + 1]?.index ?? lines.length;
+    let bodyStart = index + 1;
+    const titleParts = [action.title].filter(Boolean);
+    while (bodyStart < nextStart) {
+      const continuation = String(lines[bodyStart] || "");
+      if (!/^\s{2,}\S/.test(continuation) || /^\s*[-*]\s+/.test(continuation) || /^\s*```/.test(continuation)) break;
+      titleParts.push(continuation.trim());
+      bodyStart += 1;
+    }
+    const labelId = action.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || actionIndex + 1;
+    const baseId = `action-${labelId}${sectionIndex ? `-${sectionIndex + 1}` : ""}`;
+    const duplicate = ids.get(baseId) || 0;
+    ids.set(baseId, duplicate + 1);
+    return {
+      ...action,
+      id: duplicate ? `${baseId}-${sectionIndex + 1}-${duplicate + 1}` : baseId,
+      title: titleParts.join(" ") || action.label,
+      body: lines.slice(bodyStart, nextStart),
+    };
+  });
+
+  const intro = prdWorkflowReviewMarkdownLinesToHtml(lines.slice(0, actionStarts[0].index));
+  const navigation = actions.length > 1
+    ? `<nav class="action-index" aria-label="Action 快速跳转"><span class="action-index__label">快速跳转</span>${actions.map((action) => `<a href="#${htmlEscapeAttribute(action.id)}">${htmlEscapeAttribute(action.label)}</a>`).join("")}</nav>`
+    : "";
+  const cards = actions.map((action) => {
+    const status = action.checked === null
+      ? ""
+      : `<span class="action-card__status${action.checked ? " is-complete" : ""}">${action.checked ? "已完成" : "待完成"}</span>`;
+    const body = prdWorkflowReviewMarkdownLinesToHtml(action.body);
+    return `<section class="action-card${action.checked ? " is-complete" : ""}" id="${htmlEscapeAttribute(action.id)}">
+  <div class="action-card__header">
+    <span class="action-card__index">${htmlEscapeAttribute(action.label)}</span>
+    <h3 class="action-card__title">${prdWorkflowReviewInlineMarkdown(action.title)}</h3>
+    ${status}
+  </div>
+  <div class="action-card__body">${body}</div>
+</section>`;
+  }).join("\n");
+  return [intro, navigation, cards].filter(Boolean).join("\n");
+}
+
+function prdWorkflowReviewBodyToHtml(body) {
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let cursor = 0;
+  let sectionIndex = 0;
+  while (cursor < lines.length) {
+    const actionsHeading = prdWorkflowReviewIsActionsHeading(lines[cursor]);
+    if (!actionsHeading) {
+      const nextHeading = lines.findIndex((line, index) => index > cursor && prdWorkflowReviewIsActionsHeading(line));
+      const end = nextHeading >= 0 ? nextHeading : lines.length;
+      html.push(prdWorkflowReviewMarkdownLinesToHtml(lines.slice(cursor, end)));
+      cursor = end;
+      continue;
+    }
+    let end = cursor + 1;
+    while (end < lines.length) {
+      const heading = String(lines[end] || "").trim().match(/^(#{1,6})\s+/);
+      if (heading && heading[1].length <= actionsHeading.level) break;
+      end += 1;
+    }
+    html.push(prdWorkflowReviewMarkdownLinesToHtml([lines[cursor]]));
+    html.push(prdWorkflowReviewRenderActionSection(lines.slice(cursor + 1, end), sectionIndex));
+    sectionIndex += 1;
+    cursor = end;
+  }
+  return html.filter(Boolean).join("\n");
+}
+
+export function prdWorkflowReviewMarkdownToHtml(markdown) {
+  const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
+  return [
+    prdWorkflowReviewRenderFrontmatter(frontmatter),
+    prdWorkflowReviewBodyToHtml(body),
+  ].filter(Boolean).join("\n");
+}
+
+export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
   const escapedTitle = htmlEscapeAttribute(title || "PRD Workflow Review");
   const escapedMeta = htmlEscapeAttribute([
     meta.tapdId ? `TAPD ${meta.tapdId}` : "",
@@ -7530,57 +7634,80 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     :root {
       color-scheme: dark;
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --bg: #0b1020;
-      --bg-radial: rgba(124,58,237,.18);
-      --panel: rgba(15,23,42,.68);
-      --panel-strong: rgba(15,23,42,.88);
-      --panel-soft: rgba(30,41,59,.74);
-      --border: rgba(148,163,184,.20);
-      --border-soft: rgba(148,163,184,.14);
+      --bg: #1a1b26;
+      --panel: #1f2335;
+      --panel-strong: #24283b;
+      --panel-soft: #292e42;
+      --border: #3b4261;
+      --border-soft: #30364f;
       --text: #e5e7eb;
-      --heading: #f8fafc;
-      --muted: #94a3b8;
-      --body: #dbe4f0;
-      --link: #c4b5fd;
-      --button: rgba(124,58,237,.16);
-      --button-text: #ddd6fe;
-      --code-bg: rgba(2,6,23,.58);
-      --code-block: rgba(2,6,23,.72);
-      --shadow: rgba(0,0,0,.28);
+      --heading: #f4f4f5;
+      --muted: #8b90a0;
+      --body: #d4d4d8;
+      --link: #7dcfff;
+      --interactive: #7aa2f7;
+      --purple: #bb9af7;
+      --button: #24283b;
+      --button-text: #cbd0da;
+      --code-bg: #292e42;
+      --code-inline: #7dcfff;
+      --code-block: #16161e;
+      --code-block-text: #e5e7eb;
+      --action-bg: #1f2335;
+      --action-header: #24283b;
+      --pending-bg: rgba(224,175,104,.10);
+      --pending-border: rgba(224,175,104,.34);
+      --pending-text: #e0af68;
+      --complete-bg: rgba(158,206,106,.10);
+      --complete-border: rgba(158,206,106,.34);
+      --complete-text: #9ece6a;
+      --shadow: rgba(9,10,15,.28);
       background: var(--bg);
     }
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f8fafc;
-      --bg-radial: rgba(124,58,237,.12);
-      --panel: rgba(255,255,255,.92);
-      --panel-strong: rgba(255,255,255,.98);
-      --panel-soft: rgba(241,245,249,.96);
-      --border: rgba(100,116,139,.24);
-      --border-soft: rgba(100,116,139,.18);
-      --text: #0f172a;
-      --heading: #020617;
-      --muted: #64748b;
-      --body: #1e293b;
-      --link: #6d28d9;
-      --button: rgba(124,58,237,.10);
-      --button-text: #4c1d95;
-      --code-bg: rgba(226,232,240,.76);
-      --code-block: rgba(241,245,249,.92);
-      --shadow: rgba(15,23,42,.10);
+      --bg: #e1e2e7;
+      --panel: #f3f3f5;
+      --panel-strong: #e9e9ed;
+      --panel-soft: #dcdfe7;
+      --border: #c8cad4;
+      --border-soft: #d5d7df;
+      --text: #4c505e;
+      --heading: #343b58;
+      --muted: #7f849c;
+      --body: #4c505e;
+      --link: #007197;
+      --interactive: #2e7de9;
+      --purple: #7847bd;
+      --button: #e7e8ed;
+      --button-text: #4c505e;
+      --code-bg: #dcdfe7;
+      --code-inline: #007197;
+      --code-block: #d5d8e1;
+      --code-block-text: #343b58;
+      --action-bg: #f3f3f5;
+      --action-header: #e9e9ed;
+      --pending-bg: rgba(177,92,0,.08);
+      --pending-border: rgba(177,92,0,.28);
+      --pending-text: #9a5200;
+      --complete-bg: rgba(88,117,57,.10);
+      --complete-border: rgba(88,117,57,.28);
+      --complete-text: #587539;
+      --shadow: rgba(52,59,88,.10);
     }
     *, *::before, *::after { box-sizing: border-box; }
     html, body { overflow-x: hidden; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, var(--bg-radial), transparent 34rem), var(--bg); color: var(--text); }
-    main { width: min(100%, 1120px); margin: 0 auto; padding: 40px 24px 72px; min-width: 0; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); }
+    main { width: min(100%, 1180px); margin: 0 auto; padding: 40px 24px 72px; min-width: 0; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 22px; }
-    h1 { margin: 0 0 10px; font-size: clamp(28px, 5vw, 56px); line-height: 1.05; letter-spacing: 0; }
+    h1 { margin: 0 0 10px; font-size: clamp(28px, 4vw, 44px); line-height: 1.12; letter-spacing: -.015em; }
     .meta { margin: 0; color: var(--muted); font-size: 14px; }
     .toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
-    .raw, .theme-toggle { border: 1px solid rgba(124,58,237,.34); border-radius: 999px; color: var(--button-text); background: var(--button); padding: 9px 14px; text-decoration: none; font-size: 13px; font-weight: 800; line-height: 1.2; }
+    .raw, .theme-toggle { border: 1px solid var(--border); border-radius: 999px; color: var(--button-text); background: var(--button); padding: 9px 14px; text-decoration: none; font-size: 13px; font-weight: 800; line-height: 1.2; }
+    .raw:hover, .theme-toggle:hover { border-color: var(--interactive); color: var(--link); }
     .theme-toggle { cursor: pointer; font-family: inherit; }
-    .lifecycle { margin-top: 10px; display: inline-flex; max-width: 100%; border: 1px solid rgba(124,58,237,.30); border-radius: 999px; background: rgba(124,58,237,.12); color: var(--button-text); padding: 6px 10px; font-size: 12px; font-weight: 800; line-height: 1.35; overflow-wrap: anywhere; }
-    article { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 28px 80px var(--shadow); padding: clamp(20px, 4vw, 34px); }
+    .lifecycle { margin-top: 10px; display: inline-flex; max-width: 100%; border: 1px solid var(--border); border-radius: 999px; background: var(--button); color: var(--muted); padding: 6px 10px; font-size: 12px; font-weight: 800; line-height: 1.35; overflow-wrap: anywhere; }
+    article { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 18px 50px var(--shadow); padding: clamp(20px, 4vw, 34px); }
     article > *:first-child { margin-top: 0; }
     article > *:last-child { margin-bottom: 0; }
     h2, h3, h4, h5, h6 { margin: 1.7em 0 .65em; line-height: 1.25; letter-spacing: 0; color: var(--heading); overflow-wrap: anywhere; }
@@ -7591,10 +7718,10 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     ul { margin: .65rem 0 1rem; padding-left: 1.35rem; }
     li { margin: .28rem 0; color: var(--body); }
     li input { margin-right: .38rem; transform: translateY(1px); }
-    code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--code-bg); color: var(--heading); padding: .1rem .34rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--code-bg); color: var(--code-inline); padding: .1rem .34rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     pre { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--code-block); padding: 16px; line-height: 1.65; }
-    pre code { border: 0; background: transparent; padding: 0; white-space: pre; overflow-wrap: normal; word-break: normal; }
-    blockquote { margin: 1rem 0; border-left: 3px solid rgba(124,58,237,.72); background: rgba(124,58,237,.10); padding: .75rem 1rem; color: var(--body); }
+    pre code { border: 0; background: transparent; color: var(--code-block-text); padding: 0; white-space: pre; overflow-wrap: normal; word-break: normal; }
+    blockquote { margin: 1rem 0; border-left: 3px solid var(--purple); background: var(--panel-soft); padding: .75rem 1rem; color: var(--body); }
     a { color: var(--link); text-decoration-thickness: .08em; text-underline-offset: .16em; overflow-wrap: anywhere; }
     .table-wrap { max-width: 100%; overflow-x: auto; margin: 1rem 0 1.25rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); }
     table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -7606,7 +7733,34 @@ function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .frontmatter table { min-width: 0; margin-top: .7rem; }
     .frontmatter th { width: min(34%, 12rem); background: var(--panel-soft); color: var(--body); }
     .frontmatter-list { margin: 0; padding-left: 1.1rem; }
-    @media (max-width: 720px) { main { padding: 28px 14px 48px; } header { display: block; } .toolbar { justify-content: flex-start; margin-top: 14px; } article { padding: 18px; } th, td { padding: .58rem .65rem; } }
+    .action-index { position: sticky; top: 10px; z-index: 4; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 1rem 0 1.25rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-strong); box-shadow: 0 8px 22px var(--shadow); padding: 10px 12px; }
+    .action-index__label { margin-right: 2px; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .action-index a { min-width: 38px; border: 1px solid color-mix(in srgb, var(--interactive) 38%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--interactive) 10%, var(--button)); color: var(--interactive); padding: 5px 10px; text-align: center; text-decoration: none; font-size: 12px; font-weight: 900; }
+    .action-index a:hover { border-color: var(--link); background: color-mix(in srgb, var(--interactive) 18%, var(--button)); color: var(--link); }
+    .action-card { scroll-margin-top: 78px; margin: 0 0 20px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--action-bg); box-shadow: 0 8px 24px var(--shadow); }
+    .action-card:target { border-color: var(--interactive); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive) 18%, transparent), 0 8px 24px var(--shadow); }
+    .action-card__header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 12px; border-bottom: 1px solid var(--border-soft); background: var(--action-header); padding: 16px 18px; }
+    .action-card__index { display: inline-grid; place-items: center; min-width: 42px; min-height: 30px; border: 1px solid color-mix(in srgb, var(--interactive) 34%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--interactive) 10%, var(--panel-soft)); color: var(--interactive); font: 900 13px/1 "SFMono-Regular", Consolas, monospace; }
+    .action-card__title { margin: 3px 0 0; font-size: 16px; line-height: 1.55; letter-spacing: 0; color: var(--heading); }
+    .action-card__status { margin-top: 2px; border: 1px solid var(--pending-border); border-radius: 999px; background: var(--pending-bg); color: var(--pending-text); padding: 5px 9px; font-size: 11px; font-weight: 900; white-space: nowrap; }
+    .action-card__status.is-complete { border-color: var(--complete-border); background: var(--complete-bg); color: var(--complete-text); }
+    .action-card__body { padding: 15px 20px 20px; }
+    .action-card__body > *:first-child { margin-top: 0; }
+    .action-card__body > *:last-child { margin-bottom: 0; }
+    .action-card__body > ul { margin: 0 0 1rem; padding-left: 1.3rem; }
+    .action-card__body > ul > li { margin: .55rem 0; padding-left: .15rem; }
+    .action-card__body pre { margin: .9rem 0 1.1rem; }
+    @media (max-width: 720px) {
+      main { padding: 28px 14px 48px; }
+      header { display: block; }
+      .toolbar { justify-content: flex-start; margin-top: 14px; }
+      article { padding: 18px; }
+      th, td { padding: .58rem .65rem; }
+      .action-index { top: 6px; }
+      .action-card__header { grid-template-columns: auto minmax(0, 1fr); padding: 14px; }
+      .action-card__status { grid-column: 2; justify-self: start; }
+      .action-card__body { padding: 14px 16px 18px; }
+    }
   </style>
 </head>
 <body>
