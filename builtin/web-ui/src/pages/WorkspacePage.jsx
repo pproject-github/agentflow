@@ -7751,7 +7751,7 @@ function WorkspacePageInner() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) throw new Error(data.error || "生成 Review 链接失败");
       setWorkflowSnapshot(data.snapshot || workflowSnapshot);
-      const reviewUrl = data.review?.url || "";
+      const reviewUrl = data.review?.shortUrl || data.review?.url || "";
       if (reviewUrl) setWorkflowActionOutput((prev) => `${prev || content}\n\nReview link: ${reviewUrl}`);
     } catch (e) {
       setWorkflowError(String(e.message || e));
