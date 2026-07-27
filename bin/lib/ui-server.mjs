@@ -9570,6 +9570,7 @@ function listWorkspaceScheduleStatuses(root, userCtx = {}) {
         key,
         flowId,
         flowSource,
+        workspaceId: String(flow.collaboration?.id || scoped.workspaceId || ""),
         scheduleNodeId,
         runNodeId: targetRunNodeId,
         label: String(instance.label || "Scheduled Run"),
