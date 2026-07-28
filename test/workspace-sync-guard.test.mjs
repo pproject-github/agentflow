@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
+  finalizeWorkspaceCanvasChanges,
   shouldSkipWorkspaceRemoteRefresh,
+  workspaceCanvasChangeFinishesInteraction,
+  workspaceCanvasChangeIsContinuous,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -80,6 +84,40 @@ test("node resizing is active while resizing and finishes on mouse release", () 
     ]),
     { active: false, finished: true, mutated: true },
   );
+});
+
+test("continuous canvas changes keep only the latest value for each node and change type", () => {
+  const selection = { type: "select", id: "table", selected: true };
+  const result = coalesceWorkspaceCanvasChanges([
+    { type: "position", id: "table", position: { x: 10, y: 20 }, dragging: true },
+    selection,
+    { type: "position", id: "chart", position: { x: 30, y: 40 }, dragging: true },
+    { type: "position", id: "table", position: { x: 50, y: 60 }, dragging: true },
+    { type: "dimensions", id: "table", dimensions: { width: 600, height: 400 }, resizing: true },
+    { type: "dimensions", id: "table", dimensions: { width: 640, height: 420 }, resizing: true },
+  ]);
+
+  assert.deepEqual(result, [
+    { type: "position", id: "table", position: { x: 50, y: 60 }, dragging: true },
+    selection,
+    { type: "position", id: "chart", position: { x: 30, y: 40 }, dragging: true },
+    { type: "dimensions", id: "table", dimensions: { width: 640, height: 420 }, resizing: true },
+  ]);
+});
+
+test("finishing a canvas interaction commits queued positions and dimensions as final", () => {
+  const result = finalizeWorkspaceCanvasChanges([
+    { type: "position", id: "table", position: { x: 10, y: 20 }, dragging: true },
+    { type: "position", id: "table", position: { x: 70, y: 80 }, dragging: false },
+    { type: "dimensions", id: "chart", dimensions: { width: 700, height: 480 }, resizing: true },
+  ]);
+
+  assert.deepEqual(result, [
+    { type: "position", id: "table", position: { x: 70, y: 80 }, dragging: false },
+    { type: "dimensions", id: "chart", dimensions: { width: 700, height: 480 }, resizing: false },
+  ]);
+  assert.equal(workspaceCanvasChangeIsContinuous(result[0]), false);
+  assert.equal(workspaceCanvasChangeFinishesInteraction(result[0]), true);
 });
 
 test("latest-only saves keep every waiter but replace the pending graph snapshot", () => {
