@@ -15,7 +15,7 @@ import {
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
@@ -59,8 +59,12 @@ import {
   workspaceValueEqual,
 } from "../workspaceGraphDelta.js";
 import {
+  coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
+  finalizeWorkspaceCanvasChanges,
   shouldSkipWorkspaceRemoteRefresh,
+  workspaceCanvasChangeFinishesInteraction,
+  workspaceCanvasChangeIsContinuous,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -2130,6 +2134,9 @@ function workspaceHydratedNodeRuntimeEqual(a, b) {
     a.nodeChatActive === b.nodeChatActive &&
     a.nodeChat === b.nodeChat;
 }
+
+const EMPTY_DISPLAY_SOURCE_NODES = new Map();
+const EMPTY_DISPLAY_CANVAS_NODES = [];
 
 function graphToFlow(graph, palette) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
@@ -5428,7 +5435,7 @@ function WorkspaceFlowNode(props) {
   );
 }
 
-const nodeTypes = { [FLOW_NODE_TYPE]: WorkspaceFlowNode };
+const nodeTypes = { [FLOW_NODE_TYPE]: memo(WorkspaceFlowNode) };
 
 function flattenFiles(files, out = []) {
   for (const item of files || []) {
@@ -7756,6 +7763,13 @@ function WorkspacePageInner() {
   const [selectedDisplayNodeIds, setSelectedDisplayNodeIds] = useState([]);
   const nodeHandleSignaturesRef = useRef(new Map());
   const renderedNodeLayoutSignaturesRef = useRef(new Map());
+  const pendingNodeInternalsRefreshRef = useRef(new Set());
+  const retryNodeInternalsRefreshRef = useRef(new Set());
+  const nodeInternalsRefreshFrameRef = useRef(null);
+  const nodeInternalsRefreshTimerRef = useRef(null);
+  const pendingCanvasNodeChangesRef = useRef([]);
+  const lastActiveCanvasNodeChangesRef = useRef([]);
+  const canvasNodeChangesFrameRef = useRef(null);
   const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
@@ -7894,13 +7908,44 @@ function WorkspacePageInner() {
     }, 3800);
   }, []);
 
-  const refreshNodeInternals = useCallback((nodeId) => {
-    const id = String(nodeId || "").trim();
-    if (!id) return;
-    const refresh = () => updateNodeInternals(id);
-    window.requestAnimationFrame(refresh);
-    window.setTimeout(refresh, 80);
+  const refreshNodeInternals = useCallback((nodeIds) => {
+    const ids = Array.isArray(nodeIds) || nodeIds instanceof Set ? nodeIds : [nodeIds];
+    for (const nodeId of ids) {
+      const id = String(nodeId || "").trim();
+      if (!id) continue;
+      pendingNodeInternalsRefreshRef.current.add(id);
+      retryNodeInternalsRefreshRef.current.add(id);
+    }
+    if (pendingNodeInternalsRefreshRef.current.size === 0) return;
+    if (nodeInternalsRefreshFrameRef.current == null) {
+      nodeInternalsRefreshFrameRef.current = window.requestAnimationFrame(() => {
+        nodeInternalsRefreshFrameRef.current = null;
+        const pending = Array.from(pendingNodeInternalsRefreshRef.current);
+        pendingNodeInternalsRefreshRef.current.clear();
+        pending.forEach((id) => updateNodeInternals(id));
+      });
+    }
+    if (nodeInternalsRefreshTimerRef.current != null) {
+      window.clearTimeout(nodeInternalsRefreshTimerRef.current);
+    }
+    nodeInternalsRefreshTimerRef.current = window.setTimeout(() => {
+      nodeInternalsRefreshTimerRef.current = null;
+      const pending = Array.from(retryNodeInternalsRefreshRef.current);
+      retryNodeInternalsRefreshRef.current.clear();
+      pending.forEach((id) => updateNodeInternals(id));
+    }, 80);
   }, [updateNodeInternals]);
+
+  useEffect(() => () => {
+    if (nodeInternalsRefreshFrameRef.current != null) {
+      window.cancelAnimationFrame(nodeInternalsRefreshFrameRef.current);
+    }
+    if (nodeInternalsRefreshTimerRef.current != null) {
+      window.clearTimeout(nodeInternalsRefreshTimerRef.current);
+    }
+    pendingNodeInternalsRefreshRef.current.clear();
+    retryNodeInternalsRefreshRef.current.clear();
+  }, []);
 
   const ensureWorkspaceNodeDisplaySize = useCallback((nodeId, size) => {
     const id = String(nodeId || "").trim();
@@ -9900,6 +9945,7 @@ function WorkspacePageInner() {
   }, [nodes]);
 
   useEffect(() => {
+    if (workspaceCanvasInteractionActiveRef.current) return undefined;
     const prev = nodeHandleSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
@@ -9910,14 +9956,9 @@ function WorkspacePageInner() {
     }
     nodeHandleSignaturesRef.current = next;
     if (changedIds.length === 0) return undefined;
-    const refresh = () => changedIds.forEach((id) => updateNodeInternals(id));
-    const raf = window.requestAnimationFrame(refresh);
-    const timer = window.setTimeout(refresh, 80);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
-    };
-  }, [nodes, updateNodeInternals]);
+    refreshNodeInternals(changedIds);
+    return undefined;
+  }, [nodes, refreshNodeInternals]);
 
   useEffect(() => {
     edgesRef.current = edges;
@@ -10860,13 +10901,21 @@ function WorkspacePageInner() {
         seen.add(node.id);
         return cached.node;
       }
+      const canReuseHydratedData = Boolean(
+        cached &&
+        cached.source?.data === node.data &&
+        cached.commonData === hydratedNodeCommonData &&
+        workspaceHydratedNodeRuntimeEqual(cached.runtime, runtime)
+      );
       const hydrated = {
         ...node,
-        data: {
-          ...node.data,
-          ...hydratedNodeCommonData,
-          ...runtime,
-        },
+        data: canReuseHydratedData
+          ? cached.node.data
+          : {
+              ...node.data,
+              ...hydratedNodeCommonData,
+              ...runtime,
+            },
       };
       cache.set(node.id, { source: node, commonData: hydratedNodeCommonData, runtime, node: hydrated });
       seen.add(node.id);
@@ -10878,26 +10927,60 @@ function WorkspacePageInner() {
     return nextNodes;
   }, [activeNodeChatId, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
-  const hydratedNodeById = useMemo(
-    () => new Map(hydratedNodes.map((node) => [node.id, node])),
-    [hydratedNodes],
+  const isDisplayMode = workspaceMode === "display";
+  const isWorkflowMode = workspaceMode === "workflow";
+  const displaySourceNodeById = useMemo(
+    () => (
+      isDisplayMode
+        ? new Map(hydratedNodes.map((node) => [node.id, node]))
+        : EMPTY_DISPLAY_SOURCE_NODES
+    ),
+    [hydratedNodes, isDisplayMode],
   );
-  const displayPreviewNode = displayPreviewNodeId ? hydratedNodeById.get(displayPreviewNodeId) : null;
+  const displayPreviewNode = useMemo(
+    () => (
+      displayPreviewNodeId
+        ? hydratedNodes.find((node) => node.id === displayPreviewNodeId) || null
+        : null
+    ),
+    [displayPreviewNodeId, hydratedNodes],
+  );
 
+  const displayCanvasNodeCacheRef = useRef(new Map());
   const displayCanvasNodes = useMemo(() => {
+    if (!isDisplayMode) {
+      displayCanvasNodeCacheRef.current.clear();
+      return EMPTY_DISPLAY_CANVAS_NODES;
+    }
     const selected = new Set(selectedDisplayNodeIds);
-    return displayPage.nodeIds
+    const cache = displayCanvasNodeCacheRef.current;
+    const seen = new Set();
+    const result = displayPage.nodeIds
       .map((sourceId, index) => {
-        const sourceNode = hydratedNodeById.get(sourceId);
+        const sourceNode = displaySourceNodeById.get(sourceId);
         if (!sourceNode || !workspaceDisplayKindFromData(sourceNode.data)) return null;
         const fallbackSize = persistedWorkspaceNodeSize(sourceNode) || { width: 520, height: 320 };
         const size = normalizeWorkspaceNodeSize(displayPage.nodeSizes[sourceId] || fallbackSize, { display: true }) || fallbackSize;
         const position = displayPage.nodePositions[sourceId] || { x: 180 + index * 36, y: 120 + index * 28 };
-        return {
+        const isSelected = selected.has(sourceId);
+        const cached = cache.get(sourceId);
+        if (
+          cached &&
+          cached.source === sourceNode &&
+          cached.position?.x === position.x &&
+          cached.position?.y === position.y &&
+          cached.size?.width === size.width &&
+          cached.size?.height === size.height &&
+          cached.selected === isSelected
+        ) {
+          seen.add(sourceId);
+          return cached.node;
+        }
+        const displayNode = {
           ...sourceNode,
           id: displayRefNodeId(sourceId),
           position,
-          selected: selected.has(sourceId),
+          selected: isSelected,
           width: size.width,
           height: size.height,
           data: {
@@ -10905,22 +10988,26 @@ function WorkspacePageInner() {
             sourceNodeId: sourceId,
             displayPageMode: true,
             readOnly: true,
-            selected: selected.has(sourceId),
+            selected: isSelected,
             displaySize: size,
             nodeSize: size,
           },
         };
+        cache.set(sourceId, { source: sourceNode, position, size, selected: isSelected, node: displayNode });
+        seen.add(sourceId);
+        return displayNode;
       })
       .filter(Boolean);
-  }, [displayPage, hydratedNodeById, selectedDisplayNodeIds]);
+    for (const sourceId of cache.keys()) {
+      if (!seen.has(sourceId)) cache.delete(sourceId);
+    }
+    return result;
+  }, [displayPage, displaySourceNodeById, isDisplayMode, selectedDisplayNodeIds]);
 
   const availableDisplayNodes = useMemo(
     () => hydratedNodes.filter((node) => workspaceDisplayKindFromData(node?.data)),
     [hydratedNodes],
   );
-
-  const isDisplayMode = workspaceMode === "display";
-  const isWorkflowMode = workspaceMode === "workflow";
 
   useEffect(() => {
     if (!isDisplayMode || !displayPage.viewport) return undefined;
@@ -11005,6 +11092,7 @@ function WorkspacePageInner() {
   }, [flowParams, loadFiles, refreshWorkspaceRunStatus, scheduleWorkspaceRemoteRefresh]);
 
   useEffect(() => {
+    if (workspaceCanvasInteractionActiveRef.current) return undefined;
     const prev = renderedNodeLayoutSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
@@ -11015,14 +11103,9 @@ function WorkspacePageInner() {
     }
     renderedNodeLayoutSignaturesRef.current = next;
     if (changedIds.length === 0) return undefined;
-    const refresh = () => changedIds.forEach((id) => updateNodeInternals(id));
-    const raf = window.requestAnimationFrame(refresh);
-    const timer = window.setTimeout(refresh, 80);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
-    };
-  }, [displayCanvasNodes, hydratedNodes, updateNodeInternals]);
+    refreshNodeInternals(changedIds);
+    return undefined;
+  }, [displayCanvasNodes, hydratedNodes, refreshNodeInternals]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -11032,7 +11115,7 @@ function WorkspacePageInner() {
   const selectedNodePropSignature = useMemo(() => {
     const draft = nodeToPropDraft(selectedNode);
     return draft ? JSON.stringify(draft) : "";
-  }, [selectedNode]);
+  }, [selectedNode?.data, selectedNode?.id]);
 
   useEffect(() => {
     if (!selectedNode) {
@@ -11106,15 +11189,29 @@ function WorkspacePageInner() {
     workspaceWritable,
   ]);
 
+  const edgeNodeDataCacheRef = useRef({ refs: new Map(), nodeDataById: new Map() });
+  const edgeNodeDataById = useMemo(() => {
+    const previous = edgeNodeDataCacheRef.current;
+    let changed = previous.refs.size !== nodes.length;
+    const nextRefs = new Map();
+    for (const node of nodes) {
+      nextRefs.set(node.id, node.data);
+      if (!previous.refs.has(node.id) || previous.refs.get(node.id) !== node.data) changed = true;
+    }
+    if (!changed) return previous.nodeDataById;
+    const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
+    edgeNodeDataCacheRef.current = { refs: nextRefs, nodeDataById };
+    return nodeDataById;
+  }, [nodes]);
+
   const coloredEdges = useMemo(() => {
-    const nodeById = new Map(hydratedNodes.map((node) => [node.id, node]));
     return edges.map((edge) => {
-      const src = nodeById.get(edge.source);
-      const tgt = nodeById.get(edge.target);
+      const srcData = edgeNodeDataById.get(edge.source);
+      const tgtData = edgeNodeDataById.get(edge.target);
       const sm = /^output-(\d+)$/.exec(edge.sourceHandle || "");
       const tm = /^input-(\d+)$/.exec(edge.targetHandle || "");
-      const srcSlot = src && sm ? src.data?.outputs?.[parseInt(sm[1], 10)] : null;
-      const tgtSlot = tgt && tm ? tgt.data?.inputs?.[parseInt(tm[1], 10)] : null;
+      const srcSlot = srcData && sm ? srcData.outputs?.[parseInt(sm[1], 10)] : null;
+      const tgtSlot = tgtData && tm ? tgtData.inputs?.[parseInt(tm[1], 10)] : null;
       const hue = srcSlot?.type ? getHandleColor(srcSlot.type) : tgtSlot?.type ? getHandleColor(tgtSlot.type) : "";
       if (!hue) return edge;
       return {
@@ -11123,7 +11220,7 @@ function WorkspacePageInner() {
         markerEnd: { type: MarkerType.ArrowClosed, color: hue },
       };
     });
-  }, [edges, hydratedNodes]);
+  }, [edgeNodeDataById, edges]);
 
   const canvasNodes = isDisplayMode ? displayCanvasNodes : hydratedNodes;
   const canvasEdges = isDisplayMode ? [] : coloredEdges;
@@ -12089,32 +12186,30 @@ function WorkspacePageInner() {
     };
   }, [skillsOpen, updateSkillsMenuPosition]);
 
-  const handleNodesChange = useCallback((changes) => {
+  const applyCanvasNodeChanges = useCallback((changes) => {
     const interaction = workspaceCanvasInteractionPhase(changes);
     if (interaction.active) {
       if (!workspaceCanvasInteractionActiveRef.current) markWorkspaceDirty();
       workspaceCanvasInteractionActiveRef.current = true;
-    } else if (interaction.finished && workspaceCanvasInteractionActiveRef.current) {
+    } else if (interaction.finished) {
+      if (!workspaceCanvasInteractionActiveRef.current && interaction.mutated) markWorkspaceDirty();
       workspaceCanvasInteractionActiveRef.current = false;
       workspaceFlushAfterInteractionRef.current = true;
     }
     if (workspaceMode === "display") {
-      const nextSelected = [];
-      let shouldUpdateLayout = false;
       if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
       setDisplayPage((prev) => {
-        const nodePositions = { ...prev.nodePositions };
-        const nodeSizes = { ...prev.nodeSizes };
+        let nodePositions = prev.nodePositions;
+        let nodeSizes = prev.nodeSizes;
         for (const change of changes || []) {
           const sourceId = sourceIdFromDisplayRefId(change?.id);
           if (!sourceId || !prev.nodeIds.includes(sourceId)) continue;
-          if (change.type === "select") {
-            if (change.selected) nextSelected.push(sourceId);
-            continue;
-          }
+          if (change.type === "select") continue;
           if (change.type === "position" && change.position) {
+            const current = nodePositions[sourceId];
+            if (current?.x === change.position.x && current?.y === change.position.y) continue;
+            if (nodePositions === prev.nodePositions) nodePositions = { ...prev.nodePositions };
             nodePositions[sourceId] = { x: change.position.x, y: change.position.y };
-            shouldUpdateLayout = true;
             continue;
           }
           if (change.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
@@ -12123,15 +12218,33 @@ function WorkspacePageInner() {
               height: Math.round(Number(change.dimensions.height)),
             }, { display: true });
             if (size) {
+              const current = nodeSizes[sourceId];
+              if (current?.width === size.width && current?.height === size.height) continue;
+              if (nodeSizes === prev.nodeSizes) nodeSizes = { ...prev.nodeSizes };
               nodeSizes[sourceId] = size;
-              shouldUpdateLayout = true;
             }
           }
         }
-        return shouldUpdateLayout ? { ...prev, nodePositions, nodeSizes } : prev;
+        if (nodePositions === prev.nodePositions && nodeSizes === prev.nodeSizes) return prev;
+        const next = { ...prev, nodePositions, nodeSizes };
+        displayPageRef.current = next;
+        return next;
       });
-      if ((changes || []).some((change) => change?.type === "select")) {
-        setSelectedDisplayNodeIds(nextSelected);
+      const selectionChanges = (changes || []).filter((change) => change?.type === "select");
+      if (selectionChanges.length > 0) {
+        setSelectedDisplayNodeIds((current) => {
+          const next = new Set(current);
+          for (const change of selectionChanges) {
+            const sourceId = sourceIdFromDisplayRefId(change?.id);
+            if (!sourceId) continue;
+            if (change.selected) next.add(sourceId);
+            else next.delete(sourceId);
+          }
+          const result = Array.from(next);
+          return result.length === current.length && result.every((id, index) => id === current[index])
+            ? current
+            : result;
+        });
       }
       return;
     }
@@ -12143,65 +12256,139 @@ function WorkspacePageInner() {
       return;
     }
     if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
-    const resized = new Map();
-    for (const change of changes || []) {
-      if (change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height) {
-        const node = nodes.find((item) => item.id === change.id);
-        const isGroup = isWorkspaceGroupNode(node);
-        const isDisplay = Boolean(workspaceDisplayKindFromData(node?.data));
-        const rawSize = {
-          width: Math.round(Number(change.dimensions.width)),
-          height: Math.round(Number(change.dimensions.height)),
-        };
-        const size = isGroup
-          ? normalizeWorkspaceGroupSize(rawSize)
-          : normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
-        if (size) resized.set(change.id, size);
+    const dimensionChanges = (changes || []).filter(
+      (change) => change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height,
+    );
+    setNodes((current) => {
+      const resized = new Map();
+      if (dimensionChanges.length > 0) {
+        const currentById = new Map(current.map((node) => [node.id, node]));
+        for (const change of dimensionChanges) {
+          const node = currentById.get(change.id);
+          const rawSize = {
+            width: Math.round(Number(change.dimensions.width)),
+            height: Math.round(Number(change.dimensions.height)),
+          };
+          const size = isWorkspaceGroupNode(node)
+            ? normalizeWorkspaceGroupSize(rawSize)
+            : normalizeWorkspaceNodeSize(rawSize, { display: Boolean(workspaceDisplayKindFromData(node?.data)) });
+          if (size) resized.set(change.id, size);
+        }
+      }
+      const applied = applyNodeChanges(changes, current);
+      const next = resized.size === 0
+        ? applied
+        : applied.map((node) => {
+            const size = resized.get(node.id);
+            if (!size) return node;
+            const nextData = {
+              ...node.data,
+              nodeSize: size,
+            };
+            if (workspaceDisplayKindFromData(node.data)) nextData.displaySize = size;
+            return {
+              ...node,
+              width: size.width,
+              height: size.height,
+              data: nextData,
+            };
+          });
+      nodesRef.current = next;
+      return next;
+    });
+    if (dimensionChanges.length > 0) {
+      refreshNodeInternals(dimensionChanges.map((change) => change.id));
+    }
+  }, [markWorkspaceDirty, refreshNodeInternals, setNodes, workspaceMode, workspaceWritable]);
+
+  const flushPendingCanvasNodeChanges = useCallback((extraChanges = [], { finish = false } = {}) => {
+    if (canvasNodeChangesFrameRef.current != null) {
+      window.cancelAnimationFrame(canvasNodeChangesFrameRef.current);
+      canvasNodeChangesFrameRef.current = null;
+    }
+    const pending = pendingCanvasNodeChangesRef.current;
+    pendingCanvasNodeChangesRef.current = [];
+    const merged = finish
+      ? finalizeWorkspaceCanvasChanges([
+          ...lastActiveCanvasNodeChangesRef.current,
+          ...pending,
+          ...extraChanges,
+        ])
+      : coalesceWorkspaceCanvasChanges([...pending, ...extraChanges]);
+    if (finish) lastActiveCanvasNodeChangesRef.current = [];
+    if (merged.length > 0) applyCanvasNodeChanges(merged);
+  }, [applyCanvasNodeChanges]);
+
+  const schedulePendingCanvasNodeChanges = useCallback(() => {
+    if (canvasNodeChangesFrameRef.current != null) return;
+    canvasNodeChangesFrameRef.current = window.requestAnimationFrame(() => {
+      canvasNodeChangesFrameRef.current = null;
+      const pending = pendingCanvasNodeChangesRef.current;
+      pendingCanvasNodeChangesRef.current = [];
+      if (pending.length > 0) applyCanvasNodeChanges(pending);
+    });
+  }, [applyCanvasNodeChanges]);
+
+  const handleNodesChange = useCallback((changes) => {
+    const deferred = [];
+    const immediate = [];
+    let finishesInteraction = false;
+    for (const change of Array.isArray(changes) ? changes : []) {
+      if (workspaceCanvasChangeIsContinuous(change)) {
+        deferred.push(change);
+      } else {
+        immediate.push(change);
+        if (workspaceCanvasChangeFinishesInteraction(change)) finishesInteraction = true;
       }
     }
-    const resizedIds = Array.from(resized.keys());
-    setNodes((current) => applyNodeChanges(changes, current).map((node) => {
-      const size = resized.get(node.id);
-      if (!size) return node;
-      if (isWorkspaceGroupNode(node)) {
-        return {
-          ...node,
-          width: size.width,
-          height: size.height,
-          data: {
-            ...node.data,
-            nodeSize: size,
-          },
-        };
-      }
-      if (!workspaceDisplayKindFromData(node.data)) {
-        return {
-          ...node,
-          width: size.width,
-          height: size.height,
-          data: {
-            ...node.data,
-            nodeSize: size,
-          },
-        };
-      }
-      return {
-        ...node,
-        width: size.width,
-        height: size.height,
-        data: {
-          ...node.data,
-          nodeSize: size,
-          displaySize: size,
-        },
-      };
-    }));
-    if (resizedIds.length > 0) {
-      const refresh = () => resizedIds.forEach((id) => updateNodeInternals(id));
-      window.requestAnimationFrame(refresh);
-      window.setTimeout(refresh, 80);
+    if (deferred.length > 0) {
+      lastActiveCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
+        ...lastActiveCanvasNodeChangesRef.current,
+        ...deferred,
+      ]);
+      pendingCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
+        ...pendingCanvasNodeChangesRef.current,
+        ...deferred,
+      ]);
     }
-  }, [markWorkspaceDirty, nodes, setNodes, updateNodeInternals, workspaceMode, workspaceWritable]);
+    if (finishesInteraction) {
+      flushPendingCanvasNodeChanges(immediate, { finish: true });
+      return;
+    }
+    if (immediate.length > 0) applyCanvasNodeChanges(immediate);
+    if (pendingCanvasNodeChangesRef.current.length > 0) schedulePendingCanvasNodeChanges();
+  }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, schedulePendingCanvasNodeChanges]);
+
+  useEffect(() => {
+    const finishInterruptedInteraction = () => {
+      if (
+        !workspaceCanvasInteractionActiveRef.current
+        && pendingCanvasNodeChangesRef.current.length === 0
+        && lastActiveCanvasNodeChangesRef.current.length === 0
+      ) {
+        return;
+      }
+      flushPendingCanvasNodeChanges([], { finish: true });
+    };
+    const finishWhenHidden = () => {
+      if (document.visibilityState === "hidden") finishInterruptedInteraction();
+    };
+    window.addEventListener("pointerup", finishInterruptedInteraction);
+    window.addEventListener("pointercancel", finishInterruptedInteraction);
+    window.addEventListener("blur", finishInterruptedInteraction);
+    document.addEventListener("visibilitychange", finishWhenHidden);
+    return () => {
+      window.removeEventListener("pointerup", finishInterruptedInteraction);
+      window.removeEventListener("pointercancel", finishInterruptedInteraction);
+      window.removeEventListener("blur", finishInterruptedInteraction);
+      document.removeEventListener("visibilitychange", finishWhenHidden);
+      if (canvasNodeChangesFrameRef.current != null) {
+        window.cancelAnimationFrame(canvasNodeChangesFrameRef.current);
+      }
+      pendingCanvasNodeChangesRef.current = [];
+      lastActiveCanvasNodeChangesRef.current = [];
+    };
+  }, [flushPendingCanvasNodeChanges]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (workspaceMode === "display") return;
@@ -13492,6 +13679,7 @@ function WorkspacePageInner() {
             nodesDraggable={isDisplayMode ? true : workspaceWritable}
             nodesConnectable={isDisplayMode ? false : workspaceWritable}
             edgesReconnectable={isDisplayMode ? false : workspaceWritable}
+            onlyRenderVisibleElements={canvasNodes.length >= 80}
             deleteKeyCode={isDisplayMode ? null : workspaceWritable ? ["Backspace", "Delete"] : null}
             selectionOnDrag={canvasTool === "select"}
             panOnDrag={canvasTool === "pan" ? true : [1, 2]}

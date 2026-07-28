@@ -133,7 +133,13 @@ function AuthGate({ children }) {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "登录失败");
-      setAuth({ loading: false, authenticated: true, user: j.user || null, setupRequired: false });
+      setUsername("");
+      setPassword("");
+      // Complete the credential submission with a real navigation. Chrome can
+      // otherwise keep this fetch-based login pending and mistake a later
+      // Workspace autosave POST for a password-change submission.
+      window.location.replace(window.location.href);
+      return;
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -147,7 +153,7 @@ function AuthGate({ children }) {
   if (!auth.authenticated) {
     return (
       <div className="af-auth-screen">
-        <form className="af-auth-panel" onSubmit={submit}>
+        <form className="af-auth-panel" onSubmit={submit} autoComplete="on">
           <div className="af-auth-brand">
             <span className="material-symbols-outlined">account_circle</span>
             <div>
@@ -157,11 +163,26 @@ function AuthGate({ children }) {
           </div>
           <label className="af-auth-field">
             <span>用户名</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
+            <input
+              id="agentflow-auth-username"
+              name="username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoFocus
+            />
           </label>
           <label className="af-auth-field">
             <span>密码</span>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={auth.setupRequired ? "new-password" : "current-password"} />
+            <input
+              id="agentflow-auth-password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={auth.setupRequired ? "new-password" : "current-password"}
+            />
           </label>
           {error ? <p className="af-auth-error">{error}</p> : null}
           <button className="af-auth-submit" type="submit" disabled={submitting || !username.trim() || password.length < 4}>
