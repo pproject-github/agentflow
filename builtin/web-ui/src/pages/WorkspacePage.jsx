@@ -7277,6 +7277,7 @@ function WorkflowGlobalStateCard({ globalState, tapdId }) {
 }
 
 function PrdWorkflowTimelinePanel({
+  flowParams = {},
   tapdId,
   setTapdId,
   snapshot,
@@ -13712,6 +13713,7 @@ function WorkspacePageInner() {
 
         {isWorkflowMode ? (
           <PrdWorkflowTimelinePanel
+            flowParams={flowParams}
             tapdId={workflowTapdId}
             setTapdId={setWorkflowTapdId}
             snapshot={workflowSnapshot}
