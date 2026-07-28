@@ -421,6 +421,9 @@ export function startComposerAgent(opts) {
     detached: Boolean(opts.detached),
     force: Boolean(opts.force),
     env,
+    addDirs: Array.isArray(opts.writableDirs)
+      ? opts.writableDirs.map((dir) => String(dir || "").trim()).filter(Boolean)
+      : [],
   };
 
   if (cli === "opencode") {

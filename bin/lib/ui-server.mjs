@@ -4087,9 +4087,50 @@ function workspaceSafeNodeOutputRelPath(value) {
   return clean;
 }
 
-function workspaceDescribeNodeOutputsDir(nodeRunDir, maxEntries = 30) {
-  const outputsDir = path.resolve(nodeRunDir || "", "outputs");
-  if (!nodeRunDir || !fs.existsSync(outputsDir)) return "Current node outputs directory is missing.";
+function workspaceResolveOutputChild(rootDir, relativePath = "") {
+  const root = path.resolve(rootDir || "");
+  if (!rootDir || !root) return "";
+  const parts = String(relativePath || "").split("/").filter(Boolean);
+  const abs = path.resolve(root, ...parts);
+  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return abs === root || abs.startsWith(rootWithSep) ? abs : "";
+}
+
+function workspaceNodeOutputSuffix(relPath) {
+  const clean = workspaceSafeNodeOutputRelPath(relPath);
+  return clean ? clean.slice("outputs/".length).replace(/^\/+/, "") : "";
+}
+
+function workspaceNodeOutputWritePath(runPackage, relPath) {
+  const clean = workspaceSafeNodeOutputRelPath(relPath);
+  if (!clean) return "";
+  const suffix = workspaceNodeOutputSuffix(clean);
+  if (runPackage?.directWorkspaceOutputs && runPackage?.outputsDir) {
+    return workspaceResolveOutputChild(runPackage.outputsDir, suffix);
+  }
+  return workspaceResolveOutputChild(runPackage?.nodeRunDir, clean);
+}
+
+function workspaceNodeOutputCandidates(runPackage, relPath) {
+  const clean = workspaceSafeNodeOutputRelPath(relPath);
+  if (!clean) return [];
+  const suffix = workspaceNodeOutputSuffix(clean);
+  const direct = runPackage?.outputsDir
+    ? workspaceResolveOutputChild(runPackage.outputsDir, suffix)
+    : "";
+  const legacy = runPackage?.nodeRunDir
+    ? workspaceResolveOutputChild(runPackage.nodeRunDir, clean)
+    : "";
+  const ordered = runPackage?.directWorkspaceOutputs ? [direct, legacy] : [legacy, direct];
+  return ordered.filter((candidate, index, list) => candidate && list.indexOf(candidate) === index);
+}
+
+function workspaceDescribeNodeOutputsDir(runPackage, maxEntries = 30) {
+  const outputDirs = [
+    runPackage?.outputsDir,
+    runPackage?.nodeRunDir ? path.resolve(runPackage.nodeRunDir, "outputs") : "",
+  ].filter((dir, index, list) => dir && list.indexOf(dir) === index && fs.existsSync(dir));
+  if (!outputDirs.length) return "Current node outputs directory is missing.";
   const entries = [];
   const walk = (dir, rel = "") => {
     if (entries.length >= maxEntries) return;
@@ -4106,7 +4147,7 @@ function workspaceDescribeNodeOutputsDir(nodeRunDir, maxEntries = 30) {
       if (child.isDirectory()) walk(path.join(dir, child.name), childRel);
     }
   };
-  walk(outputsDir);
+  for (const outputDir of outputDirs) walk(outputDir);
   if (!entries.length) return "Current node outputs directory is empty.";
   const suffix = entries.length >= maxEntries ? `\n...showing first ${maxEntries} entries` : "";
   return `Current node outputs entries:\n${entries.map((entry) => `- outputs/${entry}`).join("\n")}${suffix}`;
@@ -4119,29 +4160,31 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
   const nodeRunDir = path.resolve(runPackage?.nodeRunDir || "");
   const workspaceOutputsDir = path.resolve(runPackage?.workspaceOutputsDir || "");
   if (!nodeRunDir || !workspaceOutputsDir) return clean;
-  const src = path.resolve(nodeRunDir, clean);
-  const nodeRootWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
-  if (src !== nodeRunDir && !src.startsWith(nodeRootWithSep)) {
-    throw new Error(`Invalid node output path: ${clean}`);
-  }
-  if (!fs.existsSync(src) || !fs.statSync(src).isFile()) {
+  const src = workspaceNodeOutputCandidates(runPackage, clean)
+    .find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!src) {
     throw new Error(
       `Agent returned resultFile but did not create it under this node's outputs: ${clean}\n` +
-      `Expected file: ${src}\n` +
-      `${workspaceDescribeNodeOutputsDir(nodeRunDir)}\n` +
-      `Write outputs using a relative path from the node cwd, or use AGENTFLOW_OUTPUTS_DIR.`
+      `Expected file: ${workspaceNodeOutputWritePath(runPackage, clean)}\n` +
+      `${workspaceDescribeNodeOutputsDir(runPackage)}\n` +
+      `Write downloadable files to the absolute AGENTFLOW_OUTPUTS_DIR path.`
     );
   }
   const nodePart = workspaceSanitizeTmpSegment(runPackage?.nodeId || "node", "node");
-  const destRel = clean.slice("outputs/".length).replace(/^\/+/, "");
-  const publishedRel = path.posix.join("outputs", nodePart, ...destRel.split("/").filter(Boolean));
-  const dest = path.resolve(workspaceOutputsDir, nodePart, ...destRel.split("/").filter(Boolean));
+  const destRel = workspaceNodeOutputSuffix(clean);
+  const publishedBase = String(runPackage?.outputsRel || "").trim() || path.posix.join("outputs", nodePart);
+  const publishedRel = path.posix.join(publishedBase, ...destRel.split("/").filter(Boolean));
+  const dest = runPackage?.directWorkspaceOutputs && runPackage?.outputsDir
+    ? workspaceResolveOutputChild(runPackage.outputsDir, destRel)
+    : path.resolve(workspaceOutputsDir, nodePart, ...destRel.split("/").filter(Boolean));
   const workspaceOutputsWithSep = workspaceOutputsDir.endsWith(path.sep) ? workspaceOutputsDir : `${workspaceOutputsDir}${path.sep}`;
   if (dest !== workspaceOutputsDir && !dest.startsWith(workspaceOutputsWithSep)) {
     throw new Error(`Invalid workspace output path: ${clean}`);
   }
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
+  if (src !== dest) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
   return publishedRel;
 }
 
@@ -4152,16 +4195,15 @@ export function workspaceMaterializeAgentResultFile(structured, runPackage) {
   const declared = workspaceSafeNodeOutputRelPath(rawDeclared);
   if (rawDeclared && !declared) return structured;
   const relPath = declared || configured;
-  const abs = path.resolve(runPackage.nodeRunDir || "", relPath);
-  const nodeRunDir = path.resolve(runPackage.nodeRunDir || "");
-  const nodeRootWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
-  if (!nodeRunDir || (abs !== nodeRunDir && !abs.startsWith(nodeRootWithSep))) return structured;
+  const abs = workspaceNodeOutputWritePath(runPackage, relPath);
+  if (!abs) return structured;
 
   const explicitInlineResult = structured.parsed && typeof structured.parsed === "object"
     ? String(structured.parsed.result ?? "")
     : "";
   const content = declared ? explicitInlineResult : String(structured.result ?? "");
-  let primaryReady = fs.existsSync(abs) && fs.statSync(abs).isFile();
+  let primaryReady = workspaceNodeOutputCandidates(runPackage, relPath)
+    .some((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
   if (!primaryReady && content.trim()) {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.${Date.now()}.tmp`);
@@ -4186,8 +4228,8 @@ export function workspaceMaterializeAgentResultFile(structured, runPackage) {
     if (!outputContent.trim()) continue;
     const outputRel = workspaceSafeNodeOutputRelPath(configuredRel);
     if (!outputRel) continue;
-    const outputAbs = path.resolve(nodeRunDir, outputRel);
-    if (outputAbs !== nodeRunDir && !outputAbs.startsWith(nodeRootWithSep)) continue;
+    const outputAbs = workspaceNodeOutputWritePath(runPackage, outputRel);
+    if (!outputAbs) continue;
     fs.mkdirSync(path.dirname(outputAbs), { recursive: true });
     fs.writeFileSync(outputAbs, outputContent, "utf-8");
     delete outParams[name];
@@ -4204,18 +4246,73 @@ export function workspaceMaterializeAgentResultFile(structured, runPackage) {
   };
 }
 
+function workspaceCollectNodeOutputFiles(runPackage, maxFiles = 500) {
+  const roots = [
+    runPackage?.outputsDir,
+    runPackage?.nodeRunDir ? path.resolve(runPackage.nodeRunDir, "outputs") : "",
+  ].filter((dir, index, list) => dir && list.indexOf(dir) === index && fs.existsSync(dir));
+  const relativeFiles = new Set();
+  const walk = (root, dir, depth = 0) => {
+    if (depth > 12 || relativeFiles.size >= maxFiles) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (relativeFiles.size >= maxFiles) break;
+      if (entry.isSymbolicLink()) continue;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(root, abs, depth + 1);
+      } else if (entry.isFile()) {
+        relativeFiles.add(path.relative(root, abs).replace(/\\/g, "/"));
+      }
+    }
+  };
+  for (const root of roots) walk(root, root);
+
+  const outputFiles = [];
+  for (const relativePath of relativeFiles) {
+    const publishedPath = workspacePublishNodeOutputFile(runPackage, `outputs/${relativePath}`);
+    if (!publishedPath) continue;
+    const publishedAbs = workspaceResolveOutputChild(
+      runPackage.workspaceOutputsDir,
+      publishedPath.slice("outputs/".length),
+    );
+    let size = 0;
+    try {
+      size = publishedAbs ? fs.statSync(publishedAbs).size : 0;
+    } catch {}
+    outputFiles.push({ path: publishedPath, name: path.posix.basename(publishedPath), size });
+  }
+  outputFiles.sort((a, b) => a.path.localeCompare(b.path));
+  return outputFiles;
+}
+
 export function workspacePublishAgentOutputFiles(structured, runPackage) {
-  if (!structured?.structured || !runPackage) return structured;
-  const resultFile = workspacePublishNodeOutputFile(runPackage, structured.resultFile);
-  const outParams = { ...(structured.outParams || {}) };
+  if (!runPackage) return structured;
+  const base = structured && typeof structured === "object" ? structured : {};
+  const resultFile = base.structured
+    ? workspacePublishNodeOutputFile(runPackage, base.resultFile)
+    : "";
+  const outParams = { ...(base.outParams || {}) };
   for (const [key, value] of Object.entries(outParams)) {
     if (!String(key || "").endsWith("File")) continue;
     const published = workspacePublishNodeOutputFile(runPackage, value);
     if (published) outParams[key] = published;
   }
-  return resultFile || Object.keys(outParams).length
-    ? { ...structured, result: resultFile || structured.result, resultFile: resultFile || structured.resultFile, outParams }
-    : structured;
+  const outputFiles = workspaceCollectNodeOutputFiles(runPackage);
+  return resultFile || Object.keys(outParams).length || outputFiles.length
+    ? {
+        ...base,
+        result: resultFile || base.result,
+        resultFile: resultFile || base.resultFile,
+        outParams,
+        outputFiles,
+      }
+    : base;
 }
 
 function workspaceOutputFieldForSlot(slot, index = 0) {
@@ -4701,6 +4798,7 @@ function workspaceAgentInputBlock(inputValues = {}, inputMounts = {}) {
 function workspaceNodeFileBoundaryBlock(runPackage = {}) {
   const nodeRunDir = String(runPackage?.nodeRunDir || "").trim();
   const nodeTmpDir = String(runPackage?.nodeTmpDir || "").trim();
+  const outputsDir = String(runPackage?.outputsDir || "").trim();
   const outputsRel = String(runPackage?.outputsRel || "outputs").trim() || "outputs";
   if (!nodeRunDir && !nodeTmpDir) return "";
   return [
@@ -4710,7 +4808,9 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
     Object.keys(runPackage?.inputMounts || {}).length ? "- 已挂载的输入文件位于本任务 `inputs/`；`inputs/` 只用于读取，正式产物仍写入 `outputs/`。" : "",
     "- 主文本结果和内联额外输出由 AgentFlow 在任务结束后自动写入、发布和清理，无需自行创建结果文件。",
-    `- 任务若必须直接生成二进制或工程文件，只能写入本任务 \`${outputsRel}/\`；可使用 \`AGENTFLOW_OUTPUTS_DIR\` 获取绝对目录。`,
+    outputsDir ? `- 可供用户下载的最终产物目录：\`${outputsDir}\`。这不是临时目录，环境变量 \`AGENTFLOW_OUTPUTS_DIR\` 指向这里。` : "",
+    outputsDir ? `- CSV、图片、压缩包、工程文件等下载产物必须直接写入 \`AGENTFLOW_OUTPUTS_DIR\`，不要写入当前执行目录中的相对 \`outputs/\`。` : "",
+    outputsDir ? `- 该目录中的文件会自动出现在 Workspace Files，对应相对路径为 \`${outputsRel}/\`；回复中引用下载文件时使用这个相对路径。` : "",
     "- 不要在执行目录根部创建 `temp_*`、`_out.json`、`tmp.html` 等临时产物。",
     "- 不要自行删除 run package；AgentFlow 会在运行结束后统一清理。",
   ].filter(Boolean).join("\n");
@@ -5975,14 +6075,20 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {} } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {}, durableOutputs = false } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
-  const outputsDir = path.join(nodeRunDir, "outputs");
+  const legacyOutputsDir = path.join(nodeRunDir, "outputs");
   const workspaceRoot = path.resolve(scopedRoot);
   const workspaceOutputsDir = path.join(workspaceRoot, "outputs");
+  const nodePart = workspaceSanitizeTmpSegment(nodeId || "node", "node");
+  const outputsRel = durableOutputs ? path.posix.join("outputs", nodePart) : "outputs";
+  const outputsDir = durableOutputs ? path.join(workspaceOutputsDir, nodePart) : legacyOutputsDir;
   const resultFileRel = workspaceSafeNodeOutputRelPath(resultFile) || "";
-  const resultFileAbs = resultFileRel ? path.resolve(nodeRunDir, resultFileRel) : "";
+  const resultFileSuffix = workspaceNodeOutputSuffix(resultFileRel);
+  const resultFileAbs = resultFileRel
+    ? workspaceResolveOutputChild(outputsDir, resultFileSuffix)
+    : "";
   const safeOutParamFiles = {};
   for (const [name, rel] of Object.entries(outParamFiles || {})) {
     const cleanName = String(name || "").trim();
@@ -5990,6 +6096,8 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
     if (cleanName && cleanRel) safeOutParamFiles[cleanName] = cleanRel;
   }
   fs.mkdirSync(nodeTmpDir, { recursive: true });
+  fs.mkdirSync(legacyOutputsDir, { recursive: true });
+  if (durableOutputs) fs.rmSync(outputsDir, { recursive: true, force: true });
   fs.mkdirSync(outputsDir, { recursive: true });
   fs.mkdirSync(workspaceOutputsDir, { recursive: true });
   const manifest = {
@@ -5998,7 +6106,11 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
     nodeRunDir,
     nodeTmpDir,
     outputsDir,
+    legacyOutputsDir,
+    outputsRel,
+    directWorkspaceOutputs: durableOutputs,
     workspaceRoot,
+    workspaceOutputsDir,
     executionCwd: cwd ? path.resolve(cwd) : workspaceRoot,
     resultFileRel,
     resultFileAbs,
@@ -6023,8 +6135,6 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
   }
   return {
     ...manifest,
-    workspaceOutputsDir,
-    outputsRel: "outputs",
     inputValues: runtimeInputValues,
     inputMounts: materializedInputs.mounts,
   };
@@ -6862,6 +6972,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         cwd,
         task: String(instance.script || instance.scriptRef || instance.body || "").trim(),
         inputValues,
+        durableOutputs: true,
       });
       const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
       emitTiming(nodeId, "prepare-script", prepareStartedAt, {
@@ -6898,7 +7009,12 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       if (implementationUpdate.changed) graph.instances[nodeId] = implementationUpdate.instance;
       const updatedDisplays = propagateNodeOutputDisplays(nodeId, resultContent);
       if (slotUpdate.changed || implementationUpdate.changed || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
-      emit({ type: "node-done", nodeId, definitionId: defId });
+      emit({
+        type: "node-done",
+        nodeId,
+        definitionId: defId,
+        outputFiles: normalizedAgentOutput.outputFiles || [],
+      });
       continue;
     }
 
@@ -6922,6 +7038,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       mcpBlock: promptMcpBlock,
       resultFile: resultOutputSpec.resultFile,
       outParamFiles: workspaceOutParamFileSpecs(graph, nodeId),
+      durableOutputs: true,
     });
     const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
     const body = workspaceResolveBodyPlaceholders(instance.body || "", runtimeInputValues).trim();
@@ -6972,6 +7089,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         const handle = startComposerAgent({
           uiWorkspaceRoot: scopedRoot,
           cliWorkspace: runPackage.nodeRunDir,
+          writableDirs: [runPackage.outputsDir],
           prompt,
           modelKey: nodeModelKey,
           agentflowUserId: userCtx.userId || "",
@@ -7061,7 +7179,12 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     }
     const updatedDisplays = propagateNodeOutputDisplays(nodeId, resultContent);
     if (slotUpdate.changed || implementationUpdate.changed || contextRunOutputChanged || updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
-    emit({ type: "node-done", nodeId, definitionId: defId });
+    emit({
+      type: "node-done",
+      nodeId,
+      definitionId: defId,
+      outputFiles: normalizedAgentOutput.outputFiles || [],
+    });
   }
   } finally {
     workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
