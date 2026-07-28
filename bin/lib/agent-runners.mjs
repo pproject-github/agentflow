@@ -1667,6 +1667,10 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", ws];
+  for (const dir of Array.isArray(options.addDirs) ? options.addDirs : []) {
+    const abs = path.resolve(dir);
+    if (abs && abs !== ws) args.push("--add-dir", abs);
+  }
   if (bypassPermissions) args.push("--dangerously-skip-permissions");
   if (model) args.push("--model", model);
   args.push(promptText);
@@ -1848,6 +1852,7 @@ export function runCodexAgentWithPrompt(cliWorkspace, promptText, options = {}) 
   const outputLastMessagePath = path.join(tmpDir, `codex-last-message-${process.pid}-${Date.now()}.txt`);
   const args = buildCodexExecArgs({
     workspace: ws,
+    addDirs: options.addDirs,
     model,
     outputLastMessagePath,
     promptText,
