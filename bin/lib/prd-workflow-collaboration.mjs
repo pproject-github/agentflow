@@ -44,6 +44,10 @@ function normalizeTapdId(value) {
   return String(value || "").trim();
 }
 
+function normalizeShareToken(value) {
+  return String(value || "").trim();
+}
+
 function publicWorkflow(record, userId = "") {
   if (!record) return null;
   const actorId = normalizeUserId(userId);
@@ -55,6 +59,8 @@ function publicWorkflow(record, userId = "") {
     role: actorId === record.ownerId ? "owner" : String(members[actorId] || ""),
     memberCount: Object.keys(members).length,
     members: Object.entries(members).map(([id, role]) => ({ userId: id, role })),
+    shareActive: Boolean(record.shareToken),
+    shareCreatedAt: record.shareCreatedAt || "",
     createdAt: record.createdAt || "",
     updatedAt: record.updatedAt || "",
   };
@@ -73,6 +79,17 @@ export function prdWorkflowCollaborationAccess(record, userId) {
 
 export function getPrdWorkflowCollaborationById(workflowId) {
   return readRegistry().workflows[String(workflowId || "").trim()] || null;
+}
+
+export function getPrdWorkflowCollaborationByShareToken(shareToken) {
+  const token = normalizeShareToken(shareToken);
+  if (!token) return null;
+  const incoming = Buffer.from(token);
+  return Object.values(readRegistry().workflows).find((record) => {
+    if (!record?.shareToken) return false;
+    const stored = Buffer.from(String(record.shareToken));
+    return stored.length === incoming.length && crypto.timingSafeEqual(stored, incoming);
+  }) || null;
 }
 
 export function getPrdWorkflowCollaborationForUser(tapdId, userId) {
@@ -115,6 +132,58 @@ export function ensurePrdWorkflowCollaboration({ tapdId, userId }) {
 
 export function prdWorkflowCollaborationSummary(record, userId) {
   return publicWorkflow(record, userId);
+}
+
+export function ensurePrdWorkflowShareLink({ tapdId, userId }) {
+  const ensured = ensurePrdWorkflowCollaboration({ tapdId, userId });
+  if (ensured.error) return ensured;
+  const actorId = normalizeUserId(userId);
+  if (prdWorkflowCollaborationAccess(ensured.record, actorId).role !== "owner") {
+    return { error: "Only the Workflow owner can create a share link", status: 403 };
+  }
+  if (ensured.record.shareToken) {
+    return {
+      record: ensured.record,
+      workflow: publicWorkflow(ensured.record, actorId),
+      shareToken: ensured.record.shareToken,
+      created: false,
+    };
+  }
+  const registry = readRegistry();
+  const record = registry.workflows[ensured.record.id];
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const now = new Date().toISOString();
+  record.shareToken = crypto.randomBytes(24).toString("base64url");
+  record.shareCreatedAt = now;
+  record.updatedAt = now;
+  writeRegistry(registry);
+  return {
+    record,
+    workflow: publicWorkflow(record, actorId),
+    shareToken: record.shareToken,
+    created: true,
+  };
+}
+
+export function revokePrdWorkflowShareLink({ tapdId, userId }) {
+  const record = getPrdWorkflowCollaborationForUser(tapdId, userId);
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const actorId = normalizeUserId(userId);
+  if (prdWorkflowCollaborationAccess(record, actorId).role !== "owner") {
+    return { error: "Only the Workflow owner can revoke a share link", status: 403 };
+  }
+  const registry = readRegistry();
+  const stored = registry.workflows[record.id];
+  if (!stored) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const revoked = Boolean(stored.shareToken);
+  delete stored.shareToken;
+  delete stored.shareCreatedAt;
+  stored.updatedAt = new Date().toISOString();
+  writeRegistry(registry);
+  return {
+    workflow: publicWorkflow(stored, actorId),
+    revoked,
+  };
 }
 
 export function addPrdWorkflowCollaborationMember({

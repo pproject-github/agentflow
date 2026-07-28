@@ -82,3 +82,34 @@ test("a user cannot join two shared Workflows for the same TAPD ID", async () =>
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("PRD Workflow share links are opaque, stable, and revocable", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-prd-share-link-"));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  process.env.AGENTFLOW_HOME = tempRoot;
+  try {
+    const moduleUrl = new URL(`../bin/lib/prd-workflow-collaboration.mjs?test=${Date.now()}-share-link`, import.meta.url);
+    const {
+      ensurePrdWorkflowShareLink,
+      getPrdWorkflowCollaborationByShareToken,
+      revokePrdWorkflowShareLink,
+    } = await import(moduleUrl);
+
+    const created = ensurePrdWorkflowShareLink({ tapdId: "1015046", userId: "owner" });
+    assert.equal(created.created, true);
+    assert.match(created.shareToken, /^[A-Za-z0-9_-]{32}$/);
+    assert.equal(getPrdWorkflowCollaborationByShareToken(created.shareToken)?.ownerId, "owner");
+
+    const repeated = ensurePrdWorkflowShareLink({ tapdId: "1015046", userId: "owner" });
+    assert.equal(repeated.created, false);
+    assert.equal(repeated.shareToken, created.shareToken);
+
+    const revoked = revokePrdWorkflowShareLink({ tapdId: "1015046", userId: "owner" });
+    assert.equal(revoked.revoked, true);
+    assert.equal(getPrdWorkflowCollaborationByShareToken(created.shareToken), null);
+  } finally {
+    if (previousHome == null) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

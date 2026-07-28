@@ -47,6 +47,7 @@ import {
   workflowIssueTreeCount,
 } from "../prdWorkflowIssuePresentation.js";
 import {
+  aiDocArticleTitle,
   dedupeConfirmedAiDocs,
   isConfirmedAiDocCandidate,
 } from "../prdWorkflowAiDocs.js";
@@ -193,6 +194,7 @@ function readFlowParamsFromUrl() {
     flowId: sp.get("flowId") || "",
     flowSource: sp.get("flowSource") || "user",
     workspaceId: sp.get("workspaceId") || "",
+    workflowShare: sp.get("workflowShare") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
   };
 }
@@ -202,6 +204,7 @@ function flowParamsQuery(params) {
   if (params.flowId) q.set("flowId", params.flowId);
   if (params.flowSource) q.set("flowSource", params.flowSource);
   if (params.workspaceId) q.set("workspaceId", params.workspaceId);
+  if (params.workflowShare) q.set("workflowShare", params.workflowShare);
   if (params.archived) q.set("archived", "1");
   return q;
 }
@@ -532,6 +535,10 @@ function prdWorkflowNormalizeHref(href) {
     if (url.hostname === "0.0.0.0" || url.hostname === "::" || url.hostname === "[::]") {
       const currentHost = window.location.hostname;
       url.hostname = currentHost && currentHost !== "0.0.0.0" && currentHost !== "::" ? currentHost : "127.0.0.1";
+    }
+    const workflowShare = String(new URLSearchParams(window.location.search).get("workflowShare") || "").trim();
+    if (workflowShare && url.pathname.startsWith("/api/prd-workflow/review/") && !url.searchParams.has("workflowShare")) {
+      url.searchParams.set("workflowShare", workflowShare);
     }
     return url.href;
   } catch (_) {
@@ -909,6 +916,11 @@ function prdWorkflowActionLinks(item) {
 function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
   const candidates = [];
   const issueTitleByKey = new Map();
+  const requirementTitle = String(
+    snapshot?.overall?.requirement?.title
+    || snapshot?.overall?.requirement?.name
+    || "",
+  ).trim();
   for (const issue of prdWorkflowFlattenIssuesFromSnapshot(snapshot)) {
     const issueKey = prdWorkflowIssueKey(issue);
     const issueTitle = String(issue?.title || issue?.name || issue?.summary || "").trim();
@@ -919,14 +931,6 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
     const pushCandidate = (link, linkContext = {}) => {
       if (!link || typeof link !== "object") return;
       const issueKey = String(context.issueKey || item?.issueKey || item?.issue_key || item?.issue || "").trim();
-      const rawTitle = String(
-        context.documentTitle
-        || link.title
-        || item?.documentTitle
-        || item?.document_title
-        || item?.title
-        || "",
-      ).trim();
       const source = link.source
         || link.sourceArtifact
         || link.source_artifact
@@ -935,11 +939,23 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
         || item.source
         || context.source
         || null;
+      const candidateTitle = aiDocArticleTitle({
+        ...link,
+        title: link.title || context.documentTitle || item?.title || "",
+        documentTitle: link.documentTitle
+          || link.document_title
+          || item?.documentTitle
+          || item?.document_title
+          || "",
+      }, {
+        issueTitle: issueTitleByKey.get(issueKey) || "",
+        requirementTitle,
+      });
       const candidate = {
         label: String(link.label || "ai-doc").trim() || "ai-doc",
         href: String(link.href || link.url || "").trim(),
         kind: String(link.kind || link.type || item.kind || item.type || "").trim(),
-        title: rawTitle || issueTitleByKey.get(issueKey) || "",
+        title: candidateTitle,
         issueKey,
         platform: context.platform || prdWorkflowPlatformLabel(item.platform),
         durability: link.durability || item.durability || context.durability || "",
@@ -7107,37 +7123,45 @@ function PrdWorkflowOverallPlatform({ platform, value }) {
   );
 }
 
-function PrdWorkflowOverallCard({ overall }) {
+function PrdWorkflowOverallCard({ overall, tapdId }) {
   const requirement = overall?.requirement && typeof overall.requirement === "object" ? overall.requirement : {};
   const platforms = overall?.platforms && typeof overall.platforms === "object" ? overall.platforms : {};
   const title = String(requirement.title || requirement.name || "").trim();
   const tapdUrl = String(requirement.tapdUrl || requirement.tapd_url || requirement.url || "").trim();
   const status = prdWorkflowOverallDisplayValue(requirement.status || requirement.tapdStatus || requirement.tapd_status);
+  const requirementTapdId = String(requirement.tapdId || requirement.tapd_id || tapdId || "").trim();
   const platformEntries = Object.entries(platforms).filter(([platform, value]) => (
     platform && value && typeof value === "object" && !Array.isArray(value)
   ));
-  if (!title && !tapdUrl && !status && !platformEntries.length) return null;
+  const hasReportedContent = Boolean(title || tapdUrl || status || platformEntries.length);
+  if (!requirementTapdId && !hasReportedContent) return null;
   return (
     <article className="af-prd-workflow-card af-prd-overall">
       <div className="af-prd-workflow-card__head">
         <h2>需求概览</h2>
         {status ? <span className="af-prd-overall__status">{status}</span> : null}
       </div>
-      {(title || tapdUrl) ? (
+      {(title || tapdUrl || requirementTapdId) ? (
         <div className="af-prd-overall__requirement">
           {tapdUrl ? (
             <a href={tapdUrl} target="_blank" rel="noreferrer">
-              <strong>{title || `TAPD ${requirement.tapdId || ""}`}</strong>
+              <strong>{title || `TAPD ${requirementTapdId}`}</strong>
               <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
             </a>
-          ) : <strong>{title}</strong>}
+          ) : <strong>{title || `TAPD ${requirementTapdId}`}</strong>}
         </div>
       ) : null}
-      <div className="af-prd-overall__platforms">
-        {platformEntries.map(([platform, value]) => (
-          <PrdWorkflowOverallPlatform key={platform} platform={platform} value={value} />
-        ))}
-      </div>
+      {hasReportedContent ? (
+        <div className="af-prd-overall__platforms">
+          {platformEntries.map(([platform, value]) => (
+            <PrdWorkflowOverallPlatform key={platform} platform={platform} value={value} />
+          ))}
+        </div>
+      ) : (
+        <p className="af-prd-workflow-muted">
+          暂无阶段级 Overall 信息。技术方案、端侧方案或实现 MR 上报后会逐步补充，也可让本地 Agent 执行 Overall 整理更新。
+        </p>
+      )}
     </article>
   );
 }
@@ -7165,7 +7189,8 @@ function PrdWorkflowTimelinePanel({
   const [shareLoading, setShareLoading] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareError, setShareError] = useState("");
-  const [shareUsername, setShareUsername] = useState("");
+  const [shareCanCreate, setShareCanCreate] = useState(false);
+  const [shareCopyState, setShareCopyState] = useState("");
   const [sharing, setSharing] = useState(null);
   const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
   const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
@@ -7204,63 +7229,79 @@ function PrdWorkflowTimelinePanel({
     }
     setShareLoading(true);
     setShareError("");
+    setShareCopyState("");
     try {
       const query = new URLSearchParams({ tapdId: id });
-      const response = await fetch(`/api/prd-workflow/collaboration?${query.toString()}`);
+      if (flowParams.workflowShare) query.set("workflowShare", flowParams.workflowShare);
+      const response = await fetch(`/api/prd-workflow/share?${query.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "读取 Workflow 分享状态失败");
-      setSharing(payload.collaboration || null);
+      let share = payload.share || null;
+      const canCreate = payload.canCreate === true && !flowParams.workflowShare;
+      setShareCanCreate(canCreate);
+      if (!share && canCreate) {
+        const createResponse = await fetch("/api/prd-workflow/share", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...flowParams, tapdId: id }),
+        });
+        const createPayload = await createResponse.json().catch(() => ({}));
+        if (!createResponse.ok) throw new Error(createPayload.error || "生成 Workflow 分享链接失败");
+        share = createPayload.share || null;
+      }
+      setSharing(share);
     } catch (shareLoadError) {
       setShareError(String(shareLoadError.message || shareLoadError));
     } finally {
       setShareLoading(false);
     }
-  }, [tapdId]);
-  useEffect(() => {
-    setSharing(snapshot?.collaboration?.workflow || null);
-  }, [snapshot?.collaboration?.workflow]);
+  }, [flowParams, tapdId]);
   const openSharing = () => {
     setShareOpen(true);
-    setShareUsername("");
     void loadSharing();
   };
-  const addSharingMember = async () => {
-    const username = shareUsername.trim();
-    if (!username || !tapdId || shareBusy) return;
+  const createSharingLink = async () => {
+    if (!tapdId || shareBusy || flowParams.workflowShare) return;
     setShareBusy(true);
     setShareError("");
+    setShareCopyState("");
     try {
-      const response = await fetch("/api/prd-workflow/collaboration/share", {
+      const response = await fetch("/api/prd-workflow/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tapdId, username, role: "editor" }),
+        body: JSON.stringify({ ...flowParams, tapdId }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "添加 Workflow 协作成员失败");
-      setSharing(payload.collaboration || null);
-      setShareUsername("");
-    } catch (shareAddError) {
-      setShareError(String(shareAddError.message || shareAddError));
+      if (!response.ok) throw new Error(payload.error || "生成 Workflow 分享链接失败");
+      setSharing(payload.share || null);
+      setShareCanCreate(true);
+    } catch (shareCreateError) {
+      setShareError(String(shareCreateError.message || shareCreateError));
     } finally {
       setShareBusy(false);
     }
   };
-  const removeSharingMember = async (memberUserId = "") => {
-    if (!tapdId || shareBusy) return;
+  const copySharingLink = async () => {
+    const copied = await copyTextToClipboard(sharing?.url || "");
+    setShareCopyState(copied ? "已复制" : "复制失败");
+  };
+  const revokeSharingLink = async () => {
+    if (!tapdId || shareBusy || !sharing?.canManage) return;
     setShareBusy(true);
     setShareError("");
+    setShareCopyState("");
     try {
-      const response = await fetch("/api/prd-workflow/collaboration/share", {
+      const response = await fetch("/api/prd-workflow/share", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tapdId, ...(memberUserId ? { memberUserId } : {}) }),
+        body: JSON.stringify({ tapdId }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "取消 Workflow 分享失败");
-      setSharing(payload.collaboration || null);
-      if (payload.left) setShareOpen(false);
-    } catch (shareRemoveError) {
-      setShareError(String(shareRemoveError.message || shareRemoveError));
+      if (!response.ok) throw new Error(payload.error || "取消 Workflow 分享链接失败");
+      setSharing(null);
+      setShareCanCreate(true);
+    } catch (shareRevokeError) {
+      setShareError(String(shareRevokeError.message || shareRevokeError));
     } finally {
       setShareBusy(false);
     }
@@ -7323,8 +7364,8 @@ function PrdWorkflowTimelinePanel({
               {loading ? "读取中" : tapdId ? "刷新" : "读取"}
             </button>
             <button type="button" disabled={!tapdId} onClick={openSharing}>
-              <span className="material-symbols-outlined" aria-hidden>group_add</span>
-              分享{sharing?.memberCount > 1 ? ` ${sharing.memberCount - 1}` : ""}
+              <span className="material-symbols-outlined" aria-hidden>share</span>
+              分享
             </button>
           </div>
         </form>
@@ -7464,7 +7505,7 @@ function PrdWorkflowTimelinePanel({
         </article>
 
         <aside className="af-prd-workflow-side" aria-label="Workflow related links">
-          <PrdWorkflowOverallCard overall={overall} />
+          <PrdWorkflowOverallCard overall={overall} tapdId={tapdId} />
           {otherArtifacts.length ? (
             <article className="af-prd-workflow-card">
               <div className="af-prd-workflow-card__head">
@@ -7579,10 +7620,10 @@ function PrdWorkflowTimelinePanel({
       </section>
       {shareOpen ? createPortal(
         <div className="af-flow-snippet-modal-overlay">
-          <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="分享需求 Workflow">
+          <div className="af-flow-snippet-modal af-display-share-modal af-display-link-modal" role="dialog" aria-modal="true" aria-label="分享需求 Workflow">
             <div className="af-flow-snippet-modal__head">
               <span className="af-flow-snippet-modal__title">
-                <span className="material-symbols-outlined" aria-hidden>group_add</span>
+                <span className="material-symbols-outlined" aria-hidden>share</span>
                 分享需求 Workflow
               </span>
               <button type="button" className="af-flow-snippet-modal__close" onClick={() => setShareOpen(false)} aria-label="关闭">
@@ -7591,58 +7632,42 @@ function PrdWorkflowTimelinePanel({
             </div>
             <div className="af-flow-snippet-modal__body">
               <p className="af-display-link-modal__empty">
-                按 TAPD {tapdId} 分享需求流程；不会分享当前 Project、画布或项目文件。
+                通过只读链接分享 TAPD {tapdId} 的需求流程；不会分享当前 Project、画布或项目文件。
               </p>
-              {sharing?.role && sharing.role !== "owner" ? (
-                <div className="af-prd-workflow-share-note">你是该 Workflow 的协作成员，可以查看和推进需求状态。</div>
-              ) : (
-                <div className="af-workspace-member-add">
+              {shareLoading ? <div className="af-display-link-modal__empty">正在生成分享链接...</div> : null}
+              {!shareLoading && sharing?.url ? (
+                <>
+                  <div className="af-display-link-modal__url">
                   <input
                     type="text"
-                    value={shareUsername}
-                    onChange={(event) => setShareUsername(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && shareUsername.trim() && !shareBusy) {
-                        event.preventDefault();
-                        void addSharingMember();
-                      }
-                    }}
-                    placeholder="输入已注册用户名"
-                    autoFocus
+                    value={sharing.url}
+                    readOnly
+                    onFocus={(event) => event.currentTarget.select()}
+                    aria-label="Workflow 分享链接"
                   />
-                  <button type="button" disabled={shareBusy || !shareUsername.trim()} onClick={() => void addSharingMember()}>
-                    {shareBusy ? "添加中..." : "添加成员"}
+                  <button type="button" disabled={shareBusy} onClick={() => void copySharingLink()}>
+                    <span className="material-symbols-outlined" aria-hidden>content_copy</span>
+                    {shareCopyState || "复制链接"}
                   </button>
-                </div>
-              )}
-              {shareError ? <div className="af-flow-snippet-error">{shareError}</div> : null}
-              {shareLoading ? <div className="af-display-link-modal__empty">正在读取分享成员...</div> : null}
-              <div className="af-workspace-member-list">
-                {(sharing?.members || []).map((member) => {
-                  const isOwner = member.userId === sharing?.ownerId || member.role === "owner";
-                  return (
-                    <div className="af-workspace-member-row" key={member.userId}>
-                      <span className="material-symbols-outlined" aria-hidden>{isOwner ? "shield_person" : "person"}</span>
-                      <div>
-                        <strong>{member.username || member.userId}</strong>
-                        <small>{isOwner ? "所有者" : member.role === "viewer" ? "只读成员" : "编辑成员"}</small>
-                      </div>
-                      {sharing?.role === "owner" && !isOwner ? (
-                        <button type="button" disabled={shareBusy} onClick={() => void removeSharingMember(member.userId)}>
-                          取消分享
-                        </button>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="af-flow-snippet-modal__foot">
-              {sharing?.role && sharing.role !== "owner" ? (
-                <button type="button" className="af-flow-snippet-modal__btn" disabled={shareBusy} onClick={() => void removeSharingMember()}>
-                  退出分享
+                  {sharing.canManage ? (
+                    <button type="button" disabled={shareBusy} onClick={() => void revokeSharingLink()}>
+                      {shareBusy ? "处理中..." : "取消分享"}
+                    </button>
+                  ) : null}
+                  </div>
+                  <div className="af-prd-workflow-share-note">
+                    获得链接的 AgentFlow 用户可以只读查看同一份 Workflow；链接不会授予需求推进或项目编辑权限。
+                  </div>
+                </>
+              ) : null}
+              {!shareLoading && !sharing?.url && shareCanCreate ? (
+                <button type="button" className="af-flow-snippet-modal__btn" disabled={shareBusy} onClick={() => void createSharingLink()}>
+                  {shareBusy ? "生成中..." : "生成分享链接"}
                 </button>
               ) : null}
+              {shareError ? <div className="af-flow-snippet-error">{shareError}</div> : null}
+            </div>
+            <div className="af-flow-snippet-modal__foot">
               <button type="button" className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary" onClick={() => setShareOpen(false)}>
                 完成
               </button>
