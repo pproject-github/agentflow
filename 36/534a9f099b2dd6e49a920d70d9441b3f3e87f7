@@ -1,0 +1,29 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_d99100a467f052::t_8acd8d66527469 7280
+  s_d99100a467f052::t_b6744680546f8c 13716
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_7de8f6b87e5fd4 18
+builtin/web-ui/dist/assets/index-EVYY8zcK.js
+  s_d99100a467f052::t_7de8f6b87e5fd4 1,9,17,25,33,37-38,40,42,44,60,65-67,69,71,73,75,79,84,86,93,95,98-100,102,113-114,181-187,192,241,243,245,249,251-255,259-260,262-264,269,285,313-314,317-318,322,348
+test/workspace-workflow-render-contract.test.mjs
+  s_d99100a467f052::t_8acd8d66527469 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "36534a9f099b2dd6e49a920d70d9441b3f3e87f7",
+  "prompts": {},
+  "logical_commit_id": "36534a9f099b2dd6e49a920d70d9441b3f3e87f7",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 30006,
+      "total_deletions": 1430
+    }
+  }
+}
