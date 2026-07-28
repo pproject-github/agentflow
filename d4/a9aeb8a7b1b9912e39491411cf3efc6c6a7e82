@@ -1,0 +1,33 @@
+bin/lib/composer-agent.mjs
+  s_d99100a467f052::t_436c4e1c1f6fb8 424-426
+bin/lib/ui-server.mjs
+  s_d99100a467f052::t_69c0c1b7cc4904 4165
+  s_d99100a467f052::t_56b2ce108154c3 4300
+  s_d99100a467f052::t_fd6d3caed51489 4801,4811-4813,6078,6081,6084-6086,6088-6091,6099-6100,6109-6111,6113
+  s_d99100a467f052::t_114517a6804847 4090-4133,4150,4163-4164,4168-4170,4174-4179,4184-4187,4198-4199,4205-4206,4231-4232,4246-4272,4274-4291,4293,4295-4299,4306-4315
+  s_d99100a467f052::t_ee16f9e94d9634 6975,7012-7017,7041,7092,7182-7187
+bin/lib/agent-runners.mjs
+  s_d99100a467f052::t_56b2ce108154c3 1670-1673
+  s_d99100a467f052::t_436c4e1c1f6fb8 1855
+test/workspace-output-materialization.test.mjs
+  s_d99100a467f052::t_69c0c1b7cc4904 28-50,128-153,155-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "d4a9aeb8a7b1b9912e39491411cf3efc6c6a7e82",
+  "prompts": {},
+  "logical_commit_id": "d4a9aeb8a7b1b9912e39491411cf3efc6c6a7e82",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 23168,
+      "total_deletions": 1217
+    }
+  }
+}
