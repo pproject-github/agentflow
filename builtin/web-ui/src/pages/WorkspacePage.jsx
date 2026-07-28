@@ -47,6 +47,10 @@ import {
   workflowIssueTreeCount,
 } from "../prdWorkflowIssuePresentation.js";
 import {
+  dedupeConfirmedAiDocs,
+  isConfirmedAiDocCandidate,
+} from "../prdWorkflowAiDocs.js";
+import {
   diffWorkspaceGraphsForUi,
   reconcileWorkspaceEdges,
   reconcileWorkspaceInstances,
@@ -902,20 +906,6 @@ function prdWorkflowActionLinks(item) {
   return Array.from(seen.values());
 }
 
-function prdWorkflowIsAiDocLink(item) {
-  const href = String(item?.href || item?.url || "").trim();
-  const text = [
-    item?.label,
-    item?.title,
-    item?.kind,
-    item?.type,
-    item?.source,
-    href,
-  ].map((value) => String(value || "")).join(" ");
-  if (/gitlab|merge[_ -]?request|jenkins|tapd/i.test(text)) return false;
-  return /ai[-_ ]?doc|方案文档|技术方案|设计文档|代码审查|code review|markdown review|文档预览|\/api\/prd-workflow\/review\//i.test(text);
-}
-
 function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
   const candidates = [];
   const issueTitleByKey = new Map();
@@ -925,7 +915,9 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
     if (issueKey && issueTitle) issueTitleByKey.set(issueKey, issueTitle);
   }
   const collect = (item, context = {}) => {
-    const pushCandidate = (link) => {
+    if (!item || typeof item !== "object") return;
+    const pushCandidate = (link, linkContext = {}) => {
+      if (!link || typeof link !== "object") return;
       const issueKey = String(context.issueKey || item?.issueKey || item?.issue_key || item?.issue || "").trim();
       const rawTitle = String(
         context.documentTitle
@@ -935,19 +927,37 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
         || item?.title
         || "",
       ).trim();
+      const source = link.source
+        || link.sourceArtifact
+        || link.source_artifact
+        || item.sourceArtifact
+        || item.source_artifact
+        || item.source
+        || context.source
+        || null;
       const candidate = {
         label: String(link.label || "ai-doc").trim() || "ai-doc",
         href: String(link.href || link.url || "").trim(),
-        kind: String(link.kind || link.type || "").trim(),
+        kind: String(link.kind || link.type || item.kind || item.type || "").trim(),
         title: rawTitle || issueTitleByKey.get(issueKey) || "",
+        issueKey,
+        platform: context.platform || prdWorkflowPlatformLabel(item.platform),
+        durability: link.durability || item.durability || context.durability || "",
+        persistence: link.persistence || item.persistence || context.persistence || "",
+        truth: link.truth || link.stateTruth || link.state_truth || prdWorkflowActionTruth(item) || context.truth || "",
+        authority: link.authority || item.authority || context.authority || "",
+        confirmed: link.confirmed ?? item.confirmed ?? context.confirmed,
+        source,
+        documentPath: link.documentPath
+          || link.document_path
+          || link.path
+          || linkContext.documentPath
+          || source?.path
+          || source?.documentPath
+          || source?.document_path
+          || "",
       };
-      if (candidate.href && prdWorkflowIsAiDocLink(candidate)) {
-        candidates.push({
-          ...context,
-          ...candidate,
-          kind: context.displayKind || candidate.kind || "ai-doc",
-        });
-      }
+      if (candidate.href) candidates.push(candidate);
     };
     for (const artifact of Array.isArray(item?.artifacts) ? item.artifacts : []) {
       if (!artifact || typeof artifact !== "object") continue;
@@ -955,18 +965,30 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
         ...artifact,
         label: artifact.label || artifact.title || artifact.kind || "ai-doc",
         href: prdWorkflowArtifactHref(artifact),
-      });
+      }, { documentPath: artifact.path });
     }
-    for (const link of prdWorkflowActionLinks(item)) {
-      pushCandidate(link);
+    for (const link of Array.isArray(item?.links) ? item.links : []) {
+      if (!link || typeof link !== "object") continue;
+      pushCandidate({
+        ...link,
+        label: link.label || link.title || link.kind || "ai-doc",
+        href: prdWorkflowArtifactHref(link),
+      }, { documentPath: link.path });
+    }
+    const directHref = prdWorkflowArtifactHref(item);
+    if (directHref) {
+      pushCandidate({
+        ...item,
+        label: item.label || item.title || item.kind || "ai-doc",
+        href: directHref,
+      }, { documentPath: item.path });
     }
   };
-  collect(snapshot, { displayKind: "ai-doc" });
+  collect(snapshot);
   for (const item of Array.isArray(actionRows) ? actionRows : []) {
     collect(item, {
       issueKey: String(item?.issueKey || item?.issue_key || item?.issue || "").trim(),
       platform: prdWorkflowPlatformLabel(item?.platform),
-      displayKind: "Workflow 文档",
       documentTitle: String(item?.documentTitle || item?.document_title || item?.title || "").trim(),
     });
   }
@@ -975,7 +997,6 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
       collect(item, {
         issueKey: String(item?.issueKey || item?.issue_key || item?.issue || "").trim(),
         platform: prdWorkflowPlatformLabel(item?.platform),
-        displayKind: "Workflow 文档",
         documentTitle: String(item?.documentTitle || item?.document_title || item?.title || "").trim(),
       });
     }
@@ -984,62 +1005,10 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
     collect(issue, {
       issueKey: prdWorkflowIssueKey(issue),
       platform: prdWorkflowPlatformLabel(issue?.platform),
-      displayKind: "Issue 文档",
       documentTitle: String(issue?.title || issue?.name || issue?.summary || "").trim(),
     });
   }
-
-  const reviewKey = (href) => {
-    try {
-      const url = new URL(String(href || ""), window.location.origin);
-      return `${url.origin}${url.pathname}`;
-    } catch (_) {
-      return String(href || "").split(/[?#]/)[0];
-    }
-  };
-  const labelRank = (label) => {
-    const value = String(label || "");
-    if (/技术方案|方案文档/.test(value)) return 50;
-    if (/代码审查|code review/i.test(value)) return 40;
-    if (/设计文档/.test(value)) return 30;
-    if (/markdown review|文档预览/i.test(value)) return 20;
-    return 10;
-  };
-  const titleRank = (title) => {
-    const value = String(title || "").trim();
-    if (!value) return 0;
-    const normalized = value.replace(/^Issue\s*\d+\s*/i, "").trim();
-    if (/^(方案文档预览|方案文档|技术方案|设计文档|代码审查|Markdown Review|文档预览)$/i.test(normalized)) {
-      return 10;
-    }
-    return 100 + Math.min(value.length, 100);
-  };
-  const seen = new Map();
-  for (const candidate of candidates) {
-    const key = reviewKey(candidate.href);
-    const existing = seen.get(key);
-    if (!existing) {
-      const { displayKind: _displayKind, ...entry } = candidate;
-      seen.set(key, entry);
-      continue;
-    }
-    const preferredLabel = labelRank(candidate.label) > labelRank(existing.label)
-      ? candidate.label
-      : existing.label;
-    const preferredTitle = titleRank(candidate.title) > titleRank(existing.title)
-      ? candidate.title
-      : existing.title;
-    seen.set(key, {
-      ...candidate,
-      ...existing,
-      label: preferredLabel,
-      title: preferredTitle,
-      issueKey: existing.issueKey || candidate.issueKey,
-      platform: existing.platform || candidate.platform,
-      kind: existing.kind || candidate.kind,
-    });
-  }
-  return Array.from(seen.values());
+  return dedupeConfirmedAiDocs(candidates, window.location.origin);
 }
 
 function prdWorkflowActionPayloadExtras(item) {
@@ -7207,7 +7176,7 @@ function PrdWorkflowTimelinePanel({
   const nextAction = snapshot?.nextAction && typeof snapshot.nextAction === "object" ? snapshot.nextAction : null;
   const actionRows = prdWorkflowActionRows(snapshot, nextAction);
   const aiDocLinks = prdWorkflowAiDocLinks(snapshot, actionRows);
-  const otherArtifacts = artifacts.filter((item) => !prdWorkflowIsAiDocLink({
+  const otherArtifacts = artifacts.filter((item) => !isConfirmedAiDocCandidate({
     ...item,
     href: prdWorkflowArtifactHref(item),
   }));
