@@ -6966,6 +6966,38 @@ button.af-project-card {
   line-height: 1.35;
 }
 
+.af-prd-overall-platform__row--text > div > span,
+.af-prd-overall-platform__row--user > div > span {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(241, 245, 249, 0.88);
+  padding: 0;
+  font-size: 0.74rem;
+}
+
+.af-prd-overall-platform__row--user > div > span {
+  color: rgba(191, 219, 254, 0.92);
+}
+
+.af-prd-overall-platform__row--link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  color: rgba(147, 197, 253, 0.94);
+  font-size: 0.74rem;
+  text-decoration: none;
+}
+
+.af-prd-overall-platform__row--link a:hover {
+  color: rgba(191, 219, 254, 1);
+}
+
+.af-prd-overall-platform__row--link .material-symbols-outlined {
+  font-size: 0.88rem;
+}
+
 .af-prd-overall-platform__rules ul {
   display: grid;
   gap: 0.25rem;
