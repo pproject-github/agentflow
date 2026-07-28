@@ -33,6 +33,10 @@ export function isConfirmedAiDocCandidate(candidate = {}) {
   const authority = lower(candidate.authority);
   const source = sourceKind(candidate.source) ||
     sourceKind(candidate.sourceArtifact || candidate.source_artifact);
+  const artifactLabel = [
+    candidate.label,
+    kind,
+  ].map(text).join(" ");
   const descriptor = [
     candidate.label,
     candidate.title,
@@ -53,11 +57,20 @@ export function isConfirmedAiDocCandidate(candidate = {}) {
     return false;
   }
 
+  const externalArtifact =
+    /gitlab[-_ ]?(issue|epic|mr)|merge[-_ ]?request|jenkins|tapd|实现\s*mr|修复\s*mr|提测\s*mr|集成\s*mr|安装包|二维码/i.test(artifactLabel);
+  if (externalArtifact) return false;
+  const internalSupportArtifact =
+    /tapd[-_ ]?(baseline|snapshot)|baseline[-_ ]?snapshot|tapd_snapshot|snapshot_v\d+\.md/i.test(`${artifactLabel} ${href}`);
+  if (internalSupportArtifact) return false;
+
+  const documentArtifact =
+    /ai[-_ ]?doc|方案文档|技术方案|设计文档|代码审查|code[-_ ]?review|文档预览|markdown[-_ ]?review/i.test(artifactLabel);
   const persistedByAiDoc =
     kind === "ai-doc" ||
     source === "ai-doc" ||
-    persistence === "ai-doc" ||
-    authority === "ai-doc";
+    authority === "ai-doc" ||
+    (persistence === "ai-doc" && documentArtifact);
   const durableConfirmedFact =
     truth === "durable_fact" ||
     truth === "project_fact" ||
@@ -80,13 +93,33 @@ function documentFamily(candidate = {}) {
   return "document";
 }
 
+export function aiDocArticleTitle(candidate = {}, {
+  issueTitle = "",
+  requirementTitle = "",
+} = {}) {
+  const explicitTitle = text(
+    candidate.articleTitle ||
+    candidate.article_title ||
+    candidate.documentTitle ||
+    candidate.document_title ||
+    candidate.docTitle ||
+    candidate.doc_title,
+  );
+  if (explicitTitle) return explicitTitle;
+  if (text(issueTitle)) return text(issueTitle);
+  if (documentFamily(candidate) === "tech-design" && text(requirementTitle)) {
+    return text(requirementTitle);
+  }
+  return text(candidate.title || candidate.label);
+}
+
 export function confirmedAiDocIdentity(candidate = {}, origin = "http://localhost") {
   const issueKey = text(candidate.issueKey || candidate.issue_key || candidate.issue);
   const family = documentFamily(candidate);
   if (issueKey) return `issue:${issueKey}:${family}`;
+  if (family === "tech-design") return "requirement:tech-design";
   const documentPath = text(candidate.documentPath || candidate.document_path || candidate.path);
   if (documentPath) return `path:${documentPath.replace(/\\/g, "/").replace(/\/+/g, "/")}`;
-  if (family === "tech-design") return "requirement:tech-design";
   return `url:${normalizedHref(candidate.href || candidate.url, origin)}`;
 }
 

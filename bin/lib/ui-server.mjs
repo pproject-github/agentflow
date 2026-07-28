@@ -152,10 +152,13 @@ import {
   addPrdWorkflowCollaborationMember,
   ensurePrdWorkflowCollaboration,
   getPrdWorkflowCollaborationById,
+  getPrdWorkflowCollaborationByShareToken,
   getPrdWorkflowCollaborationForUser,
+  ensurePrdWorkflowShareLink,
   prdWorkflowCollaborationAccess,
   prdWorkflowCollaborationSummary,
   removePrdWorkflowCollaborationMember,
+  revokePrdWorkflowShareLink,
 } from "./prd-workflow-collaboration.mjs";
 
 const MIME = {
@@ -3224,6 +3227,25 @@ function prdWorkflowCollaborationSummaryWithUsers(record, userId) {
       ...member,
       username: String(users[member.userId]?.username || member.userId),
     })),
+  };
+}
+
+function prdWorkflowShareLinkSummary(record, shareToken, publicBaseUrl, userId = "") {
+  const token = String(shareToken || record?.shareToken || "").trim();
+  if (!record || !token) return null;
+  const query = new URLSearchParams({
+    view: "workflow",
+    tapdId: String(record.tapdId || ""),
+    workflowShare: token,
+  });
+  const base = String(publicBaseUrl || "").replace(/\/+$/, "");
+  return {
+    tapdId: String(record.tapdId || ""),
+    url: `${base}/workspace?${query.toString()}`,
+    active: true,
+    readOnly: true,
+    createdAt: record.shareCreatedAt || "",
+    canManage: String(record.ownerId || "") === String(userId || "").trim().toLowerCase(),
   };
 }
 
@@ -7253,14 +7275,22 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
   const flowId = String(params.flowId || "").trim();
   const flowSource = String(params.flowSource || "user").trim() || "user";
   const archived = params.archived === true || params.archived === "1" || params.flowArchived === true;
-  const collaboration = tapdId
+  const shareToken = String(params.workflowShare || params.workflow_share || "").trim();
+  const linkCollaboration = shareToken ? getPrdWorkflowCollaborationByShareToken(shareToken) : null;
+  if (shareToken && (!linkCollaboration || linkCollaboration.tapdId !== tapdId)) {
+    return { error: "Workflow share link is invalid or has been revoked", status: 404 };
+  }
+  const memberCollaboration = tapdId
     ? getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId)
     : null;
-  const access = prdWorkflowCollaborationAccess(collaboration, userCtx?.userId);
+  const collaboration = linkCollaboration || memberCollaboration;
+  const access = linkCollaboration
+    ? { allowed: true, writable: false, role: "viewer", via: "share-link" }
+    : prdWorkflowCollaborationAccess(collaboration, userCtx?.userId);
   if (collaboration && !access.allowed) {
     return { error: "PRD Workflow collaboration permission denied", status: 403 };
   }
-  if (capability === "write" && collaboration && !access.writable) {
+  if (capability === "write" && (linkCollaboration || (collaboration && !access.writable))) {
     return { error: "PRD Workflow collaboration edit permission denied", status: 403 };
   }
   const ownerId = String(collaboration?.ownerId || userCtx?.userId || "").trim();
@@ -7287,15 +7317,18 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     ownerId,
     collaboration,
     collaborationAccess: access,
+    shareToken,
+    sharedByLink: Boolean(linkCollaboration),
     flowId,
     flowSource,
     archived,
   };
 }
 
-function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId = "") {
+function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId = "", shareToken = "") {
   const id = String(tapdId || "").trim();
-  const collaboration = getPrdWorkflowCollaborationForUser(id, userCtx?.userId);
+  const collaboration = getPrdWorkflowCollaborationByShareToken(shareToken)
+    || getPrdWorkflowCollaborationForUser(id, userCtx?.userId);
   const actorScope = `user:${String(collaboration?.ownerId || userCtx?.userId || "")}`;
   return [actorScope, id].join("\t");
 }
@@ -10500,6 +10533,116 @@ export function startUiServer({
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/prd-workflow/share") {
+      const tapdId = String(url.searchParams.get("tapdId") || "").trim();
+      const shareToken = String(url.searchParams.get("workflowShare") || "").trim();
+      if (shareToken) {
+        const record = getPrdWorkflowCollaborationByShareToken(shareToken);
+        if (!record || (tapdId && record.tapdId !== tapdId)) {
+          json(res, 404, { error: "Workflow share link is invalid or has been revoked" });
+          return;
+        }
+        json(res, 200, {
+          ok: true,
+          share: prdWorkflowShareLinkSummary(
+            record,
+            shareToken,
+            serverPublicBaseUrl(req, host, uiPort),
+            userCtx.userId,
+          ),
+        });
+        return;
+      }
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      if (!tapdId) {
+        json(res, 400, { error: "Missing tapdId" });
+        return;
+      }
+      const record = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+      const role = prdWorkflowCollaborationAccess(record, userCtx.userId).role;
+      json(res, 200, {
+        ok: true,
+        canCreate: !record || role === "owner",
+        share: record?.shareToken
+          ? prdWorkflowShareLinkSummary(
+              record,
+              record.shareToken,
+              serverPublicBaseUrl(req, host, uiPort),
+              userCtx.userId,
+            )
+          : null,
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/prd-workflow/share") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+      if (!tapdId) {
+        json(res, 400, { error: "Missing tapdId" });
+        return;
+      }
+      const existing = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+      if (existing && prdWorkflowCollaborationAccess(existing, userCtx.userId).role !== "owner") {
+        json(res, 403, { error: "仅 Workflow 所有者可以创建分享链接" });
+        return;
+      }
+      const result = ensurePrdWorkflowShareLink({ tapdId, userId: userCtx.userId });
+      if (result.error) {
+        json(res, result.status || 400, { error: result.error });
+        return;
+      }
+      const scope = resolvePrdWorkflowScope(root, { ...payload, tapdId }, userCtx, "write");
+      if (!scope.error) prdWorkflowMigrateLegacyState(scope.executionRoot, scope.stateRoot, tapdId);
+      json(res, 200, {
+        ok: true,
+        created: result.created === true,
+        share: prdWorkflowShareLinkSummary(
+          result.record,
+          result.shareToken,
+          serverPublicBaseUrl(req, host, uiPort, payload),
+          userCtx.userId,
+        ),
+      });
+      return;
+    }
+    if (req.method === "DELETE" && url.pathname === "/api/prd-workflow/share") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+      if (!tapdId) {
+        json(res, 400, { error: "Missing tapdId" });
+        return;
+      }
+      const result = revokePrdWorkflowShareLink({ tapdId, userId: userCtx.userId });
+      if (result.error) {
+        json(res, result.status || 400, { error: result.error });
+        return;
+      }
+      json(res, 200, { ok: true, revoked: result.revoked === true, share: null });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/prd-workflow/collaboration") {
       const tapdId = String(url.searchParams.get("tapdId") || "").trim();
       if (!tapdId) {
@@ -10623,6 +10766,7 @@ export function startUiServer({
           flowSource,
           archived,
           workspaceId: url.searchParams.get("workspaceId") || "",
+          workflowShare: url.searchParams.get("workflowShare") || "",
         }, userCtx);
         if (workflowScope.error) {
           json(res, workflowScope.status || 400, { error: workflowScope.error });
@@ -11439,7 +11583,18 @@ export function startUiServer({
       const tapdId = String(url.searchParams.get("tapdId") || "").trim();
       const flowId = String(url.searchParams.get("flowId") || "").trim();
       const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
-      const key = prdWorkflowKey(userCtx, flowSource, flowId, tapdId);
+      const workflowShare = String(url.searchParams.get("workflowShare") || "").trim();
+      const workflowScope = resolvePrdWorkflowScope(root, {
+        tapdId,
+        flowId,
+        flowSource,
+        workflowShare,
+      }, userCtx);
+      if (workflowScope.error) {
+        json(res, workflowScope.status || 400, { error: workflowScope.error });
+        return;
+      }
+      const key = prdWorkflowKey(userCtx, flowSource, flowId, tapdId, workflowShare);
       let set = prdWorkflowSubscribers.get(key);
       if (!set) {
         set = new Set();
@@ -11483,6 +11638,7 @@ export function startUiServer({
           flowSource,
           archived,
           workspaceId: url.searchParams.get("workspaceId") || "",
+          workflowShare: url.searchParams.get("workflowShare") || "",
         }, userCtx);
         if (workflowScope.error) {
           res.writeHead(workflowScope.status || 400, { "Content-Type": "text/plain; charset=utf-8" });

@@ -67,28 +67,28 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
       },
     });
 
-    const shared = await request(owner.token, "/api/prd-workflow/collaboration/share", {
+    const shared = await request(owner.token, "/api/prd-workflow/share", {
       method: "POST",
       body: JSON.stringify({
         tapdId: "1015046",
         flowId: "owner-project",
         flowSource: "user",
-        username: "guest",
       }),
     });
     const sharedPayload = await shared.json();
     assert.equal(shared.status, 200, JSON.stringify(sharedPayload));
-    assert.equal(sharedPayload.collaboration.tapdId, "1015046");
-    assert.equal(sharedPayload.member.username, "guest");
+    assert.equal(sharedPayload.share.tapdId, "1015046");
+    assert.equal(sharedPayload.share.readOnly, true);
+    const workflowShare = new URL(sharedPayload.share.url).searchParams.get("workflowShare");
+    assert.ok(workflowShare);
 
     const guestSnapshot = await request(
       guest.token,
-      "/api/prd-workflow/snapshot?tapdId=1015046&flowId=guest-project&flowSource=user&runtimeOnly=1",
+      `/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1&workflowShare=${encodeURIComponent(workflowShare)}`,
     );
     const guestPayload = await guestSnapshot.json();
     assert.equal(guestSnapshot.status, 200, JSON.stringify(guestPayload));
     assert.equal(guestPayload.snapshot.pointer, "Owner shared Workflow");
-    assert.equal(guestPayload.snapshot.collaboration.workflow.role, "editor");
 
     const outsiderSnapshot = await request(
       outsider.token,
@@ -108,6 +108,17 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
       "1015046.cache.json",
     );
     assert.equal(fs.existsSync(canonicalCache), true);
+
+    const revoked = await request(owner.token, "/api/prd-workflow/share", {
+      method: "DELETE",
+      body: JSON.stringify({ tapdId: "1015046" }),
+    });
+    assert.equal(revoked.status, 200);
+    const revokedSnapshot = await request(
+      guest.token,
+      `/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1&workflowShare=${encodeURIComponent(workflowShare)}`,
+    );
+    assert.equal(revokedSnapshot.status, 404);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome == null) delete process.env.AGENTFLOW_HOME;
