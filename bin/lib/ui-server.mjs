@@ -160,6 +160,16 @@ import {
   removePrdWorkflowCollaborationMember,
   revokePrdWorkflowShareLink,
 } from "./prd-workflow-collaboration.mjs";
+import {
+  legacyOverallToGlobalState,
+  materializeWorkflowGlobalState,
+  mergeWorkflowArtifactLists,
+  mergeWorkflowArtifacts,
+  mergeWorkflowGlobalState,
+  normalizeWorkflowReference,
+  normalizeWorkflowReport,
+  workflowRuntimeRevision,
+} from "./workflow-report.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -176,6 +186,11 @@ const MIME = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
 };
+const ADMIN_ONLY_USER_ENV_KEYS = new Set([
+  "CURSOR_API_KEYS",
+  "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES",
+  "CURSOR_API_KEY_COOLDOWN_MINUTES",
+]);
 
 const UI_SERVER_STARTED_AT = new Date().toISOString();
 const UI_SERVER_APP_VERSION = (() => {
@@ -8956,6 +8971,19 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
               incomingImplementationMetadata,
             )
           : previousImplementationMetadata;
+      const previousGlobalStatePatch =
+        events[index]?.globalStatePatch || events[index]?.global_state_patch;
+      const incomingGlobalStatePatch =
+        entry?.globalStatePatch || entry?.global_state_patch;
+      const mergedGlobalStatePatch =
+        incomingGlobalStatePatch && typeof incomingGlobalStatePatch === "object" && !Array.isArray(incomingGlobalStatePatch)
+          ? mergeWorkflowGlobalState(
+              previousGlobalStatePatch && typeof previousGlobalStatePatch === "object" && !Array.isArray(previousGlobalStatePatch)
+                ? previousGlobalStatePatch
+                : {},
+              incomingGlobalStatePatch,
+            )
+          : previousGlobalStatePatch;
       const prevArtifact = prdWorkflowRuntimeEventArtifactSignature(events[index]);
       const nextArtifact = prdWorkflowRuntimeEventArtifactSignature(entry);
       artifactConflict = Boolean(prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
@@ -8971,15 +8999,23 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
         ...events[index],
         ...entry,
         links: prdWorkflowMergeRuntimeEventArrays(events[index].links, entry.links),
-        artifacts: prdWorkflowMergeRuntimeEventArrays(events[index].artifacts, entry.artifacts),
+        artifacts: mergeWorkflowArtifactLists(events[index].artifacts, entry.artifacts, entry.artifactScope || "action"),
         outputs: prdWorkflowMergeRuntimeEventArrays(events[index].outputs, entry.outputs),
         results: prdWorkflowMergeRuntimeEventArrays(events[index].results, entry.results),
+        actionModel: mergeWorkflowGlobalState(events[index].actionModel, entry.actionModel),
+        globalStateRemove: prdWorkflowMergeRuntimeEventArrays(
+          events[index].globalStateRemove || events[index].global_state_remove,
+          entry.globalStateRemove || entry.global_state_remove,
+        ),
         createdAt: events[index].createdAt || entry.createdAt,
         startedAt: events[index].startedAt || entry.startedAt,
         idempotencyHistory: [...new Set(idempotencyHistory)].slice(-50),
       };
       if (mergedImplementationMetadata && typeof mergedImplementationMetadata === "object" && !Array.isArray(mergedImplementationMetadata)) {
         events[index].implementationMetadata = mergedImplementationMetadata;
+      }
+      if (mergedGlobalStatePatch && typeof mergedGlobalStatePatch === "object" && !Array.isArray(mergedGlobalStatePatch)) {
+        events[index].globalStatePatch = mergedGlobalStatePatch;
       }
       if (artifactConflict) {
         events[index] = {
@@ -9071,7 +9107,7 @@ function prdWorkflowMergeRuntimeEventList(snapshotEvents = [], runtimeEvents = [
         ...out[index],
         ...event,
         links: prdWorkflowMergeRuntimeEventArrays(out[index].links, event.links),
-        artifacts: prdWorkflowMergeRuntimeEventArrays(out[index].artifacts, event.artifacts),
+        artifacts: mergeWorkflowArtifactLists(out[index].artifacts, event.artifacts, event.artifactScope || "action"),
         outputs: prdWorkflowMergeRuntimeEventArrays(out[index].outputs, event.outputs),
         results: prdWorkflowMergeRuntimeEventArrays(out[index].results, event.results),
       };
@@ -9279,13 +9315,55 @@ function prdWorkflowOverallFromEvents(tapdId, snapshot = {}, runtimeEvents = [])
   return prdWorkflowFinalizeOverall(tapdId, overall);
 }
 
+function prdWorkflowEventUpdatesOverall(event) {
+  if (!event || typeof event !== "object" || Array.isArray(event)) return false;
+  return Boolean(
+    event.overallPatch ||
+    event.overall_patch ||
+    event.overallOwnerFromActor === true ||
+    event.overall_owner_from_actor === true ||
+    event.implementationMetadata ||
+    event.implementation_metadata ||
+    (Array.isArray(event.overallRemove) && event.overallRemove.length) ||
+    (Array.isArray(event.overall_remove) && event.overall_remove.length)
+  );
+}
+
+function prdWorkflowGlobalStateFromEvents(tapdId, snapshot = {}, runtimeEvents = []) {
+  let legacyOverall = prdWorkflowOverallFromEvents(tapdId, snapshot, []);
+  let state = materializeWorkflowGlobalState(tapdId, snapshot, [], legacyOverall);
+  const events = [...(Array.isArray(runtimeEvents) ? runtimeEvents : [])].sort((left, right) => {
+    const leftAt = Date.parse(left?.updatedAt || left?.occurredAt || left?.completedAt || left?.createdAt || left?.observedAt || "");
+    const rightAt = Date.parse(right?.updatedAt || right?.occurredAt || right?.completedAt || right?.createdAt || right?.observedAt || "");
+    if (!Number.isFinite(leftAt) && !Number.isFinite(rightAt)) return 0;
+    if (!Number.isFinite(leftAt)) return -1;
+    if (!Number.isFinite(rightAt)) return 1;
+    return leftAt - rightAt;
+  });
+  for (const event of events) {
+    if (prdWorkflowEventUpdatesOverall(event)) {
+      legacyOverall = prdWorkflowOverallFromEvents(tapdId, { overall: legacyOverall }, [event]);
+      state = mergeWorkflowGlobalState(state, legacyOverallToGlobalState(tapdId, legacyOverall));
+    }
+    state = materializeWorkflowGlobalState(tapdId, { globalState: state }, [event], {});
+  }
+  return state;
+}
+
 function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   const runtime = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
   const runtimeEvents = runtime.events;
   const events = prdWorkflowMergeRuntimeEventList(snapshot?.events, runtimeEvents);
+  const overall = prdWorkflowOverallFromEvents(tapdId, snapshot, runtimeEvents);
+  const globalState = prdWorkflowGlobalStateFromEvents(tapdId, snapshot, runtimeEvents);
+  const artifacts = mergeWorkflowArtifacts(snapshot?.artifacts, runtimeEvents);
   return {
     ...snapshot,
-    overall: prdWorkflowOverallFromEvents(tapdId, snapshot, runtimeEvents),
+    workflow: globalState.workflow,
+    overall,
+    globalState,
+    artifacts,
+    runtimeRevision: workflowRuntimeRevision(globalState, artifacts, runtimeEvents),
     runtimeEvents,
     events,
     sources: {
@@ -10877,6 +10955,55 @@ export function startUiServer({
       }
       return;
     }
+    if (req.method === "GET" && url.pathname === "/api/workflows/state") {
+      try {
+        const workflow = normalizeWorkflowReference({
+          workflow: {
+            key: url.searchParams.get("workflow") || "",
+            namespace: url.searchParams.get("namespace") || "",
+            id: url.searchParams.get("id") || "",
+          },
+        });
+        if (workflow.error) {
+          json(res, 400, { error: workflow.error });
+          return;
+        }
+        if (workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported workflow namespace: ${workflow.namespace}` });
+          return;
+        }
+        const flowId = String(url.searchParams.get("flowId") || "").trim();
+        const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          tapdId: workflow.id,
+          flowId,
+          flowSource,
+          archived: url.searchParams.get("archived") === "1",
+          workspaceId: url.searchParams.get("workspaceId") || "",
+          workflowShare: url.searchParams.get("workflowShare") || "",
+        }, userCtx);
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
+        }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, workflow.id);
+        const runtimeOnly = url.searchParams.get("runtimeOnly") === "1" ||
+          url.searchParams.get("runtime_only") === "1" ||
+          url.searchParams.get("cached") === "1";
+        const baseSnapshot = runtimeOnly
+          ? prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, workflow.id, userCtx, { flowSource, flowId })
+          : await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, workflow.id, userCtx, { flowSource, flowId });
+        const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+          baseSnapshot,
+          getSessionTokenFromRequest(req) || "",
+        );
+        json(res, 200, { ok: true, workflow, snapshot });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/prd-workflow/snapshot") {
       try {
         const tapdId = String(url.searchParams.get("tapdId") || "").trim();
@@ -10918,6 +11045,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/snapshot") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -11082,6 +11213,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/action") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -11504,6 +11639,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/idempotency") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -11571,7 +11710,117 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workflows/report") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const report = normalizeWorkflowReport(payload);
+        if (report.error) {
+          json(res, 400, { error: report.error });
+          return;
+        }
+        if (report.workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported workflow namespace: ${report.workflow.namespace}` });
+          return;
+        }
+        const tapdId = report.workflow.id;
+        const flowId = report.flowId;
+        const flowSource = report.flowSource || "user";
+        const archived = payload.archived === true || payload.flowArchived === true;
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId,
+          flowId,
+          flowSource,
+          archived,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
+        }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
+        const currentSnapshot = prdWorkflowMaterializeSnapshot(
+          workflowScope.executionRoot,
+          scopedRoot,
+          tapdId,
+          userCtx,
+          { flowSource, flowId },
+        );
+        const acceptedRevisions = new Set([
+          String(currentSnapshot.runtimeRevision || "").trim(),
+          String(currentSnapshot.revision || "").trim(),
+        ].filter(Boolean));
+        if (report.expectedRevision && acceptedRevisions.size && !acceptedRevisions.has(report.expectedRevision)) {
+          json(res, 409, {
+            error: "Workflow state changed; refresh before reporting",
+            conflict: {
+              type: "workflow-revision-conflict",
+              expectedRevision: report.expectedRevision,
+              currentRevision: currentSnapshot.runtimeRevision || currentSnapshot.revision || "",
+              workflow: report.workflow,
+            },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
+        if (report.idempotencyKey) {
+          const existing = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, report.idempotencyKey);
+          if (existing) {
+            json(res, 200, {
+              ok: true,
+              alreadyApplied: true,
+              report,
+              event: existing,
+              snapshot: currentSnapshot,
+            });
+            return;
+          }
+        }
+        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+          ...report.event,
+          tapdId,
+          actor: {
+            userId: String(userCtx.userId || ""),
+            username: String(authUser.username || userCtx.userId || ""),
+          },
+        });
+        if (!event) throw new Error("Failed to store workflow report");
+        const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
+          prdWorkflowMaterializeSnapshot(
+            workflowScope.executionRoot,
+            scopedRoot,
+            tapdId,
+            userCtx,
+            { flowSource, flowId },
+          ),
+          getSessionTokenFromRequest(req) || "",
+        );
+        prdWorkflowBroadcast(
+          prdWorkflowKey(userCtx, flowSource, flowId, tapdId),
+          { type: "workflow-report", tapdId, workflow: report.workflow, event, snapshot },
+        );
+        json(res, 200, { ok: true, report, event, snapshot });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/event") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -11626,6 +11875,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/review-link") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -14129,7 +14382,10 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/ui-context") {
       try {
-        json(res, 200, { workspaceRoot: root, ...uiConfig });
+        json(res, 200, {
+          ...uiConfig,
+          ...(authUser?.isAdmin ? { workspaceRoot: root } : {}),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -14199,6 +14455,10 @@ export function startUiServer({
     }
 
     if (req.method === "GET" && url.pathname === "/api/agentflow-config") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
       try {
         const cfg = readAgentflowUserConfigObject();
         const opencodeProvider = typeof cfg.opencodeProvider === "string" ? cfg.opencodeProvider : "";
@@ -14210,6 +14470,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/agentflow-config") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
@@ -14299,8 +14563,11 @@ export function startUiServer({
 
     if (req.method === "GET" && url.pathname === "/api/user-env") {
       try {
+        const userEnvRows = readUserEnvRows(userCtx.userId);
         json(res, 200, {
-          env: readUserEnvRows(userCtx.userId),
+          env: authUser?.isAdmin
+            ? userEnvRows
+            : userEnvRows.filter((row) => !ADMIN_ONLY_USER_ENV_KEYS.has(String(row?.key || "").trim())),
           globalEnv: authUser?.isAdmin ? readGlobalEnvRows() : [],
           canEditGlobalEnv: Boolean(authUser?.isAdmin),
         });
@@ -14323,13 +14590,23 @@ export function startUiServer({
           json(res, 403, { error: "Admin permission required" });
           return;
         }
-        const envRows = writeUserEnvRows(userCtx.userId, payload?.env || []);
+        const requestedEnvRows = Array.isArray(payload?.env) ? payload.env : [];
+        if (!authUser?.isAdmin && requestedEnvRows.some((row) => ADMIN_ONLY_USER_ENV_KEYS.has(String(row?.key || "").trim()))) {
+          json(res, 403, { error: "Admin permission required for infrastructure environment keys" });
+          return;
+        }
+        const preservedAdminRows = authUser?.isAdmin
+          ? []
+          : readUserEnvRows(userCtx.userId).filter((row) => ADMIN_ONLY_USER_ENV_KEYS.has(String(row?.key || "").trim()));
+        const envRows = writeUserEnvRows(userCtx.userId, [...preservedAdminRows, ...requestedEnvRows]);
         const globalEnvRows = authUser?.isAdmin && Object.prototype.hasOwnProperty.call(payload || {}, "globalEnv")
           ? writeGlobalEnvRows(payload?.globalEnv || [])
           : readGlobalEnvRows();
         json(res, 200, {
           success: true,
-          env: envRows,
+          env: authUser?.isAdmin
+            ? envRows
+            : envRows.filter((row) => !ADMIN_ONLY_USER_ENV_KEYS.has(String(row?.key || "").trim())),
           globalEnv: authUser?.isAdmin ? globalEnvRows : [],
           canEditGlobalEnv: Boolean(authUser?.isAdmin),
         });
@@ -14340,6 +14617,10 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/update-model-lists") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
       try {
         let opencodeProviderOverride = "";
         const raw = await readBody(req);

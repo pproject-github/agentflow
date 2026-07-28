@@ -40,6 +40,8 @@ Commands:
   logs --run-id <id>
   display-outputs --flow-id <id> [--flow-source user]
   sync-workspace --workspace <id>
+  workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only]
+  workflow-report --workflow tapd:<id> --file <report.json> [--expected-revision <revision>]
 `;
 }
 
@@ -227,6 +229,51 @@ function requireFlowId(args) {
   return flowId;
 }
 
+function parseWorkflowReference(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const separator = text.indexOf(":");
+  if (separator <= 0 || separator === text.length - 1) {
+    throw new Error(`Invalid workflow reference "${text}". Expected namespace:id, for example tapd:1015046.`);
+  }
+  const namespace = text.slice(0, separator).trim().toLowerCase();
+  const id = text.slice(separator + 1).trim();
+  if (!namespace || !id) {
+    throw new Error(`Invalid workflow reference "${text}". Expected namespace:id.`);
+  }
+  return { namespace, id, key: `${namespace}:${id}` };
+}
+
+function workflowReferenceFromArgs(args, required = true) {
+  const explicit = option(args, "workflow");
+  if (explicit) return parseWorkflowReference(explicit);
+  const tapdId = option(args, "tapd-id") || option(args, "tapd");
+  if (tapdId) return { namespace: "tapd", id: tapdId, key: `tapd:${tapdId}` };
+  if (required) throw new Error("Missing --workflow namespace:id.");
+  return null;
+}
+
+function readJsonFile(filePath) {
+  const requested = String(filePath || "").trim();
+  if (!requested) throw new Error("Missing --file <report.json>.");
+  const resolved = path.resolve(requested);
+  let source;
+  try {
+    source = fs.readFileSync(resolved, "utf8");
+  } catch (error) {
+    throw new Error(`Cannot read JSON file ${resolved}: ${error?.message || String(error)}`);
+  }
+  try {
+    const value = JSON.parse(source);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("top-level value must be an object");
+    }
+    return value;
+  } catch (error) {
+    throw new Error(`Invalid JSON file ${resolved}: ${error?.message || String(error)}`);
+  }
+}
+
 async function main() {
   loadEnvFiles();
   const args = parseArgv(process.argv.slice(2));
@@ -329,6 +376,42 @@ async function main() {
     const flowSource = option(args, "flow-source") || "user";
     const graphPayload = await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`);
     printJson({ flowId, flowSource, displayOutputs: extractDisplayOutputs(graphPayload.graph) });
+    return;
+  }
+
+  if (command === "workflow-get") {
+    const workflow = workflowReferenceFromArgs(args);
+    if (workflow.namespace !== "tapd") {
+      throw new Error(`Unsupported workflow namespace: ${workflow.namespace}`);
+    }
+    const flowId = option(args, "flow-id") || option(args, "flow");
+    const flowSource = option(args, "flow-source") || "user";
+    const runtimeOnly = args["runtime-only"] === true || args.cached === true ? "1" : "";
+    printJson(await httpJson(args, `/api/workflows/state${query({
+      workflow: workflow.key,
+      flowId,
+      flowSource,
+      runtimeOnly,
+    })}`));
+    return;
+  }
+
+  if (command === "workflow-report") {
+    const body = readJsonFile(option(args, "file"));
+    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(body?.workflow?.key || "");
+    if (!workflow && !(body?.workflow?.namespace && body?.workflow?.id)) {
+      throw new Error("Missing workflow reference. Pass --workflow namespace:id or include workflow.namespace and workflow.id in the JSON file.");
+    }
+    if (workflow) body.workflow = workflow;
+    const expectedRevision = option(args, "expected-revision");
+    const idempotencyKey = option(args, "idempotency-key");
+    const flowId = option(args, "flow-id") || option(args, "flow");
+    const flowSource = option(args, "flow-source");
+    if (expectedRevision) body.expectedRevision = expectedRevision;
+    if (idempotencyKey) body.idempotencyKey = idempotencyKey;
+    if (flowId) body.flowId = flowId;
+    if (flowSource) body.flowSource = flowSource;
+    printJson(await httpJson(args, "/api/workflows/report", { method: "POST", body }));
     return;
   }
 

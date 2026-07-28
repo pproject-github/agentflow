@@ -6,6 +6,11 @@ import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
 const CURSOR_API_KEYS_ENV = "CURSOR_API_KEYS";
 const CURSOR_API_KEY_COOLDOWN_ENV = "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES";
+const ADMIN_ONLY_ENV_KEYS = new Set([
+  CURSOR_API_KEYS_ENV,
+  CURSOR_API_KEY_COOLDOWN_ENV,
+  "CURSOR_API_KEY_COOLDOWN_MINUTES",
+]);
 const MODEL_LIST_KEYS = ["cursor", "opencode", "claudeCode", "codex"];
 
 function emptyModelListsPayload() {
@@ -467,37 +472,40 @@ export default function SettingsPage({ authUser }) {
   }, [hiddenModels, saveHiddenModels]);
 
   useEffect(() => {
-    loadContext();
-    loadLists();
     loadUserEnv();
     if (authUser?.isAdmin) {
+      void loadContext();
+      void loadLists();
       void loadUserAllowlist();
       void loadStorageConfig();
-    }
-    (async () => {
-      try {
-        const r = await fetch("/api/agentflow-config");
-        if (r.ok) {
-          const j = await r.json();
-          const p = typeof j.opencodeProvider === "string" ? j.opencodeProvider : "";
-          setOpcodeDraft(p);
-          lastSyncedOpencode.current = p;
-          try {
-            localStorage.setItem(OPCODE_PLAN_KEY, p);
-          } catch (_) {}
-        } else {
+      void (async () => {
+        try {
+          const r = await fetch("/api/agentflow-config");
+          if (r.ok) {
+            const j = await r.json();
+            const p = typeof j.opencodeProvider === "string" ? j.opencodeProvider : "";
+            setOpcodeDraft(p);
+            lastSyncedOpencode.current = p;
+            try {
+              localStorage.setItem(OPCODE_PLAN_KEY, p);
+            } catch (_) {}
+          } else {
+            const plan = loadOpcodePlan();
+            setOpcodeDraft(plan);
+            lastSyncedOpencode.current = plan;
+          }
+        } catch {
           const plan = loadOpcodePlan();
           setOpcodeDraft(plan);
           lastSyncedOpencode.current = plan;
+        } finally {
+          opencodeConfigReady.current = true;
         }
-      } catch {
-        const plan = loadOpcodePlan();
-        setOpcodeDraft(plan);
-        lastSyncedOpencode.current = plan;
-      } finally {
-        opencodeConfigReady.current = true;
-      }
-    })();
+      })();
+    } else {
+      setWorkspaceRoot("");
+      opencodeConfigReady.current = false;
+    }
   }, [authUser?.isAdmin, loadContext, loadLists, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
 
   useEffect(() => {
@@ -512,6 +520,7 @@ export default function SettingsPage({ authUser }) {
 
   /** OpenCode Provider：停止输入约 450ms 后写入 config 并触发模型清单更新 */
   useEffect(() => {
+    if (!authUser?.isAdmin) return;
     if (!opencodeConfigReady.current) return;
     const trimmed = opcodeDraft.trim();
     if (trimmed === lastSyncedOpencode.current) return;
@@ -600,6 +609,9 @@ export default function SettingsPage({ authUser }) {
     );
   }, [authUser?.isAdmin, modelVisibilityHidden, modelVisibilitySaving, modelVisibleCounts, setModelVisible]);
   const allowlistEnabled = allowlistFileUsers.length > 0 || allowlistEnvUsers.length > 0;
+  const visibleEnvRows = authUser?.isAdmin
+    ? envRows
+    : envRows.filter((row) => !ADMIN_ONLY_ENV_KEYS.has(String(row?.key || "").trim()));
   const cursorApiKeyScope = authUser?.isAdmin && cursorApiKeyGlobal ? "global" : "user";
   const cursorApiKeyRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEYS_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
   const cursorApiKeyRecords = useMemo(() => parseCursorApiKeyRecords(cursorApiKeyRow?.value || ""), [cursorApiKeyRow?.value]);
@@ -667,6 +679,10 @@ export default function SettingsPage({ authUser }) {
       setEnvErr(t("settings:env.invalidKey"));
       return;
     }
+    if (!authUser?.isAdmin && ADMIN_ONLY_ENV_KEYS.has(k)) {
+      setEnvErr("该运行基础设施变量仅管理员可配置。");
+      return;
+    }
     setEnvRows((rows) => [{ id: newId(), key: k, value: v, scope: authUser?.isAdmin && draftGlobal ? "global" : "user" }, ...rows]);
     setDraftKey("");
     setDraftVal("");
@@ -677,8 +693,13 @@ export default function SettingsPage({ authUser }) {
   }, []);
 
   const updateEnvRow = useCallback((id, patch) => {
+    const nextKey = String(patch?.key || "").trim();
+    if (!authUser?.isAdmin && nextKey && ADMIN_ONLY_ENV_KEYS.has(nextKey)) {
+      setEnvErr("该运行基础设施变量仅管理员可配置。");
+      return;
+    }
     setEnvRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  }, []);
+  }, [authUser?.isAdmin]);
 
   const toggleEnvValueVisible = useCallback((id) => {
     setVisibleEnvIds((prev) => {
@@ -739,16 +760,18 @@ export default function SettingsPage({ authUser }) {
           <header className="af-settings-hero">
             <h1 className="af-settings-h1">{t("common:app.name")} {t("settings:title")}</h1>
             <p className="af-settings-lead">
-              {t("settings:workspace.description")}
+              {authUser?.isAdmin ? t("settings:workspace.description") : t("settings:env.note")}
             </p>
-            {contextErr ? <p className="af-err af-settings-api-hint">{contextErr}</p> : null}
-            {listsErr ? <p className="af-err af-settings-api-hint">{listsErr}</p> : null}
+            {authUser?.isAdmin && contextErr ? <p className="af-err af-settings-api-hint">{contextErr}</p> : null}
+            {authUser?.isAdmin && listsErr ? <p className="af-err af-settings-api-hint">{listsErr}</p> : null}
             {envErr ? <p className="af-err af-settings-api-hint">{envErr}</p> : null}
             {storageErr ? <p className="af-err af-settings-api-hint">{storageErr}</p> : null}
           </header>
 
           <div className="af-settings-layout">
             <div className="af-settings-bento">
+              {authUser?.isAdmin ? (
+                <>
               <section className="af-set-card af-set-card--narrow af-set-card--low af-set-workspace">
                 <div className="af-set-card-inner">
                   <div className="af-set-card-head">
@@ -1082,6 +1105,8 @@ export default function SettingsPage({ authUser }) {
                   {listsLoading ? t("settings:cursor.modelList.fetching") : t("settings:cursor.modelList.refresh")}
                 </button>
               </section>
+                </>
+              ) : null}
 
               <section className="af-set-card af-set-card--wide af-set-card--low af-set-env">
                 <div className="af-set-env-head">
@@ -1157,7 +1182,7 @@ export default function SettingsPage({ authUser }) {
                     </div>
                   </div>
 
-                  {envRows.map((row) => (
+                  {visibleEnvRows.map((row) => (
                     <div key={row.id} className={"af-set-env-row" + (authUser?.isAdmin ? " af-set-env-row--scoped" : "")}>
                       <div className="af-set-env-cell">
                         <input
@@ -1405,6 +1430,7 @@ export default function SettingsPage({ authUser }) {
               ) : null}
 
               <section className="af-settings-rail" aria-label={t("settings:title")}>
+              {authUser?.isAdmin ? (
               <div className="af-set-rail-card af-set-rail-card--accent">
                 <div className="af-set-rail-inner">
                   <h3 className="af-set-rail-h3">{t("settings:system.title")}</h3>
@@ -1475,6 +1501,7 @@ export default function SettingsPage({ authUser }) {
                   <span className="material-symbols-outlined">vital_signs</span>
                 </div>
               </div>
+              ) : null}
 
               <div className="af-set-rail-card">
                 <h3 className="af-set-rail-h3 af-set-rail-h3--sm">{t("settings:language.title")}</h3>

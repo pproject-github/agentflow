@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentFlow CLI"
-  short_description: "Directly call AgentFlow APIs with a token-backed CLI."
-  default_prompt: "Use the bundled AgentFlow CLI to list workspaces or flows, run a flow, inspect run logs, and fetch display outputs. Use AGENTFLOW_TOKEN from env or .env and default the base URL to the internal AgentFlow service."
+  short_description: "Run flows and report Workflow state through AgentFlow APIs"
+  default_prompt: "Use $agentflow-cli to operate AgentFlow and report Workflow actions, artifacts, or global state with the bundled token-backed CLI."

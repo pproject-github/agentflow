@@ -7173,6 +7173,109 @@ function PrdWorkflowOverallCard({ overall, tapdId }) {
   );
 }
 
+function WorkflowGlobalStateField({ fieldKey, field }) {
+  if (!field || typeof field !== "object" || Array.isArray(field)) return null;
+  const label = String(field.label || fieldKey || "").trim();
+  const requestedType = String(field.type || "text").trim().toLowerCase();
+  const type = ["text", "user", "chips", "list", "link"].includes(requestedType) ? requestedType : "text";
+  const values = prdWorkflowOverallDisplayList(field.value);
+  if (!values.length) return null;
+  if (type === "list") {
+    return (
+      <div className="af-prd-overall-platform__rules">
+        <small>{label}</small>
+        <ul>{values.map((value, index) => <li key={`${fieldKey}-${index}-${value}`}>{value}</li>)}</ul>
+      </div>
+    );
+  }
+  if (type === "link") {
+    const rawValue = field.value && typeof field.value === "object" && !Array.isArray(field.value) ? field.value : {};
+    const href = String(field.href || field.url || rawValue.href || rawValue.url || "").trim();
+    return (
+      <div className="af-prd-overall-platform__row af-prd-overall-platform__row--link">
+        <small>{label}</small>
+        {href ? (
+          <a href={href} target="_blank" rel="noreferrer">
+            <span>{values[0]}</span>
+            <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+          </a>
+        ) : <strong>{values[0]}</strong>}
+      </div>
+    );
+  }
+  return (
+    <div className={`af-prd-overall-platform__row af-prd-overall-platform__row--${type}`}>
+      <small>{label}</small>
+      <div>{values.map((value, index) => <span key={`${fieldKey}-${index}-${value}`}>{value}</span>)}</div>
+    </div>
+  );
+}
+
+function WorkflowGlobalStateSection({ sectionKey, section }) {
+  if (!section || typeof section !== "object" || Array.isArray(section)) return null;
+  const fields = section.fields && typeof section.fields === "object" && !Array.isArray(section.fields)
+    ? Object.entries(section.fields)
+    : [];
+  const visibleFields = fields.filter(([, field]) => (
+    field && typeof field === "object" && prdWorkflowOverallDisplayList(field.value).length
+  ));
+  if (!visibleFields.length) return null;
+  return (
+    <section className="af-prd-overall-platform">
+      <div className="af-prd-overall-platform__head">
+        <strong>{String(section.title || sectionKey || "").trim()}</strong>
+      </div>
+      {visibleFields.map(([fieldKey, field]) => (
+        <WorkflowGlobalStateField key={fieldKey} fieldKey={fieldKey} field={field} />
+      ))}
+    </section>
+  );
+}
+
+function WorkflowGlobalStateCard({ globalState, tapdId }) {
+  const state = globalState && typeof globalState === "object" && !Array.isArray(globalState) ? globalState : {};
+  const workflow = state.workflow && typeof state.workflow === "object" && !Array.isArray(state.workflow) ? state.workflow : {};
+  const sections = state.sections && typeof state.sections === "object" && !Array.isArray(state.sections) ? state.sections : {};
+  const title = String(state.title || "").trim();
+  const url = String(state.url || "").trim();
+  const status = prdWorkflowOverallDisplayValue(state.status);
+  const workflowId = String(workflow.id || tapdId || "").trim();
+  const sectionEntries = Object.entries(sections).filter(([sectionKey, section]) => (
+    sectionKey && section && typeof section === "object" && !Array.isArray(section)
+  ));
+  const hasReportedContent = Boolean(title || url || status || sectionEntries.length);
+  if (!workflowId && !hasReportedContent) return null;
+  return (
+    <article className="af-prd-workflow-card af-prd-overall">
+      <div className="af-prd-workflow-card__head">
+        <h2>需求概览</h2>
+        {status ? <span className="af-prd-overall__status">{status}</span> : null}
+      </div>
+      {(title || url || workflowId) ? (
+        <div className="af-prd-overall__requirement">
+          {url ? (
+            <a href={url} target="_blank" rel="noreferrer">
+              <strong>{title || `${workflow.namespace || "Workflow"} ${workflowId}`}</strong>
+              <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+            </a>
+          ) : <strong>{title || `${workflow.namespace === "tapd" ? "TAPD" : "Workflow"} ${workflowId}`}</strong>}
+        </div>
+      ) : null}
+      {hasReportedContent ? (
+        <div className="af-prd-overall__platforms">
+          {sectionEntries.map(([sectionKey, section]) => (
+            <WorkflowGlobalStateSection key={sectionKey} sectionKey={sectionKey} section={section} />
+          ))}
+        </div>
+      ) : (
+        <p className="af-prd-workflow-muted">
+          暂无全局状态。各阶段可通过 Workflow 上报逐步补充负责人、配置、规则和其它上下文。
+        </p>
+      )}
+    </article>
+  );
+}
+
 function PrdWorkflowTimelinePanel({
   tapdId,
   setTapdId,
@@ -7226,7 +7329,7 @@ function PrdWorkflowTimelinePanel({
   const activeAction = collaboration.activeAction && typeof collaboration.activeAction === "object" ? collaboration.activeAction : null;
   const clientObservations = Array.isArray(snapshot?.clientObservations) ? snapshot.clientObservations : [];
   const rawOutput = String(snapshot?.rawOutput || "");
-  const overall = snapshot?.overall && typeof snapshot.overall === "object" ? snapshot.overall : null;
+  const globalState = snapshot?.globalState && typeof snapshot.globalState === "object" ? snapshot.globalState : null;
   const workflowSteps = prdWorkflowFlowSteps(phase);
   const loadSharing = useCallback(async () => {
     const id = String(tapdId || "").trim();
@@ -7512,7 +7615,7 @@ function PrdWorkflowTimelinePanel({
         </article>
 
         <aside className="af-prd-workflow-side" aria-label="Workflow related links">
-          <PrdWorkflowOverallCard overall={overall} tapdId={tapdId} />
+          <WorkflowGlobalStateCard globalState={globalState} tapdId={tapdId} />
           {otherArtifacts.length ? (
             <article className="af-prd-workflow-card">
               <div className="af-prd-workflow-card__head">
