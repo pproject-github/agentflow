@@ -21522,10 +21522,10 @@ button.af-exec-history-card {
   color: #c9f8dc;
 }
 
-/* ── 全局运行中指示器（左下角） ── */
+/* ── 全局运行中指示器（右下角，避开左侧用户区） ── */
 .af-run-indicator {
   position: fixed;
-  left: 1rem;
+  right: 1rem;
   bottom: 1rem;
   z-index: 9000;
   font-family: var(--af-body);
@@ -21625,7 +21625,7 @@ button.af-exec-history-card {
 
 .af-run-indicator__menu {
   position: absolute;
-  left: 0;
+  right: 0;
   bottom: calc(100% + 0.5rem);
   min-width: 18rem;
   max-height: 60vh;
