@@ -1,0 +1,26 @@
+bin/lib/model-config.mjs
+  s_d99100a467f052::t_f54f162ed04843 8-12,17
+test/model-config.test.mjs
+  s_d99100a467f052::t_f54f162ed04843 1-36
+bin/lib/agent-runners.mjs
+  s_d99100a467f052::t_f54f162ed04843 308-318,591,609,1540-1541
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c7b172daa12ecd613fb3f116e0c3bc7828e0d413",
+  "prompts": {},
+  "logical_commit_id": "c7b172daa12ecd613fb3f116e0c3bc7828e0d413",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 30896,
+      "total_deletions": 1461
+    }
+  }
+}
