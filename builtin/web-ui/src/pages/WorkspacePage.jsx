@@ -7420,7 +7420,7 @@ function PrdWorkflowTimelinePanel({
     }
   };
   const copySharingLink = async () => {
-    const copied = await copyTextToClipboard(sharing?.url || "");
+    const copied = await copyTextToClipboard(sharing?.shortUrl || sharing?.url || "");
     setShareCopyState(copied ? "已复制" : "复制失败");
   };
   const revokeSharingLink = async () => {
@@ -7444,6 +7444,7 @@ function PrdWorkflowTimelinePanel({
       setShareBusy(false);
     }
   };
+  const sharingUrl = sharing?.shortUrl || sharing?.url || "";
   return (
     <main className="af-prd-workflow af-prd-workflow--timeline" aria-label="PRD Workflow">
       <section className="af-prd-workflow__statusbar">
@@ -7773,12 +7774,12 @@ function PrdWorkflowTimelinePanel({
                 通过只读链接分享 TAPD {tapdId} 的需求流程；不会分享当前 Project、画布或项目文件。
               </p>
               {shareLoading ? <div className="af-display-link-modal__empty">正在生成分享链接...</div> : null}
-              {!shareLoading && sharing?.url ? (
+              {!shareLoading && sharingUrl ? (
                 <>
                   <div className="af-display-link-modal__url">
                   <input
                     type="text"
-                    value={sharing.url}
+                    value={sharingUrl}
                     readOnly
                     onFocus={(event) => event.currentTarget.select()}
                     aria-label="Workflow 分享链接"
@@ -7798,7 +7799,7 @@ function PrdWorkflowTimelinePanel({
                   </div>
                 </>
               ) : null}
-              {!shareLoading && !sharing?.url && shareCanCreate ? (
+              {!shareLoading && !sharingUrl && shareCanCreate ? (
                 <button type="button" className="af-flow-snippet-modal__btn" disabled={shareBusy} onClick={() => void createSharingLink()}>
                   {shareBusy ? "生成中..." : "生成分享链接"}
                 </button>
