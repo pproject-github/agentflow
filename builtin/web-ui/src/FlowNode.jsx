@@ -75,7 +75,19 @@ function promptEditorHeightForText(el, text) {
   return Math.ceil(rows * lineHeight + paddingTop + paddingBottom + borderTop + borderBottom);
 }
 
-export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onProvideValueChange, onNodeBodyChange, onNodeImagesChange, modelLists, onModelChange }) {
+export function FlowNode({
+  data,
+  selected,
+  id,
+  deleteNode,
+  onProvideExpand,
+  onProvideValueChange,
+  onNodeBodyChange,
+  onNodeImagesChange,
+  modelLists,
+  onModelChange,
+  deferTextCommit = false,
+}) {
   const { t } = useTranslation();
   const inputs = data?.inputs ?? [];
   const outputs = data?.outputs ?? [];
@@ -291,7 +303,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     if (readOnly) return;
     const next = e.target.value;
     setProvideDraft(next);
-    if (!provideComposingRef.current) {
+    if (!deferTextCommit && !provideComposingRef.current) {
       onProvideValueChange?.(id, next);
     }
   };
@@ -307,11 +319,12 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     provideComposingRef.current = false;
     const next = e.currentTarget.value;
     setProvideDraft(next);
-    onProvideValueChange?.(id, next);
+    if (!deferTextCommit) onProvideValueChange?.(id, next);
   };
 
   const handleProvideValueBlur = () => {
     if (readOnly) return;
+    if (deferTextCommit && provideDraft === provideValue) return;
     onProvideValueChange?.(id, provideDraft);
   };
 
@@ -349,7 +362,7 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     e.stopPropagation();
     if (readOnly) return;
     const next = e.target.value;
-    if (bodyComposingRef.current) {
+    if (deferTextCommit || bodyComposingRef.current) {
       setBodyDraft(next);
     } else {
       commitNodeBody(next);
@@ -369,13 +382,15 @@ export function FlowNode({ data, selected, id, deleteNode, onProvideExpand, onPr
     bodyComposingRef.current = false;
     setBodyComposing(false);
     const next = e.currentTarget.value;
-    commitNodeBody(next);
+    if (deferTextCommit) setBodyDraft(next);
+    else commitNodeBody(next);
   };
 
   const handleNodeBodyBlur = () => {
     if (readOnly) return;
     bodyComposingRef.current = false;
     setBodyComposing(false);
+    if (deferTextCommit && bodyDraft === bodyValue) return;
     commitNodeBody(bodyDraft);
   };
 

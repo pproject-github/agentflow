@@ -12,6 +12,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -63,9 +64,9 @@ import {
   coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
   finalizeWorkspaceCanvasChanges,
+  partitionWorkspaceCanvasChanges,
   shouldSkipWorkspaceRemoteRefresh,
-  workspaceCanvasChangeFinishesInteraction,
-  workspaceCanvasChangeIsContinuous,
+  workspaceCanvasInteractionCommitsChanges,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -5007,6 +5008,7 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const config = normalizeScheduledRunConfig(data?.body || "");
+  const [cronDraft, setCronDraft] = useState(config.cron);
   const scheduleState = data?.scheduledRunState || {};
   const running = data?.runningRunNodeIds?.has?.(id) || data?.runningRunNodeIds?.[id] === true || data?.isExecuting || data?.nodeStatus === "running";
   const optimizing = data?.optimizingRun === true;
@@ -5030,6 +5032,13 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   };
   const updateMonthDay = (monthDay) => {
     updateConfig({ monthDay, cron: scheduleCronFromParts(config.scheduleType, config.time, config.weekday, monthDay, config.cron) });
+  };
+  useEffect(() => {
+    setCronDraft(config.cron);
+  }, [config.cron, id]);
+  const commitCronDraft = () => {
+    if (readOnly || cronDraft === config.cron) return;
+    updateConfig({ cron: cronDraft });
   };
   return (
     <div
@@ -5176,11 +5185,15 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
             <span>Cron</span>
             <input
               type="text"
-              value={config.cron}
+              value={cronDraft}
               disabled={readOnly}
               spellCheck={false}
               placeholder={DEFAULT_WORKSPACE_SCHEDULE_CRON}
-              onChange={(event) => updateConfig({ cron: event.target.value })}
+              onChange={(event) => setCronDraft(event.target.value)}
+              onBlur={commitCronDraft}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
             />
           </label>
         ) : null}
@@ -5438,6 +5451,7 @@ function WorkspaceFlowNode(props) {
       <FlowNode
         {...props}
         deleteNode={deleteNode}
+        deferTextCommit
         modelLists={props.data?.modelLists}
         onModelChange={onModelChange}
         onProvideValueChange={onProvideValueChange}
@@ -7851,6 +7865,7 @@ function WorkspacePageInner() {
   const { t, i18n } = useTranslation();
   const { navigate } = useRoute();
   const reactFlow = useReactFlow();
+  const reactFlowStore = useStoreApi();
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const isWorkflowShareView = Boolean(flowParams.workflowShare);
@@ -7889,9 +7904,7 @@ function WorkspacePageInner() {
   const retryNodeInternalsRefreshRef = useRef(new Set());
   const nodeInternalsRefreshFrameRef = useRef(null);
   const nodeInternalsRefreshTimerRef = useRef(null);
-  const pendingCanvasNodeChangesRef = useRef([]);
   const lastActiveCanvasNodeChangesRef = useRef([]);
-  const canvasNodeChangesFrameRef = useRef(null);
   const canvasClipboardRef = useRef(null);
   const connectionStartRef = useRef(null);
   const connectionMenuRef = useRef(null);
@@ -8101,9 +8114,9 @@ function WorkspacePageInner() {
     }
   }, [workspaceFilesPaneHeight]);
 
-  const setWorkspaceFilesPaneFromPointer = useCallback((clientY) => {
+  const workspaceFilesPaneHeightFromPointer = useCallback((clientY) => {
     const sidebar = workspaceSidebarRef.current;
-    if (!sidebar) return;
+    if (!sidebar) return null;
     const rect = sidebar.getBoundingClientRect();
     const padding = 16;
     const minFiles = 150;
@@ -8111,20 +8124,27 @@ function WorkspacePageInner() {
     const contentTop = rect.top + padding;
     const contentBottom = rect.bottom - padding;
     const maxFiles = Math.max(minFiles, contentBottom - contentTop - minPalette);
-    const next = Math.min(Math.max(clientY - contentTop, minFiles), maxFiles);
-    setWorkspaceFilesPaneHeight(next);
+    return Math.min(Math.max(clientY - contentTop, minFiles), maxFiles);
   }, []);
 
   const startWorkspaceSidebarResize = useCallback((event) => {
     event.preventDefault();
     event.stopPropagation();
+    const sidebar = workspaceSidebarRef.current;
+    if (!sidebar) return;
+    let latestHeight = workspaceFilesPaneHeightFromPointer(event.clientY);
+    if (!Number.isFinite(latestHeight)) return;
     setWorkspaceSidebarResizing(true);
-    setWorkspaceFilesPaneFromPointer(event.clientY);
+    setWorkspaceFilesPaneHeight(latestHeight);
     const onPointerMove = (moveEvent) => {
       moveEvent.preventDefault();
-      setWorkspaceFilesPaneFromPointer(moveEvent.clientY);
+      const nextHeight = workspaceFilesPaneHeightFromPointer(moveEvent.clientY);
+      if (!Number.isFinite(nextHeight)) return;
+      latestHeight = nextHeight;
+      sidebar.style.setProperty("--af-work-files-pane-height", `${Math.round(nextHeight)}px`);
     };
     const onPointerUp = () => {
+      setWorkspaceFilesPaneHeight(latestHeight);
       setWorkspaceSidebarResizing(false);
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", onPointerUp, true);
@@ -8133,7 +8153,7 @@ function WorkspacePageInner() {
     window.addEventListener("pointermove", onPointerMove, true);
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerUp, true);
-  }, [setWorkspaceFilesPaneFromPointer]);
+  }, [workspaceFilesPaneHeightFromPointer]);
 
   useEffect(() => () => {
     if (flowSnippetToastTimerRef.current) {
@@ -8656,6 +8676,11 @@ function WorkspacePageInner() {
 
     const runRefresh = async () => {
       workspaceRemoteRefreshTimerRef.current = null;
+      if (workspaceCanvasInteractionActiveRef.current) {
+        workspaceRemoteRefreshQueuedRef.current = true;
+        workspaceRemoteRefreshTimerRef.current = window.setTimeout(runRefresh, 80);
+        return;
+      }
       if (workspaceDirtyRef.current) {
         workspaceRemoteRefreshQueuedRef.current = false;
         setStatus("检测到其他成员的更新；保存时将自动合并");
@@ -10459,6 +10484,7 @@ function WorkspacePageInner() {
       },
     };
     instancesRef.current = nextInstances;
+    skipNextWorkspaceAutosaveRef.current = true;
     setNodes(nextNodes);
     setInstances(nextInstances);
     setNodePropDraft((draft) => (
@@ -11346,6 +11372,11 @@ function WorkspacePageInner() {
 
   const canvasNodes = isDisplayMode ? displayCanvasNodes : hydratedNodes;
   const canvasEdges = isDisplayMode ? [] : coloredEdges;
+  const canvasNodesRef = useRef(canvasNodes);
+  const transientCanvasNodesRef = useRef([]);
+  if (!workspaceCanvasInteractionActiveRef.current) {
+    canvasNodesRef.current = canvasNodes;
+  }
   const jumpPaletteNodes = useMemo(() => (
     isDisplayMode
       ? displayCanvasNodes.map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
@@ -12311,15 +12342,14 @@ function WorkspacePageInner() {
   const applyCanvasNodeChanges = useCallback((changes) => {
     const interaction = workspaceCanvasInteractionPhase(changes);
     if (interaction.active) {
-      if (!workspaceCanvasInteractionActiveRef.current) markWorkspaceDirty();
       workspaceCanvasInteractionActiveRef.current = true;
-    } else if (interaction.finished) {
-      if (!workspaceCanvasInteractionActiveRef.current && interaction.mutated) markWorkspaceDirty();
+    }
+    if (interaction.finished) {
       workspaceCanvasInteractionActiveRef.current = false;
       workspaceFlushAfterInteractionRef.current = true;
     }
+    if (workspaceCanvasInteractionCommitsChanges(changes)) markWorkspaceDirty();
     if (workspaceMode === "display") {
-      if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
       setDisplayPage((prev) => {
         let nodePositions = prev.nodePositions;
         let nodeSizes = prev.nodeSizes;
@@ -12377,7 +12407,6 @@ function WorkspacePageInner() {
       }
       return;
     }
-    if (interaction.mutated && !interaction.active && !interaction.finished) markWorkspaceDirty();
     const dimensionChanges = (changes || []).filter(
       (change) => change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height,
     );
@@ -12424,73 +12453,56 @@ function WorkspacePageInner() {
   }, [markWorkspaceDirty, refreshNodeInternals, setNodes, workspaceMode, workspaceWritable]);
 
   const flushPendingCanvasNodeChanges = useCallback((extraChanges = [], { finish = false } = {}) => {
-    if (canvasNodeChangesFrameRef.current != null) {
-      window.cancelAnimationFrame(canvasNodeChangesFrameRef.current);
-      canvasNodeChangesFrameRef.current = null;
-    }
-    const pending = pendingCanvasNodeChangesRef.current;
-    pendingCanvasNodeChangesRef.current = [];
     const merged = finish
       ? finalizeWorkspaceCanvasChanges([
           ...lastActiveCanvasNodeChangesRef.current,
-          ...pending,
           ...extraChanges,
         ])
-      : coalesceWorkspaceCanvasChanges([...pending, ...extraChanges]);
+      : coalesceWorkspaceCanvasChanges(extraChanges);
     if (finish) lastActiveCanvasNodeChangesRef.current = [];
     if (merged.length > 0) applyCanvasNodeChanges(merged);
   }, [applyCanvasNodeChanges]);
 
-  const schedulePendingCanvasNodeChanges = useCallback(() => {
-    if (canvasNodeChangesFrameRef.current != null) return;
-    canvasNodeChangesFrameRef.current = window.requestAnimationFrame(() => {
-      canvasNodeChangesFrameRef.current = null;
-      const pending = pendingCanvasNodeChangesRef.current;
-      pendingCanvasNodeChangesRef.current = [];
-      if (pending.length > 0) applyCanvasNodeChanges(pending);
-    });
-  }, [applyCanvasNodeChanges]);
-
   const handleNodesChange = useCallback((changes) => {
-    const deferred = [];
-    const immediate = [];
-    let finishesInteraction = false;
-    for (const change of Array.isArray(changes) ? changes : []) {
-      if (workspaceCanvasChangeIsContinuous(change)) {
-        deferred.push(change);
-      } else {
-        immediate.push(change);
-        if (workspaceCanvasChangeFinishesInteraction(change)) finishesInteraction = true;
+    const {
+      transient,
+      committed,
+      finishesInteraction,
+    } = partitionWorkspaceCanvasChanges(changes);
+    if (transient.length > 0) {
+      if (!workspaceCanvasInteractionActiveRef.current) {
+        workspaceCanvasInteractionActiveRef.current = true;
+        transientCanvasNodesRef.current = canvasNodesRef.current;
       }
-    }
-    if (deferred.length > 0) {
       lastActiveCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
         ...lastActiveCanvasNodeChangesRef.current,
-        ...deferred,
+        ...transient,
       ]);
-      pendingCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
-        ...pendingCanvasNodeChangesRef.current,
-        ...deferred,
-      ]);
+      const nextTransientNodes = applyNodeChanges(
+        transient,
+        transientCanvasNodesRef.current,
+      );
+      transientCanvasNodesRef.current = nextTransientNodes;
+      reactFlowStore.getState().setNodes(nextTransientNodes);
     }
     if (finishesInteraction) {
-      flushPendingCanvasNodeChanges(immediate, { finish: true });
+      transientCanvasNodesRef.current = [];
+      flushPendingCanvasNodeChanges(committed, { finish: true });
       return;
     }
-    if (immediate.length > 0) applyCanvasNodeChanges(immediate);
-    if (pendingCanvasNodeChangesRef.current.length > 0) schedulePendingCanvasNodeChanges();
-  }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, schedulePendingCanvasNodeChanges]);
+    if (committed.length > 0) applyCanvasNodeChanges(committed);
+  }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, reactFlowStore]);
 
   useEffect(() => {
     const finishInterruptedInteraction = () => {
       if (
         !workspaceCanvasInteractionActiveRef.current
-        && pendingCanvasNodeChangesRef.current.length === 0
         && lastActiveCanvasNodeChangesRef.current.length === 0
       ) {
         return;
       }
       flushPendingCanvasNodeChanges([], { finish: true });
+      transientCanvasNodesRef.current = [];
     };
     const finishWhenHidden = () => {
       if (document.visibilityState === "hidden") finishInterruptedInteraction();
@@ -12504,11 +12516,8 @@ function WorkspacePageInner() {
       window.removeEventListener("pointercancel", finishInterruptedInteraction);
       window.removeEventListener("blur", finishInterruptedInteraction);
       document.removeEventListener("visibilitychange", finishWhenHidden);
-      if (canvasNodeChangesFrameRef.current != null) {
-        window.cancelAnimationFrame(canvasNodeChangesFrameRef.current);
-      }
-      pendingCanvasNodeChangesRef.current = [];
       lastActiveCanvasNodeChangesRef.current = [];
+      transientCanvasNodesRef.current = [];
     };
   }, [flushPendingCanvasNodeChanges]);
 

@@ -5,9 +5,11 @@ import {
   coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
   finalizeWorkspaceCanvasChanges,
+  partitionWorkspaceCanvasChanges,
   shouldSkipWorkspaceRemoteRefresh,
   workspaceCanvasChangeFinishesInteraction,
   workspaceCanvasChangeIsContinuous,
+  workspaceCanvasInteractionCommitsChanges,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -57,18 +59,22 @@ test("a successful save always advances the baseline before a queued edit is sav
 });
 
 test("node movement is active while dragging and finishes on mouse release", () => {
+  const dragging = [
+    { type: "position", id: "table", position: { x: 20, y: 30 }, dragging: true },
+  ];
+  const released = [
+    { type: "position", id: "table", position: { x: 40, y: 50 }, dragging: false },
+  ];
   assert.deepEqual(
-    workspaceCanvasInteractionPhase([
-      { type: "position", id: "table", position: { x: 20, y: 30 }, dragging: true },
-    ]),
+    workspaceCanvasInteractionPhase(dragging),
     { active: true, finished: false, mutated: true },
   );
   assert.deepEqual(
-    workspaceCanvasInteractionPhase([
-      { type: "position", id: "table", position: { x: 40, y: 50 }, dragging: false },
-    ]),
+    workspaceCanvasInteractionPhase(released),
     { active: false, finished: true, mutated: true },
   );
+  assert.equal(workspaceCanvasInteractionCommitsChanges(dragging), false);
+  assert.equal(workspaceCanvasInteractionCommitsChanges(released), true);
 });
 
 test("node resizing is active while resizing and finishes on mouse release", () => {
@@ -103,6 +109,23 @@ test("continuous canvas changes keep only the latest value for each node and cha
     { type: "position", id: "chart", position: { x: 30, y: 40 }, dragging: true },
     { type: "dimensions", id: "table", dimensions: { width: 640, height: 420 }, resizing: true },
   ]);
+});
+
+test("dragging stays transient until the final position is committed", () => {
+  const dragging = { type: "position", id: "table", position: { x: 50, y: 60 }, dragging: true };
+  const released = { type: "position", id: "table", position: { x: 70, y: 80 }, dragging: false };
+  const selection = { type: "select", id: "table", selected: true };
+
+  assert.deepEqual(partitionWorkspaceCanvasChanges([dragging]), {
+    transient: [dragging],
+    committed: [],
+    finishesInteraction: false,
+  });
+  assert.deepEqual(partitionWorkspaceCanvasChanges([released, selection]), {
+    transient: [],
+    committed: [released, selection],
+    finishesInteraction: true,
+  });
 });
 
 test("finishing a canvas interaction commits queued positions and dimensions as final", () => {
