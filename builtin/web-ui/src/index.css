@@ -6938,6 +6938,21 @@ button.af-project-card {
   font-size: 0.9rem;
 }
 
+.af-prd-overall-platform__fields {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.af-prd-overall-platform--compact .af-prd-overall-platform__fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.25rem), 1fr));
+  column-gap: 0.85rem;
+  row-gap: 0.55rem;
+}
+
+.af-prd-overall-platform--compact .af-prd-overall-platform__row {
+  min-width: 0;
+}
+
 .af-prd-overall-platform__row,
 .af-prd-overall-platform__rules {
   display: grid;

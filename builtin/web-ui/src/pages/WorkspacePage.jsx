@@ -7220,14 +7220,17 @@ function WorkflowGlobalStateSection({ sectionKey, section }) {
     field && typeof field === "object" && prdWorkflowOverallDisplayList(field.value).length
   ));
   if (!visibleFields.length) return null;
+  const compact = sectionKey === "progress";
   return (
-    <section className="af-prd-overall-platform">
+    <section className={`af-prd-overall-platform${compact ? " af-prd-overall-platform--compact" : ""}`}>
       <div className="af-prd-overall-platform__head">
         <strong>{String(section.title || sectionKey || "").trim()}</strong>
       </div>
-      {visibleFields.map(([fieldKey, field]) => (
-        <WorkflowGlobalStateField key={fieldKey} fieldKey={fieldKey} field={field} />
-      ))}
+      <div className="af-prd-overall-platform__fields">
+        {visibleFields.map(([fieldKey, field]) => (
+          <WorkflowGlobalStateField key={fieldKey} fieldKey={fieldKey} field={field} />
+        ))}
+      </div>
     </section>
   );
 }
