@@ -90,6 +90,75 @@ test("plan action without a formal document keeps only the latest temporary revi
   );
 });
 
+test("stable artifact keys collapse short-link aliases and keep the newest target", () => {
+  const key = "prd-review:1015046:remote-config:android:issue-plan:temporary";
+  const links = [
+    {
+      key,
+      label: "临时 Markdown 预览",
+      href: "http://ai.example.test/r/temporary1",
+      canonicalUrl: reviewUrl("temporary-1"),
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+    {
+      key,
+      label: "Markdown Review",
+      href: "http://ai.example.test/r/temporary2",
+      canonicalUrl: reviewUrl("temporary-2"),
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+    {
+      key,
+      label: "预览",
+      href: "http://ai.example.test/r/temporary3",
+      canonicalUrl: reviewUrl("temporary-3"),
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+  ];
+
+  assert.deepEqual(
+    selectCurrentPrdWorkflowActionLinks(links, {
+      stage: "issue-plan:remote-config",
+    }),
+    [{
+      ...links[2],
+      label: "临时 Markdown 预览",
+    }],
+  );
+});
+
+test("legacy short links deduplicate through canonicalUrl without an artifact key", () => {
+  const links = [
+    {
+      label: "临时 Markdown 预览",
+      href: "http://ai.example.test/r/temporary1",
+      canonicalUrl: reviewUrl("temporary-1"),
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+    {
+      label: "Markdown Review",
+      href: "http://ai.example.test/r/temporary1",
+      canonicalUrl: reviewUrl("temporary-1"),
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+  ];
+
+  assert.deepEqual(
+    selectCurrentPrdWorkflowActionLinks(links, {
+      stage: "issue-plan:remote-config",
+    }),
+    [{
+      ...links[1],
+      label: "临时 Markdown 预览",
+    }],
+  );
+});
+
 test("formal plan without a durable preview hides stale temporary reviews", () => {
   const document = {
     label: "方案文档",

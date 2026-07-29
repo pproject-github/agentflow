@@ -7678,6 +7678,32 @@ function prdWorkflowReviewIdFromRequest(tapdId, payload = {}, durability = "temp
   return prdWorkflowSafeStateId(["review", tapdId, stageHead, digest].filter(Boolean).join("-")).slice(0, 64);
 }
 
+function prdWorkflowReviewArtifactKey(tapdId, payload = {}, durability = "temporary") {
+  const explicit = String(payload.artifactKey || payload.artifact_key || "").trim();
+  if (explicit) return explicit.slice(0, 500);
+  const issueKey = prdWorkflowSafeStateId(
+    payload.issueKey || payload.issue_key || payload.issue || "global",
+  ).toLowerCase();
+  const platform = prdWorkflowSafeStateId(payload.platform || "all").toLowerCase();
+  const stage = prdWorkflowSafeStateId(
+    payload.stage
+    || payload.stageKey
+    || payload.stage_key
+    || payload.action
+    || payload.actionId
+    || payload.action_id
+    || "review",
+  ).toLowerCase();
+  return [
+    "prd-review",
+    prdWorkflowSafeStateId(tapdId).toLowerCase(),
+    issueKey,
+    platform,
+    stage,
+    String(durability || "temporary").trim().toLowerCase() || "temporary",
+  ].join(":").slice(0, 500);
+}
+
 function prdWorkflowStatePath(scopedRoot, tapdId) {
   const rootDir = scopedRoot || process.cwd();
   return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.json`);
@@ -9131,18 +9157,27 @@ function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
 
 function prdWorkflowMergeRuntimeEventArrays(left, right) {
   const out = [];
-  const seen = new Set();
+  const seen = new Map();
   for (const value of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
     if (value == null) continue;
-    let key = "";
+    const explicitKey = value && typeof value === "object" && !Array.isArray(value)
+      ? String(value.key || value.artifactKey || value.artifact_key || "").trim()
+      : "";
+    let key = explicitKey ? `key:${explicitKey}` : "";
     try {
-      key = typeof value === "string" ? value : JSON.stringify(value);
+      if (!key) key = typeof value === "string" ? value : JSON.stringify(value);
     } catch {
       key = String(value);
     }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(value);
+    const index = seen.get(key);
+    if (index == null) {
+      seen.set(key, out.length);
+      out.push(value);
+      continue;
+    }
+    if (explicitKey) {
+      out[index] = value;
+    }
   }
   return out;
 }
@@ -12195,17 +12230,15 @@ export function startUiServer({
         const shortUrl = shortLink?.shortUrl || "";
         const displayUrl = shortUrl || reviewUrl;
         const durability = review.durability || "temporary";
+        const artifactKey = prdWorkflowReviewArtifactKey(tapdId, payload, durability);
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
           : { kind: durability === "durable" ? "ai-doc" : "local-draft", durability };
-        const artifactKey = String(
-          payload.artifactKey || payload.artifact_key || "",
-        ).trim();
         const idempotencyKey = String(
           payload.idempotencyKey || payload.idempotency_key || "",
         ).trim();
         const artifact = {
-          ...(artifactKey ? { key: artifactKey } : {}),
+          key: artifactKey,
           label: payload.artifactLabel || "Markdown Review",
           kind: durability === "temporary" ? "temporary-review" : "review",
           persistence: "runtime",
@@ -12235,7 +12268,7 @@ export function startUiServer({
           expiresAt: review.expiresAt || "",
           artifacts: [artifact],
           links: [{
-            ...(artifactKey ? { key: artifactKey } : {}),
+            key: artifactKey,
             label: "Markdown Review",
             kind: artifact.kind,
             url: displayUrl,

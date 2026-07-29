@@ -8,12 +8,101 @@ function sourceKind(value) {
   return text(value.kind || value.type || value.persistence || value.durability).toLowerCase();
 }
 
+function artifactKey(link) {
+  return text(link?.key || link?.artifactKey || link?.artifact_key);
+}
+
+function reviewUrl(link) {
+  return text(
+    link?.canonicalUrl
+    || link?.canonical_url
+    || link?.reviewUrl
+    || link?.review_url
+    || link?.href
+    || link?.url,
+  );
+}
+
+function normalizedUrl(value) {
+  const raw = text(value);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, "http://agentflow.local");
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return raw.split(/[?#]/)[0];
+  }
+}
+
 export function isPrdWorkflowReviewLink(link) {
+  const key = artifactKey(link);
+  if (/^prd-review:/i.test(key)) return true;
+  if (text(link?.reviewId || link?.review_id)) return true;
+  if (/\/api\/prd-workflow\/review\//.test(reviewUrl(link))) return true;
+
+  const href = text(link?.href || link?.url || link?.shortUrl || link?.short_url);
   const kind = text(link?.kind || link?.type).toLowerCase();
-  if (kind === "review" || kind === "temporary-review") return true;
-  const canonicalUrl = text(link?.canonicalUrl || link?.canonical_url);
-  const href = text(link?.href || link?.url);
-  return /\/api\/prd-workflow\/review\//.test(canonicalUrl || href);
+  const durability = text(link?.durability).toLowerCase();
+  const source = sourceKind(link?.source) || sourceKind(link?.sourceArtifact || link?.source_artifact);
+  const hasReviewMetadata = (
+    kind === "review"
+    || kind === "temporary-review"
+    || durability === "temporary"
+    || durability === "durable"
+    || source === "local-draft"
+    || source === "ai-doc"
+  );
+  return hasReviewMetadata && /\/r\/[A-Za-z0-9_-]{8,32}(?:[?#]|$)/.test(href);
+}
+
+function reviewRank(link) {
+  const descriptor = [
+    link?.label,
+    link?.kind,
+    link?.type,
+    link?.durability,
+    sourceKind(link?.source),
+  ].map(text).join(" ");
+  if (/方案文档/.test(descriptor)) return 50;
+  if (/临时/.test(descriptor)) return 40;
+  if (/Markdown Review/i.test(descriptor)) return 20;
+  if (/预览|review/i.test(descriptor)) return 10;
+  return 0;
+}
+
+function linkIdentity(link) {
+  const key = artifactKey(link);
+  if (key) return `key:${key}`;
+  if (isPrdWorkflowReviewLink(link)) {
+    const canonical = normalizedUrl(reviewUrl(link));
+    if (canonical) return `review:${canonical}`;
+  }
+  return `link:${text(link?.label)}\n${normalizedUrl(link?.href || link?.url)}`;
+}
+
+function dedupeLinks(links) {
+  const out = [];
+  const seen = new Map();
+  for (const link of links) {
+    if (!link) continue;
+    const key = linkIdentity(link);
+    const index = seen.get(key);
+    if (index == null) {
+      seen.set(key, out.length);
+      out.push(link);
+      continue;
+    }
+    const existing = out[index];
+    const preferredLabel = reviewRank(link) >= reviewRank(existing)
+      ? text(link?.label) || text(existing?.label)
+      : text(existing?.label) || text(link?.label);
+    out[index] = {
+      ...existing,
+      ...link,
+      ...(preferredLabel ? { label: preferredLabel } : {}),
+    };
+  }
+  return out;
 }
 
 function isTemporaryReview(link) {
@@ -87,7 +176,7 @@ export function isPrdWorkflowPlanAction(item = {}) {
  * runtime event.
  */
 export function selectCurrentPrdWorkflowActionLinks(links = [], item = {}) {
-  const list = Array.isArray(links) ? links : [];
+  const list = dedupeLinks(Array.isArray(links) ? links : []);
   if (!isPrdWorkflowPlanAction(item)) return list;
 
   const reviewLinks = list.filter(isPrdWorkflowReviewLink);
