@@ -8,8 +8,12 @@ function sourceKind(value) {
   return text(value.kind || value.type || value.persistence || value.durability).toLowerCase();
 }
 
-function isReviewLink(link) {
-  return /\/api\/prd-workflow\/review\//.test(text(link?.href || link?.url));
+export function isPrdWorkflowReviewLink(link) {
+  const kind = text(link?.kind || link?.type).toLowerCase();
+  if (kind === "review" || kind === "temporary-review") return true;
+  const canonicalUrl = text(link?.canonicalUrl || link?.canonical_url);
+  const href = text(link?.href || link?.url);
+  return /\/api\/prd-workflow\/review\//.test(canonicalUrl || href);
 }
 
 function isTemporaryReview(link) {
@@ -33,7 +37,7 @@ function isTemporaryReview(link) {
 }
 
 function isDurableReview(link) {
-  if (!isReviewLink(link) || isTemporaryReview(link)) return false;
+  if (!isPrdWorkflowReviewLink(link) || isTemporaryReview(link)) return false;
   const kind = text(link?.kind || link?.type).toLowerCase();
   const durability = text(link?.durability).toLowerCase();
   const persistence = text(link?.persistence).toLowerCase();
@@ -49,7 +53,7 @@ function isDurableReview(link) {
 }
 
 function isFormalPlanDocument(link) {
-  if (isReviewLink(link)) return false;
+  if (isPrdWorkflowReviewLink(link)) return false;
   const kind = text(link?.kind || link?.type).toLowerCase();
   const persistence = text(link?.persistence).toLowerCase();
   const source = sourceKind(link?.source) || sourceKind(link?.sourceArtifact || link?.source_artifact);
@@ -86,7 +90,7 @@ export function selectCurrentPrdWorkflowActionLinks(links = [], item = {}) {
   const list = Array.isArray(links) ? links : [];
   if (!isPrdWorkflowPlanAction(item)) return list;
 
-  const reviewLinks = list.filter(isReviewLink);
+  const reviewLinks = list.filter(isPrdWorkflowReviewLink);
   if (reviewLinks.length === 0) return list;
 
   const durableReviews = reviewLinks.filter(isDurableReview);
@@ -95,5 +99,36 @@ export function selectCurrentPrdWorkflowActionLinks(links = [], item = {}) {
     ? durableReviews.at(-1)
     : reviewLinks.filter(isTemporaryReview).at(-1);
 
-  return list.filter((link) => !isReviewLink(link) || link === selectedReview);
+  return list.filter((link) => !isPrdWorkflowReviewLink(link) || link === selectedReview);
+}
+
+/**
+ * Merge snapshot/runtime lists by their logical artifact slot. A newer entry
+ * with the same stable key replaces stale metadata instead of creating a
+ * second chip. Keyless legacy entries retain value-based deduplication.
+ */
+export function mergePrdWorkflowActionLists(left, right) {
+  const out = [];
+  const indexByKey = new Map();
+  const mergeKey = (entry) => {
+    if (typeof entry === "string") return `value:${entry}`;
+    if (!entry || typeof entry !== "object") return "";
+    const stableKey = text(entry.key || entry.artifactKey || entry.artifact_key);
+    return stableKey ? `key:${stableKey}` : `value:${JSON.stringify(entry)}`;
+  };
+  const push = (entry) => {
+    if (!entry) return;
+    const key = mergeKey(entry);
+    if (!key) return;
+    const index = indexByKey.get(key);
+    if (index == null) {
+      indexByKey.set(key, out.length);
+      out.push(entry);
+      return;
+    }
+    out[index] = entry;
+  };
+  (Array.isArray(left) ? left : []).forEach(push);
+  (Array.isArray(right) ? right : []).forEach(push);
+  return out;
 }

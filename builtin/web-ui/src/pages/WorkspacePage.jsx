@@ -52,7 +52,11 @@ import {
   dedupeConfirmedAiDocs,
   isConfirmedAiDocCandidate,
 } from "../prdWorkflowAiDocs.js";
-import { selectCurrentPrdWorkflowActionLinks } from "../prdWorkflowActionLinks.js";
+import {
+  isPrdWorkflowReviewLink,
+  mergePrdWorkflowActionLists,
+  selectCurrentPrdWorkflowActionLinks,
+} from "../prdWorkflowActionLinks.js";
 import {
   diffWorkspaceGraphsForUi,
   reconcileWorkspaceEdges,
@@ -913,8 +917,13 @@ function prdWorkflowActionLinks(item) {
   };
   const seen = new Map();
   for (const link of out) {
-    const isReview = /\/api\/prd-workflow\/review\//.test(String(link.href || ""));
-    const key = isReview ? `review:${reviewKey(link.href)}` : `${link.label}\n${link.href}`;
+    const isReview = isPrdWorkflowReviewLink(link);
+    const stableKey = String(link.key || link.artifactKey || link.artifact_key || "").trim();
+    const key = stableKey
+      ? `key:${stableKey}`
+      : isReview
+        ? `review:${reviewKey(link.canonicalUrl || link.canonical_url || link.href)}`
+        : `${link.label}\n${link.href}`;
     const existing = seen.get(key);
     if (!existing) {
       seen.set(key, link);
@@ -1285,23 +1294,8 @@ function prdWorkflowEnrichActionWithSnapshotFacts(snapshot, item) {
         .replace(/^需要为/, "已为")
         .replace("创建或绑定", "创建/绑定"),
     } : {}),
-    artifacts: prdWorkflowMergeActionLists(enrichedItem.artifacts, artifacts),
+    artifacts: mergePrdWorkflowActionLists(enrichedItem.artifacts, artifacts),
   };
-}
-
-function prdWorkflowMergeActionLists(left, right) {
-  const out = [];
-  const seen = new Set();
-  const push = (entry) => {
-    if (!entry) return;
-    const key = typeof entry === "string" ? entry : JSON.stringify(entry);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(entry);
-  };
-  (Array.isArray(left) ? left : []).forEach(push);
-  (Array.isArray(right) ? right : []).forEach(push);
-  return out;
 }
 
 function prdWorkflowMergeActionRecord(prev, next) {
@@ -1315,11 +1309,11 @@ function prdWorkflowMergeActionRecord(prev, next) {
     title: prdWorkflowActionTitle(latest, 0) || prdWorkflowActionTitle(next, 0) || prdWorkflowActionTitle(prev, 0),
     detail: prdWorkflowActionDetail(latest) || prdWorkflowActionDetail(next) || prdWorkflowActionDetail(prev),
     status,
-    links: prdWorkflowMergeActionLists(prev?.links, next?.links),
-    artifacts: prdWorkflowMergeActionLists(prev?.artifacts, next?.artifacts),
-    outputs: prdWorkflowMergeActionLists(prev?.outputs, next?.outputs),
-    results: prdWorkflowMergeActionLists(prev?.results, next?.results),
-    events: prdWorkflowMergeActionLists(prev?.events, next?.events),
+    links: mergePrdWorkflowActionLists(prev?.links, next?.links),
+    artifacts: mergePrdWorkflowActionLists(prev?.artifacts, next?.artifacts),
+    outputs: mergePrdWorkflowActionLists(prev?.outputs, next?.outputs),
+    results: mergePrdWorkflowActionLists(prev?.results, next?.results),
+    events: mergePrdWorkflowActionLists(prev?.events, next?.events),
     createdAt: prev?.createdAt || prev?.created_at || next?.createdAt || next?.created_at,
     startedAt: prev?.startedAt || prev?.started_at || next?.startedAt || next?.started_at,
     updatedAt: latest?.updatedAt || latest?.updated_at || next?.updatedAt || next?.updated_at || prev?.updatedAt || prev?.updated_at,
@@ -1346,10 +1340,10 @@ function prdWorkflowActionRows(snapshot, nextAction) {
   };
   const mergeOnlyExtras = (base, extras) => ({
     ...base,
-    links: prdWorkflowMergeActionLists(base?.links, extras?.links),
-    artifacts: prdWorkflowMergeActionLists(base?.artifacts, extras?.artifacts),
-    outputs: prdWorkflowMergeActionLists(base?.outputs, extras?.outputs),
-    results: prdWorkflowMergeActionLists(base?.results, extras?.results),
+    links: mergePrdWorkflowActionLists(base?.links, extras?.links),
+    artifacts: mergePrdWorkflowActionLists(base?.artifacts, extras?.artifacts),
+    outputs: mergePrdWorkflowActionLists(base?.outputs, extras?.outputs),
+    results: mergePrdWorkflowActionLists(base?.results, extras?.results),
   });
   const rememberExtras = (stageKey, item) => {
     if (!stageKey) return;
