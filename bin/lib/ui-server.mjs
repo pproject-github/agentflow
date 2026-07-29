@@ -7804,6 +7804,30 @@ function prdWorkflowReviewSplitFrontmatter(markdown) {
   return { frontmatter: match[1].trim(), body: text.slice(match[0].length) };
 }
 
+function prdWorkflowReviewStripLegacyMetadata(body) {
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const visible = [];
+  let fenced = false;
+  let hidden = false;
+  for (const line of lines) {
+    if (!hidden && /^\s*```/.test(line)) {
+      fenced = !fenced;
+      visible.push(line);
+      continue;
+    }
+    if (!fenced && !hidden && /<!--\s*prd-flow-start\b/.test(line)) {
+      hidden = !/prd-flow-end\s*-->/.test(line);
+      continue;
+    }
+    if (hidden) {
+      if (/prd-flow-end\s*-->/.test(line)) hidden = false;
+      continue;
+    }
+    visible.push(line);
+  }
+  return visible.join("\n");
+}
+
 function prdWorkflowReviewRenderFrontmatter(frontmatter) {
   if (!String(frontmatter || "").trim()) return "";
   const rows = [];
@@ -8050,20 +8074,24 @@ export function prdWorkflowReviewMarkdownToHtml(markdown) {
   const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
   return [
     prdWorkflowReviewRenderFrontmatter(frontmatter),
-    prdWorkflowReviewBodyToHtml(body),
+    prdWorkflowReviewBodyToHtml(prdWorkflowReviewStripLegacyMetadata(body)),
   ].filter(Boolean).join("\n");
 }
 
 function prdWorkflowReviewExtractPageTitle(markdown, fallbackTitle) {
   const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
-  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const visibleBody = prdWorkflowReviewStripLegacyMetadata(body);
+  const lines = String(visibleBody || "").replace(/\r\n/g, "\n").split("\n");
   const firstContentIndex = lines.findIndex((line) => String(line || "").trim());
   const heading = firstContentIndex >= 0
     ? String(lines[firstContentIndex] || "").trim().match(/^#\s+(.+)$/)
     : null;
   if (!heading) {
     return {
-      markdown: String(markdown || ""),
+      markdown: [
+        frontmatter ? `---\n${frontmatter}\n---` : "",
+        visibleBody,
+      ].filter(Boolean).join("\n\n"),
       title: String(fallbackTitle || "PRD Workflow Review"),
     };
   }
