@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AdminRunDetailDrawer from "../components/AdminRunDetailDrawer.jsx";
 
 function compactNumber(value) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.max(0, Number(value || 0)));
@@ -59,6 +60,7 @@ export default function AdminUsagePage({ authUser }) {
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectedRun, setSelectedRun] = useState(null);
 
   const loadUsage = useCallback(async () => {
     if (!authUser?.isAdmin) return;
@@ -255,7 +257,20 @@ export default function AdminUsagePage({ authUser }) {
               {recentRuns.length === 0 ? (
                 <tr><td colSpan={6}>暂无运行明细</td></tr>
               ) : recentRuns.map((run) => (
-                <tr key={`${run.userId}:${run.flowSource}:${run.flowId}:${run.runId}:${run.at}`}>
+                <tr
+                  key={`${run.userId}:${run.flowSource}:${run.flowId}:${run.runId}:${run.at}`}
+                  className="af-admin-usage-run-row"
+                  role="button"
+                  tabIndex={0}
+                  title="查看 Run 过程与 Thinking"
+                  onClick={() => setSelectedRun(run)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedRun(run);
+                    }
+                  }}
+                >
                   <td>
                     <strong>{run.username || run.userId || "-"}</strong>
                     <span>{run.userId || "-"}</span>
@@ -274,7 +289,12 @@ export default function AdminUsagePage({ authUser }) {
                     </span>
                   </td>
                   <td>{formatDurationShort(run.durationMs)}</td>
-                  <td><code className="af-admin-usage-run-id">{formatRunId(run.runId)}</code></td>
+                  <td>
+                    <span className="af-admin-usage-run-link">
+                      <code className="af-admin-usage-run-id" title={run.runId}>{formatRunId(run.runId)}</code>
+                      <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                    </span>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -344,6 +364,10 @@ export default function AdminUsagePage({ authUser }) {
           </table>
         </div>
       </section>
+
+      {selectedRun ? (
+        <AdminRunDetailDrawer run={selectedRun} onClose={() => setSelectedRun(null)} />
+      ) : null}
     </main>
   );
 }
