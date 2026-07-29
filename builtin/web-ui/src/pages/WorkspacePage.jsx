@@ -11194,50 +11194,123 @@ function WorkspacePageInner() {
     if (!isWorkflowMode || !workflowTapdId) return undefined;
     const q = flowParamsQuery(flowParams);
     q.set("tapdId", workflowTapdId);
-    const events = new EventSource(`/api/prd-workflow/events?${q.toString()}`);
-    events.onmessage = () => {
-      void loadPrdWorkflowSnapshot(workflowTapdId);
-    };
-    events.onerror = () => {
+    let events = null;
+    let reconnectTimer = null;
+    let cancelled = false;
+
+    const closeEvents = () => {
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (!events) return;
+      events.onmessage = null;
+      events.onerror = null;
       events.close();
+      events = null;
     };
-    return () => events.close();
+    const connect = () => {
+      if (cancelled || document.hidden || events) return;
+      events = new EventSource(`/api/prd-workflow/events?${q.toString()}`);
+      events.onmessage = () => {
+        void loadPrdWorkflowSnapshot(workflowTapdId);
+      };
+      events.onerror = () => {
+        closeEvents();
+        if (!cancelled && !document.hidden) {
+          reconnectTimer = window.setTimeout(connect, 5000);
+        }
+      };
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        closeEvents();
+        return;
+      }
+      void loadPrdWorkflowSnapshot(workflowTapdId);
+      connect();
+    };
+
+    connect();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      closeEvents();
+    };
   }, [flowParams, isWorkflowMode, loadPrdWorkflowSnapshot, workflowTapdId]);
 
   useEffect(() => {
-    if (!flowParams.flowId) return undefined;
+    if (!flowParams.flowId || isWorkflowMode) return undefined;
     const q = flowParamsQuery(flowParams);
     q.set("clientId", collaborationClientIdRef.current);
-    const events = new EventSource(`/api/workspace/events?${q.toString()}`);
-    events.onmessage = (message) => {
-      let event = null;
-      try { event = JSON.parse(message.data || "{}"); } catch { event = null; }
-      if (!event || event.clientId === collaborationClientIdRef.current) return;
-      if (event.type === "graph.committed") {
-        scheduleWorkspaceRemoteRefresh(event);
-        return;
+    let events = null;
+    let reconnectTimer = null;
+    let cancelled = false;
+
+    const closeEvents = () => {
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
-      if (event.type === "runtime.committed") {
-        scheduleWorkspaceRemoteRefresh(event);
-        return;
-      }
-      if (String(event.type || "").startsWith("file.")) {
-        void loadFiles();
-        return;
-      }
-      if (String(event.type || "").startsWith("run.")) {
-        void refreshWorkspaceRunStatus();
-      }
-    };
-    return () => {
+      if (!events) return;
+      events.onmessage = null;
+      events.onerror = null;
       events.close();
+      events = null;
+    };
+    const connect = () => {
+      if (cancelled || document.hidden || events) return;
+      events = new EventSource(`/api/workspace/events?${q.toString()}`);
+      events.onmessage = (message) => {
+        let event = null;
+        try { event = JSON.parse(message.data || "{}"); } catch { event = null; }
+        if (!event || event.clientId === collaborationClientIdRef.current) return;
+        if (event.type === "graph.committed") {
+          scheduleWorkspaceRemoteRefresh(event);
+          return;
+        }
+        if (event.type === "runtime.committed") {
+          scheduleWorkspaceRemoteRefresh(event);
+          return;
+        }
+        if (String(event.type || "").startsWith("file.")) {
+          void loadFiles();
+          return;
+        }
+        if (String(event.type || "").startsWith("run.")) {
+          void refreshWorkspaceRunStatus();
+        }
+      };
+      events.onerror = () => {
+        closeEvents();
+        if (!cancelled && !document.hidden) {
+          reconnectTimer = window.setTimeout(connect, 5000);
+        }
+      };
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        closeEvents();
+        return;
+      }
+      scheduleWorkspaceRemoteRefresh({ type: "visibility.resume" });
+      connect();
+    };
+
+    connect();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      closeEvents();
       if (workspaceRemoteRefreshTimerRef.current) {
         window.clearTimeout(workspaceRemoteRefreshTimerRef.current);
         workspaceRemoteRefreshTimerRef.current = null;
       }
       workspaceRemoteRefreshQueuedRef.current = false;
     };
-  }, [flowParams, loadFiles, refreshWorkspaceRunStatus, scheduleWorkspaceRemoteRefresh]);
+  }, [flowParams, isWorkflowMode, loadFiles, refreshWorkspaceRunStatus, scheduleWorkspaceRemoteRefresh]);
 
   useEffect(() => {
     if (workspaceCanvasInteractionActiveRef.current) return undefined;
