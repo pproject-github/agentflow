@@ -1,0 +1,26 @@
+bin/lib/ui-server.mjs
+  s_60addd0605f23d::t_135160f274c69f 11135-11141
+  s_60addd0605f23d::t_3c0666e350fd2a 11098-11110,11133-11134,11142-11148,11286-11293,11295-11299
+test/prd-workflow-collaboration-api.test.mjs
+  s_60addd0605f23d::t_0ed94d35c41e9b 70-79
+  s_60addd0605f23d::t_3c0666e350fd2a 80-106,119-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9405cf4b1439309a31907b62263861c84733cdc3",
+  "prompts": {},
+  "logical_commit_id": "9405cf4b1439309a31907b62263861c84733cdc3",
+  "sessions": {
+    "s_60addd0605f23d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa15a-3bc3-74c1-b7da-85cd0141887f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 90,
+      "total_deletions": 11
+    }
+  }
+}
