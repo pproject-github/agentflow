@@ -3337,9 +3337,11 @@ function prdWorkflowShareLinkSummary(record, shareToken, publicBaseUrl, userId =
     workflowShare: token,
   });
   const base = String(publicBaseUrl || "").replace(/\/+$/, "");
+  const shortUrl = `${base}/w/${encodeURIComponent(token)}`;
   return {
     tapdId: String(record.tapdId || ""),
     url: `${base}/workspace?${query.toString()}`,
+    shortUrl,
     active: true,
     readOnly: true,
     createdAt: record.shareCreatedAt || "",
@@ -11096,6 +11098,40 @@ export function startUiServer({
       isAdmin: Boolean(authUser.isAdmin),
       adminOwnerId: String(url.searchParams.get("adminOwnerId") || "").trim(),
     } : {};
+    if (req.method === "GET" && url.pathname.startsWith("/w/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length !== 2) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      let shareToken = "";
+      try {
+        shareToken = decodeURIComponent(parts[1] || "");
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const record = getPrdWorkflowCollaborationByShareToken(shareToken);
+      if (!record) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Workflow share link is invalid or has been revoked");
+        return;
+      }
+      const query = new URLSearchParams({
+        view: "workflow",
+        tapdId: String(record.tapdId || ""),
+        workflowShare: shareToken,
+      });
+      res.writeHead(302, {
+        Location: `/workspace?${query.toString()}`,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+      });
+      res.end();
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/auth/session-token") {
       if (!authUser?.userId) {
         json(res, 401, { error: "Unauthorized" });
@@ -11418,7 +11454,7 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           snapshot,
-          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.shortUrl || workflowShare.url } : {}),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -11607,7 +11643,7 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           snapshot: withDiagnostic,
-          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.shortUrl || workflowShare.url } : {}),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

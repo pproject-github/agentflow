@@ -95,7 +95,8 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(reported.status, 200, JSON.stringify(reportedPayload));
     assert.equal(reportedPayload.workflowShare.tapdId, "1015046");
     assert.equal(reportedPayload.workflowShare.readOnly, true);
-    assert.equal(reportedPayload.shareUrl, reportedPayload.workflowShare.url);
+    assert.match(reportedPayload.workflowShare.shortUrl, /\/w\/[A-Za-z0-9_-]{32}$/);
+    assert.equal(reportedPayload.shareUrl, reportedPayload.workflowShare.shortUrl);
     const reportedUrl = new URL(reportedPayload.workflowShare.url);
     assert.equal(reportedUrl.searchParams.get("tapdId"), "1015046");
     assert.equal(reportedUrl.searchParams.get("view"), "workflow");
@@ -103,6 +104,9 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(reportedUrl.searchParams.get("flowSource"), null);
     const workflowShare = reportedUrl.searchParams.get("workflowShare");
     assert.ok(workflowShare);
+    const shortRedirect = await fetch(reportedPayload.workflowShare.shortUrl, { redirect: "manual" });
+    assert.equal(shortRedirect.status, 302);
+    assert.equal(shortRedirect.headers.get("location"), `${reportedUrl.pathname}${reportedUrl.search}`);
 
     const shared = await request(owner.token, "/api/prd-workflow/share", {
       method: "POST",
@@ -118,6 +122,7 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(sharedPayload.share.readOnly, true);
     assert.equal(sharedPayload.created, false);
     assert.equal(sharedPayload.share.url, reportedPayload.workflowShare.url);
+    assert.equal(sharedPayload.share.shortUrl, reportedPayload.workflowShare.shortUrl);
 
     const current = await request(
       owner.token,
@@ -126,7 +131,8 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     const currentPayload = await current.json();
     assert.equal(current.status, 200, JSON.stringify(currentPayload));
     assert.equal(currentPayload.workflowShare.url, reportedPayload.workflowShare.url);
-    assert.equal(currentPayload.shareUrl, reportedPayload.workflowShare.url);
+    assert.equal(currentPayload.workflowShare.shortUrl, reportedPayload.workflowShare.shortUrl);
+    assert.equal(currentPayload.shareUrl, reportedPayload.workflowShare.shortUrl);
 
     const guestSnapshot = await request(
       guest.token,
@@ -165,6 +171,8 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
       `/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1&workflowShare=${encodeURIComponent(workflowShare)}`,
     );
     assert.equal(revokedSnapshot.status, 404);
+    const revokedShortLink = await fetch(reportedPayload.workflowShare.shortUrl, { redirect: "manual" });
+    assert.equal(revokedShortLink.status, 404);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome == null) delete process.env.AGENTFLOW_HOME;
