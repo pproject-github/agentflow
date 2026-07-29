@@ -54,6 +54,11 @@ export function workspaceCanvasInteractionPhase(changes = []) {
   return { active, finished, mutated };
 }
 
+export function workspaceCanvasInteractionCommitsChanges(changes = []) {
+  const interaction = workspaceCanvasInteractionPhase(changes);
+  return interaction.mutated && !interaction.active;
+}
+
 export function workspaceCanvasChangeIsContinuous(change) {
   return Boolean(
     (change?.type === "position" && change.position && change.dragging === true)
@@ -66,6 +71,21 @@ export function workspaceCanvasChangeFinishesInteraction(change) {
     (change?.type === "position" && change.position && change.dragging === false)
     || (change?.type === "dimensions" && change.dimensions && change.resizing === false)
   );
+}
+
+export function partitionWorkspaceCanvasChanges(changes = []) {
+  const transient = [];
+  const committed = [];
+  let finishesInteraction = false;
+  for (const change of Array.isArray(changes) ? changes : []) {
+    if (workspaceCanvasChangeIsContinuous(change)) {
+      transient.push(change);
+      continue;
+    }
+    committed.push(change);
+    if (workspaceCanvasChangeFinishesInteraction(change)) finishesInteraction = true;
+  }
+  return { transient, committed, finishesInteraction };
 }
 
 export function coalesceWorkspaceCanvasChanges(changes = []) {
