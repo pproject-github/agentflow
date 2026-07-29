@@ -29,20 +29,47 @@ test("PRD Workflow review links are readable without authentication", async () =
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}`;
 
+    const reviewPayload = {
+      tapdId: "1133202860001017765",
+      title: "礼物列表缓存完整性方案",
+      markdown: "# 匿名可读 Review\n\nReview 正文",
+      stage: "issue-plan:gift-cache-integrity-validation",
+      issueKey: "gift-cache-integrity-validation",
+      artifactKey: "ai-doc:plan:gift-cache-integrity-validation:android",
+      idempotencyKey: "review:ai-doc:plan:gift-cache-integrity-validation:android:abc123",
+    };
     const created = await fetch(`${baseUrl}/api/prd-workflow/review-link`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${owner.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        tapdId: "1133202860001017765",
-        title: "礼物列表缓存完整性方案",
-        markdown: "# 匿名可读 Review\n\nReview 正文",
-      }),
+      body: JSON.stringify(reviewPayload),
     });
     const createdPayload = await created.json();
     assert.equal(created.status, 200, JSON.stringify(createdPayload));
+    assert.equal(
+      createdPayload.event.artifacts[0].key,
+      "ai-doc:plan:gift-cache-integrity-validation:android",
+    );
+    assert.equal(
+      createdPayload.event.links[0].key,
+      "ai-doc:plan:gift-cache-integrity-validation:android",
+    );
+    assert.equal(createdPayload.event.idempotencyKey, reviewPayload.idempotencyKey);
+
+    const repeated = await fetch(`${baseUrl}/api/prd-workflow/review-link`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${owner.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(reviewPayload),
+    });
+    const repeatedPayload = await repeated.json();
+    assert.equal(repeated.status, 200, JSON.stringify(repeatedPayload));
+    assert.equal(repeatedPayload.event.id, createdPayload.event.id);
+    assert.equal(repeatedPayload.event.artifacts.length, 1);
 
     const anonymous = await fetch(createdPayload.review.url);
     const anonymousHtml = await anonymous.text();

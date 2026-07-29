@@ -12198,7 +12198,14 @@ export function startUiServer({
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
           : { kind: durability === "durable" ? "ai-doc" : "local-draft", durability };
+        const artifactKey = String(
+          payload.artifactKey || payload.artifact_key || "",
+        ).trim();
+        const idempotencyKey = String(
+          payload.idempotencyKey || payload.idempotency_key || "",
+        ).trim();
         const artifact = {
+          ...(artifactKey ? { key: artifactKey } : {}),
           label: payload.artifactLabel || "Markdown Review",
           kind: durability === "temporary" ? "temporary-review" : "review",
           persistence: "runtime",
@@ -12222,12 +12229,15 @@ export function startUiServer({
           detail: "已生成临时 Markdown review 链接",
           status: "current",
           issueKey: payload.issueKey || payload.issue_key || "",
+          idempotencyKey,
           durability,
           sourceArtifact: reviewSource,
           expiresAt: review.expiresAt || "",
           artifacts: [artifact],
           links: [{
+            ...(artifactKey ? { key: artifactKey } : {}),
             label: "Markdown Review",
+            kind: artifact.kind,
             url: displayUrl,
             canonicalUrl: reviewUrl,
             shortUrl,

@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  isPrdWorkflowReviewLink,
   isPrdWorkflowPlanAction,
+  mergePrdWorkflowActionLists,
   selectCurrentPrdWorkflowActionLinks,
 } from "../builtin/web-ui/src/prdWorkflowActionLinks.js";
 
@@ -124,4 +126,63 @@ test("non-plan actions retain all unrelated review links", () => {
     }),
     links,
   );
+});
+
+test("short review URLs are recognized from review metadata", () => {
+  assert.equal(isPrdWorkflowReviewLink({
+    href: "http://ai.example.test/r/AbCd1234",
+    kind: "temporary-review",
+  }), true);
+  assert.equal(isPrdWorkflowReviewLink({
+    href: "http://ai.example.test/r/AbCd1234",
+    canonicalUrl: reviewUrl("temporary-1"),
+  }), true);
+});
+
+test("plan action deduplicates short review URLs by review semantics", () => {
+  const links = [
+    {
+      key: "ai-doc:plan:gift-cache:android",
+      label: "临时 Markdown 预览",
+      href: "http://ai.example.test/r/temporary",
+      kind: "temporary-review",
+      durability: "temporary",
+    },
+    {
+      key: "ai-doc:plan:gift-cache:android",
+      label: "方案文档预览",
+      href: "http://ai.example.test/r/durable",
+      kind: "review",
+      durability: "durable",
+    },
+  ];
+
+  const merged = mergePrdWorkflowActionLists([links[0]], [links[1]]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].href, "http://ai.example.test/r/durable");
+  assert.equal(merged[0].kind, "review");
+});
+
+test("stable artifact key replaces the complete stale artifact", () => {
+  const merged = mergePrdWorkflowActionLists(
+    [{
+      key: "ai-doc:plan:gift-cache:android",
+      label: "临时 Markdown 预览",
+      href: "http://ai.example.test/r/old",
+      source: { kind: "local-draft" },
+    }],
+    [{
+      key: "ai-doc:plan:gift-cache:android",
+      label: "方案文档预览",
+      href: "http://ai.example.test/r/new",
+      durability: "durable",
+    }],
+  );
+
+  assert.deepEqual(merged, [{
+    key: "ai-doc:plan:gift-cache:android",
+    label: "方案文档预览",
+    href: "http://ai.example.test/r/new",
+    durability: "durable",
+  }]);
 });
