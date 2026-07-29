@@ -48,7 +48,7 @@ async function publishReview(baseUrl, token, overrides = {}) {
       tapdId: "1015046",
       reviewId: "review-1015046-plan-doc",
       title: "Remote Config 方案",
-      markdown: "# Review\n\n内容",
+      markdown: "# Remote Config 方案\n\n内容",
       stage: "plan-doc:remote-config",
       issueKey: "remote-config",
       durability: "durable",
@@ -64,7 +64,7 @@ test("review-link returns a stable shortUrl and keeps the canonical url", async 
   const { baseUrl, token } = await createServer(t);
 
   const first = await publishReview(baseUrl, token);
-  const second = await publishReview(baseUrl, token, { markdown: "# Review\n\n更新内容" });
+  const second = await publishReview(baseUrl, token, { markdown: "# Remote Config 方案\n\n更新内容" });
 
   assert.match(first.review.url, /\/api\/prd-workflow\/review\/1015046\//);
   assert.match(first.review.shortUrl, /\/r\/[A-Za-z0-9_-]{8}$/);

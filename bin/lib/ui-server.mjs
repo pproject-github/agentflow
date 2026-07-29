@@ -7724,6 +7724,78 @@ function prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId) {
   };
 }
 
+function prdWorkflowReviewIndexPath(tapdId, reviewId) {
+  return path.join(
+    getAgentflowDataRoot(),
+    "prd-workflow-review-index",
+    prdWorkflowSafeStateId(tapdId),
+    `${prdWorkflowSafeStateId(reviewId)}.json`,
+  );
+}
+
+function prdWorkflowWriteReviewIndex(ownerId, tapdId, reviewId) {
+  const indexPath = prdWorkflowReviewIndexPath(tapdId, reviewId);
+  const tempPath = `${indexPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.writeFileSync(tempPath, JSON.stringify({
+    version: 1,
+    tapdId: String(tapdId || ""),
+    reviewId: prdWorkflowSafeStateId(reviewId),
+    ownerId: String(ownerId || "").trim(),
+    updatedAt: new Date().toISOString(),
+  }, null, 2) + "\n", "utf-8");
+  fs.renameSync(tempPath, indexPath);
+}
+
+function prdWorkflowReadReviewIndex(tapdId, reviewId) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prdWorkflowReviewIndexPath(tapdId, reviewId), "utf-8"));
+    if (
+      String(parsed?.tapdId || "") !== String(tapdId || "")
+      || prdWorkflowSafeStateId(parsed?.reviewId) !== prdWorkflowSafeStateId(reviewId)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowReviewFileExists(paths) {
+  try {
+    return fs.existsSync(paths.markdownPath) && fs.statSync(paths.markdownPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function prdWorkflowResolveReviewPaths(scopedRoot, tapdId, reviewId) {
+  const direct = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
+  if (prdWorkflowReviewFileExists(direct)) return direct;
+
+  const indexed = prdWorkflowReadReviewIndex(tapdId, reviewId);
+  if (indexed) {
+    const indexedPaths = prdWorkflowReviewPaths(
+      getAgentflowUserDataRoot(indexed.ownerId || ""),
+      tapdId,
+      reviewId,
+    );
+    if (prdWorkflowReviewFileExists(indexedPaths)) return indexedPaths;
+  }
+
+  const candidateOwners = ["", ...listAgentflowUserIds()];
+  for (const ownerId of candidateOwners) {
+    const candidate = prdWorkflowReviewPaths(getAgentflowUserDataRoot(ownerId), tapdId, reviewId);
+    if (!prdWorkflowReviewFileExists(candidate)) continue;
+    try {
+      prdWorkflowWriteReviewIndex(ownerId, tapdId, reviewId);
+    } catch (_) {}
+    return candidate;
+  }
+  return direct;
+}
+
 function prdWorkflowMigrateLegacyState(legacyRoot, stateRoot, tapdId) {
   const sourceRoot = path.resolve(legacyRoot || "");
   const destinationRoot = path.resolve(stateRoot || "");
@@ -7842,10 +7914,12 @@ function prdWorkflowPruneReviews(scopedRoot, tapdId, maxReviews = 200) {
     for (const entry of entries.filter((item) => Number.isFinite(item.expiresMs) && item.expiresMs < now)) {
       try { fs.unlinkSync(entry.abs); } catch (_) {}
       try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+      try { fs.unlinkSync(prdWorkflowReviewIndexPath(tapdId, entry.id)); } catch (_) {}
     }
     for (const entry of entries.filter((item) => !(Number.isFinite(item.expiresMs) && item.expiresMs < now)).slice(maxReviews)) {
       try { fs.unlinkSync(entry.abs); } catch (_) {}
       try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+      try { fs.unlinkSync(prdWorkflowReviewIndexPath(tapdId, entry.id)); } catch (_) {}
     }
   } catch (_) {}
 }
@@ -7872,6 +7946,30 @@ function prdWorkflowReviewSplitFrontmatter(markdown) {
   const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
   if (!match) return { frontmatter: "", body: text };
   return { frontmatter: match[1].trim(), body: text.slice(match[0].length) };
+}
+
+function prdWorkflowReviewStripLegacyMetadata(body) {
+  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const visible = [];
+  let fenced = false;
+  let hidden = false;
+  for (const line of lines) {
+    if (!hidden && /^\s*```/.test(line)) {
+      fenced = !fenced;
+      visible.push(line);
+      continue;
+    }
+    if (!fenced && !hidden && /<!--\s*prd-flow-start\b/.test(line)) {
+      hidden = !/prd-flow-end\s*-->/.test(line);
+      continue;
+    }
+    if (hidden) {
+      if (/prd-flow-end\s*-->/.test(line)) hidden = false;
+      continue;
+    }
+    visible.push(line);
+  }
+  return visible.join("\n");
 }
 
 function prdWorkflowReviewRenderFrontmatter(frontmatter) {
@@ -8120,20 +8218,24 @@ export function prdWorkflowReviewMarkdownToHtml(markdown) {
   const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
   return [
     prdWorkflowReviewRenderFrontmatter(frontmatter),
-    prdWorkflowReviewBodyToHtml(body),
+    prdWorkflowReviewBodyToHtml(prdWorkflowReviewStripLegacyMetadata(body)),
   ].filter(Boolean).join("\n");
 }
 
 function prdWorkflowReviewExtractPageTitle(markdown, fallbackTitle) {
   const { frontmatter, body } = prdWorkflowReviewSplitFrontmatter(markdown);
-  const lines = String(body || "").replace(/\r\n/g, "\n").split("\n");
+  const visibleBody = prdWorkflowReviewStripLegacyMetadata(body);
+  const lines = String(visibleBody || "").replace(/\r\n/g, "\n").split("\n");
   const firstContentIndex = lines.findIndex((line) => String(line || "").trim());
   const heading = firstContentIndex >= 0
     ? String(lines[firstContentIndex] || "").trim().match(/^#\s+(.+)$/)
     : null;
   if (!heading) {
     return {
-      markdown: String(markdown || ""),
+      markdown: [
+        frontmatter ? `---\n${frontmatter}\n---` : "",
+        visibleBody,
+      ].filter(Boolean).join("\n\n"),
       title: String(fallbackTitle || "PRD Workflow Review"),
     };
   }
@@ -8345,7 +8447,7 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
 </html>`;
 }
 
-function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "") {
+function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "", ownerId = "") {
   const content = String(payload.markdown || payload.content || payload.rawOutput || "").slice(0, 500000);
   if (!content.trim()) throw new Error("Missing review markdown");
   const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
@@ -8381,6 +8483,7 @@ function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "")
   fs.mkdirSync(paths.dir, { recursive: true });
   fs.writeFileSync(paths.markdownPath, content.trimEnd() + "\n", "utf-8");
   fs.writeFileSync(paths.metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
+  prdWorkflowWriteReviewIndex(ownerId, tapdId, paths.id);
   prdWorkflowPruneReviews(scopedRoot, tapdId);
   prdWorkflowAppendAudit(scopedRoot, tapdId, {
     type: "review-created",
@@ -11167,7 +11270,19 @@ export function startUiServer({
           baseSnapshot,
           getSessionTokenFromRequest(req) || "",
         );
-        json(res, 200, { ok: true, snapshot });
+        const workflowShare = workflowScope.collaboration?.shareToken
+          ? prdWorkflowShareLinkSummary(
+              workflowScope.collaboration,
+              workflowScope.collaboration.shareToken,
+              serverPublicBaseUrl(req, host, uiPort),
+              userCtx.userId,
+            )
+          : null;
+        json(res, 200, {
+          ok: true,
+          snapshot,
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -11192,6 +11307,22 @@ export function startUiServer({
           json(res, 400, { error: "Missing tapdId" });
           return;
         }
+        const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
+          ? payload.snapshot
+          : payload.prd || payload.next ? payload : null;
+        if (!rawSnapshot) {
+          json(res, 400, { error: "Missing snapshot" });
+          return;
+        }
+        const existingCollaboration = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+        const existingAccess = prdWorkflowCollaborationAccess(existingCollaboration, userCtx.userId);
+        const shareResult = existingCollaboration && existingAccess.role !== "owner"
+          ? { record: existingCollaboration, created: false }
+          : ensurePrdWorkflowShareLink({ tapdId, userId: userCtx.userId });
+        if (shareResult.error) {
+          json(res, shareResult.status || 400, { error: shareResult.error });
+          return;
+        }
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
@@ -11208,13 +11339,6 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
-          ? payload.snapshot
-          : payload.prd || payload.next ? payload : null;
-        if (!rawSnapshot) {
-          json(res, 400, { error: "Missing snapshot" });
-          return;
-        }
         const normalizedSnapshot = {
           ...prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, rawSnapshot, userCtx, { flowSource, flowId }),
           clientReportedAt: new Date().toISOString(),
@@ -11334,8 +11458,20 @@ export function startUiServer({
         }
         const materialized = prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId });
         const withDiagnostic = prdWorkflowWithAgentflowTokenDiagnostic(materialized, getSessionTokenFromRequest(req) || "");
+        const workflowShare = shareResult.record?.shareToken
+          ? prdWorkflowShareLinkSummary(
+              shareResult.record,
+              shareResult.record.shareToken,
+              serverPublicBaseUrl(req, host, uiPort, payload),
+              userCtx.userId,
+            )
+          : null;
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "snapshot-report", tapdId, snapshot: withDiagnostic });
-        json(res, 200, { ok: true, snapshot: withDiagnostic });
+        json(res, 200, {
+          ok: true,
+          snapshot: withDiagnostic,
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -12038,7 +12174,13 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
+        const review = prdWorkflowCreateReview(
+          scopedRoot,
+          tapdId,
+          payload,
+          serverPublicBaseUrl(req, host, uiPort, payload),
+          workflowScope.ownerId,
+        );
         const query = new URLSearchParams();
         if (flowId) query.set("flowId", flowId);
         if (flowId && flowSource && flowSource !== "user") query.set("flowSource", flowSource);
@@ -12222,8 +12364,8 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
-        if (!fs.existsSync(paths.markdownPath) || !fs.statSync(paths.markdownPath).isFile()) {
+        const paths = prdWorkflowResolveReviewPaths(scopedRoot, tapdId, reviewId);
+        if (!prdWorkflowReviewFileExists(paths)) {
           res.writeHead(404);
           res.end("Not found");
           return;

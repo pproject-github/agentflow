@@ -67,6 +67,43 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
       },
     });
 
+    const invalidReport = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({ tapdId: "1015046" }),
+    });
+    assert.equal(invalidReport.status, 400);
+    const beforeReport = await request(owner.token, "/api/prd-workflow/share?tapdId=1015046");
+    const beforeReportPayload = await beforeReport.json();
+    assert.equal(beforeReport.status, 200, JSON.stringify(beforeReportPayload));
+    assert.equal(beforeReportPayload.share, null);
+
+    const reported = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        snapshot: {
+          tapdId: "1015046",
+          phase: "implementing",
+          pointer: "Owner shared Workflow",
+          revision: "revision-owner",
+          actions: [],
+          issues: [],
+        },
+      }),
+    });
+    const reportedPayload = await reported.json();
+    assert.equal(reported.status, 200, JSON.stringify(reportedPayload));
+    assert.equal(reportedPayload.workflowShare.tapdId, "1015046");
+    assert.equal(reportedPayload.workflowShare.readOnly, true);
+    assert.equal(reportedPayload.shareUrl, reportedPayload.workflowShare.url);
+    const reportedUrl = new URL(reportedPayload.workflowShare.url);
+    assert.equal(reportedUrl.searchParams.get("tapdId"), "1015046");
+    assert.equal(reportedUrl.searchParams.get("view"), "workflow");
+    assert.equal(reportedUrl.searchParams.get("flowId"), null);
+    assert.equal(reportedUrl.searchParams.get("flowSource"), null);
+    const workflowShare = reportedUrl.searchParams.get("workflowShare");
+    assert.ok(workflowShare);
+
     const shared = await request(owner.token, "/api/prd-workflow/share", {
       method: "POST",
       body: JSON.stringify({
@@ -79,8 +116,17 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(shared.status, 200, JSON.stringify(sharedPayload));
     assert.equal(sharedPayload.share.tapdId, "1015046");
     assert.equal(sharedPayload.share.readOnly, true);
-    const workflowShare = new URL(sharedPayload.share.url).searchParams.get("workflowShare");
-    assert.ok(workflowShare);
+    assert.equal(sharedPayload.created, false);
+    assert.equal(sharedPayload.share.url, reportedPayload.workflowShare.url);
+
+    const current = await request(
+      owner.token,
+      "/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1",
+    );
+    const currentPayload = await current.json();
+    assert.equal(current.status, 200, JSON.stringify(currentPayload));
+    assert.equal(currentPayload.workflowShare.url, reportedPayload.workflowShare.url);
+    assert.equal(currentPayload.shareUrl, reportedPayload.workflowShare.url);
 
     const guestSnapshot = await request(
       guest.token,
