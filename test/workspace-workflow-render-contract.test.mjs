@@ -41,3 +41,29 @@ test("shared Workflow links render the Workflow content without the project top 
     "The project top bar must not render in the shared Workflow view",
   );
 });
+
+test("Workflow progress fields use a compact responsive grid", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /const compact = sectionKey === "progress";/,
+    "Only the progress section should opt into the compact layout",
+  );
+  assert.match(
+    source,
+    /af-prd-overall-platform--compact/,
+    "The progress section should expose a compact layout class",
+  );
+  assert.match(
+    source,
+    /className="af-prd-overall-platform__fields"/,
+    "Global-state fields should share one layout container",
+  );
+  assert.match(
+    css,
+    /\.af-prd-overall-platform--compact \.af-prd-overall-platform__fields\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,/s,
+    "Compact progress fields should flow horizontally and wrap responsively",
+  );
+});
