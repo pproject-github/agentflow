@@ -1,0 +1,40 @@
+builtin/web-ui/src/pages/AdminUsagePage.jsx
+  s_d99100a467f052::t_4408e35a139065 2,63,260-273,292-297,367-370
+builtin/web-ui/src/components/AdminRunDetailDrawer.jsx
+  s_d99100a467f052::t_4408e35a139065 1-163
+bin/lib/admin-run-detail.mjs
+  s_d99100a467f052::t_3ccdc2f1d681c2 221-222,228
+  s_d99100a467f052::t_a58b0aa92dfee2 1-220,223-227,229-263
+test/admin-run-detail.test.mjs
+  s_d99100a467f052::t_8594512bbb2e24 1-37,48-49,51-69,88-121,136-142
+  s_d99100a467f052::t_485a2a545ab3e0 38-47,50,70-87,122-135
+builtin/web-ui/dist/assets/index-B5Brnupo.js
+  s_d99100a467f052::t_109abbe4b22562 25,37-38,40,42,44,60,65-67,69,73,75,79,95,98-100,181-182,184-187,241,243,245,248-252,260-264,285,313-319,323,349
+bin/lib/ui-server.mjs
+  s_d99100a467f052::t_a58b0aa92dfee2 129,12362-12390
+builtin/web-ui/dist/assets/index-CuRtjhm3.css
+  s_d99100a467f052::t_109abbe4b22562 1
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_109abbe4b22562 18-19
+builtin/web-ui/src/index.css
+  s_d99100a467f052::t_d655533cfeb16f 1215-1496
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "93090e9ba565b86320ceff8d8a92aa3ed4e30d24",
+  "prompts": {},
+  "logical_commit_id": "93090e9ba565b86320ceff8d8a92aa3ed4e30d24",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 2599,
+      "total_deletions": 776
+    }
+  }
+}
