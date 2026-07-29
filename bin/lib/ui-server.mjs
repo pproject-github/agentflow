@@ -7753,6 +7753,75 @@ function prdWorkflowMigrateLegacyState(legacyRoot, stateRoot, tapdId) {
   } catch (_) {}
 }
 
+function prdWorkflowReviewShortLinkDir(root) {
+  return path.join(path.resolve(root || process.cwd()), ".workspace", "prd-flow", "review-short-links");
+}
+
+function prdWorkflowReviewShortLinkPath(root, shortCode) {
+  return path.join(
+    prdWorkflowReviewShortLinkDir(root),
+    `${String(shortCode || "").trim()}.json`,
+  );
+}
+
+function prdWorkflowReadReviewShortLink(root, shortCode) {
+  const code = String(shortCode || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,32}$/.test(code)) return null;
+  try {
+    const filePath = prdWorkflowReviewShortLinkPath(root, code);
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+    const link = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const targetPath = String(link?.targetPath || "").trim();
+    if (!targetPath.startsWith("/api/prd-workflow/review/") || /[\r\n]/.test(targetPath)) return null;
+    return {
+      ...link,
+      shortCode: code,
+      targetPath,
+      filePath,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowCreateReviewShortLink(root, reviewUrl, review = {}) {
+  let parsed;
+  try {
+    parsed = new URL(String(reviewUrl || ""));
+  } catch {
+    return null;
+  }
+  const targetPath = `${parsed.pathname}${parsed.search}`;
+  if (!targetPath.startsWith("/api/prd-workflow/review/")) return null;
+  const digest = crypto.createHash("sha256").update(targetPath).digest("base64url");
+  const dir = prdWorkflowReviewShortLinkDir(root);
+  fs.mkdirSync(dir, { recursive: true });
+  for (let length = 8; length <= 24; length += 2) {
+    const shortCode = digest.slice(0, length);
+    const existing = prdWorkflowReadReviewShortLink(root, shortCode);
+    if (existing && existing.targetPath !== targetPath) continue;
+    const link = {
+      shortCode,
+      targetPath,
+      tapdId: String(review?.tapdId || ""),
+      reviewId: String(review?.id || ""),
+      durability: String(review?.durability || "temporary"),
+      expiresAt: String(review?.expiresAt || ""),
+      createdAt: String(review?.createdAt || new Date().toISOString()),
+    };
+    fs.writeFileSync(
+      prdWorkflowReviewShortLinkPath(root, shortCode),
+      JSON.stringify(link, null, 2) + "\n",
+      "utf-8",
+    );
+    return {
+      ...link,
+      shortUrl: `${parsed.origin}/r/${shortCode}`,
+    };
+  }
+  throw new Error("Unable to allocate a unique review short code");
+}
+
 function prdWorkflowPruneReviews(scopedRoot, tapdId, maxReviews = 200) {
   try {
     const dir = prdWorkflowReviewDir(scopedRoot, tapdId);
@@ -10699,6 +10768,7 @@ function normalizeContextInstanceIds(raw) {
  * @param {string} opts.workspaceRoot
  * @param {number} opts.port
  * @param {boolean} [opts.hideCommunityLinks]
+ * @param {boolean} [opts.enableWorkspaceScheduler]
  * @param {string} [opts.staticDir] 默认 PACKAGE_ROOT/builtin/web-ui/dist（npm run build 产出）
  * @returns {Promise<import('http').Server>}
  */
@@ -10707,6 +10777,7 @@ export function startUiServer({
   port,
   host = "127.0.0.1",
   hideCommunityLinks = false,
+  enableWorkspaceScheduler = true,
   staticDir = path.join(PACKAGE_ROOT, "builtin", "web-ui", "dist"),
 }) {
   const root = path.resolve(workspaceRoot);
@@ -11968,7 +12039,19 @@ export function startUiServer({
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
         const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
-        const reviewUrl = review.url;
+        const query = new URLSearchParams();
+        if (flowId) query.set("flowId", flowId);
+        if (flowId && flowSource && flowSource !== "user") query.set("flowSource", flowSource);
+        if (archived) query.set("archived", "1");
+        const reviewUrl = query.toString() ? `${review.url}?${query.toString()}` : review.url;
+        let shortLink = null;
+        try {
+          shortLink = prdWorkflowCreateReviewShortLink(root, reviewUrl, review);
+        } catch (e) {
+          log.debug(`[prd-workflow] review short link failed: ${(e && e.message) || String(e)}`);
+        }
+        const shortUrl = shortLink?.shortUrl || "";
+        const displayUrl = shortUrl || reviewUrl;
         const durability = review.durability || "temporary";
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
@@ -11980,7 +12063,9 @@ export function startUiServer({
           durability,
           source: reviewSource,
           confirmed: payload.confirmed === true || payload.confirmed === "1",
-          url: reviewUrl,
+          url: displayUrl,
+          canonicalUrl: reviewUrl,
+          shortUrl,
           expiresAt: review.expiresAt || "",
         };
         const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
@@ -11999,15 +12084,35 @@ export function startUiServer({
           sourceArtifact: reviewSource,
           expiresAt: review.expiresAt || "",
           artifacts: [artifact],
-          links: [{ label: "Markdown Review", url: reviewUrl, persistence: "runtime", durability, source: reviewSource, expiresAt: review.expiresAt || "" }],
+          links: [{
+            label: "Markdown Review",
+            url: displayUrl,
+            canonicalUrl: reviewUrl,
+            shortUrl,
+            persistence: "runtime",
+            durability,
+            source: reviewSource,
+            expiresAt: review.expiresAt || "",
+          }],
           reviewId: review.id,
+          reviewShortCode: shortLink?.shortCode || "",
         });
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
           await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId }),
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "review-link", tapdId, event, snapshot });
-        json(res, 200, { ok: true, review: { ...review, url: reviewUrl }, event, snapshot });
+        json(res, 200, {
+          ok: true,
+          review: {
+            ...review,
+            url: reviewUrl,
+            shortUrl,
+            shortCode: shortLink?.shortCode || "",
+          },
+          event,
+          snapshot,
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -12051,6 +12156,41 @@ export function startUiServer({
       };
       req.on("close", detach);
       res.on("close", detach);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/r/")) {
+      try {
+        const parts = url.pathname.split("/").filter(Boolean);
+        const shortCode = decodeURIComponent(parts[1] || "");
+        if (parts.length !== 2) {
+          res.writeHead(404);
+          res.end("Not found");
+          return;
+        }
+        const link = prdWorkflowReadReviewShortLink(root, shortCode);
+        if (!link) {
+          res.writeHead(404);
+          res.end("Not found");
+          return;
+        }
+        const expiresMs = Date.parse(link.expiresAt || "");
+        if (Number.isFinite(expiresMs) && expiresMs < Date.now()) {
+          try { fs.unlinkSync(link.filePath); } catch (_) {}
+          res.writeHead(410, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Review link expired");
+          return;
+        }
+        res.writeHead(302, {
+          Location: link.targetPath,
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+        });
+        res.end();
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+      }
       return;
     }
 
@@ -16669,24 +16809,26 @@ finishedAt: "${new Date().toISOString()}"
     res.end(data);
   });
 
-  const workspaceScheduleTimer = setInterval(() => {
+  if (enableWorkspaceScheduler) {
+    const workspaceScheduleTimer = setInterval(() => {
+      try {
+        pollWorkspaceSchedules(root);
+      } catch (e) {
+        log.debug(`[workspace-scheduler] poll failed: ${(e && e.message) || String(e)}`);
+      }
+    }, WORKSPACE_SCHEDULE_POLL_MS);
     try {
-      pollWorkspaceSchedules(root);
-    } catch (e) {
-      log.debug(`[workspace-scheduler] poll failed: ${(e && e.message) || String(e)}`);
-    }
-  }, WORKSPACE_SCHEDULE_POLL_MS);
-  try {
-    workspaceScheduleTimer.unref?.();
-  } catch (_) {}
-  server.on("close", () => clearInterval(workspaceScheduleTimer));
-  setTimeout(() => {
-    try {
-      pollWorkspaceSchedules(root);
-    } catch (e) {
-      log.debug(`[workspace-scheduler] initial poll failed: ${(e && e.message) || String(e)}`);
-    }
-  }, 1000).unref?.();
+      workspaceScheduleTimer.unref?.();
+    } catch (_) {}
+    server.on("close", () => clearInterval(workspaceScheduleTimer));
+    setTimeout(() => {
+      try {
+        pollWorkspaceSchedules(root);
+      } catch (e) {
+        log.debug(`[workspace-scheduler] initial poll failed: ${(e && e.message) || String(e)}`);
+      }
+    }, 1000).unref?.();
+  }
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
