@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AdminRunDetailDrawer from "../components/AdminRunDetailDrawer.jsx";
+import { useRoute } from "../routeContext.jsx";
 
 function compactNumber(value) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.max(0, Number(value || 0)));
@@ -57,10 +58,15 @@ function statusText(status) {
 }
 
 export default function AdminUsagePage({ authUser }) {
+  const { navigate } = useRoute();
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedRun, setSelectedRun] = useState(null);
+  const [workspaceOwner, setWorkspaceOwner] = useState(null);
+  const [userWorkspaces, setUserWorkspaces] = useState([]);
+  const [userWorkspacesLoading, setUserWorkspacesLoading] = useState(false);
+  const [userWorkspacesError, setUserWorkspacesError] = useState("");
 
   const loadUsage = useCallback(async () => {
     if (!authUser?.isAdmin) return;
@@ -78,6 +84,40 @@ export default function AdminUsagePage({ authUser }) {
       setLoading(false);
     }
   }, [authUser?.isAdmin]);
+
+  const loadUserWorkspaces = useCallback(async (user) => {
+    const userId = String(user?.userId || "").trim();
+    if (!authUser?.isAdmin || !userId) return;
+    setWorkspaceOwner({ userId, username: String(user?.username || userId) });
+    setUserWorkspaces([]);
+    setUserWorkspacesError("");
+    setUserWorkspacesLoading(true);
+    try {
+      const query = new URLSearchParams({ userId });
+      const response = await fetch(`/api/admin/user-workspaces?${query.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "读取用户 Workspace 失败");
+      setWorkspaceOwner(payload.owner || { userId, username: String(user?.username || userId) });
+      setUserWorkspaces(Array.isArray(payload.workspaces) ? payload.workspaces : []);
+    } catch (loadError) {
+      setUserWorkspacesError(String(loadError.message || loadError));
+    } finally {
+      setUserWorkspacesLoading(false);
+    }
+  }, [authUser?.isAdmin]);
+
+  const openUserWorkspace = useCallback((workspace) => {
+    const ownerUserId = String(workspace?.ownerUserId || workspaceOwner?.userId || "").trim();
+    const flowId = String(workspace?.id || "").trim();
+    if (!ownerUserId || !flowId) return;
+    const query = new URLSearchParams({
+      flowId,
+      flowSource: "user",
+      adminOwnerId: ownerUserId,
+    });
+    if (workspace?.archived) query.set("archived", "1");
+    navigate(`/workspace?${query.toString()}`);
+  }, [navigate, workspaceOwner?.userId]);
 
   useEffect(() => {
     void loadUsage();
@@ -318,13 +358,14 @@ export default function AdminUsagePage({ authUser }) {
                 <th>Runs</th>
                 <th>状态</th>
                 <th>最近运行</th>
+                <th>Workspace</th>
               </tr>
             </thead>
             <tbody>
               {loading && !usage ? (
-                <tr><td colSpan={5}>正在加载...</td></tr>
+                <tr><td colSpan={6}>正在加载...</td></tr>
               ) : (usage?.users || []).length === 0 ? (
-                <tr><td colSpan={5}>暂无用户数据</td></tr>
+                <tr><td colSpan={6}>暂无用户数据</td></tr>
               ) : (
                 (usage?.users || []).map((row) => (
                   <tr key={row.userId}>
@@ -357,6 +398,19 @@ export default function AdminUsagePage({ authUser }) {
                         <span>无运行记录</span>
                       )}
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="af-admin-workspace-review-button"
+                        disabled={!row.pipelines?.total || (userWorkspacesLoading && workspaceOwner?.userId === row.userId)}
+                        onClick={() => void loadUserWorkspaces(row)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>visibility</span>
+                        {userWorkspacesLoading && workspaceOwner?.userId === row.userId
+                          ? "读取中"
+                          : `查看 ${compactNumber(row.pipelines?.total)}`}
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -364,6 +418,53 @@ export default function AdminUsagePage({ authUser }) {
           </table>
         </div>
       </section>
+
+      {workspaceOwner ? (
+        <section className="af-project-admin-usage af-admin-user-workspaces">
+          <div className="af-project-admin-usage__head">
+            <div>
+              <strong>{workspaceOwner.username || workspaceOwner.userId} 的 Workspace</strong>
+              <span>管理员审阅模式：只读查看，不会加入协作成员，也不能保存或运行。</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setWorkspaceOwner(null);
+                setUserWorkspaces([]);
+                setUserWorkspacesError("");
+              }}
+            >
+              关闭
+            </button>
+          </div>
+          {userWorkspacesError ? <div className="af-project-admin-usage__error">{userWorkspacesError}</div> : null}
+          <div className="af-admin-user-workspaces__grid">
+            {userWorkspacesLoading ? (
+              <p>正在读取 Workspace...</p>
+            ) : userWorkspaces.length === 0 ? (
+              <p>该用户暂无 Workspace。</p>
+            ) : userWorkspaces.map((workspace) => (
+              <button
+                key={`${workspace.id}:${workspace.archived ? "archived" : "active"}`}
+                type="button"
+                className="af-admin-user-workspace-card"
+                onClick={() => openUserWorkspace(workspace)}
+              >
+                <span className="af-admin-user-workspace-card__icon material-symbols-outlined" aria-hidden>
+                  {workspace.archived ? "inventory_2" : "account_tree"}
+                </span>
+                <span className="af-admin-user-workspace-card__content">
+                  <strong>{workspace.id}</strong>
+                  <small>{workspace.description || (workspace.archived ? "已归档 Workspace" : "用户 Workspace")}</small>
+                </span>
+                <span className="af-admin-user-workspace-card__status">
+                  {workspace.archived ? "已归档" : "只读打开"}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {selectedRun ? (
         <AdminRunDetailDrawer run={selectedRun} onClose={() => setSelectedRun(null)} />

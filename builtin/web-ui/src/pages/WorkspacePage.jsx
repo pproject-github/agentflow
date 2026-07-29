@@ -205,6 +205,7 @@ function readFlowParamsFromUrl() {
     flowSource: sp.get("flowSource") || "user",
     workspaceId: sp.get("workspaceId") || "",
     workflowShare: sp.get("workflowShare") || "",
+    adminOwnerId: sp.get("adminOwnerId") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
   };
 }
@@ -215,6 +216,7 @@ function flowParamsQuery(params) {
   if (params.flowSource) q.set("flowSource", params.flowSource);
   if (params.workspaceId) q.set("workspaceId", params.workspaceId);
   if (params.workflowShare) q.set("workflowShare", params.workflowShare);
+  if (params.adminOwnerId) q.set("adminOwnerId", params.adminOwnerId);
   if (params.archived) q.set("archived", "1");
   return q;
 }
@@ -319,7 +321,8 @@ function workspaceSkillsStorageKey(params) {
   const flowId = String(params?.flowId || "").trim();
   if (!flowId) return "";
   const flowSource = String(params?.flowSource || "user").trim() || "user";
-  return `af:composer-skills:workspace:${flowId}:${flowSource}${params?.archived ? ":archived" : ""}`;
+  const adminOwner = String(params?.adminOwnerId || "").trim();
+  return `af:composer-skills:workspace:${flowId}:${flowSource}${adminOwner ? `:admin:${adminOwner}` : ""}${params?.archived ? ":archived" : ""}`;
 }
 
 function workspaceSidebarCollapsedStorageKey(authUser) {
@@ -7868,7 +7871,7 @@ function WorkspacePageInner() {
     () => (
       flowParams.workspaceId
         ? `agentflow.workspace.viewport:shared:${flowParams.workspaceId}`
-        : `agentflow.workspace.viewport:${flowParams.flowSource || "user"}:${flowParams.flowId || ""}`
+        : `agentflow.workspace.viewport:${flowParams.flowSource || "user"}:${flowParams.adminOwnerId || "self"}:${flowParams.flowId || ""}`
     ),
     [flowParams],
   );
@@ -7969,7 +7972,12 @@ function WorkspacePageInner() {
   const [nodePropsError, setNodePropsError] = useState("");
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [workspaceWritable, setWorkspaceWritable] = useState(true);
+  const [workspaceWritable, setWorkspaceWritable] = useState(!flowParams.adminOwnerId);
+  const [adminReview, setAdminReview] = useState(() => (
+    flowParams.adminOwnerId
+      ? { readonly: true, ownerUserId: flowParams.adminOwnerId, ownerUsername: flowParams.adminOwnerId }
+      : null
+  ));
   const [workspaceCollaboration, setWorkspaceCollaboration] = useState(null);
   const [workspaceShareOpen, setWorkspaceShareOpen] = useState(false);
   const [workspaceShareBusy, setWorkspaceShareBusy] = useState(false);
@@ -8225,6 +8233,7 @@ function WorkspacePageInner() {
   }, []);
   const canManageCurrentFlow = Boolean(
     flowParams.flowId &&
+    !flowParams.adminOwnerId &&
     !flowParams.archived &&
     (
       workspaceCollaboration?.role
@@ -8233,6 +8242,8 @@ function WorkspacePageInner() {
     ),
   );
   const canLeaveSharedFlow = Boolean(
+    !flowParams.adminOwnerId
+    &&
     flowSource === "workspace"
     && workspaceCollaboration?.role
     && workspaceCollaboration.role !== "owner"
@@ -8623,6 +8634,7 @@ function WorkspacePageInner() {
     setWorkspaceCollaboration((current) => (
       workspaceValueEqual(current, nextCollaboration) ? current : nextCollaboration
     ));
+    setAdminReview(graphJson.adminReview || null);
     setWorkspaceConflict(null);
     if (shouldInitializeWorkspaceViewport) {
       setWorkspaceViewport(nextWorkspaceViewport);
@@ -8633,7 +8645,13 @@ function WorkspacePageInner() {
     setWorkspaceWritable(writable);
     setStatus(writable ? "Workspace ready" : "Readonly workspace");
     setWorkspaceSyncPhase(writable ? "synced" : "readonly");
-    setWorkspaceSyncDetail(writable ? "所有修改已同步" : "只读 Project");
+    setWorkspaceSyncDetail(
+      writable
+        ? "所有修改已同步"
+        : graphJson.adminReview
+          ? `管理员只读查看：${graphJson.adminReview.ownerUsername || graphJson.adminReview.ownerUserId || "其他用户"}`
+          : "只读 Project",
+    );
     loadedRef.current = true;
     return { skipped: false };
   }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
@@ -10617,6 +10635,7 @@ function WorkspacePageInner() {
       form.set("dir", String(targetDir || ""));
       if (flowParams.flowId) form.set("flowId", flowParams.flowId);
       if (flowParams.flowSource) form.set("flowSource", flowParams.flowSource);
+      if (flowParams.adminOwnerId) form.set("adminOwnerId", flowParams.adminOwnerId);
       if (flowParams.archived) form.set("archived", "1");
       const res = await fetch("/api/workspace/upload", {
         method: "POST",
@@ -13354,13 +13373,24 @@ function WorkspacePageInner() {
       {!isWorkflowShareView ? (
         <header className="af-pipeline-top af-workspace-top">
         <div className="af-pipeline-top-left">
-          <button type="button" className="af-icon-btn af-pipeline-back" onClick={() => navigate("/projects")} aria-label="返回">
+          <button
+            type="button"
+            className="af-icon-btn af-pipeline-back"
+            onClick={() => navigate(flowParams.adminOwnerId ? "/admin/usage" : "/projects")}
+            aria-label="返回"
+          >
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
           <div className="af-pipeline-brand" title={flowParams.flowId ? `${flowParams.flowId} · ${workspaceRoot}` : workspaceRoot || "PROJECT"}>
             <span className="af-pipeline-brand-name">{workspaceProjectTitle}</span>
             <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
           </div>
+          {adminReview ? (
+            <span className="af-workspace-admin-review-badge" title="管理员审阅模式不会修改、运行或加入该 Workspace">
+              <span className="material-symbols-outlined" aria-hidden>visibility</span>
+              只读查看 · {adminReview.ownerUsername || adminReview.ownerUserId}
+            </span>
+          ) : null}
           <div className="af-view-switch" aria-label="视图切换">
             <button
               type="button"
@@ -13419,7 +13449,7 @@ function WorkspacePageInner() {
               <button
                 type="button"
                 className="af-workspace-display-share-btn"
-                disabled={displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
+                disabled={!workspaceWritable || displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
                 onClick={() => {
                   setDisplayLinkCopyState("");
                   setDisplayLinkOpen(true);
@@ -13432,7 +13462,7 @@ function WorkspacePageInner() {
               <button
                 type="button"
                 className="af-workspace-display-share-btn"
-                disabled={availableDisplayNodes.length === 0}
+                disabled={!workspaceWritable || availableDisplayNodes.length === 0}
                 onClick={() => setDisplayPickerOpen(true)}
                 title={availableDisplayNodes.length === 0 ? "当前 workspace 没有 display 节点" : "选择展示节点 (A)"}
               >
@@ -13444,7 +13474,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-workspace-display-share-btn"
-            disabled={Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
+            disabled={!workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
             onClick={openWorkspaceShareDialog}
             title={workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
               ? "仅 Workspace 所有者可以创建邀请"
@@ -13453,15 +13483,17 @@ function WorkspacePageInner() {
             <span className="material-symbols-outlined" aria-hidden>group_add</span>
             协作分享
           </button>
-          <button
-            type="button"
-            className="af-workspace-display-share-btn"
-            onClick={openDisplaySharesPanel}
-            title="查看我的展示分享"
-          >
-            <span className="material-symbols-outlined" aria-hidden>folder_shared</span>
-            我的分享
-          </button>
+          {!adminReview ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn"
+              onClick={openDisplaySharesPanel}
+              title="查看我的展示分享"
+            >
+              <span className="material-symbols-outlined" aria-hidden>folder_shared</span>
+              我的分享
+            </button>
+          ) : null}
           <button
             type="button"
             className="af-icon-btn"
@@ -13494,7 +13526,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
-            disabled={isDisplayMode || isWorkflowMode}
+            disabled={!workspaceWritable || isDisplayMode || isWorkflowMode}
             onClick={() => {
               setWorkspaceRunLogsTarget(null);
               setComposerSidebarOpen((v) => {
@@ -13877,7 +13909,7 @@ function WorkspacePageInner() {
             }}
             onDrop={isDisplayMode ? undefined : handleWorkspaceDrop}
             onDragOver={isDisplayMode ? undefined : handleWorkspaceDragOver}
-            nodesDraggable={isDisplayMode ? true : workspaceWritable}
+            nodesDraggable={workspaceWritable}
             nodesConnectable={isDisplayMode ? false : workspaceWritable}
             edgesReconnectable={isDisplayMode ? false : workspaceWritable}
             onlyRenderVisibleElements={canvasNodes.length >= 80}
