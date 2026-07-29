@@ -51,6 +51,7 @@ import {
   dedupeConfirmedAiDocs,
   isConfirmedAiDocCandidate,
 } from "../prdWorkflowAiDocs.js";
+import { selectCurrentPrdWorkflowActionLinks } from "../prdWorkflowActionLinks.js";
 import {
   diffWorkspaceGraphsForUi,
   reconcileWorkspaceEdges,
@@ -828,10 +829,14 @@ function prdWorkflowActionMeta(item) {
 
 function prdWorkflowActionLinks(item) {
   const out = [];
-  const push = (label, href) => {
+  const push = (label, href, metadata = {}) => {
     const cleanHref = prdWorkflowNormalizeHref(href);
     if (!cleanHref) return;
-    out.push({ label: String(label || cleanHref).trim() || cleanHref, href: cleanHref });
+    out.push({
+      ...metadata,
+      label: String(label || cleanHref).trim() || cleanHref,
+      href: cleanHref,
+    });
   };
   const collect = (value, labelHint = "链接", depth = 0) => {
     if (depth > 3 || value == null) return;
@@ -845,7 +850,11 @@ function prdWorkflowActionLinks(item) {
     }
     if (typeof value !== "object") return;
     const label = value.label || value.title || value.name || value.kind || value.type || labelHint;
-    push(label, value.url || value.href || value.path || value.file || value.filePath || value.file_path);
+    push(
+      label,
+      value.url || value.href || value.path || value.file || value.filePath || value.file_path,
+      value,
+    );
     for (const key of ["links", "urls", "artifacts", "outputs", "output", "results", "result", "files"]) {
       if (value[key] != null) collect(value[key], key, depth + 1);
     }
@@ -853,10 +862,14 @@ function prdWorkflowActionLinks(item) {
   const links = Array.isArray(item?.links) ? item.links : [];
   for (const link of links) {
     if (typeof link === "string") push("链接", link);
-    else push(link?.label || link?.title || link?.kind || "链接", link?.url || link?.href);
+    else push(link?.label || link?.title || link?.kind || "链接", link?.url || link?.href, link);
   }
   for (const artifact of Array.isArray(item?.artifacts) ? item.artifacts : []) {
-    push(artifact?.label || artifact?.title || artifact?.kind || "Artifact", prdWorkflowArtifactHref(artifact));
+    push(
+      artifact?.label || artifact?.title || artifact?.kind || "Artifact",
+      prdWorkflowArtifactHref(artifact),
+      artifact,
+    );
   }
   push("TAPD", item?.tapdUrl || item?.tapd_url);
   push("ai-doc", item?.docUrl || item?.doc_url || item?.aiDocUrl || item?.ai_doc_url);
@@ -914,7 +927,7 @@ function prdWorkflowActionLinks(item) {
       }
     }
   }
-  return Array.from(seen.values());
+  return selectCurrentPrdWorkflowActionLinks(Array.from(seen.values()), item);
 }
 
 function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
