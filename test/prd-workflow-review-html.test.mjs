@@ -102,3 +102,37 @@ test("uses the payload title when markdown does not start with an H1", () => {
   assert.match(html, /<h1>Payload fallback title<\/h1>/);
   assert.match(html, /<article>[\s\S]*<h1>Later heading<\/h1>/);
 });
+
+test("hides legacy prd-flow metadata while preserving fenced examples", () => {
+  const markdown = [
+    "---",
+    "tapd_id: 1133202860001017765",
+    "---",
+    "",
+    "<!-- prd-flow-start",
+    "issues:",
+    "- key: gift-cache-integrity-validation",
+    "  platform: android",
+    "prd-flow-end -->",
+    "",
+    "# Gift cache design",
+    "",
+    "Visible content.",
+    "",
+    "```md",
+    "<!-- prd-flow-start",
+    "example: remains visible",
+    "prd-flow-end -->",
+    "```",
+  ].join("\n");
+
+  const rendered = prdWorkflowReviewMarkdownToHtml(markdown);
+  const page = prdWorkflowReviewHtml("Fallback", markdown);
+
+  assert.doesNotMatch(rendered, /gift-cache-integrity-validation/);
+  assert.doesNotMatch(rendered, /platform: android/);
+  assert.match(rendered, /example: remains visible/);
+  assert.match(page, /<title>Gift cache design<\/title>/);
+  assert.equal((page.match(/<h1>/g) || []).length, 1);
+  assert.doesNotMatch(page, /gift-cache-integrity-validation/);
+});
