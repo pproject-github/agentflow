@@ -328,7 +328,9 @@ export default function RunningIndicator() {
   const coordinated = tabCount > 1;
   const single = runs.length === 1;
 
-  if (runs.length === 0 && !delayed && !coordinated) return null;
+  // 多标签页协调成功属于后台正常状态，不需要常驻占用界面。
+  // 仅在确实有运行任务或同步异常时展示全局指示器。
+  if (runs.length === 0 && !delayed) return null;
 
   const label = delayed
     ? "状态同步延迟"
@@ -336,7 +338,7 @@ export default function RunningIndicator() {
       ? single
         ? runs[0].flowId
         : `${runs.length} running`
-      : `${tabCount} 个标签页 · 同步已合并`;
+      : "";
 
   const title = delayed
     ? `${syncHealth.message}${coordinated ? `；检测到 ${tabCount} 个 AgentFlow 标签页` : ""}`

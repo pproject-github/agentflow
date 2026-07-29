@@ -39,6 +39,11 @@ test("recent-run polling is coordinated across tabs and never overlaps", async (
     /setInterval\(load,\s*3000\)/,
     "fixed intervals must not create overlapping recent-runs requests",
   );
+  assert.match(
+    source,
+    /if \(runs\.length === 0 && !delayed\) return null;/,
+    "healthy multi-tab coordination must stay silent when nothing is running",
+  );
 });
 
 test("Workflow event streams disconnect in background tabs", async () => {
