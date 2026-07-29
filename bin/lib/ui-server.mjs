@@ -126,6 +126,7 @@ import {
   readRunLedgerEvents,
   runLedgerId,
 } from "./run-ledger.mjs";
+import { readAdminRunDetail } from "./admin-run-detail.mjs";
 import {
   appendWorkspaceRunLogEvent,
   createWorkspaceRunLogSession,
@@ -12358,6 +12359,35 @@ export function startUiServer({
       }
       try {
         json(res, 200, buildAdminUsageDashboard(root));
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/run-detail") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      const input = {
+        runType: url.searchParams.get("runType") || "pipeline",
+        userId: url.searchParams.get("userId") || "",
+        flowId: url.searchParams.get("flowId") || "",
+        flowSource: url.searchParams.get("flowSource") || "user",
+        runId: url.searchParams.get("runId") || "",
+      };
+      if (!input.userId || !input.flowId || !input.runId) {
+        json(res, 400, { error: "Missing userId, flowId or runId" });
+        return;
+      }
+      try {
+        const detail = readAdminRunDetail(root, input);
+        if (!detail) {
+          json(res, 404, { error: "Run detail not found" });
+          return;
+        }
+        json(res, 200, detail);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
