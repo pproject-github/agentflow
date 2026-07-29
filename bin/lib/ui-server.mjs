@@ -7723,6 +7723,78 @@ function prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId) {
   };
 }
 
+function prdWorkflowReviewIndexPath(tapdId, reviewId) {
+  return path.join(
+    getAgentflowDataRoot(),
+    "prd-workflow-review-index",
+    prdWorkflowSafeStateId(tapdId),
+    `${prdWorkflowSafeStateId(reviewId)}.json`,
+  );
+}
+
+function prdWorkflowWriteReviewIndex(ownerId, tapdId, reviewId) {
+  const indexPath = prdWorkflowReviewIndexPath(tapdId, reviewId);
+  const tempPath = `${indexPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.writeFileSync(tempPath, JSON.stringify({
+    version: 1,
+    tapdId: String(tapdId || ""),
+    reviewId: prdWorkflowSafeStateId(reviewId),
+    ownerId: String(ownerId || "").trim(),
+    updatedAt: new Date().toISOString(),
+  }, null, 2) + "\n", "utf-8");
+  fs.renameSync(tempPath, indexPath);
+}
+
+function prdWorkflowReadReviewIndex(tapdId, reviewId) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prdWorkflowReviewIndexPath(tapdId, reviewId), "utf-8"));
+    if (
+      String(parsed?.tapdId || "") !== String(tapdId || "")
+      || prdWorkflowSafeStateId(parsed?.reviewId) !== prdWorkflowSafeStateId(reviewId)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function prdWorkflowReviewFileExists(paths) {
+  try {
+    return fs.existsSync(paths.markdownPath) && fs.statSync(paths.markdownPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function prdWorkflowResolveReviewPaths(scopedRoot, tapdId, reviewId) {
+  const direct = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
+  if (prdWorkflowReviewFileExists(direct)) return direct;
+
+  const indexed = prdWorkflowReadReviewIndex(tapdId, reviewId);
+  if (indexed) {
+    const indexedPaths = prdWorkflowReviewPaths(
+      getAgentflowUserDataRoot(indexed.ownerId || ""),
+      tapdId,
+      reviewId,
+    );
+    if (prdWorkflowReviewFileExists(indexedPaths)) return indexedPaths;
+  }
+
+  const candidateOwners = ["", ...listAgentflowUserIds()];
+  for (const ownerId of candidateOwners) {
+    const candidate = prdWorkflowReviewPaths(getAgentflowUserDataRoot(ownerId), tapdId, reviewId);
+    if (!prdWorkflowReviewFileExists(candidate)) continue;
+    try {
+      prdWorkflowWriteReviewIndex(ownerId, tapdId, reviewId);
+    } catch (_) {}
+    return candidate;
+  }
+  return direct;
+}
+
 function prdWorkflowMigrateLegacyState(legacyRoot, stateRoot, tapdId) {
   const sourceRoot = path.resolve(legacyRoot || "");
   const destinationRoot = path.resolve(stateRoot || "");
@@ -7772,10 +7844,12 @@ function prdWorkflowPruneReviews(scopedRoot, tapdId, maxReviews = 200) {
     for (const entry of entries.filter((item) => Number.isFinite(item.expiresMs) && item.expiresMs < now)) {
       try { fs.unlinkSync(entry.abs); } catch (_) {}
       try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+      try { fs.unlinkSync(prdWorkflowReviewIndexPath(tapdId, entry.id)); } catch (_) {}
     }
     for (const entry of entries.filter((item) => !(Number.isFinite(item.expiresMs) && item.expiresMs < now)).slice(maxReviews)) {
       try { fs.unlinkSync(entry.abs); } catch (_) {}
       try { fs.unlinkSync(path.join(dir, `${entry.id}.md`)); } catch (_) {}
+      try { fs.unlinkSync(prdWorkflowReviewIndexPath(tapdId, entry.id)); } catch (_) {}
     }
   } catch (_) {}
 }
@@ -8303,7 +8377,7 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
 </html>`;
 }
 
-function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "") {
+function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "", ownerId = "") {
   const content = String(payload.markdown || payload.content || payload.rawOutput || "").slice(0, 500000);
   if (!content.trim()) throw new Error("Missing review markdown");
   const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
@@ -8339,6 +8413,7 @@ function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "")
   fs.mkdirSync(paths.dir, { recursive: true });
   fs.writeFileSync(paths.markdownPath, content.trimEnd() + "\n", "utf-8");
   fs.writeFileSync(paths.metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
+  prdWorkflowWriteReviewIndex(ownerId, tapdId, paths.id);
   prdWorkflowPruneReviews(scopedRoot, tapdId);
   prdWorkflowAppendAudit(scopedRoot, tapdId, {
     type: "review-created",
@@ -12027,7 +12102,13 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const review = prdWorkflowCreateReview(scopedRoot, tapdId, payload, serverPublicBaseUrl(req, host, uiPort, payload));
+        const review = prdWorkflowCreateReview(
+          scopedRoot,
+          tapdId,
+          payload,
+          serverPublicBaseUrl(req, host, uiPort, payload),
+          workflowScope.ownerId,
+        );
         const reviewUrl = review.url;
         const durability = review.durability || "temporary";
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
@@ -12142,8 +12223,8 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
-        if (!fs.existsSync(paths.markdownPath) || !fs.statSync(paths.markdownPath).isFile()) {
+        const paths = prdWorkflowResolveReviewPaths(scopedRoot, tapdId, reviewId);
+        if (!prdWorkflowReviewFileExists(paths)) {
           res.writeHead(404);
           res.end("Not found");
           return;
