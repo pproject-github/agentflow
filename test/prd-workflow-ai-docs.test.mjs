@@ -142,6 +142,58 @@ test("AI Docs deduplicates file and preview links by issue document identity", (
   assert.equal(entries[0].title, "Issue3 · Android 双端保持 Firebase 初始化");
 });
 
+test("AI Docs merges the same durable review collected as artifact and link", () => {
+  const href = "http://127.0.0.1:8875/api/prd-workflow/review/1015046/review-plan-doc?flowSource=user";
+  const entries = dedupeConfirmedAiDocs([
+    {
+      label: "方案文档预览",
+      href,
+      kind: "review",
+      durability: "durable",
+      source: { kind: "ai-doc" },
+      issueKey: "firebase-init-analytics-preservation-android",
+      platform: "Android",
+      title: "Android 双端保持 Firebase 初始化和 Analytics 不受 Remote Config 开关影响",
+    },
+    {
+      label: "Markdown Review",
+      href: `${href}&refresh=1`,
+      kind: "review",
+      durability: "durable",
+      source: { kind: "ai-doc" },
+      issueKey: "firebase-init-analytics-preservation-android",
+      platform: "Android",
+      title: "Android 双端保持 Firebase 初始化和 Analytics 不受 Remote Config 开关影响",
+    },
+  ], "http://127.0.0.1:8875");
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].label, "方案文档预览");
+  assert.equal(entries[0].href, href);
+});
+
+test("AI Docs keeps different document families for the same issue", () => {
+  const shared = {
+    kind: "ai-doc",
+    durability: "durable",
+    issueKey: "firebase-init-analytics-preservation-android",
+  };
+  const entries = dedupeConfirmedAiDocs([
+    {
+      ...shared,
+      label: "方案文档",
+      href: "file://issues/issue-3/plan.md",
+    },
+    {
+      ...shared,
+      label: "代码审查",
+      href: "file://issues/issue-3/code-review.md",
+    },
+  ]);
+
+  assert.equal(entries.length, 2);
+});
+
 test("different issue documents remain separate", () => {
   const base = {
     label: "方案文档",

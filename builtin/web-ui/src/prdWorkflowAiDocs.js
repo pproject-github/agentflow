@@ -17,6 +17,9 @@ function normalizedHref(value, origin = "http://localhost") {
   if (!href) return "";
   try {
     const url = new URL(href, origin);
+    if (url.origin === "null") {
+      return `${url.protocol}//${url.host}${url.pathname}`;
+    }
     return `${url.origin}${url.pathname}`;
   } catch {
     return href.split(/[?#]/)[0];
@@ -139,6 +142,22 @@ function candidateRank(candidate = {}) {
   return rank;
 }
 
+function mergeAiDocCandidates(existing, candidate) {
+  const preferred = candidateRank(candidate) > candidateRank(existing) ? candidate : existing;
+  const alternate = preferred === candidate ? existing : candidate;
+  return {
+    ...alternate,
+    ...preferred,
+    title: titleRank(existing.title) >= titleRank(candidate.title)
+      ? existing.title
+      : candidate.title,
+    issueKey: existing.issueKey || candidate.issueKey,
+    platform: existing.platform || candidate.platform,
+    documentPath: preferred.documentPath || alternate.documentPath,
+    source: preferred.source || alternate.source,
+  };
+}
+
 function titleRank(value) {
   const title = text(value);
   if (!title) return 0;
@@ -149,27 +168,41 @@ function titleRank(value) {
   return 100 + Math.min(title.length, 100);
 }
 
-export function dedupeConfirmedAiDocs(candidates = [], origin = "http://localhost") {
-  const seen = new Map();
-  for (const candidate of Array.isArray(candidates) ? candidates : []) {
-    if (!isConfirmedAiDocCandidate(candidate)) continue;
-    const key = confirmedAiDocIdentity(candidate, origin);
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, candidate);
+function dedupeAiDocsByKey(candidates, keyFor) {
+  const positions = new Map();
+  const output = [];
+  for (const candidate of candidates) {
+    const key = keyFor(candidate);
+    if (!key) {
+      output.push(candidate);
       continue;
     }
-    const preferred = candidateRank(candidate) > candidateRank(existing) ? candidate : existing;
-    const alternate = preferred === candidate ? existing : candidate;
-    seen.set(key, {
-      ...alternate,
-      ...preferred,
-      title: titleRank(existing.title) >= titleRank(candidate.title)
-        ? existing.title
-        : candidate.title,
-      issueKey: existing.issueKey || candidate.issueKey,
-      platform: existing.platform || candidate.platform,
-    });
+    const existingIndex = positions.get(key);
+    if (existingIndex === undefined) {
+      positions.set(key, output.length);
+      output.push(candidate);
+      continue;
+    }
+    output[existingIndex] = mergeAiDocCandidates(output[existingIndex], candidate);
   }
-  return Array.from(seen.values());
+  return output;
+}
+
+export function dedupeConfirmedAiDocs(candidates = [], origin = "http://localhost") {
+  const confirmed = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) => isConfirmedAiDocCandidate(candidate));
+  const byUrl = dedupeAiDocsByKey(
+    confirmed,
+    (candidate) => normalizedHref(candidate.href || candidate.url, origin),
+  );
+  const byDocumentPath = dedupeAiDocsByKey(
+    byUrl,
+    (candidate) => text(candidate.documentPath || candidate.document_path || candidate.path)
+      .replace(/\\/g, "/")
+      .replace(/\/+/g, "/"),
+  );
+  return dedupeAiDocsByKey(
+    byDocumentPath,
+    (candidate) => confirmedAiDocIdentity(candidate, origin),
+  );
 }
