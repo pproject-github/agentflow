@@ -5,11 +5,16 @@ import { LEGACY_MODEL_CONFIG_REL, MODEL_CONFIG_REL } from "./paths.mjs";
 
 const modelConfigCache = new Map();
 
-/** UI 格式为「模型 ID - 描述」，传参只用前面的模型 ID。若为 "auto" 则规范为 Cursor 可识别的 "Auto"。 */
+/**
+ * UI 格式为「模型 ID - 描述」，传参只用前面的模型 ID。
+ * Workspace 的统一模型选择器会为 Cursor 值加上 `cursor:` 后端标识；
+ * 调用 Cursor CLI 前必须移除该标识。若为 "auto" 则规范为 Cursor 可识别的 "Auto"。
+ */
 export function normalizeCursorModelForCli(value) {
   if (value == null || value === false || value === "") return "Auto";
   let s = String(value).trim();
   if (!s) return "Auto";
+  s = s.replace(/^cursor\s*:\s*/i, "").trim();
   const dashIdx = s.indexOf(" - ");
   if (dashIdx >= 0) s = s.slice(0, dashIdx).trim();
   if (!s) return "Auto";

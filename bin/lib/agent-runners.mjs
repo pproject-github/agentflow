@@ -305,6 +305,17 @@ function codexFailureMessage(code, stderrTail, { flowName = "", uuid = "" } = {}
   return `Codex CLI exited ${code}. ${tail || "No result event received."}${suffix}`;
 }
 
+export function summarizeCursorStderr(stderr, maxChars = 1200) {
+  const text = String(stderr || "").trim();
+  if (!text) return "";
+  const invalidModel = text.match(/Cannot use this model:\s*(.+?)(?:\.\s*Available models:|[\r\n]|$)/is);
+  if (invalidModel?.[1]) {
+    return `Cannot use this model: ${invalidModel[1].trim()}. Available models omitted; inspect the run log for the full list.`;
+  }
+  const limit = Math.max(1, Number(maxChars) || 1200);
+  return text.length <= limit ? text : text.slice(-limit);
+}
+
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
  */
@@ -577,6 +588,7 @@ export function runCursorAgentForNode(
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
         if (retryCursorQuota(stderrTail)) return;
+        const stderrSummary = summarizeCursorStderr(stderr);
         const autoOnly =
           /named models unavailable/i.test(stderrTail) ||
           (/free plans?/i.test(stderrTail) && /only use auto/i.test(stderrTail)) ||
@@ -594,7 +606,7 @@ export function runCursorAgentForNode(
           flowName && uuid
             ? ` 检查 run 目录 logs/log.txt 查看完整 Cursor stderr；常见原因：未登录 Cursor、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CURSOR_STDERR_INHERIT=1 后重跑，使 Cursor 的 stderr 直接输出到终端。`
             : "";
-        const err = new Error(`Cursor CLI exited ${code}. ${stderrTail || "No result event received."}${logHint}`);
+        const err = new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}${logHint}`);
         err.cursorStderrTail = stderrTail;
         reject(err);
         return;
@@ -1525,7 +1537,8 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
         if (retryCursorQuota(stderrTail)) return;
-        const err = new Error(`Cursor CLI exited ${code}. ${stderrTail || "No result event received."}`);
+        const stderrSummary = summarizeCursorStderr(stderr);
+        const err = new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}`);
         err.cursorStderrTail = stderrTail;
         emit({ type: "status", line: truncateComposerLine(err.message) });
         reject(err);
