@@ -4407,7 +4407,7 @@ function normalizeHtmlDisplayContent(content) {
   return text;
 }
 
-function workspaceBodyPlaceholderNames(body) {
+export function workspaceBodyPlaceholderNames(body) {
   const names = new Set();
   const raw = String(body || "");
   raw.replace(/\$\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (_match, name) => {
@@ -4417,7 +4417,7 @@ function workspaceBodyPlaceholderNames(body) {
   return names;
 }
 
-function workspaceRelevantInputValues(body, inputValues = {}) {
+export function workspaceRelevantInputValues(body, inputValues = {}) {
   const placeholders = workspaceBodyPlaceholderNames(body);
   if (!placeholders.size) return { values: inputValues || {}, placeholders };
   const values = {};
@@ -4425,6 +4425,17 @@ function workspaceRelevantInputValues(body, inputValues = {}) {
     if (placeholders.has(name)) values[name] = value;
   }
   return { values, placeholders };
+}
+
+export function workspaceAssertRequiredInputs(body, inputValues = {}, nodeId = "") {
+  const placeholders = workspaceBodyPlaceholderNames(body);
+  const missing = [...placeholders].filter((name) => (
+    !Object.prototype.hasOwnProperty.call(inputValues || {}, name) ||
+    !String(inputValues[name] ?? "").trim()
+  ));
+  if (!missing.length) return;
+  const label = nodeId ? `Workspace node ${nodeId}` : "Workspace node";
+  throw new Error(`${label} 缺少必需输入：${missing.join(", ")}。请连接对应输入槽或提供非空值。`);
 }
 
 function workspaceDownstreamSlotKind(slot) {
@@ -5631,10 +5642,19 @@ function workspaceContextObjectFromText(text, baseCwd, scopedRoot) {
   };
 }
 
+function workspaceLooksLikeKnowledgePath(value) {
+  const raw = String(value || "").trim();
+  return Boolean(raw) &&
+    raw.length <= 4096 &&
+    !/[\r\n<>]/.test(raw) &&
+    !/^```/.test(raw) &&
+    !/^<!doctype/i.test(raw);
+}
+
 function workspaceKnowledgeSourceFromObject(source = {}, baseCwd = "", scopedRoot = "") {
   if (!source || typeof source !== "object" || Array.isArray(source)) return null;
   const rawPath = String(source.path || source.repoPath || source.cwd || source.workspaceRoot || "").trim();
-  if (!rawPath) return null;
+  if (!workspaceLooksLikeKnowledgePath(rawPath)) return null;
   const resolvedPath = workspaceResolvePath(baseCwd || scopedRoot, rawPath) || rawPath;
   return {
     id: String(source.id || source.mountPath || source.label || path.basename(resolvedPath) || "").trim(),
@@ -5650,7 +5670,7 @@ function workspaceKnowledgeSourceFromObject(source = {}, baseCwd = "", scopedRoo
   };
 }
 
-function workspaceKnowledgeSourcesFromText(text, baseCwd = "", scopedRoot = "") {
+export function workspaceKnowledgeSourcesFromText(text, baseCwd = "", scopedRoot = "") {
   const raw = String(text || "").trim();
   if (!raw) return [];
   const parsed = parseJsonText(raw, null);
@@ -5664,6 +5684,7 @@ function workspaceKnowledgeSourcesFromText(text, baseCwd = "", scopedRoot = "") 
       .map((source) => workspaceKnowledgeSourceFromObject(source, baseCwd, scopedRoot))
       .filter(Boolean);
   }
+  if (!workspaceLooksLikeKnowledgePath(raw)) return [];
   const resolved = workspaceResolvePath(baseCwd || scopedRoot, raw) || raw;
   return [{
     id: path.basename(resolved) || "knowledge",
@@ -6155,13 +6176,49 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
   };
 }
 
-function workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues = {}) {
+const WORKSPACE_INLINE_INPUT_FILE_THRESHOLD = 4096;
+
+function workspaceInlineInputExtension(value) {
+  const text = String(value || "").trim();
+  if (/^(?:<!doctype\s+html|<html\b)/i.test(text)) return ".html";
+  if (/^[\[{]/.test(text)) {
+    try {
+      JSON.parse(text);
+      return ".json";
+    } catch {}
+  }
+  if (/^(?:#{1,6}\s|---\s*$)/m.test(text)) return ".md";
+  return ".txt";
+}
+
+export function workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues = {}) {
   const values = {};
   const mounts = {};
   for (const [name, value] of Object.entries(inputValues || {})) {
     const slotName = String(name || "").trim();
     if (!slotName) continue;
     const rel = workspaceInputFileRelPath(value);
+    const inlineText = String(value ?? "");
+    if (!rel && inlineText.length >= WORKSPACE_INLINE_INPUT_FILE_THRESHOLD) {
+      const extension = workspaceInlineInputExtension(inlineText);
+      const fileName = `${workspaceSanitizeTmpSegment(slotName, "input")}${extension}`;
+      const mountedRel = path.join("inputs", workspaceSanitizeTmpSegment(slotName, "input"), fileName);
+      const dest = path.resolve(nodeRunDir, mountedRel);
+      const nodeRunWithSep = nodeRunDir.endsWith(path.sep) ? nodeRunDir : `${nodeRunDir}${path.sep}`;
+      if (dest !== nodeRunDir && !dest.startsWith(nodeRunWithSep)) continue;
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, inlineText, "utf-8");
+      const mounted = mountedRel.split(path.sep).join(path.posix.sep);
+      values[slotName] = mounted;
+      mounts[slotName] = {
+        source: `inline:${slotName}`,
+        mounted,
+        bytes: Buffer.byteLength(inlineText, "utf-8"),
+        sha256: crypto.createHash("sha256").update(inlineText, "utf-8").digest("hex"),
+        inline: true,
+      };
+      continue;
+    }
     if (!rel) continue;
     const src = path.resolve(workspaceRoot, rel);
     const rootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
@@ -7038,6 +7095,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
     const prepareStartedAt = Date.now();
     const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
+    workspaceAssertRequiredInputs(instance.body || "", inputValues, nodeId);
     const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders, scopedRoot);
     const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
     const ownSkillBlock = isContextRunNode ? loadSkillsBlockForKeys(selectedSkillKeysFromConfigSlots(instance)) : "";
