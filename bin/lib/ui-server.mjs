@@ -3133,6 +3133,48 @@ function hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped = {}, graph = {},
   return hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withMarketplaceRuntime, userCtx);
 }
 
+function adminWorkspaceOwnerSummary(ownerId = "") {
+  const id = String(ownerId || "").trim();
+  if (!id) return null;
+  const users = readAuthUsers();
+  const knownUserIds = new Set([
+    ...Object.keys(users || {}),
+    ...listAgentflowUserIds(),
+  ].map((value) => String(value || "").trim()).filter(Boolean));
+  if (!knownUserIds.has(id)) return null;
+  return {
+    userId: id,
+    username: String(users?.[id]?.username || id),
+  };
+}
+
+function adminWorkspaceRequestedUserContext(userCtx = {}) {
+  const ownerId = String(userCtx.adminOwnerId || "").trim();
+  if (!ownerId) return { userCtx };
+  if (userCtx.isAdmin !== true) {
+    return { error: "Admin permission required", status: 403 };
+  }
+  const owner = adminWorkspaceOwnerSummary(ownerId);
+  if (!owner) return { error: "Workspace owner not found", status: 404 };
+  return {
+    owner,
+    userCtx: {
+      ...userCtx,
+      userId: owner.userId,
+      adminOwnerId: "",
+    },
+  };
+}
+
+function workspaceScopedUserContext(scoped = {}, userCtx = {}) {
+  if (!scoped.adminReadonly || !scoped.ownerUserId) return userCtx;
+  return {
+    ...userCtx,
+    userId: scoped.ownerUserId,
+    adminOwnerId: "",
+  };
+}
+
 function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   const flowId = params.flowId != null ? String(params.flowId).trim() : "";
   if (!flowId) return { root: path.resolve(workspaceRoot), flowId: "", flowSource: "", archived: false };
@@ -3142,6 +3184,46 @@ function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   const archived = params.archived === true || params.archived === "1" || params.flowArchived === true;
   if (!isValidFlowSourceRead(flowSource)) {
     return { root: "", error: "Invalid flowSource" };
+  }
+  const adminOwnerId = String(params.adminOwnerId || opts.adminOwnerId || "").trim();
+  if (adminOwnerId) {
+    if (opts.isAdmin !== true) {
+      return { root: "", error: "Admin permission required", status: 403 };
+    }
+    if (flowSource !== "user") {
+      return { root: "", error: "Admin read-only review only supports user projects", status: 400 };
+    }
+    const owner = adminWorkspaceOwnerSummary(adminOwnerId);
+    if (!owner) {
+      return { root: "", error: "Workspace owner not found", status: 404 };
+    }
+    const targetFlow = listFlowsJson(workspaceRoot, { userId: owner.userId })
+      .find((flow) => (
+        flow.id === flowId
+        && (flow.source || "user") === "user"
+        && Boolean(flow.archived) === archived
+      ));
+    if (!targetFlow?.path) {
+      return { root: "", error: "Pipeline workspace not found", status: 404 };
+    }
+    return {
+      root: path.resolve(targetFlow.path),
+      flowId,
+      flowSource: "user",
+      requestedFlowSource: flowSource,
+      workspaceId: "",
+      archived,
+      collaboration: null,
+      collaborationAccess: {
+        allowed: true,
+        writable: false,
+        runnable: false,
+        role: "admin-viewer",
+      },
+      adminReadonly: true,
+      ownerUserId: owner.userId,
+      ownerUsername: owner.username,
+    };
   }
   const workspaceId = String(params.workspaceId || "").trim();
   let collaboration = getWorkspaceCollaborationForProject({
@@ -7472,6 +7554,17 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
   const flowId = String(params.flowId || "").trim();
   const flowSource = String(params.flowSource || "user").trim() || "user";
   const archived = params.archived === true || params.archived === "1" || params.flowArchived === true;
+  const adminOwnerId = String(params.adminOwnerId || userCtx.adminOwnerId || "").trim();
+  if (adminOwnerId && userCtx.isAdmin !== true) {
+    return { error: "Admin permission required", status: 403 };
+  }
+  const adminOwner = adminOwnerId ? adminWorkspaceOwnerSummary(adminOwnerId) : null;
+  if (adminOwnerId && !adminOwner) {
+    return { error: "Workspace owner not found", status: 404 };
+  }
+  if (adminOwner && capability !== "read") {
+    return { error: "Admin Workspace review is read-only", status: 403 };
+  }
   const shareToken = String(params.workflowShare || params.workflow_share || "").trim();
   const linkCollaboration = shareToken ? getPrdWorkflowCollaborationByShareToken(shareToken) : null;
   if (shareToken && (!linkCollaboration || linkCollaboration.tapdId !== tapdId)) {
@@ -7480,8 +7573,10 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
   const memberCollaboration = tapdId
     ? getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId)
     : null;
-  const collaboration = linkCollaboration || memberCollaboration;
-  const access = linkCollaboration
+  const collaboration = adminOwner ? null : (linkCollaboration || memberCollaboration);
+  const access = adminOwner
+    ? { allowed: true, writable: false, role: "admin-viewer", via: "admin-review" }
+    : linkCollaboration
     ? { allowed: true, writable: false, role: "viewer", via: "share-link" }
     : prdWorkflowCollaborationAccess(collaboration, userCtx?.userId);
   if (collaboration && !access.allowed) {
@@ -7490,7 +7585,7 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
   if (capability === "write" && (linkCollaboration || (collaboration && !access.writable))) {
     return { error: "PRD Workflow collaboration edit permission denied", status: 403 };
   }
-  const ownerId = String(collaboration?.ownerId || userCtx?.userId || "").trim();
+  const ownerId = String(adminOwner?.userId || collaboration?.ownerId || userCtx?.userId || "").trim();
   const stateRoot = path.resolve(getAgentflowUserDataRoot(ownerId));
   let executionRoot = path.resolve(workspaceRoot);
   if (flowId) {
@@ -7498,6 +7593,7 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
       flowId,
       flowSource,
       workspaceId: params.workspaceId || "",
+      adminOwnerId,
       archived,
     }, userCtx);
     if (projectScope.error) {
@@ -7516,6 +7612,7 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     collaborationAccess: access,
     shareToken,
     sharedByLink: Boolean(linkCollaboration),
+    adminReadonly: Boolean(adminOwner),
     flowId,
     flowSource,
     archived,
@@ -7526,7 +7623,8 @@ function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId =
   const id = String(tapdId || "").trim();
   const collaboration = getPrdWorkflowCollaborationByShareToken(shareToken)
     || getPrdWorkflowCollaborationForUser(id, userCtx?.userId);
-  const actorScope = `user:${String(collaboration?.ownerId || userCtx?.userId || "")}`;
+  const adminOwnerId = userCtx?.isAdmin === true ? String(userCtx?.adminOwnerId || "").trim() : "";
+  const actorScope = `user:${String(collaboration?.ownerId || adminOwnerId || userCtx?.userId || "")}`;
   return [actorScope, id].join("\t");
 }
 
@@ -10993,7 +11091,11 @@ export function startUiServer({
     }
 
     const authUser = getAuthUserFromRequest(req);
-    const userCtx = authUser ? { userId: authUser.userId, isAdmin: Boolean(authUser.isAdmin) } : {};
+    const userCtx = authUser ? {
+      userId: authUser.userId,
+      isAdmin: Boolean(authUser.isAdmin),
+      adminOwnerId: String(url.searchParams.get("adminOwnerId") || "").trim(),
+    } : {};
     if (req.method === "GET" && url.pathname === "/api/auth/session-token") {
       if (!authUser?.userId) {
         json(res, 401, { error: "Unauthorized" });
@@ -12690,6 +12792,36 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/admin/user-workspaces") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      const owner = adminWorkspaceOwnerSummary(url.searchParams.get("userId") || "");
+      if (!owner) {
+        json(res, 404, { error: "Workspace owner not found" });
+        return;
+      }
+      try {
+        const workspaces = listFlowsJson(root, { userId: owner.userId })
+          .filter((flow) => (flow.source || "user") === "user")
+          .map((flow) => ({
+            id: String(flow.id || ""),
+            source: "user",
+            archived: flow.archived === true,
+            description: String(flow.description || ""),
+            ownerUserId: owner.userId,
+            ownerUsername: owner.username,
+            adminReadonly: true,
+          }))
+          .sort((a, b) => Number(a.archived) - Number(b.archived) || a.id.localeCompare(b.id));
+        json(res, 200, { owner, workspaces });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/admin/run-detail") {
       if (!authUser?.isAdmin) {
         json(res, 403, { error: "Admin permission required" });
@@ -13065,10 +13197,15 @@ export function startUiServer({
           flowId,
           flowSource,
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived,
         }, userCtx);
         if (scoped.error) {
           json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.adminReadonly) {
+          json(res, 403, { error: "Admin Workspace review is read-only" });
           return;
         }
         const ensured = ensureWorkspaceCollaboration({
@@ -13182,7 +13319,12 @@ export function startUiServer({
         json(res, scoped.status || 400, { error: scoped.error });
         return;
       }
-      const key = workspaceCollaborationEventKey(userCtx, scoped.flowSource, scoped.flowId, scoped.archived);
+      const key = workspaceCollaborationEventKey(
+        workspaceScopedUserContext(scoped, userCtx),
+        scoped.flowSource,
+        scoped.flowId,
+        scoped.archived,
+      );
       let subscribers = workspaceCollaborationSubscribers.get(key);
       if (!subscribers) {
         subscribers = new Set();
@@ -13299,7 +13441,8 @@ export function startUiServer({
           return;
         }
         const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
-        const hydratedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, graph, userCtx);
+        const scopedUserCtx = workspaceScopedUserContext(scoped, userCtx);
+        const hydratedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, graph, scopedUserCtx);
         const collaborationAccess = scoped.collaborationAccess || workspaceCollaborationAccess(null, userCtx.userId);
         json(res, 200, {
           ok: true,
@@ -13313,9 +13456,15 @@ export function startUiServer({
           flowSource: scoped.flowSource,
           archived: scoped.archived,
           writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource))
+            && scoped.adminReadonly !== true
             && collaborationAccess.writable !== false,
           collaboration: workspaceCollaborationSummaryWithUsers(scoped.collaboration, userCtx.userId),
-          workspaceSchedules: listWorkspaceScheduleStatusesForFlow(userCtx, scoped.flowSource || "user", scoped.flowId || ""),
+          adminReview: scoped.adminReadonly ? {
+            readonly: true,
+            ownerUserId: scoped.ownerUserId,
+            ownerUsername: scoped.ownerUsername,
+          } : null,
+          workspaceSchedules: listWorkspaceScheduleStatusesForFlow(scopedUserCtx, scoped.flowSource || "user", scoped.flowId || ""),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -13336,10 +13485,15 @@ export function startUiServer({
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
           json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.adminReadonly) {
+          json(res, 403, { error: "Admin Workspace review is read-only" });
           return;
         }
         const { graph } = readWorkspaceGraph(scoped.root);
@@ -13381,6 +13535,7 @@ export function startUiServer({
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -13494,8 +13649,21 @@ export function startUiServer({
           json(res, 400, { error: "Missing flowId" });
           return;
         }
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource,
+          archived: url.searchParams.get("archived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
         json(res, 200, {
-          schedules: listWorkspaceScheduleStatusesForFlow(userCtx, flowSource, flowId),
+          schedules: listWorkspaceScheduleStatusesForFlow(
+            workspaceScopedUserContext(scoped, userCtx),
+            flowSource,
+            flowId,
+          ),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -13516,10 +13684,15 @@ export function startUiServer({
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
           json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.collaborationAccess?.runnable === false) {
+          json(res, 403, { error: "Workspace run permission denied" });
           return;
         }
         const flowId = String(payload.flowId || "").trim();
@@ -13564,6 +13737,7 @@ export function startUiServer({
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -13628,6 +13802,7 @@ export function startUiServer({
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
           workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -13911,9 +14086,10 @@ export function startUiServer({
           json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
+        const scopedUserCtx = workspaceScopedUserContext(scoped, userCtx);
         json(res, 200, {
           runs: listWorkspaceRunLogs({
-            userId: flowSource === "workspace" ? "" : userCtx.userId || "",
+            userId: flowSource === "workspace" ? "" : scopedUserCtx.userId || "",
             flowId,
             flowSource,
             scheduleNodeId,
@@ -13945,8 +14121,9 @@ export function startUiServer({
           json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
+        const scopedUserCtx = workspaceScopedUserContext(scoped, userCtx);
         const run = listWorkspaceRunLogs({
-          userId: flowSource === "workspace" ? "" : userCtx.userId || "",
+          userId: flowSource === "workspace" ? "" : scopedUserCtx.userId || "",
           flowId,
           flowSource,
           limit: 200,
@@ -13982,7 +14159,7 @@ export function startUiServer({
         json(res, scoped.status || 400, { error: scoped.error });
         return;
       }
-      const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
+      const scopeKey = workspaceRunKey(workspaceScopedUserContext(scoped, userCtx), flowSource, flowId);
       const entries = workspaceActiveRunsForScope(scopeKey).map(([, entry]) => entry);
       const entry = entries[0] || null;
       json(res, 200, {
@@ -14023,6 +14200,7 @@ export function startUiServer({
       const scoped = resolveWorkspaceScopeRoot(root, {
         flowId,
         flowSource,
+        adminOwnerId: payload.adminOwnerId || "",
         archived: payload.archived === true || payload.flowArchived === true,
       }, userCtx);
       if (scoped.error) {
@@ -14167,6 +14345,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -14228,6 +14407,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -14302,6 +14482,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: parsed.fields.flowId || "",
           flowSource: parsed.fields.flowSource || "user",
+          adminOwnerId: parsed.fields.adminOwnerId || "",
           archived: parsed.fields.archived === "1" || parsed.fields.archived === "true" || parsed.fields.flowArchived === "true",
         }, userCtx);
         if (scoped.error) {
@@ -14347,6 +14528,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -14387,6 +14569,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -14437,6 +14620,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: req.method === "POST" ? (payload.flowId || "") : (url.searchParams.get("flowId") || ""),
           flowSource: req.method === "POST" ? (payload.flowSource || "user") : (url.searchParams.get("flowSource") || "user"),
+          adminOwnerId: req.method === "POST" ? (payload.adminOwnerId || "") : "",
           archived: req.method === "POST"
             ? (payload.archived === true || payload.flowArchived === true)
             : (url.searchParams.get("archived") === "1" || url.searchParams.get("flowArchived") === "1"),
@@ -14478,6 +14662,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -14568,6 +14753,7 @@ export function startUiServer({
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId: payload.flowId || "",
           flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
           archived: payload.archived === true || payload.flowArchived === true,
         }, userCtx);
         if (scoped.error) {
@@ -15211,9 +15397,18 @@ export function startUiServer({
       }
       const nodesArchived = url.searchParams.get("archived") === "1";
       try {
+        const requestedContext = adminWorkspaceRequestedUserContext(userCtx);
+        if (requestedContext.error) {
+          json(res, requestedContext.status || 403, { error: requestedContext.error });
+          return;
+        }
         const { setLanguage } = await import("./i18n.mjs");
         setLanguage(lang);
-        json(res, 200, listNodesJson(root, flowId || "", flowId ? flowSource : "", { archived: nodesArchived, ...userCtx, marketplaceScope }));
+        json(res, 200, listNodesJson(root, flowId || "", flowId ? flowSource : "", {
+          archived: nodesArchived,
+          ...requestedContext.userCtx,
+          marketplaceScope,
+        }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -15234,7 +15429,15 @@ export function startUiServer({
       }
       const archived = url.searchParams.get("archived") === "1";
       try {
-        const detail = readNodeDetailJson(root, nodeId, flowId, flowId ? (flowSource || "user") : "", { archived, ...userCtx });
+        const requestedContext = adminWorkspaceRequestedUserContext(userCtx);
+        if (requestedContext.error) {
+          json(res, requestedContext.status || 403, { error: requestedContext.error });
+          return;
+        }
+        const detail = readNodeDetailJson(root, nodeId, flowId, flowId ? (flowSource || "user") : "", {
+          archived,
+          ...requestedContext.userCtx,
+        });
         if (detail.error) {
           json(res, 404, { error: detail.error });
           return;
@@ -15481,7 +15684,12 @@ export function startUiServer({
         json(res, collaborationDenied.status, { error: collaborationDenied.error });
         return;
       }
-      const result = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
+      const requestedContext = adminWorkspaceRequestedUserContext(userCtx);
+      if (requestedContext.error) {
+        json(res, requestedContext.status || 403, { error: requestedContext.error });
+        return;
+      }
+      const result = readFlowJson(root, flowId, flowSource, { archived: flowArchived, ...requestedContext.userCtx });
       if (result.error) {
         json(res, 404, result);
         return;
