@@ -11095,7 +11095,19 @@ export function startUiServer({
           baseSnapshot,
           getSessionTokenFromRequest(req) || "",
         );
-        json(res, 200, { ok: true, snapshot });
+        const workflowShare = workflowScope.collaboration?.shareToken
+          ? prdWorkflowShareLinkSummary(
+              workflowScope.collaboration,
+              workflowScope.collaboration.shareToken,
+              serverPublicBaseUrl(req, host, uiPort),
+              userCtx.userId,
+            )
+          : null;
+        json(res, 200, {
+          ok: true,
+          snapshot,
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -11120,6 +11132,22 @@ export function startUiServer({
           json(res, 400, { error: "Missing tapdId" });
           return;
         }
+        const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
+          ? payload.snapshot
+          : payload.prd || payload.next ? payload : null;
+        if (!rawSnapshot) {
+          json(res, 400, { error: "Missing snapshot" });
+          return;
+        }
+        const existingCollaboration = getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId);
+        const existingAccess = prdWorkflowCollaborationAccess(existingCollaboration, userCtx.userId);
+        const shareResult = existingCollaboration && existingAccess.role !== "owner"
+          ? { record: existingCollaboration, created: false }
+          : ensurePrdWorkflowShareLink({ tapdId, userId: userCtx.userId });
+        if (shareResult.error) {
+          json(res, shareResult.status || 400, { error: shareResult.error });
+          return;
+        }
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
@@ -11136,13 +11164,6 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const rawSnapshot = payload.snapshot && typeof payload.snapshot === "object" && !Array.isArray(payload.snapshot)
-          ? payload.snapshot
-          : payload.prd || payload.next ? payload : null;
-        if (!rawSnapshot) {
-          json(res, 400, { error: "Missing snapshot" });
-          return;
-        }
         const normalizedSnapshot = {
           ...prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, rawSnapshot, userCtx, { flowSource, flowId }),
           clientReportedAt: new Date().toISOString(),
@@ -11262,8 +11283,20 @@ export function startUiServer({
         }
         const materialized = prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId });
         const withDiagnostic = prdWorkflowWithAgentflowTokenDiagnostic(materialized, getSessionTokenFromRequest(req) || "");
+        const workflowShare = shareResult.record?.shareToken
+          ? prdWorkflowShareLinkSummary(
+              shareResult.record,
+              shareResult.record.shareToken,
+              serverPublicBaseUrl(req, host, uiPort, payload),
+              userCtx.userId,
+            )
+          : null;
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "snapshot-report", tapdId, snapshot: withDiagnostic });
-        json(res, 200, { ok: true, snapshot: withDiagnostic });
+        json(res, 200, {
+          ok: true,
+          snapshot: withDiagnostic,
+          ...(workflowShare ? { workflowShare, shareUrl: workflowShare.url } : {}),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
