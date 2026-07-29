@@ -1,0 +1,32 @@
+builtin/web-ui/src/index.css
+  s_d99100a467f052::t_bcc96b1d255733 21525,21528,21628
+builtin/web-ui/dist/assets/index-BKrD5J1s.css
+  s_d99100a467f052::t_e45f614cc0e193 1
+test/running-indicator-coordination.test.mjs
+  s_d99100a467f052::t_bcc96b1d255733 42-46
+builtin/web-ui/dist/assets/index-C1u3wc3p.js
+  s_d99100a467f052::t_e45f614cc0e193 350
+builtin/web-ui/src/RunningIndicator.jsx
+  s_d99100a467f052::t_bcc96b1d255733 331-333,341
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_e45f614cc0e193 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "aa75738d7ad788481b56d308b7ab96999459f82a",
+  "prompts": {},
+  "logical_commit_id": "aa75738d7ad788481b56d308b7ab96999459f82a",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 2660,
+      "total_deletions": 160
+    }
+  }
+}
