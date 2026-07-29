@@ -7837,6 +7837,7 @@ function WorkspacePageInner() {
   const reactFlow = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const flowParams = useMemo(readFlowParamsFromUrl, []);
+  const isWorkflowShareView = Boolean(flowParams.workflowShare);
   const initialFocusNodeIdRef = useRef(new URLSearchParams(window.location.search).get("focusNodeId") || "");
   const workspaceViewportStorageKey = useMemo(
     () => (
@@ -7848,6 +7849,7 @@ function WorkspacePageInner() {
   );
   const [workspaceMode, setWorkspaceMode] = useState(() => (
     (() => {
+      if (flowParams.workflowShare) return "workflow";
       const view = new URLSearchParams(window.location.search).get("view");
       return view === "display" || view === "workflow" ? view : "workspace";
     })()
@@ -13257,7 +13259,8 @@ function WorkspacePageInner() {
 
   return (
     <div className="af-workspace-page">
-      <header className="af-pipeline-top af-workspace-top">
+      {!isWorkflowShareView ? (
+        <header className="af-pipeline-top af-workspace-top">
         <div className="af-pipeline-top-left">
           <button type="button" className="af-icon-btn af-pipeline-back" onClick={() => navigate("/projects")} aria-label="返回">
             <span className="material-symbols-outlined">arrow_back</span>
@@ -13414,7 +13417,8 @@ function WorkspacePageInner() {
             Save
           </button>
         </div>
-      </header>
+        </header>
+      ) : null}
       {flowSnippetToast ? (
         <div className="af-flow-snippet-toast" role="status" aria-live="polite">
           <span className="material-symbols-outlined" aria-hidden>check_circle</span>
