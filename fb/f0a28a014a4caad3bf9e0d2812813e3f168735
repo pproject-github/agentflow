@@ -1,0 +1,26 @@
+test/workspace-workflow-render-contract.test.mjs
+  s_60addd0605f23d::t_56e9949b7992de 44-69
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_60addd0605f23d::t_56e9949b7992de 7223,7225,7229-7233
+builtin/web-ui/src/index.css
+  s_60addd0605f23d::t_56e9949b7992de 6941-6955
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fbf0a28a014a4caad3bf9e0d2812813e3f168735",
+  "prompts": {},
+  "logical_commit_id": "fbf0a28a014a4caad3bf9e0d2812813e3f168735",
+  "sessions": {
+    "s_60addd0605f23d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa15a-3bc3-74c1-b7da-85cd0141887f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 48,
+      "total_deletions": 4
+    }
+  }
+}
