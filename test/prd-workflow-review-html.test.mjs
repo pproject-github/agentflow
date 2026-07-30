@@ -88,7 +88,8 @@ test("escapes planned code paths and content", () => {
 
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /data-file="src\/&lt;unsafe&gt;\.java"/);
-  assert.match(html, /&lt;script&gt;alert\('x'\)&lt;\/script&gt;/);
+  assert.match(html, /class="syntax-operator">&lt;<\/span>script/);
+  assert.match(html, /class="syntax-string">'x'<\/span>/);
 });
 
 test("renders a modified function with real source context and pseudocode", () => {
@@ -124,6 +125,10 @@ test("renders a modified function with real source context and pseudocode", () =
   assert.match(html, /当前上下文/);
   assert.match(html, /class="change-intent__line-anchor">L241–L245<\/span>/);
   assert.match(html, /class="change-intent__source-number">241<\/span>/);
+  assert.match(html, /data-language="java"/);
+  assert.match(html, /class="syntax-keyword">if<\/span>/);
+  assert.match(html, /class="syntax-function">saveGifts<\/span>/);
+  assert.match(html, /class="syntax-literal">true<\/span>/);
   assert.match(html, /方案伪代码/);
   assert.doesNotMatch(html, /class="change-intent__proposal[^"]*"[\s\S]*class="change-intent__source-number"/);
   assert.doesNotMatch(html, /#change|#reference|#proposal/);
@@ -168,7 +173,9 @@ test("renders proposed code with plus markers but no fake source lines", () => {
 
   assert.match(html, /拟议代码 · 未写入/);
   assert.match(html, /class="change-intent__proposal-mark">\+<\/span>/);
-  assert.match(html, /internal class FetchPolicy/);
+  assert.match(html, /class="syntax-keyword">internal<\/span>/);
+  assert.match(html, /class="syntax-keyword">class<\/span>/);
+  assert.match(html, /class="syntax-type">FetchPolicy<\/span>/);
   assert.doesNotMatch(html, /change-intent__source-number|L\d+/);
 });
 
@@ -183,6 +190,9 @@ test("uses a terminal-inspired document palette with semantic accent colors", ()
   assert.match(html, /--link: #7dcfff/);
   assert.match(html, /--pending-text: #e0af68/);
   assert.match(html, /--complete-text: #9ece6a/);
+  assert.match(html, /--syntax-keyword: #bb9af7/);
+  assert.match(html, /--syntax-string: #9ece6a/);
+  assert.match(html, /font: 500 13px\/1\.55/);
   assert.match(html, /background: var\(--bg\)/);
   assert.match(html, /\.action-card:target \{ border-color: var\(--interactive\)/);
   assert.doesNotMatch(html, /radial-gradient/);
