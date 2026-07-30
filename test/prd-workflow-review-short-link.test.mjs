@@ -71,9 +71,11 @@ test("review-link returns a stable shortUrl and keeps the canonical url", async 
   assert.equal(first.review.shortUrl, second.review.shortUrl);
   assert.equal(first.event.artifacts[0].url, first.review.shortUrl);
   assert.equal(first.event.artifacts[0].canonicalUrl, first.review.url);
-  assert.match(first.event.artifacts[0].key, /^prd-review:1015046:remote-config:all:plan-doc_remote-config:durable$/);
+  assert.match(first.event.artifacts[0].key, /^prd-review:1015046:remote-config:all:plan-doc_remote-config$/);
   assert.equal(first.event.artifacts[0].key, first.event.links[0].key);
   assert.equal(first.event.artifacts[0].key, second.event.artifacts[0].key);
+  assert.equal(first.event.aggregateByStage, false);
+  assert.equal(first.event.id, `review-link:${first.event.artifacts[0].key}`);
 });
 
 

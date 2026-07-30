@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  canonicalPrdWorkflowStageKey,
+  isPrdWorkflowGlobalEvent,
   isPrdWorkflowReviewLink,
   isPrdWorkflowPlanAction,
   mergePrdWorkflowActionLists,
@@ -16,6 +18,61 @@ test("recognizes issue plan actions by their canonical stage", () => {
   }), true);
   assert.equal(isPrdWorkflowPlanAction({
     stage: "implementation:firebase-remote-config-fetch-control-android",
+  }), false);
+});
+
+test("canonicalizes legacy marker stages into registered action slots", () => {
+  const issueKey = "gift-cache-integrity-validation";
+  assert.equal(
+    canonicalPrdWorkflowStageKey({
+      stage: "implementation_mr",
+      action: "mark",
+      issueKey,
+    }),
+    `implementation:${issueKey}`,
+  );
+  assert.equal(
+    canonicalPrdWorkflowStageKey({
+      stageKey: "fix_mr",
+      issueKey,
+    }),
+    `bugfix:${issueKey}`,
+  );
+  assert.equal(
+    canonicalPrdWorkflowStageKey({
+      stage: "integration_mr",
+      issueKey,
+    }),
+    `integration:${issueKey}`,
+  );
+  assert.equal(
+    canonicalPrdWorkflowStageKey({
+      stage: "implementation:android:issue-2",
+      issueKey: "issue-2",
+    }),
+    "implementation:android:issue-2",
+  );
+  assert.equal(
+    canonicalPrdWorkflowStageKey({
+      type: "review-link",
+      stage: `code-review:${issueKey}`,
+      action: "CODE_REVIEW_COMPLETED",
+      issueKey,
+    }),
+    `implementation:${issueKey}`,
+  );
+});
+
+test("classifies global-only reports as auxiliary timeline events", () => {
+  assert.equal(isPrdWorkflowGlobalEvent({
+    type: "workflow-report",
+    aggregateByStage: false,
+    artifactScope: "global",
+  }), true);
+  assert.equal(isPrdWorkflowGlobalEvent({
+    type: "workflow-report",
+    action: "implementation:gift-cache",
+    artifactScope: "action",
   }), false);
 });
 
@@ -254,4 +311,54 @@ test("stable artifact key replaces the complete stale artifact", () => {
     href: "http://ai.example.test/r/new",
     durability: "durable",
   }]);
+});
+
+test("post-enrichment stable artifact replaces a keyless legacy URL alias", () => {
+  const merged = mergePrdWorkflowActionLists(
+    [{
+      label: "GitLab Issue",
+      kind: "gitlab-issue",
+      url: "https://git.example/project/issues/1?from=runtime",
+    }],
+    [{
+      key: "gitlab-issue:gift-cache:android",
+      label: "GitLab Issue",
+      kind: "gitlab-issue",
+      url: "https://git.example/project/issues/1",
+    }],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].key, "gitlab-issue:gift-cache:android");
+});
+
+test("implementation action keeps MR and linked Code Review report artifacts", () => {
+  const merged = mergePrdWorkflowActionLists(
+    [{
+      key: "gitlab-mr:gift-cache:implementation",
+      label: "实现 MR",
+      kind: "gitlab-mr",
+      url: "https://git.example/project/merge_requests/948",
+    }],
+    [{
+      key: "code-review:gift-cache:android",
+      label: "Code Review 报告",
+      kind: "code-review",
+      url: "http://agentflow.example/r/CodeRv01",
+      issueKey: "gift-cache",
+      platform: "android",
+      mrUrl: "https://git.example/project/merge_requests/948",
+      mrIid: "948",
+      commitSha: "abc123",
+      stageKey: "implementation:gift-cache",
+    }],
+  );
+
+  assert.equal(merged.length, 2);
+  assert.deepEqual(
+    merged.map((artifact) => artifact.label),
+    ["实现 MR", "Code Review 报告"],
+  );
+  assert.equal(merged[1].stageKey, "implementation:gift-cache");
+  assert.equal(merged[1].commitSha, "abc123");
 });

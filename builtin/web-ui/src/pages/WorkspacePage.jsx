@@ -53,6 +53,8 @@ import {
   isConfirmedAiDocCandidate,
 } from "../prdWorkflowAiDocs.js";
 import {
+  canonicalPrdWorkflowStageKey,
+  isPrdWorkflowGlobalEvent,
   isPrdWorkflowReviewLink,
   mergePrdWorkflowActionLists,
   selectCurrentPrdWorkflowActionLinks,
@@ -1187,16 +1189,7 @@ function prdWorkflowActionId(item) {
 }
 
 function prdWorkflowStageKey(item) {
-  if (!item || typeof item !== "object") return "";
-  const issue = String(item.issueKey || item.issue_key || item.issue || "").trim();
-  const action = String(item.action || item.actionId || item.action_id || prdWorkflowActionId(item) || "").trim();
-  const rawStage = String(item.stageKey || item.stage_key || item.stage || item.phase || item.code || item.pointer || action).trim();
-  const text = [rawStage, action, item.code, item.type, item.title].map((value) => String(value || "")).join(" ").toLowerCase();
-  if (issue) {
-    if (/plan_draft_local|submit-plan|plan-doc/.test(text)) return `issue-plan:${issue}`;
-    if (/gitlab_issue_missing|ensure-gitlab-issue/.test(text)) return `issue-gitlab:${issue}`;
-  }
-  return rawStage;
+  return canonicalPrdWorkflowStageKey(item);
 }
 
 function prdWorkflowActionSortTime(item) {
@@ -1281,8 +1274,24 @@ function prdWorkflowEnrichActionWithSnapshotFacts(snapshot, item) {
   const shouldAttachGitlabArtifacts = /issue-gitlab:|gitlab_issue_missing|ensure-gitlab-issue|implementation|impl_|fix_|testing|submit-test|self-test/i.test(stageText);
   if (!shouldAttachGitlabArtifacts) return enrichedItem;
   const artifacts = [];
-  if (gitlabIssue) artifacts.push({ label: "GitLab Issue", kind: "gitlab-issue", durability: "durable", url: gitlabIssue });
-  if (gitlabEpic) artifacts.push({ label: "GitLab Epic", kind: "gitlab-epic", durability: "durable", url: gitlabEpic });
+  if (gitlabIssue) {
+    artifacts.push({
+      key: `gitlab-issue:${issueKey}:${(platform || "all").toLowerCase()}`,
+      label: "GitLab Issue",
+      kind: "gitlab-issue",
+      durability: "durable",
+      url: gitlabIssue,
+    });
+  }
+  if (gitlabEpic) {
+    artifacts.push({
+      key: "gitlab-epic:requirement",
+      label: "GitLab Epic",
+      kind: "gitlab-epic",
+      durability: "durable",
+      url: gitlabEpic,
+    });
+  }
   const status = prdWorkflowActionStatus(enrichedItem.status);
   const shouldRetitle = gitlabIssue && status === "done" && /^issue-gitlab:/.test(stage) && /需要.*GitLab Issue/.test(String(enrichedItem.title || enrichedItem.label || ""));
   return {
@@ -1331,6 +1340,7 @@ function prdWorkflowActionRows(snapshot, nextAction) {
   const shouldSkipRow = (item) => {
     if (!item || typeof item !== "object") return true;
     if (item.auxiliary === true || item.auxiliary_event === true) return true;
+    if (isPrdWorkflowGlobalEvent(item)) return true;
     if (String(item.type || "") === "review-link") return true;
     if (String(item.type || "") === "action-preview" || item.preview === true) return true;
     if (

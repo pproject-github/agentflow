@@ -65,6 +65,7 @@ test("supports global-only reports and rejects malformed reports", () => {
     }],
   });
   assert.equal(report.event.aggregateByStage, false);
+  assert.equal(report.event.auxiliary, true);
   assert.equal(report.event.artifacts[0].scope, "global");
 
   assert.match(
@@ -122,6 +123,24 @@ test("deduplicates artifacts by stable key while accepting updates", () => {
   assert.equal(artifacts.length, 1);
   assert.equal(artifacts[0].url, "https://example.test/new");
   assert.equal(artifacts[0].status, "ready");
+});
+
+test("deduplicates keyless legacy artifacts after a stable key is introduced", () => {
+  const artifacts = mergeWorkflowArtifactLists(
+    [{
+      type: "gitlab-issue",
+      title: "GitLab Issue",
+      url: "https://example.test/issues/1?legacy=1",
+    }],
+    [{
+      key: "gitlab-issue:gift-cache:android",
+      type: "gitlab-issue",
+      title: "GitLab Issue",
+      url: "https://example.test/issues/1",
+    }],
+  );
+  assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0].key, "gitlab-issue:gift-cache:android");
 });
 
 test("accepts canonical workflow keys and ignores unsafe state keys", () => {
