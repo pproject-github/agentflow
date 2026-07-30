@@ -7778,7 +7778,7 @@ function prdWorkflowReviewIdFromRequest(tapdId, payload = {}, durability = "temp
   return prdWorkflowSafeStateId(["review", tapdId, stageHead, digest].filter(Boolean).join("-")).slice(0, 64);
 }
 
-function prdWorkflowReviewArtifactKey(tapdId, payload = {}, durability = "temporary") {
+function prdWorkflowReviewArtifactKey(tapdId, payload = {}) {
   const explicit = String(payload.artifactKey || payload.artifact_key || "").trim();
   if (explicit) return explicit.slice(0, 500);
   const issueKey = prdWorkflowSafeStateId(
@@ -7800,7 +7800,6 @@ function prdWorkflowReviewArtifactKey(tapdId, payload = {}, durability = "tempor
     issueKey,
     platform,
     stage,
-    String(durability || "temporary").trim().toLowerCase() || "temporary",
   ].join(":").slice(0, 500);
 }
 
@@ -9096,16 +9095,54 @@ function prdWorkflowNormalizeStoredRuntimeEvent(tapdId, event = {}) {
       const kind = String(item.kind || "").trim();
       const hasReviewUrl = /\/api\/prd-workflow\/review\//.test(String(item.url || item.href || ""));
       if (!kind && !hasReviewUrl) return item;
+      const originalKey = String(item.key || item.artifactKey || item.artifact_key || "").trim();
+      const logicalKey = /^prd-review:/i.test(originalKey)
+        ? originalKey.replace(/:(?:temporary|durable)$/i, "")
+        : originalKey && !/^(?:temporary-)?review:https?:/i.test(originalKey)
+          ? originalKey
+          : prdWorkflowReviewArtifactKey(tapdId, out);
       return {
         ...item,
+        key: logicalKey,
         persistence: item.persistence || "runtime",
         source: item.source && typeof item.source === "object" && !Array.isArray(item.source) ? item.source : sourceArtifact,
       };
     };
     if (Array.isArray(out.artifacts)) out.artifacts = out.artifacts.map(normalizeReviewRef);
     if (Array.isArray(out.links)) out.links = out.links.map(normalizeReviewRef);
+    const reviewArtifactKey = String(
+      out.artifacts?.[0]?.key
+      || out.links?.[0]?.key
+      || "",
+    ).trim();
+    out.aggregateByStage = false;
+    if (reviewArtifactKey) out.id = `review-link:${reviewArtifactKey}`;
   }
+  const canonicalStage = prdWorkflowRuntimeEventCanonicalStage(out);
+  const canonicalAction = prdWorkflowRuntimeEventCanonicalAction(canonicalStage);
+  const rawStage = String(out.stageKey || out.stage_key || out.stage || "").trim();
+  if (canonicalStage) {
+    if (rawStage && rawStage !== canonicalStage) out.sourceStage = out.sourceStage || rawStage;
+    out.stage = canonicalStage;
+    out.stageKey = canonicalStage;
+  }
+  if (canonicalAction && (type === "workflow-marker" || String(out.action || "") === "mark")) {
+    out.action = canonicalAction;
+    out.actionId = canonicalAction;
+  }
+  if (type === "workflow-report" && !out.action && (
+    String(out.artifactScope || out.artifact_scope || out.scope || "").toLowerCase() === "global"
+    || out.aggregateByStage === false
+    || out.aggregate_by_stage === false
+  )) {
+    out.auxiliary = true;
+  }
+  out.artifacts = prdWorkflowRuntimeOwnedArtifacts(out.artifacts, canonicalStage);
+  out.links = prdWorkflowRuntimeOwnedArtifacts(out.links, canonicalStage);
   out.tapdId = String(out.tapdId || out.tapd_id || tapdId || "");
+  const canonicalId = prdWorkflowRuntimeEventId(out);
+  if (out.id && out.id !== canonicalId) out.sourceEventId = out.sourceEventId || out.id;
+  out.id = canonicalId;
   return out;
 }
 
@@ -9158,13 +9195,61 @@ function prdWorkflowRuntimeEventStatus(type, status) {
 function prdWorkflowRuntimeEventCanonicalStage(event = {}) {
   const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
   const action = String(event.action || event.actionId || event.action_id || "").trim();
-  const rawStage = String(event.stage || event.stageKey || event.stage_key || event.phase || event.code || action || "").trim();
-  const text = [rawStage, action, event.code, event.type, event.title].map((value) => String(value || "")).join(" ").toLowerCase();
+  const rawStage = String(event.stageKey || event.stage_key || event.stage || event.phase || event.code || action || "").trim();
+  const normalizedStage = rawStage.toLowerCase();
+  const tokens = [rawStage, action, event.code, event.type]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
   if (issue) {
-    if (/plan_draft_local|submit-plan|plan-doc/.test(text)) return `issue-plan:${issue}`;
-    if (/gitlab_issue_missing|ensure-gitlab-issue/.test(text)) return `issue-gitlab:${issue}`;
+    if (/^(?:issue-plan|issue-gitlab|implementation|bugfix|integration):/.test(normalizedStage)) return rawStage;
+    if (tokens.some((value) => /^code-review(?::|$)/.test(value) || value === "code_review_completed")) {
+      return `implementation:${issue}`;
+    }
+    if (tokens.some((value) => /plan_draft_local|submit-plan|plan-doc/.test(value) || ["plan_mr", "plan_approved", "issue-plan"].includes(value))) {
+      return `issue-plan:${issue}`;
+    }
+    if (tokens.some((value) => /gitlab_issue_missing|ensure-gitlab-issue/.test(value) || value === "issue-gitlab")) {
+      return `issue-gitlab:${issue}`;
+    }
+    if (tokens.some((value) => ["fix_mr", "bugfix"].includes(value))) return `bugfix:${issue}`;
+    if (tokens.some((value) => ["integration_mr", "integrated", "integration"].includes(value))) return `integration:${issue}`;
+    if (tokens.some((value) => [
+      "implementation_mr",
+      "implementation_done",
+      "implementation_merged",
+      "impl_mr",
+      "impl_done",
+      "impl_merged",
+      "runtime_marker",
+      "status",
+      "implementation",
+    ].includes(value))) {
+      return `implementation:${issue}`;
+    }
   }
   return rawStage || action;
+}
+
+function prdWorkflowRuntimeEventCanonicalAction(stage = "") {
+  const prefix = String(stage || "").trim().split(":", 1)[0];
+  return ["issue-plan", "issue-gitlab", "implementation", "bugfix", "integration"].includes(prefix)
+    ? prefix
+    : "";
+}
+
+function prdWorkflowRuntimeOwnedArtifacts(values, stage = "") {
+  if (!Array.isArray(values)) return values;
+  const ownsOnlyChangedArtifact = /^(?:issue-plan|implementation|bugfix|integration):/.test(String(stage || ""));
+  if (!ownsOnlyChangedArtifact) return values;
+  return values.filter((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return true;
+    const kind = String(item.kind || item.type || "").trim().toLowerCase();
+    const key = String(item.key || item.artifactKey || item.artifact_key || "").trim().toLowerCase();
+    return !(
+      ["gitlab-epic", "gitlab-issue"].includes(kind)
+      || /^(?:gitlab-epic|gitlab-issue):/.test(key)
+    );
+  });
 }
 
 function prdWorkflowRuntimeEventId(event = {}) {
@@ -9203,8 +9288,13 @@ function prdWorkflowCompactRuntimeValue(value, maxChars = 24000) {
 function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
   const now = new Date().toISOString();
   const type = String(event.type || event.kind || "workflow-event").trim().slice(0, 120);
-  const action = String(event.action || event.actionId || event.action_id || "").trim().slice(0, 160);
-  const stage = String(event.stage || event.stageKey || event.stage_key || event.phase || action || "").trim().slice(0, 160);
+  const rawAction = String(event.action || event.actionId || event.action_id || "").trim().slice(0, 160);
+  const rawStage = String(event.stageKey || event.stage_key || event.stage || event.phase || rawAction || "").trim().slice(0, 160);
+  const stage = prdWorkflowRuntimeEventCanonicalStage(event).slice(0, 160);
+  const canonicalAction = prdWorkflowRuntimeEventCanonicalAction(stage);
+  const action = canonicalAction && (type === "workflow-marker" || rawAction === "mark")
+    ? canonicalAction
+    : rawAction;
   const scope = String(event.scope || "").trim().slice(0, 80);
   const platform = String(event.platform || "").trim().slice(0, 80);
   const status = prdWorkflowRuntimeEventStatus(type, event.status);
@@ -9230,6 +9320,7 @@ function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
     authority,
     updatedAt: now,
   };
+  if (rawStage && rawStage !== stage) entry.sourceStage = rawStage;
   const sourceEventId = String(event.id || event.eventId || event.event_id || "").trim();
   if (sourceEventId && sourceEventId !== entry.id) entry.sourceEventId = sourceEventId.slice(0, 160);
   if (action) {
@@ -9238,8 +9329,10 @@ function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
   }
   if (stage) {
     entry.stage = stage;
-    entry.stageKey = String(event.stageKey || event.stage_key || stage);
+    entry.stageKey = stage;
   }
+  entry.artifacts = prdWorkflowRuntimeOwnedArtifacts(entry.artifacts, stage);
+  entry.links = prdWorkflowRuntimeOwnedArtifacts(entry.links, stage);
   if (scope) entry.scope = scope;
   if (platform) entry.platform = platform;
   if (!entry.createdAt) entry.createdAt = event.startedAt || now;
@@ -9258,26 +9351,50 @@ function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
 function prdWorkflowMergeRuntimeEventArrays(left, right) {
   const out = [];
   const seen = new Map();
+  const aliasesFor = (value) => {
+    if (typeof value === "string") return [`value:${value}`];
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const aliases = [];
+    const explicitKey = String(value.key || value.artifactKey || value.artifact_key || "").trim();
+    if (explicitKey) aliases.push(`key:${explicitKey}`);
+    const rawUrl = String(
+      value.canonicalUrl
+      || value.canonical_url
+      || value.href
+      || value.url
+      || "",
+    ).trim();
+    if (rawUrl) {
+      try {
+        const parsed = new URL(rawUrl, "http://agentflow.local");
+        aliases.push(`url:${parsed.origin}${parsed.pathname.replace(/\/+$/, "") || "/"}`);
+      } catch {
+        aliases.push(`url:${rawUrl.split(/[?#]/)[0].replace(/\/+$/, "")}`);
+      }
+    }
+    const itemPath = String(value.path || "").trim();
+    if (itemPath) aliases.push(`path:${itemPath}`);
+    if (!aliases.length) {
+      try {
+        aliases.push(`value:${JSON.stringify(value)}`);
+      } catch {
+        aliases.push(`value:${String(value)}`);
+      }
+    }
+    return aliases;
+  };
   for (const value of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
     if (value == null) continue;
-    const explicitKey = value && typeof value === "object" && !Array.isArray(value)
-      ? String(value.key || value.artifactKey || value.artifact_key || "").trim()
-      : "";
-    let key = explicitKey ? `key:${explicitKey}` : "";
-    try {
-      if (!key) key = typeof value === "string" ? value : JSON.stringify(value);
-    } catch {
-      key = String(value);
-    }
-    const index = seen.get(key);
+    const aliases = aliasesFor(value);
+    const index = aliases.map((alias) => seen.get(alias)).find((candidate) => candidate != null);
     if (index == null) {
-      seen.set(key, out.length);
+      const nextIndex = out.length;
       out.push(value);
+      aliases.forEach((alias) => seen.set(alias, nextIndex));
       continue;
     }
-    if (explicitKey) {
-      out[index] = value;
-    }
+    out[index] = value;
+    aliasesFor(value).forEach((alias) => seen.set(alias, index));
   }
   return out;
 }
@@ -12368,7 +12485,15 @@ export function startUiServer({
         const shortUrl = shortLink?.shortUrl || "";
         const displayUrl = shortUrl || reviewUrl;
         const durability = review.durability || "temporary";
-        const artifactKey = prdWorkflowReviewArtifactKey(tapdId, payload, durability);
+        const artifactKey = prdWorkflowReviewArtifactKey(tapdId, payload);
+        const reviewStageKey = prdWorkflowRuntimeEventCanonicalStage(payload)
+          || payload.stageKey
+          || payload.stage_key
+          || payload.stage
+          || "review";
+        const reviewMrUrl = String(payload.mrUrl || payload.mr_url || "").trim();
+        const reviewMrIid = String(payload.mrIid || payload.mr_iid || "").trim();
+        const reviewCommitSha = String(payload.commitSha || payload.commit_sha || "").trim();
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
           : { kind: durability === "durable" ? "ai-doc" : "local-draft", durability };
@@ -12387,19 +12512,32 @@ export function startUiServer({
           canonicalUrl: reviewUrl,
           shortUrl,
           expiresAt: review.expiresAt || "",
+          issueKey: payload.issueKey || payload.issue_key || "",
+          platform: payload.platform || "",
+          stageKey: reviewStageKey,
+          ...(reviewMrUrl ? { mrUrl: reviewMrUrl } : {}),
+          ...(reviewMrIid ? { mrIid: reviewMrIid } : {}),
+          ...(reviewCommitSha ? { commitSha: reviewCommitSha } : {}),
         };
         const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+          id: `review-link:${artifactKey}`,
           type: "review-link",
           auxiliary: true,
+          aggregateByStage: false,
           conflictOnArtifact: false,
           truth: "runtime_event",
           persistence: "runtime",
           action: payload.action || payload.actionId || "",
-          stage: payload.stage || payload.stageKey || payload.stage_key || "review",
+          stage: reviewStageKey,
+          stageKey: reviewStageKey,
           title: payload.title || "临时 Markdown Review",
           detail: "已生成临时 Markdown review 链接",
           status: "current",
           issueKey: payload.issueKey || payload.issue_key || "",
+          platform: payload.platform || "",
+          ...(reviewMrUrl ? { mrUrl: reviewMrUrl } : {}),
+          ...(reviewMrIid ? { mrIid: reviewMrIid } : {}),
+          ...(reviewCommitSha ? { commitSha: reviewCommitSha } : {}),
           idempotencyKey,
           durability,
           sourceArtifact: reviewSource,
@@ -12416,6 +12554,12 @@ export function startUiServer({
             durability,
             source: reviewSource,
             expiresAt: review.expiresAt || "",
+            issueKey: artifact.issueKey,
+            platform: artifact.platform,
+            stageKey: artifact.stageKey,
+            ...(artifact.mrUrl ? { mrUrl: artifact.mrUrl } : {}),
+            ...(artifact.mrIid ? { mrIid: artifact.mrIid } : {}),
+            ...(artifact.commitSha ? { commitSha: artifact.commitSha } : {}),
           }],
           reviewId: review.id,
           reviewShortCode: shortLink?.shortCode || "",

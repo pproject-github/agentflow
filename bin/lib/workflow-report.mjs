@@ -233,6 +233,7 @@ export function normalizeWorkflowReport(payload = {}) {
     workflow,
     workflowKey: workflow.key,
     aggregateByStage: Boolean(action),
+    auxiliary: !action,
     conflictOnArtifact: payload.conflictOnArtifact === true || payload.conflict_on_artifact === true,
     artifactScope: action ? "action" : "global",
     ...(action ? {
@@ -395,16 +396,51 @@ export function mergeWorkflowArtifacts(baseArtifacts = [], runtimeEvents = []) {
 export function mergeWorkflowArtifactLists(left = [], right = [], defaultScope = "action") {
   const out = [];
   const seen = new Map();
+  const normalizedUrl = (value) => {
+    const raw = cleanString(value, 4000);
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw, "http://agentflow.local");
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "") || "/"}`;
+    } catch {
+      return raw.split(/[?#]/)[0].replace(/\/+$/, "");
+    }
+  };
+  const artifactAliases = (artifact) => {
+    const aliases = [];
+    const explicitKey = cleanString(
+      artifact?.key || artifact?.artifactKey || artifact?.artifact_key,
+      500,
+    );
+    if (explicitKey) aliases.push(`key:${explicitKey}`);
+    const url = normalizedUrl(
+      artifact?.canonicalUrl
+      || artifact?.canonical_url
+      || artifact?.href
+      || artifact?.url,
+    );
+    if (url) aliases.push(`url:${url}`);
+    const artifactPath = cleanString(artifact?.path, 4000);
+    if (artifactPath) aliases.push(`path:${artifactPath}`);
+    return aliases;
+  };
   const add = (artifact) => {
     if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) return;
+    const rawAliases = artifactAliases(artifact);
     const normalized = normalizeWorkflowArtifact(artifact, out.length, defaultScope);
-    const key = normalized.key || normalized.url || `${normalized.type}:${normalized.title}`;
-    const existing = seen.get(key);
+    const aliases = uniqueValues([
+      ...rawAliases,
+      ...artifactAliases(normalized),
+      ...(!rawAliases.length ? [`value:${normalized.type}:${normalized.title}`] : []),
+    ]);
+    const existing = aliases.map((alias) => seen.get(alias)).find((value) => value != null);
     if (existing == null) {
-      seen.set(key, out.length);
+      const index = out.length;
       out.push(normalized);
+      aliases.forEach((alias) => seen.set(alias, index));
     } else {
       out[existing] = { ...out[existing], ...normalized };
+      artifactAliases(out[existing]).forEach((alias) => seen.set(alias, existing));
     }
   };
   for (const artifact of Array.isArray(left) ? left : []) add(artifact);

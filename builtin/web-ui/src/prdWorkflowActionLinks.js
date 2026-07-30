@@ -34,6 +34,56 @@ function normalizedUrl(value) {
   }
 }
 
+export function canonicalPrdWorkflowStageKey(item = {}) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const issue = text(item.issueKey || item.issue_key || item.issue);
+  const action = text(item.action || item.actionId || item.action_id);
+  const rawStage = text(item.stageKey || item.stage_key || item.stage || item.phase || item.code || action);
+  const normalizedStage = rawStage.toLowerCase();
+  const tokens = [rawStage, action, item.code, item.type]
+    .map((value) => text(value).toLowerCase())
+    .filter(Boolean);
+  if (!issue) return rawStage || action;
+  if (/^(?:issue-plan|issue-gitlab|implementation|bugfix|integration):/.test(normalizedStage)) return rawStage;
+  if (tokens.some((value) => /^code-review(?::|$)/.test(value) || value === "code_review_completed")) {
+    return `implementation:${issue}`;
+  }
+  if (tokens.some((value) => /plan_draft_local|submit-plan|plan-doc/.test(value) || ["plan_mr", "plan_approved", "issue-plan"].includes(value))) {
+    return `issue-plan:${issue}`;
+  }
+  if (tokens.some((value) => /gitlab_issue_missing|ensure-gitlab-issue/.test(value) || value === "issue-gitlab")) {
+    return `issue-gitlab:${issue}`;
+  }
+  if (tokens.some((value) => ["fix_mr", "bugfix"].includes(value))) return `bugfix:${issue}`;
+  if (tokens.some((value) => ["integration_mr", "integrated", "integration"].includes(value))) return `integration:${issue}`;
+  if (tokens.some((value) => [
+    "implementation_mr",
+    "implementation_done",
+    "implementation_merged",
+    "impl_mr",
+    "impl_done",
+    "impl_merged",
+    "runtime_marker",
+    "status",
+    "implementation",
+  ].includes(value))) {
+    return `implementation:${issue}`;
+  }
+  return rawStage || action;
+}
+
+export function isPrdWorkflowGlobalEvent(item = {}) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  const type = text(item.type || item.kind).toLowerCase();
+  if (type !== "workflow-report") return false;
+  const hasAction = Boolean(
+    text(item.action || item.actionId || item.action_id || item.actionModel?.key || item.action_model?.key),
+  );
+  const globalScope = text(item.artifactScope || item.artifact_scope || item.scope).toLowerCase() === "global";
+  const aggregateByStage = item.aggregateByStage ?? item.aggregate_by_stage;
+  return !hasAction && (globalScope || aggregateByStage === false);
+}
+
 export function isPrdWorkflowReviewLink(link) {
   const key = artifactKey(link);
   if (/^prd-review:/i.test(key)) return true;
@@ -199,23 +249,39 @@ export function selectCurrentPrdWorkflowActionLinks(links = [], item = {}) {
 export function mergePrdWorkflowActionLists(left, right) {
   const out = [];
   const indexByKey = new Map();
-  const mergeKey = (entry) => {
-    if (typeof entry === "string") return `value:${entry}`;
-    if (!entry || typeof entry !== "object") return "";
+  const mergeKeys = (entry) => {
+    if (typeof entry === "string") return [`value:${entry}`];
+    if (!entry || typeof entry !== "object") return [];
+    const keys = [];
     const stableKey = text(entry.key || entry.artifactKey || entry.artifact_key);
-    return stableKey ? `key:${stableKey}` : `value:${JSON.stringify(entry)}`;
+    if (stableKey) keys.push(`key:${stableKey}`);
+    const canonical = normalizedUrl(
+      entry.canonicalUrl
+      || entry.canonical_url
+      || entry.reviewUrl
+      || entry.review_url
+      || entry.href
+      || entry.url,
+    );
+    if (canonical) keys.push(`url:${canonical}`);
+    const path = text(entry.path);
+    if (path) keys.push(`path:${path}`);
+    if (!keys.length) keys.push(`value:${JSON.stringify(entry)}`);
+    return keys;
   };
   const push = (entry) => {
     if (!entry) return;
-    const key = mergeKey(entry);
-    if (!key) return;
-    const index = indexByKey.get(key);
+    const keys = mergeKeys(entry);
+    if (!keys.length) return;
+    const index = keys.map((key) => indexByKey.get(key)).find((value) => value != null);
     if (index == null) {
-      indexByKey.set(key, out.length);
+      const nextIndex = out.length;
       out.push(entry);
+      keys.forEach((key) => indexByKey.set(key, nextIndex));
       return;
     }
     out[index] = entry;
+    mergeKeys(entry).forEach((key) => indexByKey.set(key, index));
   };
   (Array.isArray(left) ? left : []).forEach(push);
   (Array.isArray(right) ? right : []).forEach(push);
