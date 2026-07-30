@@ -51,6 +51,46 @@ test("keeps ordinary markdown lists unchanged outside an actions section", () =>
   assert.match(html, /<ul><li>A1 is only a reference here<\/li><li>regular item<\/li><\/ul>/);
 });
 
+test("renders planned code blocks with file and source line anchors", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（保存缓存基线）",
+    "  - 要解决的问题: 三个缓存字段当前分开提交。",
+    "  - 准备怎么解决:",
+    "    #file iHeima/src/main/java/sg/bigo/live/model/utils/GiftUtils.java",
+    "    #code line245-246",
+    "    List<VGiftInfoBean> convertedGifts = convertToVGiftInfoBeanList(giftList);",
+    "    boolean success = saveFetchedGiftBaseline(context, convertedGifts, version);",
+    "    #codeend",
+    "",
+    "    如果 success 为 false，保留旧缓存并允许下次重试。",
+  ].join("\n"));
+
+  assert.match(html, /class="planned-code"/);
+  assert.match(html, /data-file="iHeima\/src\/main\/java\/sg\/bigo\/live\/model\/utils\/GiftUtils\.java"/);
+  assert.match(html, /class="planned-code__anchor">L245–L246<\/span>/);
+  assert.match(html, /class="planned-code__badge">计划代码 · 未写入<\/span>/);
+  assert.match(html, /class="planned-code__number">245<\/span>/);
+  assert.match(html, /class="planned-code__number">246<\/span>/);
+  assert.match(html, /saveFetchedGiftBaseline/);
+  assert.doesNotMatch(html, /#file|#codeend/);
+  assert.match(html, /如果 success 为 false/);
+});
+
+test("escapes planned code paths and content", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#file src/<unsafe>.java",
+    "#code line7",
+    "<script>alert('x')</script>",
+    "#codeend",
+  ].join("\n"));
+
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /data-file="src\/&lt;unsafe&gt;\.java"/);
+  assert.match(html, /&lt;script&gt;alert\('x'\)&lt;\/script&gt;/);
+});
+
 test("uses a terminal-inspired document palette with semantic accent colors", () => {
   const html = prdWorkflowReviewHtml("Preview", "## TODO Actions\n\n- [ ] A1 Test");
 

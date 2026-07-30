@@ -8161,6 +8161,42 @@ function prdWorkflowReviewRenderTable(lines) {
   ].join("");
 }
 
+function prdWorkflowReviewDedentPlannedCode(lines) {
+  const indents = lines
+    .filter((line) => String(line || "").trim())
+    .map((line) => String(line || "").match(/^\s*/)?.[0]?.length || 0);
+  const indent = indents.length ? Math.min(...indents) : 0;
+  return lines.map((line) => String(line || "").slice(indent));
+}
+
+function prdWorkflowReviewRenderPlannedCode(filePath, codeLines, startLine = 0, endLine = 0) {
+  const safePath = htmlEscapeAttribute(
+    String(filePath || "").trim().replace(/^`|`$/g, ""),
+  );
+  const normalizedLines = prdWorkflowReviewDedentPlannedCode(codeLines);
+  const firstLine = Number.isFinite(Number(startLine)) && Number(startLine) > 0
+    ? Number(startLine)
+    : 0;
+  const explicitEnd = Number.isFinite(Number(endLine)) && Number(endLine) >= firstLine
+    ? Number(endLine)
+    : 0;
+  const lineLabel = firstLine
+    ? `L${firstLine}${explicitEnd && explicitEnd !== firstLine ? `–L${explicitEnd}` : ""}`
+    : "拟修改";
+  const rows = normalizedLines.map((line, index) => {
+    const lineNumber = firstLine ? String(firstLine + index) : "·";
+    return `<span class="planned-code__line"><span class="planned-code__number">${lineNumber}</span><span class="planned-code__text">${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(line)) || " "}</span></span>`;
+  }).join("");
+  return `<section class="planned-code" data-file="${safePath}">
+  <div class="planned-code__header">
+    <code class="planned-code__file">${safePath}</code>
+    <span class="planned-code__anchor">${htmlEscapeAttribute(lineLabel)}</span>
+    <span class="planned-code__badge">计划代码 · 未写入</span>
+  </div>
+  <pre class="planned-code__body"><code>${rows}</code></pre>
+</section>`;
+}
+
 function prdWorkflowReviewMarkdownLinesToHtml(lines) {
   const html = [];
   let paragraph = [];
@@ -8201,6 +8237,33 @@ function prdWorkflowReviewMarkdownLinesToHtml(lines) {
     if (!trimmed) {
       flushBlocks();
       continue;
+    }
+    const plannedFile = trimmed.match(/^#file\s+(.+?)\s*$/i);
+    if (plannedFile) {
+      let codeStart = i + 1;
+      while (codeStart < lines.length && !String(lines[codeStart] || "").trim()) codeStart += 1;
+      const codeDirective = String(lines[codeStart] || "")
+        .trim()
+        .match(/^#code(?:\s+line\s*(\d+)(?:\s*-\s*(\d+))?)?\s*$/i);
+      if (codeDirective) {
+        let codeEnd = codeStart + 1;
+        const plannedLines = [];
+        while (codeEnd < lines.length && !/^#codeend\s*$/i.test(String(lines[codeEnd] || "").trim())) {
+          plannedLines.push(lines[codeEnd]);
+          codeEnd += 1;
+        }
+        if (codeEnd < lines.length) {
+          flushBlocks();
+          html.push(prdWorkflowReviewRenderPlannedCode(
+            plannedFile[1],
+            plannedLines,
+            Number(codeDirective[1] || 0),
+            Number(codeDirective[2] || 0),
+          ));
+          i = codeEnd;
+          continue;
+        }
+      }
     }
     if (/^\|.+\|\s*$/.test(trimmed) && i + 1 < lines.length && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i + 1].trim())) {
       flushBlocks();
@@ -8427,6 +8490,10 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       --code-inline: #7dcfff;
       --code-block: #16161e;
       --code-block-text: #e5e7eb;
+      --planned-border: rgba(158,206,106,.42);
+      --planned-header: rgba(158,206,106,.08);
+      --planned-gutter: #565f89;
+      --planned-line: rgba(158,206,106,.08);
       --action-bg: #1f2335;
       --action-header: #24283b;
       --pending-bg: rgba(224,175,104,.10);
@@ -8459,6 +8526,10 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       --code-inline: #007197;
       --code-block: #d5d8e1;
       --code-block-text: #343b58;
+      --planned-border: rgba(88,117,57,.34);
+      --planned-header: rgba(88,117,57,.08);
+      --planned-gutter: #8990a7;
+      --planned-line: rgba(88,117,57,.07);
       --action-bg: #f3f3f5;
       --action-header: #e9e9ed;
       --pending-bg: rgba(177,92,0,.08);
@@ -8495,6 +8566,17 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--code-bg); color: var(--code-inline); padding: .1rem .34rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     pre { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--code-block); padding: 16px; line-height: 1.65; }
     pre code { border: 0; background: transparent; color: var(--code-block-text); padding: 0; white-space: pre; overflow-wrap: normal; word-break: normal; }
+    .planned-code { max-width: 100%; margin: 1rem 0 1.2rem; overflow: hidden; border: 1px solid var(--planned-border); border-radius: 10px; background: var(--code-block); }
+    .planned-code__header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--planned-border); background: var(--planned-header); padding: 10px 12px; }
+    .planned-code__file { min-width: 0; border: 0; background: transparent; color: var(--link); padding: 0; font-weight: 800; }
+    .planned-code__anchor, .planned-code__badge { border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font: 800 11px/1.35 "SFMono-Regular", Consolas, monospace; }
+    .planned-code__badge { margin-left: auto; border-color: var(--planned-border); color: var(--complete-text); }
+    .planned-code__body { margin: 0; border: 0; border-radius: 0; padding: 10px 0; }
+    .planned-code__body code { display: block; }
+    .planned-code__line { display: grid; grid-template-columns: 4.25rem minmax(max-content, 1fr); min-height: 1.65em; }
+    .planned-code__line:hover { background: var(--planned-line); }
+    .planned-code__number { border-right: 1px solid var(--border-soft); color: var(--planned-gutter); padding: 0 .8rem 0 .5rem; text-align: right; user-select: none; }
+    .planned-code__text { padding: 0 1rem; white-space: pre; }
     blockquote { margin: 1rem 0; border-left: 3px solid var(--purple); background: var(--panel-soft); padding: .75rem 1rem; color: var(--body); }
     a { color: var(--link); text-decoration-thickness: .08em; text-underline-offset: .16em; overflow-wrap: anywhere; }
     .table-wrap { max-width: 100%; overflow-x: auto; margin: 1rem 0 1.25rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); }
