@@ -91,6 +91,87 @@ test("escapes planned code paths and content", () => {
   assert.match(html, /&lt;script&gt;alert\('x'\)&lt;\/script&gt;/);
 });
 
+test("renders a modified function with real source context and pseudocode", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（统一保存缓存基线）",
+    "  - 要解决的问题: 当前缓存字段分开提交。",
+    "  - 准备怎么解决:",
+    "    #change modify",
+    "    #target function",
+    "    #file iHeima/src/main/java/sg/bigo/live/model/utils/GiftUtils.java",
+    "    #symbol GiftUtils#onGetGiftList",
+    "    #base story/1017765@5293ee034e6e",
+    "    #reference line241-245",
+    "    if (resCode == RESCODE_SUCCESS) {",
+    "        saveGifts(context, giftList, true);",
+    "    }",
+    "    #referenceend",
+    "    #proposal pseudocode",
+    "    convertedGifts = 转换完整礼物列表",
+    "    如果保存失败",
+    "        保留旧缓存并返回",
+    "    #proposalend",
+    "    #changeend",
+  ].join("\n"));
+
+  assert.match(html, /class="change-intent is-modify"/);
+  assert.match(html, /data-target="function"/);
+  assert.match(html, /修改方法/);
+  assert.match(html, /GiftUtils#onGetGiftList/);
+  assert.match(html, /基于.*story\/1017765@5293ee034e6e/);
+  assert.match(html, /当前上下文/);
+  assert.match(html, /class="change-intent__line-anchor">L241–L245<\/span>/);
+  assert.match(html, /class="change-intent__source-number">241<\/span>/);
+  assert.match(html, /方案伪代码/);
+  assert.doesNotMatch(html, /class="change-intent__proposal[^"]*"[\s\S]*class="change-intent__source-number"/);
+  assert.doesNotMatch(html, /#change|#reference|#proposal/);
+});
+
+test("renders a new function with an insertion neighbor and natural proposal", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#change add",
+    "#target function",
+    "#file modules/config/src/main/java/example/RemoteConfigRepository.kt",
+    "#symbol RemoteConfigRepository#decideFetch",
+    "#base story/1234567@7b41d109eaf2",
+    "#insert-near RemoteConfigRepository#refresh",
+    "#proposal natural",
+    "新增纯决策方法，不在方法内发起网络请求。",
+    "",
+    "- 输入国家和上次成功时间",
+    "- 返回明确的拉取决策",
+    "#proposalend",
+    "#changeend",
+  ].join("\n"));
+
+  assert.match(html, /class="change-intent is-add"/);
+  assert.match(html, /新增方法/);
+  assert.match(html, /建议位置.*RemoteConfigRepository#refresh.*附近/);
+  assert.match(html, /自然语言方案/);
+  assert.match(html, /<li>输入国家和上次成功时间<\/li>/);
+  assert.doesNotMatch(html, /当前上下文|change-intent__line-anchor/);
+});
+
+test("renders proposed code with plus markers but no fake source lines", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#change add",
+    "#target file",
+    "#file modules/config/src/main/java/example/FetchPolicy.kt",
+    "#base story/1234567@7b41d109eaf2",
+    "#proposal code",
+    "internal class FetchPolicy",
+    "#proposalend",
+    "#changeend",
+  ].join("\n"));
+
+  assert.match(html, /拟议代码 · 未写入/);
+  assert.match(html, /class="change-intent__proposal-mark">\+<\/span>/);
+  assert.match(html, /internal class FetchPolicy/);
+  assert.doesNotMatch(html, /change-intent__source-number|L\d+/);
+});
+
 test("uses a terminal-inspired document palette with semantic accent colors", () => {
   const html = prdWorkflowReviewHtml("Preview", "## TODO Actions\n\n- [ ] A1 Test");
 
