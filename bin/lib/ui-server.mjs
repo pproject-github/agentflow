@@ -8169,11 +8169,186 @@ function prdWorkflowReviewDedentPlannedCode(lines) {
   return lines.map((line) => String(line || "").slice(indent));
 }
 
+const PRD_WORKFLOW_REVIEW_CODE_KEYWORDS = new Set([
+  "abstract", "as", "async", "await", "break", "case", "catch", "class", "const",
+  "continue", "default", "delete", "do", "else", "enum", "export", "extends",
+  "final", "finally", "for", "from", "fun", "function", "goto", "if", "implements",
+  "import", "in", "instanceof", "interface", "internal", "is", "native", "new",
+  "object", "of", "open", "package", "private", "protected", "public", "return",
+  "sealed", "static", "strictfp", "super", "switch", "synchronized", "throw",
+  "throws", "transient", "try", "typeof", "val", "var", "void", "volatile",
+  "when", "while", "with", "yield",
+]);
+
+const PRD_WORKFLOW_REVIEW_CODE_LITERALS = new Set([
+  "false", "null", "this", "true", "undefined",
+]);
+
+const PRD_WORKFLOW_REVIEW_CODE_TYPES = new Set([
+  "any", "boolean", "byte", "char", "double", "float", "int", "long", "never",
+  "number", "short", "string", "unknown",
+]);
+
+function prdWorkflowReviewCodeLanguage(filePath) {
+  const extension = String(filePath || "").trim().toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || "";
+  return {
+    c: "c",
+    cc: "cpp",
+    cpp: "cpp",
+    cs: "csharp",
+    go: "go",
+    java: "java",
+    js: "javascript",
+    json: "json",
+    jsx: "jsx",
+    kt: "kotlin",
+    kts: "kotlin",
+    m: "objective-c",
+    mm: "objective-cpp",
+    py: "python",
+    rs: "rust",
+    sh: "shell",
+    swift: "swift",
+    ts: "typescript",
+    tsx: "tsx",
+  }[extension] || "text";
+}
+
+function prdWorkflowReviewSyntaxToken(kind, value) {
+  const escaped = htmlEscapeAttribute(prdWorkflowReviewNormalizeText(value));
+  return kind ? `<span class="syntax-${kind}">${escaped}</span>` : escaped;
+}
+
+function prdWorkflowReviewHighlightCodeLine(line, language, state) {
+  const source = prdWorkflowReviewNormalizeText(line);
+  let html = "";
+  let cursor = 0;
+  const isIdentifierStart = (char) => /[A-Za-z_$]/.test(char || "");
+  const isIdentifierPart = (char) => /[A-Za-z0-9_$]/.test(char || "");
+
+  while (cursor < source.length) {
+    if (state.blockComment) {
+      const end = source.indexOf("*/", cursor);
+      if (end < 0) {
+        html += prdWorkflowReviewSyntaxToken("comment", source.slice(cursor));
+        cursor = source.length;
+        continue;
+      }
+      html += prdWorkflowReviewSyntaxToken("comment", source.slice(cursor, end + 2));
+      state.blockComment = false;
+      cursor = end + 2;
+      continue;
+    }
+
+    if (source.startsWith("//", cursor) || (
+      language === "shell"
+      && source[cursor] === "#"
+    )) {
+      html += prdWorkflowReviewSyntaxToken("comment", source.slice(cursor));
+      break;
+    }
+
+    if (source.startsWith("/*", cursor)) {
+      const end = source.indexOf("*/", cursor + 2);
+      if (end < 0) {
+        html += prdWorkflowReviewSyntaxToken("comment", source.slice(cursor));
+        state.blockComment = true;
+        break;
+      }
+      html += prdWorkflowReviewSyntaxToken("comment", source.slice(cursor, end + 2));
+      cursor = end + 2;
+      continue;
+    }
+
+    const char = source[cursor];
+    if (char === "\"" || char === "'" || char === "`") {
+      let end = cursor + 1;
+      while (end < source.length) {
+        if (source[end] === "\\") {
+          end += 2;
+          continue;
+        }
+        if (source[end] === char) {
+          end += 1;
+          break;
+        }
+        end += 1;
+      }
+      html += prdWorkflowReviewSyntaxToken("string", source.slice(cursor, end));
+      cursor = end;
+      continue;
+    }
+
+    if (char === "@" && isIdentifierStart(source[cursor + 1])) {
+      let end = cursor + 2;
+      while (end < source.length && isIdentifierPart(source[end])) end += 1;
+      html += prdWorkflowReviewSyntaxToken("annotation", source.slice(cursor, end));
+      cursor = end;
+      continue;
+    }
+
+    if (/[0-9]/.test(char)) {
+      const number = source.slice(cursor).match(/^(?:0[xX][\dA-Fa-f_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?[fFdDlL]?)/)?.[0] || char;
+      html += prdWorkflowReviewSyntaxToken("number", number);
+      cursor += number.length;
+      continue;
+    }
+
+    if (isIdentifierStart(char)) {
+      let end = cursor + 1;
+      while (end < source.length && isIdentifierPart(source[end])) end += 1;
+      const word = source.slice(cursor, end);
+      const next = source.slice(end).match(/^\s*(.)/)?.[1] || "";
+      let kind = "";
+      if (PRD_WORKFLOW_REVIEW_CODE_KEYWORDS.has(word)) kind = "keyword";
+      else if (PRD_WORKFLOW_REVIEW_CODE_LITERALS.has(word)) kind = "literal";
+      else if (/^[A-Z][A-Z0-9_]*$/.test(word)) kind = "constant";
+      else if (PRD_WORKFLOW_REVIEW_CODE_TYPES.has(word) || /^[A-Z][A-Za-z0-9_$]*$/.test(word)) kind = "type";
+      else if (next === "(") kind = "function";
+      html += prdWorkflowReviewSyntaxToken(kind, word);
+      cursor = end;
+      continue;
+    }
+
+    const operator = source.slice(cursor).match(/^(?:>>>=|===|!==|>>>|<<=|>>=|->|=>|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|::|<<|>>|\?\.|\?:)/)?.[0];
+    if (operator) {
+      html += prdWorkflowReviewSyntaxToken("operator", operator);
+      cursor += operator.length;
+      continue;
+    }
+    if (/[+\-*/%=&|!<>?:~^]/.test(char)) {
+      html += prdWorkflowReviewSyntaxToken("operator", char);
+      cursor += 1;
+      continue;
+    }
+    if (/[()[\]{},.;]/.test(char)) {
+      html += prdWorkflowReviewSyntaxToken("punctuation", char);
+      cursor += 1;
+      continue;
+    }
+
+    html += htmlEscapeAttribute(char);
+    cursor += 1;
+  }
+
+  return html || " ";
+}
+
+function prdWorkflowReviewHighlightCodeLines(lines, filePath) {
+  const language = prdWorkflowReviewCodeLanguage(filePath);
+  const state = { blockComment: false };
+  return {
+    language,
+    lines: lines.map((line) => prdWorkflowReviewHighlightCodeLine(line, language, state)),
+  };
+}
+
 function prdWorkflowReviewRenderPlannedCode(filePath, codeLines, startLine = 0, endLine = 0) {
   const safePath = htmlEscapeAttribute(
     String(filePath || "").trim().replace(/^`|`$/g, ""),
   );
   const normalizedLines = prdWorkflowReviewDedentPlannedCode(codeLines);
+  const highlighted = prdWorkflowReviewHighlightCodeLines(normalizedLines, filePath);
   const firstLine = Number.isFinite(Number(startLine)) && Number(startLine) > 0
     ? Number(startLine)
     : 0;
@@ -8183,11 +8358,11 @@ function prdWorkflowReviewRenderPlannedCode(filePath, codeLines, startLine = 0, 
   const lineLabel = firstLine
     ? `L${firstLine}${explicitEnd && explicitEnd !== firstLine ? `–L${explicitEnd}` : ""}`
     : "拟修改";
-  const rows = normalizedLines.map((line, index) => {
+  const rows = highlighted.lines.map((line, index) => {
     const lineNumber = firstLine ? String(firstLine + index) : "·";
-    return `<span class="planned-code__line"><span class="planned-code__number">${lineNumber}</span><span class="planned-code__text">${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(line)) || " "}</span></span>`;
+    return `<span class="planned-code__line"><span class="planned-code__number">${lineNumber}</span><span class="planned-code__text">${line}</span></span>`;
   }).join("");
-  return `<section class="planned-code" data-file="${safePath}">
+  return `<section class="planned-code" data-file="${safePath}" data-language="${highlighted.language}">
   <div class="planned-code__header">
     <code class="planned-code__file">${safePath}</code>
     <span class="planned-code__anchor">${htmlEscapeAttribute(lineLabel)}</span>
@@ -8303,18 +8478,19 @@ function prdWorkflowReviewRenderChangeIntent(change) {
   let referenceHtml = "";
   if (change.reference) {
     const normalized = prdWorkflowReviewDedentPlannedCode(change.reference.lines);
+    const highlighted = prdWorkflowReviewHighlightCodeLines(normalized, change.file || change.module);
     const lineLabel = `L${change.reference.startLine}${
       change.reference.endLine !== change.reference.startLine
         ? `–L${change.reference.endLine}`
         : ""
     }`;
-    const rows = normalized.map((line, index) => (
+    const rows = highlighted.lines.map((line, index) => (
       `<span class="change-intent__source-line">`
       + `<span class="change-intent__source-number">${change.reference.startLine + index}</span>`
-      + `<span class="change-intent__source-text">${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(line)) || " "}</span>`
+      + `<span class="change-intent__source-text">${line}</span>`
       + "</span>"
     )).join("");
-    referenceHtml = `<details class="change-intent__context" open>
+    referenceHtml = `<details class="change-intent__context" data-language="${highlighted.language}" open>
   <summary><span>当前上下文</span><span class="change-intent__line-anchor">${lineLabel}</span></summary>
   <pre class="change-intent__source"><code>${rows}</code></pre>
 </details>`;
@@ -8328,13 +8504,14 @@ function prdWorkflowReviewRenderChangeIntent(change) {
     if (type === "natural") {
       body = `<div class="change-intent__natural">${prdWorkflowReviewMarkdownLinesToHtml(normalized)}</div>`;
     } else if (type === "code") {
-      const rows = normalized.map((line) => (
+      const highlighted = prdWorkflowReviewHighlightCodeLines(normalized, change.file || change.module);
+      const rows = highlighted.lines.map((line) => (
         `<span class="change-intent__proposal-line is-code">`
         + '<span class="change-intent__proposal-mark">+</span>'
-        + `<span class="change-intent__proposal-text">${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(line)) || " "}</span>`
+        + `<span class="change-intent__proposal-text">${line}</span>`
         + "</span>"
       )).join("");
-      body = `<pre class="change-intent__proposal-body is-code"><code>${rows}</code></pre>`;
+      body = `<pre class="change-intent__proposal-body is-code" data-language="${highlighted.language}"><code>${rows}</code></pre>`;
     } else {
       const rows = normalized.map((line) => (
         `<span class="change-intent__proposal-line">`
@@ -8681,6 +8858,17 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       --change-modify: #7dcfff;
       --change-remove: #f7768e;
       --change-move: #bb9af7;
+      --syntax-comment: #737aa2;
+      --syntax-keyword: #bb9af7;
+      --syntax-literal: #ff9e64;
+      --syntax-type: #2ac3de;
+      --syntax-function: #7aa2f7;
+      --syntax-string: #9ece6a;
+      --syntax-number: #ff9e64;
+      --syntax-annotation: #e0af68;
+      --syntax-constant: #ff9e64;
+      --syntax-operator: #89ddff;
+      --syntax-punctuation: #a9b1d6;
       --action-bg: #1f2335;
       --action-header: #24283b;
       --pending-bg: rgba(224,175,104,.10);
@@ -8726,6 +8914,17 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       --change-modify: #007197;
       --change-remove: #c64343;
       --change-move: #7847bd;
+      --syntax-comment: #8990a7;
+      --syntax-keyword: #7847bd;
+      --syntax-literal: #965027;
+      --syntax-type: #007197;
+      --syntax-function: #2e7de9;
+      --syntax-string: #587539;
+      --syntax-number: #965027;
+      --syntax-annotation: #9a5200;
+      --syntax-constant: #965027;
+      --syntax-operator: #007197;
+      --syntax-punctuation: #565a6e;
       --action-bg: #f3f3f5;
       --action-header: #e9e9ed;
       --pending-bg: rgba(177,92,0,.08);
@@ -8767,9 +8966,9 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .planned-code__file { min-width: 0; border: 0; background: transparent; color: var(--link); padding: 0; font-weight: 800; }
     .planned-code__anchor, .planned-code__badge { border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font: 800 11px/1.35 "SFMono-Regular", Consolas, monospace; }
     .planned-code__badge { margin-left: auto; border-color: var(--planned-border); color: var(--complete-text); }
-    .planned-code__body { margin: 0; border: 0; border-radius: 0; padding: 10px 0; }
-    .planned-code__body code { display: block; }
-    .planned-code__line { display: grid; grid-template-columns: 4.25rem minmax(max-content, 1fr); min-height: 1.65em; }
+    .planned-code__body { margin: 0; border: 0; border-radius: 0; padding: 10px 0; font: 500 13px/1.55 "SFMono-Regular", "JetBrains Mono", Consolas, monospace; }
+    .planned-code__body code { display: block; font: inherit; }
+    .planned-code__line { display: grid; grid-template-columns: 3.75rem minmax(max-content, 1fr); min-height: 1.55em; }
     .planned-code__line:hover { background: var(--planned-line); }
     .planned-code__number { border-right: 1px solid var(--border-soft); color: var(--planned-gutter); padding: 0 .8rem 0 .5rem; text-align: right; user-select: none; }
     .planned-code__text { padding: 0 1rem; white-space: pre; }
@@ -8788,9 +8987,9 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .change-intent__context { border-bottom: 1px solid var(--border-soft); background: var(--change-context); }
     .change-intent__context summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; padding: 10px 14px; color: var(--body); font-size: 13px; font-weight: 900; list-style-position: inside; }
     .change-intent__line-anchor, .change-intent__proposal-badge { margin-left: auto; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font: 800 11px/1.35 "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
-    .change-intent__source { margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; padding: 10px 0; background: var(--code-block); }
-    .change-intent__source code, .change-intent__proposal-body code { display: block; }
-    .change-intent__source-line { display: grid; grid-template-columns: 4.25rem minmax(max-content, 1fr); min-height: 1.65em; }
+    .change-intent__source { margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; padding: 10px 0; background: var(--code-block); font: 500 13px/1.55 "SFMono-Regular", "JetBrains Mono", Consolas, monospace; }
+    .change-intent__source code, .change-intent__proposal-body code { display: block; font: inherit; }
+    .change-intent__source-line { display: grid; grid-template-columns: 3.75rem minmax(max-content, 1fr); min-height: 1.55em; }
     .change-intent__source-line:hover { background: var(--planned-line); }
     .change-intent__source-number { border-right: 1px solid var(--border-soft); color: var(--planned-gutter); padding: 0 .8rem 0 .5rem; text-align: right; user-select: none; }
     .change-intent__source-text { padding: 0 1rem; white-space: pre; }
@@ -8802,11 +9001,22 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .change-intent__natural { border-top: 1px solid var(--border-soft); padding: 11px 14px 13px; }
     .change-intent__natural > *:first-child { margin-top: 0; }
     .change-intent__natural > *:last-child { margin-bottom: 0; }
-    .change-intent__proposal-body { margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; padding: 11px 14px 13px; background: var(--code-block); }
-    .change-intent__proposal-line { display: block; min-height: 1.65em; }
+    .change-intent__proposal-body { margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; padding: 11px 14px 13px; background: var(--code-block); font: 500 13px/1.55 "SFMono-Regular", "JetBrains Mono", Consolas, monospace; }
+    .change-intent__proposal-line { display: block; min-height: 1.55em; }
     .change-intent__proposal-line.is-code { display: grid; grid-template-columns: 2rem minmax(max-content, 1fr); margin: 0 -14px; padding: 0 14px; background: var(--change-code); }
     .change-intent__proposal-mark { color: var(--change-add); font-weight: 900; text-align: center; user-select: none; }
     .change-intent__proposal-text { white-space: pre; }
+    .syntax-comment { color: var(--syntax-comment); font-style: italic; }
+    .syntax-keyword { color: var(--syntax-keyword); font-weight: 700; }
+    .syntax-literal { color: var(--syntax-literal); font-weight: 650; }
+    .syntax-type { color: var(--syntax-type); }
+    .syntax-function { color: var(--syntax-function); }
+    .syntax-string { color: var(--syntax-string); }
+    .syntax-number { color: var(--syntax-number); }
+    .syntax-annotation { color: var(--syntax-annotation); }
+    .syntax-constant { color: var(--syntax-constant); }
+    .syntax-operator { color: var(--syntax-operator); }
+    .syntax-punctuation { color: var(--syntax-punctuation); }
     blockquote { margin: 1rem 0; border-left: 3px solid var(--purple); background: var(--panel-soft); padding: .75rem 1rem; color: var(--body); }
     a { color: var(--link); text-decoration-thickness: .08em; text-underline-offset: .16em; overflow-wrap: anywhere; }
     .table-wrap { max-width: 100%; overflow-x: auto; margin: 1rem 0 1.25rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); }
@@ -8840,7 +9050,7 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       main { padding: 28px 14px 48px; }
       .change-intent__header { align-items: flex-start; flex-direction: column; }
       .change-intent__locator { width: 100%; }
-      .change-intent__source-line { grid-template-columns: 3.35rem minmax(max-content, 1fr); }
+      .change-intent__source-line, .planned-code__line { grid-template-columns: 3.25rem minmax(max-content, 1fr); }
       header { display: block; }
       .toolbar { justify-content: flex-start; margin-top: 14px; }
       article { padding: 18px; }
