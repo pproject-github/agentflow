@@ -134,6 +134,60 @@ test("renders a modified function with real source context and pseudocode", () =
   assert.doesNotMatch(html, /#change|#reference|#proposal/);
 });
 
+test("renders focused non-contiguous source fragments with review annotations", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#change modify",
+    "#target function",
+    "#file iHeima/src/main/java/sg/bigo/live/model/utils/GiftUtils.java",
+    "#symbol GiftUtils#saveGifts",
+    "#base story/1017765@5293ee034e6e",
+    "#reference line327-330",
+    "boolean haveNewGift = false, haveUnread = false;",
+    "SharedPreferences.Editor editor = preferences.edit();",
+    "JSONObject json = new JSONObject();",
+    "try {",
+    "#referenceend",
+    "#annotation line328 problem",
+    "Editor 当前在序列化前创建，计划延后到 JSON 准备成功后。",
+    "#annotationend",
+    "#reference line348-352",
+    "groupArray.put(getGiftJson(gift));",
+    "}",
+    "json.put(JSON_KEY_GIFT_ARRAY, groupArray);",
+    "} catch (JSONException e) {",
+    "return false;",
+    "#referenceend",
+    "#annotation line348 preserve",
+    "礼物 JSON 组装规则保持不变。",
+    "#annotationend",
+    "#annotation line350 change",
+    "JSON 完成后再进入统一提交路径。",
+    "#annotationend",
+    "#proposal natural",
+    "完整响应使用同一个 Editor 保存 gifts、version 和 count。",
+    "#proposalend",
+    "#changeend",
+  ].join("\n"));
+
+  assert.match(html, /当前上下文/);
+  assert.match(html, /2 个片段 · 9 行/);
+  assert.match(html, /片段 1/);
+  assert.match(html, /片段 2/);
+  assert.match(html, /L327–L330/);
+  assert.match(html, /L348–L352/);
+  assert.match(html, /class="change-intent__annotation is-problem"/);
+  assert.match(html, /class="change-intent__annotation is-change"/);
+  assert.match(html, /class="change-intent__annotation is-preserve"/);
+  assert.match(html, /Review 指引/);
+  assert.match(html, /当前问题/);
+  assert.match(html, /计划修改/);
+  assert.match(html, /保持不变/);
+  assert.match(html, /class="syntax-type">boolean<\/span>/);
+  assert.match(html, /class="syntax-function">put<\/span>/);
+  assert.doesNotMatch(html, /class="change-intent__source-number">331<\/span>/);
+  assert.doesNotMatch(html, /#annotation|#annotationend/);
+});
+
 test("renders a new function with an insertion neighbor and natural proposal", () => {
   const html = prdWorkflowReviewMarkdownToHtml([
     "#change add",

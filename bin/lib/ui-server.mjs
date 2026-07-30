@@ -8386,7 +8386,8 @@ function prdWorkflowReviewParseChangeIntent(lines, startIndex) {
     base: "",
     insertNear: "",
     destination: "",
-    reference: null,
+    references: [],
+    annotations: [],
     proposals: [],
   };
   for (let i = startIndex + 1; i < lines.length; i += 1) {
@@ -8415,11 +8416,31 @@ function prdWorkflowReviewParseChangeIntent(lines, startIndex) {
         end += 1;
       }
       if (end >= lines.length) return null;
-      change.reference = {
+      change.references.push({
         startLine: Number(reference[1]),
         endLine: Number(reference[2] || reference[1]),
         lines: body,
-      };
+      });
+      i = end;
+      continue;
+    }
+    const annotation = trimmed.match(
+      /^#annotation\s+line\s*(\d+)(?:\s*-\s*(\d+))?\s+(problem|change|preserve)\s*$/i,
+    );
+    if (annotation) {
+      const body = [];
+      let end = i + 1;
+      while (end < lines.length && !/^#annotationend\s*$/i.test(String(lines[end] || "").trim())) {
+        body.push(lines[end]);
+        end += 1;
+      }
+      if (end >= lines.length) return null;
+      change.annotations.push({
+        startLine: Number(annotation[1]),
+        endLine: Number(annotation[2] || annotation[1]),
+        type: annotation[3].toLowerCase(),
+        lines: body,
+      });
       i = end;
       continue;
     }
@@ -8461,6 +8482,11 @@ function prdWorkflowReviewRenderChangeIntent(change) {
     pseudocode: "方案伪代码",
     code: "拟议代码 · 未写入",
   };
+  const annotationLabels = {
+    problem: "当前问题",
+    change: "计划修改",
+    preserve: "保持不变",
+  };
   const operation = operationLabels[change.operation] || "变更";
   const target = targetLabels[change.target] || "目标";
   const locator = change.module || change.file || "未定位";
@@ -8475,24 +8501,66 @@ function prdWorkflowReviewRenderChangeIntent(change) {
     safeDestination ? `<span><strong>移动到</strong> <code>${safeDestination}</code></span>` : "",
   ].filter(Boolean).join("");
 
+  const references = Array.isArray(change.references)
+    ? change.references
+    : (change.reference ? [change.reference] : []);
+  const annotations = Array.isArray(change.annotations) ? change.annotations : [];
+  const sourceLanguage = prdWorkflowReviewCodeLanguage(change.file || change.module);
+  const sourceLineLabel = (item) => `L${item.startLine}${
+    item.endLine !== item.startLine
+      ? `–L${item.endLine}`
+      : ""
+  }`;
   let referenceHtml = "";
-  if (change.reference) {
-    const normalized = prdWorkflowReviewDedentPlannedCode(change.reference.lines);
-    const highlighted = prdWorkflowReviewHighlightCodeLines(normalized, change.file || change.module);
-    const lineLabel = `L${change.reference.startLine}${
-      change.reference.endLine !== change.reference.startLine
-        ? `–L${change.reference.endLine}`
-        : ""
-    }`;
-    const rows = highlighted.lines.map((line, index) => (
-      `<span class="change-intent__source-line">`
-      + `<span class="change-intent__source-number">${change.reference.startLine + index}</span>`
-      + `<span class="change-intent__source-text">${line}</span>`
-      + "</span>"
-    )).join("");
-    referenceHtml = `<details class="change-intent__context" data-language="${highlighted.language}" open>
-  <summary><span>当前上下文</span><span class="change-intent__line-anchor">${lineLabel}</span></summary>
-  <pre class="change-intent__source"><code>${rows}</code></pre>
+  if (references.length) {
+    const totalLines = references.reduce(
+      (total, reference) => total + Math.max(0, reference.endLine - reference.startLine + 1),
+      0,
+    );
+    const hunks = references.map((reference, referenceIndex) => {
+      const normalized = prdWorkflowReviewDedentPlannedCode(reference.lines);
+      const highlighted = prdWorkflowReviewHighlightCodeLines(normalized, change.file || change.module);
+      const rows = highlighted.lines.map((line, index) => (
+        `<span class="change-intent__source-line">`
+        + `<span class="change-intent__source-number">${reference.startLine + index}</span>`
+        + `<span class="change-intent__source-text">${line}</span>`
+        + "</span>"
+      )).join("");
+      const annotationHtml = annotations
+        .filter((annotation) => (
+          reference.startLine <= annotation.startLine
+          && annotation.endLine <= reference.endLine
+        ))
+        .map((annotation) => {
+          const type = annotation.type || "change";
+          const label = annotationLabels[type] || "Review 指引";
+          const body = prdWorkflowReviewMarkdownLinesToHtml(
+            prdWorkflowReviewDedentPlannedCode(annotation.lines),
+          );
+          return `<aside class="change-intent__annotation is-${htmlEscapeAttribute(type)}">
+  <div class="change-intent__annotation-header">
+    <span class="change-intent__annotation-title">Review 指引</span>
+    <span class="change-intent__annotation-badge">${htmlEscapeAttribute(label)}</span>
+    <span class="change-intent__annotation-anchor">${htmlEscapeAttribute(sourceLineLabel(annotation))}</span>
+  </div>
+  <div class="change-intent__annotation-body">${body}</div>
+</aside>`;
+        }).join("");
+      return `<section class="change-intent__hunk">
+  <div class="change-intent__hunk-header">
+    <span>片段 ${referenceIndex + 1}</span>
+    <span class="change-intent__line-anchor">${htmlEscapeAttribute(sourceLineLabel(reference))}</span>
+  </div>
+  <pre class="change-intent__source" data-language="${highlighted.language}"><code>${rows}</code></pre>
+  ${annotationHtml}
+</section>`;
+    }).join("");
+    referenceHtml = `<details class="change-intent__context" data-language="${sourceLanguage}" open>
+  <summary>
+    <span>当前上下文</span>
+    <span class="change-intent__context-stats">${references.length} 个片段 · ${totalLines} 行</span>
+  </summary>
+  <div class="change-intent__hunks">${hunks}</div>
 </details>`;
   }
 
@@ -8986,13 +9054,26 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .change-intent__meta code { border: 0; background: transparent; padding: 0; color: var(--muted); }
     .change-intent__context { border-bottom: 1px solid var(--border-soft); background: var(--change-context); }
     .change-intent__context summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; padding: 10px 14px; color: var(--body); font-size: 13px; font-weight: 900; list-style-position: inside; }
-    .change-intent__line-anchor, .change-intent__proposal-badge { margin-left: auto; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font: 800 11px/1.35 "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
+    .change-intent__context-stats, .change-intent__line-anchor, .change-intent__proposal-badge, .change-intent__annotation-anchor { margin-left: auto; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font: 800 11px/1.35 "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
+    .change-intent__hunk + .change-intent__hunk { border-top: 8px solid var(--panel-strong); }
+    .change-intent__hunk-header { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border-soft); padding: 8px 14px; color: var(--muted); font-size: 12px; font-weight: 800; }
     .change-intent__source { margin: 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; padding: 10px 0; background: var(--code-block); font: 500 13px/1.55 "SFMono-Regular", "JetBrains Mono", Consolas, monospace; }
     .change-intent__source code, .change-intent__proposal-body code { display: block; font: inherit; }
     .change-intent__source-line { display: grid; grid-template-columns: 3.75rem minmax(max-content, 1fr); min-height: 1.55em; }
     .change-intent__source-line:hover { background: var(--planned-line); }
     .change-intent__source-number { border-right: 1px solid var(--border-soft); color: var(--planned-gutter); padding: 0 .8rem 0 .5rem; text-align: right; user-select: none; }
     .change-intent__source-text { padding: 0 1rem; white-space: pre; }
+    .change-intent__annotation { border-top: 1px solid var(--border-soft); border-left: 3px solid var(--change-modify); background: var(--change-proposal); padding: 10px 14px 11px; }
+    .change-intent__annotation.is-problem { border-left-color: var(--change-remove); }
+    .change-intent__annotation.is-preserve { border-left-color: var(--change-add); }
+    .change-intent__annotation-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--body); }
+    .change-intent__annotation-title { font-size: 12px; font-weight: 900; }
+    .change-intent__annotation-badge { border: 1px solid currentColor; border-radius: 999px; color: var(--change-modify); padding: 3px 8px; font-size: 11px; font-weight: 900; line-height: 1.3; }
+    .change-intent__annotation.is-problem .change-intent__annotation-badge { color: var(--change-remove); }
+    .change-intent__annotation.is-preserve .change-intent__annotation-badge { color: var(--change-add); }
+    .change-intent__annotation-body { margin-top: 7px; }
+    .change-intent__annotation-body > *:first-child { margin-top: 0; }
+    .change-intent__annotation-body > *:last-child { margin-bottom: 0; }
     .change-intent__proposal { background: var(--change-proposal); }
     .change-intent__proposal + .change-intent__proposal { border-top: 1px solid var(--border-soft); }
     .change-intent__proposal-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; color: var(--heading); font-size: 13px; font-weight: 900; }
@@ -9210,6 +9291,50 @@ function prdWorkflowAppendAudit(scopedRoot, tapdId, event = {}) {
   } catch (_) {}
 }
 
+function prdWorkflowReadAuditEntries(scopedRoot, tapdId, limit = 500) {
+  try {
+    const p = prdWorkflowAuditPath(scopedRoot, tapdId);
+    if (!fs.existsSync(p)) return [];
+    return fs.readFileSync(p, "utf-8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-Math.max(1, Number(limit) || 500))
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function prdWorkflowReadRecentActionAudit(scopedRoot, tapdId, limit = 24) {
+  return prdWorkflowReadAuditEntries(scopedRoot, tapdId, 500)
+    .filter((item) => item?.type === "snapshot-action-change")
+    .slice(-Math.max(1, Number(limit) || 24));
+}
+
+function prdWorkflowFirstPointerObservation(scopedRoot, tapdId, snapshot = {}) {
+  const phase = String(snapshot?.phase || "").trim();
+  const pointer = String(snapshot?.pointer || "").trim();
+  if (!phase && !pointer) return "";
+  let earliest = "";
+  for (const entry of prdWorkflowReadAuditEntries(scopedRoot, tapdId, 5000)) {
+    if (entry?.type !== "client-observation-stored") continue;
+    if (phase && String(entry.phase || "").trim() !== phase) continue;
+    if (pointer && String(entry.pointer || "").trim() !== pointer) continue;
+    const candidate = String(entry.observedAt || entry.reportedAt || entry.at || "").trim();
+    const candidateTime = Date.parse(candidate);
+    if (!Number.isFinite(candidateTime)) continue;
+    if (!earliest || candidateTime < Date.parse(earliest)) earliest = candidate;
+  }
+  return earliest;
+}
+
 function prdWorkflowReadProjectState(scopedRoot, tapdId) {
   return prdWorkflowReadJsonFile(prdWorkflowProjectPath(scopedRoot, tapdId), {
     version: 1,
@@ -9302,6 +9427,160 @@ function prdWorkflowWriteClientObservation(scopedRoot, tapdId, meta, snapshot) {
   });
 }
 
+const PRD_WORKFLOW_SNAPSHOT_ACTION_ARRAY_KEYS = [
+  "actions",
+  "workflowActions",
+  "workflow_actions",
+  "timeline",
+  "history",
+];
+
+function prdWorkflowSnapshotActionKey(action = {}) {
+  const stageKey = String(
+    action.stageKey ||
+    action.stage_key ||
+    action.stage ||
+    action.actionId ||
+    action.action_id ||
+    action.action ||
+    action.id ||
+    "",
+  ).trim();
+  const issueKey = String(action.issueKey || action.issue_key || action.issue || "").trim();
+  const platform = String(action.platform || "").trim().toLowerCase();
+  return [stageKey, issueKey, platform].filter(Boolean).join("|");
+}
+
+function prdWorkflowSnapshotActionTime(action = {}) {
+  return String(
+    action.stageEnteredAt ||
+    action.stage_entered_at ||
+    action.time ||
+    action.at ||
+    action.observedAt ||
+    action.observed_at ||
+    action.startedAt ||
+    action.started_at ||
+    action.completedAt ||
+    action.completed_at ||
+    action.updatedAt ||
+    action.updated_at ||
+    action.createdAt ||
+    action.created_at ||
+    "",
+  ).trim();
+}
+
+function prdWorkflowSnapshotSourceActionTime(action = {}) {
+  return String(
+    action.time ||
+    action.at ||
+    action.observedAt ||
+    action.observed_at ||
+    action.startedAt ||
+    action.started_at ||
+    action.completedAt ||
+    action.completed_at ||
+    action.updatedAt ||
+    action.updated_at ||
+    action.createdAt ||
+    action.created_at ||
+    "",
+  ).trim();
+}
+
+function prdWorkflowSnapshotActionMap(snapshot = {}) {
+  const out = new Map();
+  for (const key of PRD_WORKFLOW_SNAPSHOT_ACTION_ARRAY_KEYS) {
+    const rows = Array.isArray(snapshot?.[key]) ? snapshot[key] : [];
+    for (const action of rows) {
+      if (!action || typeof action !== "object" || Array.isArray(action)) continue;
+      const actionKey = prdWorkflowSnapshotActionKey(action);
+      if (actionKey && !out.has(actionKey)) out.set(actionKey, action);
+    }
+  }
+  return out;
+}
+
+function prdWorkflowSnapshotActionChanges(previousSnapshot = {}, nextSnapshot = {}) {
+  const previous = prdWorkflowSnapshotActionMap(previousSnapshot);
+  const next = prdWorkflowSnapshotActionMap(nextSnapshot);
+  const changes = [];
+  const compact = (kind, action, previousAction = null) => ({
+    kind,
+    stageKey: String(action?.stageKey || action?.stage_key || action?.stage || action?.id || "").trim(),
+    issueKey: String(action?.issueKey || action?.issue_key || action?.issue || "").trim(),
+    platform: String(action?.platform || "").trim(),
+    title: String(action?.title || action?.label || action?.name || "").trim(),
+    status: String(action?.status || "").trim(),
+    previousStatus: String(previousAction?.status || "").trim(),
+    actionAt: prdWorkflowSnapshotActionTime(action),
+    previousActionAt: prdWorkflowSnapshotActionTime(previousAction || {}),
+    sourceActionAt: prdWorkflowSnapshotSourceActionTime(action),
+    previousSourceActionAt: prdWorkflowSnapshotSourceActionTime(previousAction || {}),
+  });
+  for (const [key, action] of next) {
+    const previousAction = previous.get(key);
+    if (!previousAction) {
+      changes.push(compact("added", action));
+      continue;
+    }
+    const statusChanged = String(previousAction.status || "") !== String(action.status || "");
+    const timeChanged =
+      prdWorkflowSnapshotActionTime(previousAction) !== prdWorkflowSnapshotActionTime(action) ||
+      prdWorkflowSnapshotSourceActionTime(previousAction) !== prdWorkflowSnapshotSourceActionTime(action);
+    const titleChanged = String(previousAction.title || previousAction.label || "") !== String(action.title || action.label || "");
+    if (statusChanged || timeChanged || titleChanged) {
+      changes.push(compact(
+        statusChanged ? "status-changed" : timeChanged ? "time-changed" : "title-changed",
+        action,
+        previousAction,
+      ));
+    }
+  }
+  for (const [key, action] of previous) {
+    if (!next.has(key)) changes.push(compact("removed", action, action));
+  }
+  return changes.slice(0, 80);
+}
+
+function prdWorkflowStampCurrentActionEntryTimes(scopedRoot, tapdId, snapshot = {}, clientState = {}, meta = {}) {
+  const existingTimes = new Map();
+  for (const client of Object.values(clientState?.clients || {})) {
+    const observedAt = String(client?.observedAt || client?.reportedAt || "").trim();
+    for (const [key, action] of prdWorkflowSnapshotActionMap(client?.snapshot || {})) {
+      if (String(action?.status || "").trim().toLowerCase() !== "current") continue;
+      const value = String(action.stageEnteredAt || action.stage_entered_at || observedAt).trim();
+      if (!value || !Number.isFinite(Date.parse(value))) continue;
+      const previous = existingTimes.get(key);
+      if (!previous || Date.parse(value) < Date.parse(previous)) existingTimes.set(key, value);
+    }
+  }
+  const auditedAt = prdWorkflowFirstPointerObservation(scopedRoot, tapdId, snapshot);
+  const observedAt = String(meta.observedAt || meta.reportedAt || new Date().toISOString()).trim();
+  const stamp = (action) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) return action;
+    if (String(action.status || "").trim().toLowerCase() !== "current") return action;
+    const actionKey = prdWorkflowSnapshotActionKey(action);
+    const candidates = [
+      String(action.stageEnteredAt || action.stage_entered_at || "").trim(),
+      existingTimes.get(actionKey) || "",
+      auditedAt,
+      observedAt,
+    ].filter((value) => Number.isFinite(Date.parse(value)));
+    const stageEnteredAt = candidates.sort((left, right) => Date.parse(left) - Date.parse(right))[0] || observedAt;
+    return {
+      ...action,
+      stageEnteredAt,
+    };
+  };
+  const next = { ...snapshot };
+  for (const key of PRD_WORKFLOW_SNAPSHOT_ACTION_ARRAY_KEYS) {
+    if (Array.isArray(snapshot?.[key])) next[key] = snapshot[key].map(stamp);
+  }
+  return next;
+}
+
 const PRD_WORKFLOW_PROJECTION_SOURCE_KEYS = new Set([
   "projectionMode",
   "projectCacheScope",
@@ -9331,6 +9610,7 @@ function prdWorkflowStoredObservationSnapshot(snapshot, sourcePatch = {}) {
   delete clean.collaboration;
   delete clean.clientObservations;
   delete clean.clients;
+  delete clean.snapshotAudit;
   clean.sources = prdWorkflowStoredObservationSources(snapshot.sources, sourcePatch);
   return clean;
 }
@@ -9561,6 +9841,7 @@ function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, 
       revision: String(materialized.revision || ""),
     },
   ];
+  materialized.snapshotAudit = prdWorkflowReadRecentActionAudit(scopedRoot, tapdId);
   prdWorkflowAppendAudit(scopedRoot, tapdId, {
     type: "projection-materialized",
     flowSource,
@@ -12179,7 +12460,21 @@ export function startUiServer({
           issueKey: reportMeta.issueKey,
           stageKey: reportMeta.stageKey,
         };
-        const storedObservationSnapshot = prdWorkflowStoredObservationSnapshot(normalizedSnapshot, reportSource);
+        const existingClientState = prdWorkflowReadClientState(scopedRoot, tapdId);
+        const existingClientId = prdWorkflowSafeStateId(reportMeta.clientId || "anonymous");
+        const previousClientSnapshot = existingClientState.clients?.[existingClientId]?.snapshot || null;
+        const stampedSnapshot = prdWorkflowStampCurrentActionEntryTimes(
+          scopedRoot,
+          tapdId,
+          normalizedSnapshot,
+          existingClientState,
+          reportMeta,
+        );
+        const storedObservationSnapshot = prdWorkflowStoredObservationSnapshot(stampedSnapshot, reportSource);
+        const actionChanges = prdWorkflowSnapshotActionChanges(
+          previousClientSnapshot || {},
+          storedObservationSnapshot,
+        );
         prdWorkflowWriteClientObservation(scopedRoot, tapdId, reportMeta, storedObservationSnapshot);
         prdWorkflowAppendAudit(scopedRoot, tapdId, {
           type: "client-observation-stored",
@@ -12198,12 +12493,51 @@ export function startUiServer({
           persistence: "runtime",
           note: "ordinary current snapshot stored as client observation; it must not overwrite project state",
         });
+        for (const change of actionChanges) {
+          const changeLabel = {
+            added: "新增",
+            removed: "移除",
+            "status-changed": "状态变更",
+            "time-changed": "时间更正",
+            "title-changed": "标题变更",
+          }[change.kind] || "变更";
+          prdWorkflowAppendAudit(scopedRoot, tapdId, {
+            type: "snapshot-action-change",
+            change: change.kind,
+            title: `Workflow Action ${changeLabel}${change.title ? `：${change.title}` : ""}`,
+            detail: [
+              change.stageKey,
+              change.previousStatus && change.previousStatus !== change.status
+                ? `${change.previousStatus} -> ${change.status}`
+                : change.status,
+              change.previousActionAt && change.previousActionAt !== change.actionAt
+                ? `${change.previousActionAt} -> ${change.actionAt || "无时间"}`
+                : change.actionAt,
+              change.previousSourceActionAt !== change.sourceActionAt
+                ? `来源时间 ${change.previousSourceActionAt || "无"} -> ${change.sourceActionAt || "无"}`
+                : "",
+            ].filter(Boolean).join(" · "),
+            auditStatus: "observed",
+            truth: "audit",
+            authority: "agentflow",
+            persistence: "runtime",
+            clientId: reportMeta.clientId,
+            userId: reportMeta.userId,
+            observedAt: reportMeta.observedAt,
+            reportedAt: reportMeta.reportedAt,
+            revision: String(storedObservationSnapshot.revision || ""),
+            previousRevision: String(previousClientSnapshot?.revision || ""),
+            pointer: String(storedObservationSnapshot.pointer || ""),
+            previousPointer: String(previousClientSnapshot?.pointer || ""),
+            ...change,
+          });
+        }
 
         const projectFactSource = reportMeta.scope === "project"
           ? prdWorkflowProjectFactSource(payload, rawSnapshot)
           : null;
         const projectFactSnapshot = projectFactSource
-          ? prdWorkflowStoredObservationSnapshot(normalizedSnapshot, {
+          ? prdWorkflowStoredObservationSnapshot(stampedSnapshot, {
               ...reportSource,
               ...projectFactSource,
             })

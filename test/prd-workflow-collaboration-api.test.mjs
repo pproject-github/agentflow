@@ -108,6 +108,112 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(shortRedirect.status, 302);
     assert.equal(shortRedirect.headers.get("location"), `${reportedUrl.pathname}${reportedUrl.search}`);
 
+    const issue2ObservedAt = "2026-07-29T21:01:35+08:00";
+    const issue2Snapshot = {
+      tapdId: "1015046",
+      phase: "PLAN_DRAFT_MISSING",
+      pointer: "开始 Issue2 功能点实现",
+      revision: "revision-issue-2",
+      actions: [{
+        id: "issue-plan:issue-2",
+        stageKey: "issue-plan:issue-2",
+        issueKey: "issue-2",
+        platform: "android",
+        title: "起草 Issue2 方案",
+        status: "current",
+      }],
+      issues: [],
+    };
+    const issue2Report = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        clientId: "prd-flow:test-owner",
+        observedAt: issue2ObservedAt,
+        snapshot: issue2Snapshot,
+      }),
+    });
+    const issue2Payload = await issue2Report.json();
+    assert.equal(issue2Report.status, 200, JSON.stringify(issue2Payload));
+    assert.equal(issue2Payload.snapshot.actions[0].stageEnteredAt, issue2ObservedAt);
+    assert.ok(issue2Payload.snapshot.snapshotAudit.some((entry) => (
+      entry.type === "snapshot-action-change" &&
+      entry.change === "added" &&
+      entry.stageKey === "issue-plan:issue-2" &&
+      entry.actionAt === issue2ObservedAt
+    )));
+
+    const repeatedIssue2Report = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        clientId: "prd-flow:test-owner",
+        observedAt: "2026-07-30T09:00:00+08:00",
+        snapshot: issue2Snapshot,
+      }),
+    });
+    const repeatedIssue2Payload = await repeatedIssue2Report.json();
+    assert.equal(repeatedIssue2Report.status, 200, JSON.stringify(repeatedIssue2Payload));
+    assert.equal(repeatedIssue2Payload.snapshot.actions[0].stageEnteredAt, issue2ObservedAt);
+    const actionAuditPath = path.join(
+      dataRoot,
+      "users",
+      "owner",
+      ".workspace",
+      "prd-flow",
+      "workflow-state",
+      "1015046.audit.jsonl",
+    );
+    const actionAudit = fs.readFileSync(actionAuditPath, "utf-8")
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => (
+        entry.type === "snapshot-action-change" &&
+        entry.stageKey === "issue-plan:issue-2"
+      ));
+    assert.equal(actionAudit.length, 1);
+
+    const correctedIssue2Report = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        clientId: "prd-flow:test-owner",
+        observedAt: "2026-07-30T09:01:00+08:00",
+        snapshot: {
+          ...issue2Snapshot,
+          actions: [{
+            ...issue2Snapshot.actions[0],
+            at: "2026-07-29T21:01:34+08:00",
+            createdAt: "2026-07-29T21:01:34+08:00",
+          }],
+        },
+      }),
+    });
+    const correctedIssue2Payload = await correctedIssue2Report.json();
+    assert.equal(correctedIssue2Report.status, 200, JSON.stringify(correctedIssue2Payload));
+    assert.ok(correctedIssue2Payload.snapshot.snapshotAudit.some((entry) => (
+      entry.type === "snapshot-action-change" &&
+      entry.change === "time-changed" &&
+      entry.stageKey === "issue-plan:issue-2" &&
+      entry.actionAt === issue2ObservedAt &&
+      entry.previousSourceActionAt === "" &&
+      entry.sourceActionAt === "2026-07-29T21:01:34+08:00"
+    )));
+
+    const otherClientReport = await request(owner.token, "/api/prd-workflow/snapshot", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        clientId: "prd-flow:second-client",
+        observedAt: "2026-07-31T09:00:00+08:00",
+        snapshot: issue2Snapshot,
+      }),
+    });
+    const otherClientPayload = await otherClientReport.json();
+    assert.equal(otherClientReport.status, 200, JSON.stringify(otherClientPayload));
+    assert.equal(otherClientPayload.snapshot.actions[0].stageEnteredAt, issue2ObservedAt);
+
     const shared = await request(owner.token, "/api/prd-workflow/share", {
       method: "POST",
       body: JSON.stringify({
@@ -140,7 +246,7 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     );
     const guestPayload = await guestSnapshot.json();
     assert.equal(guestSnapshot.status, 200, JSON.stringify(guestPayload));
-    assert.equal(guestPayload.snapshot.pointer, "Owner shared Workflow");
+    assert.equal(guestPayload.snapshot.pointer, "开始 Issue2 功能点实现");
 
     const outsiderSnapshot = await request(
       outsider.token,
@@ -148,7 +254,7 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     );
     const outsiderPayload = await outsiderSnapshot.json();
     assert.equal(outsiderSnapshot.status, 200);
-    assert.notEqual(outsiderPayload.snapshot.pointer, "Owner shared Workflow");
+    assert.notEqual(outsiderPayload.snapshot.pointer, "开始 Issue2 功能点实现");
 
     const canonicalCache = path.join(
       dataRoot,
