@@ -697,6 +697,8 @@ function prdWorkflowActionDisplayDetail(item) {
 function prdWorkflowActionTime(item) {
   if (!item || typeof item !== "object") return "";
   return String(
+    item.stageEnteredAt ||
+    item.stage_entered_at ||
     item.time ||
     item.at ||
     item.observedAt ||
@@ -1419,11 +1421,17 @@ function prdWorkflowActionRows(snapshot, nextAction) {
 }
 
 function prdWorkflowRuntimeAuditRows(snapshot) {
-  const rows = Array.isArray(snapshot?.runtimeEvents)
+  const runtimeRows = Array.isArray(snapshot?.runtimeEvents)
     ? snapshot.runtimeEvents
     : Array.isArray(snapshot?.runtime_events)
       ? snapshot.runtime_events
       : [];
+  const snapshotRows = Array.isArray(snapshot?.snapshotAudit)
+    ? snapshot.snapshotAudit
+    : Array.isArray(snapshot?.snapshot_audit)
+      ? snapshot.snapshot_audit
+      : [];
+  const rows = [...runtimeRows, ...snapshotRows];
   return rows
     .filter((item) => item && typeof item === "object")
     .map((item, index) => ({ item, index, ts: prdWorkflowActionSortTime(item) }))
