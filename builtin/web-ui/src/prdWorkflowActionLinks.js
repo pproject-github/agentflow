@@ -34,6 +34,19 @@ function normalizedUrl(value) {
   }
 }
 
+function normalizedLinkUrl(value) {
+  const raw = text(value);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, "http://agentflow.local");
+    url.hash = "";
+    url.searchParams.sort();
+    return url.href;
+  } catch {
+    return raw.split("#")[0];
+  }
+}
+
 export function canonicalPrdWorkflowStageKey(item = {}) {
   if (!item || typeof item !== "object" || Array.isArray(item)) return "";
   const issue = text(item.issueKey || item.issue_key || item.issue);
@@ -120,14 +133,18 @@ function reviewRank(link) {
   return 0;
 }
 
-function linkIdentity(link) {
+function linkIdentities(link) {
+  const identities = [];
   const key = artifactKey(link);
-  if (key) return `key:${key}`;
+  if (key) identities.push(`key:${key}`);
   if (isPrdWorkflowReviewLink(link)) {
     const canonical = normalizedUrl(reviewUrl(link));
-    if (canonical) return `review:${canonical}`;
+    if (canonical) identities.push(`review:${canonical}`);
   }
-  return `link:${text(link?.label)}\n${normalizedUrl(link?.href || link?.url)}`;
+  const href = normalizedLinkUrl(link?.href || link?.url);
+  if (href) identities.push(`url:${href}`);
+  if (!identities.length) identities.push(`link:${text(link?.label)}\n${href}`);
+  return identities;
 }
 
 function dedupeLinks(links) {
@@ -135,10 +152,10 @@ function dedupeLinks(links) {
   const seen = new Map();
   for (const link of links) {
     if (!link) continue;
-    const key = linkIdentity(link);
-    const index = seen.get(key);
+    const identities = linkIdentities(link);
+    const index = identities.map((identity) => seen.get(identity)).find((value) => value != null);
     if (index == null) {
-      seen.set(key, out.length);
+      identities.forEach((identity) => seen.set(identity, out.length));
       out.push(link);
       continue;
     }
@@ -146,11 +163,19 @@ function dedupeLinks(links) {
     const preferredLabel = reviewRank(link) >= reviewRank(existing)
       ? text(link?.label) || text(existing?.label)
       : text(existing?.label) || text(link?.label);
+    const existingHasStableKey = Boolean(artifactKey(existing));
+    const linkHasStableKey = Boolean(artifactKey(link));
+    const preferred = existingHasStableKey && !linkHasStableKey ? existing : link;
+    const fallback = preferred === existing ? link : existing;
+    const finalLabel = artifactKey(preferred) && !artifactKey(fallback)
+      ? text(preferred?.label) || preferredLabel
+      : preferredLabel;
     out[index] = {
-      ...existing,
-      ...link,
-      ...(preferredLabel ? { label: preferredLabel } : {}),
+      ...fallback,
+      ...preferred,
+      ...(finalLabel ? { label: finalLabel } : {}),
     };
+    linkIdentities(out[index]).forEach((identity) => seen.set(identity, index));
   }
   return out;
 }

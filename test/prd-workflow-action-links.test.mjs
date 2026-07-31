@@ -332,6 +332,49 @@ test("post-enrichment stable artifact replaces a keyless legacy URL alias", () =
   assert.equal(merged[0].key, "gitlab-issue:gift-cache:android");
 });
 
+test("final action links collapse stable artifacts and legacy direct-field aliases by URL", () => {
+  const href = "https://git.example/project/issues/1";
+  const stableArtifact = {
+    key: "gitlab-issue:gift-cache:android",
+    label: "GitLab Issue",
+    kind: "gitlab-issue",
+    href,
+  };
+  const legacyDirectFieldAlias = {
+    label: "GitLab Issue",
+    href,
+  };
+
+  for (const links of [
+    [stableArtifact, legacyDirectFieldAlias],
+    [legacyDirectFieldAlias, stableArtifact],
+  ]) {
+    const selected = selectCurrentPrdWorkflowActionLinks(links, {
+      stage: "implementation:gift-cache",
+    });
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].key, stableArtifact.key);
+    assert.equal(selected[0].href, href);
+  }
+});
+
+test("final action link URL identity preserves functional query parameters", () => {
+  const selected = selectCurrentPrdWorkflowActionLinks([
+    {
+      label: "Workspace file",
+      href: "/api/workspace/file/raw?path=reports%2Fa.md",
+    },
+    {
+      label: "Workspace file",
+      href: "/api/workspace/file/raw?path=reports%2Fb.md",
+    },
+  ], {
+    stage: "implementation:gift-cache",
+  });
+
+  assert.equal(selected.length, 2);
+});
+
 test("implementation action keeps MR and linked Code Review report artifacts", () => {
   const merged = mergePrdWorkflowActionLists(
     [{
