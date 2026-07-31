@@ -8491,10 +8491,25 @@ function prdWorkflowReviewRenderPlannedCode(filePath, codeLines, startLine = 0, 
 }
 
 const PRD_WORKFLOW_VERIFICATION_FIELDS = {
+  "Case ID": "caseId",
+  "场景": "scenario",
+  "数据准备": "setup",
+  "执行步骤": "steps",
+  "验证方式": "method",
+  "证据定位": "evidenceLocator",
+  "预期结果": "expectedResults",
+};
+
+const PRD_WORKFLOW_LEGACY_VERIFICATION_FIELDS = {
   "入口": "entry",
   "前置条件": "precondition",
   "观察": "observation",
   "通过标准": "passCriteria",
+};
+
+const PRD_WORKFLOW_ALL_VERIFICATION_FIELDS = {
+  ...PRD_WORKFLOW_VERIFICATION_FIELDS,
+  ...PRD_WORKFLOW_LEGACY_VERIFICATION_FIELDS,
 };
 
 function prdWorkflowReviewVerificationBoundary(line) {
@@ -8513,15 +8528,54 @@ function prdWorkflowReviewVerificationContent(lines = []) {
   return [source[0], ...prdWorkflowReviewDedentPlannedCode(source.slice(1))];
 }
 
+function prdWorkflowReviewVerificationScalar(lines = []) {
+  return prdWorkflowReviewVerificationContent(lines)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function prdWorkflowReviewVerificationList(lines = []) {
+  const items = [];
+  for (const line of prdWorkflowReviewVerificationContent(lines)) {
+    const value = String(line || "");
+    const item = value.match(/^\s*(?:[-*]|\d+[.)])\s+(?:\[(?: |x|X)\]\s+)?(.+)$/);
+    if (item) {
+      items.push(item[1].trim());
+      continue;
+    }
+    const continuation = value.trim();
+    if (!continuation) continue;
+    if (items.length) items[items.length - 1] += ` ${continuation}`;
+    else items.push(continuation);
+  }
+  return items;
+}
+
+function prdWorkflowReviewVerificationField(line, fieldIndent) {
+  const field = String(line || "").match(
+    /^(\s*)-\s*(Case ID|场景|数据准备|执行步骤|验证方式|证据定位|预期结果|入口|前置条件|观察|通过标准)\s*[:：]\s*(.*)$/i,
+  );
+  if (!field) return null;
+  const indent = field[1].length;
+  if (fieldIndent != null && indent !== fieldIndent) return null;
+  const canonicalLabel = Object.keys(PRD_WORKFLOW_ALL_VERIFICATION_FIELDS)
+    .find((label) => label.toLowerCase() === field[2].toLowerCase());
+  if (!canonicalLabel) return null;
+  return {
+    indent,
+    key: PRD_WORKFLOW_ALL_VERIFICATION_FIELDS[canonicalLabel],
+    value: field[3],
+  };
+}
+
 function prdWorkflowReviewParseVerificationBlock(lines, startIndex) {
   if (!/^\s*#verification\s*$/i.test(String(lines[startIndex] || ""))) return null;
-  const fields = {
-    entry: [],
-    precondition: [],
-    observation: [],
-    passCriteria: [],
-  };
+  const fields = Object.fromEntries(
+    Object.values(PRD_WORKFLOW_ALL_VERIFICATION_FIELDS).map((key) => [key, []]),
+  );
   let activeField = "";
+  let fieldIndent = null;
   let boundaryIndex = lines.length;
   for (let i = startIndex + 1; i < lines.length; i += 1) {
     const line = String(lines[i] || "");
@@ -8529,6 +8583,13 @@ function prdWorkflowReviewParseVerificationBlock(lines, startIndex) {
       return {
         verification: {
           type: "verification",
+          caseId: prdWorkflowReviewVerificationScalar(fields.caseId),
+          scenario: prdWorkflowReviewVerificationScalar(fields.scenario),
+          setup: prdWorkflowReviewVerificationScalar(fields.setup),
+          steps: prdWorkflowReviewVerificationList(fields.steps),
+          method: prdWorkflowReviewVerificationScalar(fields.method),
+          evidenceLocator: prdWorkflowReviewVerificationList(fields.evidenceLocator),
+          expectedResults: prdWorkflowReviewVerificationList(fields.expectedResults),
           entry: prdWorkflowReviewVerificationContent(fields.entry),
           precondition: prdWorkflowReviewVerificationContent(fields.precondition),
           observation: prdWorkflowReviewVerificationContent(fields.observation),
@@ -8542,10 +8603,11 @@ function prdWorkflowReviewParseVerificationBlock(lines, startIndex) {
       boundaryIndex = i;
       break;
     }
-    const field = line.match(/^\s*-\s*(入口|前置条件|观察|通过标准)\s*[:：]\s*(.*)$/);
+    const field = prdWorkflowReviewVerificationField(line, fieldIndent);
     if (field) {
-      activeField = PRD_WORKFLOW_VERIFICATION_FIELDS[field[1]];
-      if (field[2]) fields[activeField].push(field[2]);
+      if (fieldIndent == null) fieldIndent = field.indent;
+      activeField = field.key;
+      if (field.value) fields[activeField].push(field.value);
       continue;
     }
     if (activeField) fields[activeField].push(line);
@@ -8558,7 +8620,7 @@ function prdWorkflowReviewParseVerificationBlock(lines, startIndex) {
   };
 }
 
-function prdWorkflowReviewRenderVerificationBlock(verification) {
+function prdWorkflowReviewRenderLegacyVerificationBlock(verification) {
   const fields = [
     ["入口", verification.entry],
     ["前置条件", verification.precondition],
@@ -8582,6 +8644,67 @@ function prdWorkflowReviewRenderVerificationBlock(verification) {
   </div>
   <dl class="verification-block__fields">${rows}</dl>
 </section>`;
+}
+
+function prdWorkflowReviewRenderVerificationCaseValue(value, kind = "scalar") {
+  const values = Array.isArray(value) ? value.filter((item) => String(item || "").trim()) : [];
+  if (kind === "scalar") {
+    const text = String(value || "").trim();
+    return text
+      ? `<p>${prdWorkflowReviewInlineMarkdown(text)}</p>`
+      : '<span class="verification-block__missing">未填写</span>';
+  }
+  if (!values.length) return '<span class="verification-block__missing">未填写</span>';
+  const tag = kind === "steps" ? "ol" : "ul";
+  return `<${tag} class="verification-block__list">${values
+    .map((item) => `<li>${prdWorkflowReviewInlineMarkdown(item)}</li>`)
+    .join("")}</${tag}>`;
+}
+
+function prdWorkflowReviewRenderVerificationCase(verification) {
+  const caseId = String(verification.caseId || "").trim();
+  const scenario = String(verification.scenario || "").trim();
+  const fields = [
+    ["数据准备", verification.setup, "scalar"],
+    ["执行步骤", verification.steps, "steps"],
+    ["验证方式", verification.method, "scalar"],
+    ["证据定位", verification.evidenceLocator, "list"],
+    ["预期结果", verification.expectedResults, "list"],
+  ];
+  const rows = fields.map(([label, value, kind]) => {
+    const missing = kind === "scalar"
+      ? !String(value || "").trim()
+      : !Array.isArray(value) || !value.some((item) => String(item || "").trim());
+    return `<div class="verification-block__field${missing ? " is-missing" : ""}">
+  <dt>${htmlEscapeAttribute(label)}</dt>
+  <dd>${prdWorkflowReviewRenderVerificationCaseValue(value, kind)}</dd>
+</div>`;
+  }).join("");
+  return `<section class="verification-block verification-case" data-solution-block="verification">
+  <div class="verification-block__header">
+    <span class="verification-block__badge">验证用例</span>
+    <div class="verification-block__title">
+      ${caseId ? `<code>${htmlEscapeAttribute(caseId)}</code>` : '<span class="verification-block__missing">未填写 Case ID</span>'}
+      <strong>${scenario ? prdWorkflowReviewInlineMarkdown(scenario) : "未命名场景"}</strong>
+    </div>
+  </div>
+  <dl class="verification-block__fields">${rows}</dl>
+</section>`;
+}
+
+function prdWorkflowReviewRenderVerificationBlock(verification) {
+  const hasVerificationCase = [
+    verification.caseId,
+    verification.scenario,
+    verification.setup,
+    verification.method,
+    ...(Array.isArray(verification.steps) ? verification.steps : []),
+    ...(Array.isArray(verification.evidenceLocator) ? verification.evidenceLocator : []),
+    ...(Array.isArray(verification.expectedResults) ? verification.expectedResults : []),
+  ].some((value) => String(value || "").trim());
+  return hasVerificationCase
+    ? prdWorkflowReviewRenderVerificationCase(verification)
+    : prdWorkflowReviewRenderLegacyVerificationBlock(verification);
 }
 
 function prdWorkflowReviewRenderIncompleteVerification(rawLines = []) {
@@ -9346,6 +9469,9 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .verification-block { max-width: 100%; margin: 1rem 0 1.2rem; overflow: hidden; border: 1px solid var(--change-border); border-radius: 12px; background: var(--panel-strong); }
     .verification-block__header { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--change-border); background: var(--change-header); padding: 11px 14px; color: var(--heading); font-size: 13px; font-weight: 900; }
     .verification-block__badge { flex: 0 0 auto; border: 1px solid currentColor; border-radius: 999px; color: var(--change-move); padding: 4px 9px; font-size: 12px; line-height: 1.3; }
+    .verification-block__title { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .verification-block__title code { color: var(--link); font-weight: 900; }
+    .verification-block__title strong { min-width: 0; color: var(--heading); overflow-wrap: anywhere; }
     .verification-block__fields { margin: 0; }
     .verification-block__field { display: grid; grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr); border-top: 1px solid var(--border-soft); }
     .verification-block__field:first-child { border-top: 0; }
@@ -9353,6 +9479,7 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .verification-block__field dd { min-width: 0; margin: 0; padding: 10px 14px 12px; color: var(--body); }
     .verification-block__field dd > *:first-child { margin-top: 0; }
     .verification-block__field dd > *:last-child { margin-bottom: 0; }
+    .verification-block__list { margin: 0; }
     .verification-block__field.is-missing { opacity: .72; }
     .verification-block__missing { color: var(--muted); font-size: 13px; font-style: italic; }
     .verification-block.is-incomplete { border-color: var(--pending-border); }
