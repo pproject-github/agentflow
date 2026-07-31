@@ -95,6 +95,80 @@ test("renders indented verification blocks with structured bilingual fields", ()
   assert.doesNotMatch(html, /不会循环请求。\s*#verificationend/);
 });
 
+test("renders VerificationCase fields and collects nested list values", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（验证缓存恢复）",
+    "  - 准备怎么解决:",
+    "    #verification",
+    "    - Case ID: CACHE-001",
+    "    - 场景：无效缓存触发强制恢复",
+    "    - 数据准备: 准备一份有效缓存和一份无效缓存。",
+    "    - 执行步骤:",
+    "      1. 打开礼物面板。",
+    "      2. 调用 `forceFetch()`，",
+    "         并等待请求完成。",
+    "    - 验证方式：检查网络请求与本地缓存。",
+    "    - 证据定位:",
+    "      - `GiftApi#getGiftList` 请求记录",
+    "      - 缓存文件中的 version 字段",
+    "    - 预期结果:",
+    "      - 无效缓存可以恢复",
+    "      - 不会循环请求",
+    "    #verificationend",
+  ].join("\n"));
+
+  assert.match(html, /class="verification-block verification-case"/);
+  assert.match(html, /<span class="verification-block__badge">验证用例<\/span>/);
+  assert.match(html, /<code>CACHE-001<\/code>/);
+  assert.match(html, /<strong>无效缓存触发强制恢复<\/strong>/);
+  assert.match(html, /<dt>数据准备<\/dt>/);
+  assert.match(html, /<dt>执行步骤<\/dt>/);
+  assert.match(html, /<dt>验证方式<\/dt>/);
+  assert.match(html, /<dt>证据定位<\/dt>/);
+  assert.match(html, /<dt>预期结果<\/dt>/);
+  assert.match(html, /<ol class="verification-block__list"><li>打开礼物面板。<\/li><li>调用 <code>forceFetch\(\)<\/code>， 并等待请求完成。<\/li><\/ol>/);
+  assert.match(html, /<ul class="verification-block__list"><li><code>GiftApi#getGiftList<\/code> 请求记录<\/li>/);
+  assert.doesNotMatch(html, /<dt>Case ID<\/dt>|<dt>场景<\/dt>|#verification/);
+});
+
+test("only same-level VerificationCase fields end nested list collection", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#verification",
+    "- Case ID: CACHE-002",
+    "- 场景: 顶层场景",
+    "- 执行步骤:",
+    "  1. 执行第一步",
+    "    - 场景: 这是步骤内的说明，不是新字段",
+    "  2. 执行第二步",
+    "- 验证方式: 检查结果",
+    "#verificationend",
+  ].join("\n"));
+
+  assert.match(html, /<strong>顶层场景<\/strong>/);
+  assert.match(html, /这是步骤内的说明，不是新字段/);
+  assert.match(html, /执行第二步/);
+  assert.doesNotMatch(html, /<strong>这是步骤内的说明，不是新字段<\/strong>/);
+});
+
+test("prefers VerificationCase rendering when legacy fields are also present", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#verification",
+    "- Case ID: CACHE-003",
+    "- 场景: 新格式优先",
+    "- 数据准备: 新格式数据。",
+    "- 入口: 旧格式入口不应展示。",
+    "- 通过标准: 旧格式标准不应展示。",
+    "#verificationend",
+  ].join("\n"));
+
+  assert.match(html, /CACHE-003/);
+  assert.match(html, /新格式优先/);
+  assert.match(html, /新格式数据/);
+  assert.doesNotMatch(html, /旧格式入口不应展示|旧格式标准不应展示|<dt>入口<\/dt>/);
+});
+
 test("keeps verification and change solution blocks in source order", () => {
   const html = prdWorkflowReviewMarkdownToHtml([
     "## TODO Actions",
