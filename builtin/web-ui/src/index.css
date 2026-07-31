@@ -3994,9 +3994,388 @@ button.af-project-card {
   cursor: default;
 }
 
+.af-workflows-inner {
+  max-width: 92rem;
+}
+
+.af-workflows-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.af-workflows-eyebrow {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: #a88cff;
+  font-family: var(--af-headline);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.af-workflows-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.af-workflows-summary > div {
+  position: relative;
+  overflow: hidden;
+  min-height: 5.6rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 1rem;
+}
+
+.af-workflows-summary > div::after {
+  content: "";
+  position: absolute;
+  right: -1.5rem;
+  bottom: -2rem;
+  width: 5rem;
+  height: 5rem;
+  border-radius: 999px;
+  background: rgba(124, 87, 255, 0.1);
+  filter: blur(8px);
+}
+
+.af-workflows-summary > div.is-attention {
+  border-color: rgba(255, 177, 90, 0.3);
+}
+
+.af-workflows-summary span,
+.af-workflows-summary strong {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.af-workflows-summary span {
+  margin-bottom: 0.45rem;
+  color: rgba(216, 210, 230, 0.58);
+  font-size: 0.76rem;
+}
+
+.af-workflows-summary strong {
+  color: var(--af-on-surface);
+  font-family: var(--af-headline);
+  font-size: 1.65rem;
+}
+
+.af-workflows-toolbar {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto minmax(9rem, auto);
+  gap: 0.7rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.7rem;
+}
+
+.af-workflows-search {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  min-height: 2.55rem;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 0 0.75rem;
+  color: rgba(216, 210, 230, 0.5);
+}
+
+.af-workflows-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--af-on-surface);
+  font: inherit;
+}
+
+.af-workflows-search input::placeholder {
+  color: rgba(216, 210, 230, 0.38);
+}
+
+.af-workflows-segments {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 0.25rem;
+}
+
+.af-workflows-segments button,
+.af-workflows-toolbar select {
+  min-height: 2.05rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(216, 210, 230, 0.62);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.af-workflows-segments button {
+  padding: 0 0.75rem;
+}
+
+.af-workflows-segments button.is-active {
+  background: rgba(124, 87, 255, 0.2);
+  color: #d7cbff;
+}
+
+.af-workflows-toolbar select {
+  min-height: 2.55rem;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  background: rgba(0, 0, 0, 0.16);
+  padding: 0 0.7rem;
+}
+
+.af-workflows-message,
+.af-workflows-empty {
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 1rem;
+  color: rgba(216, 210, 230, 0.68);
+}
+
+.af-workflows-message--error {
+  border-color: rgba(255, 117, 117, 0.3);
+  color: #ffb8b8;
+}
+
+.af-workflows-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 15rem;
+  text-align: center;
+}
+
+.af-workflows-empty .material-symbols-outlined {
+  color: #9d83ff;
+  font-size: 2rem;
+}
+
+.af-workflows-empty strong {
+  margin: 0;
+  color: var(--af-on-surface);
+}
+
+.af-workflows-empty p {
+  margin: 0;
+}
+
+.af-workflows-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.af-workflow-card {
+  display: grid;
+  grid-template-columns: minmax(20rem, 1fr) minmax(10rem, 0.34fr) minmax(12rem, 0.42fr) auto;
+  gap: 1rem;
+  align-items: center;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 1rem;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.af-workflow-card:hover {
+  border-color: rgba(147, 113, 255, 0.34);
+  background: rgba(124, 87, 255, 0.07);
+  transform: translateY(-1px);
+}
+
+.af-workflow-card__identity,
+.af-workflow-card__progress,
+.af-workflow-card__latest {
+  min-width: 0;
+}
+
+.af-workflow-card__title-row,
+.af-workflow-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.af-workflow-tapd,
+.af-workflow-state,
+.af-workflow-role,
+.af-workflow-shared {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.45rem;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.af-workflow-tapd {
+  background: rgba(124, 87, 255, 0.16);
+  color: #c9baff;
+}
+
+.af-workflow-state--active {
+  background: rgba(98, 174, 255, 0.14);
+  color: #9ecfff;
+}
+
+.af-workflow-state--completed {
+  background: rgba(91, 214, 125, 0.14);
+  color: #a6f0b7;
+}
+
+.af-workflow-state--blocked {
+  background: rgba(255, 177, 90, 0.14);
+  color: #ffd09a;
+}
+
+.af-workflow-role {
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(216, 210, 230, 0.66);
+}
+
+.af-workflow-shared {
+  color: #d7cbff;
+}
+
+.af-workflow-shared .material-symbols-outlined {
+  font-size: 0.9rem;
+}
+
+.af-workflow-card__identity h2 {
+  margin: 0.55rem 0 0.28rem;
+  overflow: hidden;
+  color: var(--af-on-surface);
+  font-size: 1rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflow-card__identity > p {
+  margin: 0 0 0.55rem;
+  overflow: hidden;
+  color: rgba(216, 210, 230, 0.58);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflow-card__meta {
+  color: rgba(216, 210, 230, 0.44);
+  font-size: 0.7rem;
+}
+
+.af-workflow-card__meta span:not(:last-child)::after {
+  content: "·";
+  margin-left: 0.4rem;
+}
+
+.af-workflow-card__progress > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: rgba(216, 210, 230, 0.5);
+  font-size: 0.72rem;
+}
+
+.af-workflow-card__progress strong {
+  color: rgba(244, 240, 255, 0.88);
+  font-size: 0.78rem;
+}
+
+.af-workflow-progress {
+  height: 0.34rem;
+  margin: 0.55rem 0 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.af-workflow-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7250e8, #a88cff);
+}
+
+.af-workflow-card__progress small,
+.af-workflow-card__latest > span,
+.af-workflow-card__latest small {
+  color: rgba(216, 210, 230, 0.44);
+  font-size: 0.7rem;
+}
+
+.af-workflow-card__latest > span,
+.af-workflow-card__latest strong,
+.af-workflow-card__latest small {
+  display: block;
+}
+
+.af-workflow-card__latest strong {
+  margin: 0.28rem 0;
+  overflow: hidden;
+  color: rgba(244, 240, 255, 0.82);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflow-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.55rem;
+  border: 1px solid rgba(147, 113, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(124, 87, 255, 0.12);
+  padding: 0 0.85rem;
+  color: #d7cbff;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.af-workflow-open:hover {
+  border-color: rgba(147, 113, 255, 0.54);
+  background: rgba(124, 87, 255, 0.2);
+}
+
+.af-workflow-open .material-symbols-outlined {
+  font-size: 1rem;
+}
+
 @media (max-width: 900px) {
   .af-schedules-summary,
-  .af-schedule-card__grid {
+  .af-schedule-card__grid,
+  .af-workflows-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -4008,6 +4387,23 @@ button.af-project-card {
     flex-direction: row;
     align-items: center;
     justify-content: flex-start;
+  }
+
+  .af-workflows-toolbar,
+  .af-workflow-card {
+    grid-template-columns: 1fr;
+  }
+
+  .af-workflows-segments {
+    justify-content: stretch;
+  }
+
+  .af-workflows-segments button {
+    flex: 1;
+  }
+
+  .af-workflow-open {
+    justify-self: start;
   }
 }
 

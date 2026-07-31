@@ -104,6 +104,39 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     assert.equal(reportedUrl.searchParams.get("flowSource"), null);
     const workflowShare = reportedUrl.searchParams.get("workflowShare");
     assert.ok(workflowShare);
+    const addedGuest = await request(owner.token, "/api/prd-workflow/collaboration/share", {
+      method: "POST",
+      body: JSON.stringify({
+        tapdId: "1015046",
+        username: "guest",
+        role: "viewer",
+      }),
+    });
+    assert.equal(addedGuest.status, 200, await addedGuest.text());
+
+    const ownerDashboard = await request(owner.token, "/api/prd-workflows");
+    const ownerDashboardPayload = await ownerDashboard.json();
+    assert.equal(ownerDashboard.status, 200, JSON.stringify(ownerDashboardPayload));
+    assert.equal(ownerDashboardPayload.workflows.length, 1);
+    assert.equal(ownerDashboardPayload.workflows[0].tapdId, "1015046");
+    assert.equal(ownerDashboardPayload.workflows[0].pointer, "Owner shared Workflow");
+    assert.equal(ownerDashboardPayload.workflows[0].role, "owner");
+    assert.equal(ownerDashboardPayload.workflows[0].shareActive, true);
+
+    const guestDashboard = await request(guest.token, "/api/prd-workflows");
+    const guestDashboardPayload = await guestDashboard.json();
+    assert.equal(guestDashboard.status, 200, JSON.stringify(guestDashboardPayload));
+    assert.equal(guestDashboardPayload.workflows.length, 1);
+    assert.equal(guestDashboardPayload.workflows[0].role, "viewer");
+
+    const outsiderDashboard = await request(outsider.token, "/api/prd-workflows");
+    const outsiderDashboardPayload = await outsiderDashboard.json();
+    assert.equal(outsiderDashboard.status, 200, JSON.stringify(outsiderDashboardPayload));
+    assert.deepEqual(outsiderDashboardPayload.workflows, []);
+
+    const anonymousDashboard = await fetch(`${baseUrl}/api/prd-workflows`);
+    assert.equal(anonymousDashboard.status, 401);
+
     const shortRedirect = await fetch(reportedPayload.workflowShare.shortUrl, { redirect: "manual" });
     assert.equal(shortRedirect.status, 302);
     assert.equal(shortRedirect.headers.get("location"), `${reportedUrl.pathname}${reportedUrl.search}`);
@@ -155,6 +188,11 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     const issue2Payload = await issue2Report.json();
     assert.equal(issue2Report.status, 200, JSON.stringify(issue2Payload));
     assert.equal(issue2Payload.snapshot.actions[0].stageEnteredAt, issue2ObservedAt);
+    const updatedDashboard = await request(owner.token, "/api/prd-workflows");
+    const updatedDashboardPayload = await updatedDashboard.json();
+    assert.equal(updatedDashboard.status, 200, JSON.stringify(updatedDashboardPayload));
+    assert.equal(updatedDashboardPayload.workflows[0].latestAction.title, "起草 Issue2 方案");
+    assert.equal(updatedDashboardPayload.workflows[0].latestAction.at, "2026-07-29T13:01:35.000Z");
     assert.ok(issue2Payload.snapshot.snapshotAudit.some((entry) => (
       entry.type === "snapshot-action-change" &&
       entry.change === "added" &&
