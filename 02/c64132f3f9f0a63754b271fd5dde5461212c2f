@@ -1,0 +1,41 @@
+bin/lib/ui-server.mjs
+  s_f532c6a4bbe8de::t_0525afd5a2b126 8860
+  s_f532c6a4bbe8de::t_0992909580318c 9156,9169
+  s_f532c6a4bbe8de::t_100d340b9c9f93 8735,8743-8747,8836-8837,8839-8857,9162,9164-9167
+  s_f532c6a4bbe8de::t_6caf1d64613215 8262,9251-9252
+test/prd-workflow-review-html.test.mjs
+  s_f532c6a4bbe8de::t_100d340b9c9f93 54-70,268,299
+  s_f532c6a4bbe8de::t_0992909580318c 269-270
+  s_f532c6a4bbe8de::t_6caf1d64613215 301-318
+  s_f532c6a4bbe8de::t_89febe50bb0a31 267
+  s_9abdc979a6e3f3::t_39b58faa786711 300
+examples/prd-workflow-review-demo.md
+  s_f532c6a4bbe8de::t_77d77d5f7a04e8 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "02c64132f3f9f0a63754b271fd5dde5461212c2f",
+  "prompts": {},
+  "logical_commit_id": "02c64132f3f9f0a63754b271fd5dde5461212c2f",
+  "sessions": {
+    "s_9abdc979a6e3f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb5ed-4d37-7c93-8292-4c7f23e69ff0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_f532c6a4bbe8de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb13d-ed3d-71b2-b7ed-f3edf638317d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 184,
+      "total_deletions": 20
+    }
+  }
+}
