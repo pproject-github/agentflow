@@ -8490,6 +8490,111 @@ function prdWorkflowReviewRenderPlannedCode(filePath, codeLines, startLine = 0, 
 </section>`;
 }
 
+const PRD_WORKFLOW_VERIFICATION_FIELDS = {
+  "入口": "entry",
+  "前置条件": "precondition",
+  "观察": "observation",
+  "通过标准": "passCriteria",
+};
+
+function prdWorkflowReviewVerificationBoundary(line) {
+  const trimmed = String(line || "").trim();
+  return /^#verification\s*$/i.test(trimmed)
+    || /^#change\s+(?:add|modify|remove|move)\s*$/i.test(trimmed)
+    || /^#file\s+.+$/i.test(trimmed)
+    || Boolean(prdWorkflowReviewActionLine(line));
+}
+
+function prdWorkflowReviewVerificationContent(lines = []) {
+  const source = Array.isArray(lines) ? [...lines] : [];
+  while (source.length && !String(source[0] || "").trim()) source.shift();
+  while (source.length && !String(source[source.length - 1] || "").trim()) source.pop();
+  if (source.length <= 1) return source;
+  return [source[0], ...prdWorkflowReviewDedentPlannedCode(source.slice(1))];
+}
+
+function prdWorkflowReviewParseVerificationBlock(lines, startIndex) {
+  if (!/^\s*#verification\s*$/i.test(String(lines[startIndex] || ""))) return null;
+  const fields = {
+    entry: [],
+    precondition: [],
+    observation: [],
+    passCriteria: [],
+  };
+  let activeField = "";
+  let boundaryIndex = lines.length;
+  for (let i = startIndex + 1; i < lines.length; i += 1) {
+    const line = String(lines[i] || "");
+    if (/^\s*#verificationend\s*$/i.test(line)) {
+      return {
+        verification: {
+          type: "verification",
+          entry: prdWorkflowReviewVerificationContent(fields.entry),
+          precondition: prdWorkflowReviewVerificationContent(fields.precondition),
+          observation: prdWorkflowReviewVerificationContent(fields.observation),
+          passCriteria: prdWorkflowReviewVerificationContent(fields.passCriteria),
+        },
+        complete: true,
+        endIndex: i,
+      };
+    }
+    if (prdWorkflowReviewVerificationBoundary(line)) {
+      boundaryIndex = i;
+      break;
+    }
+    const field = line.match(/^\s*-\s*(入口|前置条件|观察|通过标准)\s*[:：]\s*(.*)$/);
+    if (field) {
+      activeField = PRD_WORKFLOW_VERIFICATION_FIELDS[field[1]];
+      if (field[2]) fields[activeField].push(field[2]);
+      continue;
+    }
+    if (activeField) fields[activeField].push(line);
+  }
+  return {
+    verification: null,
+    complete: false,
+    endIndex: boundaryIndex - 1,
+    rawLines: lines.slice(startIndex + 1, boundaryIndex),
+  };
+}
+
+function prdWorkflowReviewRenderVerificationBlock(verification) {
+  const fields = [
+    ["入口", verification.entry],
+    ["前置条件", verification.precondition],
+    ["观察", verification.observation],
+    ["通过标准", verification.passCriteria],
+  ];
+  const rows = fields.map(([label, content]) => {
+    const missing = !Array.isArray(content) || !content.some((line) => String(line || "").trim());
+    const value = missing
+      ? '<span class="verification-block__missing">未填写</span>'
+      : prdWorkflowReviewMarkdownLinesToHtml(content);
+    return `<div class="verification-block__field${missing ? " is-missing" : ""}">
+  <dt>${htmlEscapeAttribute(label)}</dt>
+  <dd>${value}</dd>
+</div>`;
+  }).join("");
+  return `<section class="verification-block" data-solution-block="verification">
+  <div class="verification-block__header">
+    <span class="verification-block__badge">验证方案</span>
+    <span>执行与通过标准</span>
+  </div>
+  <dl class="verification-block__fields">${rows}</dl>
+</section>`;
+}
+
+function prdWorkflowReviewRenderIncompleteVerification(rawLines = []) {
+  const body = prdWorkflowReviewMarkdownLinesToHtml(rawLines);
+  return `<section class="verification-block is-incomplete" data-solution-block="verification">
+  <div class="verification-block__header">
+    <span class="verification-block__badge">验证方案</span>
+    <strong>验证块格式不完整</strong>
+  </div>
+  ${body ? `<div class="verification-block__fallback">${body}</div>` : ""}
+</section>`;
+}
+
 function prdWorkflowReviewParseChangeIntent(lines, startIndex) {
   const start = String(lines[startIndex] || "")
     .trim()
@@ -8771,6 +8876,17 @@ function prdWorkflowReviewMarkdownLinesToHtml(lines) {
     if (!trimmed) {
       flushBlocks();
       continue;
+    }
+    if (/^#verification\s*$/i.test(trimmed)) {
+      const parsed = prdWorkflowReviewParseVerificationBlock(lines, i);
+      if (parsed) {
+        flushBlocks();
+        html.push(parsed.complete
+          ? prdWorkflowReviewRenderVerificationBlock(parsed.verification)
+          : prdWorkflowReviewRenderIncompleteVerification(parsed.rawLines));
+        i = parsed.endIndex;
+        continue;
+      }
     }
     if (/^#change\s+/i.test(trimmed)) {
       const parsed = prdWorkflowReviewParseChangeIntent(lines, i);
@@ -9227,6 +9343,24 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .change-intent__proposal-line.is-code { display: grid; grid-template-columns: 2rem minmax(max-content, 1fr); margin: 0 -14px; padding: 0 14px; background: var(--change-code); }
     .change-intent__proposal-mark { color: var(--change-add); font-weight: 900; text-align: center; user-select: none; }
     .change-intent__proposal-text { white-space: pre; }
+    .verification-block { max-width: 100%; margin: 1rem 0 1.2rem; overflow: hidden; border: 1px solid var(--change-border); border-radius: 12px; background: var(--panel-strong); }
+    .verification-block__header { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--change-border); background: var(--change-header); padding: 11px 14px; color: var(--heading); font-size: 13px; font-weight: 900; }
+    .verification-block__badge { flex: 0 0 auto; border: 1px solid currentColor; border-radius: 999px; color: var(--change-move); padding: 4px 9px; font-size: 12px; line-height: 1.3; }
+    .verification-block__fields { margin: 0; }
+    .verification-block__field { display: grid; grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr); border-top: 1px solid var(--border-soft); }
+    .verification-block__field:first-child { border-top: 0; }
+    .verification-block__field dt { background: var(--change-context); color: var(--body); padding: 11px 14px; font-size: 13px; font-weight: 900; }
+    .verification-block__field dd { min-width: 0; margin: 0; padding: 10px 14px 12px; color: var(--body); }
+    .verification-block__field dd > *:first-child { margin-top: 0; }
+    .verification-block__field dd > *:last-child { margin-bottom: 0; }
+    .verification-block__field.is-missing { opacity: .72; }
+    .verification-block__missing { color: var(--muted); font-size: 13px; font-style: italic; }
+    .verification-block.is-incomplete { border-color: var(--pending-border); }
+    .verification-block.is-incomplete .verification-block__header { border-bottom-color: var(--pending-border); background: var(--pending-bg); color: var(--pending-text); }
+    .verification-block.is-incomplete .verification-block__badge { color: var(--pending-text); }
+    .verification-block__fallback { padding: 10px 14px 12px; }
+    .verification-block__fallback > *:first-child { margin-top: 0; }
+    .verification-block__fallback > *:last-child { margin-bottom: 0; }
     .syntax-comment { color: var(--syntax-comment); font-style: italic; }
     .syntax-keyword { color: var(--syntax-keyword); font-weight: 700; }
     .syntax-literal { color: var(--syntax-literal); font-weight: 650; }
@@ -9272,6 +9406,8 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
       main { padding: 28px 14px 48px; }
       .change-intent__header { align-items: flex-start; flex-direction: column; }
       .change-intent__locator { width: 100%; }
+      .verification-block__field { grid-template-columns: 1fr; }
+      .verification-block__field dt { border-bottom: 1px solid var(--border-soft); padding-bottom: 8px; }
       .change-intent__source-line, .planned-code__line { grid-template-columns: 3.25rem minmax(max-content, 1fr); }
       header { display: block; }
       .toolbar { justify-content: flex-start; margin-top: 14px; }

@@ -68,6 +68,100 @@ test("renders ordered lists with indented continuation lines", () => {
   assert.doesNotMatch(html, /<p>1\. 首次绑定/);
 });
 
+test("renders indented verification blocks with structured bilingual fields", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（验证缓存恢复）",
+    "  - 准备怎么解决:",
+    "    #verification",
+    "    - 入口：打开礼物面板，",
+    "      或调用 `forceFetch()`。",
+    "    - 前置条件: 准备有效缓存和无效缓存。",
+    "    - 观察：请求 `version`、响应码，",
+    "      以及缓存和请求次数。",
+    "    - 通过标准: 无效缓存恢复且不会循环请求。",
+    "    #verificationend",
+  ].join("\n"));
+
+  assert.match(html, /class="verification-block" data-solution-block="verification"/);
+  assert.match(html, /<dt>入口<\/dt>/);
+  assert.match(html, /<dt>前置条件<\/dt>/);
+  assert.match(html, /<dt>观察<\/dt>/);
+  assert.match(html, /<dt>通过标准<\/dt>/);
+  assert.match(html, /打开礼物面板， 或调用 <code>forceFetch\(\)<\/code>。/);
+  assert.match(html, /请求 <code>version<\/code>、响应码， 以及缓存和请求次数。/);
+  assert.doesNotMatch(html, /#verification(?:end)?/);
+  assert.doesNotMatch(html, /不会循环请求。\s*#verificationend/);
+});
+
+test("keeps verification and change solution blocks in source order", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（混合解决方案）",
+    "  - 准备怎么解决:",
+    "    #verification",
+    "    - 入口: 第一轮验证。",
+    "    - 通过标准: 第一轮通过。",
+    "    #verificationend",
+    "    #change add",
+    "    #target function",
+    "    #file src/CachePolicy.kt",
+    "    #symbol CachePolicy#recover",
+    "    #proposal natural",
+    "    新增缓存恢复策略。",
+    "    #proposalend",
+    "    #changeend",
+    "    #verification",
+    "    - 入口：第二轮验证。",
+    "    - 观察：恢复后的请求次数。",
+    "    #verificationend",
+  ].join("\n"));
+
+  assert.equal((html.match(/data-solution-block="verification"/g) || []).length, 2);
+  assert.match(html, /class="change-intent is-add"/);
+  assert.ok(html.indexOf("第一轮验证") < html.indexOf("change-intent is-add"));
+  assert.ok(html.indexOf("change-intent is-add") < html.indexOf("第二轮验证"));
+  assert.doesNotMatch(html, /#change|#proposal|#verification/);
+});
+
+test("an incomplete verification block falls back without consuming the next Action", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "## TODO Actions",
+    "",
+    "- [ ] A1（不完整验证块）",
+    "  - 准备怎么解决:",
+    "    #verification",
+    "    - 入口: 执行 A1 验证。",
+    "    - 观察: 记录 A1 请求。",
+    "",
+    "- [ ] A2（后续 Action）",
+    "  - 准备怎么解决: A2 仍需正常显示。",
+  ].join("\n"));
+
+  assert.match(html, /验证块格式不完整/);
+  assert.match(html, /class="action-card" id="action-a1"/);
+  assert.match(html, /class="action-card" id="action-a2"/);
+  assert.match(html, /执行 A1 验证/);
+  assert.match(html, /A2 仍需正常显示/);
+  assert.doesNotMatch(html, /#verification/);
+});
+
+test("marks missing verification fields and preserves unknown directives", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "#verification",
+    "- 入口: 调用入口。",
+    "  #custom keep-me",
+    "#verificationend",
+  ].join("\n"));
+
+  assert.match(html, /调用入口/);
+  assert.match(html, /#custom keep-me/);
+  assert.equal((html.match(/verification-block__field is-missing/g) || []).length, 3);
+  assert.equal((html.match(/verification-block__missing/g) || []).length, 3);
+});
+
 test("renders planned code blocks with file and source line anchors", () => {
   const html = prdWorkflowReviewMarkdownToHtml([
     "## TODO Actions",
