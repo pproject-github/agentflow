@@ -1,0 +1,51 @@
+builtin/web-ui/dist/assets/index-yDUNXR5x.js
+  s_9abdc979a6e3f3::t_78b88ec65c192a 25,37-38,40,42,44,60,65-67,69,73,75,79,95,98-100,181-183,185-188,242,246,249-253,261-265,286,314-316,319-320,324,350
+builtin/web-ui/dist/index.html
+  s_9abdc979a6e3f3::t_78b88ec65c192a 18-19
+builtin/web-ui/dist/assets/index-DQA8LAlU.css
+  s_9abdc979a6e3f3::t_78b88ec65c192a 1
+builtin/web-ui/src/index.css
+  s_9abdc979a6e3f3::t_969ad22d9d5a9c 4161-4165,4176,4181
+  s_9abdc979a6e3f3::t_573719e9a7f255 3997-4160,4166-4175,4177-4180,4182-4374,4377-4378,4390-4406
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_9abdc979a6e3f3::t_d3a4953fb1c4a2 8
+builtin/web-ui/src/App.jsx
+  s_9abdc979a6e3f3::t_d3a4953fb1c4a2 14,90
+bin/lib/prd-workflow-collaboration.mjs
+  s_9abdc979a6e3f3::t_9684edf22d0d18 108-115
+test/prd-workflow-collaboration-api.test.mjs
+  s_9abdc979a6e3f3::t_604be503140320 191-195
+  s_9abdc979a6e3f3::t_d4b532aaa5f1b2 107-139
+builtin/web-ui/src/pages/WorkflowsPage.jsx
+  s_9abdc979a6e3f3::t_d3a4953fb1c4a2 1-248
+bin/lib/ui-server.mjs
+  s_9abdc979a6e3f3::t_9d9d3df330f6c6 12182-12189,12202
+  s_9abdc979a6e3f3::t_9684edf22d0d18 159,3353-3381,3386-3387,3390-3403,3405-3466,3468,12198
+  s_9abdc979a6e3f3::t_25fca566f5e16c 3382-3385,3388-3389,3404
+  s_9abdc979a6e3f3::t_f51b2e949054be 3467
+  s_9abdc979a6e3f3::t_c90a14ff6d46f9 3469
+  s_9abdc979a6e3f3::t_3954e5c74fa081 12190-12192,12195-12197
+  s_9abdc979a6e3f3::t_9e0bc31ce72d74 12199-12201
+  s_9abdc979a6e3f3::t_79ebb2e79dfc9d 12193-12194
+test/workflow-dashboard-contract.test.mjs
+  s_9abdc979a6e3f3::t_e4be7b0dbe5bf6 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1e446e5cfeff2b90ce35c39450a1c69580b03aae",
+  "prompts": {},
+  "logical_commit_id": "1e446e5cfeff2b90ce35c39450a1c69580b03aae",
+  "sessions": {
+    "s_9abdc979a6e3f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb5ed-4d37-7c93-8292-4c7f23e69ff0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 2762,
+      "total_deletions": 28
+    }
+  }
+}
