@@ -156,6 +156,7 @@ import {
   getPrdWorkflowCollaborationByShareToken,
   getPrdWorkflowCollaborationForUser,
   ensurePrdWorkflowShareLink,
+  listPrdWorkflowCollaborationsForUser,
   prdWorkflowCollaborationAccess,
   prdWorkflowCollaborationSummary,
   removePrdWorkflowCollaborationMember,
@@ -3346,6 +3347,123 @@ function prdWorkflowShareLinkSummary(record, shareToken, publicBaseUrl, userId =
     readOnly: true,
     createdAt: record.shareCreatedAt || "",
     canManage: String(record.ownerId || "") === String(userId || "").trim().toLowerCase(),
+  };
+}
+
+function prdWorkflowDashboardActions(snapshot = {}) {
+  const rows = new Map();
+  for (const field of ["actions", "workflowActions", "workflow_actions", "timeline", "history"]) {
+    for (const item of Array.isArray(snapshot?.[field]) ? snapshot[field] : []) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const key = String(
+        item.stageKey
+        || item.stage_key
+        || item.actionId
+        || item.action_id
+        || item.id
+        || item.action
+        || "",
+      ).trim();
+      if (!key) continue;
+      rows.set(key, { ...(rows.get(key) || {}), ...item });
+    }
+  }
+  return Array.from(rows.values());
+}
+
+function prdWorkflowDashboardTimestamp(item = {}) {
+  for (const value of [
+    item.updatedAt,
+    item.updated_at,
+    item.observedAt,
+    item.observed_at,
+    item.completedAt,
+    item.completed_at,
+    item.stageEnteredAt,
+    item.stage_entered_at,
+    item.actionAt,
+    item.action_at,
+    item.startedAt,
+    item.started_at,
+    item.reportedAt,
+    item.reported_at,
+    item.createdAt,
+    item.created_at,
+    item.at,
+  ]) {
+    const timestamp = Date.parse(String(value || ""));
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return 0;
+}
+
+function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
+  const tapdId = String(record?.tapdId || snapshot?.tapdId || snapshot?.tapd_id || "").trim();
+  const collaboration = prdWorkflowCollaborationSummaryWithUsers(record, userCtx?.userId) || {};
+  const actions = prdWorkflowDashboardActions(snapshot);
+  const doneStatuses = new Set(["done", "complete", "success", "completed", "passed", "observed"]);
+  const completedActions = actions.filter((item) => (
+    doneStatuses.has(String(item?.status || "").trim().toLowerCase())
+  )).length;
+  const latestAction = [...actions].sort((left, right) => (
+    prdWorkflowDashboardTimestamp(right) - prdWorkflowDashboardTimestamp(left)
+  ))[0] || null;
+  const issues = Array.isArray(snapshot?.issues)
+    ? snapshot.issues
+    : Array.isArray(snapshot?.raw?.prd?.issues)
+      ? snapshot.raw.prd.issues
+      : [];
+  const platforms = Array.from(new Set(issues
+    .map((issue) => String(issue?.platform || "").trim().toLowerCase())
+    .filter(Boolean)));
+  const phase = String(snapshot?.phase || "").trim();
+  const phaseKey = phase.toLowerCase();
+  const state = /blocked|failed|error|conflict/.test(phaseKey)
+    ? "blocked"
+    : /done|completed|released|closed/.test(phaseKey) || (actions.length > 0 && completedActions === actions.length)
+      ? "completed"
+      : "active";
+  const requirement = snapshot?.overall?.requirement && typeof snapshot.overall.requirement === "object"
+    ? snapshot.overall.requirement
+    : {};
+  const title = String(
+    requirement.title
+    || requirement.name
+    || snapshot?.prd?.title
+    || snapshot?.raw?.prd?.title
+    || snapshot?.title
+    || "",
+  ).trim();
+  const updatedAtTimestamp = Math.max(
+    prdWorkflowDashboardTimestamp(record),
+    prdWorkflowDashboardTimestamp(snapshot),
+    prdWorkflowDashboardTimestamp(latestAction || {}),
+  );
+  return {
+    id: String(record?.id || ""),
+    tapdId,
+    title,
+    phase,
+    state,
+    pointer: String(snapshot?.pointer || "").trim(),
+    revision: String(snapshot?.revision || "").trim(),
+    issueCount: issues.length,
+    platforms,
+    actionCount: actions.length,
+    completedActionCount: completedActions,
+    latestAction: latestAction
+      ? {
+          title: String(latestAction.title || latestAction.label || latestAction.action || latestAction.id || "").trim(),
+          status: String(latestAction.status || "").trim(),
+          at: prdWorkflowDashboardTimestamp(latestAction) ? new Date(prdWorkflowDashboardTimestamp(latestAction)).toISOString() : "",
+        }
+      : null,
+    role: String(collaboration.role || ""),
+    ownerId: String(collaboration.ownerId || ""),
+    ownerUsername: String(collaboration.ownerUsername || collaboration.ownerId || ""),
+    memberCount: Number(collaboration.memberCount || 0),
+    shareActive: collaboration.shareActive === true,
+    updatedAt: updatedAtTimestamp ? new Date(updatedAtTimestamp).toISOString() : String(record?.updatedAt || ""),
   };
 }
 
@@ -12061,6 +12179,27 @@ export function startUiServer({
         return;
       }
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/prd-workflows") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      try {
+        const workflows = listPrdWorkflowCollaborationsForUser(userCtx.userId).map((record) => {
+          const stateRoot = path.resolve(getAgentflowUserDataRoot(record.ownerId));
+          const tapdId = String(record.tapdId || "").trim();
+          const project = prdWorkflowReadProjectState(stateRoot, tapdId);
+          const latestClient = prdWorkflowLatestClientSnapshot(stateRoot, stateRoot, tapdId);
+          const legacy = prdWorkflowReadCachedSnapshot(stateRoot, tapdId);
+          const snapshot = project?.snapshot || latestClient || legacy?.snapshot || {};
+          return prdWorkflowDashboardSummary(record, snapshot, userCtx);
+        });
+        json(res, 200, { ok: true, workflows });
+      } catch (error) {
+        json(res, 500, { error: (error && error.message) || String(error) });
+      }
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/prd-workflow/share") {

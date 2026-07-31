@@ -105,6 +105,14 @@ export function getPrdWorkflowCollaborationForUser(tapdId, userId) {
   return records.find((record) => record.ownerId === actorId) || records[0] || null;
 }
 
+export function listPrdWorkflowCollaborationsForUser(userId) {
+  const actorId = normalizeUserId(userId);
+  if (!actorId) return [];
+  return Object.values(readRegistry().workflows)
+    .filter((record) => prdWorkflowCollaborationAccess(record, actorId).allowed)
+    .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
+}
+
 export function ensurePrdWorkflowCollaboration({ tapdId, userId }) {
   const ownerId = normalizeUserId(userId);
   const normalizedTapdId = normalizeTapdId(tapdId);

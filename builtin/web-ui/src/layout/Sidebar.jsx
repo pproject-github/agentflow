@@ -5,6 +5,7 @@ import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 
 const ITEMS = [
   { to: "/projects", labelKey: "common:nav.projects", icon: "folder_open" },
+  { to: "/workflows", label: "迭代", icon: "timeline" },
   { to: "/workspaces", label: "知识库", icon: "folder_managed" },
   { to: "/nodes", labelKey: "common:nav.nodes", icon: "account_tree" },
   { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
