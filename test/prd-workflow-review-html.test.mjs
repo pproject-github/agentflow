@@ -51,6 +51,23 @@ test("keeps ordinary markdown lists unchanged outside an actions section", () =>
   assert.match(html, /<ul><li>A1 is only a reference here<\/li><li>regular item<\/li><\/ul>/);
 });
 
+test("renders ordered lists with indented continuation lines", () => {
+  const html = prdWorkflowReviewMarkdownToHtml([
+    "实际链路如下：",
+    "",
+    "1. 首次绑定评论时，`bindCommentBubble()` 调用 `setBubbleUrl(url)`，",
+    "   触发资源下载和渲染。",
+    "2. View detach 时停止下载监听，",
+    "   并回收已经加载的位图。",
+    "3. 重新 attach 时不会再次执行 bind。",
+  ].join("\n"));
+
+  assert.match(html, /<ol><li>首次绑定评论时，<code>bindCommentBubble\(\)<\/code> 调用 <code>setBubbleUrl\(url\)<\/code>， 触发资源下载和渲染。<\/li>/);
+  assert.match(html, /<li>View detach 时停止下载监听， 并回收已经加载的位图。<\/li>/);
+  assert.match(html, /<li>重新 attach 时不会再次执行 bind。<\/li><\/ol>/);
+  assert.doesNotMatch(html, /<p>1\. 首次绑定/);
+});
+
 test("renders planned code blocks with file and source line anchors", () => {
   const html = prdWorkflowReviewMarkdownToHtml([
     "## TODO Actions",
@@ -247,6 +264,10 @@ test("uses a terminal-inspired document palette with semantic accent colors", ()
   assert.match(html, /--syntax-keyword: #bb9af7/);
   assert.match(html, /--syntax-string: #9ece6a/);
   assert.match(html, /font: 500 13px\/1\.55/);
+  assert.match(html, /main \{ width: min\(100%, 1180px\)/);
+  assert.match(html, /ul, ol \{ margin: \.75rem 0 1\.1rem/);
+  assert.match(html, /article \{ min-width: 0; border: 0;/);
+  assert.match(html, /code \{ display: inline; max-width: 100%; border: 1px solid var\(--border-soft\);/);
   assert.match(html, /background: var\(--bg\)/);
   assert.match(html, /\.action-card:target \{ border-color: var\(--interactive\)/);
   assert.doesNotMatch(html, /radial-gradient/);
@@ -275,6 +296,26 @@ test("promotes the leading markdown H1 to the single page title", () => {
   assert.doesNotMatch(html, /Payload fallback title/);
   assert.doesNotMatch(html, /<article>[\s\S]*<h1>/);
   assert.match(html, /<article>[\s\S]*正文内容。[\s\S]*<h2>审查范围<\/h2>/);
+});
+
+test("keeps document metadata collapsed with a compact key column", () => {
+  const html = prdWorkflowReviewHtml(
+    "Metadata layout",
+    [
+      "---",
+      "tapd_id: 1018321",
+      "platform: android",
+      "issue: preserve-member-comment-bubble",
+      "---",
+      "",
+      "正文内容。",
+    ].join("\n"),
+  );
+
+  assert.match(html, /<details class="frontmatter"><summary>文档元数据<\/summary>/);
+  assert.doesNotMatch(html, /<details class="frontmatter" open>/);
+  assert.match(html, /<colgroup><col class="frontmatter-key-column"><col><\/colgroup>/);
+  assert.match(html, /\.frontmatter-key-column \{ width: clamp\(10rem, 22%, 16rem\); \}/);
 });
 
 test("uses the payload title when markdown does not start with an H1", () => {

@@ -8259,7 +8259,7 @@ function prdWorkflowReviewRenderFrontmatter(frontmatter) {
     }
   }
   flush();
-  return `<details class="frontmatter" open><summary>文档元数据</summary><table>${rows}</table></details>`;
+  return `<details class="frontmatter"><summary>文档元数据</summary><table><colgroup><col class="frontmatter-key-column"><col></colgroup>${rows}</table></details>`;
 }
 
 function prdWorkflowReviewRenderTable(lines) {
@@ -8732,7 +8732,7 @@ function prdWorkflowReviewRenderChangeIntent(change) {
 function prdWorkflowReviewMarkdownLinesToHtml(lines) {
   const html = [];
   let paragraph = [];
-  let list = [];
+  let list = null;
   let code = null;
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -8740,9 +8740,11 @@ function prdWorkflowReviewMarkdownLinesToHtml(lines) {
     paragraph = [];
   };
   const flushList = () => {
-    if (!list.length) return;
-    html.push(`<ul>${list.map((item) => `<li>${item}</li>`).join("")}</ul>`);
-    list = [];
+    if (!list?.items?.length) return;
+    const tag = list.ordered ? "ol" : "ul";
+    const start = list.ordered && list.start !== 1 ? ` start="${list.start}"` : "";
+    html.push(`<${tag}${start}>${list.items.map((item) => `<li>${item}</li>`).join("")}</${tag}>`);
+    list = null;
   };
   const flushBlocks = () => {
     flushParagraph();
@@ -8831,13 +8833,31 @@ function prdWorkflowReviewMarkdownLinesToHtml(lines) {
       html.push(`<blockquote>${prdWorkflowReviewInlineMarkdown(quote[1])}</blockquote>`);
       continue;
     }
-    const bullet = trimmed.match(/^[-*]\s+(?:\[( |x|X)\]\s+)?(.+)$/);
-    if (bullet) {
+    const listItem = line.match(/^(\s*)([-*]|\d+[.)])\s+(?:\[( |x|X)\]\s+)?(.+)$/);
+    if (listItem) {
       flushParagraph();
-      const checked = bullet[1] ? `<input type="checkbox" disabled${bullet[1].toLowerCase() === "x" ? " checked" : ""}> ` : "";
-      list.push(`${checked}${prdWorkflowReviewInlineMarkdown(bullet[2])}`);
+      const ordered = /^\d/.test(listItem[2]);
+      if (list && list.ordered !== ordered) flushList();
+      if (!list) {
+        list = {
+          ordered,
+          start: ordered ? Number.parseInt(listItem[2], 10) || 1 : 1,
+          indent: listItem[1].length,
+          items: [],
+        };
+      }
+      const checked = listItem[3]
+        ? `<input type="checkbox" disabled${listItem[3].toLowerCase() === "x" ? " checked" : ""}> `
+        : "";
+      list.items.push(`${checked}${prdWorkflowReviewInlineMarkdown(listItem[4])}`);
       continue;
     }
+    if (list?.items?.length && /^\s{2,}\S/.test(line)) {
+      const lastIndex = list.items.length - 1;
+      list.items[lastIndex] += ` ${prdWorkflowReviewInlineMarkdown(trimmed)}`;
+      continue;
+    }
+    if (list) flushList();
     paragraph.push(trimmed);
   }
   if (code) html.push(`<pre><code>${htmlEscapeAttribute(prdWorkflowReviewNormalizeText(code.lines.join("\n")))}</code></pre>`);
@@ -9133,18 +9153,20 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .raw:hover, .theme-toggle:hover { border-color: var(--interactive); color: var(--link); }
     .theme-toggle { cursor: pointer; font-family: inherit; }
     .lifecycle { margin-top: 10px; display: inline-flex; max-width: 100%; border: 1px solid var(--border); border-radius: 999px; background: var(--button); color: var(--muted); padding: 6px 10px; font-size: 12px; font-weight: 800; line-height: 1.35; overflow-wrap: anywhere; }
-    article { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 18px 50px var(--shadow); padding: clamp(20px, 4vw, 34px); }
+    article { min-width: 0; border: 0; border-radius: 14px; background: var(--panel); box-shadow: 0 18px 50px var(--shadow); padding: clamp(20px, 4vw, 34px); }
     article > *:first-child { margin-top: 0; }
     article > *:last-child { margin-bottom: 0; }
     h2, h3, h4, h5, h6 { margin: 1.7em 0 .65em; line-height: 1.25; letter-spacing: 0; color: var(--heading); overflow-wrap: anywhere; }
     h2 { padding-bottom: .4rem; border-bottom: 1px solid var(--border-soft); font-size: 1.5rem; }
     h3 { font-size: 1.2rem; }
-    p, li, td, th, blockquote { font-size: 15px; line-height: 1.8; overflow-wrap: anywhere; word-break: break-word; }
+    p, li, td, th, blockquote { font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; word-break: break-word; }
     p { margin: .75rem 0; color: var(--body); }
-    ul { margin: .65rem 0 1rem; padding-left: 1.35rem; }
-    li { margin: .28rem 0; color: var(--body); }
+    ul, ol { margin: .75rem 0 1.1rem; padding-left: 1.55rem; }
+    ol { padding-left: 1.8rem; }
+    li { margin: .48rem 0; padding-left: .12rem; color: var(--body); }
+    li::marker { color: var(--interactive); font-weight: 750; }
     li input { margin-right: .38rem; transform: translateY(1px); }
-    code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--code-bg); color: var(--code-inline); padding: .1rem .34rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    code { display: inline; max-width: 100%; border: 1px solid var(--border-soft); border-radius: 4px; background: color-mix(in srgb, var(--interactive) 8%, transparent); color: var(--code-inline); padding: .06rem .24rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     pre { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--code-block); padding: 16px; line-height: 1.65; }
     pre code { border: 0; background: transparent; color: var(--code-block-text); padding: 0; white-space: pre; overflow-wrap: normal; word-break: normal; }
     .planned-code { max-width: 100%; margin: 1rem 0 1.2rem; overflow: hidden; border: 1px solid var(--planned-border); border-radius: 10px; background: var(--code-block); }
@@ -9226,7 +9248,8 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
     .frontmatter { margin: 0 0 1.35rem; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel-strong); padding: .75rem .9rem; }
     .frontmatter summary { cursor: pointer; color: var(--body); font-weight: 800; }
     .frontmatter table { min-width: 0; margin-top: .7rem; }
-    .frontmatter th { width: min(34%, 12rem); background: var(--panel-soft); color: var(--body); }
+    .frontmatter-key-column { width: clamp(10rem, 22%, 16rem); }
+    .frontmatter th { background: var(--panel-soft); color: var(--body); }
     .frontmatter-list { margin: 0; padding-left: 1.1rem; }
     .action-index { position: sticky; top: 10px; z-index: 4; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 1rem 0 1.25rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-strong); box-shadow: 0 8px 22px var(--shadow); padding: 10px 12px; }
     .action-index__label { margin-right: 2px; color: var(--muted); font-size: 12px; font-weight: 800; }
