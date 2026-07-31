@@ -20,6 +20,12 @@ function isLikeeContextPath(path) {
   return path === "/likee-context" || path === "/likee_context";
 }
 
+function isWorkflowSharePath(path) {
+  if (path !== "/workspace") return false;
+  const params = new URLSearchParams(window.location.search);
+  return Boolean(String(params.get("workflowShare") || "").trim());
+}
+
 function RedirectFlowToWorkspace() {
   const { navigate } = useRoute();
   useEffect(() => {
@@ -228,6 +234,7 @@ function PublicOrAuthedApp() {
   const { path } = useRoute();
   if (path.startsWith("/display")) return <DisplayPage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
+  if (isWorkflowSharePath(path)) return <WorkspacePage />;
   return (
     <AuthGate>
       {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}

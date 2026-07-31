@@ -107,6 +107,25 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
     const shortRedirect = await fetch(reportedPayload.workflowShare.shortUrl, { redirect: "manual" });
     assert.equal(shortRedirect.status, 302);
     assert.equal(shortRedirect.headers.get("location"), `${reportedUrl.pathname}${reportedUrl.search}`);
+    const anonymousShare = await fetch(
+      `${baseUrl}/api/prd-workflow/share?tapdId=1015046&workflowShare=${encodeURIComponent(workflowShare)}`,
+    );
+    assert.equal(anonymousShare.status, 200);
+    const anonymousSharePayload = await anonymousShare.json();
+    assert.equal(anonymousSharePayload.share.readOnly, true);
+    assert.equal(anonymousSharePayload.share.canManage, false);
+
+    const anonymousSnapshot = await fetch(
+      `${baseUrl}/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1&workflowShare=${encodeURIComponent(workflowShare)}`,
+    );
+    assert.equal(anonymousSnapshot.status, 200);
+    const anonymousSnapshotPayload = await anonymousSnapshot.json();
+    assert.equal(anonymousSnapshotPayload.snapshot.pointer, "Owner shared Workflow");
+
+    const invalidAnonymousSnapshot = await fetch(
+      `${baseUrl}/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1&workflowShare=invalid-share-token`,
+    );
+    assert.equal(invalidAnonymousSnapshot.status, 404);
 
     const issue2ObservedAt = "2026-07-29T21:01:35+08:00";
     const issue2Snapshot = {

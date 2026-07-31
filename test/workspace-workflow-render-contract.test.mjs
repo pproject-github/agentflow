@@ -6,6 +6,7 @@ const workspacePagePath = new URL(
   "../builtin/web-ui/src/pages/WorkspacePage.jsx",
   import.meta.url,
 );
+const appPath = new URL("../builtin/web-ui/src/App.jsx", import.meta.url);
 
 test("Workflow timeline receives flow params without relying on an undeclared variable", async () => {
   const source = await readFile(workspacePagePath, "utf8");
@@ -24,6 +25,7 @@ test("Workflow timeline receives flow params without relying on an undeclared va
 
 test("shared Workflow links render the Workflow content without the project top bar", async () => {
   const source = await readFile(workspacePagePath, "utf8");
+  const appSource = await readFile(appPath, "utf8");
 
   assert.match(
     source,
@@ -39,6 +41,21 @@ test("shared Workflow links render the Workflow content without the project top 
     source,
     /\{!isWorkflowShareView \? \(\s*<header className="af-pipeline-top af-workspace-top">/,
     "The project top bar must not render in the shared Workflow view",
+  );
+  assert.match(
+    appSource,
+    /function isWorkflowSharePath\(path\)[\s\S]*params\.get\("workflowShare"\)/,
+    "The app must identify Workflow share routes before applying the login gate",
+  );
+  assert.match(
+    appSource,
+    /if \(isWorkflowSharePath\(path\)\) return <WorkspacePage \/>;/,
+    "Workflow share routes must render without AuthGate",
+  );
+  assert.match(
+    source,
+    /if \(isWorkflowShareView\) \{\s*setAuthUser\(null\);\s*setAuthResolved\(true\);/,
+    "The public Workflow view must skip authenticated Workspace bootstrap requests",
   );
 });
 

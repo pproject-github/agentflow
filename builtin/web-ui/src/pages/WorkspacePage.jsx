@@ -1298,8 +1298,6 @@ function prdWorkflowEnrichActionWithSnapshotFacts(snapshot, item) {
   const shouldRetitle = gitlabIssue && status === "done" && /^issue-gitlab:/.test(stage) && /需要.*GitLab Issue/.test(String(enrichedItem.title || enrichedItem.label || ""));
   return {
     ...enrichedItem,
-    ...(gitlabIssue ? { gitlabIssue, gitlab_issue: gitlabIssue } : {}),
-    ...(gitlabEpic ? { gitlabEpic, gitlab_epic: gitlabEpic } : {}),
     ...(shouldRetitle ? {
       title: String(enrichedItem.title || enrichedItem.label || "GitLab Issue 已绑定")
         .replace(/^需要为/, "已为")
@@ -7813,7 +7811,7 @@ function PrdWorkflowTimelinePanel({
                   ) : null}
                   </div>
                   <div className="af-prd-workflow-share-note">
-                    获得链接的 AgentFlow 用户可以只读查看同一份 Workflow；链接不会授予需求推进或项目编辑权限。
+                    获得链接的人无需登录即可只读查看同一份 Workflow；链接不会授予需求推进或项目编辑权限。
                   </div>
                 </>
               ) : null}
@@ -10039,6 +10037,13 @@ function WorkspacePageInner() {
 
   useEffect(() => {
     let cancelled = false;
+    if (isWorkflowShareView) {
+      setAuthUser(null);
+      setAuthResolved(true);
+      return () => {
+        cancelled = true;
+      };
+    }
     const bootstrapWorkspace = async () => {
       const currentUrl = new URL(window.location.href);
       const invite = String(currentUrl.searchParams.get("invite") || "").trim();
@@ -10092,7 +10097,7 @@ function WorkspacePageInner() {
     return () => {
       cancelled = true;
     };
-  }, [loadWorkspace, loadWorkspaceConversations, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
+  }, [isWorkflowShareView, loadWorkspace, loadWorkspaceConversations, loadFlowSnippets, refreshMcps, refreshSkills, refreshWorkspaceRunStatus, refreshWorkspaces, skillsStorageKey]);
 
   useEffect(() => {
     setSkillsStorageReadyKey("");
