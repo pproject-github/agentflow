@@ -7939,6 +7939,7 @@ function WorkspacePageInner() {
   const workspaceRemoteRefreshQueuedRef = useRef(false);
   const workspaceRemoteRefreshTargetRevisionRef = useRef("");
   const skipNextWorkspaceAutosaveRef = useRef(false);
+  const workspaceAutosaveSuppressedStateRef = useRef(null);
   const workspaceCanvasInteractionActiveRef = useRef(false);
   const workspaceFlushAfterInteractionRef = useRef(false);
   const collaborationClientIdRef = useRef(
@@ -10189,6 +10190,15 @@ function WorkspacePageInner() {
     if (!workspaceWritable) return;
     if (workspaceCanvasInteractionActiveRef.current) {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      return;
+    }
+    const suppressedState = workspaceAutosaveSuppressedStateRef.current;
+    workspaceAutosaveSuppressedStateRef.current = null;
+    if (
+      suppressedState?.nodes === nodes
+      && suppressedState.edges === edges
+      && suppressedState.displayPage === displayPage
+    ) {
       return;
     }
     if (skipNextWorkspaceAutosaveRef.current) {
@@ -12517,6 +12527,11 @@ function WorkspacePageInner() {
       }
       return;
     }
+    // Selection is React Flow UI state, not part of the persisted workspace graph.
+    // Without this guard, pressing a node schedules an autosave before its first
+    // drag event. That save can rerender the controlled canvas with the old
+    // persisted position while the new position still lives only in React Flow's
+    // transient store, making the node jump back during a drag.
     const dimensionChanges = (changes || []).filter(
       (change) => change?.type === "dimensions" && change.dimensions?.width && change.dimensions?.height,
     );
@@ -12554,6 +12569,13 @@ function WorkspacePageInner() {
               data: nextData,
             };
           });
+      if (!interaction.mutated) {
+        workspaceAutosaveSuppressedStateRef.current = {
+          nodes: next,
+          edges: edgesRef.current,
+          displayPage: displayPageRef.current,
+        };
+      }
       nodesRef.current = next;
       return next;
     });
@@ -12580,6 +12602,10 @@ function WorkspacePageInner() {
       finishesInteraction,
     } = partitionWorkspaceCanvasChanges(changes);
     if (transient.length > 0) {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       if (!workspaceCanvasInteractionActiveRef.current) {
         workspaceCanvasInteractionActiveRef.current = true;
         transientCanvasNodesRef.current = canvasNodesRef.current;

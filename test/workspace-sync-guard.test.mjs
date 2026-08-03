@@ -77,6 +77,17 @@ test("node movement is active while dragging and finishes on mouse release", () 
   assert.equal(workspaceCanvasInteractionCommitsChanges(released), true);
 });
 
+test("selection changes never commit workspace graph changes", () => {
+  const selection = [
+    { type: "select", id: "table", selected: true },
+  ];
+  assert.deepEqual(
+    workspaceCanvasInteractionPhase(selection),
+    { active: false, finished: false, mutated: false },
+  );
+  assert.equal(workspaceCanvasInteractionCommitsChanges(selection), false);
+});
+
 test("node resizing is active while resizing and finishes on mouse release", () => {
   assert.deepEqual(
     workspaceCanvasInteractionPhase([
