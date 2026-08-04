@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { getAgentflowDataRoot } from "./paths.mjs";
+import { getTeamForUser } from "./teams.mjs";
 
 const REGISTRY_VERSION = 1;
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -67,15 +68,19 @@ function publicWorkspace(record, userId = "") {
   if (!record) return null;
   const actorId = normalizeUserId(userId);
   const members = record.members && typeof record.members === "object" ? record.members : {};
+  const access = workspaceCollaborationAccess(record, actorId);
   return {
     id: record.id,
     flowId: record.flowId,
     flowSource: record.projectSource || record.flowSource || "workspace",
     archived: record.archived === true,
     ownerId: record.ownerId,
-    role: actorId === record.ownerId ? "owner" : members[actorId] || "",
+    role: access.role,
+    accessSource: access.source,
+    teamId: access.teamId,
     memberCount: Object.keys(members).length,
     members: Object.entries(members).map(([id, role]) => ({ userId: id, role })),
+    teamShares: Object.entries(record.teamShares || {}).map(([teamId, role]) => ({ teamId, role })),
     createdAt: record.createdAt || "",
     updatedAt: record.updatedAt || "",
   };
@@ -98,12 +103,19 @@ export function getWorkspaceCollaborationById(workspaceId) {
 export function workspaceCollaborationAccess(record, userId) {
   if (!record) return { allowed: true, role: "" };
   const id = normalizeUserId(userId);
-  const role = id === record.ownerId ? "owner" : String(record.members?.[id] || "");
+  const directRole = id === record.ownerId ? "owner" : String(record.members?.[id] || "");
+  const team = getTeamForUser(id);
+  const teamRole = team ? String(record.teamShares?.[team.id] || "") : "";
+  const role = directRole === "owner" || directRole === "editor" || teamRole === "editor"
+    ? directRole === "owner" ? "owner" : "editor"
+    : directRole === "viewer" || teamRole === "viewer" ? "viewer" : "";
   return {
     allowed: role === "owner" || role === "editor" || role === "viewer",
     writable: role === "owner" || role === "editor",
     runnable: role === "owner" || role === "editor",
     role,
+    source: directRole ? "member" : teamRole ? "team" : "",
+    teamId: teamRole ? team?.id || "" : "",
   };
 }
 
@@ -254,6 +266,44 @@ export function addWorkspaceCollaborationMember({
   record.updatedAt = new Date().toISOString();
   writeRegistry(registry);
   return { workspace: publicWorkspace(record, actorId), memberUserId: targetId };
+}
+
+export function setWorkspaceCollaborationTeamShare({
+  workspaceId,
+  userId,
+  teamId,
+  role = "viewer",
+}) {
+  const registry = readRegistry();
+  const record = registry.workspaces[String(workspaceId || "").trim()];
+  if (!record) return { error: "Workspace collaboration not found", status: 404 };
+  const actorId = normalizeUserId(userId);
+  const targetTeamId = String(teamId || "").trim();
+  if (workspaceCollaborationAccess(record, actorId).role !== "owner") {
+    return { error: "Only the workspace owner can share with a team", status: 403 };
+  }
+  if (!targetTeamId) return { error: "Missing teamId", status: 400 };
+  record.teamShares = record.teamShares && typeof record.teamShares === "object" ? record.teamShares : {};
+  record.teamShares[targetTeamId] = role === "editor" ? "editor" : "viewer";
+  record.updatedAt = new Date().toISOString();
+  writeRegistry(registry);
+  return { workspace: publicWorkspace(record, actorId), teamId: targetTeamId };
+}
+
+export function removeWorkspaceCollaborationTeamShare({ workspaceId, userId, teamId }) {
+  const registry = readRegistry();
+  const record = registry.workspaces[String(workspaceId || "").trim()];
+  if (!record) return { error: "Workspace collaboration not found", status: 404 };
+  const actorId = normalizeUserId(userId);
+  const targetTeamId = String(teamId || "").trim();
+  if (workspaceCollaborationAccess(record, actorId).role !== "owner") {
+    return { error: "Only the workspace owner can revoke a team share", status: 403 };
+  }
+  const removed = Boolean(record.teamShares?.[targetTeamId]);
+  if (removed) delete record.teamShares[targetTeamId];
+  record.updatedAt = new Date().toISOString();
+  writeRegistry(registry);
+  return { workspace: publicWorkspace(record, actorId), teamId: targetTeamId, removed };
 }
 
 export function removeWorkspaceCollaborationMember({

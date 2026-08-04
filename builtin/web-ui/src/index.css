@@ -22887,3 +22887,80 @@ body:has(.af-public-display-page--canvas) {
     flex-wrap: wrap;
   }
 }
+.af-team-admin-page {
+  min-height: 100vh;
+  padding: 44px 48px;
+  background: var(--af-bg, #131313);
+  color: #e5e2e1;
+}
+
+.af-team-admin-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+
+.af-team-admin-hero span { color: #9f98a9; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.af-team-admin-hero h1 { margin: 8px 0; font-size: 36px; }
+.af-team-admin-hero p { margin: 0; color: #aaa5ac; }
+.af-team-admin-hero button,
+.af-team-admin-actions button {
+  display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 12px;
+  padding: 10px 15px; background: #2a292b; color: #e5e2e1; cursor: pointer;
+}
+
+.af-team-admin-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 22px; }
+.af-team-admin-list, .af-team-admin-detail { border-radius: 22px; background: #1c1b1d; padding: 18px; }
+.af-team-admin-list form { display: flex; gap: 8px; margin-bottom: 14px; }
+.af-team-admin-list input, .af-team-admin-fields input, .af-team-admin-fields select,
+.af-team-admin-fields textarea, .af-team-admin-members-head input {
+  box-sizing: border-box; width: 100%; border: 0; border-radius: 11px; background: #101010; color: #e5e2e1; padding: 11px 12px;
+}
+.af-team-admin-list form button { border: 0; border-radius: 11px; background: #7c4dff; color: white; cursor: pointer; }
+.af-team-admin-list > button {
+  display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; border-radius: 14px;
+  padding: 13px; margin-top: 7px; text-align: left; background: transparent; color: #e5e2e1; cursor: pointer;
+}
+.af-team-admin-list > button.is-active { background: #30284a; }
+.af-team-admin-list > button span { display: grid; gap: 4px; }
+.af-team-admin-list small, .af-team-admin-list em { color: #99939e; font-size: 12px; font-style: normal; }
+.af-team-admin-fields { display: grid; grid-template-columns: 1fr 180px; gap: 16px; }
+.af-team-admin-fields label { display: grid; gap: 8px; color: #bdb7c1; font-size: 13px; }
+.af-team-admin-fields label.is-wide { grid-column: 1 / -1; }
+.af-team-admin-fields textarea { min-height: 76px; resize: vertical; }
+.af-team-admin-members-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin: 26px 0 12px; }
+.af-team-admin-members-head div { display: grid; gap: 5px; }
+.af-team-admin-members-head div span { color: #99939e; font-size: 12px; }
+.af-team-admin-members-head input { max-width: 260px; }
+.af-team-admin-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 9px; max-height: 430px; overflow: auto; }
+.af-team-admin-members label { display: flex; align-items: center; gap: 10px; padding: 11px; border-radius: 13px; background: #242325; cursor: pointer; }
+.af-team-admin-members label.is-selected { background: #30284a; }
+.af-team-admin-members label > span:nth-of-type(2) { display: grid; flex: 1; }
+.af-team-admin-members label small { color: #99939e; }
+.af-team-admin-members label em { color: #bca9ff; font-size: 11px; font-style: normal; }
+.af-team-admin-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.af-team-admin-actions > div { display: flex; gap: 9px; }
+.af-team-admin-actions button.is-primary { background: #7c4dff; }
+.af-team-admin-actions button.is-danger { color: #ffaaa5; }
+.af-team-admin-actions button:disabled, .af-team-admin-hero button:disabled { opacity: .45; cursor: default; }
+
+.af-scope-switch { display: inline-flex; gap: 4px; padding: 4px; border-radius: 13px; background: #1d1c1e; }
+.af-scope-switch button { border: 0; border-radius: 10px; padding: 8px 18px; background: transparent; color: #aaa5ac; cursor: pointer; }
+.af-scope-switch button.is-active { background: #3a3154; color: #eee8ff; }
+.af-project-scope-switch { flex: 0 0 auto; }
+
+.af-workspace-team-share { margin-bottom: 18px; padding: 14px; border-radius: 14px; background: #242128; }
+.af-workspace-team-share__head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.af-workspace-team-share__head span { color: #aaa5ac; font-size: 12px; }
+.af-workspace-team-share__actions { display: flex; gap: 8px; }
+.af-workspace-team-share__actions select, .af-workspace-team-share__actions button { border: 0; border-radius: 10px; padding: 9px 11px; background: #111; color: #e5e2e1; }
+.af-workspace-team-share__actions button { background: #5d3cb7; cursor: pointer; }
+
+@media (max-width: 900px) {
+  .af-team-admin-page { padding: 24px 18px; }
+  .af-team-admin-layout { grid-template-columns: 1fr; }
+  .af-team-admin-fields { grid-template-columns: 1fr; }
+  .af-team-admin-fields label.is-wide { grid-column: auto; }
+}

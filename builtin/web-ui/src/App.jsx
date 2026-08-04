@@ -6,6 +6,7 @@ import WorkspacePage from "./pages/WorkspacePage.jsx";
 import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import AdminUsagePage from "./pages/AdminUsagePage.jsx";
+import AdminTeamsPage from "./pages/AdminTeamsPage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import SchedulesPage from "./pages/SchedulesPage.jsx";
@@ -96,6 +97,7 @@ function RoutedContent({ authUser }) {
   if (path.startsWith("/display")) return <DisplayPage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
+  if (path === "/admin/teams") return <AdminTeamsPage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage authUser={authUser} />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;

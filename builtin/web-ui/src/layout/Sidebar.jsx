@@ -14,6 +14,7 @@ const ITEMS = [
   { to: "/node-studio", label: "节点编辑器", icon: "draw" },
   { to: "/schedules", label: "定时任务", icon: "event_busy" },
   { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
+  { to: "/admin/teams", label: "团队管理", icon: "groups", adminOnly: true },
   { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
