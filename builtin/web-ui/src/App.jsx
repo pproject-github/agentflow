@@ -13,6 +13,7 @@ import SchedulesPage from "./pages/SchedulesPage.jsx";
 import NodeStudioPage from "./pages/NodeStudioPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import WorkflowsPage from "./pages/WorkflowsPage.jsx";
+import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
@@ -89,6 +90,7 @@ function RoutedContent({ authUser }) {
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage />;
+  if (path === "/workflow-report") return <WorkflowReportGuidePage />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
   if (path === "/node-studio") return <NodeStudioPage />;

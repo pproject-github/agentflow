@@ -3998,11 +3998,49 @@ button.af-project-card {
   max-width: 92rem;
 }
 
+.af-workflows-page .af-settings-body {
+  padding-top: 1.25rem;
+}
+
 .af-workflows-hero {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.af-workflows-hero-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.af-workflows-guide-link {
+  min-height: 2.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0 0.75rem;
+  color: rgba(216, 210, 230, 0.7);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-workflows-guide-link:hover {
+  border-color: rgba(147, 113, 255, 0.4);
+  background: rgba(124, 87, 255, 0.12);
+  color: #d7cbff;
+}
+
+.af-workflows-guide-link .material-symbols-outlined {
+  font-size: 1rem;
 }
 
 .af-workflows-eyebrow {
@@ -4016,56 +4054,225 @@ button.af-project-card {
   text-transform: uppercase;
 }
 
-.af-workflows-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.8rem;
+.af-workflows-timeline {
   margin-bottom: 1rem;
-}
-
-.af-workflows-summary > div {
-  position: relative;
   overflow: hidden;
-  min-height: 5.6rem;
   border: 1px solid rgba(178, 170, 200, 0.12);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
-  padding: 1rem;
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.af-workflows-summary > div::after {
+.af-workflows-timeline__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid rgba(178, 170, 200, 0.1);
+}
+
+.af-workflows-timeline__heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+
+.af-workflows-timeline__heading > div > em {
+  border-radius: 999px;
+  background: rgba(98, 174, 255, 0.12);
+  padding: 0.18rem 0.45rem;
+  color: #9ecfff;
+  font-size: 0.64rem;
+  font-style: normal;
+}
+
+.af-workflows-timeline__heading span {
+  color: rgba(216, 210, 230, 0.54);
+  font-size: 0.72rem;
+}
+
+.af-workflows-timeline__heading strong {
+  color: rgba(244, 240, 255, 0.82);
+  font-size: 0.8rem;
+}
+
+.af-workflows-timeline__heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+  border: 0;
+  background: transparent;
+  color: #bfaeff;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.af-workflows-timeline__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.af-workflows-timeline__rail {
+  display: grid;
+  grid-auto-columns: clamp(14rem, 19.2%, 22rem);
+  grid-auto-flow: column;
+  gap: 0.65rem;
+  overflow-x: auto;
+  padding: 1.8rem 0.75rem 0.8rem;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 0.75rem;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+.af-workflows-timeline__rail > button {
+  position: relative;
+  min-width: 0;
+  min-height: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.28rem;
+  overflow: visible;
+  border: 1px solid rgba(178, 170, 200, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 0.7rem 0.75rem 0.7rem 1rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.af-workflows-timeline__rail > button::before {
   content: "";
   position: absolute;
-  right: -1.5rem;
-  bottom: -2rem;
-  width: 5rem;
-  height: 5rem;
+  z-index: 2;
+  left: 0.95rem;
+  top: -1.18rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  box-sizing: border-box;
+  border: 2px solid #8e70eb;
   border-radius: 999px;
-  background: rgba(124, 87, 255, 0.1);
-  filter: blur(8px);
+  background: #18171a;
+  box-shadow: 0 0 0 4px rgba(142, 112, 235, 0.11);
 }
 
-.af-workflows-summary > div.is-attention {
-  border-color: rgba(255, 177, 90, 0.3);
-}
-
-.af-workflows-summary span,
-.af-workflows-summary strong {
-  position: relative;
+.af-workflows-timeline__rail > button::after {
+  content: "";
+  position: absolute;
   z-index: 1;
-  display: block;
+  left: 1.3rem;
+  top: -0.85rem;
+  width: calc(100% + 0.65rem);
+  height: 1px;
+  background: rgba(178, 170, 200, 0.2);
 }
 
-.af-workflows-summary span {
-  margin-bottom: 0.45rem;
-  color: rgba(216, 210, 230, 0.58);
-  font-size: 0.76rem;
+.af-workflows-timeline__rail > button:last-child::after {
+  display: none;
 }
 
-.af-workflows-summary strong {
-  color: var(--af-on-surface);
-  font-family: var(--af-headline);
-  font-size: 1.65rem;
+.af-workflows-timeline__rail > button:hover,
+.af-workflows-timeline__rail > button.is-active {
+  border-color: rgba(147, 113, 255, 0.5);
+  background: rgba(124, 87, 255, 0.13);
+}
+
+.af-workflows-timeline__rail > button.is-active::before {
+  border-color: #c2b2ff;
+  background: #8e70eb;
+  box-shadow: 0 0 0 5px rgba(142, 112, 235, 0.18);
+}
+
+.af-workflows-timeline__rail > button.is-completed::before {
+  border-color: #77d895;
+}
+
+.af-workflows-timeline__rail > button.is-overdue::before {
+  border-color: #ffb35f;
+}
+
+.af-workflows-timeline__rail > button strong {
+  width: 100%;
+  overflow: hidden;
+  color: rgba(244, 240, 255, 0.9);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflows-timeline__rail > button small,
+.af-workflows-timeline__date {
+  width: 100%;
+  overflow: hidden;
+  color: rgba(216, 210, 230, 0.48);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflows-timeline__date {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.af-workflows-timeline__date em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(124, 87, 255, 0.12);
+  padding: 0.14rem 0.4rem;
+  color: #bfaeff;
+  font-size: 0.6rem;
+  font-style: normal;
+}
+
+.is-completed .af-workflows-timeline__date em {
+  background: rgba(91, 214, 125, 0.12);
+  color: #a6f0b7;
+}
+
+.is-overdue .af-workflows-timeline__date em {
+  background: rgba(255, 177, 90, 0.12);
+  color: #ffd09a;
+}
+
+.af-workflows-timeline__unassigned::before {
+  border-color: rgba(216, 210, 230, 0.38) !important;
+  background: #18171a !important;
+  box-shadow: none !important;
+}
+
+.af-workflows-demo-button {
+  min-height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  border: 1px solid rgba(147, 113, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(124, 87, 255, 0.1);
+  padding: 0 0.8rem;
+  color: #cdbfff;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-workflows-demo-button:hover {
+  border-color: rgba(147, 113, 255, 0.5);
+  background: rgba(124, 87, 255, 0.17);
+}
+
+.af-workflows-demo-button .material-symbols-outlined {
+  font-size: 1rem;
 }
 
 .af-workflows-toolbar {
@@ -4266,21 +4473,11 @@ button.af-project-card {
 }
 
 .af-workflow-card__identity h2 {
-  margin: 0.55rem 0 0.28rem;
+  margin: 0.55rem 0 0.48rem;
   overflow: hidden;
   color: var(--af-on-surface);
   font-size: 1rem;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-workflow-card__identity > p {
-  margin: 0 0 0.55rem;
-  overflow: hidden;
-  color: rgba(216, 210, 230, 0.58);
-  font-size: 0.8rem;
-  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4368,14 +4565,20 @@ button.af-project-card {
   background: rgba(124, 87, 255, 0.2);
 }
 
+.af-workflow-open:disabled {
+  border-color: rgba(178, 170, 200, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(216, 210, 230, 0.42);
+  cursor: default;
+}
+
 .af-workflow-open .material-symbols-outlined {
   font-size: 1rem;
 }
 
 @media (max-width: 900px) {
   .af-schedules-summary,
-  .af-schedule-card__grid,
-  .af-workflows-summary {
+  .af-schedule-card__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -4392,6 +4595,28 @@ button.af-project-card {
   .af-workflows-toolbar,
   .af-workflow-card {
     grid-template-columns: 1fr;
+  }
+
+  .af-workflows-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .af-workflows-hero-actions {
+    flex-wrap: wrap;
+  }
+
+  .af-workflows-timeline__heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .af-workflows-timeline__actions {
+    flex-wrap: wrap;
+  }
+
+  .af-workflows-timeline__rail {
+    grid-auto-columns: minmax(14rem, 48%);
   }
 
   .af-workflows-segments {
@@ -22888,7 +23113,11 @@ body:has(.af-public-display-page--canvas) {
   }
 }
 .af-team-admin-page {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   padding: 44px 48px;
   background: var(--af-bg, #131313);
   color: #e5e2e1;
@@ -22911,8 +23140,10 @@ body:has(.af-public-display-page--canvas) {
   padding: 10px 15px; background: #2a292b; color: #e5e2e1; cursor: pointer;
 }
 
-.af-team-admin-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 22px; }
-.af-team-admin-list, .af-team-admin-detail { border-radius: 22px; background: #1c1b1d; padding: 18px; }
+.af-team-admin-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 22px; flex: 1; min-height: 0; }
+.af-team-admin-list, .af-team-admin-detail { min-height: 0; border-radius: 22px; background: #1c1b1d; padding: 18px; }
+.af-team-admin-list { overflow-y: auto; }
+.af-team-admin-detail { display: flex; flex-direction: column; overflow: hidden; }
 .af-team-admin-list form { display: flex; gap: 8px; margin-bottom: 14px; }
 .af-team-admin-list input, .af-team-admin-fields input, .af-team-admin-fields select,
 .af-team-admin-fields textarea, .af-team-admin-members-head input {
@@ -22934,13 +23165,13 @@ body:has(.af-public-display-page--canvas) {
 .af-team-admin-members-head div { display: grid; gap: 5px; }
 .af-team-admin-members-head div span { color: #99939e; font-size: 12px; }
 .af-team-admin-members-head input { max-width: 260px; }
-.af-team-admin-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 9px; max-height: 430px; overflow: auto; }
+.af-team-admin-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); align-content: start; gap: 9px; flex: 1; min-height: 160px; overflow-y: auto; padding-right: 4px; }
 .af-team-admin-members label { display: flex; align-items: center; gap: 10px; padding: 11px; border-radius: 13px; background: #242325; cursor: pointer; }
 .af-team-admin-members label.is-selected { background: #30284a; }
 .af-team-admin-members label > span:nth-of-type(2) { display: grid; flex: 1; }
 .af-team-admin-members label small { color: #99939e; }
 .af-team-admin-members label em { color: #bca9ff; font-size: 11px; font-style: normal; }
-.af-team-admin-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.af-team-admin-actions { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 12px; margin: 18px -18px -18px; padding: 14px 18px 18px; background: #1c1b1d; box-shadow: 0 -16px 28px rgba(0, 0, 0, .18); }
 .af-team-admin-actions > div { display: flex; gap: 9px; }
 .af-team-admin-actions button.is-primary { background: #7c4dff; }
 .af-team-admin-actions button.is-danger { color: #ffaaa5; }
@@ -22959,8 +23190,10 @@ body:has(.af-public-display-page--canvas) {
 .af-workspace-team-share__actions button { background: #5d3cb7; cursor: pointer; }
 
 @media (max-width: 900px) {
-  .af-team-admin-page { padding: 24px 18px; }
-  .af-team-admin-layout { grid-template-columns: 1fr; }
+  .af-team-admin-page { height: 100%; overflow-y: auto; padding: 24px 18px; }
+  .af-team-admin-layout { display: grid; grid-template-columns: 1fr; flex: none; min-height: auto; }
+  .af-team-admin-list, .af-team-admin-detail { overflow: visible; }
+  .af-team-admin-members { max-height: 430px; flex: none; }
   .af-team-admin-fields { grid-template-columns: 1fr; }
   .af-team-admin-fields label.is-wide { grid-column: auto; }
 }

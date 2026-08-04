@@ -177,6 +177,7 @@ import {
 import {
   legacyOverallToGlobalState,
   materializeWorkflowGlobalState,
+  materializeWorkflowProjections,
   mergeWorkflowArtifactLists,
   mergeWorkflowArtifacts,
   mergeWorkflowGlobalState,
@@ -3464,6 +3465,23 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
     || snapshot?.title
     || "",
   ).trim();
+  const timeline = Array.isArray(snapshot?.projections?.timeline)
+    ? snapshot.projections.timeline
+        .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+        .map((entry) => ({
+          key: String(entry.key || [entry.source, entry.kind, entry.id].filter(Boolean).join(":")),
+          kind: String(entry.kind || ""),
+          id: String(entry.id || ""),
+          title: String(entry.title || entry.label || entry.id || ""),
+          date: String(entry.date || ""),
+          source: String(entry.source || ""),
+          dimensions: entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+            ? entry.dimensions
+            : {},
+          order: Number.isFinite(Number(entry.order)) ? Number(entry.order) : 0,
+        }))
+        .filter((entry) => entry.kind && entry.id)
+    : [];
   const updatedAtTimestamp = Math.max(
     prdWorkflowDashboardTimestamp(record),
     prdWorkflowDashboardTimestamp(snapshot),
@@ -3481,6 +3499,7 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
     platforms,
     actionCount: actions.length,
     completedActionCount: completedActions,
+    timeline,
     latestAction: latestAction
       ? {
           title: String(latestAction.title || latestAction.label || latestAction.action || latestAction.id || "").trim(),
@@ -3497,6 +3516,72 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
     teamName: String(getTeamById(collaboration.teamId)?.name || ""),
     shareActive: collaboration.shareActive === true,
     updatedAt: updatedAtTimestamp ? new Date(updatedAtTimestamp).toISOString() : String(record?.updatedAt || ""),
+  };
+}
+
+function prdWorkflowDashboardTimeline(workflows = []) {
+  const buckets = new Map();
+  const assignedWorkflowIds = new Set();
+  const rows = [...(Array.isArray(workflows) ? workflows : [])].sort((left, right) => {
+    const leftAt = Date.parse(String(left?.updatedAt || ""));
+    const rightAt = Date.parse(String(right?.updatedAt || ""));
+    if (Number.isFinite(leftAt) && Number.isFinite(rightAt)) return leftAt - rightAt;
+    if (Number.isFinite(leftAt) !== Number.isFinite(rightAt)) return Number.isFinite(leftAt) ? 1 : -1;
+    return String(left?.id || left?.tapdId || "").localeCompare(String(right?.id || right?.tapdId || ""));
+  });
+  for (const workflow of rows) {
+    const workflowId = String(workflow?.id || workflow?.tapdId || "");
+    const seen = new Set();
+    for (const entry of Array.isArray(workflow?.timeline) ? workflow.timeline : []) {
+      const key = String(entry?.key || [entry?.source, entry?.kind, entry?.id].filter(Boolean).join(":"));
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      assignedWorkflowIds.add(workflowId);
+      const current = buckets.get(key) || {
+        key,
+        kind: String(entry.kind || ""),
+        id: String(entry.id || ""),
+        title: String(entry.title || entry.id || ""),
+        date: String(entry.date || ""),
+        source: String(entry.source || ""),
+        dimensions: entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+          ? entry.dimensions
+          : {},
+        order: Number.isFinite(Number(entry.order)) ? Number(entry.order) : 0,
+        workflowCount: 0,
+        completedCount: 0,
+        blockedCount: 0,
+        workflowIds: [],
+      };
+      current.kind = String(entry.kind || current.kind);
+      current.id = String(entry.id || current.id);
+      current.title = String(entry.title || current.title);
+      current.date = String(entry.date || current.date);
+      current.source = String(entry.source || current.source);
+      current.dimensions = entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+        ? entry.dimensions
+        : current.dimensions;
+      current.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : current.order;
+      current.workflowCount += 1;
+      if (workflow?.state === "completed") current.completedCount += 1;
+      if (workflow?.state === "blocked") current.blockedCount += 1;
+      current.workflowIds.push(workflowId);
+      buckets.set(key, current);
+    }
+  }
+  const timeline = Array.from(buckets.values()).sort((left, right) => {
+    const leftAt = Date.parse(String(left.date || ""));
+    const rightAt = Date.parse(String(right.date || ""));
+    const leftValid = Number.isFinite(leftAt);
+    const rightValid = Number.isFinite(rightAt);
+    if (leftValid && rightValid && leftAt !== rightAt) return leftAt - rightAt;
+    if (leftValid !== rightValid) return leftValid ? -1 : 1;
+    if (left.order !== right.order) return left.order - right.order;
+    return left.title.localeCompare(right.title, undefined, { numeric: true, sensitivity: "base" });
+  });
+  return {
+    timeline,
+    unassignedCount: rows.filter((workflow) => !assignedWorkflowIds.has(String(workflow?.id || workflow?.tapdId || ""))).length,
   };
 }
 
@@ -11083,13 +11168,15 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   const overall = prdWorkflowOverallFromEvents(tapdId, snapshot, runtimeEvents);
   const globalState = prdWorkflowGlobalStateFromEvents(tapdId, snapshot, runtimeEvents);
   const artifacts = mergeWorkflowArtifacts(snapshot?.artifacts, runtimeEvents);
+  const projections = materializeWorkflowProjections(snapshot, runtimeEvents);
   return {
     ...snapshot,
     workflow: globalState.workflow,
     overall,
     globalState,
     artifacts,
-    runtimeRevision: workflowRuntimeRevision(globalState, artifacts, runtimeEvents),
+    projections,
+    runtimeRevision: workflowRuntimeRevision(globalState, artifacts, runtimeEvents, projections),
     runtimeEvents,
     events,
     sources: {
@@ -12515,7 +12602,7 @@ export function startUiServer({
             ? getTeamById(requestedTeamId)
             : getTeamForUser(userCtx.userId);
           if (!team || team.status !== "active") {
-            json(res, 200, { ok: true, view: "team", team: null, workflows: [] });
+            json(res, 200, { ok: true, view: "team", team: null, workflows: [], timeline: [], unassignedCount: 0 });
             return;
           }
           records = listPrdWorkflowCollaborationsForTeam(team.id);
@@ -12529,9 +12616,17 @@ export function startUiServer({
           const latestClient = prdWorkflowLatestClientSnapshot(stateRoot, stateRoot, tapdId);
           const legacy = prdWorkflowReadCachedSnapshot(stateRoot, tapdId);
           const snapshot = project?.snapshot || latestClient || legacy?.snapshot || {};
-          return prdWorkflowDashboardSummary(record, snapshot, userCtx);
+          const materialized = prdWorkflowMergeRuntimeEvents(stateRoot, tapdId, snapshot);
+          return prdWorkflowDashboardSummary(record, materialized, userCtx);
         });
-        json(res, 200, { ok: true, view: view === "team" ? "team" : "personal", team: teamSummaryWithUsers(team), workflows });
+        const dashboardTimeline = prdWorkflowDashboardTimeline(workflows);
+        json(res, 200, {
+          ok: true,
+          view: view === "team" ? "team" : "personal",
+          team: teamSummaryWithUsers(team),
+          workflows,
+          ...dashboardTimeline,
+        });
       } catch (error) {
         json(res, 500, { error: (error && error.message) || String(error) });
       }
@@ -13635,6 +13730,13 @@ export function startUiServer({
         if (workflowScope.error) {
           json(res, workflowScope.status || 400, { error: workflowScope.error });
           return;
+        }
+        if (!workflowScope.collaboration) {
+          const ensured = ensurePrdWorkflowCollaboration({ tapdId, userId: userCtx.userId });
+          if (ensured.error) {
+            json(res, ensured.status || 400, { error: ensured.error });
+            return;
+          }
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   legacyOverallToGlobalState,
   materializeWorkflowGlobalState,
+  materializeWorkflowProjections,
   mergeWorkflowArtifactLists,
   mergeWorkflowGlobalState,
   normalizeWorkflowReference,
@@ -43,6 +44,16 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
         },
       },
     },
+    projections: {
+      timeline: [{
+        kind: "version",
+        id: "android-5.63.0",
+        title: "Android 5.63.0",
+        date: "2026-08-20",
+        source: "prd-flow",
+        dimensions: { platform: "android" },
+      }],
+    },
     idempotencyKey: "issue-2-mr-943",
   });
 
@@ -52,6 +63,7 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
   assert.equal(report.event.stageKey, "implementation:android:issue-2");
   assert.equal(report.event.artifacts[0].scope, "action");
   assert.equal(report.event.globalStatePatch.title, "Remote Config");
+  assert.equal(report.event.projections.timeline[0].key, "prd-flow:version:android-5.63.0");
   assert.equal(report.event.idempotencyKey, "issue-2-mr-943");
 });
 
@@ -76,6 +88,42 @@ test("supports global-only reports and rejects malformed reports", () => {
     normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" } }).error,
     /requires action/,
   );
+  assert.match(
+    normalizeWorkflowReport({
+      workflow: { namespace: "tapd", id: "1015046" },
+      projections: { timeline: [{ title: "missing identity" }] },
+    }).error,
+    /requires kind and id/,
+  );
+});
+
+test("materializes producer-owned timeline projections with replace semantics", () => {
+  const base = {
+    projections: {
+      timeline: [{ kind: "sprint", id: "sprint-1", title: "Sprint 1" }],
+    },
+  };
+  const projected = materializeWorkflowProjections(base, [{
+    occurredAt: "2026-08-01T00:00:00.000Z",
+    projections: {
+      timeline: [{
+        kind: "version",
+        id: "ios-5.63.0",
+        title: "iOS 5.63.0",
+        date: "2026-08-22",
+        dimensions: { platform: "ios", train: "stable" },
+      }],
+    },
+  }]);
+  assert.equal(projected.timeline.length, 1);
+  assert.equal(projected.timeline[0].kind, "version");
+  assert.equal(projected.timeline[0].dimensions.train, "stable");
+
+  const cleared = materializeWorkflowProjections({ projections: projected }, [{
+    occurredAt: "2026-08-02T00:00:00.000Z",
+    projections: { timeline: [] },
+  }]);
+  assert.deepEqual(cleared.timeline, []);
 });
 
 test("materializes legacy Overall and generic patches into one global state", () => {

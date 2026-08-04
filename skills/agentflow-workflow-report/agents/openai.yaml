@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentFlow Workflow Report"
+  short_description: "Read and report Workflow state safely with a stable protocol"
+  default_prompt: "Use $agentflow-workflow-report to read the current Workflow, merge the intended update, and report it with revision and idempotency safeguards."

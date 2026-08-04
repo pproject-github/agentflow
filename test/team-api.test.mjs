@@ -74,10 +74,30 @@ test("team APIs manage membership and expose team-scoped iterations and projects
     assert.equal(personalFlowRows.some((flow) => flow.id === "team-shared-flow"), false);
 
     workflows.ensurePrdWorkflowCollaboration({ tapdId: "778899", userId: admin.user.userId });
+    const projectionReport = await request(admin.token, "/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: { namespace: "tapd", id: "778899" },
+        projections: {
+          timeline: [{
+            kind: "release",
+            id: "platform-august",
+            title: "Platform August",
+            date: "2026-08-20",
+            source: "prd-flow",
+            dimensions: { platform: "all" },
+          }],
+        },
+        idempotencyKey: "team-api-projection",
+      }),
+    });
+    assert.equal(projectionReport.status, 200, await projectionReport.text());
     const teamIterations = await request(guest.token, "/api/prd-workflows?view=team");
     const teamIterationPayload = await teamIterations.json();
     assert.equal(teamIterationPayload.team.id, teamId);
     assert.equal(teamIterationPayload.workflows.some((workflow) => workflow.tapdId === "778899"), true);
+    assert.equal(teamIterationPayload.timeline[0].id, "platform-august");
+    assert.equal(teamIterationPayload.timeline[0].workflowCount, 1);
     const personalIterations = await request(guest.token, "/api/prd-workflows?view=personal");
     const personalIterationPayload = await personalIterations.json();
     assert.equal(personalIterationPayload.workflows.some((workflow) => workflow.tapdId === "778899"), false);
