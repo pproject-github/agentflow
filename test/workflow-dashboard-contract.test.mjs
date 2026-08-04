@@ -24,7 +24,9 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
     readFile(cssPath, "utf8"),
   ]);
 
-  assert.match(page, /fetch\("\/api\/prd-workflows"\)/);
+  assert.match(page, /fetch\(`\/api\/prd-workflows\?view=\$\{encodeURIComponent\(view\)\}`\)/);
+  assert.match(page, />个人迭代<\/button>/);
+  assert.match(page, />团队迭代<\/button>/);
   assert.match(page, /view: "workflow"/);
   assert.match(page, /tapdId: String\(workflow\?\.tapdId \|\| ""\)/);
   assert.match(page, /scope === "owned"/);

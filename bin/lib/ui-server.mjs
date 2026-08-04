@@ -145,6 +145,8 @@ import {
   getWorkspaceCollaborationForProject,
   listWorkspaceCollaborationsForUser,
   removeWorkspaceCollaborationMember,
+  removeWorkspaceCollaborationTeamShare,
+  setWorkspaceCollaborationTeamShare,
   updateWorkspaceCollaborationFlow,
   workspaceCollaborationAccess,
   workspaceCollaborationSummary,
@@ -157,11 +159,21 @@ import {
   getPrdWorkflowCollaborationForUser,
   ensurePrdWorkflowShareLink,
   listPrdWorkflowCollaborationsForUser,
+  listPrdWorkflowCollaborationsForTeam,
   prdWorkflowCollaborationAccess,
   prdWorkflowCollaborationSummary,
   removePrdWorkflowCollaborationMember,
   revokePrdWorkflowShareLink,
 } from "./prd-workflow-collaboration.mjs";
+import {
+  createTeam,
+  deleteTeam,
+  getTeamById,
+  getTeamForUser,
+  listTeams,
+  setTeamMembers,
+  updateTeam,
+} from "./teams.mjs";
 import {
   legacyOverallToGlobalState,
   materializeWorkflowGlobalState,
@@ -3305,12 +3317,30 @@ function workspaceCollaborationSummaryWithUsers(record, userId) {
   const summary = workspaceCollaborationSummary(record, userId);
   if (!summary) return null;
   const users = readAuthUsers();
+  const teams = new Map(listTeams().map((team) => [team.id, team]));
   return {
     ...summary,
     ownerUsername: String(users[summary.ownerId]?.username || summary.ownerId),
     members: (summary.members || []).map((member) => ({
       ...member,
       username: String(users[member.userId]?.username || member.userId),
+    })),
+    teamShares: (summary.teamShares || []).map((share) => ({
+      ...share,
+      teamName: String(teams.get(share.teamId)?.name || share.teamId),
+    })),
+  };
+}
+
+function teamSummaryWithUsers(team) {
+  if (!team) return null;
+  const users = readAuthUsers();
+  return {
+    ...team,
+    members: (team.members || []).map((userId) => ({
+      userId,
+      username: String(users[userId]?.username || userId),
+      isAdmin: Boolean(users[userId]?.isAdmin),
     })),
   };
 }
@@ -3462,6 +3492,9 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
     ownerId: String(collaboration.ownerId || ""),
     ownerUsername: String(collaboration.ownerUsername || collaboration.ownerId || ""),
     memberCount: Number(collaboration.memberCount || 0),
+    accessSource: String(collaboration.accessSource || ""),
+    teamId: String(collaboration.teamId || ""),
+    teamName: String(getTeamById(collaboration.teamId)?.name || ""),
     shareActive: collaboration.shareActive === true,
     updatedAt: updatedAtTimestamp ? new Date(updatedAtTimestamp).toISOString() : String(record?.updatedAt || ""),
   };
@@ -12473,7 +12506,23 @@ export function startUiServer({
         return;
       }
       try {
-        const workflows = listPrdWorkflowCollaborationsForUser(userCtx.userId).map((record) => {
+        const view = String(url.searchParams.get("view") || "personal").trim().toLowerCase();
+        let team = null;
+        let records;
+        if (view === "team") {
+          const requestedTeamId = String(url.searchParams.get("teamId") || "").trim();
+          team = requestedTeamId && authUser?.isAdmin
+            ? getTeamById(requestedTeamId)
+            : getTeamForUser(userCtx.userId);
+          if (!team || team.status !== "active") {
+            json(res, 200, { ok: true, view: "team", team: null, workflows: [] });
+            return;
+          }
+          records = listPrdWorkflowCollaborationsForTeam(team.id);
+        } else {
+          records = listPrdWorkflowCollaborationsForUser(userCtx.userId);
+        }
+        const workflows = records.map((record) => {
           const stateRoot = path.resolve(getAgentflowUserDataRoot(record.ownerId));
           const tapdId = String(record.tapdId || "").trim();
           const project = prdWorkflowReadProjectState(stateRoot, tapdId);
@@ -12482,7 +12531,7 @@ export function startUiServer({
           const snapshot = project?.snapshot || latestClient || legacy?.snapshot || {};
           return prdWorkflowDashboardSummary(record, snapshot, userCtx);
         });
-        json(res, 200, { ok: true, workflows });
+        json(res, 200, { ok: true, view: view === "team" ? "team" : "personal", team: teamSummaryWithUsers(team), workflows });
       } catch (error) {
         json(res, 500, { error: (error && error.message) || String(error) });
       }
@@ -14158,6 +14207,62 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/teams/me") {
+      const team = getTeamForUser(userCtx.userId);
+      json(res, 200, { team: teamSummaryWithUsers(team) });
+      return;
+    }
+
+    if (url.pathname === "/api/admin/teams") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        const assigned = new Set(listTeams().flatMap((team) => team.members || []));
+        const users = Object.entries(readAuthUsers()).map(([userId, user]) => ({
+          userId,
+          username: String(user?.username || userId),
+          isAdmin: Boolean(user?.isAdmin),
+          assigned: assigned.has(userId),
+          teamId: getTeamForUser(userId, { includeInactive: true })?.id || "",
+        }));
+        json(res, 200, { teams: listTeams().map(teamSummaryWithUsers), users });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      let result;
+      if (req.method === "POST") {
+        result = createTeam(payload || {});
+      } else if (req.method === "PATCH") {
+        result = updateTeam(payload?.teamId, payload || {});
+      } else if (req.method === "PUT") {
+        const users = readAuthUsers();
+        const memberIds = Array.isArray(payload?.members) ? payload.members.map((value) => String(value || "").trim().toLowerCase()) : [];
+        const unknown = memberIds.find((userId) => !users[userId]);
+        result = unknown
+          ? { error: `用户不存在：${unknown}`, status: 404 }
+          : setTeamMembers(payload?.teamId, memberIds);
+      } else if (req.method === "DELETE") {
+        result = deleteTeam(payload?.teamId);
+      } else {
+        json(res, 405, { error: "Method not allowed" });
+        return;
+      }
+      if (result?.error) {
+        json(res, result.status || 400, { error: result.error });
+        return;
+      }
+      json(res, 200, { ok: true, ...result, teams: listTeams().map(teamSummaryWithUsers) });
+      return;
+    }
+
     if (url.pathname === "/api/feedback") {
       if (req.method === "POST") {
         let payload;
@@ -14345,6 +14450,8 @@ export function startUiServer({
     if (url.pathname === "/api/flows") {
       if (req.method === "GET") {
         try {
+          const projectView = String(url.searchParams.get("view") || "all").trim().toLowerCase();
+          const currentTeam = getTeamForUser(userCtx.userId);
           const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
             .filter((flow) => (
               !workspaceFlowCollaborationGuard(
@@ -14387,7 +14494,22 @@ export function startUiServer({
             });
             existingCollaborationIds.add(record.id);
           }
-          json(res, 200, flows);
+          const visibleFlows = projectView === "team"
+            ? flows.filter((flow) => (
+                currentTeam
+                && Array.isArray(flow.collaboration?.teamShares)
+                && flow.collaboration.teamShares.some((share) => share.teamId === currentTeam.id)
+              ))
+            : projectView === "personal"
+              ? flows.filter((flow) => (
+                  !flow.collaboration
+                  || flow.collaboration.ownerId === userCtx.userId
+                  || flow.collaboration.members?.some((member) => member.userId === userCtx.userId)
+                  || flow.source === "builtin"
+                  || flow.source === "admin"
+                ))
+              : flows;
+          json(res, 200, visibleFlows);
         } catch (e) {
           json(res, 500, { error: (e && e.message) || String(e) });
         }
@@ -14707,6 +14829,74 @@ export function startUiServer({
           ok: true,
           workspace: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
           member: { userId: targetUser.userId, username: targetUser.username, role: "editor" },
+        });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/collaboration/team-share" && (req.method === "POST" || req.method === "DELETE")) {
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const flowId = String(payload?.flowId || "").trim();
+        const flowSource = String(payload?.flowSource || "user").trim();
+        const archived = payload?.archived === true || payload?.flowArchived === true;
+        if (!flowId || (flowSource !== "workspace" && flowSource !== "user")) {
+          json(res, 400, { error: "当前 Project 不支持团队分享" });
+          return;
+        }
+        const targetTeam = getTeamById(payload?.teamId);
+        const actorTeam = getTeamForUser(userCtx.userId);
+        if (!targetTeam || targetTeam.status !== "active") {
+          json(res, 404, { error: "团队不存在或已停用" });
+          return;
+        }
+        if (!authUser?.isAdmin && actorTeam?.id !== targetTeam.id) {
+          json(res, 403, { error: "只能分享给自己所在的团队" });
+          return;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource,
+          workspaceId: payload.workspaceId || "",
+          archived,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        const ensured = ensureWorkspaceCollaboration({
+          flowId,
+          flowSource,
+          archived,
+          userId: userCtx.userId,
+        });
+        if (ensured.error) {
+          json(res, ensured.status || 400, { error: ensured.error });
+          return;
+        }
+        const result = req.method === "POST"
+          ? setWorkspaceCollaborationTeamShare({
+              workspaceId: ensured.workspace.id,
+              userId: userCtx.userId,
+              teamId: targetTeam.id,
+              role: payload?.role,
+            })
+          : removeWorkspaceCollaborationTeamShare({
+              workspaceId: ensured.workspace.id,
+              userId: userCtx.userId,
+              teamId: targetTeam.id,
+            });
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        const record = getWorkspaceCollaborationForProject({ workspaceId: ensured.workspace.id });
+        json(res, 200, {
+          ok: true,
+          workspace: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
+          team: teamSummaryWithUsers(targetTeam),
         });
       } catch (e) {
         json(res, 400, { error: (e && e.message) || String(e) });

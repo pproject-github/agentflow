@@ -44,6 +44,8 @@ function workflowUrl(workflow) {
 export default function WorkflowsPage() {
   const { navigate } = useRoute();
   const [workflows, setWorkflows] = useState([]);
+  const [view, setView] = useState("personal");
+  const [team, setTeam] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -54,17 +56,19 @@ export default function WorkflowsPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/prd-workflows");
+      const response = await fetch(`/api/prd-workflows?view=${encodeURIComponent(view)}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "读取迭代列表失败");
       setWorkflows(Array.isArray(payload.workflows) ? payload.workflows : []);
+      setTeam(payload.team || null);
     } catch (loadError) {
       setError(String(loadError.message || loadError));
       setWorkflows([]);
+      setTeam(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     void loadWorkflows();
@@ -120,7 +124,11 @@ export default function WorkflowsPage() {
             <div>
               <span className="af-workflows-eyebrow">Workflow Dashboard</span>
               <h1 className="af-settings-h1">迭代</h1>
-              <p className="af-settings-lead">集中查看我创建和参与的需求 Workflow，追踪阶段、Action 进度与最新动态。</p>
+              <p className="af-settings-lead">{view === "team" ? `汇总${team?.name ? `「${team.name}」` : "当前团队"}的需求 Workflow，按负责人追踪进度与风险。` : "集中查看我创建和参与的需求 Workflow，追踪阶段、Action 进度与最新动态。"}</p>
+            </div>
+            <div className="af-scope-switch" aria-label="迭代视图">
+              <button type="button" className={view === "personal" ? "is-active" : ""} onClick={() => setView("personal")}>个人迭代</button>
+              <button type="button" className={view === "team" ? "is-active" : ""} onClick={() => setView("team")}>团队迭代</button>
             </div>
           </section>
 
@@ -171,8 +179,8 @@ export default function WorkflowsPage() {
           {!loading && !error && workflows.length === 0 ? (
             <div className="af-workflows-empty">
               <span className="material-symbols-outlined" aria-hidden>timeline</span>
-              <strong>暂无迭代</strong>
-              <p>当 prd-flow 上报 Workflow 后，它会出现在这里。</p>
+              <strong>{view === "team" && !team ? "尚未加入团队" : "暂无迭代"}</strong>
+              <p>{view === "team" && !team ? "请联系超级管理员完成团队划分。" : "当 prd-flow 上报 Workflow 后，它会出现在这里。"}</p>
             </div>
           ) : null}
           {!loading && workflows.length > 0 && filtered.length === 0 ? (
@@ -209,6 +217,7 @@ export default function WorkflowsPage() {
                         <span key={platform}>{platformLabel(platform)}</span>
                       ))}
                       <span>Owner · {workflow.ownerUsername || workflow.ownerId || "-"}</span>
+                      {view === "team" && workflow.teamName ? <span>团队 · {workflow.teamName}</span> : null}
                     </div>
                   </div>
 

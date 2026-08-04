@@ -363,6 +363,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const canEditSkillCollections = Boolean(authUser?.isAdmin);
   const [filter, setFilter] = useState(resourceKind || "all");
   const [apiFlows, setApiFlows] = useState([]);
+  const [projectView, setProjectView] = useState("personal");
   const [globalNodes, setGlobalNodes] = useState([]);
   const [globalSkills, setGlobalSkills] = useState([]);
   const [flowSnippets, setFlowSnippets] = useState([]);
@@ -405,7 +406,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     const myId = ++mountIdRef.current;
     setListError("");
     try {
-      const rFlows = await fetch("/api/flows");
+      const rFlows = await fetch(`/api/flows?view=${encodeURIComponent(projectView)}`);
       if (myId !== mountIdRef.current) return;
       if (!rFlows.ok) throw new Error("HTTP " + rFlows.status);
       const data = await rFlows.json();
@@ -449,7 +450,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       setAdminBuiltinConfig({ hiddenBuiltins: [], promoted: [] });
     }
     setLoaded(true);
-  }, [authUser?.isAdmin]);
+  }, [authUser?.isAdmin, projectView]);
 
   const updateAdminBuiltinFlow = useCallback(async (flow, action) => {
     if (!authUser?.isAdmin || !flow?.id) return;
@@ -1030,6 +1031,12 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
           </div>
         )}
         <div className="af-projects-top-right">
+          {!isResourceTab ? (
+            <div className="af-scope-switch af-project-scope-switch" aria-label="Project 视图">
+              <button type="button" className={projectView === "personal" ? "is-active" : ""} onClick={() => setProjectView("personal")}>个人</button>
+              <button type="button" className={projectView === "team" ? "is-active" : ""} onClick={() => setProjectView("team")}>团队</button>
+            </div>
+          ) : null}
           <div className="af-search-wrap">
             <span className="material-symbols-outlined af-search-icon">search</span>
             <input
@@ -1452,11 +1459,13 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                       <span className={badgeClass(sourceBadgeMeta(f.source, t).tone)}>
                         <HighlightMatch query={pipelineSearch}>{sourceBadgeMeta(f.source, t).label}</HighlightMatch>
                       </span>
-                      {f.source === "workspace" && f.collaboration?.role ? (
+                      {f.collaboration?.role ? (
                         <span className={badgeClass(f.collaboration.role === "owner" ? "primary" : "muted")}>
                           {f.collaboration.role === "owner"
-                            ? "我创建的"
-                            : `${f.collaboration.ownerUsername || f.collaboration.ownerId} 分享`}
+                            ? f.collaboration.teamShares?.length ? "已分享团队" : "我创建的"
+                            : f.collaboration.accessSource === "team"
+                              ? `${f.collaboration.teamShares?.find((share) => share.teamId === f.collaboration.teamId)?.teamName || "团队"}共享`
+                              : `${f.collaboration.ownerUsername || f.collaboration.ownerId} 分享`}
                         </span>
                       ) : null}
                       {f.archived ? (

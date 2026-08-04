@@ -8012,6 +8012,9 @@ function WorkspacePageInner() {
   const [workspaceShareError, setWorkspaceShareError] = useState("");
   const [workspaceShareUsername, setWorkspaceShareUsername] = useState("");
   const [workspaceShareRemovingUserId, setWorkspaceShareRemovingUserId] = useState("");
+  const [workspaceShareTeam, setWorkspaceShareTeam] = useState(null);
+  const [workspaceShareTeamRole, setWorkspaceShareTeamRole] = useState("viewer");
+  const [workspaceShareTeamBusy, setWorkspaceShareTeamBusy] = useState(false);
   const [workspaceConflict, setWorkspaceConflict] = useState(null);
   const [workspaceConflictOpen, setWorkspaceConflictOpen] = useState(false);
   const [workspaceConflictChoices, setWorkspaceConflictChoices] = useState({});
@@ -12112,7 +12115,38 @@ function WorkspacePageInner() {
   const openWorkspaceShareDialog = useCallback(() => {
     setWorkspaceShareError("");
     setWorkspaceShareOpen(true);
-  }, []);
+    fetch("/api/teams/me")
+      .then((response) => response.json().then((payload) => ({ response, payload })))
+      .then(({ response, payload }) => {
+        if (!response.ok) throw new Error(payload.error || "读取团队失败");
+        const nextTeam = payload.team || null;
+        setWorkspaceShareTeam(nextTeam);
+        const existing = workspaceCollaboration?.teamShares?.find((share) => share.teamId === nextTeam?.id);
+        setWorkspaceShareTeamRole(existing?.role === "editor" ? "editor" : "viewer");
+      })
+      .catch((error) => setWorkspaceShareError(String(error.message || error)));
+  }, [workspaceCollaboration?.teamShares]);
+
+  const updateWorkspaceTeamShare = useCallback(async (remove = false) => {
+    if (!workspaceShareTeam?.id) return;
+    setWorkspaceShareTeamBusy(true);
+    setWorkspaceShareError("");
+    try {
+      const response = await fetch("/api/workspace/collaboration/team-share", {
+        method: remove ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...flowParams, teamId: workspaceShareTeam.id, role: workspaceShareTeamRole }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || (remove ? "取消团队分享失败" : "分享到团队失败"));
+      setWorkspaceCollaboration(payload.workspace || null);
+      setStatus(remove ? `已取消对「${workspaceShareTeam.name}」的分享` : `已分享到「${workspaceShareTeam.name}」`);
+    } catch (error) {
+      setWorkspaceShareError(String(error.message || error));
+    } finally {
+      setWorkspaceShareTeamBusy(false);
+    }
+  }, [flowParams, workspaceShareTeam, workspaceShareTeamRole]);
 
   const removeWorkspaceSharedMember = useCallback(async (member) => {
     const memberUserId = String(member?.userId || "").trim();
@@ -14997,6 +15031,28 @@ function WorkspacePageInner() {
                 </button>
               </div>
               <div className="af-flow-snippet-modal__body">
+                <div className="af-workspace-team-share">
+                  <div className="af-workspace-team-share__head">
+                    <strong>分享到团队</strong>
+                    <span>{workspaceShareTeam ? workspaceShareTeam.name : "尚未加入团队"}</span>
+                  </div>
+                  {workspaceShareTeam ? (
+                    <div className="af-workspace-team-share__actions">
+                      <select value={workspaceShareTeamRole} onChange={(event) => setWorkspaceShareTeamRole(event.target.value)} aria-label="团队权限">
+                        <option value="viewer">只读</option>
+                        <option value="editor">可编辑和运行</option>
+                      </select>
+                      {workspaceCollaboration?.teamShares?.some((share) => share.teamId === workspaceShareTeam.id) ? (
+                        <>
+                          <button type="button" disabled={workspaceShareTeamBusy} onClick={() => void updateWorkspaceTeamShare(false)}>{workspaceShareTeamBusy ? "处理中..." : "更新权限"}</button>
+                          <button type="button" disabled={workspaceShareTeamBusy} onClick={() => void updateWorkspaceTeamShare(true)}>取消分享</button>
+                        </>
+                      ) : (
+                        <button type="button" disabled={workspaceShareTeamBusy} onClick={() => void updateWorkspaceTeamShare(false)}>{workspaceShareTeamBusy ? "分享中..." : "分享到团队"}</button>
+                      )}
+                    </div>
+                  ) : <p className="af-display-link-modal__empty">联系超级管理员将你加入团队后，即可在这里分享。</p>}
+                </div>
                 <p className="af-display-link-modal__empty">
                   输入已注册用户名。添加后，这个 Workspace 会直接出现在对方的项目列表中。
                 </p>
