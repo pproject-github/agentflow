@@ -21,6 +21,10 @@ function cleanString(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function hasOwn(value, key) {
+  return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) return value.map((item) => stableValue(item));
   if (value && typeof value === "object") {
@@ -103,6 +107,67 @@ function normalizeWorkflowArtifact(value, index = 0, defaultScope = "action") {
     scope,
     status: cleanString(raw.status, 80),
   };
+}
+
+export function normalizeWorkflowTimelineProjection(value, index = 0) {
+  const raw = plainObject(value);
+  const kind = cleanString(raw.kind || raw.type, 80).toLowerCase();
+  const id = cleanString(raw.id || raw.key, 240);
+  if (!kind || !id) return null;
+  const source = cleanString(raw.source || raw.namespace, 120).toLowerCase();
+  const date = cleanString(raw.date || raw.targetDate || raw.target_date, 80);
+  const dimensions = mergeWorkflowGlobalState({}, plainObject(raw.dimensions || raw.facets));
+  const key = cleanString(raw.key || [source, kind, id].filter(Boolean).join(":"), 500);
+  return {
+    ...mergeWorkflowGlobalState({}, raw),
+    key: key || `${kind}:${id}`,
+    kind,
+    id,
+    title: cleanString(raw.title || raw.label || id, 500) || id,
+    ...(source ? { source } : {}),
+    ...(date ? { date } : {}),
+    dimensions,
+    order: Number.isFinite(Number(raw.order)) ? Number(raw.order) : index,
+  };
+}
+
+function normalizeWorkflowProjectionState(value = {}) {
+  const raw = mergeWorkflowGlobalState({}, plainObject(value));
+  if (Array.isArray(value?.timeline)) {
+    raw.timeline = value.timeline
+      .map((item, index) => normalizeWorkflowTimelineProjection(item, index))
+      .filter(Boolean)
+      .slice(0, 100);
+  } else {
+    delete raw.timeline;
+  }
+  return raw;
+}
+
+export function materializeWorkflowProjections(snapshot = {}, runtimeEvents = []) {
+  const base =
+    snapshot.projections ||
+    snapshot.workflowProjections ||
+    snapshot.workflow_projections ||
+    snapshot.raw?.projections ||
+    {};
+  let projections = normalizeWorkflowProjectionState(base);
+  const events = [...(Array.isArray(runtimeEvents) ? runtimeEvents : [])]
+    .sort((left, right) => eventTime(left) - eventTime(right));
+  for (const event of events) {
+    const next = event?.projections || event?.workflowProjections || event?.workflow_projections;
+    if (!next || typeof next !== "object" || Array.isArray(next) || !hasOwn(next, "timeline")) continue;
+    projections = {
+      ...projections,
+      timeline: Array.isArray(next.timeline)
+        ? next.timeline
+            .map((item, index) => normalizeWorkflowTimelineProjection(item, index))
+            .filter(Boolean)
+            .slice(0, 100)
+        : projections.timeline || [],
+    };
+  }
+  return projections;
 }
 
 export function mergeWorkflowGlobalState(base, patch) {
@@ -206,6 +271,22 @@ export function normalizeWorkflowReport(payload = {}) {
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
     .map((item, index) => normalizeWorkflowArtifact(item, index, action ? "action" : "global"));
 
+  const rawProjections = plainObject(payload.projections || payload.workflowProjections || payload.workflow_projections);
+  const hasProjections = Object.keys(rawProjections).length > 0 || hasOwn(payload, "projections");
+  if (hasProjections && !hasOwn(rawProjections, "timeline")) {
+    return { error: "projections requires timeline" };
+  }
+  if (hasProjections && !Array.isArray(rawProjections.timeline)) {
+    return { error: "projections.timeline must be an array" };
+  }
+  const invalidTimelineIndex = hasProjections
+    ? rawProjections.timeline.findIndex((item, index) => !normalizeWorkflowTimelineProjection(item, index))
+    : -1;
+  if (invalidTimelineIndex >= 0) {
+    return { error: `projections.timeline[${invalidTimelineIndex}] requires kind and id` };
+  }
+  const projections = hasProjections ? normalizeWorkflowProjectionState(rawProjections) : null;
+
   const rawGlobalState = plainObject(payload.globalState || payload.global_state);
   const hasGlobalState = Object.keys(rawGlobalState).length > 0;
   const globalStatePatch = plainObject(rawGlobalState.patch);
@@ -215,8 +296,8 @@ export function normalizeWorkflowReport(payload = {}) {
   if (hasGlobalState && !Object.keys(globalStatePatch).length && !globalStateRemove.length) {
     return { error: "globalState requires patch or remove" };
   }
-  if (!action && !artifacts.length && !hasGlobalState) {
-    return { error: "Workflow report requires action, artifacts, or globalState" };
+  if (!action && !artifacts.length && !hasGlobalState && !hasProjections) {
+    return { error: "Workflow report requires action, artifacts, globalState, or projections" };
   }
 
   const idempotencyKey = cleanString(
@@ -257,6 +338,7 @@ export function normalizeWorkflowReport(payload = {}) {
       scope: "global",
     }),
     artifacts,
+    ...(hasProjections ? { projections } : {}),
     ...(hasGlobalState ? {
       globalStatePatch,
       globalStateRemove,
@@ -268,6 +350,7 @@ export function normalizeWorkflowReport(payload = {}) {
     workflow,
     action,
     artifacts,
+    projections,
     globalState: hasGlobalState ? {
       mode: "merge",
       patch: globalStatePatch,
@@ -448,7 +531,7 @@ export function mergeWorkflowArtifactLists(left = [], right = [], defaultScope =
   return out;
 }
 
-export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtimeEvents = []) {
+export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtimeEvents = [], projections = {}) {
   const events = (Array.isArray(runtimeEvents) ? runtimeEvents : []).map((event) => ({
     id: event?.id || "",
     action: event?.action || event?.actionId || "",
@@ -457,10 +540,11 @@ export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtim
     artifacts: event?.artifacts || [],
     globalStatePatch: event?.globalStatePatch || {},
     globalStateRemove: event?.globalStateRemove || [],
+    projections: event?.projections || {},
   }));
   const hash = crypto
     .createHash("sha256")
-    .update(JSON.stringify(stableValue({ globalState, artifacts, events })))
+    .update(JSON.stringify(stableValue({ globalState, artifacts, projections, events })))
     .digest("hex")
     .slice(0, 24);
   return `runtime:${hash}`;

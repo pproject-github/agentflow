@@ -144,6 +144,16 @@ const NODE_FILTERS = ["all", "agent", "control", "provide", "marketplace"];
 const MY_NODE_FILTERS = ["all", "agent", "control", "provide"];
 const ACTIVITY_PANEL_OPEN_STORAGE_KEY = "agentflow.projects.activityPanelOpen";
 const ACTIVITY_SELECTED_STORAGE_KEY = "agentflow.projects.activitySelected";
+const PROJECT_VIEW_STORAGE_KEY = "agentflow.projects.scopeView";
+
+function loadProjectView() {
+  if (typeof localStorage === "undefined") return "personal";
+  try {
+    return localStorage.getItem(PROJECT_VIEW_STORAGE_KEY) === "team" ? "team" : "personal";
+  } catch {
+    return "personal";
+  }
+}
 
 function loadActivityPanelOpen() {
   if (typeof localStorage === "undefined") return true;
@@ -363,7 +373,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const canEditSkillCollections = Boolean(authUser?.isAdmin);
   const [filter, setFilter] = useState(resourceKind || "all");
   const [apiFlows, setApiFlows] = useState([]);
-  const [projectView, setProjectView] = useState("personal");
+  const [projectView, setProjectView] = useState(loadProjectView);
   const [globalNodes, setGlobalNodes] = useState([]);
   const [globalSkills, setGlobalSkills] = useState([]);
   const [flowSnippets, setFlowSnippets] = useState([]);
@@ -532,6 +542,14 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       /* ignore storage failures */
     }
   }, [activityPanelOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROJECT_VIEW_STORAGE_KEY, projectView);
+    } catch {
+      /* ignore storage failures */
+    }
+  }, [projectView]);
 
   useEffect(() => {
     try {

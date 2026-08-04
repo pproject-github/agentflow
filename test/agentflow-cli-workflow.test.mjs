@@ -40,6 +40,16 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
         },
       },
     },
+    projections: {
+      timeline: [{
+        kind: "milestone",
+        id: "verification-complete",
+        title: "验证完成",
+        date: "2026-08-04",
+        source: "prd-flow",
+        dimensions: { channel: "internal" },
+      }],
+    },
   }), "utf8");
 
   const previousHome = process.env.AGENTFLOW_HOME;
@@ -77,6 +87,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
     assert.equal(reported.ok, true);
     assert.equal(reported.snapshot.globalState.status.label, "已验证");
     assert.equal(reported.snapshot.artifacts[0].key, "cli-evidence");
+    assert.equal(reported.snapshot.projections.timeline[0].kind, "milestone");
 
     const get = await execFileAsync(process.execPath, [
       cliPath,
@@ -87,6 +98,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
     ]);
     const current = JSON.parse(get.stdout);
     assert.equal(current.snapshot.globalState.sections.verification.fields.result.value, "通过");
+    assert.equal(current.snapshot.projections.timeline[0].dimensions.channel, "internal");
     assert.match(current.snapshot.runtimeRevision, /^runtime:/);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
