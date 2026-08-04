@@ -54,6 +54,18 @@ export function workspaceCanvasInteractionPhase(changes = []) {
   return { active, finished, mutated };
 }
 
+export function workspaceCanvasInteractionIsActive({
+  nodeInteraction = false,
+  pointerCount = 0,
+  viewportInteraction = false,
+} = {}) {
+  return Boolean(
+    nodeInteraction
+    || viewportInteraction
+    || Number(pointerCount) > 0
+  );
+}
+
 export function workspaceCanvasInteractionCommitsChanges(changes = []) {
   const interaction = workspaceCanvasInteractionPhase(changes);
   return interaction.mutated && !interaction.active;

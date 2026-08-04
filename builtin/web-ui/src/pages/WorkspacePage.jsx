@@ -73,6 +73,7 @@ import {
   partitionWorkspaceCanvasChanges,
   shouldSkipWorkspaceRemoteRefresh,
   workspaceCanvasInteractionCommitsChanges,
+  workspaceCanvasInteractionIsActive,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -7941,7 +7942,16 @@ function WorkspacePageInner() {
   const skipNextWorkspaceAutosaveRef = useRef(false);
   const workspaceAutosaveSuppressedStateRef = useRef(null);
   const workspaceCanvasInteractionActiveRef = useRef(false);
+  const workspaceCanvasPointerIdsRef = useRef(new Set());
+  const workspaceViewportInteractionActiveRef = useRef(false);
   const workspaceFlushAfterInteractionRef = useRef(false);
+  const workspaceCanvasIsInteracting = useCallback(() => (
+    workspaceCanvasInteractionIsActive({
+      nodeInteraction: workspaceCanvasInteractionActiveRef.current,
+      pointerCount: workspaceCanvasPointerIdsRef.current.size,
+      viewportInteraction: workspaceViewportInteractionActiveRef.current,
+    })
+  ), []);
   const collaborationClientIdRef = useRef(
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
@@ -8706,9 +8716,8 @@ function WorkspacePageInner() {
 
     const runRefresh = async () => {
       workspaceRemoteRefreshTimerRef.current = null;
-      if (workspaceCanvasInteractionActiveRef.current) {
+      if (workspaceCanvasIsInteracting()) {
         workspaceRemoteRefreshQueuedRef.current = true;
-        workspaceRemoteRefreshTimerRef.current = window.setTimeout(runRefresh, 80);
         return;
       }
       if (workspaceDirtyRef.current) {
@@ -8733,7 +8742,7 @@ function WorkspacePageInner() {
     };
 
     workspaceRemoteRefreshTimerRef.current = window.setTimeout(runRefresh, 40);
-  }, [loadWorkspace]);
+  }, [loadWorkspace, workspaceCanvasIsInteracting]);
 
   const loadPrdWorkflowSnapshot = useCallback(async (tapdIdOverride = workflowTapdId) => {
     const tapdId = String(tapdIdOverride || "").trim();
@@ -12629,33 +12638,72 @@ function WorkspacePageInner() {
     if (committed.length > 0) applyCanvasNodeChanges(committed);
   }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, reactFlowStore]);
 
-  useEffect(() => {
-    const finishInterruptedInteraction = () => {
-      if (
-        !workspaceCanvasInteractionActiveRef.current
-        && lastActiveCanvasNodeChangesRef.current.length === 0
-      ) {
-        return;
-      }
+  const settleWorkspaceCanvasInteraction = useCallback(() => {
+    if (
+      workspaceCanvasPointerIdsRef.current.size > 0
+      || workspaceViewportInteractionActiveRef.current
+    ) {
+      return;
+    }
+    if (
+      workspaceCanvasInteractionActiveRef.current
+      || lastActiveCanvasNodeChangesRef.current.length > 0
+    ) {
       flushPendingCanvasNodeChanges([], { finish: true });
       transientCanvasNodesRef.current = [];
+    }
+    if (workspaceRemoteRefreshQueuedRef.current) {
+      scheduleWorkspaceRemoteRefresh({ type: "interaction.finished" });
+    }
+  }, [flushPendingCanvasNodeChanges, scheduleWorkspaceRemoteRefresh]);
+
+  const trackWorkspaceCanvasPointer = useCallback((event) => {
+    if (event?.pointerId == null) return;
+    workspaceCanvasPointerIdsRef.current.add(event.pointerId);
+  }, []);
+
+  const finishWorkspaceCanvasPointer = useCallback((event) => {
+    if (event?.pointerId != null) {
+      workspaceCanvasPointerIdsRef.current.delete(event.pointerId);
+    }
+    window.queueMicrotask(settleWorkspaceCanvasInteraction);
+  }, [settleWorkspaceCanvasInteraction]);
+
+  const handleWorkspaceViewportMoveStart = useCallback(() => {
+    workspaceViewportInteractionActiveRef.current = true;
+  }, []);
+
+  const handleWorkspaceViewportMoveEnd = useCallback(() => {
+    workspaceViewportInteractionActiveRef.current = false;
+    window.queueMicrotask(settleWorkspaceCanvasInteraction);
+  }, [settleWorkspaceCanvasInteraction]);
+
+  useEffect(() => {
+    const finishInterruptedInteraction = () => {
+      workspaceCanvasPointerIdsRef.current.clear();
+      workspaceViewportInteractionActiveRef.current = false;
+      settleWorkspaceCanvasInteraction();
     };
     const finishWhenHidden = () => {
       if (document.visibilityState === "hidden") finishInterruptedInteraction();
     };
-    window.addEventListener("pointerup", finishInterruptedInteraction);
-    window.addEventListener("pointercancel", finishInterruptedInteraction);
+    window.addEventListener("pointerup", finishWorkspaceCanvasPointer, true);
+    window.addEventListener("pointercancel", finishWorkspaceCanvasPointer, true);
+    window.addEventListener("lostpointercapture", finishWorkspaceCanvasPointer, true);
     window.addEventListener("blur", finishInterruptedInteraction);
     document.addEventListener("visibilitychange", finishWhenHidden);
     return () => {
-      window.removeEventListener("pointerup", finishInterruptedInteraction);
-      window.removeEventListener("pointercancel", finishInterruptedInteraction);
+      window.removeEventListener("pointerup", finishWorkspaceCanvasPointer, true);
+      window.removeEventListener("pointercancel", finishWorkspaceCanvasPointer, true);
+      window.removeEventListener("lostpointercapture", finishWorkspaceCanvasPointer, true);
       window.removeEventListener("blur", finishInterruptedInteraction);
       document.removeEventListener("visibilitychange", finishWhenHidden);
+      workspaceCanvasPointerIdsRef.current.clear();
+      workspaceViewportInteractionActiveRef.current = false;
       lastActiveCanvasNodeChangesRef.current = [];
       transientCanvasNodesRef.current = [];
     };
-  }, [flushPendingCanvasNodeChanges]);
+  }, [finishWorkspaceCanvasPointer, settleWorkspaceCanvasInteraction]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (workspaceMode === "display") return;
@@ -13913,7 +13961,11 @@ function WorkspacePageInner() {
           ref={workspaceCanvasRef}
           className="af-workspace-canvas"
           tabIndex={-1}
-          onPointerDownCapture={focusWorkspaceCanvasForShortcuts}
+          onPointerDownCapture={(event) => {
+            focusWorkspaceCanvasForShortcuts(event);
+            trackWorkspaceCanvasPointer(event);
+          }}
+          onLostPointerCaptureCapture={finishWorkspaceCanvasPointer}
         >
           <ReactFlow
             className={
@@ -13926,6 +13978,8 @@ function WorkspacePageInner() {
             nodeTypes={nodeTypes}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
+            onMoveStart={handleWorkspaceViewportMoveStart}
+            onMoveEnd={handleWorkspaceViewportMoveEnd}
             onConnect={isDisplayMode ? undefined : handleConnect}
             onConnectStart={isDisplayMode ? undefined : handleConnectStart}
             onConnectEnd={isDisplayMode ? undefined : handleConnectEnd}
