@@ -10,6 +10,7 @@ import {
   workspaceCanvasChangeFinishesInteraction,
   workspaceCanvasChangeIsContinuous,
   workspaceCanvasInteractionCommitsChanges,
+  workspaceCanvasInteractionIsActive,
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
@@ -75,6 +76,14 @@ test("node movement is active while dragging and finishes on mouse release", () 
   );
   assert.equal(workspaceCanvasInteractionCommitsChanges(dragging), false);
   assert.equal(workspaceCanvasInteractionCommitsChanges(released), true);
+});
+
+test("canvas interaction starts before node movement and covers multi-pointer viewport gestures", () => {
+  assert.equal(workspaceCanvasInteractionIsActive({ pointerCount: 1 }), true);
+  assert.equal(workspaceCanvasInteractionIsActive({ pointerCount: 2 }), true);
+  assert.equal(workspaceCanvasInteractionIsActive({ viewportInteraction: true }), true);
+  assert.equal(workspaceCanvasInteractionIsActive({ nodeInteraction: true }), true);
+  assert.equal(workspaceCanvasInteractionIsActive({}), false);
 });
 
 test("selection changes never commit workspace graph changes", () => {
