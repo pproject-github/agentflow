@@ -17,6 +17,28 @@ function parseResultStatus(filePath) {
   }
 }
 
+function readJenkinsState(runDir, instanceId) {
+  const statePath = path.join(runDir, "state", `${instanceId}.jenkins.json`);
+  if (!fs.existsSync(statePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function jenkinsUiStatus(executionStatus, state) {
+  if (!state) return executionStatus;
+  if (executionStatus === "pending" || state.phase === "queued" || state.phase === "running" || state.phase === "triggering") {
+    return "waiting";
+  }
+  if (executionStatus === "success" && state.phase === "complete") {
+    return String(state.status || "").toUpperCase() === "SUCCESS" ? "success" : "outcome_failed";
+  }
+  return executionStatus;
+}
+
 /** @param {string} filePath @returns {number | null} */
 function parseElapsedMsLine(filePath) {
   try {
@@ -34,7 +56,7 @@ function parseElapsedMsLine(filePath) {
  * @param {string} workspaceRoot
  * @param {string} flowName
  * @param {string} uuid
- * @returns {Record<string, { status: string, elapsed?: string }>}
+ * @returns {Record<string, { status: string, elapsed?: string, executionStatus?: string, phase?: string, jenkinsStatus?: string, message?: string, buildNumber?: string, url?: string, qrUrl?: string, startedAt?: string, wakeAt?: string }>}
  */
 export function getRunNodeStatusesFromDisk(workspaceRoot, flowName, uuid, opts = {}) {
   const runDir = getRunDir(workspaceRoot, flowName, uuid, opts);
@@ -70,9 +92,25 @@ export function getRunNodeStatusesFromDisk(workspaceRoot, flowName, uuid, opts =
     const low = String(status).toLowerCase();
     if (low === "completed" || low === "done") uiStatus = "success";
 
-    /** @type {{ status: string, elapsed?: string }} */
+    const jenkinsState = defId === "tool_jenkins_build" ? readJenkinsState(runDir, instanceId) : null;
+    if (jenkinsState) uiStatus = jenkinsUiStatus(uiStatus, jenkinsState);
+
+    /** @type {{ status: string, elapsed?: string, executionStatus?: string, phase?: string, jenkinsStatus?: string, message?: string, buildNumber?: string, url?: string, qrUrl?: string, startedAt?: string, wakeAt?: string }} */
     const row = { status: uiStatus };
-    if (uiStatus === "success" && fs.existsSync(resultPath)) {
+    if (jenkinsState) {
+      row.executionStatus = status;
+      row.phase = String(jenkinsState.phase || "");
+      row.jenkinsStatus = String(jenkinsState.status || "");
+      row.message = String(jenkinsState.message || "");
+      row.buildNumber = String(jenkinsState.buildNumber || "");
+      row.url = String(jenkinsState.url || jenkinsState.buildUrl || "");
+      row.qrUrl = String(jenkinsState.qrUrl || "");
+      row.startedAt = String(jenkinsState.startedAt || "");
+      row.wakeAt = String(jenkinsState.wakeAt || "");
+      const started = Date.parse(jenkinsState.startedAt || "");
+      const ended = Date.parse(jenkinsState.completedAt || "");
+      if (Number.isFinite(started) && Number.isFinite(ended) && ended >= started) row.elapsed = formatDuration(ended - started);
+    } else if (uiStatus === "success" && fs.existsSync(resultPath)) {
       const ms = parseElapsedMsLine(resultPath);
       if (ms != null && ms > 0) {
         row.elapsed = formatDuration(ms);

@@ -272,8 +272,8 @@ export default function RunNodeContextPanel({ instanceId, flowId, runId, nodeSta
      * 已有 round 且状态为 running 时继续轮询直至写完。
      */
     const shouldPoll =
-      (nodeStatus === "running" && rounds.length === 0) ||
-      Boolean(lastRound && lastRound.status === "running");
+      ((nodeStatus === "running" || nodeStatus === "waiting") && rounds.length === 0) ||
+      Boolean(lastRound && (lastRound.status === "running" || lastRound.status === "pending"));
     if (shouldPoll && instanceId && flowId) {
       pollRef.current = setInterval(() => refreshContext(), 2000);
     }

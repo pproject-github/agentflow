@@ -9,6 +9,21 @@ import { isApplyProcessAlive } from "./run-apply-active-lock.mjs";
 /** Web UI 调用 /api/flow/run/stop 时写入，用于与「未跑完但未标记」区分 */
 export const RUN_INTERRUPTED_FILENAME = "run-interrupted.json";
 
+function hasActiveDurableWait(runDir) {
+  const paths = [path.join(runDir, "wait-states.json"), path.join(runDir, "wait-state.json")];
+  for (const filePath of paths) {
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      const waits = Array.isArray(parsed?.waits) ? parsed.waits : parsed && typeof parsed === "object" ? [parsed] : [];
+      if (waits.some((wait) => wait && (wait.status === "waiting" || wait.status === "resuming"))) return true;
+    } catch {
+      /* ignore corrupt wait files */
+    }
+  }
+  return false;
+}
+
 /** @param {string} filePath */
 function parseResultStatusFromFile(filePath) {
   try {
@@ -112,6 +127,7 @@ function inferRunStatusFromRunDir(runDir) {
 
   if (anyResult || fs.existsSync(flowJsonPath)) {
     if (isApplyProcessAlive(runDir)) return "running";
+    if (hasActiveDurableWait(runDir)) return "running";
     return "interrupted";
   }
   return "unknown";

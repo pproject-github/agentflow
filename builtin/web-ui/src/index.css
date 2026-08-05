@@ -17988,6 +17988,166 @@ button.af-project-card {
   font-size: 1.25rem;
 }
 
+/* Composer shares the same conversational language as Workflow Assistant. */
+.af-composer-sidebar-thread .af-composer-assistant-thread {
+  max-height: none;
+  overflow: visible;
+  gap: 0.95rem;
+  padding: 0.25rem 0 0.75rem;
+}
+
+.af-composer-sidebar-thread .af-composer-thread-assistant {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.af-composer-sidebar-thread .af-workflow-assistant-message__bubble {
+  font-size: 0.76rem;
+}
+
+.af-composer-sidebar-thread .af-workflow-assistant-message--assistant .af-workflow-assistant-message__bubble {
+  padding-left: 1.63rem;
+}
+
+.af-workflow-assistant-message--error .af-workflow-assistant-message__identity,
+.af-workflow-assistant-message--error .af-workflow-assistant-message__identity .material-symbols-outlined {
+  color: rgba(255, 180, 174, 0.9);
+}
+
+.af-workflow-assistant-message--error .af-workflow-assistant-message__identity .material-symbols-outlined {
+  background: rgba(255, 119, 110, 0.12);
+}
+
+.af-workflow-assistant-message--error .af-workflow-assistant-message__bubble {
+  margin-left: 1.63rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.65rem;
+  color: rgba(255, 205, 200, 0.88);
+  background: rgba(78, 31, 31, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 119, 110, 0.12);
+}
+
+.af-composer-assistant-activity {
+  margin: 0.2rem 0 0.15rem 1.63rem;
+  overflow: hidden;
+  border-radius: 0.7rem;
+  background: rgba(14, 14, 16, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(202, 195, 216, 0.08);
+}
+
+.af-composer-assistant-activity > summary {
+  min-height: 2.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.48rem 0.65rem;
+  color: rgba(202, 195, 216, 0.54);
+  font-size: 0.61rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.af-composer-assistant-activity > summary::-webkit-details-marker {
+  display: none;
+}
+
+.af-composer-assistant-activity > summary strong {
+  color: rgba(229, 226, 225, 0.76);
+  font-size: 0.65rem;
+}
+
+.af-composer-assistant-activity > summary > span:nth-of-type(2) {
+  margin-left: auto;
+}
+
+.af-composer-assistant-activity__pulse {
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(0, 228, 117, 0.68);
+  box-shadow: 0 0 0 0 rgba(0, 228, 117, 0.2);
+}
+
+.af-composer-assistant-activity--running .af-composer-assistant-activity__pulse {
+  animation: af-composer-activity-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes af-composer-activity-pulse {
+  0%, 100% { opacity: 0.52; box-shadow: 0 0 0 0 rgba(0, 228, 117, 0.18); }
+  50% { opacity: 1; box-shadow: 0 0 0 0.32rem rgba(0, 228, 117, 0); }
+}
+
+.af-composer-assistant-activity__chevron {
+  font-size: 0.9rem;
+  transition: transform 0.16s ease;
+}
+
+.af-composer-assistant-activity[open] .af-composer-assistant-activity__chevron {
+  transform: rotate(180deg);
+}
+
+.af-composer-assistant-activity__body {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.15rem 0.55rem 0.6rem;
+}
+
+.af-composer-assistant-activity__item {
+  min-width: 0;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.52rem;
+  background: rgba(42, 42, 42, 0.52);
+}
+
+.af-composer-assistant-activity__item small {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: rgba(158, 202, 255, 0.56);
+  font-family: var(--af-headline);
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.af-composer-assistant-activity__item pre {
+  max-height: 15rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(202, 195, 216, 0.68);
+  font-family: var(--af-mono, ui-monospace, monospace);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.af-composer-assistant-activity__status {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  color: rgba(202, 195, 216, 0.5);
+  font-size: 0.62rem;
+  line-height: 1.45;
+}
+
+.af-composer-sidebar-input--assistant {
+  display: block;
+  border-top: 0;
+  padding: 0.3rem 0.75rem 0.8rem;
+  background: linear-gradient(180deg, transparent, rgba(24, 24, 26, 0.98) 24%);
+}
+
+.af-composer-sidebar-input--assistant > .af-workflow-assistant-composer {
+  width: 100%;
+}
+
+.af-composer-sidebar-input--assistant .af-workflow-assistant-composer__input {
+  min-height: 3.6rem;
+  resize: vertical;
+}
+
 
 .af-node-props-head {
   align-items: flex-start;
@@ -19230,6 +19390,44 @@ button.af-exec-history-card {
   font-weight: 500;
 }
 
+.af-flow-node__guide-button {
+  position: relative;
+  z-index: 13;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 1px solid rgba(205, 189, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.06);
+  color: rgba(224, 216, 255, 0.62);
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity 0.15s, border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.af-flow-node:hover .af-flow-node__guide-button,
+.af-flow-node--selected .af-flow-node__guide-button,
+.af-flow-node__guide-button:focus-visible {
+  opacity: 1;
+}
+
+.af-flow-node__guide-button:hover,
+.af-flow-node__guide-button:focus-visible {
+  border-color: rgba(205, 189, 255, 0.5);
+  outline: none;
+  background: rgba(124, 77, 255, 0.2);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.af-flow-node__guide-button .material-symbols-outlined {
+  font-size: 0.86rem;
+  font-weight: 550;
+}
+
 .af-flow-node__body {
   position: relative;
   z-index: 0;
@@ -19816,6 +20014,278 @@ button.af-exec-history-card {
   scrollbar-color: rgba(205, 189, 255, 0.48) rgba(255, 255, 255, 0.05);
 }
 
+.af-node-guide {
+  position: fixed;
+  inset: 0;
+  z-index: 27000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 3rem);
+  background: rgba(3, 3, 5, 0.62);
+  backdrop-filter: blur(10px);
+}
+
+.af-node-guide__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(48rem, 100%);
+  max-height: min(46rem, 88vh);
+  overflow: hidden;
+  border: 1px solid rgba(124, 77, 255, 0.45);
+  border-radius: 1rem;
+  background: rgba(24, 23, 28, 0.99);
+  color: var(--af-on-surface);
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.af-node-guide__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.af-node-guide__heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.af-node-guide__heading > .material-symbols-outlined {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  border-radius: 0.6rem;
+  background: rgba(124, 77, 255, 0.2);
+  color: rgba(205, 189, 255, 0.95);
+  font-size: 1.1rem;
+}
+
+.af-node-guide__heading h2,
+.af-node-guide__heading p,
+.af-node-guide__content h3,
+.af-node-guide__content p {
+  margin: 0;
+}
+
+.af-node-guide__heading h2 {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.94);
+  font-family: var(--af-headline);
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-node-guide__heading p {
+  margin-top: 0.2rem;
+  color: rgba(214, 207, 232, 0.5);
+  font-family: var(--af-font-mono);
+  font-size: 0.66rem;
+}
+
+.af-node-guide__header > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.af-node-guide__header > button:hover {
+  border-color: rgba(124, 77, 255, 0.5);
+  background: rgba(124, 77, 255, 0.18);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.af-node-guide__header > button .material-symbols-outlined {
+  font-size: 1.1rem;
+}
+
+.af-node-guide__content {
+  display: grid;
+  gap: 1.15rem;
+  padding: 1.15rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.af-node-guide__content > section {
+  display: grid;
+  gap: 0.62rem;
+}
+
+.af-node-guide__content h3 {
+  color: rgba(224, 216, 255, 0.92);
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+}
+
+.af-node-guide__content p,
+.af-node-guide__content li {
+  color: rgba(239, 235, 247, 0.75);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.af-node-guide__content ul,
+.af-node-guide__content ol {
+  display: grid;
+  gap: 0.38rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.af-node-guide__slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.af-node-guide__slot {
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.af-node-guide__slot-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.4rem;
+}
+
+.af-node-guide__slot-head code {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: var(--af-font-mono);
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-node-guide__slot-head span,
+.af-node-guide__slot-head em {
+  flex: 0 0 auto;
+  padding: 0.12rem 0.34rem;
+  border-radius: 999px;
+  background: rgba(158, 202, 255, 0.1);
+  color: rgba(158, 202, 255, 0.72);
+  font-family: var(--af-font-mono);
+  font-size: 0.56rem;
+  font-style: normal;
+}
+
+.af-node-guide__slot-head em {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(214, 207, 232, 0.5);
+}
+
+.af-node-guide__slot-head em.is-required {
+  background: rgba(255, 183, 77, 0.12);
+  color: rgba(255, 196, 108, 0.88);
+}
+
+.af-node-guide__slot p {
+  margin-top: 0.45rem;
+  color: rgba(214, 207, 232, 0.62);
+  font-size: 0.69rem;
+  line-height: 1.45;
+}
+
+.af-node-guide__slot small {
+  display: block;
+  margin-top: 0.4rem;
+  overflow: hidden;
+  color: rgba(214, 207, 232, 0.45);
+  font-family: var(--af-font-mono);
+  font-size: 0.61rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-node-guide__section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.af-node-guide__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(205, 189, 255, 0.18);
+  border-radius: 0.45rem;
+  background: rgba(124, 77, 255, 0.09);
+  color: rgba(224, 216, 255, 0.78);
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+
+.af-node-guide__copy:hover {
+  border-color: rgba(205, 189, 255, 0.4);
+  background: rgba(124, 77, 255, 0.18);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.af-node-guide__copy .material-symbols-outlined {
+  font-size: 0.82rem;
+}
+
+.af-node-guide__content pre {
+  margin: 0;
+  padding: 0.8rem;
+  overflow: auto;
+  border: 1px solid rgba(124, 77, 255, 0.18);
+  border-radius: 0.65rem;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(234, 228, 248, 0.84);
+  font-family: var(--af-font-mono);
+  font-size: 0.69rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .af-node-guide {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .af-node-guide__panel {
+    max-height: 92vh;
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  .af-node-guide__slots {
+    grid-template-columns: 1fr;
+  }
+}
+
 .af-flow-node__file-value,
 .af-flow-node__password-value {
   display: flex;
@@ -19934,6 +20404,12 @@ button.af-exec-history-card {
     0 0 14px rgba(255, 82, 82, 0.12);
 }
 
+.af-flow-node--waiting {
+  box-shadow:
+    0 0 0 1px rgba(255, 183, 77, 0.38),
+    0 0 14px rgba(255, 183, 77, 0.11);
+}
+
 .af-flow-node__status-badge {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.5rem;
@@ -19968,6 +20444,58 @@ button.af-exec-history-card {
 .af-flow-node__status-badge--failed {
   color: var(--af-error);
   background: rgba(255, 180, 171, 0.12);
+}
+
+.af-flow-node__status-badge--waiting {
+  color: #ffca78;
+  background: rgba(255, 183, 77, 0.14);
+  animation: af-badge-blink 1.4s ease-in-out infinite;
+}
+
+.af-flow-node__jenkins-runtime {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 8.5rem;
+  max-width: 13rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(158, 202, 255, 0.2);
+  border-radius: 0.55rem;
+  background: rgba(158, 202, 255, 0.06);
+  color: var(--af-on-surface, #e4e7ec);
+}
+
+.af-flow-node__jenkins-runtime-main {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.af-flow-node__jenkins-runtime-main .material-symbols-outlined {
+  font-size: 1rem;
+  color: #ffca78;
+}
+
+.af-flow-node__jenkins-runtime small {
+  color: var(--af-on-surface-variant, #aeb6c2);
+  font-size: 0.58rem;
+}
+
+.af-flow-node__jenkins-runtime-links {
+  display: flex;
+  gap: 0.65rem;
+}
+
+.af-flow-node__jenkins-runtime-links a {
+  color: rgba(158, 202, 255, 0.98);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.af-flow-node__jenkins-runtime-links a:hover {
+  text-decoration: underline;
 }
 
 .af-flow-node__status-badge--running-disk {
@@ -21569,6 +22097,130 @@ button.af-exec-history-card {
 
 .af-display-share-modal.af-display-link-modal {
   width: min(48rem, calc(100vw - 2rem));
+}
+
+.af-workflow-project-modal {
+  width: min(44rem, calc(100vw - 2rem));
+  max-height: min(90vh, 46rem);
+}
+
+.af-workflow-project-modal__lead,
+.af-workflow-project-modal__error {
+  margin: 0;
+  color: rgba(232, 227, 239, 0.62);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.af-workflow-project-modal__error {
+  color: #fca5a5;
+}
+
+.af-workflow-project-modal__section {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(202, 195, 216, 0.1);
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.af-workflow-project-modal__section-head,
+.af-workflow-project-modal__item,
+.af-workflow-project-modal__actions,
+.af-workflow-project-modal__bind-row {
+  display: flex;
+  align-items: center;
+}
+
+.af-workflow-project-modal__section-head {
+  justify-content: space-between;
+  color: rgba(232, 227, 239, 0.72);
+  font: 700 0.68rem/1.3 var(--af-headline);
+}
+
+.af-workflow-project-modal__section-head span {
+  color: rgba(202, 195, 216, 0.46);
+  font-weight: 600;
+}
+
+.af-workflow-project-modal__list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.af-workflow-project-modal__item {
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  border-radius: 0.5rem;
+  background: var(--af-surface-lowest);
+}
+
+.af-workflow-project-modal__item > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.af-workflow-project-modal__item strong,
+.af-workflow-project-modal__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-workflow-project-modal__item strong {
+  color: var(--af-on-surface);
+  font: 700 0.72rem/1.3 var(--af-headline);
+}
+
+.af-workflow-project-modal__item small {
+  color: rgba(202, 195, 216, 0.5);
+  font-size: 0.64rem;
+}
+
+.af-workflow-project-modal__actions {
+  flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+.af-workflow-project-modal__actions button {
+  height: 1.85rem;
+  border: 1px solid rgba(124, 77, 255, 0.28);
+  border-radius: 0.4rem;
+  background: rgba(124, 77, 255, 0.08);
+  color: rgba(232, 227, 239, 0.8);
+  font: 700 0.62rem/1 var(--af-headline);
+  padding: 0 0.55rem;
+  cursor: pointer;
+}
+
+.af-workflow-project-modal__actions .af-workflow-project-modal__unbind {
+  border-color: rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.06);
+  color: #fca5a5;
+}
+
+.af-workflow-project-modal__actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.af-workflow-project-modal__bind-row {
+  gap: 0.55rem;
+}
+
+.af-workflow-project-modal__bind-row select {
+  min-width: 0;
+  flex: 1;
+  height: 2.1rem;
+  border: 1px solid rgba(202, 195, 216, 0.12);
+  border-radius: 0.45rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  padding: 0 0.65rem;
 }
 
 .af-workspace-conflict-modal {

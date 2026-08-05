@@ -74,6 +74,19 @@ test("Workflow details preserve an explicit Dashboard return route", async () =>
   );
 });
 
+test("Workflow Project navigation requires an explicit binding", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, /fetch\(`\/api\/workflows\/project-bindings\?tapdId=/);
+  assert.match(source, /method: "POST"[\s\S]*绑定 Project 失败/);
+  assert.match(source, /method: "DELETE"[\s\S]*解除 Project 绑定失败/);
+  assert.match(source, /workflowProjectBindings\.length === 1/);
+  assert.match(source, /setWorkflowProjectBindingOpen\(true\)/);
+  assert.match(source, /setWorkspaceMode\(view === "display" \|\| view === "workflow" \? view : "workspace"\)/);
+  assert.match(source, /迭代绑定的 Projects/);
+  assert.match(source, /只有主动绑定后，全局迭代才能进入对应的 Project 视图/);
+});
+
 test("Workflow details can render a read-only local demo snapshot", async () => {
   const source = await readFile(workspacePagePath, "utf8");
 

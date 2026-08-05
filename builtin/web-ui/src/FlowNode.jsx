@@ -63,6 +63,147 @@ function renderImageTokenHighlightHtml(text) {
   return html || " ";
 }
 
+function normalizeGuideList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function NodeGuideDialog({ nodeTitle, definitionId, description, guide, inputs, outputs, onClose }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const summary = String(guide?.summary || description || "").trim();
+  const prerequisites = normalizeGuideList(guide?.prerequisites);
+  const steps = normalizeGuideList(guide?.steps);
+  const notes = normalizeGuideList(guide?.notes);
+  const example = String(guide?.example || "").trim();
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const copyExample = async () => {
+    if (!example || typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(example);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch (_) {}
+  };
+
+  const renderSlots = (slots, kind) => (
+    <div className="af-node-guide__slots">
+      {(Array.isArray(slots) ? slots : []).map((slot, index) => {
+        const name = String(slot?.name || `#${index + 1}`);
+        const type = String(slot?.type || "node");
+        const defaultValue = String(slot?.default ?? slot?.value ?? "");
+        return (
+          <div key={`${kind}-${index}-${name}`} className="af-node-guide__slot">
+            <div className="af-node-guide__slot-head">
+              <code>{name}</code>
+              <span>{type}</span>
+              <em className={slot?.required ? "is-required" : ""}>
+                {slot?.required ? t("flow:node.guideRequired") : t("flow:node.guideOptional")}
+              </em>
+            </div>
+            {slot?.description ? <p>{String(slot.description)}</p> : null}
+            {defaultValue !== "" ? <small>{t("flow:node.guideDefault", { value: defaultValue })}</small> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return createPortal(
+    <div
+      className="af-node-guide nodrag"
+      role="presentation"
+      onClick={onClose}
+      onPointerDown={stopInteractiveEvent}
+      onMouseDown={stopInteractiveEvent}
+      onWheel={stopInteractiveEvent}
+    >
+      <section
+        className="af-node-guide__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${nodeTitle} · ${t("flow:node.guideTitle")}`}
+        onClick={stopInteractiveEvent}
+      >
+        <header className="af-node-guide__header">
+          <div className="af-node-guide__heading">
+            <span className="material-symbols-outlined" aria-hidden="true">help</span>
+            <div>
+              <h2>{nodeTitle}</h2>
+              <p>{definitionId} · {t("flow:node.guideTitle")}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label={t("flow:node.guideClose")} title={t("flow:node.guideClose")}>
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </header>
+        <div className="af-node-guide__content">
+          {summary ? (
+            <section>
+              <h3>{t("flow:node.guideSummary")}</h3>
+              <p>{summary}</p>
+            </section>
+          ) : null}
+          {prerequisites.length ? (
+            <section>
+              <h3>{t("flow:node.guidePrerequisites")}</h3>
+              <ul>{prerequisites.map((item, index) => <li key={`pre-${index}`}>{item}</li>)}</ul>
+            </section>
+          ) : null}
+          {steps.length ? (
+            <section>
+              <h3>{t("flow:node.guideSteps")}</h3>
+              <ol>{steps.map((item, index) => <li key={`step-${index}`}>{item}</li>)}</ol>
+            </section>
+          ) : null}
+          {inputs?.length ? (
+            <section>
+              <h3>{t("flow:node.guideInputs")}</h3>
+              {renderSlots(inputs, "input")}
+            </section>
+          ) : null}
+          {outputs?.length ? (
+            <section>
+              <h3>{t("flow:node.guideOutputs")}</h3>
+              {renderSlots(outputs, "output")}
+            </section>
+          ) : null}
+          {example ? (
+            <section>
+              <div className="af-node-guide__section-heading">
+                <h3>{t("flow:node.guideExample")}</h3>
+                <button type="button" className="af-node-guide__copy" onClick={copyExample}>
+                  <span className="material-symbols-outlined" aria-hidden="true">{copied ? "check" : "content_copy"}</span>
+                  {copied ? t("flow:node.guideCopied") : t("flow:node.guideCopy")}
+                </button>
+              </div>
+              <pre>{example}</pre>
+            </section>
+          ) : null}
+          {notes.length ? (
+            <section>
+              <h3>{t("flow:node.guideNotes")}</h3>
+              <ul>{notes.map((item, index) => <li key={`note-${index}`}>{item}</li>)}</ul>
+            </section>
+          ) : null}
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function promptEditorHeightForText(el, text) {
   const style = window.getComputedStyle(el);
   const lineHeight = Number.parseFloat(style.lineHeight) || 18;
@@ -99,7 +240,13 @@ export function FlowNode({
   const isDim = data?.isDim ?? false;
   const nodeStatus = data?.nodeStatus ?? null;
   const nodeElapsed = data?.nodeElapsed ?? null;
+  const nodeRunDetail = data?.nodeRunDetail ?? null;
   const definitionId = data?.definitionId || "";
+  const isJenkinsBuild = definitionId === "tool_jenkins_build";
+  const jenkinsDisplayStatus = String(
+    nodeRunDetail?.jenkinsStatus ||
+      (nodeRunDetail?.phase === "queued" ? "QUEUED" : nodeRunDetail?.phase === "running" ? "RUNNING" : ""),
+  ).toUpperCase();
   const isProvideNode = definitionId.startsWith("provide_");
   const isProvideBool = definitionId === "provide_bool";
   const isProvideText = definitionId === "provide_str";
@@ -134,6 +281,7 @@ export function FlowNode({
   const [bodyComposing, setBodyComposing] = useState(false);
   const [bodyPromptScrollbar, setBodyPromptScrollbar] = useState({ visible: false, top: 0, height: 100 });
   const [bodyFullscreenEditor, setBodyFullscreenEditor] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const updateBodyPromptScrollbar = useCallback(() => {
     const el = bodyTextareaRef.current;
@@ -518,6 +666,8 @@ export function FlowNode({
         (isExecuting ? " af-flow-node--executing" : "") +
         (nodeStatus === "success" ? " af-flow-node--done" : "") +
         (nodeStatus === "failed" ? " af-flow-node--failed" : "") +
+        (nodeStatus === "outcome_failed" ? " af-flow-node--failed" : "") +
+        (nodeStatus === "waiting" ? " af-flow-node--waiting" : "") +
         (nodeStatus === "running" && !isExecuting ? " af-flow-node--running-disk" : "") +
         (isDim ? " af-flow-node--dim" : "") +
         (hasInlineBodyEditor ? " af-flow-node--inline-body-editor" : "") +
@@ -600,7 +750,19 @@ export function FlowNode({
         )}
         {nodeStatus === "success" && (
           <span className="af-flow-node__status-badge af-flow-node__status-badge--done">
-            {nodeElapsed != null && String(nodeElapsed).trim() !== "" ? nodeElapsed : "--"}
+            {isJenkinsBuild && jenkinsDisplayStatus
+              ? jenkinsDisplayStatus
+              : nodeElapsed != null && String(nodeElapsed).trim() !== "" ? nodeElapsed : "--"}
+          </span>
+        )}
+        {nodeStatus === "waiting" && (
+          <span className="af-flow-node__status-badge af-flow-node__status-badge--waiting">
+            {nodeRunDetail?.phase === "queued" ? "QUEUED" : nodeRunDetail?.phase === "triggering" ? "TRIGGERING" : "BUILDING"}
+          </span>
+        )}
+        {nodeStatus === "outcome_failed" && (
+          <span className="af-flow-node__status-badge af-flow-node__status-badge--failed">
+            {jenkinsDisplayStatus || "FAILED"}
           </span>
         )}
         {nodeStatus === "failed" && (
@@ -608,6 +770,20 @@ export function FlowNode({
             FAILED
           </span>
         )}
+        <button
+          type="button"
+          className="af-flow-node__guide-button nodrag"
+          onClick={(event) => {
+            event.stopPropagation();
+            setGuideOpen(true);
+          }}
+          onPointerDown={stopInteractiveEvent}
+          onMouseDown={stopInteractiveEvent}
+          aria-label={t("flow:node.openGuide")}
+          title={t("flow:node.openGuide")}
+        >
+          <span className="material-symbols-outlined">help</span>
+        </button>
         {!isRunMode && isProvideNode && !isProvideBool && !isProvideText && !isProvideFile && !isProvidePassword && (
           <button
             type="button"
@@ -657,6 +833,31 @@ export function FlowNode({
           })}
         </div>
         <div className="af-flow-node__title-wrap">
+          {isRunMode && isJenkinsBuild && nodeRunDetail ? (
+            <div className="af-flow-node__jenkins-runtime">
+              <div className="af-flow-node__jenkins-runtime-main">
+                <span className="material-symbols-outlined" aria-hidden="true">
+                  {nodeStatus === "waiting" ? "progress_activity" : nodeStatus === "success" ? "check_circle" : "error"}
+                </span>
+                <span>{nodeRunDetail.message || jenkinsDisplayStatus || "Jenkins Build"}</span>
+              </div>
+              {nodeRunDetail.buildNumber ? <small>Build #{nodeRunDetail.buildNumber}</small> : null}
+              {nodeRunDetail.url || nodeRunDetail.qrUrl ? (
+                <div className="af-flow-node__jenkins-runtime-links nodrag">
+                  {nodeRunDetail.url ? (
+                    <a href={nodeRunDetail.url} target="_blank" rel="noreferrer" onPointerDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+                      查看结果
+                    </a>
+                  ) : null}
+                  {nodeRunDetail.qrUrl ? (
+                    <a href={nodeRunDetail.qrUrl} target="_blank" rel="noreferrer" onPointerDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+                      二维码
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {isProvideBool ? (
             <select
               className={"af-flow-node__bool-select nodrag" + (provideBoolValue ? " af-flow-node__bool-select--true" : "")}
@@ -899,6 +1100,17 @@ export function FlowNode({
           </div>
         </div>,
         document.body,
+      ) : null}
+      {guideOpen ? (
+        <NodeGuideDialog
+          nodeTitle={nodeTitle}
+          definitionId={definitionId}
+          description={data?.description}
+          guide={data?.guide}
+          inputs={inputs}
+          outputs={outputs}
+          onClose={() => setGuideOpen(false)}
+        />
       ) : null}
     </div>
   );

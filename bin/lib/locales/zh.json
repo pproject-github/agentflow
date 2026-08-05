@@ -289,6 +289,28 @@
       "displayName": "提交 GitLab MR",
       "description": "为当前分支创建或复用 GitLab Merge Request，并输出 MR 链接"
     },
+    "tool_jenkins_build": {
+      "displayName": "Jenkins 构建",
+      "description": "触发 Jenkins 构建并持续等待结果，完成后输出构建状态、产物链接和可选二维码",
+      "guide": {
+        "summary": "这个节点会触发一次 Jenkins Job，并在后台持续检查排队和构建状态。等待期间不会占用执行进程，完成后流程会自动继续。",
+        "prerequisites": [
+          "在「设置 → 环境变量」中配置 Jenkins 地址；需要登录时同时配置用户名和 API Token。",
+          "确认 Jenkins Job 名称及其参数名；参数名区分大小写。"
+        ],
+        "steps": [
+          "job 填 Jenkins Job 名称，例如 like-android；如果 Job 位于文件夹中，填写 folder/job。",
+          "parameters 填 JSON object；非参数化构建填写 {}。",
+          "credentialRef 留空时使用 JENKINS_BASE_URL 等默认变量；填写 mobile 时使用 JENKINS_MOBILE_* 变量。",
+          "pollInterval 和 timeout 默认分别为 30s、2h，通常不需要修改。"
+        ],
+        "example": "JENKINS_MOBILE_BASE_URL=http://jenkinsmobile.bigo.sg:8080/\nJENKINS_MOBILE_USERNAME=your-name\nJENKINS_MOBILE_TOKEN=your-api-token\n\njob: like-android\nparameters: {}\ncredentialRef: mobile",
+        "notes": [
+          "不要把 Jenkins Token 写入 flow.yaml 或 parameters。",
+          "status 会返回 SUCCESS、FAILURE、ABORTED、TIMEOUT 或 CANCELLED；即使构建失败，下游通知节点仍会继续执行。"
+        ]
+      }
+    },
     "tool_wecom_send_group_markdown": {
       "displayName": "企业微信群聊 Markdown",
       "description": "通过企业微信群机器人 webhook 发送 Markdown 到群聊"

@@ -139,6 +139,7 @@ export function buildNodeSchemaCompactSection() {
   lines.push("3. `provide_*` 节点不得连入控制链（node→node 边），仅作数据源向下游 text/file/bool 槽供值。");
   lines.push("4. 边连接时 `sourceHandle: output-N` 与 `targetHandle: input-N` 的索引必须对应**同一 type**；type 不一致禁止连线（text 不能接 file，node 不能接 text）。");
   lines.push("5. **YAML 多行字符串必须用 `|` 块标量。** 写 `script` / `body` / `value` 等字符串字段时，只要内容含 `: `、`\"`、`'`、`#`、换行、shell 操作符，**强制**使用 `|` 块。");
+  lines.push("6. 用户要求 Jenkins 构建或等待 Jenkins 结果时，必须使用固定槽位节点 `tool_jenkins_build`；不要生成 `tool_nodejs` 轮询脚本、`control_interval_loop` 或阻塞式 sleep。该节点内部负责持久化等待，输出 `status/url/qrUrl`。");
   cachedCompact = lines.join("\n");
   return cachedCompact;
 }
@@ -193,6 +194,9 @@ export function buildNodeSchemaPromptSection() {
   );
   lines.push(
     "5. **YAML 多行字符串必须用 `|` 块标量。** 写 `script` / `body` / `value` 等字符串字段时，只要内容含 `: `（冒号+空格）、`\"`、`'`、`#`、换行、shell 操作符（`|`/`&`/`>`/`<`），**强制**使用 `|` 块。**默认全部用 `|`**——比裸写安全且易读。"
+  );
+  lines.push(
+    "6. 用户要求 Jenkins 构建或等待 Jenkins 结果时，必须使用固定槽位节点 `tool_jenkins_build`；不要生成 `tool_nodejs` 轮询脚本、`control_interval_loop` 或阻塞式 sleep。该节点内部负责持久化等待，输出 `status/url/qrUrl`。"
   );
   lines.push("   ✅ 正确：");
   lines.push("   ```yaml");

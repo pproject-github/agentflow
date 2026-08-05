@@ -30,7 +30,22 @@
     "outputTooltip": "输出 {{name}} | 类型: {{type}}",
     "defaultSuffix": " | 默认: {{value}}",
     "fallbackLabel": "节点",
-    "expandProvide": "编辑内容"
+    "expandProvide": "编辑内容",
+    "openGuide": "查看节点指引",
+    "guideTitle": "节点使用指引",
+    "guideSummary": "这个节点做什么",
+    "guidePrerequisites": "使用前准备",
+    "guideSteps": "怎么填写",
+    "guideInputs": "输入参数",
+    "guideOutputs": "输出结果",
+    "guideExample": "配置示例",
+    "guideNotes": "注意事项",
+    "guideRequired": "必填",
+    "guideOptional": "可选",
+    "guideDefault": "默认：{{value}}",
+    "guideCopy": "复制示例",
+    "guideCopied": "已复制",
+    "guideClose": "关闭节点指引"
   },
   "nodeProps": {
     "title": "节点属性",

@@ -51,11 +51,11 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
     projections: {
       timeline: [{
         kind: "version",
-        id: "android-5.63.0",
-        title: "Android 5.63.0",
+        id: "1133202860001000338",
+        title: "Android&iOS 5.63.0",
         date: "2026-08-20",
         source: "prd-flow",
-        dimensions: { platform: "android" },
+        dimensions: { platform: ["android", "ios"] },
       }],
     },
     idempotencyKey: "issue-2-mr-943",
@@ -68,7 +68,8 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
   assert.equal(report.event.artifacts[0].scope, "action");
   assert.equal(report.event.artifacts[0].producer, "prd-flow");
   assert.equal(report.event.globalStatePatch.title, "Remote Config");
-  assert.equal(report.event.projections.timeline[0].key, "prd-flow:version:android-5.63.0");
+  assert.equal(report.event.projections.timeline[0].key, "prd-flow:version:1133202860001000338");
+  assert.deepEqual(report.event.projections.timeline[0].dimensions.platform, ["android", "ios"]);
   assert.equal(report.event.idempotencyKey, "issue-2-mr-943");
 });
 
@@ -140,10 +141,10 @@ test("materializes producer-owned timeline projections with replace semantics", 
     projections: {
       timeline: [{
         kind: "version",
-        id: "ios-5.63.0",
-        title: "iOS 5.63.0",
+        id: "1133202860001000338",
+        title: "Android&iOS 5.63.0",
         date: "2026-08-22",
-        dimensions: { platform: "ios", train: "stable" },
+        dimensions: { platform: ["android", "ios"], train: "stable" },
       }],
     },
   }]);

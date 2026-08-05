@@ -83,9 +83,9 @@ const VERSION_REPORT = `{
     "patch": {
       "tapdCurrentVersion": {
         "id": "1133202860001000338",
-        "name": "Likee Android 5.63.0",
+        "name": "Likee Android&iOS 5.63.0",
         "date": "2026-08-31",
-        "platform": "android"
+        "platforms": ["android", "ios"]
       }
     }
   },
@@ -93,12 +93,12 @@ const VERSION_REPORT = `{
     "timeline": [
       {
         "kind": "version",
-        "id": "android:1133202860001000338",
-        "key": "prd-flow:version:android:1133202860001000338",
-        "title": "Likee Android 5.63.0",
+        "id": "1133202860001000338",
+        "key": "prd-flow:tapd-current-version:1133202860001000338",
+        "title": "Likee Android&iOS 5.63.0",
         "date": "2026-08-31",
         "source": "prd-flow",
-        "dimensions": { "platform": "android" }
+        "dimensions": { "platform": ["android", "ios"] }
       }
     ]
   },
@@ -106,10 +106,10 @@ const VERSION_REPORT = `{
     "global:tapdCurrentVersion.id": "rv:<version-from-get-or-absent>",
     "global:tapdCurrentVersion.name": "rv:<version-from-get-or-absent>",
     "global:tapdCurrentVersion.date": "rv:<version-from-get-or-absent>",
-    "global:tapdCurrentVersion.platform": "rv:<version-from-get-or-absent>",
-    "projection:prd-flow:version:android:1133202860001000338": "absent"
+    "global:tapdCurrentVersion.platforms": "rv:<version-from-get-or-absent>",
+    "projection:prd-flow:version:1133202860001000338": "absent"
   },
-  "idempotencyKey": "timeline:1020124:android-version-1133202860001000338:v1"
+  "idempotencyKey": "timeline:1020124:version-1133202860001000338:v1"
 }`;
 
 const ACTION_REPORT = `{
@@ -380,11 +380,11 @@ const SECTION_FIELDS = [
 const PROJECTION_FIELDS = [
   ["timeline", "array", "是", "替换当前 source 的完整切片；省略 projections 才表示不修改"],
   ["timeline[].kind", "string", "是", "version / sprint / milestone 或生产方自定义类型"],
-  ["timeline[].id", "string", "是", "业务对象稳定 ID；改名或改期不改变"],
-  ["timeline[].key", "string", "建议", "建议 source:kind:id，避免不同生产方碰撞"],
+  ["timeline[].id", "string", "是", "业务对象稳定 ID；改名、改期或平台范围变化时不改变"],
+  ["timeline[].key", "string", "建议", "建议 source:kind:id；不要拼入 platform 等筛选维度"],
   ["timeline[].title / date", "string", "否", "卡片标题和 YYYY-MM-DD 排期"],
   ["timeline[].source", "string", "建议", "条目所有者，用于 read-merge 时识别自有条目"],
-  ["timeline[].dimensions", "object", "否", "平台、发布列车等不透明筛选维度"],
+  ["timeline[].dimensions", "object", "否", "平台、发布列车等不透明筛选维度；多值可使用数组"],
 ];
 
 const EXTENSION_FIELDS = [

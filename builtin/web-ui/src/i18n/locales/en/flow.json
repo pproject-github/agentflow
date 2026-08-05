@@ -30,7 +30,22 @@
     "outputTooltip": "Output {{name}} | Type: {{type}}",
     "defaultSuffix": " | Default: {{value}}",
     "fallbackLabel": "Node",
-    "expandProvide": "Edit content"
+    "expandProvide": "Edit content",
+    "openGuide": "Open node guide",
+    "guideTitle": "Node Guide",
+    "guideSummary": "What this node does",
+    "guidePrerequisites": "Before you start",
+    "guideSteps": "How to configure it",
+    "guideInputs": "Inputs",
+    "guideOutputs": "Outputs",
+    "guideExample": "Configuration example",
+    "guideNotes": "Notes",
+    "guideRequired": "Required",
+    "guideOptional": "Optional",
+    "guideDefault": "Default: {{value}}",
+    "guideCopy": "Copy example",
+    "guideCopied": "Copied",
+    "guideClose": "Close node guide"
   },
   "nodeProps": {
     "title": "Node Properties",

@@ -74,6 +74,9 @@ For local Markdown or other content that must become a browser URL, publish it f
 - Give every action a stable `key`.
 - Send a stable lowercase `source` on every report and Markdown publish; it is required. Action, idempotency, Artifact, Projection, Extension, Observation, and GlobalState ownership are isolated by source-aware resource keys.
 - Give every timeline entry stable `kind` and `id` values.
+- Base a timeline `id` and `key` on the scheduled business object itself. Keep platform, team, and
+  other filter facets in `dimensions`; if one version/sprint/milestone spans multiple platforms,
+  report one entry with a dimension array instead of creating one identity per platform.
 - Treat `dimensions` as opaque facets; do not hardcode Android, iOS, version, or prd-flow fields into AgentFlow state.
 - Treat `globalState` as the source of truth owned by the producer; treat projections as replaceable derived views.
 - Send the complete current source-owned timeline slice whenever changing it. Omitting `projections` means no projection change.
