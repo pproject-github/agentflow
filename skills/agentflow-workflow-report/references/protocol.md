@@ -3,7 +3,7 @@
 ## 目录
 
 1. 接入边界
-2. 认证、身份与权限
+2. 认证、身份与权限（含 POST /api/workflows/access/sync）
 3. 数据区域模型
 4. GET /api/workflows/state
 5. POST /api/workflows/report
@@ -17,13 +17,14 @@
 
 ## 1. 接入边界
 
-新接入只使用以下三个正式接口：
+新接入使用三个运行态数据接口，以及一个独立的权限控制面接口：
 
 | 方法 | 路径 | 用途 | 是否修改 Workflow |
 | --- | --- | --- | --- |
 | `GET` | `/api/workflows/state` | 读取当前快照和资源 key 版本 | 否 |
 | `POST` | `/api/workflows/report` | 上报全局信息、Action、普通产物、迭代归属和自定义区域 | 是 |
 | `POST` | `/api/workflow-artifacts/publish` | 把本地 Markdown 内容发布成浏览器可访问的预览链接 | 是 |
+| `POST` | `/api/workflows/access/sync` | 同步 TAPD Owner 和参与人的派生权限 | 只修改权限 |
 
 `agentflow-workflow-report` 是接入规格；`workflow-report-client.mjs` 是可复用客户端；`agentflow-cli` 是命令行包装；AgentFlow 服务才负责鉴权、存储、合并和展示。Skill 不参与运行时传输，CLI 也不是数据生产方。
 
@@ -48,14 +49,53 @@ CLI 从 `AGENTFLOW_TOKEN` 或 `AGENTFLOW_SESSION_TOKEN` 读取凭证。不得把
 
 | 身份 | 读取 | 上报 / 发布预览 | 管理成员与分享 |
 | --- | --- | --- | --- |
-| Workflow owner | 是 | 是 | 是 |
-| 显式 editor | 是 | 是 | 否 |
-| 显式 viewer | 是 | 否 | 否 |
+| TAPD Owner / Workflow Owner | 是 | 是 | 是 |
+| 显式 Reporter | 是 | 是 | 否 |
+| TAPD 参与人 | 是 | 否 | 否 |
+| 显式 Viewer | 是 | 否 | 否 |
 | owner 同团队成员 | 是，团队视图自动获得 viewer 权限 | 否 | 否 |
 | 分享链接访问者 | 是 | 否 | 否 |
 | 超级管理员代看 | 是 | 否，只读审阅 | 否 |
 
-首次由已认证用户上报一个尚未登记的 TAPD ID 时，该用户成为这个 Workflow 的 owner。后续写入解析到 owner 的状态空间；没有写权限的调用返回 `403`，不会回退成调用者自己的副本。
+完成权限同步后，TAPD 需求 Owner 就是 Workflow Owner。TAPD 参与人匹配到已注册的 AgentFlow 账号后，默认得到派生 Viewer，不会自动获得上报权限。Owner 可在 AgentFlow 中显式授予 Reporter 或 Viewer。
+
+派生权限和显式授权分开保存：后续 TAPD 刷新可以增加或移除派生 Viewer，但不能抹掉 Owner 主动给出的显式授权。尚未同步 TAPD 人员的历史 Workflow 保留已有 Owner，避免升级时突然撤销权限。兼容客户端若跳过 access sync，首次上报仍会建立 `legacy` Owner；新接入不得依赖这个回退，应先同步 TAPD 权限。旧角色字符串 `editor` 作为兼容别名继续接受，并统一物化为 `reporter`。没有写权限的调用返回 `403`，不会回退成调用者自己的副本。
+
+### 2.3 TAPD 权限同步
+
+Adapter 读取 TAPD Story 后、上报运行态之前，调用 `POST /api/workflows/access/sync`：
+
+```json
+{
+  "workflow": { "namespace": "tapd", "id": "1020124" },
+  "authority": {
+    "type": "tapd",
+    "owner": { "username": "alice" },
+    "participants": ["alice", "bob", "carol"],
+    "observedAt": "2026-08-05T08:00:00.000Z",
+    "revision": "tapd-story-modified-at-or-content-digest"
+  }
+}
+```
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `workflow` | 是 | 规范身份；当前仅支持 `tapd:<short-id>` |
+| `authority.type` | 是 | 当前固定为 `tapd` |
+| `authority.owner` | 是 | TAPD Owner username/userId；必须已注册或登录过 AgentFlow |
+| `authority.participants` | 否 | TAPD 参与人 username/userId；匹配后成为派生 Viewer |
+| `authority.observedAt` | 建议 | 读取人员快照的时间；旧于已保存快照时返回 `409` |
+| `authority.revision` | 建议 | TAPD `modified` 值或人员内容摘要，用于审计和排查 |
+
+新 Workflow 首次同步时，当前登录用户必须是映射后的 TAPD Owner；超级管理员可代为初始化。后续同步只允许当前 Workflow Owner 或超级管理员执行。Owner 发生变化时只更新管理身份，Workflow 使用稳定的内部状态空间，已有 Action、产物和全局信息不会搬迁或变空。未注册的参与人会出现在响应的 `unresolvedParticipants` 中；他们注册并在后续同步被匹配前不获得权限。
+
+CLI 等价命令：
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-access-sync \
+  --workflow tapd:1020124 \
+  --file workflow-access.json
+```
 
 ## 3. 数据区域模型
 
@@ -523,7 +563,7 @@ timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 | --- | --- | --- |
 | `400` | JSON、namespace、字段或 schema 不合法 | 按协议修正；不要降级校验 |
 | `401` | 缺少或无效认证 | 停止并配置 Token；不要把 Token 打印出来 |
-| `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 停止；由 owner 授予 editor 或改用正确身份 |
+| `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 停止；由 Owner 授予 Reporter 或改用正确身份 |
 | `404` | 分享链接、owner 或目标资源不存在 | 重新解析目标，不要创建影子副本 |
 | `409` | 同一资源 key 已变化，或路径属于其他 source | 读取 `conflict.conflicts`，只刷新冲突资源并重试一次；所有 key 通过前请求不会部分落库 |
 | `500` | 服务端异常 | 保留幂等键，记录脱敏上下文后重试或上报 |
@@ -563,6 +603,7 @@ prd-flow 只是一个接入实现，不是协议依赖：
 | prd-flow 事实 | 通用协议位置 | 页面结果 |
 | --- | --- | --- |
 | TAPD short ID | `workflow = tapd:<id>` | 串起同一需求、权限和分享 |
+| TAPD Owner / 参与人 | `POST /api/workflows/access/sync` | Owner 管理权限；参与人默认只读 |
 | 计算出的完整当前状态 | `observation.state` | Workflow 全局概览和当前指针 |
 | TAPD 当前版本原始信息 | `globalState.tapdCurrentVersion` | 保留版本业务事实 |
 | 由版本事实派生的归属 | `projections.timeline[kind=version]` | 个人/团队迭代时间线 |
@@ -576,7 +617,8 @@ prd-flow 只是一个接入实现，不是协议依赖：
 ## 12. 验收清单
 
 - 能使用 Token GET 当前 Workflow，并读到 `snapshot.resourceVersions`。
-- 首次写入能建立 owner；editor 能写，viewer、团队成员、分享链接和管理员代看不能写。
+- TAPD Owner 同步后成为 Workflow Owner；TAPD 参与人自动成为 Viewer；显式 Reporter 能写，Viewer、团队成员、分享链接和管理员代看不能写。
+- TAPD 派生参与人刷新不会覆盖显式授权；过期的权限快照返回 `409`。
 - `globalState` 更新不会覆盖其他生产方拥有的路径，数组替换行为符合预期。
 - 同一 Action key 重报不产生重复业务阶段。
 - Action 下能看到稳定 key 的 MR、构建或测试产物。

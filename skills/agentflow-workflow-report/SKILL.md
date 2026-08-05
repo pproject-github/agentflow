@@ -1,6 +1,6 @@
 ---
 name: agentflow-workflow-report
-description: Safely read, merge, and report AgentFlow Workflow actions, artifacts, producer-owned global state, and generic timeline projections through the AgentFlow CLI and HTTP protocol. Use when an AI agent or producer such as prd-flow needs to integrate Workflow reporting, publish progress or evidence, update globalState, assign version/sprint/milestone timeline membership, clear projections, or resolve revision and idempotency conflicts.
+description: Safely synchronize TAPD-derived Workflow access, then read, merge, and report AgentFlow Workflow actions, artifacts, producer-owned global state, and generic timeline projections through the AgentFlow CLI and HTTP protocol. Use when an AI agent or producer such as prd-flow needs to integrate Workflow reporting, map TAPD Owner and participants, publish progress or evidence, update globalState, assign version/sprint/milestone timeline membership, clear projections, or resolve revision and idempotency conflicts.
 ---
 
 # AgentFlow Workflow Report
@@ -22,7 +22,8 @@ Read [references/protocol.md](references/protocol.md) completely before implemen
 ## Required sequence
 
 1. Resolve a canonical Workflow reference such as `tapd:1015046`. The report schema is producer-generic, but the current AgentFlow identity adapter accepts only the `tapd` namespace. Do not claim that arbitrary Workflow namespaces already work.
-2. Read the current materialized state and retain `snapshot.resourceVersions` for every resource key the operation will touch:
+2. If the Adapter reads TAPD personnel, synchronize its authority snapshot with `POST /api/workflows/access/sync` before reporting: TAPD Owner becomes Workflow Owner and matched TAPD participants become derived Viewers. Keep this permission control-plane call separate from runtime report data.
+3. Read the current materialized state and retain `snapshot.resourceVersions` for every resource key the operation will touch:
 
 ```bash
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-get \
@@ -30,10 +31,10 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-get \
   --runtime-only
 ```
 
-3. Compute only the intended semantic update. Choose one stable lowercase `source` for the business adapter (for example `prd-flow` or `release-bot`). `agentflow-cli` is only transport and must not replace the real producer identity.
-4. Preserve unrelated `globalState` fields. Never infer or rewrite a producer's private schema.
-5. When timeline membership changes, derive the complete producer-owned `projections.timeline` slice. AgentFlow preserves entries owned by other sources; use `[]` to clear only the current source's memberships.
-6. Put `expectedVersions` for every touched Action, Artifact, GlobalState path, Projection, Extension path, or Observation into the JSON payload. Use `"absent"` when creating a new key. Report it with a stable operation key:
+4. Compute only the intended semantic update. Choose one stable lowercase `source` for the business adapter (for example `prd-flow` or `release-bot`). `agentflow-cli` is only transport and must not replace the real producer identity.
+5. Preserve unrelated `globalState` fields. Never infer or rewrite a producer's private schema.
+6. When timeline membership changes, derive the complete producer-owned `projections.timeline` slice. AgentFlow preserves entries owned by other sources; use `[]` to clear only the current source's memberships.
+7. Put `expectedVersions` for every touched Action, Artifact, GlobalState path, Projection, Extension path, or Observation into the JSON payload. Use `"absent"` when creating a new key. Report it with a stable operation key:
 
 ```bash
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-report \
@@ -42,7 +43,7 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-report \
   --idempotency-key 'implementation-finished:android:issue-2:v1'
 ```
 
-7. On HTTP 409, refresh only the resource keys listed in `conflict.conflicts`, recompute the intended update, and retry once with their new versions. Never send a client field named `snapshot`; use `observation.state` for a complete producer observation and treat returned `snapshot` as server output.
+8. On HTTP 409, refresh only the resource keys listed in `conflict.conflicts`, recompute the intended update, and retry once with their new versions. Never send a client field named `snapshot`; use `observation.state` for a complete producer observation and treat returned `snapshot` as server output.
 
 ## Report selection
 
@@ -81,8 +82,8 @@ For local Markdown or other content that must become a browser URL, publish it f
 
 ## Permissions and overwrite semantics
 
-- Treat the first authenticated reporter as owner when the Workflow has no collaboration record.
-- Allow owner and explicit editor writes. Treat explicit viewer, same-team viewer, share-link viewer, and admin review as read-only.
+- Treat TAPD personnel as derived authority when the Adapter can read them: TAPD Owner maps to Workflow Owner and registered TAPD participants map to Viewer.
+- Keep explicit grants separate from derived TAPD membership. Allow Owner and explicit Reporter writes. Treat TAPD participant Viewer, explicit Viewer, same-team Viewer, share-link Viewer, and admin review as read-only. Accept legacy `editor` only as a compatibility alias for Reporter.
 - `observation.state` replaces the complete previous observation for the same `clientId`.
 - `globalState.patch` recursively merges objects; arrays and scalars replace; `null` and `remove` delete explicit paths. The first reporting source to write a path owns it; another source cannot overwrite an owned path.
 - Reusing an `action.key` updates the same semantic stage. Do not create a new key for refreshes or retries.

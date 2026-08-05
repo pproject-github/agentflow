@@ -63,6 +63,17 @@ const READ_RESPONSE = `{
   }
 }`;
 
+const ACCESS_SYNC_REQUEST = `{
+  "workflow": { "namespace": "tapd", "id": "1020124" },
+  "authority": {
+    "type": "tapd",
+    "owner": { "username": "alice" },
+    "participants": ["alice", "bob", "carol"],
+    "observedAt": "2026-08-05T08:00:00.000Z",
+    "revision": "tapd-story-modified-at-or-content-digest"
+  }
+}`;
+
 const VERSION_REPORT = `{
   "schemaVersion": 1,
   "workflow": { "namespace": "tapd", "id": "1020124" },
@@ -226,7 +237,8 @@ Content-Type: application/json
 
 const AI_GUIDE = `请使用 $agentflow-workflow-report 接入一个生产方，并完整阅读 references/protocol.md。
 
-目标只有三个正式接口：
+运行态数据只有三个正式接口，TAPD 人员权限另有一个控制面接口：
+0. POST /api/workflows/access/sync：把 TAPD Owner 和参与人同步为 Workflow 派生权限；它不写业务状态。
 1. GET /api/workflows/state：读取当前状态和 snapshot.resourceVersions。
 2. POST /api/workflows/report：写全局信息、Action、普通产物、迭代投影或自定义区域。
 3. POST /api/workflow-artifacts/publish：把本地 Markdown 内容发布成预览 URL。
@@ -240,8 +252,9 @@ const AI_GUIDE = `请使用 $agentflow-workflow-report 接入一个生产方，�
 - 普通自定义信息是否可用 globalState.sections 的 text/user/chips/list/link 渲染器表达。
 - 只有通用渲染器不够时，才设计 extensions namespace/schema/前端渲染器。
 
-实现 read → merge → report → verify：
-- owner/editor 才能写；viewer、团队成员、分享链接、管理员代看只读。
+实现 access sync → read → merge → report → verify：
+- TAPD Owner 映射为 Workflow Owner；TAPD 参与人默认 Viewer；Owner 可在 AgentFlow 中显式授予 Reporter。
+- owner/reporter 才能写；viewer、团队成员、分享链接、管理员代看只读。
 - globalState 只 patch 自己拥有的路径；对象递归合并，数组/标量替换。
 - source 使用真实业务 Adapter 的稳定小写名称；agentflow-cli 只是传输工具。
 - 同一 source + action.key 更新同一阶段，不为刷新或重试创建新 key。
@@ -255,6 +268,14 @@ const AI_GUIDE = `请使用 $agentflow-workflow-report 接入一个生产方，�
 
 const ENDPOINTS = [
   {
+    method: "POST",
+    path: "/api/workflows/access/sync",
+    title: "同步 TAPD 权限",
+    detail: "把 TAPD Owner 和参与人投影为 Workflow 派生权限；不传业务状态。",
+    permission: "首次为 TAPD Owner；后续为当前 Owner / 管理员",
+    effect: "更新 Owner 与 TAPD Viewer，保留显式授权",
+  },
+  {
     method: "GET",
     path: "/api/workflows/state",
     title: "读取当前 Workflow",
@@ -267,7 +288,7 @@ const ENDPOINTS = [
     path: "/api/workflows/report",
     title: "统一上报",
     detail: "写入全局信息、Action、普通产物、迭代归属和自定义区域。",
-    permission: "owner / editor",
+    permission: "owner / reporter",
     effect: "按区域执行替换、合并或更新",
   },
   {
@@ -275,7 +296,7 @@ const ENDPOINTS = [
     path: "/api/workflow-artifacts/publish",
     title: "发布 Markdown 预览",
     detail: "上传 Markdown 内容，生成可供浏览器查看的规范 URL 与短链。",
-    permission: "owner / editor",
+    permission: "owner / reporter",
     effect: "保存预览副本与辅助 Artifact，不推进阶段",
   },
 ];
@@ -313,6 +334,15 @@ const REPORT_FIELDS = [
   ["artifacts", "array", "条件", "Action 证据或全局证据"],
   ["projections", "object", "条件", "当前 source 的完整 timeline 迭代归属切片"],
   ["extensions", "object", "条件", "按生产方 namespace 组织的自定义区域"],
+];
+
+const ACCESS_SYNC_FIELDS = [
+  ["workflow", "object | string", "是", "规范 Workflow 身份；当前仅 tapd:<short-id>"],
+  ["authority.type", "string", "是", "当前固定为 tapd；表示权限事实来源，不是 report source"],
+  ["authority.owner", "string | object", "是", "TAPD 需求 Owner 的 AgentFlow username/userId；必须已登录或注册"],
+  ["authority.participants", "array", "否", "TAPD 参与人用户名；匹配到账号后自动获得 Viewer"],
+  ["authority.observedAt", "ISO date", "建议", "读取 TAPD 人员快照的时间；旧于已保存快照时返回 409"],
+  ["authority.revision", "string", "建议", "TAPD modified 值或人员内容摘要，供审计和排查"],
 ];
 
 const ACTION_FIELDS = [
@@ -435,9 +465,10 @@ const OVERWRITE_RULES = [
 ];
 
 const PERMISSIONS = [
-  ["Workflow owner", "可读", "可写", "可管理成员和分享"],
-  ["显式 editor", "可读", "可写", "不能管理成员"],
-  ["显式 viewer", "可读", "只读", "不能管理成员"],
+  ["TAPD Owner", "可读", "可写", "Workflow Owner；可管理成员和分享"],
+  ["显式 Reporter", "可读", "可写", "Owner 主动授权；不能管理成员"],
+  ["TAPD 参与人", "可读", "只读", "由 TAPD 派生；移出 TAPD 后自动收回"],
+  ["显式 Viewer", "可读", "只读", "Owner 主动授权；不依赖 TAPD"],
   ["同团队成员", "可读", "只读", "自动获得 team viewer"],
   ["分享链接", "可读", "只读", "不能用于上报"],
   ["超级管理员代看", "可读", "只读", "不会以管理员身份覆盖数据"],
@@ -634,7 +665,7 @@ export default function WorkflowReportGuidePage() {
           <div>
             <span className="af-wr-kicker">WORKFLOW REPORT · API REFERENCE</span>
             <h1>Workflow 接入文档</h1>
-            <p>用 3 个正式接口，把生产流程的全局信息、Action 时间轴、产物链接、迭代归属和自定义面板接入 AgentFlow。数据协议面向任意 Adapter；当前服务端的 Workflow 身份适配器只支持 TAPD，prd-flow 仅作为 TAPD 研发场景的参考实现。</p>
+            <p>用 3 个运行态数据接口和 1 个权限控制面接口，把生产流程的人员权限、全局信息、Action 时间轴、产物链接、迭代归属和自定义面板接入 AgentFlow。数据协议面向任意 Adapter；当前服务端的 Workflow 身份与权限适配器只支持 TAPD，prd-flow 仅作为 TAPD 研发场景的参考实现。</p>
             <div className="af-wr-hero__boundary"><strong>当前边界</strong><span>可接入任意事实来源</span><i>·</i><span>Workflow key 目前必须是 tapd:&lt;short-id&gt;</span></div>
           </div>
           <div className="af-wr-hero__actions">
@@ -651,7 +682,7 @@ export default function WorkflowReportGuidePage() {
         </nav>
 
         <section className="af-wr-section" id="api">
-          <SectionHead number="01" title="5 分钟跑通一次上报" detail="正式接口只有三个。先准备登录 Token 和稳定 source，再执行 read → merge → report → verify；旧 /api/prd-workflow/* 仅为兼容入口。" />
+          <SectionHead number="01" title="5 分钟跑通一次上报" detail="运行态数据接口只有三个，人员权限由独立控制面接口同步。先准备登录 Token 和稳定 source，再执行 access sync → read → merge → report → verify；旧 /api/prd-workflow/* 仅为兼容入口。" />
           <div className="af-wr-endpoint-grid">
             {ENDPOINTS.map((endpoint) => (
               <article key={endpoint.path}>
@@ -734,7 +765,15 @@ export default function WorkflowReportGuidePage() {
           <SectionHead number="04" title="接口与参数参考" detail="以下字段来自当前服务端真实校验与合并逻辑；可以按区域只提交本次需要更新的部分。" />
 
           <article className="af-wr-endpoint">
-            <EndpointHeader method="GET" path="/api/workflows/state" title="读取当前 Workflow" permission="owner / editor / viewer / team viewer / share viewer" effect="无" />
+            <EndpointHeader method="POST" path="/api/workflows/access/sync" title="同步 TAPD 派生权限" permission="首次：TAPD Owner；后续：当前 Owner / 管理员" effect="只改权限控制面，不写运行态" />
+            <p className="af-wr-endpoint__intro">Adapter 读取 TAPD Story 后，先把 Owner 与参与人同步到 AgentFlow。Owner 必须已注册 AgentFlow；未匹配的参与人会在 <code>unresolvedParticipants</code> 中返回，注册后下次同步即可获得 Viewer。</p>
+            <FieldTable rows={ACCESS_SYNC_FIELDS} label="Workflow access sync 参数" />
+            <CodePanel title="权限同步请求" value={ACCESS_SYNC_REQUEST} copyKey="access-sync" copied={copied} onCopy={copy} />
+            <div className="af-wr-callout"><span className="material-symbols-outlined" aria-hidden>security</span><p><strong>派生权限与显式授权分开保存。</strong>TAPD 参与人只自动获得 Viewer；Owner 可在 Workflow 分享弹窗把某人提升为 Reporter。后续 TAPD 同步会替换派生参与人，但不会覆盖显式授权。</p></div>
+          </article>
+
+          <article className="af-wr-endpoint">
+            <EndpointHeader method="GET" path="/api/workflows/state" title="读取当前 Workflow" permission="owner / reporter / viewer / team viewer / share viewer" effect="无" />
             <p className="af-wr-endpoint__intro">写入前读取当前快照，从 <code>snapshot.resourceVersions</code> 保存本次将触及的业务 key 版本；不存在的 key 使用 <code>absent</code>。客户端提交的完整状态叫 <code>observation.state</code>；只有服务端返回的数据才叫 <code>snapshot</code>。</p>
             <FieldTable rows={STATE_QUERY_FIELDS} label="Workflow state query 参数" />
             <h4>成功响应</h4>
@@ -746,7 +785,7 @@ export default function WorkflowReportGuidePage() {
           </article>
 
           <article className="af-wr-endpoint">
-            <EndpointHeader method="POST" path="/api/workflows/report" title="统一上报 Workflow" permission="owner / editor" effect="修改运行态并返回新 snapshot" />
+            <EndpointHeader method="POST" path="/api/workflows/report" title="统一上报 Workflow" permission="owner / reporter" effect="修改运行态并返回新 snapshot" />
             <p className="af-wr-endpoint__intro">至少提交 observation、globalState、action、artifacts、projections、extensions 之一。一次请求可以组合多个区域：每个业务 key 独立校验版本，任一冲突则整次请求原子失败，不会只写入一半。</p>
             <h4>Envelope</h4>
             <FieldTable rows={REPORT_FIELDS} label="Workflow Report 顶层参数" />
@@ -765,7 +804,7 @@ export default function WorkflowReportGuidePage() {
           </article>
 
           <article className="af-wr-endpoint">
-            <EndpointHeader method="POST" path="/api/workflow-artifacts/publish" title="发布 Markdown 预览" permission="owner / editor" effect="保存预览副本和辅助 Artifact；不推进 Action" />
+            <EndpointHeader method="POST" path="/api/workflow-artifacts/publish" title="发布 Markdown 预览" permission="owner / reporter" effect="保存预览副本和辅助 Artifact；不推进 Action" />
             <p className="af-wr-endpoint__intro">客户端读取本地 Markdown，再发送实际内容。服务端不能访问调用方本地路径；外部系统已有 URL 时直接使用 Report artifacts，无需发布副本。</p>
             <FieldTable rows={PUBLISH_FIELDS} label="Artifact Publish 参数" />
             <div className="af-wr-publish-layout">
@@ -801,12 +840,12 @@ export default function WorkflowReportGuidePage() {
         <section className="af-wr-section" id="safety">
           <SectionHead number="06" title="权限、覆盖和冲突" detail="接入前必须明确谁能写、每个区域怎么更新，以及冲突发生时是否可能误删其他生产方的数据。" />
           <div className="af-wr-safety-grid">
-            <div><h3>权限矩阵</h3><FieldTable columns={["身份", "读取", "上报", "说明"]} rows={PERMISSIONS} label="Workflow 权限矩阵" /><p className="af-wr-table-note">首次由已认证用户上报未登记的 TAPD ID 时，该用户成为 owner。团队成员自动获得 viewer，不会自动获得写权限。</p></div>
+            <div><h3>权限矩阵</h3><FieldTable columns={["身份", "读取", "上报", "说明"]} rows={PERMISSIONS} label="Workflow 权限矩阵" /><p className="af-wr-table-note">完成 TAPD 权限同步后，Owner 和参与人以 TAPD 为准；参与人默认只读。尚未同步过的历史 Workflow 保留原 Owner，直到当前 Owner 或管理员执行首次同步。</p></div>
             <div><h3>覆盖矩阵</h3><FieldTable columns={["区域", "重复上报", "删除/清空", "接入方责任"]} rows={OVERWRITE_RULES} label="Workflow 覆盖矩阵" /></div>
           </div>
           <div className="af-wr-conflict-flow"><span>GET snapshot.resourceVersions</span><i>→</i><span>计算触及的 resource keys</span><i>→</i><span>POST + expectedVersions + idempotencyKey</span><i>→</i><span>409 时只刷新冲突 key / 重算 / 重试一次</span></div>
           <div className="af-wr-errors">
-            <div><code>400</code><p>字段或 schema 错误；按协议修正</p></div><div><code>401</code><p>缺少认证；停止并配置 Token</p></div><div><code>403</code><p>只读或无权限；由 owner 授权 editor</p></div><div><code>409</code><p>资源 key 变化或路径属于其他 source；整次请求未落库</p></div>
+            <div><code>400</code><p>字段或 schema 错误；按协议修正</p></div><div><code>401</code><p>缺少认证；停止并配置 Token</p></div><div><code>403</code><p>只读或无权限；由 Owner 授权 Reporter</p></div><div><code>409</code><p>资源 key 冲突、路径属于其他 source，或权限快照过旧</p></div>
           </div>
         </section>
 
@@ -814,7 +853,7 @@ export default function WorkflowReportGuidePage() {
           <SectionHead number="07" title="设计思想与运行关系" detail="业务解释留在 Adapter，传输和存储保持通用；这样新生产方不需要复制 prd-flow 的 TAPD 私有模型。" />
           <div className="af-wr-runtime">
             <article><small>事实来源</small><strong>TAPD / GitLab / Jenkins / 其他系统</strong><p>提供原始业务事实。</p></article><i>→</i>
-            <article className="is-focus"><small>你需要实现</small><strong>业务 Adapter</strong><p>解释阶段、定义稳定 key、生成 Report。prd-flow 是一个现有 Adapter。</p></article><i>→</i>
+            <article className="is-focus"><small>你需要实现</small><strong>业务 Adapter</strong><p>先同步上游人员权限，再解释阶段、定义稳定 key、生成 Report。prd-flow 是一个现有 Adapter。</p></article><i>→</i>
             <article><small>通用传输</small><strong>Workflow Report Client / agentflow-cli</strong><p>负责地址、Token、JSON 和 HTTP，不理解业务。</p></article><i>→</i>
             <article><small>接收与展示</small><strong>AgentFlow 服务与页面</strong><p>鉴权、合并、存储并渲染三类区域。</p></article>
           </div>

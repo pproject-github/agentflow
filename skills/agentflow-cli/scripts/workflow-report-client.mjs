@@ -58,6 +58,9 @@ export function createWorkflowReportClient({ baseUrl, token, fetchImpl = globalT
         runtimeOnly: runtimeOnly ? "1" : "",
       })}`);
     },
+    syncAccess(body = {}) {
+      return request("/api/workflows/access/sync", { method: "POST", body });
+    },
     report(body = {}) {
       return request("/api/workflows/report", { method: "POST", body });
     },

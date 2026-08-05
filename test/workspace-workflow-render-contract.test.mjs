@@ -78,7 +78,7 @@ test("Workflow details can render a read-only local demo snapshot", async () => 
   assert.match(source, /if \(flowParams\.workflowDemo\) \{/);
   assert.match(source, /本地只读示例/);
   assert.match(source, /readOnly=\{flowParams\.workflowDemo\}/);
-  assert.match(source, /!tapdId \|\| flowParams\.workflowDemo/);
+  assert.match(source, /isWorkflowMode\s*\? !workflowTapdId/);
 });
 
 test("Workflow details use the canonical Artifact publish endpoint and registered prd-flow extensions", async () => {
@@ -88,6 +88,32 @@ test("Workflow details use the canonical Artifact publish endpoint and registere
   assert.doesNotMatch(source, /fetch\("\/api\/prd-workflow\/review-link"/);
   assert.match(source, /snapshot\?\.extensions\?\.\["prd-flow"\]/);
   assert.match(source, /Array\.isArray\(prdFlowExtension\.aiDocs\)/);
+});
+
+test("Workflow share dialog manages explicit report permissions without hiding TAPD-derived viewers", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(source, /fetch\(`\/api\/prd-workflow\/collaboration\?tapdId=/);
+  assert.match(source, /<option value="reporter">可上报<\/option>/);
+  assert.match(source, /member\.source === "tapd"/);
+  assert.match(source, /移除授权/);
+  assert.match(source, /TAPD 参与人 · 只读/);
+  assert.match(css, /\.af-display-share-modal\.af-display-link-modal\s*\{[^}]*width:\s*min\(48rem,/s);
+  assert.match(css, /\.af-flow-snippet-modal__body\s*\{[^}]*overflow-y:\s*auto;/s);
+});
+
+test("the top collaboration entry opens the permission surface for the active scope", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, />\s*协作\s*<\/button>/);
+  assert.match(source, /if \(isWorkflowMode\) \{\s*setWorkflowCollaborationOpenRequest/);
+  assert.match(source, /collaborationOpenRequest=\{workflowCollaborationOpenRequest\}/);
+  assert.match(source, /aria-label="需求协作"/);
+  assert.match(source, /aria-label="项目协作"/);
+  assert.doesNotMatch(source, />\s*协作分享\s*<\//);
+  assert.doesNotMatch(source, /title=\{flowParams\.workflowDemo \? "本地示例不可分享" : "分享 Workflow"\}/);
+  assert.doesNotMatch(source, /本地只读示例不能配置需求协作/);
 });
 
 test("Workflow progress fields use a compact responsive grid", async () => {

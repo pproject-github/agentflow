@@ -42,6 +42,7 @@ Commands:
   display-outputs --flow-id <id> [--flow-source user]
   sync-workspace --workspace <id>
   workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only]
+  workflow-access-sync --workflow tapd:<id> --file <access.json>
   workflow-report --workflow tapd:<id> --file <report.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
   workflow-artifact-publish --workflow tapd:<id> --file <artifact.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
 `;
@@ -421,6 +422,20 @@ async function main() {
     if (flowSource) body.flowSource = flowSource;
     const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
     printJson(await client.report(body));
+    return;
+  }
+
+  if (command === "workflow-access-sync") {
+    const body = readJsonFile(option(args, "file"));
+    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(
+      typeof body?.workflow === "string" ? body.workflow : body?.workflow?.key || "",
+    );
+    if (!workflow && !(body?.workflow?.namespace && body?.workflow?.id)) {
+      throw new Error("Missing workflow reference. Pass --workflow namespace:id or include workflow.namespace and workflow.id in the JSON file.");
+    }
+    if (workflow) body.workflow = workflow;
+    const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
+    printJson(await client.syncAccess(body));
     return;
   }
 

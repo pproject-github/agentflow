@@ -30,10 +30,11 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(page, /POST \/api\/workflows\/report/);
   assert.match(page, /GET \/api\/workflows\/state/);
   assert.match(page, /POST \/api\/workflow-artifacts\/publish/);
+  assert.match(page, /POST \/api\/workflows\/access\/sync/);
   assert.match(page, /projections\.timeline/);
-  assert.match(page, /正式接口只有三个/);
+  assert.match(page, /运行态数据接口只有三个/);
   assert.match(page, /5 分钟跑通一次上报/);
-  assert.match(page, /当前服务端的 Workflow 身份适配器只支持 TAPD/);
+  assert.match(page, /当前服务端的 Workflow 身份与权限适配器只支持 TAPD/);
   assert.match(page, /可直接执行的三步命令/);
   assert.match(page, /成功响应/);
   assert.match(page, /Observation 参数/);
@@ -64,6 +65,8 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(page, /上报 Action 和产物链接/);
   assert.match(page, /上报自定义文档区 \/ Issue 区/);
   assert.match(page, /权限矩阵/);
+  assert.match(page, /TAPD 参与人默认 Viewer/);
+  assert.match(page, /显式 Reporter/);
   assert.match(page, /覆盖矩阵/);
   assert.match(page, /同团队成员/);
   assert.match(page, /当前 source 的完整切片替换/);
@@ -110,8 +113,10 @@ test("Workflow reporting specification is isolated in its own skill", async () =
   assert.match(protocol, /当前唯一注册的 extension renderer/);
   assert.match(protocol, /section key 为 `progress` 时使用紧凑响应式网格/);
   assert.match(protocol, /覆盖、合并与删除规则/);
-  assert.match(protocol, /Workflow owner/);
-  assert.match(protocol, /显式 editor/);
+  assert.match(protocol, /Workflow Owner/);
+  assert.match(protocol, /显式 Reporter/);
+  assert.match(protocol, /POST \/api\/workflows\/access\/sync/);
+  assert.match(protocol, /派生权限和显式授权分开保存/);
   assert.match(protocol, /替换当前 `source` 拥有的完整切片/);
   assert.match(protocol, /resourceVersions/);
   assert.match(protocol, /任意一个 key 冲突时整次请求不落库/);
