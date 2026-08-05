@@ -21,6 +21,14 @@ function cleanString(value, max = 4000) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function rawString(value) {
+  return String(value ?? "").trim();
+}
+
+function stringExceeds(value, max) {
+  return rawString(value).length > max;
+}
+
 function hasOwn(value, key) {
   return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
 }
@@ -74,6 +82,26 @@ function normalizeActionStatus(value) {
   };
   const normalized = aliases[raw] || raw || "pending";
   return WORKFLOW_ACTION_STATUSES.has(normalized) ? normalized : "pending";
+}
+
+function isKnownActionStatus(value) {
+  const raw = cleanString(value, 40).toLowerCase();
+  if (!raw) return true;
+  return WORKFLOW_ACTION_STATUSES.has(raw) || [
+    "success", "succeeded", "complete", "completed", "failed", "failure", "canceled", "in_progress", "in-progress",
+  ].includes(raw);
+}
+
+export function isSafeWorkflowUrl(value, { allowRelative = true } = {}) {
+  const raw = rawString(value);
+  if (!raw) return true;
+  if (allowRelative && raw.startsWith("/") && !raw.startsWith("//")) return true;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function normalizeStringList(value, maxItems = 100) {
@@ -136,8 +164,7 @@ function normalizeWorkflowProjectionState(value = {}) {
   if (Array.isArray(value?.timeline)) {
     raw.timeline = value.timeline
       .map((item, index) => normalizeWorkflowTimelineProjection(item, index))
-      .filter(Boolean)
-      .slice(0, 100);
+      .filter(Boolean);
   } else {
     delete raw.timeline;
   }
@@ -189,7 +216,6 @@ export function materializeWorkflowProjections(snapshot = {}, runtimeEvents = []
         ? next.timeline
             .map((item, index) => normalizeWorkflowTimelineProjection(item, index))
             .filter(Boolean)
-            .slice(0, 100)
         : projections.timeline || [],
     };
   }
@@ -230,11 +256,22 @@ export function removeWorkflowGlobalStatePath(value, rawPath) {
 }
 
 export function normalizeWorkflowReference(payload = {}) {
-  const workflow = plainObject(payload.workflow);
-  const explicitKey = cleanString(workflow.key || payload.workflowKey || payload.workflow_key, 400);
+  const workflowInput = payload.workflow;
+  const workflow = plainObject(workflowInput);
+  const rawExplicitKey = rawString(
+    (typeof workflowInput === "string" ? workflowInput : "") || workflow.key || payload.workflowKey || payload.workflow_key,
+  );
+  if (rawExplicitKey.length > 400) return { error: "Workflow key exceeds 400 characters" };
+  if (/[\0\r\n]/.test(rawExplicitKey)) return { error: "Workflow key contains control characters" };
+  const explicitKey = rawExplicitKey;
   const keySeparator = explicitKey.indexOf(":");
   const keyedNamespace = keySeparator > 0 ? explicitKey.slice(0, keySeparator) : "";
   const keyedId = keySeparator > 0 ? explicitKey.slice(keySeparator + 1) : explicitKey;
+  const rawNamespace = rawString(workflow.namespace || workflow.type || payload.workflowNamespace || payload.workflow_namespace || keyedNamespace || "tapd");
+  const rawId = rawString(workflow.id || keyedId || payload.workflowId || payload.workflow_id || payload.tapdId || payload.tapd_id);
+  if (rawNamespace.length > 80) return { error: "Workflow namespace exceeds 80 characters" };
+  if (rawId.length > 240) return { error: "Workflow id exceeds 240 characters" };
+  if (/[\0\r\n]/.test(rawId)) return { error: "Workflow id contains control characters" };
   const namespace = cleanString(
     workflow.namespace || workflow.type || payload.workflowNamespace || payload.workflow_namespace || keyedNamespace || "tapd",
     80,
@@ -260,14 +297,17 @@ export function normalizeWorkflowReference(payload = {}) {
 }
 
 export function normalizeWorkflowReport(payload = {}) {
-  const schemaVersion = Number(payload.schemaVersion || payload.schema_version || WORKFLOW_REPORT_SCHEMA_VERSION);
+  const schemaValue = payload.schemaVersion ?? payload.schema_version ?? WORKFLOW_REPORT_SCHEMA_VERSION;
+  const schemaVersion = Number(schemaValue);
   if (schemaVersion !== WORKFLOW_REPORT_SCHEMA_VERSION) {
     return { error: `Unsupported workflow report schemaVersion: ${schemaVersion}` };
   }
   const workflow = normalizeWorkflowReference(payload);
   if (workflow.error) return workflow;
   const rawWorkflow = plainObject(payload.workflow);
-  const source = cleanString(payload.source || "agentflow-cli", 120).toLowerCase() || "agentflow-cli";
+  if (!rawString(payload.source)) return { error: "Workflow report requires source" };
+  if (stringExceeds(payload.source, 120)) return { error: "Workflow report source exceeds 120 characters" };
+  const source = cleanString(payload.source, 120).toLowerCase();
   if (!/^[a-z][a-z0-9._-]{0,119}$/.test(source)) {
     return { error: "Invalid workflow report source" };
   }
@@ -278,29 +318,49 @@ export function normalizeWorkflowReport(payload = {}) {
   if (hasObservation && !Object.keys(observationState).length) {
     return { error: "observation requires state" };
   }
+  if (stringExceeds(rawObservation.schema || rawObservation.model, 160)) return { error: "observation.schema exceeds 160 characters" };
+  if (stringExceeds(rawObservation.clientId || rawObservation.client_id || source, 160)) return { error: "observation.clientId exceeds 160 characters" };
+  if (stringExceeds(rawObservation.scope || "client", 80)) return { error: "observation.scope exceeds 80 characters" };
+  const rawObservedAt = rawString(rawObservation.observedAt || rawObservation.observed_at);
+  if (rawObservedAt && !Number.isFinite(Date.parse(rawObservedAt))) return { error: "observation.observedAt must be an ISO-compatible date" };
   const observation = hasObservation ? {
     schema: cleanString(rawObservation.schema || rawObservation.model || "workflow-observation/v1", 160),
     state: mergeWorkflowGlobalState({}, observationState),
     observedAt: cleanString(rawObservation.observedAt || rawObservation.observed_at, 80),
-    clientId: cleanString(rawObservation.clientId || rawObservation.client_id, 160),
+    clientId: cleanString(rawObservation.clientId || rawObservation.client_id || source, 160),
     scope: cleanString(rawObservation.scope || "client", 80).toLowerCase() || "client",
   } : null;
 
   const rawAction = plainObject(payload.action);
   const hasAction = Object.keys(rawAction).length > 0;
+  if (stringExceeds(rawAction.key || rawAction.id || rawAction.actionKey || rawAction.action_key, 240)) {
+    return { error: "Workflow action key exceeds 240 characters" };
+  }
   const actionKey = cleanString(rawAction.key || rawAction.id || rawAction.actionKey || rawAction.action_key, 240);
   if (hasAction && !actionKey) return { error: "Workflow action requires a stable key" };
+  if (hasAction && /[\0\r\n]/.test(actionKey)) return { error: "Workflow action key contains control characters" };
+  if (stringExceeds(rawAction.title || rawAction.label || actionKey, 500)) return { error: "Workflow action title exceeds 500 characters" };
+  if (stringExceeds(rawAction.detail || rawAction.description || rawAction.message, 4000)) return { error: "Workflow action detail exceeds 4000 characters" };
+  if (stringExceeds(rawAction.group || rawAction.stage || rawAction.category, 120)) return { error: "Workflow action group exceeds 120 characters" };
+  if (stringExceeds(rawAction.scope, 80)) return { error: "Workflow action scope exceeds 80 characters" };
+  if (stringExceeds(rawAction.platform, 80)) return { error: "Workflow action platform exceeds 80 characters" };
+  if (stringExceeds(rawAction.issueKey || rawAction.issue_key, 240)) return { error: "Workflow action issueKey exceeds 240 characters" };
+  const rawTags = Array.isArray(rawAction.tags) ? rawAction.tags : rawAction.tags == null ? [] : [rawAction.tags];
+  if (rawTags.length > 100 || rawTags.some((tag) => stringExceeds(tag, 240))) return { error: "Workflow action tags exceed supported limits" };
+  if (hasAction && !isKnownActionStatus(rawAction.status)) return { error: `Invalid workflow action status: ${rawAction.status}` };
+  const rawOccurredAt = rawString(rawAction.occurredAt || rawAction.occurred_at || rawAction.completedAt || rawAction.startedAt);
+  if (rawOccurredAt && !Number.isFinite(Date.parse(rawOccurredAt))) return { error: "action.occurredAt must be an ISO-compatible date" };
   const action = hasAction ? {
     ...rawAction,
     key: actionKey,
     title: cleanString(rawAction.title || rawAction.label || actionKey, 500),
-    detail: cleanString(rawAction.detail || rawAction.description || rawAction.message, 4000),
+    ...(rawAction.detail || rawAction.description || rawAction.message ? { detail: cleanString(rawAction.detail || rawAction.description || rawAction.message, 4000) } : {}),
     status: normalizeActionStatus(rawAction.status),
-    group: cleanString(rawAction.group || rawAction.stage || rawAction.category, 120),
-    scope: cleanString(rawAction.scope, 80),
-    platform: cleanString(rawAction.platform, 80),
-    issueKey: cleanString(rawAction.issueKey || rawAction.issue_key, 240),
-    tags: normalizeStringList(rawAction.tags),
+    ...(rawAction.group || rawAction.stage || rawAction.category ? { group: cleanString(rawAction.group || rawAction.stage || rawAction.category, 120) } : {}),
+    ...(rawAction.scope ? { scope: cleanString(rawAction.scope, 80) } : {}),
+    ...(rawAction.platform ? { platform: cleanString(rawAction.platform, 80) } : {}),
+    ...(rawAction.issueKey || rawAction.issue_key ? { issueKey: cleanString(rawAction.issueKey || rawAction.issue_key, 240) } : {}),
+    ...(rawAction.tags != null ? { tags: normalizeStringList(rawAction.tags) } : {}),
     occurredAt: cleanString(
       rawAction.occurredAt ||
       rawAction.occurred_at ||
@@ -311,6 +371,31 @@ export function normalizeWorkflowReport(payload = {}) {
   } : null;
 
   const rawArtifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  if (rawArtifacts.length > 100) return { error: "Workflow report supports at most 100 artifacts per request" };
+  const invalidArtifactShapeIndex = rawArtifacts.findIndex((item) => !item || typeof item !== "object" || Array.isArray(item));
+  if (invalidArtifactShapeIndex >= 0) return { error: `artifacts[${invalidArtifactShapeIndex}] must be an object` };
+  const missingArtifactTargetIndex = rawArtifacts.findIndex((item) => !rawString(item?.url || item?.href) && !rawString(item?.path));
+  if (missingArtifactTargetIndex >= 0) return { error: `artifacts[${missingArtifactTargetIndex}] requires url or path` };
+  const oversizedArtifactIndex = rawArtifacts.findIndex((item) => (
+    stringExceeds(item?.url || item?.href, 4000) ||
+    stringExceeds(item?.path, 4000) ||
+    stringExceeds(item?.title || item?.label || item?.name, 500) ||
+    stringExceeds(item?.type || item?.kind, 120) ||
+    stringExceeds(item?.label, 500) ||
+    stringExceeds(item?.status, 80)
+  ));
+  if (oversizedArtifactIndex >= 0) return { error: `artifacts[${oversizedArtifactIndex}] exceeds supported field limits` };
+  const invalidArtifactIndex = rawArtifacts.findIndex((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const url = item.url || item.href;
+    return Boolean(url) && !isSafeWorkflowUrl(url);
+  });
+  if (invalidArtifactIndex >= 0) return { error: `artifacts[${invalidArtifactIndex}].url must use http, https, or an absolute application path` };
+  const invalidArtifactKeyIndex = rawArtifacts.findIndex((item) => {
+    const key = rawString(item?.key || item?.id || item?.artifactKey || item?.artifact_key);
+    return key.length > 500 || /[\0\r\n]/.test(key);
+  });
+  if (invalidArtifactKeyIndex >= 0) return { error: `artifacts[${invalidArtifactKeyIndex}].key is invalid` };
   const artifacts = rawArtifacts
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
     .map((item, index) => ({
@@ -326,25 +411,81 @@ export function normalizeWorkflowReport(payload = {}) {
   if (hasProjections && !Array.isArray(rawProjections.timeline)) {
     return { error: "projections.timeline must be an array" };
   }
+  if (hasProjections && rawProjections.timeline.length > 100) {
+    return { error: "projections.timeline supports at most 100 entries" };
+  }
   const invalidTimelineIndex = hasProjections
     ? rawProjections.timeline.findIndex((item, index) => !normalizeWorkflowTimelineProjection(item, index))
     : -1;
   if (invalidTimelineIndex >= 0) {
     return { error: `projections.timeline[${invalidTimelineIndex}] requires kind and id` };
   }
-  const projections = hasProjections ? normalizeWorkflowProjectionState(rawProjections) : null;
+  const oversizedTimelineIndex = hasProjections
+    ? rawProjections.timeline.findIndex((item) => (
+        stringExceeds(item?.kind || item?.type, 80) ||
+        stringExceeds(item?.id || item?.key, 240) ||
+        stringExceeds(item?.key, 500) ||
+        stringExceeds(item?.title || item?.label, 500) ||
+        stringExceeds(item?.source || item?.namespace || source, 120) ||
+        stringExceeds(item?.date || item?.targetDate || item?.target_date, 80)
+      ))
+    : -1;
+  if (oversizedTimelineIndex >= 0) return { error: `projections.timeline[${oversizedTimelineIndex}] exceeds supported field limits` };
+  const invalidTimelineSourceIndex = hasProjections
+    ? rawProjections.timeline.findIndex((item) => {
+        const itemSource = cleanString(item?.source || item?.namespace || source, 120).toLowerCase();
+        return !/^[a-z][a-z0-9._-]{0,119}$/.test(itemSource);
+      })
+    : -1;
+  if (invalidTimelineSourceIndex >= 0) return { error: `projections.timeline[${invalidTimelineSourceIndex}].source is invalid` };
+  const invalidTimelineDateIndex = hasProjections
+    ? rawProjections.timeline.findIndex((item) => {
+        const date = rawString(item?.date || item?.targetDate || item?.target_date);
+        return date && !Number.isFinite(Date.parse(date));
+      })
+    : -1;
+  if (invalidTimelineDateIndex >= 0) return { error: `projections.timeline[${invalidTimelineDateIndex}].date must be ISO-compatible` };
+  const projections = hasProjections ? normalizeWorkflowProjectionState({
+    ...rawProjections,
+    timeline: rawProjections.timeline.map((item) => ({
+      ...plainObject(item),
+      source: cleanString(item?.source || item?.namespace || source, 120).toLowerCase(),
+    })),
+  }) : null;
 
   const rawExtensions = plainObject(payload.extensions);
   const hasExtensions = Object.keys(rawExtensions).length > 0;
+  const invalidExtensionNamespace = Object.keys(rawExtensions).findIndex((namespace) => (
+    !/^[a-z][a-z0-9._-]{0,119}$/.test(rawString(namespace).toLowerCase()) ||
+    !rawExtensions[namespace] ||
+    typeof rawExtensions[namespace] !== "object" ||
+    Array.isArray(rawExtensions[namespace])
+  ));
+  if (invalidExtensionNamespace >= 0) {
+    const namespace = Object.keys(rawExtensions)[invalidExtensionNamespace];
+    return { error: `extensions[${namespace}] must be a valid namespace object` };
+  }
   const extensions = hasExtensions ? normalizeWorkflowExtensions(rawExtensions) : null;
   if (hasExtensions && !Object.keys(extensions).length) {
     return { error: "extensions requires at least one valid namespace object" };
+  }
+  if (hasExtensions && Object.keys(extensions).some((namespace) => namespace !== source)) {
+    return { error: "extensions may only update the namespace matching report source" };
   }
 
   const rawGlobalState = plainObject(payload.globalState || payload.global_state);
   const hasGlobalState = Object.keys(rawGlobalState).length > 0;
   const globalStatePatch = plainObject(rawGlobalState.patch);
-  const globalStateRemove = normalizeStringList(rawGlobalState.remove || rawGlobalState.removePaths || rawGlobalState.remove_paths);
+  const rawGlobalStateRemove = rawGlobalState.remove || rawGlobalState.removePaths || rawGlobalState.remove_paths;
+  const rawGlobalStateRemoveList = Array.isArray(rawGlobalStateRemove) ? rawGlobalStateRemove : rawGlobalStateRemove == null || rawGlobalStateRemove === "" ? [] : [rawGlobalStateRemove];
+  if (rawGlobalStateRemoveList.length > 100 || rawGlobalStateRemoveList.some((item) => stringExceeds(item, 240))) {
+    return { error: "globalState.remove exceeds supported limits" };
+  }
+  const globalStateRemove = normalizeStringList(rawGlobalStateRemove);
+  const globalStateOwnerPaths = uniqueValues([
+    ...patchLeafPaths(globalStatePatch).filter((path) => path.length).map((path) => path.join(".")),
+    ...globalStateRemove,
+  ]);
   const mode = cleanString(rawGlobalState.mode || "merge", 40).toLowerCase() || "merge";
   if (hasGlobalState && mode !== "merge") return { error: "globalState.mode must be merge" };
   if (hasGlobalState && !Object.keys(globalStatePatch).length && !globalStateRemove.length) {
@@ -361,9 +502,23 @@ export function normalizeWorkflowReport(payload = {}) {
     action?.idempotency_key,
     500,
   );
+  if (stringExceeds(payload.idempotencyKey || payload.idempotency_key || action?.idempotencyKey || action?.idempotency_key, 500)) {
+    return { error: "idempotencyKey exceeds 500 characters" };
+  }
+  if (stringExceeds(payload.expectedRevision || payload.expected_revision, 500)) return { error: "expectedRevision exceeds 500 characters" };
+  const rawExpectedVersions = plainObject(payload.expectedVersions || payload.expected_versions);
+  const expectedVersions = {};
+  for (const [resourceKey, version] of Object.entries(rawExpectedVersions)) {
+    const key = rawString(resourceKey);
+    if (!key || key.length > 800 || /[\0\r\n]/.test(key)) return { error: "Invalid expectedVersions resource key" };
+    const normalizedVersion = version == null || version === "" ? "absent" : rawString(version);
+    if (normalizedVersion.length > 160) return { error: `expectedVersions[${key}] exceeds 160 characters` };
+    expectedVersions[key] = normalizedVersion;
+  }
   const event = {
     schemaVersion,
     type: "workflow-report",
+    operation: "report",
     source,
     workflow,
     workflowKey: workflow.key,
@@ -381,9 +536,9 @@ export function normalizeWorkflowReport(payload = {}) {
       detail: action.detail,
       status: action.status,
       scope: action.scope || action.group || "workflow",
-      platform: action.platform,
-      issueKey: action.issueKey,
-      tags: action.tags,
+      ...(action.platform ? { platform: action.platform } : {}),
+      ...(action.issueKey ? { issueKey: action.issueKey } : {}),
+      ...(action.tags ? { tags: action.tags } : {}),
       ...(action.occurredAt ? { occurredAt: action.occurredAt } : {}),
     } : {
       title: cleanString(payload.title || "Workflow 全局状态更新", 500),
@@ -397,9 +552,23 @@ export function normalizeWorkflowReport(payload = {}) {
     ...(hasGlobalState ? {
       globalStatePatch,
       globalStateRemove,
+      globalStateOwnerPaths,
     } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
+  if (idempotencyKey) {
+    event.idempotencyFingerprint = semanticHash({
+      workflow,
+      source,
+      observation,
+      action,
+      artifacts,
+      globalState: hasGlobalState ? { patch: globalStatePatch, remove: globalStateRemove } : null,
+      projections,
+      extensions,
+    });
+    event.idempotencyFingerprints = { [idempotencyKey]: event.idempotencyFingerprint };
+  }
   return {
     schemaVersion,
     workflow,
@@ -415,11 +584,108 @@ export function normalizeWorkflowReport(payload = {}) {
       remove: globalStateRemove,
     } : null,
     expectedRevision: cleanString(payload.expectedRevision || payload.expected_revision, 500),
+    expectedVersions,
     idempotencyKey,
     flowId: cleanString(payload.flowId || payload.flow_id || rawWorkflow.flowId || rawWorkflow.flow_id, 240),
     flowSource: cleanString(payload.flowSource || payload.flow_source || rawWorkflow.flowSource || rawWorkflow.flow_source || "user", 80) || "user",
     event,
   };
+}
+
+function semanticHash(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex").slice(0, 24);
+}
+
+function resourceVersion(value) {
+  return `rv:${semanticHash(value)}`;
+}
+
+function addObjectResourceVersions(out, prefix, value, path = []) {
+  if (value === undefined) return;
+  if (path.length) out[`${prefix}:${path.join(".")}`] = resourceVersion(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (UNSAFE_OBJECT_KEYS.has(key)) continue;
+    addObjectResourceVersions(out, prefix, child, [...path, key]);
+  }
+}
+
+export function workflowSnapshotResourceVersions(snapshot = {}) {
+  const out = {};
+  const runtimeEvents = Array.isArray(snapshot.runtimeEvents || snapshot.runtime_events)
+    ? (snapshot.runtimeEvents || snapshot.runtime_events)
+    : [];
+  for (const event of runtimeEvents) {
+    const source = cleanString(event?.source || event?.producer || "agentflow", 120).toLowerCase() || "agentflow";
+    const actionKey = cleanString(event?.actionModel?.key || event?.action || event?.actionId || event?.stageKey, 240);
+    if (actionKey && event?.auxiliary !== true) out[`action:${source}:${actionKey}`] = resourceVersion(event);
+    for (const artifact of Array.isArray(event?.artifacts) ? event.artifacts : []) {
+      const producer = cleanString(artifact?.producer || source, 120).toLowerCase() || source;
+      const key = cleanString(artifact?.key || artifact?.artifactKey || artifact?.artifact_key, 500);
+      if (key) out[`artifact:${producer}:${key}`] = resourceVersion(artifact);
+    }
+  }
+  for (const artifact of Array.isArray(snapshot.artifacts) ? snapshot.artifacts : []) {
+    const producer = cleanString(artifact?.producer || "legacy", 120).toLowerCase() || "legacy";
+    const key = cleanString(artifact?.key || artifact?.artifactKey || artifact?.artifact_key, 500);
+    if (key) out[`artifact:${producer}:${key}`] = resourceVersion(artifact);
+  }
+  for (const projection of Array.isArray(snapshot?.projections?.timeline) ? snapshot.projections.timeline : []) {
+    const source = cleanString(projection?.source || "legacy", 120).toLowerCase() || "legacy";
+    const kind = cleanString(projection?.kind, 80).toLowerCase();
+    const id = cleanString(projection?.id, 240);
+    if (kind && id) out[`projection:${source}:${kind}:${id}`] = resourceVersion(projection);
+  }
+  addObjectResourceVersions(out, "global", plainObject(snapshot.globalState));
+  for (const [namespace, value] of Object.entries(plainObject(snapshot.extensions))) {
+    addObjectResourceVersions(out, `extension:${namespace}`, value);
+  }
+  for (const observation of Array.isArray(snapshot.clientObservations) ? snapshot.clientObservations : []) {
+    const source = cleanString(observation?.source || "legacy", 120).toLowerCase() || "legacy";
+    const clientId = cleanString(observation?.clientId, 160);
+    if (clientId) out[`observation:${source}:${clientId}`] = resourceVersion(observation);
+  }
+  return out;
+}
+
+function patchLeafPaths(value, path = []) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [path];
+  const entries = Object.entries(value).filter(([key]) => !UNSAFE_OBJECT_KEYS.has(key));
+  if (!entries.length) return [path];
+  return entries.flatMap(([key, child]) => patchLeafPaths(child, [...path, key]));
+}
+
+export function workflowReportResourceKeys(report = {}, currentSnapshot = {}) {
+  const keys = new Set();
+  const source = cleanString(report?.event?.source || "agentflow-cli", 120).toLowerCase() || "agentflow-cli";
+  if (report.action?.key) keys.add(`action:${source}:${report.action.key}`);
+  for (const artifact of Array.isArray(report.artifacts) ? report.artifacts : []) {
+    if (artifact?.key) keys.add(`artifact:${source}:${artifact.key}`);
+  }
+  for (const path of patchLeafPaths(report?.globalState?.patch || {})) {
+    if (path.length) keys.add(`global:${path.join(".")}`);
+  }
+  for (const path of Array.isArray(report?.globalState?.remove) ? report.globalState.remove : []) {
+    if (path) keys.add(`global:${path}`);
+  }
+  for (const [namespace, extension] of Object.entries(plainObject(report.extensions))) {
+    for (const path of patchLeafPaths(extension)) {
+      if (path.length) keys.add(`extension:${namespace}:${path.join(".")}`);
+    }
+  }
+  if (report.projections) {
+    const current = Array.isArray(currentSnapshot?.projections?.timeline) ? currentSnapshot.projections.timeline : [];
+    const incoming = Array.isArray(report.projections.timeline) ? report.projections.timeline : [];
+    for (const item of [...current, ...incoming]) {
+      const owner = cleanString(item?.source || source, 120).toLowerCase() || source;
+      if (owner !== source) continue;
+      const kind = cleanString(item?.kind, 80).toLowerCase();
+      const id = cleanString(item?.id, 240);
+      if (kind && id) keys.add(`projection:${source}:${kind}:${id}`);
+    }
+  }
+  if (report.observation?.clientId) keys.add(`observation:${source}:${report.observation.clientId}`);
+  return [...keys].sort();
 }
 
 function displayValue(value) {
@@ -592,17 +858,11 @@ export function mergeWorkflowArtifactLists(left = [], right = [], defaultScope =
 }
 
 export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtimeEvents = [], projections = {}, extensions = {}) {
-  const events = (Array.isArray(runtimeEvents) ? runtimeEvents : []).map((event) => ({
-    id: event?.id || "",
-    action: event?.action || event?.actionId || "",
-    stageKey: event?.stageKey || event?.stage || "",
-    status: event?.status || "",
-    artifacts: event?.artifacts || [],
-    globalStatePatch: event?.globalStatePatch || {},
-    globalStateRemove: event?.globalStateRemove || [],
-    projections: event?.projections || {},
-    extensionsPatch: event?.extensionsPatch || {},
-  }));
+  const events = (Array.isArray(runtimeEvents) ? runtimeEvents : []).map((event) => {
+    const semantic = { ...plainObject(event) };
+    for (const key of ["updatedAt", "createdAt", "actor", "rawOutput", "output", "result"]) delete semantic[key];
+    return semantic;
+  });
   const hash = crypto
     .createHash("sha256")
     .update(JSON.stringify(stableValue({ globalState, artifacts, projections, extensions, events })))

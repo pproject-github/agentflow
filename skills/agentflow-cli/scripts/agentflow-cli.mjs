@@ -42,8 +42,8 @@ Commands:
   display-outputs --flow-id <id> [--flow-source user]
   sync-workspace --workspace <id>
   workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only]
-  workflow-report --workflow tapd:<id> --file <report.json> [--expected-revision <revision>]
-  workflow-artifact-publish --workflow tapd:<id> --file <artifact.json>
+  workflow-report --workflow tapd:<id> --file <report.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
+  workflow-artifact-publish --workflow tapd:<id> --file <artifact.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
 `;
 }
 
@@ -401,17 +401,22 @@ async function main() {
 
   if (command === "workflow-report") {
     const body = readJsonFile(option(args, "file"));
-    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(body?.workflow?.key || "");
+    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(
+      typeof body?.workflow === "string" ? body.workflow : body?.workflow?.key || "",
+    );
     if (!workflow && !(body?.workflow?.namespace && body?.workflow?.id)) {
       throw new Error("Missing workflow reference. Pass --workflow namespace:id or include workflow.namespace and workflow.id in the JSON file.");
     }
     if (workflow) body.workflow = workflow;
     const expectedRevision = option(args, "expected-revision");
     const idempotencyKey = option(args, "idempotency-key");
+    const reportSource = option(args, "source");
     const flowId = option(args, "flow-id") || option(args, "flow");
     const flowSource = option(args, "flow-source");
     if (expectedRevision) body.expectedRevision = expectedRevision;
     if (idempotencyKey) body.idempotencyKey = idempotencyKey;
+    if (reportSource) body.source = reportSource;
+    if (!String(body.source || "").trim()) throw new Error("Missing Workflow report source. Pass --source <adapter> or include source in the JSON file.");
     if (flowId) body.flowId = flowId;
     if (flowSource) body.flowSource = flowSource;
     const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
@@ -421,15 +426,24 @@ async function main() {
 
   if (command === "workflow-artifact-publish") {
     const body = readJsonFile(option(args, "file"));
-    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(body?.workflow?.key || "");
+    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(
+      typeof body?.workflow === "string" ? body.workflow : body?.workflow?.key || "",
+    );
     if (!workflow && !(body?.workflow?.namespace && body?.workflow?.id)) {
       throw new Error("Missing workflow reference. Pass --workflow namespace:id or include workflow.namespace and workflow.id in the JSON file.");
     }
     if (workflow) body.workflow = workflow;
+    const expectedRevision = option(args, "expected-revision");
+    const idempotencyKey = option(args, "idempotency-key");
+    const reportSource = option(args, "source");
     const flowId = option(args, "flow-id") || option(args, "flow");
     const flowSource = option(args, "flow-source");
     if (flowId) body.flowId = flowId;
     if (flowSource) body.flowSource = flowSource;
+    if (expectedRevision) body.expectedRevision = expectedRevision;
+    if (idempotencyKey) body.idempotencyKey = idempotencyKey;
+    if (reportSource) body.source = reportSource;
+    if (!String(body.source || "").trim()) throw new Error("Missing Workflow artifact source. Pass --source <adapter> or include source in the JSON file.");
     const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
     printJson(await client.publishArtifact(body));
     return;

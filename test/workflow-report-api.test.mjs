@@ -167,6 +167,151 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     assert.equal(replayWithStaleRevision.status, 200, JSON.stringify(replayWithStaleRevisionResult));
     assert.equal(replayWithStaleRevisionResult.alreadyApplied, true);
 
+    const originalActionResourceKey = "action:prd-flow:implementation:android:issue-2";
+    const originalActionVersion = result.snapshot.resourceVersions[originalActionResourceKey];
+    assert.match(originalActionVersion, /^rv:/);
+    const concurrentDifferentKeys = ["concurrent-a", "concurrent-b"];
+    const concurrentDifferentResponses = await Promise.all(concurrentDifferentKeys.map((key) => request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedVersions: { [`action:prd-flow:${key}`]: "absent" },
+        idempotencyKey: `${key}:v1`,
+        action: { key, title: key, status: "running" },
+      }),
+    })));
+    assert.deepEqual(concurrentDifferentResponses.map((item) => item.status), [200, 200]);
+
+    const concurrentSameKey = "concurrent-same-key";
+    const concurrentSameResponses = await Promise.all(["left", "right"].map((side) => request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedVersions: { [`action:prd-flow:${concurrentSameKey}`]: "absent" },
+        idempotencyKey: `${concurrentSameKey}:${side}:v1`,
+        action: { key: concurrentSameKey, title: side, status: "running" },
+      }),
+    })));
+    assert.deepEqual(concurrentSameResponses.map((item) => item.status).sort(), [200, 409]);
+    const concurrentConflictResponse = concurrentSameResponses.find((item) => item.status === 409);
+    const concurrentConflictResult = await concurrentConflictResponse.json();
+    assert.equal(concurrentConflictResult.conflict.conflicts[0].resourceKey, `action:prd-flow:${concurrentSameKey}`);
+
+    const parallelResourceKey = "action:prd-flow:parallel-check";
+    const parallelWrite = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedRevision: "runtime:stale-is-ignored-when-key-versions-are-present",
+        expectedVersions: { [parallelResourceKey]: "absent" },
+        idempotencyKey: "parallel-check-running-v1",
+        action: { key: "parallel-check", title: "并行检查", status: "running" },
+      }),
+    });
+    const parallelResult = await parallelWrite.json();
+    assert.equal(parallelWrite.status, 200, JSON.stringify(parallelResult));
+    assert.deepEqual(parallelResult.resourceKeys, [parallelResourceKey]);
+
+    const parallelReplay = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedVersions: { [parallelResourceKey]: "absent" },
+        idempotencyKey: "parallel-check-running-v1",
+        action: { key: "parallel-check", title: "并行检查", status: "running" },
+      }),
+    });
+    const parallelReplayResult = await parallelReplay.json();
+    assert.equal(parallelReplay.status, 200, JSON.stringify(parallelReplayResult));
+    assert.equal(parallelReplayResult.alreadyApplied, true);
+
+    const reusedIdempotencyWithDifferentPayload = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        idempotencyKey: "parallel-check-running-v1",
+        action: { key: "parallel-check", title: "不同的语义内容", status: "done" },
+      }),
+    });
+    const reusedIdempotencyResult = await reusedIdempotencyWithDifferentPayload.json();
+    assert.equal(reusedIdempotencyWithDifferentPayload.status, 409, JSON.stringify(reusedIdempotencyResult));
+    assert.equal(reusedIdempotencyResult.conflict.type, "workflow-idempotency-conflict");
+
+    const sameKeyWrite = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedVersions: { [originalActionResourceKey]: originalActionVersion },
+        idempotencyKey: "implementation-issue-2-v2",
+        action: { key: "implementation:android:issue-2", title: "Android 实现复核", status: "running" },
+      }),
+    });
+    const sameKeyWriteResult = await sameKeyWrite.json();
+    assert.equal(sameKeyWrite.status, 200, JSON.stringify(sameKeyWriteResult));
+
+    const replayOlderSemanticOperation = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify(reportPayload),
+    });
+    const replayOlderSemanticResult = await replayOlderSemanticOperation.json();
+    assert.equal(replayOlderSemanticOperation.status, 200, JSON.stringify(replayOlderSemanticResult));
+    assert.equal(replayOlderSemanticResult.alreadyApplied, true);
+
+    const staleSameKeyWrite = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        expectedVersions: { [originalActionResourceKey]: originalActionVersion },
+        idempotencyKey: "implementation-issue-2-v3",
+        action: { key: "implementation:android:issue-2", title: "陈旧覆盖", status: "done" },
+      }),
+    });
+    const staleSameKeyResult = await staleSameKeyWrite.json();
+    assert.equal(staleSameKeyWrite.status, 409, JSON.stringify(staleSameKeyResult));
+    assert.equal(staleSameKeyResult.conflict.type, "workflow-resource-conflict");
+    assert.equal(staleSameKeyResult.conflict.conflicts[0].resourceKey, originalActionResourceKey);
+
+    const crossOperationIdempotency = await request("/api/workflow-artifacts/publish", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        title: "幂等操作域验证",
+        markdown: "# Publish\n\n与 Report 复用业务 key。",
+        artifactKey: "idempotency-operation-proof",
+        idempotencyKey: reportPayload.idempotencyKey,
+        durability: "temporary",
+        ttlDays: 7,
+      }),
+    });
+    const crossOperationResult = await crossOperationIdempotency.json();
+    assert.equal(crossOperationIdempotency.status, 200, JSON.stringify(crossOperationResult));
+    assert.notEqual(crossOperationResult.alreadyApplied, true);
+    assert.equal(crossOperationResult.artifact.key, "idempotency-operation-proof");
+
+    const missingPublishResourceVersion = await request("/api/workflow-artifacts/publish", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "prd-flow",
+        title: "错误资源版本验证",
+        markdown: "# Missing key",
+        artifactKey: "expected-version-proof",
+        idempotencyKey: "expected-version-proof-v1",
+        expectedVersions: { "artifact:prd-flow:another-key": "absent" },
+      }),
+    });
+    const missingPublishResourceVersionResult = await missingPublishResourceVersion.json();
+    assert.equal(missingPublishResourceVersion.status, 400, JSON.stringify(missingPublishResourceVersionResult));
+    assert.deepEqual(missingPublishResourceVersionResult.missingExpectedVersionKeys, ["artifact:prd-flow:expected-version-proof"]);
+
     const otherProducer = await request("/api/workflows/report", {
       method: "POST",
       body: JSON.stringify({

@@ -156,6 +156,7 @@ import {
   ensurePrdWorkflowCollaboration,
   getPrdWorkflowCollaborationById,
   getPrdWorkflowCollaborationByShareToken,
+  getPrdWorkflowCollaborationByTapdId,
   getPrdWorkflowCollaborationForUser,
   ensurePrdWorkflowShareLink,
   listPrdWorkflowCollaborationsForUser,
@@ -184,7 +185,10 @@ import {
   mergeWorkflowGlobalState,
   normalizeWorkflowReference,
   normalizeWorkflowReport,
+  removeWorkflowGlobalStatePath,
+  workflowReportResourceKeys,
   workflowRuntimeRevision,
+  workflowSnapshotResourceVersions,
 } from "./workflow-report.mjs";
 
 const MIME = {
@@ -1446,11 +1450,31 @@ function skillhubInstallArgs(payload, { uninstall = false } = {}) {
   return args;
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 5 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    let total = 0;
+    let exceeded = false;
+    req.on("data", (chunk) => {
+      if (exceeded) return;
+      const value = Buffer.from(chunk);
+      total += value.length;
+      if (total > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(value);
+    });
+    req.on("end", () => {
+      if (exceeded) {
+        const error = new Error(`Request body exceeds ${maxBytes} bytes`);
+        error.status = 413;
+        reject(error);
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
     req.on("error", reject);
   });
 }
@@ -7780,6 +7804,7 @@ const workspaceCollaborationSequences = new Map();
 const prdWorkflowSubscribers = new Map();
 const prdWorkflowIdempotency = new Map();
 const prdWorkflowActionLocks = new Map();
+const prdWorkflowWriteQueues = new Map();
 const PRD_WORKFLOW_IDEMPOTENCY_MAX = 1000;
 const PRD_WORKFLOW_RUNTIME_EVENTS_MAX = 1000;
 const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
@@ -7787,6 +7812,22 @@ const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
 const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = true;
 const WORKSPACE_IMPLEMENTATION_SUMMARY_ENABLED = false;
 const WORKSPACE_NODE_HISTORY_MAX_CHARS = 80000;
+
+async function prdWorkflowAcquireWriteLock(key) {
+  const lockKey = String(key || "").trim();
+  const previous = prdWorkflowWriteQueues.get(lockKey) || Promise.resolve();
+  let releaseCurrent;
+  const current = new Promise((resolve) => { releaseCurrent = resolve; });
+  prdWorkflowWriteQueues.set(lockKey, current);
+  await previous.catch(() => {});
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseCurrent();
+    if (prdWorkflowWriteQueues.get(lockKey) === current) prdWorkflowWriteQueues.delete(lockKey);
+  };
+}
 
 function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capability = "read") {
   const tapdId = String(params.tapdId || params.tapd_id || "").trim();
@@ -7812,6 +7853,10 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
   const memberCollaboration = tapdId
     ? getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId)
     : null;
+  const existingCollaboration = tapdId ? getPrdWorkflowCollaborationByTapdId(tapdId) : null;
+  if (!adminOwner && !linkCollaboration && existingCollaboration && !memberCollaboration) {
+    return { error: "PRD Workflow collaboration permission denied", status: 403 };
+  }
   const collaboration = adminOwner ? null : (linkCollaboration || memberCollaboration);
   const access = adminOwner
     ? { allowed: true, writable: false, role: "admin-viewer", via: "admin-review" }
@@ -8073,6 +8118,11 @@ function prdWorkflowClientsPath(scopedRoot, tapdId) {
 function prdWorkflowEventsPath(scopedRoot, tapdId) {
   const rootDir = scopedRoot || process.cwd();
   return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.events.json`);
+}
+
+function prdWorkflowEventsArchivePath(scopedRoot, tapdId) {
+  const rootDir = scopedRoot || process.cwd();
+  return path.join(rootDir, ".workspace", "prd-flow", "workflow-state", `${prdWorkflowSafeStateId(tapdId)}.events.archive.jsonl`);
 }
 
 function prdWorkflowAuditPath(scopedRoot, tapdId) {
@@ -9712,10 +9762,20 @@ export function prdWorkflowReviewHtml(title, markdown, meta = {}) {
 }
 
 function prdWorkflowCreateReview(scopedRoot, tapdId, payload = {}, urlBase = "", ownerId = "") {
-  const content = String(payload.markdown || payload.content || payload.rawOutput || "").slice(0, 500000);
+  const content = String(payload.markdown || payload.content || payload.rawOutput || "");
   if (!content.trim()) throw new Error("Missing review markdown");
+  if (Buffer.byteLength(content, "utf-8") > 500000) {
+    const error = new Error("Review markdown exceeds 500000 bytes");
+    error.status = 413;
+    throw error;
+  }
   const title = String(payload.title || payload.label || "PRD Workflow Review").trim().slice(0, 160) || "PRD Workflow Review";
   const durability = String(payload.durability || (payload.durable === true || payload.permanent === true ? "durable" : "temporary")).trim().toLowerCase() || "temporary";
+  if (!["temporary", "durable"].includes(durability)) {
+    const error = new Error("durability must be temporary or durable");
+    error.status = 400;
+    throw error;
+  }
   const reviewId = prdWorkflowReviewIdFromRequest(tapdId, payload, durability);
   const paths = prdWorkflowReviewPaths(scopedRoot, tapdId, reviewId);
   const ttlDaysRaw = Number(payload.ttlDays || payload.ttl_days || (durability === "temporary" ? 7 : 0));
@@ -9935,11 +9995,13 @@ function prdWorkflowReadClientStateWithFallback(root, scopedRoot, tapdId) {
 
 function prdWorkflowWriteClientObservation(scopedRoot, tapdId, meta, snapshot) {
   const state = prdWorkflowReadClientState(scopedRoot, tapdId);
-  const clientId = prdWorkflowSafeStateId(meta.clientId || "anonymous");
+  const reportSource = String(meta.reportSource || meta.source || "legacy").trim().toLowerCase() || "legacy";
+  const clientId = prdWorkflowSafeStateId(`${reportSource}:${meta.clientId || "anonymous"}`);
   const nextClients = {
     ...state.clients,
     [clientId]: {
       clientId: String(meta.clientId || clientId),
+      source: reportSource,
       userId: String(meta.userId || ""),
       observedAt: String(meta.observedAt || ""),
       reportedAt: String(meta.reportedAt || new Date().toISOString()),
@@ -10172,6 +10234,7 @@ function prdWorkflowSnapshotMetaFromReport(payload = {}, rawSnapshot = {}, req =
     reportedAt,
     observedAt: String(payload.observedAt || payload.observed_at || rawSnapshot.observedAt || rawSnapshot.observed_at || sources.observedAt || sources.checkedAt || headerObservedAt || reportedAt),
     clientId: String(payload.clientId || payload.client_id || sources.clientId || headerClientId || userCtx?.userId || "anonymous").slice(0, 160),
+    reportSource: String(payload.reportSource || payload.report_source || payload.source || "legacy").trim().toLowerCase().slice(0, 120) || "legacy",
     userId: String(userCtx?.userId || payload.userId || payload.user_id || "").slice(0, 160),
     baseRevision: String(payload.baseRevision || payload.base_revision || payload.expectedRevision || payload.expected_revision || rawSnapshot.baseRevision || sources.baseRevision || "").trim(),
     scope: String(payload.scope || rawSnapshot.scope || rawSnapshot.next?.scope || sources.scope || "client").trim().toLowerCase() || "client",
@@ -10218,7 +10281,7 @@ function prdWorkflowStoreClientObservation({
     stageKey: reportMeta.stageKey,
   };
   const existingClientState = prdWorkflowReadClientState(scopedRoot, tapdId);
-  const existingClientId = prdWorkflowSafeStateId(reportMeta.clientId || "anonymous");
+  const existingClientId = prdWorkflowSafeStateId(`${reportMeta.reportSource || "legacy"}:${reportMeta.clientId || "anonymous"}`);
   const previousClientSnapshot = existingClientState.clients?.[existingClientId]?.snapshot || null;
   const stampedSnapshot = prdWorkflowStampCurrentActionEntryTimes(
     scopedRoot,
@@ -10379,6 +10442,7 @@ function prdWorkflowMaterializeSnapshot(root, scopedRoot, tapdId, userCtx = {}, 
   );
   const clientObservations = prdWorkflowClientObservationRows(root, scopedRoot, tapdId).map((item) => ({
     clientId: item.clientId,
+    source: item.source || "legacy",
     userId: item.userId || "",
     phase: item.phase || "",
     pointer: item.pointer || "",
@@ -10571,13 +10635,22 @@ function prdWorkflowNormalizeStoredRuntimeEvent(tapdId, event = {}) {
 function prdWorkflowReadRuntimeEvents(scopedRoot, tapdId) {
   try {
     const p = prdWorkflowEventsPath(scopedRoot, tapdId);
-    if (!fs.existsSync(p)) return { version: 1, tapdId: String(tapdId || ""), events: [] };
-    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
-    const events = Array.isArray(data?.events)
-      ? data.events
-          .map((item) => prdWorkflowNormalizeStoredRuntimeEvent(data?.tapdId || tapdId, item))
-          .filter((item) => item && typeof item === "object")
+    const archivePath = prdWorkflowEventsArchivePath(scopedRoot, tapdId);
+    const data = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf-8")) : {};
+    const archivedEvents = fs.existsSync(archivePath)
+      ? fs.readFileSync(archivePath, "utf-8").split("\n").filter(Boolean).flatMap((line) => {
+          try { return [JSON.parse(line)]; } catch { return []; }
+        })
       : [];
+    const normalizedEvents = [...archivedEvents, ...(Array.isArray(data?.events) ? data.events : [])]
+      .map((item) => prdWorkflowNormalizeStoredRuntimeEvent(data?.tapdId || tapdId, item))
+      .filter((item) => item && typeof item === "object");
+    const eventsByKey = new Map();
+    for (const event of normalizedEvents) {
+      const key = `${prdWorkflowRuntimeEventProducer(event)}:${prdWorkflowRuntimeEventOperation(event)}:${String(event.id || "")}`;
+      eventsByKey.set(key, event);
+    }
+    const events = [...eventsByKey.values()];
     return {
       version: 1,
       tapdId: String(data?.tapdId || tapdId || ""),
@@ -10592,11 +10665,17 @@ function prdWorkflowReadRuntimeEvents(scopedRoot, tapdId) {
 function prdWorkflowWriteRuntimeEvents(scopedRoot, tapdId, events) {
   const p = prdWorkflowEventsPath(scopedRoot, tapdId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
+  const allEvents = Array.isArray(events) ? events : [];
+  const overflow = allEvents.slice(0, Math.max(0, allEvents.length - PRD_WORKFLOW_RUNTIME_EVENTS_MAX));
+  const archivePath = prdWorkflowEventsArchivePath(scopedRoot, tapdId);
+  const archiveTmp = `${archivePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(archiveTmp, overflow.length ? `${overflow.map((event) => JSON.stringify(event)).join("\n")}\n` : "", "utf-8");
+  fs.renameSync(archiveTmp, archivePath);
   const data = {
     version: 1,
     tapdId: String(tapdId || ""),
     updatedAt: new Date().toISOString(),
-    events: Array.isArray(events) ? events.slice(-PRD_WORKFLOW_RUNTIME_EVENTS_MAX) : [],
+    events: allEvents.slice(-PRD_WORKFLOW_RUNTIME_EVENTS_MAX),
   };
   const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
@@ -10666,6 +10745,12 @@ function prdWorkflowRuntimeEventProducer(event = {}) {
     .slice(0, 120) || "agentflow";
 }
 
+function prdWorkflowRuntimeEventOperation(event = {}) {
+  return String(event.operation || (event.type === "review-link" ? "artifact.publish" : "report"))
+    .trim()
+    .toLowerCase() || "report";
+}
+
 function prdWorkflowRuntimeOwnedArtifacts(values, stage = "") {
   if (!Array.isArray(values)) return values;
   const ownsOnlyChangedArtifact = /^(?:issue-plan|implementation|bugfix|integration):/.test(String(stage || ""));
@@ -10687,16 +10772,21 @@ function prdWorkflowRuntimeEventId(event = {}) {
   const scope = String(event.scope || "").trim();
   const platform = String(event.platform || "").trim();
   const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
+  const operation = prdWorkflowRuntimeEventOperation(event);
+  const stableActionKey = String(event?.actionModel?.key || "").trim();
+  if (stableActionKey && aggregateByStage && String(event?.type || "") === "workflow-report") {
+    return `stage_${prdWorkflowSafeStateId([prdWorkflowRuntimeEventProducer(event), operation, stableActionKey].join(":"))}`;
+  }
   if ((stage || action) && aggregateByStage) {
     const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
-    const key = [prdWorkflowRuntimeEventProducer(event), scope, issue, platform, stage || action].filter(Boolean).join(":");
+    const key = [prdWorkflowRuntimeEventProducer(event), operation, scope, issue, platform, stage || action].filter(Boolean).join(":");
     return `stage_${prdWorkflowSafeStateId(key)}`;
   }
   const existing = String(event.id || event.eventId || event.event_id || "").trim();
   if (existing) return existing.slice(0, 160);
   if (stage || action) {
     const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
-    const key = [prdWorkflowRuntimeEventProducer(event), scope, issue, platform, stage || action].filter(Boolean).join(":");
+    const key = [prdWorkflowRuntimeEventProducer(event), operation, scope, issue, platform, stage || action].filter(Boolean).join(":");
     return `stage_${prdWorkflowSafeStateId(key)}`;
   }
   return `evt_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
@@ -10866,10 +10956,12 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
     const entry = prdWorkflowNormalizeRuntimeEvent(tapdId, event);
     const entryIdem = String(entry.idempotencyKey || "").trim();
     const entryProducer = prdWorkflowRuntimeEventProducer(entry);
+    const entryOperation = prdWorkflowRuntimeEventOperation(entry);
     const entryDedupeKey = prdWorkflowRuntimeEventDedupeKey(entry);
     const index = current.events.findIndex((item) => {
       if (prdWorkflowRuntimeEventProducer(item) !== entryProducer) return false;
       if (String(item?.id || "") === entry.id) return true;
+      if (prdWorkflowRuntimeEventOperation(item) !== entryOperation) return false;
       if (prdWorkflowRuntimeEventDedupeKey(item) === entryDedupeKey) return true;
       if (!entryIdem) return false;
       if (String(item?.idempotencyKey || "").trim() === entryIdem) return true;
@@ -10905,17 +10997,43 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
               incomingGlobalStatePatch,
             )
           : previousGlobalStatePatch;
+      const incomingPatchPaths = Array.isArray(entry?.globalStateOwnerPaths) ? entry.globalStateOwnerPaths : [];
+      const previousRemovePaths = Array.isArray(events[index]?.globalStateRemove || events[index]?.global_state_remove)
+        ? (events[index].globalStateRemove || events[index].global_state_remove)
+        : [];
+      const incomingRemovePaths = Array.isArray(entry?.globalStateRemove || entry?.global_state_remove)
+        ? (entry.globalStateRemove || entry.global_state_remove)
+        : [];
+      const overlapsPath = (left, right) => left === right || left.startsWith(`${right}.`) || right.startsWith(`${left}.`);
+      const mergedGlobalStateRemove = [...new Set([
+        ...previousRemovePaths.filter((removedPath) => !incomingPatchPaths.some((patchPath) => overlapsPath(String(removedPath), String(patchPath)))),
+        ...incomingRemovePaths,
+      ])];
+      let normalizedGlobalStatePatch = mergedGlobalStatePatch;
+      for (const removedPath of incomingRemovePaths) {
+        normalizedGlobalStatePatch = removeWorkflowGlobalStatePath(normalizedGlobalStatePatch, removedPath);
+      }
       const prevArtifact = prdWorkflowRuntimeEventArtifactSignature(events[index]);
       const nextArtifact = prdWorkflowRuntimeEventArtifactSignature(entry);
       artifactConflict = Boolean(prevArtifact && nextArtifact && prevArtifact !== nextArtifact &&
         prdWorkflowRuntimeEventShouldConflictOnArtifact(events[index]) &&
         prdWorkflowRuntimeEventShouldConflictOnArtifact(entry));
-      const idempotencyHistory = [
-        ...(events[index].idempotencyKey ? [events[index].idempotencyKey] : []),
-        ...(entry.idempotencyKey ? [entry.idempotencyKey] : []),
+      const idempotencyHistory = [...new Set([
         ...(Array.isArray(events[index].idempotencyHistory) ? events[index].idempotencyHistory : []),
+        ...(events[index].idempotencyKey ? [events[index].idempotencyKey] : []),
         ...(Array.isArray(entry.idempotencyHistory) ? entry.idempotencyHistory : []),
-      ];
+        ...(entry.idempotencyKey ? [entry.idempotencyKey] : []),
+      ])].slice(-50);
+      const allIdempotencyFingerprints = {
+        ...(events[index].idempotencyFingerprints || {}),
+        ...(events[index].idempotencyKey && events[index].idempotencyFingerprint
+          ? { [events[index].idempotencyKey]: events[index].idempotencyFingerprint }
+          : {}),
+        ...(entry.idempotencyFingerprints || {}),
+        ...(entry.idempotencyKey && entry.idempotencyFingerprint
+          ? { [entry.idempotencyKey]: entry.idempotencyFingerprint }
+          : {}),
+      };
       events[index] = {
         ...events[index],
         ...entry,
@@ -10924,19 +11042,28 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
         outputs: prdWorkflowMergeRuntimeEventArrays(events[index].outputs, entry.outputs),
         results: prdWorkflowMergeRuntimeEventArrays(events[index].results, entry.results),
         actionModel: mergeWorkflowGlobalState(events[index].actionModel, entry.actionModel),
-        globalStateRemove: prdWorkflowMergeRuntimeEventArrays(
-          events[index].globalStateRemove || events[index].global_state_remove,
-          entry.globalStateRemove || entry.global_state_remove,
+        globalStateRemove: mergedGlobalStateRemove,
+        extensionsPatch: entry.extensionsPatch
+          ? mergeWorkflowGlobalState(events[index].extensionsPatch, entry.extensionsPatch)
+          : events[index].extensionsPatch,
+        globalStateOwnerPaths: prdWorkflowMergeRuntimeEventArrays(
+          events[index].globalStateOwnerPaths,
+          entry.globalStateOwnerPaths,
         ),
         createdAt: events[index].createdAt || entry.createdAt,
         startedAt: events[index].startedAt || entry.startedAt,
-        idempotencyHistory: [...new Set(idempotencyHistory)].slice(-50),
+        idempotencyHistory,
+        idempotencyFingerprints: Object.fromEntries(
+          idempotencyHistory
+            .filter((key) => allIdempotencyFingerprints[key])
+            .map((key) => [key, allIdempotencyFingerprints[key]]),
+        ),
       };
       if (mergedImplementationMetadata && typeof mergedImplementationMetadata === "object" && !Array.isArray(mergedImplementationMetadata)) {
         events[index].implementationMetadata = mergedImplementationMetadata;
       }
-      if (mergedGlobalStatePatch && typeof mergedGlobalStatePatch === "object" && !Array.isArray(mergedGlobalStatePatch)) {
-        events[index].globalStatePatch = mergedGlobalStatePatch;
+      if (normalizedGlobalStatePatch && typeof normalizedGlobalStatePatch === "object" && !Array.isArray(normalizedGlobalStatePatch)) {
+        events[index].globalStatePatch = normalizedGlobalStatePatch;
       }
       if (artifactConflict) {
         events[index] = {
@@ -10981,43 +11108,128 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
   }
 }
 
-function prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source = "", completedOnly = true) {
+function prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source = "", completedOnly = true, operation = "") {
   const key = String(idempotencyKey || "").trim();
   if (!key) return null;
   const producer = String(source || "").trim().toLowerCase();
+  const operationKey = String(operation || "").trim().toLowerCase();
   const events = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId).events;
   return [...events].reverse().find((event) => (
     (!producer || prdWorkflowRuntimeEventProducer(event) === producer) &&
+    (!operationKey || String(event?.operation || (event?.type === "review-link" ? "artifact.publish" : "report")).toLowerCase() === operationKey) &&
     (String(event?.idempotencyKey || "") === key || (Array.isArray(event?.idempotencyHistory) && event.idempotencyHistory.includes(key))) &&
     (!completedOnly || ["done", "success", "completed"].includes(String(event?.status || "").toLowerCase()))
   )) || null;
 }
 
 function prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source = "") {
-  return prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source, true);
+  return prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source, false, "report");
+}
+
+function prdWorkflowIdempotencyFingerprint(event = {}, idempotencyKey = "") {
+  const key = String(idempotencyKey || "").trim();
+  return String(
+    event?.idempotencyFingerprints?.[key]
+    || (String(event?.idempotencyKey || "").trim() === key ? event?.idempotencyFingerprint : "")
+    || "",
+  );
+}
+
+function prdWorkflowResourceVersionConflicts(expectedVersions = {}, currentVersions = {}) {
+  const conflicts = [];
+  for (const [resourceKey, expectedVersion] of Object.entries(expectedVersions || {})) {
+    const currentVersion = String(currentVersions?.[resourceKey] || "absent");
+    const expected = String(expectedVersion || "absent");
+    if (expected === currentVersion) continue;
+    conflicts.push({ resourceKey, expectedVersion: expected, currentVersion });
+  }
+  return conflicts;
+}
+
+function prdWorkflowGlobalPathOwners(snapshot = {}) {
+  const owners = new Map();
+  for (const event of Array.isArray(snapshot.runtimeEvents) ? snapshot.runtimeEvents : []) {
+    const source = prdWorkflowRuntimeEventProducer(event);
+    for (const path of Array.isArray(event?.globalStateOwnerPaths) ? event.globalStateOwnerPaths : []) {
+      const normalized = String(path || "").trim();
+      if (normalized) owners.set(normalized, source);
+    }
+  }
+  return owners;
+}
+
+function prdWorkflowGlobalOwnershipConflicts(report, currentSnapshot = {}) {
+  const source = prdWorkflowRuntimeEventProducer(report?.event || {});
+  const owners = prdWorkflowGlobalPathOwners(currentSnapshot);
+  const conflicts = [];
+  for (const path of Array.isArray(report?.event?.globalStateOwnerPaths) ? report.event.globalStateOwnerPaths : []) {
+    const normalizedPath = String(path || "");
+    const match = [...owners.entries()].find(([ownedPath, owner]) => (
+      owner !== source && (
+        ownedPath === normalizedPath ||
+        ownedPath.startsWith(`${normalizedPath}.`) ||
+        normalizedPath.startsWith(`${ownedPath}.`)
+      )
+    ));
+    if (match) conflicts.push({ path: normalizedPath, owner: match[1], source });
+  }
+  return conflicts;
+}
+
+function prdWorkflowMergeProducerTimeline(report, currentSnapshot = {}) {
+  if (!report?.projections || !Array.isArray(report.projections.timeline)) return report;
+  const source = prdWorkflowRuntimeEventProducer(report.event);
+  const current = Array.isArray(currentSnapshot?.projections?.timeline) ? currentSnapshot.projections.timeline : [];
+  const incoming = report.projections.timeline;
+  const foreignCurrent = current.filter((item) => prdWorkflowRuntimeEventProducer(item) !== source);
+  const ownIncoming = incoming.filter((item) => prdWorkflowRuntimeEventProducer(item) === source);
+  const foreignIncoming = incoming.filter((item) => prdWorkflowRuntimeEventProducer(item) !== source);
+  const foreignByKey = new Map(foreignCurrent.map((item) => [String(item?.key || `${item?.source}:${item?.kind}:${item?.id}`), item]));
+  for (const item of foreignIncoming) {
+    const key = String(item?.key || `${item?.source}:${item?.kind}:${item?.id}`);
+    const existing = foreignByKey.get(key);
+    const existingVersion = existing
+      ? Object.values(workflowSnapshotResourceVersions({ projections: { timeline: [existing] } }))[0]
+      : "";
+    const incomingVersion = Object.values(workflowSnapshotResourceVersions({ projections: { timeline: [item] } }))[0] || "";
+    if (!existing || existingVersion !== incomingVersion) {
+      return { error: `projections.timeline may not modify entries owned by source ${item?.source || "unknown"}` };
+    }
+  }
+  const timeline = [...foreignCurrent, ...ownIncoming];
+  return {
+    ...report,
+    projections: { ...report.projections, timeline },
+    event: { ...report.event, projections: { ...report.event.projections, timeline } },
+  };
 }
 
 function prdWorkflowRuntimeEventDedupeKey(event = {}, index = 0) {
   const producer = prdWorkflowRuntimeEventProducer(event);
+  const operation = prdWorkflowRuntimeEventOperation(event);
   const stage = prdWorkflowRuntimeEventCanonicalStage(event);
   const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
+  const stableActionKey = String(event?.actionModel?.key || "").trim();
+  if (stableActionKey && aggregateByStage && String(event?.type || "") === "workflow-report") {
+    return `producer:${producer}:operation:${operation}:action:${stableActionKey}`;
+  }
   if (stage) {
     const issue = event?.issueKey || event?.issue_key || event?.issue;
     const platform = event?.platform;
     if (aggregateByStage || issue || platform) {
-      return ["producer", producer, "stage", event?.scope, issue, platform, stage]
+      return ["producer", producer, "operation", operation, "stage", event?.scope, issue, platform, stage]
         .map((value) => String(value || "").trim())
         .join(":");
     }
   }
   const id = String(event?.id || event?.eventId || event?.event_id || "").trim();
-  if (id) return `producer:${producer}:id:${id}`;
+  if (id) return `producer:${producer}:operation:${operation}:id:${id}`;
   if (stage) {
-    return ["producer", producer, "stage", event?.scope, event?.issueKey || event?.issue_key || event?.issue, event?.platform, stage]
+    return ["producer", producer, "operation", operation, "stage", event?.scope, event?.issueKey || event?.issue_key || event?.issue, event?.platform, stage]
       .map((value) => String(value || "").trim())
       .join(":");
   }
-  return `producer:${producer}:idx:${index}`;
+  return `producer:${producer}:operation:${operation}:idx:${index}`;
 }
 
 function prdWorkflowMergeRuntimeEventList(snapshotEvents = [], runtimeEvents = []) {
@@ -11294,7 +11506,7 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   for (const key of ["issues", "issueGroups", "issue_groups", "epics", "epicGroups", "epic_groups", "aiDocs", "ai_docs"]) {
     if (Object.prototype.hasOwnProperty.call(prdFlowExtension, key)) prdFlowExtensionView[key] = prdFlowExtension[key];
   }
-  return {
+  const materialized = {
     ...snapshot,
     ...prdFlowExtensionView,
     workflow: globalState.workflow,
@@ -11311,6 +11523,8 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
       runtimeEventsUpdatedAt: runtime.updatedAt || "",
     },
   };
+  materialized.resourceVersions = workflowSnapshotResourceVersions(materialized);
+  return materialized;
 }
 
 function prdWorkflowMockSnapshot(scopedRoot, tapdId = "mock-prd") {
@@ -13159,7 +13373,7 @@ export function startUiServer({
           stageKey: reportMeta.stageKey,
         };
         const existingClientState = prdWorkflowReadClientState(scopedRoot, tapdId);
-        const existingClientId = prdWorkflowSafeStateId(reportMeta.clientId || "anonymous");
+        const existingClientId = prdWorkflowSafeStateId(`${reportMeta.reportSource || "legacy"}:${reportMeta.clientId || "anonymous"}`);
         const previousClientSnapshot = existingClientState.clients?.[existingClientId]?.snapshot || null;
         const stampedSnapshot = prdWorkflowStampCurrentActionEntryTimes(
           scopedRoot,
@@ -13834,13 +14048,14 @@ export function startUiServer({
       }
       let payload;
       try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
+        payload = JSON.parse(await readBody(req, 1024 * 1024));
+      } catch (error) {
+        json(res, error?.status === 413 ? 413 : 400, { error: error?.status === 413 ? error.message : "Invalid JSON body" });
         return;
       }
+      let releaseWorkflowWriteLock = null;
       try {
-        const report = normalizeWorkflowReport(payload);
+        let report = normalizeWorkflowReport(payload);
         if (report.error) {
           json(res, 400, { error: report.error });
           return;
@@ -13873,6 +14088,7 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
+        releaseWorkflowWriteLock = await prdWorkflowAcquireWriteLock(`${scopedRoot}\t${tapdId}`);
         const currentSnapshot = prdWorkflowMaterializeSnapshot(
           workflowScope.executionRoot,
           scopedRoot,
@@ -13880,10 +14096,7 @@ export function startUiServer({
           userCtx,
           { flowSource, flowId },
         );
-        const acceptedRevisions = new Set([
-          String(currentSnapshot.runtimeRevision || "").trim(),
-          String(currentSnapshot.revision || "").trim(),
-        ].filter(Boolean));
+        const currentRuntimeRevision = String(currentSnapshot.runtimeRevision || "").trim();
         if (report.idempotencyKey) {
           const existing = prdWorkflowFindCompletedIdempotencyEvent(
             scopedRoot,
@@ -13892,6 +14105,19 @@ export function startUiServer({
             report.event.source,
           );
           if (existing) {
+            const existingFingerprint = prdWorkflowIdempotencyFingerprint(existing, report.idempotencyKey);
+            if (existingFingerprint && existingFingerprint !== report.event.idempotencyFingerprint) {
+              json(res, 409, {
+                error: "Idempotency key was already used for a different Workflow report",
+                conflict: {
+                  type: "workflow-idempotency-conflict",
+                  idempotencyKey: report.idempotencyKey,
+                  workflow: report.workflow,
+                },
+                snapshot: currentSnapshot,
+              });
+              return;
+            }
             json(res, 200, {
               ok: true,
               alreadyApplied: true,
@@ -13902,17 +14128,68 @@ export function startUiServer({
             return;
           }
         }
-        if (report.expectedRevision && acceptedRevisions.size && !acceptedRevisions.has(report.expectedRevision)) {
+        const ownershipConflicts = prdWorkflowGlobalOwnershipConflicts(report, currentSnapshot);
+        if (ownershipConflicts.length) {
+          json(res, 409, {
+            error: "Workflow globalState paths are owned by another report source",
+            conflict: {
+              type: "workflow-resource-ownership-conflict",
+              conflicts: ownershipConflicts,
+              workflow: report.workflow,
+            },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
+        const resourceKeys = workflowReportResourceKeys(report, currentSnapshot);
+        const missingExpectedVersionKeys = Object.keys(report.expectedVersions).length
+          ? resourceKeys.filter((key) => !Object.prototype.hasOwnProperty.call(report.expectedVersions, key))
+          : [];
+        if (missingExpectedVersionKeys.length) {
+          json(res, 400, {
+            error: "expectedVersions must include every resource key touched by this report",
+            missingExpectedVersionKeys,
+            resourceKeys,
+          });
+          return;
+        }
+        const expectedTouchedVersions = Object.fromEntries(
+          resourceKeys
+            .filter((key) => Object.prototype.hasOwnProperty.call(report.expectedVersions, key))
+            .map((key) => [key, report.expectedVersions[key]]),
+        );
+        const resourceConflicts = prdWorkflowResourceVersionConflicts(
+          expectedTouchedVersions,
+          currentSnapshot.resourceVersions || {},
+        );
+        if (resourceConflicts.length) {
+          json(res, 409, {
+            error: "Workflow resources changed; refresh the conflicting keys before reporting",
+            conflict: {
+              type: "workflow-resource-conflict",
+              conflicts: resourceConflicts,
+              workflow: report.workflow,
+            },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
+        if (!Object.keys(report.expectedVersions).length && report.expectedRevision && currentRuntimeRevision && report.expectedRevision !== currentRuntimeRevision) {
           json(res, 409, {
             error: "Workflow state changed; refresh before reporting",
             conflict: {
               type: "workflow-revision-conflict",
               expectedRevision: report.expectedRevision,
-              currentRevision: currentSnapshot.runtimeRevision || currentSnapshot.revision || "",
+              currentRevision: currentRuntimeRevision,
               workflow: report.workflow,
             },
             snapshot: currentSnapshot,
           });
+          return;
+        }
+        report = prdWorkflowMergeProducerTimeline(report, currentSnapshot);
+        if (report.error) {
+          json(res, 400, { error: report.error });
           return;
         }
         let observation = null;
@@ -13923,6 +14200,7 @@ export function startUiServer({
             clientId: report.observation.clientId || payload.clientId || payload.source || "workflow-reporter",
             observedAt: report.observation.observedAt || payload.observedAt || "",
             scope: report.observation.scope || payload.scope || "client",
+            reportSource: report.event.source,
           };
           observation = prdWorkflowStoreClientObservation({
             scopedRoot,
@@ -13962,6 +14240,7 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           report,
+          resourceKeys,
           event,
           observation: observation ? {
             accepted: true,
@@ -13973,6 +14252,8 @@ export function startUiServer({
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      } finally {
+        releaseWorkflowWriteLock?.();
       }
       return;
     }
@@ -14056,11 +14337,12 @@ export function startUiServer({
       }
       let payload;
       try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
+        payload = JSON.parse(await readBody(req, 600000));
+      } catch (error) {
+        json(res, error?.status === 413 ? 413 : 400, { error: error?.status === 413 ? error.message : "Invalid JSON body" });
         return;
       }
+      let releaseWorkflowWriteLock = null;
       try {
         const workflow = normalizeWorkflowReference(payload);
         if (workflow.error) {
@@ -14088,14 +14370,85 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
-        const producer = String(payload.source || "agentflow-cli").trim().toLowerCase() || "agentflow-cli";
+        const producer = String(payload.source || (legacyReviewEndpoint ? "prd-flow" : "")).trim().toLowerCase();
+        if (!producer) {
+          json(res, 400, { error: "Workflow artifact publish requires source" });
+          return;
+        }
         if (!/^[a-z][a-z0-9._-]{0,119}$/.test(producer)) {
           json(res, 400, { error: "Invalid workflow report source" });
+          return;
+        }
+        const fieldLimits = [
+          [payload.title || payload.label, 160, "title"],
+          [payload.stage || payload.stageKey || payload.stage_key, 240, "stage"],
+          [payload.issueKey || payload.issue_key || payload.issue, 240, "issueKey"],
+          [payload.platform, 80, "platform"],
+          [payload.artifactLabel, 500, "artifactLabel"],
+          [payload.reviewId || payload.review_id, 500, "reviewId"],
+        ];
+        const oversizedField = fieldLimits.find(([value, max]) => String(value || "").trim().length > max);
+        if (oversizedField) {
+          json(res, 400, { error: `${oversizedField[2]} exceeds ${oversizedField[1]} characters` });
+          return;
+        }
+        const markdown = String(payload.markdown || payload.content || payload.rawOutput || "");
+        if (!markdown.trim()) {
+          json(res, 400, { error: "Missing review markdown" });
+          return;
+        }
+        if (Buffer.byteLength(markdown, "utf-8") > 500000) {
+          json(res, 413, { error: "Review markdown exceeds 500000 bytes" });
+          return;
+        }
+        const requestedDurability = String(
+          payload.durability || (payload.durable === true || payload.permanent === true ? "durable" : "temporary"),
+        ).trim().toLowerCase() || "temporary";
+        if (!["temporary", "durable"].includes(requestedDurability)) {
+          json(res, 400, { error: "durability must be temporary or durable" });
+          return;
+        }
+        const ttlInput = payload.ttlDays ?? payload.ttl_days;
+        if (requestedDurability === "temporary" && ttlInput != null) {
+          const ttlDays = Number(ttlInput);
+          if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 30) {
+            json(res, 400, { error: "ttlDays must be an integer between 1 and 30" });
+            return;
+          }
+        }
+        const explicitExpiresAt = String(payload.expiresAt || payload.expires_at || "").trim();
+        if (explicitExpiresAt && (!Number.isFinite(Date.parse(explicitExpiresAt)) || Date.parse(explicitExpiresAt) <= Date.now())) {
+          json(res, 400, { error: "expiresAt must be a valid future date" });
           return;
         }
         const idempotencyKey = String(
           payload.idempotencyKey || payload.idempotency_key || "",
         ).trim();
+        if (idempotencyKey.length > 500) {
+          json(res, 400, { error: "idempotencyKey exceeds 500 characters" });
+          return;
+        }
+        if (String(payload.artifactKey || payload.artifact_key || "").trim().length > 500) {
+          json(res, 400, { error: "artifactKey exceeds 500 characters" });
+          return;
+        }
+        const artifactKey = prdWorkflowReviewArtifactKey(tapdId, payload);
+        const idempotencyFingerprint = prdWorkflowRevisionHash({
+          operation: "artifact.publish",
+          workflow,
+          producer,
+          title: String(payload.title || payload.label || "").trim(),
+          markdown,
+          stage: String(payload.stage || payload.stageKey || payload.stage_key || "").trim(),
+          issueKey: String(payload.issueKey || payload.issue_key || payload.issue || "").trim(),
+          platform: String(payload.platform || "").trim(),
+          artifactKey,
+          artifactLabel: String(payload.artifactLabel || "").trim(),
+          durability: requestedDurability,
+          ttlDays: ttlInput ?? null,
+          expiresAt: explicitExpiresAt,
+        });
+        releaseWorkflowWriteLock = await prdWorkflowAcquireWriteLock(`${scopedRoot}\t${tapdId}`);
         const currentSnapshot = prdWorkflowMaterializeSnapshot(
           workflowScope.executionRoot,
           scopedRoot,
@@ -14104,10 +14457,11 @@ export function startUiServer({
           { flowSource, flowId },
         );
         const expectedRevision = String(payload.expectedRevision || payload.expected_revision || "").trim();
-        const acceptedRevisions = new Set([
-          String(currentSnapshot.runtimeRevision || "").trim(),
-          String(currentSnapshot.revision || "").trim(),
-        ].filter(Boolean));
+        if (expectedRevision.length > 500) {
+          json(res, 400, { error: "expectedRevision exceeds 500 characters" });
+          return;
+        }
+        const currentRuntimeRevision = String(currentSnapshot.runtimeRevision || "").trim();
         if (idempotencyKey) {
           const existing = prdWorkflowFindIdempotencyEvent(
             scopedRoot,
@@ -14115,8 +14469,18 @@ export function startUiServer({
             idempotencyKey,
             producer,
             false,
+            "artifact.publish",
           );
           if (existing) {
+            const existingFingerprint = prdWorkflowIdempotencyFingerprint(existing, idempotencyKey);
+            if (existingFingerprint && existingFingerprint !== idempotencyFingerprint) {
+              json(res, 409, {
+                error: "Idempotency key was already used for different Artifact content",
+                conflict: { type: "workflow-idempotency-conflict", idempotencyKey, workflow },
+                snapshot: currentSnapshot,
+              });
+              return;
+            }
             const artifact = Array.isArray(existing.artifacts) ? existing.artifacts[0] : null;
             json(res, 200, {
               ok: true,
@@ -14137,13 +14501,57 @@ export function startUiServer({
             return;
           }
         }
-        if (expectedRevision && acceptedRevisions.size && !acceptedRevisions.has(expectedRevision)) {
+        const resourceKey = `artifact:${producer}:${artifactKey}`;
+        const hasExpectedVersionsField = Object.prototype.hasOwnProperty.call(payload, "expectedVersions")
+          || Object.prototype.hasOwnProperty.call(payload, "expected_versions");
+        const rawExpectedVersionsInput = Object.prototype.hasOwnProperty.call(payload, "expectedVersions")
+          ? payload.expectedVersions
+          : payload.expected_versions;
+        if (hasExpectedVersionsField && (!rawExpectedVersionsInput || typeof rawExpectedVersionsInput !== "object" || Array.isArray(rawExpectedVersionsInput))) {
+          json(res, 400, { error: "expectedVersions must be an object" });
+          return;
+        }
+        const rawExpectedVersions = hasExpectedVersionsField ? rawExpectedVersionsInput : {};
+        const invalidExpectedVersionEntry = Object.entries(rawExpectedVersions).find(([key, value]) => (
+          !String(key || "").trim() || String(key).length > 800 || /[\0\r\n]/.test(String(key)) ||
+          String(value == null || value === "" ? "absent" : value).trim().length > 160
+        ));
+        if (invalidExpectedVersionEntry) {
+          json(res, 400, { error: "expectedVersions contains an invalid resource key or version" });
+          return;
+        }
+        if (Object.keys(rawExpectedVersions).length && !Object.prototype.hasOwnProperty.call(rawExpectedVersions, resourceKey)) {
+          json(res, 400, {
+            error: "expectedVersions must include the Artifact resource key touched by this publish",
+            missingExpectedVersionKeys: [resourceKey],
+            resourceKeys: [resourceKey],
+          });
+          return;
+        }
+        const expectedArtifactVersion = Object.prototype.hasOwnProperty.call(rawExpectedVersions, resourceKey)
+          ? String(rawExpectedVersions[resourceKey] || "absent")
+          : null;
+        const resourceConflicts = expectedArtifactVersion == null
+          ? []
+          : prdWorkflowResourceVersionConflicts(
+              { [resourceKey]: expectedArtifactVersion },
+              currentSnapshot.resourceVersions || {},
+            );
+        if (resourceConflicts.length) {
+          json(res, 409, {
+            error: "Workflow artifact changed; refresh before publishing",
+            conflict: { type: "workflow-resource-conflict", conflicts: resourceConflicts, workflow },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
+        if (!Object.keys(rawExpectedVersions).length && expectedRevision && currentRuntimeRevision && expectedRevision !== currentRuntimeRevision) {
           json(res, 409, {
             error: "Workflow state changed; refresh before publishing",
             conflict: {
               type: "workflow-revision-conflict",
               expectedRevision,
-              currentRevision: currentSnapshot.runtimeRevision || currentSnapshot.revision || "",
+              currentRevision: currentRuntimeRevision,
               workflow,
             },
             snapshot: currentSnapshot,
@@ -14171,7 +14579,6 @@ export function startUiServer({
         const shortUrl = shortLink?.shortUrl || "";
         const displayUrl = shortUrl || reviewUrl;
         const durability = review.durability || "temporary";
-        const artifactKey = prdWorkflowReviewArtifactKey(tapdId, payload);
         const reviewStageKey = prdWorkflowRuntimeEventCanonicalStage(payload)
           || payload.stageKey
           || payload.stage_key
@@ -14206,6 +14613,7 @@ export function startUiServer({
         const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
           id: `review-link:${artifactKey}`,
           type: "review-link",
+          operation: "artifact.publish",
           source: producer,
           auxiliary: true,
           aggregateByStage: false,
@@ -14224,6 +14632,8 @@ export function startUiServer({
           ...(reviewMrIid ? { mrIid: reviewMrIid } : {}),
           ...(reviewCommitSha ? { commitSha: reviewCommitSha } : {}),
           idempotencyKey,
+          idempotencyFingerprint,
+          idempotencyFingerprints: idempotencyKey ? { [idempotencyKey]: idempotencyFingerprint } : {},
           durability,
           sourceArtifact: reviewSource,
           expiresAt: review.expiresAt || "",
@@ -14263,6 +14673,7 @@ export function startUiServer({
           ok: true,
           workflow,
           artifact,
+          resourceKeys: [resourceKey],
           review: {
             ...review,
             url: reviewUrl,
@@ -14279,7 +14690,10 @@ export function startUiServer({
           } : {}),
         });
       } catch (e) {
-        json(res, 500, { error: (e && e.message) || String(e) });
+        const status = Number(e?.status);
+        json(res, status >= 400 && status < 500 ? status : 500, { error: (e && e.message) || String(e) });
+      } finally {
+        releaseWorkflowWriteLock?.();
       }
       return;
     }

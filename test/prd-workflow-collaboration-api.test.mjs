@@ -310,8 +310,8 @@ test("shared PRD Workflow state follows TAPD ID across different Projects", asyn
       "/api/prd-workflow/snapshot?tapdId=1015046&runtimeOnly=1",
     );
     const outsiderPayload = await outsiderSnapshot.json();
-    assert.equal(outsiderSnapshot.status, 200);
-    assert.notEqual(outsiderPayload.snapshot.pointer, "开始 Issue2 功能点实现");
+    assert.equal(outsiderSnapshot.status, 403, JSON.stringify(outsiderPayload));
+    assert.match(outsiderPayload.error, /access|permission|belongs/i);
 
     const canonicalCache = path.join(
       dataRoot,

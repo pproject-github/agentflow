@@ -10,6 +10,8 @@ import {
   mergeWorkflowGlobalState,
   normalizeWorkflowReference,
   normalizeWorkflowReport,
+  workflowReportResourceKeys,
+  workflowSnapshotResourceVersions,
 } from "../bin/lib/workflow-report.mjs";
 
 test("normalizes action, artifacts, and global state into one runtime event", () => {
@@ -73,6 +75,7 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
 test("supports global-only reports and rejects malformed reports", () => {
   const report = normalizeWorkflowReport({
     workflow: { namespace: "tapd", id: "1015046" },
+    source: "test-adapter",
     artifacts: [{
       type: "dashboard",
       title: "结果看板",
@@ -84,16 +87,17 @@ test("supports global-only reports and rejects malformed reports", () => {
   assert.equal(report.event.artifacts[0].scope, "global");
 
   assert.match(
-    normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" }, action: { title: "missing key" } }).error,
+    normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" }, source: "test-adapter", action: { title: "missing key" } }).error,
     /stable key/,
   );
   assert.match(
-    normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" } }).error,
+    normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" }, source: "test-adapter" }).error,
     /requires observation, action/,
   );
   assert.match(
     normalizeWorkflowReport({
       workflow: { namespace: "tapd", id: "1015046" },
+      source: "test-adapter",
       projections: { timeline: [{ title: "missing identity" }] },
     }).error,
     /requires kind and id/,
@@ -103,6 +107,7 @@ test("supports global-only reports and rejects malformed reports", () => {
 test("normalizes observations and materializes namespaced extensions", () => {
   const report = normalizeWorkflowReport({
     workflow: { namespace: "tapd", id: "1015046" },
+    source: "prd-flow",
     observation: {
       schema: "prd-flow/v1",
       clientId: "prd-flow-local",
@@ -229,10 +234,90 @@ test("keeps identical artifact keys isolated between report producers", () => {
 
 test("requires a stable normalized report source", () => {
   assert.match(normalizeWorkflowReport({
+    workflow: "tapd:1015046",
+    action: { key: "implementation", status: "done" },
+  }).error, /requires source/);
+  assert.match(normalizeWorkflowReport({
     workflow: { namespace: "tapd", id: "1015046" },
     source: "Invalid Source",
     action: { key: "implementation", status: "done" },
   }).error, /Invalid workflow report source/);
+});
+
+test("validates generic report boundaries without silently truncating", () => {
+  assert.deepEqual(normalizeWorkflowReference({ workflow: "tapd:1015046" }), {
+    namespace: "tapd",
+    id: "1015046",
+    key: "tapd:1015046",
+  });
+  const base = { workflow: "tapd:1015046", source: "test-adapter" };
+  assert.match(normalizeWorkflowReport({ ...base, action: { key: "build", status: "typo" } }).error, /Invalid workflow action status/);
+  assert.match(normalizeWorkflowReport({ ...base, artifacts: [{ key: "bad", url: "javascript:alert(1)" }] }).error, /must use http/);
+  assert.match(normalizeWorkflowReport({ ...base, artifacts: [{ key: "missing-target", title: "No URL" }] }).error, /requires url or path/);
+  assert.match(normalizeWorkflowReport({ ...base, artifacts: ["not-an-object"] }).error, /must be an object/);
+  assert.match(normalizeWorkflowReport({ ...base, projections: { timeline: Array.from({ length: 101 }, (_, index) => ({ kind: "sprint", id: String(index) })) } }).error, /at most 100/);
+  assert.match(normalizeWorkflowReport({ ...base, extensions: { "other-adapter": { value: true } } }).error, /matching report source/);
+  assert.match(normalizeWorkflowReport({ ...base, extensions: { "test-adapter": {}, "": {} } }).error, /must be a valid namespace object/);
+});
+
+test("does not globally truncate timeline entries from multiple producers", () => {
+  const timeline = materializeWorkflowProjections({
+    projections: {
+      timeline: Array.from({ length: 75 }, (_, index) => ({
+        kind: "sprint",
+        id: `a-${index}`,
+        source: "adapter-a",
+      })),
+    },
+  }, [{
+    projections: {
+      timeline: Array.from({ length: 75 }, (_, index) => ({
+        kind: "version",
+        id: `b-${index}`,
+        source: "adapter-b",
+      })),
+    },
+  }]).timeline;
+  assert.equal(timeline.length, 75);
+
+  const combined = materializeWorkflowProjections({
+    projections: {
+      timeline: [
+        ...Array.from({ length: 75 }, (_, index) => ({ kind: "sprint", id: `a-${index}`, source: "adapter-a" })),
+        ...Array.from({ length: 75 }, (_, index) => ({ kind: "version", id: `b-${index}`, source: "adapter-b" })),
+      ],
+    },
+  }, []).timeline;
+  assert.equal(combined.length, 150);
+});
+
+test("exposes independent resource versions and touched keys", () => {
+  const report = normalizeWorkflowReport({
+    workflow: "tapd:1015046",
+    source: "test-adapter",
+    action: { key: "build", title: "Build", status: "running" },
+    artifacts: [{ key: "log", url: "https://example.test/log" }],
+    globalState: { patch: { producers: { "test-adapter": { owner: "alice" } } } },
+    projections: { timeline: [{ kind: "sprint", id: "s1" }] },
+  });
+  const snapshot = {
+    runtimeEvents: [report.event],
+    artifacts: [],
+    globalState: { producers: { "test-adapter": { owner: "alice" } }, workflow: report.workflow },
+    projections: report.projections,
+    extensions: {},
+  };
+  const versions = workflowSnapshotResourceVersions(snapshot);
+  assert.match(versions["action:test-adapter:build"], /^rv:/);
+  assert.match(versions["artifact:test-adapter:log"], /^rv:/);
+  assert.match(versions["projection:test-adapter:sprint:s1"], /^rv:/);
+  assert.match(versions["global:producers.test-adapter.owner"], /^rv:/);
+  assert.deepEqual(workflowReportResourceKeys(report, snapshot), [
+    "action:test-adapter:build",
+    "artifact:test-adapter:log",
+    "global:producers.test-adapter.owner",
+    "projection:test-adapter:sprint:s1",
+  ]);
 });
 
 test("accepts canonical workflow keys and ignores unsafe state keys", () => {

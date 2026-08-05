@@ -122,6 +122,8 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs display-outputs --flow-id Te
 
 The reusable transport lives in `scripts/workflow-report-client.mjs`. The CLI exposes it through `workflow-get`, `workflow-report`, and `workflow-artifact-publish`; their state model, extension contract, concurrency rules, and AI procedure belong to the separate [`agentflow-workflow-report`](../agentflow-workflow-report/SKILL.md) skill. Use that skill whenever reading or mutating Workflow state; do not reconstruct the protocol from this general CLI guide.
 
+Every write requires the real business adapter `source`. Put the key-level `expectedVersions` map in the JSON file; use `absent` for a new resource key. `--expected-revision` is retained only for legacy whole-Workflow locking and should not be used by new integrations.
+
 ## Workflow
 
 1. Check token availability with `config`.

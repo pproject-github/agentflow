@@ -94,15 +94,19 @@ test("short review url redirects to the canonical review and renders it", async 
 
 
 test("unknown and expired short review urls do not redirect", async (t) => {
-  const { baseUrl, token } = await createServer(t);
+  const { root, baseUrl, token } = await createServer(t);
 
   const missing = await fetch(`${baseUrl}/r/unknown1`, { redirect: "manual" });
   assert.equal(missing.status, 404);
 
   const expired = await publishReview(baseUrl, token, {
     durability: "temporary",
-    expiresAt: "2020-01-01T00:00:00.000Z",
+    ttlDays: 1,
   });
+  const shortCode = new URL(expired.review.shortUrl).pathname.split("/").pop();
+  const shortLinkPath = path.join(root, ".workspace", "prd-flow", "review-short-links", `${shortCode}.json`);
+  const shortLink = JSON.parse(fs.readFileSync(shortLinkPath, "utf-8"));
+  fs.writeFileSync(shortLinkPath, JSON.stringify({ ...shortLink, expiresAt: "2020-01-01T00:00:00.000Z" }), "utf-8");
   const expiredResponse = await fetch(expired.review.shortUrl, { redirect: "manual" });
   assert.equal(expiredResponse.status, 410);
 });

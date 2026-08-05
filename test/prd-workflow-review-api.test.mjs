@@ -31,6 +31,7 @@ test("PRD Workflow review links are readable without authentication", async () =
 
     const reviewPayload = {
       tapdId: "1133202860001017765",
+      source: "prd-flow",
       title: "礼物列表缓存完整性方案",
       markdown: "# 匿名可读 Review\n\nReview 正文",
       stage: "issue-plan:gift-cache-integrity-validation",
