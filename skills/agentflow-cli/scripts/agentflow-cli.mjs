@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createWorkflowReportClient } from "./workflow-report-client.mjs";
 
 const DEFAULT_BASE_URL = "http://ai.mengma.bigo.inner/";
 const DISPLAY_DEFINITION_KINDS = new Map([
@@ -42,6 +43,7 @@ Commands:
   sync-workspace --workspace <id>
   workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only]
   workflow-report --workflow tapd:<id> --file <report.json> [--expected-revision <revision>]
+  workflow-artifact-publish --workflow tapd:<id> --file <artifact.json>
 `;
 }
 
@@ -387,12 +389,13 @@ async function main() {
     const flowId = option(args, "flow-id") || option(args, "flow");
     const flowSource = option(args, "flow-source") || "user";
     const runtimeOnly = args["runtime-only"] === true || args.cached === true ? "1" : "";
-    printJson(await httpJson(args, `/api/workflows/state${query({
+    const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
+    printJson(await client.getState({
       workflow: workflow.key,
       flowId,
       flowSource,
-      runtimeOnly,
-    })}`));
+      runtimeOnly: runtimeOnly === "1",
+    }));
     return;
   }
 
@@ -411,7 +414,24 @@ async function main() {
     if (idempotencyKey) body.idempotencyKey = idempotencyKey;
     if (flowId) body.flowId = flowId;
     if (flowSource) body.flowSource = flowSource;
-    printJson(await httpJson(args, "/api/workflows/report", { method: "POST", body }));
+    const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
+    printJson(await client.report(body));
+    return;
+  }
+
+  if (command === "workflow-artifact-publish") {
+    const body = readJsonFile(option(args, "file"));
+    const workflow = workflowReferenceFromArgs(args, false) || parseWorkflowReference(body?.workflow?.key || "");
+    if (!workflow && !(body?.workflow?.namespace && body?.workflow?.id)) {
+      throw new Error("Missing workflow reference. Pass --workflow namespace:id or include workflow.namespace and workflow.id in the JSON file.");
+    }
+    if (workflow) body.workflow = workflow;
+    const flowId = option(args, "flow-id") || option(args, "flow");
+    const flowSource = option(args, "flow-source");
+    if (flowId) body.flowId = flowId;
+    if (flowSource) body.flowSource = flowSource;
+    const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
+    printJson(await client.publishArtifact(body));
     return;
   }
 

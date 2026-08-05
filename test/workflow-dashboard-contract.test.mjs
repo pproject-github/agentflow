@@ -29,6 +29,10 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(page, />团队迭代<\/button>/);
   assert.match(page, /view: "workflow"/);
   assert.match(page, /tapdId: String\(workflow\?\.tapdId \|\| ""\)/);
+  assert.match(page, /returnTo: "\/workflows"/);
+  assert.match(page, /workflowDemo/);
+  assert.match(page, /createWorkflowDemoSnapshot/);
+  assert.match(page, /查看示例/);
   assert.match(page, /scope === "owned"/);
   assert.match(page, /scope === "collaborating"/);
   assert.match(page, /payload\.timeline/);

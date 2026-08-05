@@ -48,6 +48,8 @@ test("PRD Workflow review links are readable without authentication", async () =
     });
     const createdPayload = await created.json();
     assert.equal(created.status, 200, JSON.stringify(createdPayload));
+    assert.equal(created.headers.get("deprecation"), "true");
+    assert.equal(createdPayload.compatibility.replacement, "/api/workflow-artifacts/publish");
     assert.equal(
       createdPayload.event.artifacts[0].key,
       "ai-doc:plan:gift-cache-integrity-validation:android",
@@ -64,12 +66,14 @@ test("PRD Workflow review links are readable without authentication", async () =
         Authorization: `Bearer ${owner.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(reviewPayload),
+      body: JSON.stringify({ ...reviewPayload, expectedRevision: "runtime:stale" }),
     });
     const repeatedPayload = await repeated.json();
     assert.equal(repeated.status, 200, JSON.stringify(repeatedPayload));
+    assert.equal(repeatedPayload.alreadyApplied, true);
     assert.equal(repeatedPayload.event.id, createdPayload.event.id);
     assert.equal(repeatedPayload.event.artifacts.length, 1);
+    assert.equal(repeatedPayload.review.url, createdPayload.review.url);
 
     const anonymous = await fetch(createdPayload.review.url);
     const anonymousHtml = await anonymous.text();

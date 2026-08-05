@@ -222,8 +222,91 @@ function workflowUrl(workflow) {
   const query = new URLSearchParams({
     view: "workflow",
     tapdId: String(workflow?.tapdId || ""),
+    returnTo: "/workflows",
   });
+  if (workflow?.demo) query.set("workflowDemo", "1");
   return `/workspace?${query.toString()}`;
+}
+
+function createWorkflowDemoSnapshot(workflow) {
+  const tapdId = String(workflow?.tapdId || "DEMO");
+  const platform = platformLabel(workflow?.platforms?.[0] || "all") || "双端";
+  const timelineEntry = workflow?.timeline?.[0] || {};
+  const actionTemplates = [
+    ["方案已确认", "需求范围和实现方案已完成确认。"],
+    ["研发任务已创建", "Issue 与研发分支信息已经同步。"],
+    ["实现进度已更新", "实现状态和当前风险已归档。"],
+    ["测试状态已更新", "自测、提测状态已经同步。"],
+    ["版本归属已确认", "版本排期和发布上下文已经确认。"],
+  ];
+  const visibleActionCount = Math.min(5, Math.max(1, Number(workflow?.actionCount || 1)));
+  const completedRatio = Number(workflow?.actionCount || 0) > 0
+    ? Number(workflow?.completedActionCount || 0) / Number(workflow.actionCount)
+    : 0;
+  const completedSlots = Math.round(visibleActionCount * completedRatio);
+  const actions = actionTemplates.slice(0, visibleActionCount).map(([title, detail], index) => ({
+    id: `demo-action-${index + 1}`,
+    actionId: `demo-action-${index + 1}`,
+    stageKey: ["plan", "issue", "implementation", "test", "release"][index],
+    title,
+    detail,
+    status: index < completedSlots ? "done" : index === completedSlots ? "current" : "pending",
+    issueKey: `demo-${tapdId.toLowerCase()}`,
+    platform,
+    updatedAt: new Date(Date.now() - (visibleActionCount - index) * 45 * 60 * 1000).toISOString(),
+  }));
+  return {
+    revision: `demo-${tapdId}`,
+    phase: workflow?.phase || "PLANNING",
+    pointer: workflow?.pointer || workflow?.latestAction?.title || "本地 Workflow 示例",
+    actions,
+    issues: Array.from({ length: Math.min(4, Math.max(1, Number(workflow?.issueCount || 1))) }, (_, index) => ({
+      key: `demo-${tapdId.toLowerCase()}-${index + 1}`,
+      title: index === 0 ? workflow?.title || "示例研发事项" : `子任务 ${index + 1}`,
+      platform,
+      status: workflow?.state === "completed" ? "done" : index === 0 ? "in_progress" : "pending",
+      epicKey: "示例需求",
+    })),
+    globalState: {
+      title: workflow?.title || `TAPD ${tapdId}`,
+      status: { label: stateLabel(workflow?.state) },
+      workflow: { namespace: "tapd", id: tapdId },
+      sections: {
+        version: {
+          title: "版本归属",
+          fields: {
+            version: { label: "版本", type: "text", value: timelineEntry.title || "待归属" },
+            date: { label: "版本日期", type: "text", value: timelineEntry.date || "待确认" },
+            platform: { label: "平台", type: "chips", value: [platform] },
+          },
+        },
+        progress: {
+          title: "研发进度",
+          fields: {
+            actions: { label: "Action", type: "text", value: `${workflow?.completedActionCount || 0}/${workflow?.actionCount || 0}` },
+            issues: { label: "Issues", type: "text", value: String(workflow?.issueCount || 0) },
+            owner: { label: "Owner", type: "user", value: workflow?.ownerUsername || "demo-user" },
+          },
+        },
+      },
+    },
+    runtimeEvents: actions.map((action) => ({ ...action, type: "demo-runtime-event" })),
+    demo: true,
+  };
+}
+
+function openWorkflow(navigate, workflow) {
+  if (workflow?.demo) {
+    try {
+      window.sessionStorage.setItem(
+        `agentflow.workflow.demo:${workflow.tapdId}`,
+        JSON.stringify(createWorkflowDemoSnapshot(workflow)),
+      );
+    } catch {
+      /* the detail page will show a local-example error when storage is unavailable */
+    }
+  }
+  navigate(workflowUrl(workflow));
 }
 
 export default function WorkflowsPage() {
@@ -611,10 +694,9 @@ export default function WorkflowsPage() {
                   <button
                     type="button"
                     className="af-workflow-open"
-                    onClick={() => { if (!workflow.demo) navigate(workflowUrl(workflow)); }}
-                    disabled={workflow.demo}
+                    onClick={() => openWorkflow(navigate, workflow)}
                   >
-                    {workflow.demo ? "示例数据" : "打开 Workflow"}
+                    {workflow.demo ? "查看示例" : "打开 Workflow"}
                     <span className="material-symbols-outlined" aria-hidden>{workflow.demo ? "science" : "arrow_forward"}</span>
                   </button>
                 </article>

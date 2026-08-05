@@ -13,6 +13,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
   const dataRoot = path.join(tempRoot, "data");
   const workspaceRoot = path.join(tempRoot, "project");
   const reportPath = path.join(tempRoot, "workflow-report.json");
+  const artifactPath = path.join(tempRoot, "workflow-artifact.json");
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.writeFileSync(reportPath, JSON.stringify({
     action: {
@@ -50,6 +51,14 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
         dimensions: { channel: "internal" },
       }],
     },
+  }), "utf8");
+  fs.writeFileSync(artifactPath, JSON.stringify({
+    title: "CLI Markdown 预览",
+    markdown: "# CLI Markdown\n\n统一 Artifact 发布接口。",
+    stage: "verification",
+    artifactKey: "cli-markdown-preview",
+    artifactLabel: "CLI Markdown 预览",
+    durability: "temporary",
   }), "utf8");
 
   const previousHome = process.env.AGENTFLOW_HOME;
@@ -100,6 +109,18 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
     assert.equal(current.snapshot.globalState.sections.verification.fields.result.value, "通过");
     assert.equal(current.snapshot.projections.timeline[0].dimensions.channel, "internal");
     assert.match(current.snapshot.runtimeRevision, /^runtime:/);
+
+    const published = await execFileAsync(process.execPath, [
+      cliPath,
+      "workflow-artifact-publish",
+      "--workflow", "tapd:1015046",
+      "--file", artifactPath,
+      ...commonArgs,
+    ]);
+    const artifact = JSON.parse(published.stdout);
+    assert.equal(artifact.ok, true);
+    assert.equal(artifact.artifact.key, "cli-markdown-preview");
+    assert.match(artifact.review.shortUrl || artifact.review.url, /\/(r|api\/prd-workflow\/review)\//);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

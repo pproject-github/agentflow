@@ -7509,13 +7509,17 @@ button.af-project-card {
 }
 
 .af-prd-workflow {
+  --af-workflow-surface: rgba(30, 29, 33, 0.9);
+  --af-workflow-surface-soft: rgba(255, 255, 255, 0.035);
+  --af-workflow-surface-inset: rgba(0, 0, 0, 0.18);
+  --af-workflow-border: rgba(216, 210, 230, 0.12);
   min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: clamp(1.25rem, 2.4vw, 2.5rem);
   background:
-    radial-gradient(circle at 18% 12%, rgba(124, 77, 255, 0.16), transparent 24rem),
-    linear-gradient(135deg, rgba(16, 16, 18, 0.98), rgba(18, 22, 28, 0.98));
+    radial-gradient(circle at 18% 12%, rgba(124, 77, 255, 0.09), transparent 24rem),
+    linear-gradient(135deg, #121214, #171619);
 }
 
 .af-prd-workflow__hero {
@@ -7560,9 +7564,9 @@ button.af-project-card {
   gap: 0.65rem;
   align-content: center;
   padding: 0.85rem;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--af-workflow-border);
   border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--af-workflow-surface);
   box-shadow: 0 1.2rem 3rem rgba(0, 0, 0, 0.26);
 }
 
@@ -7574,10 +7578,10 @@ button.af-project-card {
 }
 
 .af-prd-workflow-share-note {
-  border: 1px solid rgba(96, 165, 250, 0.24);
+  border: 1px solid rgba(167, 139, 250, 0.24);
   border-radius: 0.5rem;
-  background: rgba(30, 64, 175, 0.12);
-  color: rgba(219, 234, 254, 0.86);
+  background: rgba(124, 77, 255, 0.1);
+  color: rgba(237, 233, 254, 0.88);
   padding: 0.75rem 0.85rem;
   font-size: 0.78rem;
   line-height: 1.55;
@@ -7603,7 +7607,7 @@ button.af-project-card {
   height: 2.45rem;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 0.45rem;
-  background: rgba(2, 6, 23, 0.46);
+  background: var(--af-workflow-surface-inset);
   color: rgba(248, 250, 252, 0.94);
   padding: 0 0.75rem;
   outline: none;
@@ -7658,10 +7662,10 @@ button.af-project-card {
 
 .af-prd-workflow-card {
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--af-workflow-border);
   border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.62);
-  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.2);
+  background: var(--af-workflow-surface);
+  box-shadow: 0 0.8rem 2rem rgba(0, 0, 0, 0.16);
   padding: 1rem;
 }
 
@@ -7887,7 +7891,15 @@ button.af-project-card {
   gap: 0.85rem;
 }
 
+.af-prd-overall > .af-prd-workflow-card__head {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .af-prd-workflow-card__head .af-prd-overall__status {
+  max-width: 100%;
+  box-sizing: border-box;
   border: 1px solid rgba(52, 211, 153, 0.28);
   border-radius: 999px;
   background: rgba(6, 78, 59, 0.3);
@@ -7895,12 +7907,15 @@ button.af-project-card {
   padding: 0.2rem 0.55rem;
   font-family: var(--af-headline);
   font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .af-prd-overall__requirement {
-  border: 1px solid rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.2);
   border-radius: 0.5rem;
-  background: rgba(30, 64, 175, 0.1);
+  background: rgba(124, 77, 255, 0.08);
   padding: 0.75rem;
 }
 
@@ -7914,7 +7929,7 @@ button.af-project-card {
 }
 
 .af-prd-overall__requirement a:hover {
-  color: #93c5fd;
+  color: #c4b5fd;
 }
 
 .af-prd-overall__requirement strong {
@@ -7940,7 +7955,7 @@ button.af-project-card {
   gap: 0.65rem;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--af-workflow-surface-soft);
   padding: 0.75rem;
 }
 
@@ -7961,7 +7976,7 @@ button.af-project-card {
   align-items: center;
   gap: 0.22rem;
   min-width: 0;
-  color: rgba(191, 219, 254, 0.86);
+  color: rgba(221, 214, 254, 0.88);
   font-size: 0.72rem;
 }
 
@@ -8003,10 +8018,10 @@ button.af-project-card {
 }
 
 .af-prd-overall-platform__row > div > span {
-  border: 1px solid rgba(96, 165, 250, 0.2);
+  border: 1px solid rgba(167, 139, 250, 0.2);
   border-radius: 999px;
-  background: rgba(30, 64, 175, 0.12);
-  color: rgba(219, 234, 254, 0.9);
+  background: rgba(124, 77, 255, 0.09);
+  color: rgba(237, 233, 254, 0.9);
   padding: 0.18rem 0.42rem;
   font-size: 0.68rem;
   line-height: 1.35;
@@ -8023,7 +8038,7 @@ button.af-project-card {
 }
 
 .af-prd-overall-platform__row--user > div > span {
-  color: rgba(191, 219, 254, 0.92);
+  color: rgba(221, 214, 254, 0.92);
 }
 
 .af-prd-overall-platform__row--link a {
@@ -8031,13 +8046,13 @@ button.af-project-card {
   align-items: center;
   gap: 0.25rem;
   width: fit-content;
-  color: rgba(147, 197, 253, 0.94);
+  color: rgba(196, 181, 253, 0.94);
   font-size: 0.74rem;
   text-decoration: none;
 }
 
 .af-prd-overall-platform__row--link a:hover {
-  color: rgba(191, 219, 254, 1);
+  color: rgba(221, 214, 254, 1);
 }
 
 .af-prd-overall-platform__row--link .material-symbols-outlined {
@@ -8294,9 +8309,9 @@ button.af-project-card {
 
 .af-prd-workflow__status-main {
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--af-workflow-border);
   border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.56);
+  background: var(--af-workflow-surface);
   padding: 1rem;
 }
 
@@ -8369,7 +8384,7 @@ button.af-project-card {
   flex: 0 0 auto;
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.75);
+  background: rgba(20, 19, 22, 0.92);
 }
 
 .af-prd-workflow-flow__step small {
@@ -8527,9 +8542,9 @@ button.af-project-card {
 
 .af-prd-workflow-actions {
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--af-workflow-border);
   border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.56);
+  background: var(--af-workflow-surface);
   padding: 1rem;
 }
 
@@ -8561,7 +8576,7 @@ button.af-project-card {
   max-width: min(34rem, 48vw);
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 0.45rem;
-  background: rgba(2, 6, 23, 0.28);
+  background: var(--af-workflow-surface-inset);
   padding: 0.55rem 0.65rem;
 }
 
@@ -8600,7 +8615,7 @@ button.af-project-card {
   gap: 0.32rem;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.36);
+  background: var(--af-workflow-surface-inset);
   color: rgba(203, 213, 225, 0.76);
   padding: 0.22rem 0.52rem;
   font: inherit;
@@ -8718,7 +8733,7 @@ button.af-project-card {
   min-width: 0;
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--af-workflow-surface-soft);
   padding: 0.85rem;
 }
 
@@ -8774,7 +8789,7 @@ button.af-project-card {
   flex: 0 0 auto;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.36);
+  background: var(--af-workflow-surface-inset);
   color: rgba(203, 213, 225, 0.72);
   padding: 0.12rem 0.42rem;
   font-family: var(--af-mono);
@@ -8804,21 +8819,34 @@ button.af-project-card {
   margin-top: 0.55rem;
 }
 
-.af-prd-workflow-action__meta span {
+.af-prd-workflow-action__meta > .af-prd-workflow-action__meta-item {
   display: inline-flex;
   align-items: center;
   gap: 0.28rem;
-  max-width: 16rem;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.36);
+  background: var(--af-workflow-surface-inset);
   color: rgba(203, 213, 225, 0.76);
   padding: 0.18rem 0.46rem;
   font-size: 0.66rem;
   line-height: 1.2;
 }
 
+.af-prd-workflow-action__meta-item--issue {
+  flex: 0 1 28rem;
+}
+
+.af-prd-workflow-action__meta-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .af-prd-workflow-action__meta b {
+  flex: 0 0 auto;
   color: rgba(148, 163, 184, 0.74);
   font-weight: 700;
   text-transform: uppercase;
@@ -8829,7 +8857,7 @@ button.af-project-card {
   flex: 0 0 auto;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.42);
+  background: var(--af-workflow-surface-inset);
   color: rgba(203, 213, 225, 0.76);
   padding: 0.2rem 0.52rem;
   font-size: 0.66rem;
