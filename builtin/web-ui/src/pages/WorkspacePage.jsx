@@ -7430,7 +7430,13 @@ function PrdWorkflowTimelinePanel({
   const workflowSteps = prdWorkflowFlowSteps(phase);
   const loadKnowledgeBindings = useCallback(async () => {
     const id = String(tapdId || "").trim();
-    if (!id || flowParams.workflowShare) return;
+    if (!id || flowParams.workflowShare) {
+      setKnowledgeBindings([]);
+      setKnowledgeSelection([]);
+      setKnowledgeWorkspaces([]);
+      setKnowledgeCanManage(false);
+      return;
+    }
     const response = await fetch(`/api/workflows/knowledge-bindings?tapdId=${encodeURIComponent(id)}`);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "读取知识工作区绑定失败");
@@ -7440,6 +7446,14 @@ function PrdWorkflowTimelinePanel({
     setKnowledgeWorkspaces(Array.isArray(payload.availableWorkspaces) ? payload.availableWorkspaces : []);
     setKnowledgeCanManage(payload.canManage === true);
   }, [flowParams.workflowShare, tapdId]);
+  useEffect(() => {
+    void loadKnowledgeBindings().catch(() => {
+      setKnowledgeBindings([]);
+      setKnowledgeSelection([]);
+      setKnowledgeWorkspaces([]);
+      setKnowledgeCanManage(false);
+    });
+  }, [loadKnowledgeBindings]);
   const loadSharing = useCallback(async () => {
     const id = String(tapdId || "").trim();
     if (!id) {
@@ -7669,7 +7683,7 @@ function PrdWorkflowTimelinePanel({
             {tapdId ? <>TAPD <strong>{tapdId}</strong> · {flowParams.workflowDemo ? "本地只读示例" : "独立需求 Workflow"}</> : <>尚未选择 TAPD 需求</>}
           </p>
           {error ? <p className="af-prd-workflow-error">{error}</p> : null}
-          {(activeAction || collaboration.subscribers) ? (
+          {(activeAction || collaboration.subscribers || knowledgeBindings.length) ? (
             <div className="af-prd-workflow-collab">
               {activeAction ? (
                 <span>
@@ -7682,6 +7696,24 @@ function PrdWorkflowTimelinePanel({
                 <span>
                   <span className="material-symbols-outlined" aria-hidden>group</span>
                   {collaboration.subscribers} 个连接
+                </span>
+              ) : null}
+              {knowledgeBindings.slice(0, 3).map((binding) => (
+                <span
+                  key={binding.workspaceId}
+                  className="af-prd-workflow-knowledge-chip"
+                  title={[binding.label, binding.branch, binding.repoUrl].filter(Boolean).join(" · ")}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>database</span>
+                  {binding.label}
+                  {(binding.type || binding.branch) ? (
+                    <small>{[binding.type, binding.branch].filter(Boolean).join(" · ")}</small>
+                  ) : null}
+                </span>
+              ))}
+              {knowledgeBindings.length > 3 ? (
+                <span className="af-prd-workflow-knowledge-chip af-prd-workflow-knowledge-chip--more">
+                  +{knowledgeBindings.length - 3} 个知识库
                 </span>
               ) : null}
             </div>
