@@ -51,6 +51,13 @@ import {
 import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, unloadGitWorktree } from "../lib/git-worktree.mjs";
 import { createGitLabMergeRequest } from "../lib/gitlab-mr.mjs";
 import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "../lib/wecom.mjs";
+import {
+  advanceJenkinsBuild,
+  createJenkinsSkillInvoker,
+  normalizeJenkinsBuildConfig,
+  readJenkinsBuildState,
+  writeJenkinsBuildState,
+} from "../lib/jenkins.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -498,6 +505,106 @@ async function emitWecomMarkdownNode(workspaceRoot, flowName, uuid, instanceId, 
     body: result.message,
   }, { execId });
   return emitLocalNoopPrompt(workspaceRoot, runDir, instanceId, "wecom-markdown", `${result.message}\n`);
+}
+
+function emitJenkinsBuildNode(workspaceRoot, flowName, uuid, instanceId, execId) {
+  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const data = getResolvedValues(workspaceRoot, flowName, uuid, instanceId);
+  if (!data.ok) throw new Error("getResolvedValues failed");
+  const inputs = data.resolvedInputs || {};
+  const config = normalizeJenkinsBuildConfig(inputs);
+  const statePath = path.join(runDir, "state", `${instanceId}.jenkins.json`);
+  const priorState = readJenkinsBuildState(statePath);
+  if (priorState?.job && priorState.job !== config.job) {
+    throw new Error(`checkpoint job mismatch: ${priorState.job} != ${config.job}`);
+  }
+  let invoker = null;
+  const invoke = (operation, args) => {
+    if (!invoker) {
+      invoker = createJenkinsSkillInvoker({
+        workspaceRoot,
+        credentialRef: config.credentialRef,
+        env: process.env,
+      });
+    }
+    return invoker(operation, args);
+  };
+  const result = advanceJenkinsBuild({
+    state: priorState,
+    config,
+    invoke,
+    persistState: (state) => writeJenkinsBuildState(statePath, state),
+    nowMs: Date.now(),
+    cancelled: readCancelFlag(runDir),
+  });
+  writeJenkinsBuildState(statePath, result.state);
+  writeOutputSlot(runDir, instanceId, execId, "status", result.outputs?.status || result.state?.status || "");
+  writeOutputSlot(runDir, instanceId, execId, "url", result.outputs?.url || result.state?.url || result.state?.buildUrl || "");
+  writeOutputSlot(runDir, instanceId, execId, "qrUrl", result.outputs?.qrUrl || result.state?.qrUrl || "");
+
+  const message = result.message || result.state?.message || "Jenkins Build";
+  if (result.kind === "failed") {
+    writeResult(
+      workspaceRoot,
+      flowName,
+      uuid,
+      instanceId,
+      { status: "failed", message },
+      { execId, preserveBody: false, body: JSON.stringify({ status: "ERROR", message }, null, 2) },
+    );
+    throw new Error(message);
+  }
+
+  const promptPath = emitLocalNoopPrompt(
+    workspaceRoot,
+    runDir,
+    instanceId,
+    result.kind === "waiting" ? "jenkins-waiting" : "jenkins-complete",
+    `${message}\n`,
+  );
+  if (result.kind === "waiting") {
+    const waitId = `${uuid}:${instanceId}:jenkins-build`;
+    writeWaitState(runDir, {
+      waitId,
+      status: "waiting",
+      reason: "tool_jenkins_build",
+      resumeMode: "rerun",
+      flowName,
+      uuid,
+      instanceId,
+      execId,
+      phase: result.state?.phase || "queued",
+      buildNumber: result.state?.buildNumber || "",
+      wakeAt: result.wakeAt,
+      createdAt: priorState?.createdAt || new Date().toISOString(),
+    });
+    writeResult(
+      workspaceRoot,
+      flowName,
+      uuid,
+      instanceId,
+      { status: "pending", message },
+      { execId, preserveBody: false, body: JSON.stringify({ phase: result.state?.phase, wakeAt: result.wakeAt }, null, 2) },
+    );
+  } else {
+    writeResult(
+      workspaceRoot,
+      flowName,
+      uuid,
+      instanceId,
+      { status: "success", message },
+      {
+        execId,
+        preserveBody: false,
+        body: JSON.stringify({
+          status: result.outputs?.status || result.state?.status || "",
+          url: result.outputs?.url || result.state?.url || "",
+          qrUrl: result.outputs?.qrUrl || result.state?.qrUrl || "",
+        }, null, 2),
+      },
+    );
+  }
+  return { promptPath, lifecycle: result.kind };
 }
 
 function emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) {
@@ -1203,26 +1310,29 @@ async function main() {
     return;
   }
 
-  if (definitionId === "tool_git_checkout" || definitionId === "tool_git_worktree_load" || definitionId === "tool_git_worktree_unload" || definitionId === "tool_gitlab_create_mr" || definitionId === "tool_wecom_send_group_markdown" || definitionId === "tool_wecom_send_app_markdown" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
+  if (definitionId === "tool_git_checkout" || definitionId === "tool_git_worktree_load" || definitionId === "tool_git_worktree_unload" || definitionId === "tool_gitlab_create_mr" || definitionId === "tool_jenkins_build" || definitionId === "tool_wecom_send_group_markdown" || definitionId === "tool_wecom_send_app_markdown" || definitionId === "control_cd_workspace" || definitionId === "control_user_workspace" || definitionId === "control_load_skills" || definitionId === "tool_print") {
     try {
-      const promptPath =
+      const localResult =
         definitionId === "tool_git_checkout"
-          ? emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel)
+          ? { promptPath: emitGitCheckoutNode(workspaceRoot, flowName, uuid, instanceId, execId, resultPathRel) }
           : definitionId === "tool_git_worktree_load"
-            ? emitGitWorktreeLoadNode(workspaceRoot, flowName, uuid, instanceId, execId)
+            ? { promptPath: emitGitWorktreeLoadNode(workspaceRoot, flowName, uuid, instanceId, execId) }
             : definitionId === "tool_git_worktree_unload"
-              ? emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, execId)
+              ? { promptPath: emitGitWorktreeUnloadNode(workspaceRoot, flowName, uuid, instanceId, execId) }
               : definitionId === "tool_gitlab_create_mr"
-                ? await emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                ? { promptPath: await emitGitLabCreateMrNode(workspaceRoot, flowName, uuid, instanceId, execId) }
+                : definitionId === "tool_jenkins_build"
+                  ? emitJenkinsBuildNode(workspaceRoot, flowName, uuid, instanceId, execId)
                 : definitionId === "tool_wecom_send_group_markdown" || definitionId === "tool_wecom_send_app_markdown"
-                  ? await emitWecomMarkdownNode(workspaceRoot, flowName, uuid, instanceId, execId, definitionId)
+                  ? { promptPath: await emitWecomMarkdownNode(workspaceRoot, flowName, uuid, instanceId, execId, definitionId) }
                   : definitionId === "control_cd_workspace"
-                    ? emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                    ? { promptPath: emitCdWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) }
                     : definitionId === "control_user_workspace"
-                      ? emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId)
+                      ? { promptPath: emitUserWorkspaceNode(workspaceRoot, flowName, uuid, instanceId, execId) }
                       : definitionId === "control_load_skills"
-                        ? emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId)
-                        : emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId);
+                        ? { promptPath: emitLoadSkillsNode(workspaceRoot, flowName, uuid, instanceId, execId) }
+                        : { promptPath: emitToolPrintNode(workspaceRoot, flowName, uuid, instanceId, execId) };
+      const promptPath = localResult.promptPath;
       writeCacheJsonForNode(workspaceRoot, flowName, uuid, instanceId, execId);
       logToRunTag(workspaceRoot, flowName, uuid, "pre-process", { event: "runtime-context-node", instanceId, definitionId });
       console.log(JSON.stringify({
@@ -1233,6 +1343,7 @@ async function main() {
         subagent: "agentflow-node-executor",
         optionalPromptPath: promptPath,
         definitionId,
+        ...(localResult.lifecycle ? { nodeLifecycle: localResult.lifecycle } : {}),
       }));
       return;
     } catch (e) {

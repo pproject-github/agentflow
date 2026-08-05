@@ -225,8 +225,8 @@ export function normalizeRoleToKey(roleOrKey) {
 /**
  * 翻译节点定义字段
  * @param {string} definitionId - 节点定义 ID
- * @param {"displayName" | "description"} field - 字段名
- * @returns {string}
+ * @param {"displayName" | "description" | "guide"} field - 字段名
+ * @returns {string | object}
  */
 export function translateNodeDef(definitionId, field) {
   return t(`nodeDef.${definitionId}.${field}`);

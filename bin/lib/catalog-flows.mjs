@@ -171,7 +171,7 @@ function normalizeFrontmatterSlots(arr) {
  */
 export function parseNodeFrontmatter(raw) {
   const m = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  const data = { input: [], output: [], displayName: undefined, description: undefined };
+  const data = { input: [], output: [], displayName: undefined, description: undefined, guide: undefined };
   if (!m) return data;
   const fm = m[1];
   try {
@@ -182,6 +182,9 @@ export function parseNodeFrontmatter(raw) {
       }
       if (parsed.displayName != null && String(parsed.displayName).trim() !== "") {
         data.displayName = String(parsed.displayName).trim();
+      }
+      if (parsed.guide && typeof parsed.guide === "object" && !Array.isArray(parsed.guide)) {
+        data.guide = parsed.guide;
       }
       data.input = normalizeFrontmatterSlots(parsed.input);
       data.output = normalizeFrontmatterSlots(parsed.output);
@@ -259,14 +262,24 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         const strippedId =
           id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
         const label = data.displayName ?? strippedId;
-        const translatedDisplayName = translateNodeDef(id, "displayName");
-        const translatedDescription = translateNodeDef(id, "description");
+        const displayNameKey = `nodeDef.${id}.displayName`;
+        const descriptionKey = `nodeDef.${id}.description`;
+        const guideKey = `nodeDef.${id}.guide`;
+        const translatedDisplayNameRaw = translateNodeDef(id, "displayName");
+        const translatedDescriptionRaw = translateNodeDef(id, "description");
+        const translatedGuideRaw = translateNodeDef(id, "guide");
+        const translatedDisplayName = translatedDisplayNameRaw === displayNameKey ? "" : translatedDisplayNameRaw;
+        const translatedDescription = translatedDescriptionRaw === descriptionKey ? "" : translatedDescriptionRaw;
+        const translatedGuide = translatedGuideRaw && typeof translatedGuideRaw === "object" && !Array.isArray(translatedGuideRaw)
+          ? translatedGuideRaw
+          : undefined;
         byId.set(id, {
           id,
           type,
           label: translatedDisplayName || label,
           displayName: translatedDisplayName || data.displayName,
           description: translatedDescription || data.description,
+          guide: translatedGuide || data.guide,
           inputs: data.input,
           outputs: data.output,
           source: flowIdOpt ? "flow" : "project",
@@ -606,6 +619,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
         outputs: data.output,
         executionLogic: content || undefined,
         description: data.description,
+        guide: data.guide,
       };
     } catch (_) {}
   }

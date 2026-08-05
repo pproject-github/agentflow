@@ -52,6 +52,10 @@ import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel
 import RunNodeContextPanel from "../RunNodeContextPanel.jsx";
 import RunConfigPanel from "../components/RunConfigPanel.jsx";
 import LogViewer from "../components/LogViewer.jsx";
+import {
+  ComposerAssistantActivity,
+  ComposerAssistantTurn,
+} from "../components/ComposerAssistant.jsx";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -625,24 +629,9 @@ function coalesceComposerSegmentsInOrder(segments) {
   return out;
 }
 
-function segmentKindToComposerLabel(kind, t) {
-  if (kind === "thinking") return t("flow:composer.thinking");
-  if (kind === "result") return t("flow:composer.result");
-  if (kind === "assistant") return t("flow:composer.reply");
-  if (kind === "error") return t("flow:composer.error");
-  return String(kind);
-}
-
-function segmentKindToComposerBlockClass(kind) {
-  if (kind === "thinking") return "af-composer-ai-block af-composer-ai-block--thinking";
-  if (kind === "result") return "af-composer-ai-block af-composer-ai-block--result";
-  if (kind === "assistant") return "af-composer-ai-block af-composer-ai-block--reply";
-  if (kind === "error") return "af-composer-ai-block af-composer-ai-block--error";
-  return "af-composer-ai-block af-composer-ai-block--reply";
-}
-
 /**
- * 对话线程：历史轮次 + 当前轮流式片段（与底部输出区一致的分块展示，非纯文本拼接）。
+ * 对话线程：历史轮次 + 当前轮流式片段。自然语言使用 Assistant 对话样式，
+ * thinking / tool activity 收进可折叠执行过程。
  * 支持自动滚动到底部。
  * @param {{
  *   thread: Array<
@@ -656,7 +645,6 @@ function segmentKindToComposerBlockClass(kind) {
  * }} props
  */
 function ComposerThreadContent({ thread, liveSegments, running, className = "", autoScroll = true }) {
-  const { t } = useTranslation();
   const stackRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const stackClass = ["af-composer-ai-stack", "af-composer-ai-stack--in-panel", "af-composer-thread-stack", className]
     .filter(Boolean)
@@ -673,16 +661,14 @@ function ComposerThreadContent({ thread, liveSegments, running, className = "", 
   }, [thread, liveSegments, autoScroll]);
 
   return (
-    <div ref={stackRef} className={stackClass}>
+    <div ref={stackRef} className={`${stackClass} af-composer-assistant-thread`}>
       {thread.map((item, i) =>
         item.type === "user" ? (
-          <section
+          <ComposerAssistantTurn
             key={`composer-u-${i}-${item.text.slice(0, 48)}`}
-            className="af-composer-ai-block af-composer-ai-block--user-msg"
-          >
-            <div className="af-composer-ai-block-label">{t("flow:composer.yourQuestion")}</div>
-            <div className="af-composer-ai-block-body">{item.text}</div>
-          </section>
+            role="user"
+            content={item.text}
+          />
         ) : (
           <div key={`composer-a-${i}`} className="af-composer-thread-assistant">
             <AssistantStreamBlocks segments={item.segments} running={false} />
@@ -697,11 +683,10 @@ function ComposerThreadContent({ thread, liveSegments, running, className = "", 
 }
 
 /**
- * 单轮 AI 输出：按流式到达顺序展示思考 / 回复 / 结果（相邻同 kind 合并）；错误置底。running 且无内容时显示等待。
+ * 单轮 AI 输出：回复 / 结果显示为自然对话，其余流式事件折叠为执行过程；错误置底。
  * @param {{ segments: Array<{ kind: string, text: string }>, running?: boolean }} props
  */
 function AssistantStreamBlocks({ segments, running = false }) {
-  const { t } = useTranslation();
   const reply = segments.filter((s) => s.kind === "assistant").map((s) => s.text).join("");
   const result = segments.filter((s) => s.kind === "result").map((s) => s.text).join("");
   const omitResult = shouldOmitComposerResult(reply, result);
@@ -709,29 +694,34 @@ function AssistantStreamBlocks({ segments, running = false }) {
     .filter((s) => s.kind === "error")
     .map((s) => s.text)
     .join("\n");
-  const naturalRaw = segments.filter((s) => s.kind !== "error");
+  const naturalRaw = segments.filter((s) => s.kind === "assistant" || s.kind === "result");
   const naturalFiltered = omitResult ? naturalRaw.filter((s) => s.kind !== "result") : naturalRaw;
   const orderedBlocks = coalesceComposerSegmentsInOrder(naturalFiltered);
-  const hasBody = Boolean(orderedBlocks.length > 0 || errText);
+  const responseText = orderedBlocks.map((s) => s.text.trim()).filter(Boolean).join("\n\n");
+  const activityItems = segments
+    .filter((s) => s.kind !== "assistant" && s.kind !== "result" && s.kind !== "error")
+    .map((s, index) => ({
+      id: `${s.kind || "activity"}-${index}`,
+      kind: s.kind || "activity",
+      label: s.kind === "thinking" ? "Thinking" : (s.kind || "Activity"),
+      text: s.text,
+    }));
   return (
     <>
-      {orderedBlocks.map((s, i) => (
-        <section key={`${s.kind}-${i}`} className={segmentKindToComposerBlockClass(s.kind)}>
-          <div className="af-composer-ai-block-label">{segmentKindToComposerLabel(s.kind, t)}</div>
-          <div className="af-composer-ai-block-body">{s.text}</div>
-        </section>
-      ))}
-      {running && !hasBody ? (
-        <section className="af-composer-ai-block af-composer-ai-block--reply af-composer-ai-block--pending">
-          <div className="af-composer-ai-block-label">{t("flow:composer.reply")}</div>
-          <div className="af-composer-ai-block-body">{t("flow:composer.waiting")}</div>
-        </section>
+      {responseText || running ? (
+        <ComposerAssistantTurn
+          content={responseText}
+          pending={running}
+          pendingLabel={responseText ? "仍在生成并同步工作流" : "正在理解需求并规划工作流"}
+        />
       ) : null}
+      <ComposerAssistantActivity
+        items={activityItems}
+        running={running}
+        label="执行过程"
+      />
       {errText ? (
-        <section className="af-composer-ai-block af-composer-ai-block--error">
-          <div className="af-composer-ai-block-label">{t("flow:composer.error")}</div>
-          <div className="af-composer-ai-block-body">{errText}</div>
-        </section>
+        <ComposerAssistantTurn content={errText} error copy={false} />
       ) : null}
     </>
   );
@@ -853,8 +843,23 @@ function shallowEqualStatusMap(a, b) {
     if (va === vb) continue;
     if (va.status !== vb.status) return false;
     if ((va.elapsed ?? null) !== (vb.elapsed ?? null)) return false;
+    if ((va.phase ?? null) !== (vb.phase ?? null)) return false;
+    if ((va.jenkinsStatus ?? null) !== (vb.jenkinsStatus ?? null)) return false;
+    if ((va.message ?? null) !== (vb.message ?? null)) return false;
+    if ((va.buildNumber ?? null) !== (vb.buildNumber ?? null)) return false;
+    if ((va.url ?? null) !== (vb.url ?? null)) return false;
+    if ((va.qrUrl ?? null) !== (vb.qrUrl ?? null)) return false;
   }
   return true;
+}
+
+function normalizeNodeRunStatus(value) {
+  if (!value || typeof value !== "object" || typeof value.status !== "string") return null;
+  const next = { status: value.status };
+  for (const key of ["elapsed", "executionStatus", "phase", "jenkinsStatus", "message", "buildNumber", "url", "qrUrl", "startedAt", "wakeAt"]) {
+    if (value[key] != null && String(value[key]).trim() !== "") next[key] = String(value[key]);
+  }
+  return next;
 }
 
 function setsEqual(a, b) {
@@ -1838,6 +1843,7 @@ export default function FlowEditorPage() {
         isExecuting: executingNodes.has(n.id),
         nodeStatus: nodeRunStatus[n.id]?.status ?? null,
         nodeElapsed: nodeRunStatus[n.id]?.elapsed ?? null,
+        nodeRunDetail: nodeRunStatus[n.id] ?? null,
         isDim: runFocusIds ? !runFocusIds.has(n.id) : false,
       },
     }));
@@ -3845,13 +3851,13 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         await fetch("/api/flow/run/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user" }),
+          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user", runId: currentRunUuid }),
         });
       } catch (_) {}
     }
     setRunMode("stopped");
     setExecutingNodes(new Set());
-  }, [selected]);
+  }, [selected, currentRunUuid]);
 
   const handleBackToEdit = useCallback(() => {
     setRunMode("edit");
@@ -3874,12 +3880,12 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         await fetch("/api/flow/run/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user" }),
+          body: JSON.stringify({ flowId: selected.id, flowSource: selected.source || "user", runId: currentRunUuid }),
         });
       } catch (_) {}
     }
     handleBackToEdit();
-  }, [selected, handleBackToEdit]);
+  }, [selected, currentRunUuid, handleBackToEdit]);
   const backgroundAndExit = useCallback(() => {
     setBackPromptOpen(false);
     navigate("/projects");
@@ -3929,12 +3935,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
             /** @type {Record<string, { status: string, elapsed?: string }>} */
             const next = {};
             for (const [id, v] of Object.entries(raw)) {
-              if (v && typeof v === "object" && typeof v.status === "string") {
-                next[id] = {
-                  status: v.status,
-                  ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}),
-                };
-              }
+              const normalized = normalizeNodeRunStatus(v);
+              if (normalized) next[id] = normalized;
             }
             setNodeRunStatus(next);
           })
@@ -3976,10 +3978,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           const next = {};
           const exec = new Set();
           for (const [id, v] of Object.entries(raw)) {
-            if (v && typeof v === "object" && typeof v.status === "string") {
-              next[id] = { status: v.status, ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}) };
-              if (v.status === "running") exec.add(id);
-            }
+            const normalized = normalizeNodeRunStatus(v);
+            if (!normalized) continue;
+            next[id] = normalized;
+            if (v.status === "running") exec.add(id);
           }
           setNodeRunStatus(next);
           setExecutingNodes(exec);
@@ -4022,10 +4024,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
         const next = {};
         const exec = new Set();
         for (const [id, v] of Object.entries(raw)) {
-          if (v && typeof v === "object" && typeof v.status === "string") {
-            next[id] = { status: v.status, ...(v.elapsed != null && String(v.elapsed).trim() !== "" ? { elapsed: String(v.elapsed) } : {}) };
-            if (v.status === "running") exec.add(id);
-          }
+          const normalized = normalizeNodeRunStatus(v);
+          if (!normalized) continue;
+          next[id] = normalized;
+          if (v.status === "running") exec.add(id);
         }
         // 跳过无变化的 setState，避免每 2.5s 触发 runNodes/runEdges 全量 memo 重算 + 21 个 ReactFlow 节点重渲。
         setNodeRunStatus((prev) => (shallowEqualStatusMap(prev, next) ? prev : next));

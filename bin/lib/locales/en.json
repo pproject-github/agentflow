@@ -289,6 +289,28 @@
       "displayName": "Create GitLab MR",
       "description": "Create or reuse a GitLab merge request for the current branch and output its URL"
     },
+    "tool_jenkins_build": {
+      "displayName": "Jenkins Build",
+      "description": "Trigger a Jenkins build and wait for completion, then output its status, artifact URL, and optional QR code",
+      "guide": {
+        "summary": "This node triggers one Jenkins job and durably checks its queue and build status. It does not keep an execution process blocked while waiting, and the flow continues automatically when the build finishes.",
+        "prerequisites": [
+          "Configure the Jenkins URL in Settings → Environment Variables; add a username and API token when authentication is required.",
+          "Confirm the exact Jenkins job name and parameter names; parameter names are case-sensitive."
+        ],
+        "steps": [
+          "Set job to the Jenkins job name, such as like-android; use folder/job for jobs inside folders.",
+          "Set parameters to a JSON object; use {} for a non-parameterized build.",
+          "Leave credentialRef empty to use the default JENKINS_BASE_URL variables, or set it to mobile to use JENKINS_MOBILE_* variables.",
+          "pollInterval and timeout default to 30s and 2h and normally do not need changes."
+        ],
+        "example": "JENKINS_MOBILE_BASE_URL=http://jenkinsmobile.bigo.sg:8080/\nJENKINS_MOBILE_USERNAME=your-name\nJENKINS_MOBILE_TOKEN=your-api-token\n\njob: like-android\nparameters: {}\ncredentialRef: mobile",
+        "notes": [
+          "Never put a Jenkins token in flow.yaml or parameters.",
+          "status returns SUCCESS, FAILURE, ABORTED, TIMEOUT, or CANCELLED; downstream notification nodes continue even when the build itself fails."
+        ]
+      }
+    },
     "tool_wecom_send_group_markdown": {
       "displayName": "WeCom Group Chat Markdown",
       "description": "Send a Markdown message to a group chat through a WeCom group robot webhook"

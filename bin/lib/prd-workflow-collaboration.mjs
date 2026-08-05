@@ -4,7 +4,7 @@ import path from "path";
 import { getAgentflowDataRoot } from "./paths.mjs";
 import { getTeamForUser } from "./teams.mjs";
 
-const REGISTRY_VERSION = 3;
+const REGISTRY_VERSION = 4;
 
 function registryPath() {
   return path.join(getAgentflowDataRoot(), "collaboration", "prd-workflows.json");
@@ -83,6 +83,28 @@ function normalizeKnowledgeBindings(value) {
   });
 }
 
+function normalizeProjectBindings(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const workspaceId = String(entry.workspaceId || "").trim();
+    const flowId = String(entry.flowId || "").trim();
+    const flowSource = String(entry.flowSource || "user").trim() || "user";
+    if (!workspaceId || !flowId || seen.has(workspaceId)) return [];
+    seen.add(workspaceId);
+    return [{
+      workspaceId,
+      flowId,
+      flowSource,
+      archived: entry.archived === true,
+      ownerId: normalizeUserId(entry.ownerId),
+      boundBy: normalizeUserId(entry.boundBy),
+      boundAt: String(entry.boundAt || "").trim(),
+    }];
+  });
+}
+
 function collaborationMembers(record) {
   const ownerId = normalizeUserId(record?.ownerId);
   const explicit = normalizedMemberMap(record?.members);
@@ -128,6 +150,7 @@ function publicWorkflow(record, userId = "") {
         : [],
     } : null,
     knowledgeBindings: normalizeKnowledgeBindings(record.knowledgeBindings),
+    projectBindingCount: normalizeProjectBindings(record.projectBindings).length,
     shareActive: Boolean(record.shareToken),
     shareCreatedAt: record.shareCreatedAt || "",
     createdAt: record.createdAt || "",
@@ -275,6 +298,75 @@ export function setPrdWorkflowKnowledgeBindings({ tapdId, userId, bindings = [] 
     record: stored,
     workflow: publicWorkflow(stored, actorId),
     knowledgeBindings: normalizeKnowledgeBindings(stored.knowledgeBindings),
+  };
+}
+
+export function listPrdWorkflowProjectBindings({ tapdId, userId }) {
+  const record = getPrdWorkflowCollaborationForUser(tapdId, userId);
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  return {
+    record,
+    workflow: publicWorkflow(record, userId),
+    projectBindings: normalizeProjectBindings(record.projectBindings),
+  };
+}
+
+export function bindPrdWorkflowProject({ tapdId, userId, project }) {
+  const record = getPrdWorkflowCollaborationForUser(tapdId, userId);
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const normalized = normalizeProjectBindings([project])[0];
+  if (!normalized) return { error: "Project binding requires workspaceId and flowId", status: 400 };
+  const registry = readRegistry();
+  const stored = registry.workflows[record.id];
+  if (!stored) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const actorId = normalizeUserId(userId);
+  const now = new Date().toISOString();
+  const current = normalizeProjectBindings(stored.projectBindings);
+  const existing = current.find((binding) => binding.workspaceId === normalized.workspaceId);
+  stored.projectBindings = [
+    ...current.filter((binding) => binding.workspaceId !== normalized.workspaceId),
+    {
+      ...normalized,
+      boundBy: existing?.boundBy || actorId,
+      boundAt: existing?.boundAt || now,
+    },
+  ];
+  stored.updatedAt = now;
+  writeRegistry(registry);
+  return {
+    record: stored,
+    workflow: publicWorkflow(stored, actorId),
+    projectBindings: normalizeProjectBindings(stored.projectBindings),
+    created: !existing,
+  };
+}
+
+export function unbindPrdWorkflowProject({ tapdId, userId, workspaceId }) {
+  const record = getPrdWorkflowCollaborationForUser(tapdId, userId);
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const id = String(workspaceId || "").trim();
+  if (!id) return { error: "Missing workspaceId", status: 400 };
+  const registry = readRegistry();
+  const stored = registry.workflows[record.id];
+  if (!stored) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const current = normalizeProjectBindings(stored.projectBindings);
+  const next = current.filter((binding) => binding.workspaceId !== id);
+  if (next.length === current.length) {
+    return {
+      record: stored,
+      workflow: publicWorkflow(stored, userId),
+      projectBindings: current,
+      unchanged: true,
+    };
+  }
+  stored.projectBindings = next;
+  stored.updatedAt = new Date().toISOString();
+  writeRegistry(registry);
+  return {
+    record: stored,
+    workflow: publicWorkflow(stored, userId),
+    projectBindings: next,
+    removedWorkspaceId: id,
   };
 }
 

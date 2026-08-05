@@ -346,6 +346,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
       inputs,
       outputs,
       description: translatedDescription || mergedDescription,
+      guide: def?.guide || n.data?.guide,
       originalLabel: label,
       originalBody: mergedBody,
       ...(showScriptField ? { script: mergedScript } : {}),

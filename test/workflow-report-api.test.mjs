@@ -104,11 +104,11 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
       projections: {
         timeline: [{
           kind: "version",
-          id: "android-5.63.0",
-          title: "Android 5.63.0",
+          id: "1133202860001000338",
+          title: "Android&iOS 5.63.0",
           date: "2026-08-20",
           source: "prd-flow",
-          dimensions: { platform: "android" },
+          dimensions: { platform: ["android", "ios"] },
         }],
       },
       idempotencyKey: "report-1015046-issue-2",
@@ -129,7 +129,7 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     assert.equal(result.snapshot.globalState.title, "双端 Remote Config");
     assert.equal(result.snapshot.globalState.status.label, "开发中");
     assert.equal(result.snapshot.globalState.sections.android.fields.owner.value, "workflow-reporter");
-    assert.equal(result.snapshot.projections.timeline[0].id, "android-5.63.0");
+    assert.equal(result.snapshot.projections.timeline[0].id, "1133202860001000338");
     assert.match(result.snapshot.runtimeRevision, /^runtime:/);
     assert.equal(result.event.actor.userId, user.user.userId);
     assert.equal(result.event.artifacts[0].url, "https://git.example/mr/943");
@@ -146,9 +146,9 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     const dashboardResult = await dashboard.json();
     assert.equal(dashboard.status, 200, JSON.stringify(dashboardResult));
     assert.equal(dashboardResult.timeline.length, 1);
-    assert.equal(dashboardResult.timeline[0].key, "prd-flow:version:android-5.63.0");
+    assert.equal(dashboardResult.timeline[0].key, "prd-flow:version:1133202860001000338");
     assert.equal(dashboardResult.timeline[0].workflowCount, 1);
-    assert.equal(dashboardResult.workflows[0].timeline[0].dimensions.platform, "android");
+    assert.deepEqual(dashboardResult.workflows[0].timeline[0].dimensions.platform, ["android", "ios"]);
     assert.equal(dashboardResult.unassignedCount, 0);
 
     const replay = await request("/api/workflows/report", {

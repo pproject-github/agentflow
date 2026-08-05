@@ -75,31 +75,22 @@ function initialTimelineWindow(entries) {
 function createWorkflowDemo() {
   const versions = [
     {
-      key: "prd-flow:version:android-5.62.0",
+      key: "prd-flow:version:demo-5.62.0",
       kind: "version",
-      id: "android-5.62.0",
-      title: "Likee Android 5.62.0",
+      id: "demo-5.62.0",
+      title: "Likee Android&iOS 5.62.0",
       date: dateFromToday(-12),
       source: "prd-flow",
-      dimensions: { platform: "Android" },
+      dimensions: { platform: ["Android", "iOS"] },
     },
     {
-      key: "prd-flow:version:android-5.63.0",
+      key: "prd-flow:version:demo-5.63.0",
       kind: "version",
-      id: "android-5.63.0",
-      title: "Likee Android 5.63.0",
+      id: "demo-5.63.0",
+      title: "Likee Android&iOS 5.63.0",
       date: dateFromToday(6),
       source: "prd-flow",
-      dimensions: { platform: "Android" },
-    },
-    {
-      key: "prd-flow:version:ios-5.63.0",
-      kind: "version",
-      id: "ios-5.63.0",
-      title: "Likee iOS 5.63.0",
-      date: dateFromToday(10),
-      source: "prd-flow",
-      dimensions: { platform: "iOS" },
+      dimensions: { platform: ["Android", "iOS"] },
     },
     {
       key: "prd-flow:milestone:august-gray",
@@ -111,18 +102,18 @@ function createWorkflowDemo() {
       dimensions: { channel: "灰度" },
     },
     ...Array.from({ length: 12 }, (_, index) => ({
-      key: `prd-flow:version:android-5.${50 + index}.0`,
+      key: `prd-flow:version:demo-5.${50 + index}.0`,
       kind: "version",
-      id: `android-5.${50 + index}.0`,
+      id: `demo-5.${50 + index}.0`,
       title: `Likee Android 5.${50 + index}.0`,
       date: dateFromToday(-180 + index * 14),
       source: "prd-flow",
       dimensions: { platform: "Android" },
     })),
     ...Array.from({ length: 8 }, (_, index) => ({
-      key: `prd-flow:version:android-5.${64 + index}.0`,
+      key: `prd-flow:version:demo-5.${64 + index}.0`,
       kind: "version",
-      id: `android-5.${64 + index}.0`,
+      id: `demo-5.${64 + index}.0`,
       title: `Likee Android 5.${64 + index}.0`,
       date: dateFromToday(32 + index * 14),
       source: "prd-flow",
@@ -136,28 +127,28 @@ function createWorkflowDemo() {
       pointer: "继续实现 Android Action 与通用 Hook 多层注入平台", phase: "IMPLEMENTATION_IN_PROGRESS",
       state: "active", role: "owner", ownerUsername: "wangfang", issueCount: 2, platforms: ["android"],
       actionCount: 5, completedActionCount: 4, latestAction: { title: "Android 实现协议已确认", at: new Date().toISOString() },
-      timeline: [byKey["prd-flow:version:android-5.63.0"]], demo: true,
+      timeline: [byKey["prd-flow:version:demo-5.63.0"]], demo: true,
     },
     {
       id: "demo-2", tapdId: "1013667", title: "激励视频增收方案",
       pointer: "检查并选择 TAPD 未解决 Bug", phase: "BUG_SELECTION_READY",
       state: "blocked", role: "viewer", ownerUsername: "surujija", issueCount: 18, platforms: ["android", "ios"],
       actionCount: 33, completedActionCount: 32, latestAction: { title: "等待版本风险确认", at: new Date().toISOString() },
-      timeline: [byKey["prd-flow:version:android-5.63.0"], byKey["prd-flow:version:ios-5.63.0"]], demo: true,
+      timeline: [byKey["prd-flow:version:demo-5.63.0"]], demo: true,
     },
     {
       id: "demo-3", tapdId: "1133202860001018940", title: "Likee Android 5.62.0",
       pointer: "发版上下文已同步", phase: "RELEASED",
       state: "completed", role: "reporter", ownerUsername: "chenjunlun", issueCount: 1, platforms: ["ios"],
       actionCount: 1, completedActionCount: 1, latestAction: { title: "版本发布完成", at: dateFromToday(-12) },
-      timeline: [byKey["prd-flow:version:android-5.62.0"]], demo: true,
+      timeline: [byKey["prd-flow:version:demo-5.62.0"]], demo: true,
     },
     {
       id: "demo-4", tapdId: "1015046", title: "Remote Config 拉取频控",
       pointer: "双端方案进入提测准备", phase: "SUBMIT_TEST",
       state: "active", role: "owner", ownerUsername: "alice", issueCount: 4, platforms: ["android", "ios"],
       actionCount: 8, completedActionCount: 6, latestAction: { title: "测试用例已归档", at: new Date().toISOString() },
-      timeline: [byKey["prd-flow:version:ios-5.63.0"], byKey["prd-flow:milestone:august-gray"]], demo: true,
+      timeline: [byKey["prd-flow:version:demo-5.63.0"], byKey["prd-flow:milestone:august-gray"]], demo: true,
     },
     {
       id: "demo-5", tapdId: "1027788", title: "直播间礼物动效治理",
@@ -224,6 +215,14 @@ function workflowUrl(workflow) {
     tapdId: String(workflow?.tapdId || ""),
     returnTo: "/workflows",
   });
+  const projectBindings = Array.isArray(workflow?.projectBindings) ? workflow.projectBindings : [];
+  if (projectBindings.length === 1) {
+    const project = projectBindings[0];
+    if (project.flowId) query.set("flowId", String(project.flowId));
+    if (project.flowSource) query.set("flowSource", String(project.flowSource));
+    if (project.workspaceId) query.set("workspaceId", String(project.workspaceId));
+    if (project.archived) query.set("archived", "1");
+  }
   if (workflow?.demo) query.set("workflowDemo", "1");
   return `/workspace?${query.toString()}`;
 }
@@ -465,11 +464,23 @@ export default function WorkflowsPage() {
     });
   }, [loadEarlierTimeline, loadLaterTimeline]);
 
+  const selectedTimelineEntry = useMemo(
+    () => timeline.find((entry) => entry.key === timelineKey) || null,
+    [timeline, timelineKey],
+  );
+
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     return workflows.filter((workflow) => {
       if (timelineKey === "unassigned" && (workflow.timeline || []).length > 0) return false;
-      if (timelineKey !== "all" && timelineKey !== "unassigned" && !(workflow.timeline || []).some((entry) => entry.key === timelineKey)) return false;
+      if (timelineKey !== "all" && timelineKey !== "unassigned") {
+        const workflowId = String(workflow?.id || workflow?.tapdId || "");
+        const selectedWorkflowIds = Array.isArray(selectedTimelineEntry?.workflowIds) ? selectedTimelineEntry.workflowIds : [];
+        const belongsToSelectedTimeline = selectedWorkflowIds.length > 0
+          ? selectedWorkflowIds.includes(workflowId)
+          : (workflow.timeline || []).some((entry) => entry.key === timelineKey);
+        if (!belongsToSelectedTimeline) return false;
+      }
       if (scope === "owned" && workflow.role !== "owner") return false;
       if (scope === "collaborating" && workflow.role === "owner") return false;
       if (state !== "all" && workflow.state !== state) return false;
@@ -489,7 +500,7 @@ export default function WorkflowsPage() {
         ]),
       ].some((value) => String(value || "").toLowerCase().includes(keyword));
     });
-  }, [query, scope, state, timelineKey, workflows]);
+  }, [query, scope, selectedTimelineEntry, state, timelineKey, workflows]);
 
   return (
     <div className="af-settings-page af-workflows-page">
@@ -668,6 +679,9 @@ export default function WorkflowsPage() {
                       ))}
                       {(workflow.timeline || []).map((entry) => (
                         <span key={entry.key}>{entry.title || entry.id}</span>
+                      ))}
+                      {(workflow.projectBindings || []).map((project) => (
+                        <span key={project.workspaceId}>Project · {project.label || project.flowId}</span>
                       ))}
                       <span>Owner · {workflow.ownerUsername || workflow.ownerId || "-"}</span>
                       {view === "team" && workflow.teamName ? <span>团队 · {workflow.teamName}</span> : null}

@@ -83,7 +83,7 @@ import {
 } from "./composer-log.mjs";
 import { runNodeScript } from "./pipeline-scripts.mjs";
 import { computeNextRunAt, readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
-import { listScheduleStatuses } from "./scheduler.mjs";
+import { cancelScheduledRun, listScheduleStatuses } from "./scheduler.mjs";
 import {
   mergeWorkspaceGraphs,
   workspaceDesignRevision,
@@ -153,6 +153,7 @@ import {
 } from "./workspace-collaboration.mjs";
 import {
   addPrdWorkflowCollaborationMember,
+  bindPrdWorkflowProject,
   ensurePrdWorkflowCollaboration,
   getPrdWorkflowCollaborationById,
   getPrdWorkflowCollaborationByShareToken,
@@ -161,12 +162,14 @@ import {
   ensurePrdWorkflowShareLink,
   listPrdWorkflowCollaborationsForUser,
   listPrdWorkflowCollaborationsForTeam,
+  listPrdWorkflowProjectBindings,
   prdWorkflowCollaborationAccess,
   prdWorkflowCollaborationSummary,
   removePrdWorkflowCollaborationMember,
   revokePrdWorkflowShareLink,
   setPrdWorkflowKnowledgeBindings,
   syncPrdWorkflowAuthority,
+  unbindPrdWorkflowProject,
 } from "./prd-workflow-collaboration.mjs";
 import {
   createTeam,
@@ -3592,6 +3595,95 @@ function prdWorkflowShareLinkSummary(record, shareToken, publicBaseUrl, userId =
   };
 }
 
+function listAccessibleProjectFlows(root, userCtx = {}) {
+  const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
+    .filter((flow) => (
+      !workspaceFlowCollaborationGuard(
+        flow.id,
+        flow.source || "user",
+        flow.archived === true,
+        userCtx,
+        "read",
+      )
+    ))
+    .map((flow) => {
+      const source = flow.source || "user";
+      const collaboration = source === "workspace"
+        ? getWorkspaceCollaborationByFlow(flow.id, flow.archived === true)
+        : getWorkspaceCollaborationForProject({
+            flowId: flow.id,
+            flowSource: source,
+            archived: flow.archived === true,
+            ownerId: userCtx.userId,
+          });
+      return collaboration
+        ? { ...flow, collaboration: workspaceCollaborationSummaryWithUsers(collaboration, userCtx.userId) }
+        : flow;
+    });
+  const existingCollaborationIds = new Set(flows.map((flow) => flow.collaboration?.id).filter(Boolean));
+  for (const record of listWorkspaceCollaborationsForUser(userCtx.userId)) {
+    const source = record.projectSource || record.flowSource || "workspace";
+    if (source !== "user" || record.ownerId === userCtx.userId) continue;
+    if (existingCollaborationIds.has(record.id)) continue;
+    const ownerFlow = listFlowsJson(root, { userId: record.ownerId })
+      .find((flow) => (
+        flow.id === record.flowId
+        && (flow.source || "user") === "user"
+        && Boolean(flow.archived) === Boolean(record.archived)
+      ));
+    if (!ownerFlow) continue;
+    flows.push({
+      ...ownerFlow,
+      collaboration: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
+    });
+    existingCollaborationIds.add(record.id);
+  }
+  return flows;
+}
+
+function workflowProjectBindingRows(bindings = [], accessibleProjects = [], userCtx = {}) {
+  return (Array.isArray(bindings) ? bindings : []).flatMap((binding) => {
+    const workspaceId = String(binding?.workspaceId || "").trim();
+    if (!workspaceId) return [];
+    const project = accessibleProjects.find((flow) => String(flow?.collaboration?.id || "") === workspaceId);
+    if (!project) return [];
+    const role = String(project.collaboration?.role || "");
+    return [{
+      workspaceId,
+      flowId: String(project.id || binding.flowId || ""),
+      flowSource: String(project.source || binding.flowSource || "user"),
+      archived: project.archived === true,
+      label: String(project.id || binding.flowId || "Project"),
+      description: String(project.description || ""),
+      role: role || ((project.source || "user") === "user" ? "owner" : "editor"),
+      canManage: role === "owner" || role === "editor" || (!role && (project.source || "user") === "user"),
+      boundBy: String(binding.boundBy || ""),
+      boundAt: String(binding.boundAt || ""),
+    }];
+  });
+}
+
+function availableWorkflowBindingProjects(accessibleProjects = [], bindings = []) {
+  const bound = new Set((Array.isArray(bindings) ? bindings : []).map((item) => String(item?.workspaceId || "")).filter(Boolean));
+  return accessibleProjects
+    .filter((project) => {
+      const source = String(project?.source || "user");
+      const role = String(project?.collaboration?.role || "");
+      const workspaceId = String(project?.collaboration?.id || "");
+      return !project?.archived
+        && (source === "user" || source === "workspace")
+        && !bound.has(workspaceId)
+        && (!role || role === "owner" || role === "editor");
+    })
+    .map((project) => ({
+      flowId: String(project.id || ""),
+      flowSource: String(project.source || "user"),
+      workspaceId: String(project.collaboration?.id || ""),
+      label: String(project.id || "Project"),
+      description: String(project.description || ""),
+    }));
+}
+
 function prdWorkflowDashboardActions(snapshot = {}) {
   const rows = new Map();
   for (const field of ["actions", "workflowActions", "workflow_actions", "timeline", "history"]) {
@@ -3639,7 +3731,7 @@ function prdWorkflowDashboardTimestamp(item = {}) {
   return 0;
 }
 
-function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
+function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}, projectBindings = []) {
   const tapdId = String(record?.tapdId || snapshot?.tapdId || snapshot?.tapd_id || "").trim();
   const collaboration = prdWorkflowCollaborationSummaryWithUsers(record, userCtx?.userId) || {};
   const actions = prdWorkflowDashboardActions(snapshot);
@@ -3727,10 +3819,73 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}) {
     teamName: String(getTeamById(collaboration.teamId)?.name || ""),
     shareActive: collaboration.shareActive === true,
     updatedAt: updatedAtTimestamp ? new Date(updatedAtTimestamp).toISOString() : String(record?.updatedAt || ""),
+    projectBindings,
   };
 }
 
-function prdWorkflowDashboardTimeline(workflows = []) {
+function prdWorkflowDashboardTimelineDimensionValues(value) {
+  return (Array.isArray(value) ? value : [value])
+    .flatMap((item) => Array.isArray(item) ? item : [item])
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function prdWorkflowDashboardTimelineIdentity(entry = {}) {
+  const id = String(entry?.id || "").trim();
+  const source = String(entry?.source || "").trim().toLowerCase();
+  const kind = String(entry?.kind || "").trim().toLowerCase();
+  const dimensions = entry?.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+    ? entry.dimensions
+    : {};
+  const legacyPlatformIdentity = id.match(/^(android|ios|all)[:_-](.+)$/i);
+  const declaredPlatforms = [
+    ...prdWorkflowDashboardTimelineDimensionValues(dimensions.platform),
+    ...prdWorkflowDashboardTimelineDimensionValues(dimensions.platforms),
+  ].map((value) => value.toLowerCase());
+  if (
+    source === "prd-flow"
+    && ["version", "iteration"].includes(kind)
+    && legacyPlatformIdentity
+    && declaredPlatforms.includes(legacyPlatformIdentity[1].toLowerCase())
+  ) {
+    return legacyPlatformIdentity[2].trim().toLowerCase();
+  }
+  return id.toLowerCase();
+}
+
+function prdWorkflowDashboardTimelineGroupKey(entry = {}) {
+  const source = String(entry?.source || "").trim().toLowerCase();
+  const kind = String(entry?.kind || "").trim().toLowerCase();
+  const identity = prdWorkflowDashboardTimelineIdentity(entry);
+  const dimensions = entry?.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+    ? entry.dimensions
+    : {};
+  const nonPlatformDimensions = Object.entries(dimensions)
+    .filter(([key]) => !["platform", "platforms", "client", "clients", "os"].includes(String(key).trim().toLowerCase()))
+    .map(([key, value]) => [
+      String(key).trim().toLowerCase(),
+      prdWorkflowDashboardTimelineDimensionValues(value).map((item) => item.toLowerCase()).sort(),
+    ])
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (identity) return JSON.stringify([source, kind, identity, nonPlatformDimensions]);
+  return String(entry?.key || [entry?.source, entry?.kind, entry?.id].filter(Boolean).join(":"));
+}
+
+function prdWorkflowDashboardMergeTimelineDimensions(current = {}, incoming = {}) {
+  const out = {};
+  for (const key of new Set([...Object.keys(current || {}), ...Object.keys(incoming || {})])) {
+    const values = [
+      ...prdWorkflowDashboardTimelineDimensionValues(current?.[key]),
+      ...prdWorkflowDashboardTimelineDimensionValues(incoming?.[key]),
+    ];
+    const unique = Array.from(new Map(values.map((value) => [value.toLowerCase(), value])).values());
+    if (unique.length === 1) out[key] = unique[0];
+    else if (unique.length > 1) out[key] = unique;
+  }
+  return out;
+}
+
+export function prdWorkflowDashboardTimeline(workflows = []) {
   const buckets = new Map();
   const assignedWorkflowIds = new Set();
   const rows = [...(Array.isArray(workflows) ? workflows : [])].sort((left, right) => {
@@ -3744,14 +3899,15 @@ function prdWorkflowDashboardTimeline(workflows = []) {
     const workflowId = String(workflow?.id || workflow?.tapdId || "");
     const seen = new Set();
     for (const entry of Array.isArray(workflow?.timeline) ? workflow.timeline : []) {
-      const key = String(entry?.key || [entry?.source, entry?.kind, entry?.id].filter(Boolean).join(":"));
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
+      const memberKey = String(entry?.key || [entry?.source, entry?.kind, entry?.id].filter(Boolean).join(":"));
+      const identity = prdWorkflowDashboardTimelineIdentity(entry);
+      const groupKey = prdWorkflowDashboardTimelineGroupKey(entry);
+      if (!memberKey || !groupKey) continue;
       assignedWorkflowIds.add(workflowId);
-      const current = buckets.get(key) || {
-        key,
+      const current = buckets.get(groupKey) || {
+        key: memberKey,
         kind: String(entry.kind || ""),
-        id: String(entry.id || ""),
+        id: identity || String(entry.id || ""),
         title: String(entry.title || entry.id || ""),
         date: String(entry.date || ""),
         source: String(entry.source || ""),
@@ -3763,21 +3919,25 @@ function prdWorkflowDashboardTimeline(workflows = []) {
         completedCount: 0,
         blockedCount: 0,
         workflowIds: [],
+        memberKeys: [],
       };
       current.kind = String(entry.kind || current.kind);
-      current.id = String(entry.id || current.id);
       current.title = String(entry.title || current.title);
       current.date = String(entry.date || current.date);
       current.source = String(entry.source || current.source);
-      current.dimensions = entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
-        ? entry.dimensions
-        : current.dimensions;
+      current.dimensions = prdWorkflowDashboardMergeTimelineDimensions(current.dimensions, entry.dimensions);
       current.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : current.order;
-      current.workflowCount += 1;
-      if (workflow?.state === "completed") current.completedCount += 1;
-      if (workflow?.state === "blocked") current.blockedCount += 1;
-      current.workflowIds.push(workflowId);
-      buckets.set(key, current);
+      if (!current.memberKeys.includes(memberKey)) current.memberKeys.push(memberKey);
+      current.memberKeys.sort();
+      current.key = current.memberKeys[0] || memberKey;
+      if (!seen.has(groupKey)) {
+        seen.add(groupKey);
+        current.workflowCount += 1;
+        if (workflow?.state === "completed") current.completedCount += 1;
+        if (workflow?.state === "blocked") current.blockedCount += 1;
+        if (!current.workflowIds.includes(workflowId)) current.workflowIds.push(workflowId);
+      }
+      buckets.set(groupKey, current);
     }
   }
   const timeline = Array.from(buckets.values()).sort((left, right) => {
@@ -13227,6 +13387,7 @@ export function startUiServer({
         } else {
           records = listPrdWorkflowCollaborationsForUser(userCtx.userId);
         }
+        const accessibleProjects = listAccessibleProjectFlows(root, userCtx);
         const workflows = records.map((record) => {
           const stateRoot = path.resolve(getAgentflowUserDataRoot(record.stateOwnerId || record.ownerId));
           const tapdId = String(record.tapdId || "").trim();
@@ -13235,7 +13396,8 @@ export function startUiServer({
           const legacy = prdWorkflowReadCachedSnapshot(stateRoot, tapdId);
           const snapshot = project?.snapshot || latestClient || legacy?.snapshot || {};
           const materialized = prdWorkflowMergeRuntimeEvents(stateRoot, tapdId, snapshot);
-          return prdWorkflowDashboardSummary(record, materialized, userCtx);
+          const projectBindings = workflowProjectBindingRows(record.projectBindings, accessibleProjects, userCtx);
+          return prdWorkflowDashboardSummary(record, materialized, userCtx, projectBindings);
         });
         const dashboardTimeline = prdWorkflowDashboardTimeline(workflows);
         json(res, 200, {
@@ -13370,6 +13532,177 @@ export function startUiServer({
       json(res, 200, {
         ok: true,
         collaboration: prdWorkflowCollaborationSummaryWithUsers(record, userCtx.userId),
+      });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/workflows/project-bindings") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      const tapdId = String(url.searchParams.get("tapdId") || url.searchParams.get("id") || "").trim();
+      if (!tapdId) {
+        json(res, 400, { error: "Missing tapdId" });
+        return;
+      }
+      const existing = getPrdWorkflowCollaborationByTapdId(tapdId);
+      const result = listPrdWorkflowProjectBindings({ tapdId, userId: userCtx.userId });
+      if (existing && result.error) {
+        json(res, 403, { error: "PRD Workflow collaboration permission denied" });
+        return;
+      }
+      const accessibleProjects = listAccessibleProjectFlows(root, userCtx);
+      const bindings = workflowProjectBindingRows(result.projectBindings || [], accessibleProjects, userCtx);
+      json(res, 200, {
+        ok: true,
+        bindings,
+        availableProjects: availableWorkflowBindingProjects(accessibleProjects, bindings),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/workflows/project-bindings") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 128 * 1024));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+      const flowId = String(payload?.flowId || "").trim();
+      const flowSource = String(payload?.flowSource || "user").trim() || "user";
+      const workspaceId = String(payload?.workspaceId || "").trim();
+      if (!tapdId || !flowId) {
+        json(res, 400, { error: "Project binding requires tapdId and flowId" });
+        return;
+      }
+      if (flowSource !== "user" && flowSource !== "workspace") {
+        json(res, 400, { error: "Only editable Projects can be bound" });
+        return;
+      }
+      const existingWorkflow = getPrdWorkflowCollaborationByTapdId(tapdId);
+      if (existingWorkflow && !getPrdWorkflowCollaborationForUser(tapdId, userCtx.userId)) {
+        json(res, 403, { error: "PRD Workflow collaboration permission denied" });
+        return;
+      }
+      const scoped = resolveWorkspaceScopeRoot(root, {
+        flowId,
+        flowSource,
+        workspaceId,
+        archived: false,
+      }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
+      if (scoped.archived || (scoped.collaboration && !scoped.collaborationAccess?.writable)) {
+        json(res, 403, { error: "Only Project owners and editors can bind an iteration" });
+        return;
+      }
+      const projectCollaboration = scoped.collaboration
+        ? { record: scoped.collaboration, workspace: workspaceCollaborationSummary(scoped.collaboration, userCtx.userId) }
+        : ensureWorkspaceCollaboration({
+            flowId: scoped.flowId,
+            flowSource: scoped.flowSource,
+            archived: false,
+            userId: userCtx.userId,
+          });
+      if (projectCollaboration.error || !projectCollaboration.record?.id) {
+        json(res, projectCollaboration.status || 400, { error: projectCollaboration.error || "Project collaboration is unavailable" });
+        return;
+      }
+      const projectAccess = workspaceCollaborationAccess(projectCollaboration.record, userCtx.userId);
+      if (!projectAccess.writable) {
+        json(res, 403, { error: "Only Project owners and editors can bind an iteration" });
+        return;
+      }
+      const ensuredWorkflow = ensurePrdWorkflowCollaboration({ tapdId, userId: userCtx.userId });
+      if (ensuredWorkflow.error) {
+        json(res, ensuredWorkflow.status || 400, { error: ensuredWorkflow.error });
+        return;
+      }
+      const result = bindPrdWorkflowProject({
+        tapdId,
+        userId: userCtx.userId,
+        project: {
+          workspaceId: projectCollaboration.record.id,
+          flowId: scoped.flowId,
+          flowSource: scoped.flowSource,
+          archived: false,
+          ownerId: projectCollaboration.record.ownerId,
+        },
+      });
+      if (result.error) {
+        json(res, result.status || 400, { error: result.error });
+        return;
+      }
+      const accessibleProjects = listAccessibleProjectFlows(root, userCtx);
+      const bindings = workflowProjectBindingRows(result.projectBindings, accessibleProjects, userCtx);
+      json(res, 200, {
+        ok: true,
+        created: result.created === true,
+        bindings,
+        availableProjects: availableWorkflowBindingProjects(accessibleProjects, bindings),
+      });
+      return;
+    }
+    if (req.method === "DELETE" && url.pathname === "/api/workflows/project-bindings") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 128 * 1024));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+      const workspaceId = String(payload?.workspaceId || "").trim();
+      if (!tapdId || !workspaceId) {
+        json(res, 400, { error: "Unbinding requires tapdId and workspaceId" });
+        return;
+      }
+      const listed = listPrdWorkflowProjectBindings({ tapdId, userId: userCtx.userId });
+      if (listed.error) {
+        json(res, listed.status || 400, { error: listed.error });
+        return;
+      }
+      const binding = listed.projectBindings.find((item) => item.workspaceId === workspaceId);
+      if (!binding) {
+        json(res, 404, { error: "Project binding not found" });
+        return;
+      }
+      const scoped = resolveWorkspaceScopeRoot(root, {
+        flowId: binding.flowId,
+        flowSource: binding.flowSource,
+        workspaceId,
+        archived: binding.archived === true,
+      }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
+      if (!scoped.collaborationAccess?.writable) {
+        json(res, 403, { error: "Only Project owners and editors can unbind an iteration" });
+        return;
+      }
+      const result = unbindPrdWorkflowProject({ tapdId, userId: userCtx.userId, workspaceId });
+      if (result.error) {
+        json(res, result.status || 400, { error: result.error });
+        return;
+      }
+      const accessibleProjects = listAccessibleProjectFlows(root, userCtx);
+      const bindings = workflowProjectBindingRows(result.projectBindings, accessibleProjects, userCtx);
+      json(res, 200, {
+        ok: true,
+        bindings,
+        availableProjects: availableWorkflowBindingProjects(accessibleProjects, bindings),
       });
       return;
     }
@@ -15701,48 +16034,7 @@ export function startUiServer({
         try {
           const projectView = String(url.searchParams.get("view") || "all").trim().toLowerCase();
           const currentTeam = getTeamForUser(userCtx.userId);
-          const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
-            .filter((flow) => (
-              !workspaceFlowCollaborationGuard(
-                flow.id,
-                flow.source || "user",
-                flow.archived === true,
-                userCtx,
-                "read",
-              )
-            ))
-            .map((flow) => {
-              const source = flow.source || "user";
-              const collaboration = source === "workspace"
-                ? getWorkspaceCollaborationByFlow(flow.id, flow.archived === true)
-                : getWorkspaceCollaborationForProject({
-                  flowId: flow.id,
-                  flowSource: source,
-                  archived: flow.archived === true,
-                  ownerId: userCtx.userId,
-                });
-              return collaboration
-                ? { ...flow, collaboration: workspaceCollaborationSummaryWithUsers(collaboration, userCtx.userId) }
-                : flow;
-            });
-          const existingCollaborationIds = new Set(flows.map((flow) => flow.collaboration?.id).filter(Boolean));
-          for (const record of listWorkspaceCollaborationsForUser(userCtx.userId)) {
-            const source = record.projectSource || record.flowSource || "workspace";
-            if (source !== "user" || record.ownerId === userCtx.userId) continue;
-            if (existingCollaborationIds.has(record.id)) continue;
-            const ownerFlow = listFlowsJson(root, { userId: record.ownerId })
-              .find((flow) => (
-                flow.id === record.flowId
-                && (flow.source || "user") === "user"
-                && Boolean(flow.archived) === Boolean(record.archived)
-              ));
-            if (!ownerFlow) continue;
-            flows.push({
-              ...ownerFlow,
-              collaboration: workspaceCollaborationSummaryWithUsers(record, userCtx.userId),
-            });
-            existingCollaborationIds.add(record.id);
-          }
+          const flows = listAccessibleProjectFlows(root, userCtx);
           const visibleFlows = projectView === "team"
             ? flows.filter((flow) => (
                 currentTeam
@@ -19585,6 +19877,7 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       const flowSource = payload.flowSource || "user";
+      const requestedRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
       const collaborationDenied = workspaceFlowCollaborationGuard(
         flowId,
         flowSource,
@@ -19599,6 +19892,13 @@ finishedAt: "${new Date().toISOString()}"
       const runKey = workspaceRunKey(userCtx, flowSource, flowId);
       const entry = activeFlowRuns.get(runKey);
       if (!entry || !entry.child) {
+        if (requestedRunId) {
+          const cancelled = cancelScheduledRun(root, flowId, requestedRunId, userCtx);
+          if (cancelled.ok && cancelled.updatedWaits > 0) {
+            json(res, 200, { ok: true, cancelledWaitingRun: true, ...cancelled });
+            return;
+          }
+        }
         json(res, 404, { error: "该流水线未在运行" });
         return;
       }

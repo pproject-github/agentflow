@@ -27,6 +27,11 @@ import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealCo
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
+import {
+  ComposerAssistantActivity,
+  ComposerAssistantInput,
+  ComposerAssistantTurn,
+} from "../components/ComposerAssistant.jsx";
 import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
 import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
@@ -229,6 +234,10 @@ function flowParamsQuery(params) {
   if (params.returnTo) q.set("returnTo", params.returnTo);
   if (params.workflowDemo) q.set("workflowDemo", "1");
   return q;
+}
+
+function workflowProjectBindingKey(project = {}) {
+  return [project.workspaceId || "", project.flowSource || "user", project.flowId || ""].join("\t");
 }
 
 function readWorkflowDemoSnapshot(tapdId) {
@@ -5767,60 +5776,52 @@ function WorkspaceFilePickerModal({ files, query, onQueryChange, onSelect, onUpl
   );
 }
 
-function WorkspaceComposerThread({ messages, running, showRunningIndicator = true }) {
+function workspaceComposerActivityLabel(msg) {
+  if (msg.kind === "run-summary") return "Steps";
+  if (msg.kind === "run-log") return "Run";
+  if (msg.kind === "activity") return "Activity";
+  if (msg.kind === "prompt") return "Prompt";
+  if (msg.kind === "raw") return "Raw Trace";
+  if (msg.kind === "thinking") return "Thinking";
+  return "Activity";
+}
+
+function WorkspaceComposerThread({ messages, running, showRunningIndicator = true, technical = false }) {
+  if (technical) {
+    return (
+      <ComposerAssistantActivity
+        items={messages.map((msg, index) => ({
+          id: `${msg.kind || "activity"}-${index}-${String(msg.text || "").slice(0, 24)}`,
+          kind: msg.kind || "activity",
+          label: workspaceComposerActivityLabel(msg),
+          text: msg.text,
+        }))}
+        running={running}
+        label="执行过程"
+        defaultOpen={running}
+      />
+    );
+  }
+
   const hasBody = messages.length > 0;
   return (
-    <div className="af-composer-ai-stack af-composer-ai-stack--in-panel af-composer-thread-stack">
+    <div className="af-composer-ai-stack af-composer-ai-stack--in-panel af-composer-thread-stack af-composer-assistant-thread">
       {messages.map((msg, idx) => {
-        const role = msg.kind === "run-log" || msg.kind === "run-summary" || msg.kind === "activity" || msg.kind === "prompt" || msg.kind === "raw" || msg.kind === "thinking" || msg.kind === "result" || msg.kind === "assistant"
-          ? "reply"
-          : msg.role === "user"
-            ? "user-msg"
-            : msg.error
-              ? "error"
-              : "reply";
-        const label = msg.kind === "run-summary"
-          ? "Steps"
-          : msg.kind === "run-log"
-            ? "Run"
-            : msg.kind === "activity"
-              ? "Activity"
-              : msg.kind === "prompt"
-                ? "Prompt"
-                : msg.kind === "raw"
-                  ? "Raw Trace"
-                  : msg.kind === "thinking"
-                    ? "Thinking"
-                    : msg.kind === "result"
-                      ? "Result"
-                      : msg.kind === "assistant"
-                        ? "Response"
-                        : msg.role === "user"
-                          ? "You"
-                          : msg.error
-                            ? "Error"
-                            : "Reply";
         return (
-          <section
+          <ComposerAssistantTurn
             key={`${idx}-${msg.role}-${String(msg.text || "").slice(0, 24)}`}
-            className={`af-composer-ai-block af-composer-ai-block--${role}${msg.kind ? ` af-composer-ai-block--kind-${msg.kind}` : ""}`}
-          >
-            <div className="af-composer-ai-block-label">{label}</div>
-            <div className="af-composer-ai-block-body">{msg.text}</div>
-          </section>
+            role={msg.role === "user" ? "user" : "assistant"}
+            content={msg.text}
+            error={Boolean(msg.error)}
+            copy={!msg.error}
+          />
         );
       })}
       {showRunningIndicator && running && !hasBody ? (
-        <section className="af-composer-ai-block af-composer-ai-block--reply af-composer-ai-block--pending">
-          <div className="af-composer-ai-block-label">Reply</div>
-          <div className="af-composer-ai-block-body">Waiting...</div>
-        </section>
+        <ComposerAssistantTurn pending pendingLabel="正在理解 Workspace 并规划修改" />
       ) : null}
       {showRunningIndicator && running && hasBody ? (
-        <section className="af-composer-ai-block af-composer-ai-block--thinking">
-          <div className="af-composer-ai-block-label">Thinking</div>
-          <div className="af-composer-ai-block-body">Workspace agent is running...</div>
-        </section>
+        <ComposerAssistantTurn pending pendingLabel="仍在生成并同步 Workspace" copy={false} />
       ) : null}
     </div>
   );
@@ -5838,10 +5839,11 @@ function workspaceComposerConversationMessages(messages, running = false) {
   const fallback = [...list].reverse().find((msg) => msg?.kind === "result" || msg?.kind === "assistant" || msg?.error);
   if (fallback) return [fallback];
   if (list.length > 0 || running) {
+    if (running) return [];
     return [{
       role: "assistant",
       kind: "assistant",
-      text: running ? "正在执行，可以在完成后继续追问或要求调整。" : "运行已完成。可以在下方继续追问、要求总结或调整结果。",
+      text: "运行已完成。可以在下方继续追问、要求总结或调整结果。",
       at: 0,
     }];
   }
@@ -8455,6 +8457,13 @@ function WorkspacePageInner() {
   const [workflowPendingConfirm, setWorkflowPendingConfirm] = useState(null);
   const [workflowReviewPublishing, setWorkflowReviewPublishing] = useState(false);
   const [workflowConflict, setWorkflowConflict] = useState(null);
+  const [workflowProjectBindings, setWorkflowProjectBindings] = useState([]);
+  const [workflowAvailableProjects, setWorkflowAvailableProjects] = useState([]);
+  const [workflowProjectBindingOpen, setWorkflowProjectBindingOpen] = useState(false);
+  const [workflowProjectBindingBusy, setWorkflowProjectBindingBusy] = useState(false);
+  const [workflowProjectBindingError, setWorkflowProjectBindingError] = useState("");
+  const [workflowProjectSelection, setWorkflowProjectSelection] = useState("");
+  const [workflowProjectPendingMode, setWorkflowProjectPendingMode] = useState("workspace");
 
   const showFlowSnippetToast = useCallback((message) => {
     if (flowSnippetToastTimerRef.current) {
@@ -8694,7 +8703,8 @@ function WorkspacePageInner() {
 
   useEffect(() => {
     const syncWorkspaceModeFromUrl = () => {
-      setWorkspaceMode(new URLSearchParams(window.location.search).get("view") === "display" ? "display" : "workspace");
+      const view = new URLSearchParams(window.location.search).get("view");
+      setWorkspaceMode(view === "display" || view === "workflow" ? view : "workspace");
     };
     window.addEventListener("popstate", syncWorkspaceModeFromUrl);
     return () => window.removeEventListener("popstate", syncWorkspaceModeFromUrl);
@@ -9175,6 +9185,80 @@ function WorkspacePageInner() {
       setWorkflowLoading(false);
     }
   }, [flowParams, workflowTapdId]);
+
+  const loadWorkflowProjectBindings = useCallback(async () => {
+    const tapdId = String(workflowTapdId || "").trim();
+    if (!tapdId || flowParams.workflowShare || flowParams.workflowDemo) {
+      setWorkflowProjectBindings([]);
+      setWorkflowAvailableProjects([]);
+      return;
+    }
+    const response = await fetch(`/api/workflows/project-bindings?tapdId=${encodeURIComponent(tapdId)}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "读取 Project 绑定失败");
+    const bindings = Array.isArray(payload.bindings) ? payload.bindings : [];
+    const available = Array.isArray(payload.availableProjects) ? payload.availableProjects : [];
+    setWorkflowProjectBindings(bindings);
+    setWorkflowAvailableProjects(available);
+    setWorkflowProjectSelection((current) => (
+      available.some((project) => workflowProjectBindingKey(project) === current)
+        ? current
+        : available[0] ? workflowProjectBindingKey(available[0]) : ""
+    ));
+  }, [flowParams.workflowDemo, flowParams.workflowShare, workflowTapdId]);
+
+  const bindWorkflowProject = useCallback(async () => {
+    const project = workflowAvailableProjects.find((item) => (
+      workflowProjectBindingKey(item) === workflowProjectSelection
+    ));
+    if (!project || !workflowTapdId || workflowProjectBindingBusy) return;
+    setWorkflowProjectBindingBusy(true);
+    setWorkflowProjectBindingError("");
+    try {
+      const response = await fetch("/api/workflows/project-bindings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId: workflowTapdId, ...project }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "绑定 Project 失败");
+      const available = Array.isArray(payload.availableProjects) ? payload.availableProjects : [];
+      setWorkflowProjectBindings(Array.isArray(payload.bindings) ? payload.bindings : []);
+      setWorkflowAvailableProjects(available);
+      setWorkflowProjectSelection(available[0] ? workflowProjectBindingKey(available[0]) : "");
+    } catch (bindingError) {
+      setWorkflowProjectBindingError(String(bindingError.message || bindingError));
+    } finally {
+      setWorkflowProjectBindingBusy(false);
+    }
+  }, [workflowAvailableProjects, workflowProjectBindingBusy, workflowProjectSelection, workflowTapdId]);
+
+  const unbindWorkflowProject = useCallback(async (project) => {
+    if (!project?.workspaceId || !workflowTapdId || workflowProjectBindingBusy) return;
+    setWorkflowProjectBindingBusy(true);
+    setWorkflowProjectBindingError("");
+    try {
+      const response = await fetch("/api/workflows/project-bindings", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId: workflowTapdId, workspaceId: project.workspaceId }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "解除 Project 绑定失败");
+      const available = Array.isArray(payload.availableProjects) ? payload.availableProjects : [];
+      setWorkflowProjectBindings(Array.isArray(payload.bindings) ? payload.bindings : []);
+      setWorkflowAvailableProjects(available);
+      setWorkflowProjectSelection((current) => (
+        available.some((item) => workflowProjectBindingKey(item) === current)
+          ? current
+          : available[0] ? workflowProjectBindingKey(available[0]) : ""
+      ));
+    } catch (bindingError) {
+      setWorkflowProjectBindingError(String(bindingError.message || bindingError));
+    } finally {
+      setWorkflowProjectBindingBusy(false);
+    }
+  }, [workflowProjectBindingBusy, workflowTapdId]);
 
   const runPrdWorkflowAction = useCallback(async (actionOverride = null, options = {}) => {
     const targetAction = actionOverride && typeof actionOverride === "object" ? actionOverride : workflowSnapshot?.nextAction;
@@ -11650,6 +11734,16 @@ function WorkspacePageInner() {
   }, [isWorkflowMode]);
 
   useEffect(() => {
+    if (!isWorkflowMode) return;
+    setWorkflowProjectBindingError("");
+    void loadWorkflowProjectBindings().catch((bindingError) => {
+      setWorkflowProjectBindings([]);
+      setWorkflowAvailableProjects([]);
+      setWorkflowProjectBindingError(String(bindingError.message || bindingError));
+    });
+  }, [isWorkflowMode, loadWorkflowProjectBindings]);
+
+  useEffect(() => {
     if (!isWorkflowMode || !workflowTapdId || flowParams.workflowDemo) return undefined;
     const q = flowParamsQuery(flowParams);
     q.set("tapdId", workflowTapdId);
@@ -12178,8 +12272,34 @@ function WorkspacePageInner() {
     [edges, selectedCanvasNodeIdSet],
   );
 
+  const openWorkflowProjectView = useCallback((project, mode = "workspace") => {
+    if (!project?.flowId) return;
+    const q = flowParamsQuery({
+      ...flowParams,
+      flowId: project.flowId,
+      flowSource: project.flowSource || "user",
+      workspaceId: project.workspaceId || "",
+      archived: project.archived === true,
+      workflowShare: "",
+      workflowDemo: false,
+    });
+    const nextMode = mode === "display" ? "display" : mode === "workflow" ? "workflow" : "workspace";
+    if (nextMode !== "workspace") q.set("view", nextMode);
+    if (workflowTapdId.trim()) q.set("tapdId", workflowTapdId.trim());
+    window.location.assign(`/workspace?${q.toString()}`);
+  }, [flowParams, workflowTapdId]);
+
   const switchWorkspaceMode = useCallback((mode) => {
     const nextMode = mode === "display" ? "display" : mode === "workflow" ? "workflow" : "workspace";
+    if (isWorkflowMode && !flowParams.flowId && nextMode !== "workflow") {
+      if (workflowProjectBindings.length === 1) {
+        openWorkflowProjectView(workflowProjectBindings[0], nextMode);
+      } else {
+        setWorkflowProjectPendingMode(nextMode);
+        setWorkflowProjectBindingOpen(true);
+      }
+      return;
+    }
     setWorkspaceMode(nextMode);
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
@@ -12194,7 +12314,7 @@ function WorkspacePageInner() {
     }
     const url = `/workspace${q.toString() ? `?${q.toString()}` : ""}`;
     window.history.pushState({}, "", url);
-  }, [flowParams, workflowTapdId]);
+  }, [flowParams, isWorkflowMode, openWorkflowProjectView, workflowProjectBindings, workflowTapdId]);
 
   const addDisplayPageNode = useCallback((sourceId) => {
     const id = String(sourceId || "").trim();
@@ -13958,6 +14078,24 @@ function WorkspacePageInner() {
               <span className="af-workspace-sync-light__dot" aria-hidden />
             </span>
           ) : null}
+          {isWorkflowMode && !flowParams.workflowShare && !flowParams.workflowDemo ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn"
+              onClick={() => {
+                setWorkflowProjectPendingMode("workspace");
+                setWorkflowProjectBindingOpen(true);
+                setWorkflowProjectBindingError("");
+                void loadWorkflowProjectBindings().catch((bindingError) => {
+                  setWorkflowProjectBindingError(String(bindingError.message || bindingError));
+                });
+              }}
+              title="管理当前迭代绑定的 Projects"
+            >
+              <span className="material-symbols-outlined" aria-hidden>hub</span>
+              Projects{workflowProjectBindings.length ? ` · ${workflowProjectBindings.length}` : ""}
+            </button>
+          ) : null}
           {!isWorkflowMode && workspaceConflict ? (
             <button
               type="button"
@@ -14926,42 +15064,21 @@ function WorkspacePageInner() {
                   running={activeComposerRunning}
                   showRunningIndicator={!activeRunSession}
                 />
-                {activeComposerTechnicalMessages.length > 0 ? (
-                  <details className="af-composer-sidebar-log-details" {...(activeComposerRunning ? { open: true } : {})}>
-                    <summary>执行日志</summary>
-                    <WorkspaceComposerThread
-                      messages={activeComposerTechnicalMessages}
-                      running={false}
-                      showRunningIndicator={false}
-                    />
-                  </details>
-                ) : null}
-              </div>
-              <div className="af-composer-sidebar-input">
-                <textarea
-                  className="af-composer-sidebar-textarea"
-                  value={composerText}
-                  rows={3}
-                  onChange={(event) => setComposerText(event.target.value)}
-                  onKeyDown={(event) => {
-                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                      event.preventDefault();
-                      void submitWorkspaceAi();
-                    }
-                  }}
-                  placeholder={activeRunSession ? "继续追问、总结或要求调整这次结果" : "继续描述你想让 AI 在 workspace 中做什么"}
-                  disabled={!workspaceWritable || activeComposerRunning}
+                <WorkspaceComposerThread
+                  messages={activeComposerTechnicalMessages}
+                  running={activeComposerRunning}
+                  showRunningIndicator={false}
+                  technical
                 />
-                <button
-                  type="button"
-                  className="af-composer-sidebar-send"
-                  disabled={!workspaceWritable || activeComposerRunning || !composerText.trim()}
-                  onClick={() => void submitWorkspaceAi()}
-                  aria-label="发送 AI 对话"
-                >
-                  <span className="material-symbols-outlined" aria-hidden>arrow_upward</span>
-                </button>
               </div>
+              <ComposerAssistantInput
+                value={composerText}
+                onChange={setComposerText}
+                onSend={() => void submitWorkspaceAi()}
+                placeholder={activeRunSession ? "继续追问、总结或要求调整这次结果" : "继续描述你想让 AI 在 Workspace 中做什么"}
+                disabled={!workspaceWritable}
+                busy={activeComposerRunning}
+              />
             </div>
           </aside>
         ) : !isDisplayMode && !isWorkflowMode && nodePropDraft && selectedNode ? (
@@ -15029,6 +15146,113 @@ function WorkspacePageInner() {
             navigate("/projects");
           }}
         />
+        {workflowProjectBindingOpen && isWorkflowMode ? createPortal(
+          <div className="af-flow-snippet-modal-overlay">
+            <div className="af-flow-snippet-modal af-workflow-project-modal" role="dialog" aria-modal="true" aria-label="迭代绑定的 Projects">
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>hub</span>
+                  迭代绑定的 Projects
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  onClick={() => setWorkflowProjectBindingOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <p className="af-workflow-project-modal__lead">
+                  Workspace 和 Display 属于 Project。只有主动绑定后，全局迭代才能进入对应的 Project 视图。
+                </p>
+                {workflowProjectBindingError ? (
+                  <p className="af-workflow-project-modal__error">{workflowProjectBindingError}</p>
+                ) : null}
+                <section className="af-workflow-project-modal__section">
+                  <div className="af-workflow-project-modal__section-head">
+                    <strong>已绑定</strong>
+                    <span>{workflowProjectBindings.length}</span>
+                  </div>
+                  {workflowProjectBindings.length ? (
+                    <div className="af-workflow-project-modal__list">
+                      {workflowProjectBindings.map((project) => (
+                        <article key={project.workspaceId} className="af-workflow-project-modal__item">
+                          <div>
+                            <strong>{project.label || project.flowId}</strong>
+                            <small>{project.description || `${project.flowSource || "user"} · ${project.role || "member"}`}</small>
+                          </div>
+                          <div className="af-workflow-project-modal__actions">
+                            <button type="button" onClick={() => openWorkflowProjectView(project, "workspace")}>Workspace</button>
+                            <button type="button" onClick={() => openWorkflowProjectView(project, "display")}>Display</button>
+                            {project.canManage ? (
+                              <button
+                                type="button"
+                                className="af-workflow-project-modal__unbind"
+                                disabled={workflowProjectBindingBusy}
+                                onClick={() => void unbindWorkflowProject(project)}
+                              >
+                                解绑
+                              </button>
+                            ) : null}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="af-display-link-modal__empty">当前迭代尚未绑定 Project。</p>
+                  )}
+                </section>
+                <section className="af-workflow-project-modal__section">
+                  <div className="af-workflow-project-modal__section-head">
+                    <strong>绑定 Project</strong>
+                    <span>Owner / Editor</span>
+                  </div>
+                  {workflowAvailableProjects.length ? (
+                    <div className="af-workflow-project-modal__bind-row">
+                      <select
+                        value={workflowProjectSelection}
+                        disabled={workflowProjectBindingBusy}
+                        onChange={(event) => setWorkflowProjectSelection(event.target.value)}
+                        aria-label="选择要绑定的 Project"
+                      >
+                        {workflowAvailableProjects.map((project) => (
+                          <option key={workflowProjectBindingKey(project)} value={workflowProjectBindingKey(project)}>
+                            {project.label || project.flowId}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                        disabled={workflowProjectBindingBusy || !workflowProjectSelection}
+                        onClick={() => void bindWorkflowProject()}
+                      >
+                        {workflowProjectBindingBusy ? "处理中…" : "确认绑定"}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="af-display-link-modal__empty">没有你可编辑且尚未绑定的 Project。</p>
+                  )}
+                </section>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button type="button" className="af-flow-snippet-modal__btn" onClick={() => setWorkflowProjectBindingOpen(false)}>关闭</button>
+                {workflowProjectBindings.length === 1 ? (
+                  <button
+                    type="button"
+                    className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                    onClick={() => openWorkflowProjectView(workflowProjectBindings[0], workflowProjectPendingMode)}
+                  >
+                    {workflowProjectPendingMode === "display" ? "进入 Display" : "进入 Workspace"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
         {workspaceConflictOpen && workspaceConflict ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
             <div className="af-flow-snippet-modal af-workspace-conflict-modal" role="dialog" aria-modal="true" aria-label="解决 Workspace 冲突">

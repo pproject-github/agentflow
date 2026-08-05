@@ -12,7 +12,7 @@
  *   import { writeResult } from "./write-result.mjs";
  *   writeResult(workspaceRoot, flowName, uuid, instanceId, fields, options?)
  * fields: { status, message, finishedAt?, outputPath?, branch?, cacheNotMetReason?, elapsedMs? }
- * options: { preserveBody?: boolean, body?: string, execId?: number }
+ * options: { preserveBody?: boolean, body?: string, execId?: number, runDir?: string }
  */
 
 import fs from "fs";
@@ -53,10 +53,10 @@ function getExistingBody(resultPath) {
  * @param {string} uuid - 本次 run 的 uuid
  * @param {string} instanceId - 节点 instance id
  * @param {{ status: string, message: string, finishedAt?: string, outputPath?: string, branch?: string, cacheNotMetReason?: string, elapsedMs?: number }} fields - 必填 status、message；可选其余（elapsedMs 为节点执行耗时毫秒，供 UI 展示）
- * @param {{ preserveBody?: boolean, body?: string, execId?: number }} [options] - preserveBody：保留已有正文；body：指定正文内容；execId：本轮 execId，缺省则从 memory 读取
+ * @param {{ preserveBody?: boolean, body?: string, execId?: number, runDir?: string }} [options] - preserveBody：保留已有正文；body：指定正文内容；execId：本轮 execId，缺省则从 memory 读取；runDir：多用户调度时使用已解析的精确运行目录
  */
 export function writeResult(workspaceRoot, flowName, uuid, instanceId, fields, options = {}) {
-  const runDir = getRunDir(workspaceRoot, flowName, uuid);
+  const runDir = options.runDir || getRunDir(workspaceRoot, flowName, uuid);
   const execId = options.execId ?? loadExecId(workspaceRoot, flowName, uuid, instanceId);
   const resultBasename = intermediateResultBasename(instanceId, execId);
   const resultPath = path.join(runDir, intermediateDirForNode(instanceId), resultBasename);
@@ -114,7 +114,7 @@ export function writeResult(workspaceRoot, flowName, uuid, instanceId, fields, o
     branch: branch ?? undefined,
     cacheNotMetReason: cacheNotMetReason ?? undefined,
     resultPathRel: path.relative(runDir, resultPath),
-  });
+  }, { runDir });
 }
 
 function main() {

@@ -21,11 +21,11 @@ const LOG_FILE = "logs/log.txt";
  * @param {string} tag - 来源标识：get-ready-nodes | check-cache | pre-process | post-process | result
  * @param {string|object} message - 文本或对象（对象会 JSON.stringify）
  */
-export function logToRunTag(workspaceRoot, flowName, uuid, tag, message) {
+export function logToRunTag(workspaceRoot, flowName, uuid, tag, message, opts = {}) {
   if (!workspaceRoot || !flowName || !uuid) return;
   const text = typeof message === "string" ? message : JSON.stringify(message);
   try {
-    const runDir = getRunDir(workspaceRoot, flowName, uuid);
+    const runDir = opts.runDir || getRunDir(workspaceRoot, flowName, uuid);
     const logPath = path.join(runDir, LOG_FILE);
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const line = `[${new Date().toISOString()}] [${tag}] ${text}\n`;

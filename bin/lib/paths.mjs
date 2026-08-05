@@ -330,6 +330,7 @@ export const LOCAL_ONLY_DEFINITION_IDS = new Set([
   "tool_git_worktree_load",
   "tool_git_worktree_unload",
   "tool_gitlab_create_mr",
+  "tool_jenkins_build",
   "tool_wecom_send_group_markdown",
   "tool_wecom_send_app_markdown",
   "tool_display_share_link",

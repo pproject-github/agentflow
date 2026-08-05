@@ -477,12 +477,12 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 {
   "timeline": [{
     "kind": "version",
-    "id": "android:1133202860001000338",
-    "key": "my-adapter:version:android:1133202860001000338",
-    "title": "Likee Android 5.63.0",
+    "id": "1133202860001000338",
+    "key": "my-adapter:version:1133202860001000338",
+    "title": "Likee Android&iOS 5.63.0",
     "date": "2026-08-31",
     "source": "my-adapter",
-    "dimensions": { "platform": "android" },
+    "dimensions": { "platform": ["android", "ios"] },
     "order": 0
   }]
 }
@@ -498,6 +498,9 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `source` | 否 | 生产方 namespace |
 | `dimensions` | 否 | 不透明筛选维度，例如 platform/team |
 | `order` | 否 | 日期缺失或相同时的稳定顺序 |
+
+`id` / `key` 标识版本、Sprint 或里程碑本身，不能把平台等筛选维度拼进身份。同一迭代覆盖
+Android 和 iOS 时仍只上报一项，并在 `dimensions.platform` 中使用数组表达多平台。
 
 每个 source 最多上报 100 条合法 timeline 项；超过限制返回错误，不会截断。
 
@@ -552,7 +555,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 
 ```text
 implementation-finished:android:runtime-hook:v1
-timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
+timeline-membership:tapd-1020124:version-1133202860001000338:v1
 ```
 
 同一 `workflow + source + operation + idempotencyKey` 的重放返回 `alreadyApplied: true`，包括 `running/error/pending` Action。`report` 与 `artifact.publish` 可以安全复用同一业务 key。Publish 会返回第一次创建的预览，不会先生成一个新文件再去重。业务内容发生变化时提高语义版本或使用内容摘要；不要使用请求时间。
