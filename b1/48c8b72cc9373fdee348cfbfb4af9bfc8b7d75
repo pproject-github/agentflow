@@ -1,0 +1,36 @@
+builtin/web-ui/src/pages/WorkflowsPage.jsx
+  s_b8fd1696dd8226::t_c7794e95eb36aa 673
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_170dc675f5bfe3 18
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b8fd1696dd8226::t_c7794e95eb36aa 573-590,7450,7702
+builtin/web-ui/dist/assets/index-Bk6Ki8M5.js
+  s_b8fd1696dd8226::t_170dc675f5bfe3 1,9,25,33,37-38,40,42,44,60,65-67,69,79,93-95,98-99,181-188,192,194,197,241-242,246,250,252-256,260-261,263-265,269,271,286,288,292,300,302,306,314-320,327,341,352-353,371,380,416,443,467,511,560,564,590
+bin/lib/ui-server.mjs
+  s_b8fd1696dd8226::t_c7794e95eb36aa 3764-3765
+test/workflow-report-api.test.mjs
+  s_b8fd1696dd8226::t_c7794e95eb36aa 151-152
+test/workspace-workflow-render-contract.test.mjs
+  s_b8fd1696dd8226::t_c7794e95eb36aa 77-90
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Bt8zfrCg.js
+  s_b8fd1696dd8226::t_170dc675f5bfe3 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b148c8b72cc9373fdee348cfbfb4af9bfc8b7d75",
+  "prompts": {},
+  "logical_commit_id": "b148c8b72cc9373fdee348cfbfb4af9bfc8b7d75",
+  "sessions": {
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 9813,
+      "total_deletions": 572
+    }
+  }
+}
