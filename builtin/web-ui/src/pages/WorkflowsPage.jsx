@@ -148,7 +148,7 @@ function createWorkflowDemo() {
     {
       id: "demo-3", tapdId: "1133202860001018940", title: "Likee Android 5.62.0",
       pointer: "发版上下文已同步", phase: "RELEASED",
-      state: "completed", role: "editor", ownerUsername: "chenjunlun", issueCount: 1, platforms: ["ios"],
+      state: "completed", role: "reporter", ownerUsername: "chenjunlun", issueCount: 1, platforms: ["ios"],
       actionCount: 1, completedActionCount: 1, latestAction: { title: "版本发布完成", at: dateFromToday(-12) },
       timeline: [byKey["prd-flow:version:android-5.62.0"]], demo: true,
     },
@@ -173,7 +173,7 @@ function createWorkflowDemo() {
       pointer: index < 12 ? "历史版本事项已归档" : "等待进入版本排期",
       phase: index < 12 ? "RELEASED" : "PLANNING",
       state: index < 12 ? "completed" : "active",
-      role: index % 3 === 0 ? "owner" : "editor",
+      role: index % 3 === 0 ? "owner" : "reporter",
       ownerUsername: index % 3 === 0 ? "wangfang" : "demo-user",
       issueCount: (index % 4) + 1,
       platforms: ["android"],
@@ -199,7 +199,7 @@ function createWorkflowDemo() {
 
 function roleLabel(role) {
   if (role === "owner") return "我创建的";
-  if (role === "editor") return "协作编辑";
+  if (role === "reporter" || role === "editor") return "可上报";
   if (role === "viewer") return "只读协作";
   return "可访问";
 }

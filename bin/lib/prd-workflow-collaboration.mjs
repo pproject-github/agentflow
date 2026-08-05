@@ -4,7 +4,7 @@ import path from "path";
 import { getAgentflowDataRoot } from "./paths.mjs";
 import { getTeamForUser } from "./teams.mjs";
 
-const REGISTRY_VERSION = 1;
+const REGISTRY_VERSION = 2;
 
 function registryPath() {
   return path.join(getAgentflowDataRoot(), "collaboration", "prd-workflows.json");
@@ -49,10 +49,45 @@ function normalizeShareToken(value) {
   return String(value || "").trim();
 }
 
+function normalizeMemberRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (role === "reporter" || role === "editor") return "reporter";
+  if (role === "viewer") return "viewer";
+  return "";
+}
+
+function normalizedMemberMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([userId, role]) => [normalizeUserId(userId), normalizeMemberRole(role)])
+    .filter(([userId, role]) => userId && role));
+}
+
+function collaborationMembers(record) {
+  const ownerId = normalizeUserId(record?.ownerId);
+  const explicit = normalizedMemberMap(record?.members);
+  const derived = normalizedMemberMap(record?.derivedMembers);
+  const rows = new Map();
+  if (ownerId) rows.set(ownerId, {
+    userId: ownerId,
+    role: "owner",
+    source: String(record?.ownerSource || "legacy"),
+  });
+  for (const [userId, role] of Object.entries(derived)) {
+    if (userId === ownerId) continue;
+    rows.set(userId, { userId, role: role === "reporter" ? "reporter" : "viewer", source: "tapd" });
+  }
+  for (const [userId, role] of Object.entries(explicit)) {
+    if (userId === ownerId) continue;
+    rows.set(userId, { userId, role, source: "explicit" });
+  }
+  return [...rows.values()];
+}
+
 function publicWorkflow(record, userId = "") {
   if (!record) return null;
   const actorId = normalizeUserId(userId);
-  const members = record.members && typeof record.members === "object" ? record.members : {};
+  const members = collaborationMembers(record);
   const access = prdWorkflowCollaborationAccess(record, actorId);
   return {
     id: record.id,
@@ -61,8 +96,17 @@ function publicWorkflow(record, userId = "") {
     role: access.role,
     accessSource: access.source,
     teamId: String(record.teamId || getTeamForUser(record.ownerId)?.id || ""),
-    memberCount: Object.keys(members).length,
-    members: Object.entries(members).map(([id, role]) => ({ userId: id, role })),
+    ownerSource: String(record.ownerSource || "legacy"),
+    memberCount: members.length,
+    members,
+    authority: record.authority && typeof record.authority === "object" ? {
+      type: String(record.authority.type || ""),
+      observedAt: String(record.authority.observedAt || ""),
+      revision: String(record.authority.revision || ""),
+      unresolvedParticipants: Array.isArray(record.authority.unresolvedParticipants)
+        ? record.authority.unresolvedParticipants.map((value) => String(value || "")).filter(Boolean)
+        : [],
+    } : null,
     shareActive: Boolean(record.shareToken),
     shareCreatedAt: record.shareCreatedAt || "",
     createdAt: record.createdAt || "",
@@ -73,16 +117,26 @@ function publicWorkflow(record, userId = "") {
 export function prdWorkflowCollaborationAccess(record, userId) {
   if (!record) return { allowed: true, role: "" };
   const actorId = normalizeUserId(userId);
-  const directRole = actorId === record.ownerId ? "owner" : String(record.members?.[actorId] || "");
+  const explicitRole = normalizeMemberRole(record.members?.[actorId]);
+  const derivedRole = normalizeMemberRole(record.derivedMembers?.[actorId]);
+  const directRole = actorId === record.ownerId ? "owner" : (explicitRole || derivedRole);
   const actorTeam = getTeamForUser(actorId);
   const recordTeamId = String(record.teamId || getTeamForUser(record.ownerId)?.id || "");
   const teamRole = actorTeam?.status === "active" && actorTeam.id === recordTeamId ? "viewer" : "";
   const role = directRole || teamRole;
   return {
-    allowed: role === "owner" || role === "editor" || role === "viewer",
-    writable: role === "owner" || role === "editor",
+    allowed: role === "owner" || role === "reporter" || role === "viewer",
+    writable: role === "owner" || role === "reporter",
     role,
-    source: directRole ? "member" : teamRole ? "team" : "",
+    source: actorId === record.ownerId
+      ? String(record.ownerSource || "legacy")
+      : explicitRole
+      ? "explicit"
+      : derivedRole
+      ? "tapd"
+      : teamRole
+      ? "team"
+      : "",
     teamId: teamRole ? recordTeamId : "",
   };
 }
@@ -128,7 +182,9 @@ export function listPrdWorkflowCollaborationsForUser(userId) {
   if (!actorId) return [];
   return Object.values(readRegistry().workflows)
     .filter((record) => (
-      record?.ownerId === actorId || Boolean(record?.members?.[actorId])
+      record?.ownerId === actorId
+      || Boolean(normalizeMemberRole(record?.members?.[actorId]))
+      || Boolean(normalizeMemberRole(record?.derivedMembers?.[actorId]))
     ))
     .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
 }
@@ -159,8 +215,11 @@ export function ensurePrdWorkflowCollaboration({ tapdId, userId }) {
     id: workflowId,
     tapdId: normalizedTapdId,
     ownerId,
+    ownerSource: "legacy",
+    stateOwnerId: ownerId,
     teamId: String(getTeamForUser(ownerId)?.id || ""),
-    members: { [ownerId]: "owner" },
+    members: {},
+    derivedMembers: {},
     createdAt: now,
     updatedAt: now,
   };
@@ -229,7 +288,7 @@ export function addPrdWorkflowCollaborationMember({
   workflowId,
   userId,
   memberUserId,
-  role = "editor",
+  role = "reporter",
 }) {
   const registry = readRegistry();
   const record = registry.workflows[String(workflowId || "").trim()];
@@ -243,6 +302,10 @@ export function addPrdWorkflowCollaborationMember({
   if (targetId === record.ownerId) {
     return { workflow: publicWorkflow(record, actorId), unchanged: true };
   }
+  const normalizedRole = normalizeMemberRole(role);
+  if (!normalizedRole) {
+    return { error: "Workflow member role must be reporter or viewer", status: 400 };
+  }
   const conflicting = Object.values(registry.workflows).find((item) => (
     item?.id !== record.id
     && item?.tapdId === record.tapdId
@@ -252,10 +315,90 @@ export function addPrdWorkflowCollaborationMember({
     return { error: "该用户已经加入同一 TAPD ID 的另一个 Workflow 分享", status: 409 };
   }
   record.members = record.members && typeof record.members === "object" ? record.members : {};
-  record.members[targetId] = role === "viewer" ? "viewer" : "editor";
+  record.members[targetId] = normalizedRole;
   record.updatedAt = new Date().toISOString();
   writeRegistry(registry);
   return { workflow: publicWorkflow(record, actorId), memberUserId: targetId };
+}
+
+export function syncPrdWorkflowAuthority({
+  tapdId,
+  userId,
+  isAdmin = false,
+  authority = "tapd",
+  ownerUserId,
+  ownerIdentity = "",
+  participantUserIds = [],
+  participantIdentities = [],
+  unresolvedParticipants = [],
+  observedAt = "",
+  revision = "",
+}) {
+  const actorId = normalizeUserId(userId);
+  const normalizedTapdId = normalizeTapdId(tapdId);
+  const normalizedOwnerId = normalizeUserId(ownerUserId);
+  const authorityType = String(authority || "tapd").trim().toLowerCase();
+  if (!actorId) return { error: "Authentication required", status: 401 };
+  if (!normalizedTapdId) return { error: "Missing tapdId", status: 400 };
+  if (authorityType !== "tapd") return { error: `Unsupported Workflow authority: ${authorityType}`, status: 400 };
+  if (!normalizedOwnerId) return { error: "TAPD owner must be a registered AgentFlow user", status: 422 };
+  const normalizedObservedAt = String(observedAt || "").trim();
+  if (normalizedObservedAt && !Number.isFinite(Date.parse(normalizedObservedAt))) {
+    return { error: "observedAt must be an ISO-compatible date", status: 400 };
+  }
+
+  const registry = readRegistry();
+  let record = Object.values(registry.workflows).find((item) => item?.tapdId === normalizedTapdId) || null;
+  const previousOwnerId = normalizeUserId(record?.ownerId);
+  if (!record && actorId !== normalizedOwnerId && isAdmin !== true) {
+    return { error: "Only the TAPD owner can initialize Workflow permissions", status: 403 };
+  }
+  if (record && actorId !== previousOwnerId && isAdmin !== true) {
+    return { error: "Only the current Workflow owner or an administrator can synchronize TAPD permissions", status: 403 };
+  }
+  const storedObservedAt = String(record?.authority?.observedAt || "").trim();
+  if (storedObservedAt && normalizedObservedAt && Date.parse(normalizedObservedAt) < Date.parse(storedObservedAt)) {
+    return { error: "TAPD permission snapshot is older than the stored snapshot", status: 409 };
+  }
+
+  const now = new Date().toISOString();
+  if (!record) {
+    const workflowId = `prd_${crypto.randomBytes(12).toString("hex")}`;
+    record = {
+      id: workflowId,
+      tapdId: normalizedTapdId,
+      stateOwnerId: normalizedOwnerId,
+      members: {},
+      createdAt: now,
+    };
+    registry.workflows[workflowId] = record;
+  }
+  const participants = [...new Set(participantUserIds.map(normalizeUserId).filter(Boolean))]
+    .filter((id) => id !== normalizedOwnerId);
+  record.ownerId = normalizedOwnerId;
+  record.stateOwnerId = normalizeUserId(record.stateOwnerId || previousOwnerId || normalizedOwnerId);
+  record.ownerSource = "tapd";
+  record.teamId = String(getTeamForUser(normalizedOwnerId)?.id || "");
+  record.members = normalizedMemberMap(record.members);
+  delete record.members[normalizedOwnerId];
+  record.derivedMembers = Object.fromEntries(participants.map((id) => [id, "viewer"]));
+  record.authority = {
+    type: "tapd",
+    ownerIdentity: String(ownerIdentity || "").trim(),
+    participantIdentities: [...new Set(participantIdentities.map((value) => String(value || "").trim()).filter(Boolean))],
+    unresolvedParticipants: [...new Set(unresolvedParticipants.map((value) => String(value || "").trim()).filter(Boolean))],
+    observedAt: normalizedObservedAt || now,
+    revision: String(revision || "").trim(),
+  };
+  record.updatedAt = now;
+  writeRegistry(registry);
+  return {
+    record,
+    workflow: publicWorkflow(record, actorId),
+    created: !previousOwnerId,
+    ownerChanged: Boolean(previousOwnerId && previousOwnerId !== normalizedOwnerId),
+    previousOwnerId,
+  };
 }
 
 export function removePrdWorkflowCollaborationMember({
@@ -280,9 +423,11 @@ export function removePrdWorkflowCollaborationMember({
   delete record.members[targetId];
   record.updatedAt = new Date().toISOString();
   writeRegistry(registry);
+  const selfRemoved = targetId === actorId;
+  const stillAllowed = prdWorkflowCollaborationAccess(record, actorId).allowed;
   return {
     workflow: publicWorkflow(record, actorId),
     removedUserId: targetId,
-    left: targetId === actorId,
+    left: selfRemoved && !stillAllowed,
   };
 }

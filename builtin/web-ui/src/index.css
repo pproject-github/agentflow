@@ -7411,7 +7411,99 @@ button.af-project-card {
 }
 
 .af-display-link-modal {
-  width: min(42rem, calc(100vw - 2rem));
+  width: min(48rem, calc(100vw - 2rem));
+}
+
+.af-prd-workflow-access-panel {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(155, 126, 247, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(155, 126, 247, 0.055);
+}
+
+.af-prd-workflow-access-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.af-prd-workflow-access-panel__head > div {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.af-prd-workflow-access-panel__head strong {
+  color: rgba(245, 243, 255, 0.94);
+  font: 750 0.78rem/1.25 var(--af-headline);
+}
+
+.af-prd-workflow-access-panel__head small,
+.af-prd-workflow-access-panel__unresolved {
+  color: rgba(202, 195, 216, 0.58);
+  font-size: 0.66rem;
+}
+
+.af-prd-workflow-access-panel__head > span {
+  flex: none;
+  border-radius: 999px;
+  background: rgba(125, 207, 255, 0.1);
+  color: rgba(174, 225, 255, 0.88);
+  padding: 0.3rem 0.55rem;
+  font-size: 0.62rem;
+}
+
+.af-workspace-member-add.af-prd-workflow-member-add {
+  grid-template-columns: minmax(0, 1fr) 7rem auto;
+}
+
+.af-prd-workflow-member-add select,
+.af-prd-workflow-member-actions select {
+  min-width: 0;
+  height: 2.35rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(125, 207, 255, 0.22);
+  border-radius: 0.45rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  padding: 0 0.55rem;
+  outline: none;
+}
+
+.af-prd-workflow-member-actions {
+  display: flex !important;
+  align-items: center;
+  grid-template-columns: none !important;
+  gap: 0.4rem !important;
+}
+
+.af-prd-workflow-member-actions select {
+  width: 6.5rem;
+  height: 1.9rem;
+  font-size: 0.66rem;
+}
+
+.af-prd-workflow-access-panel__unresolved {
+  margin: 0;
+  color: #f5c97a;
+}
+
+.af-prd-workflow-share-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: rgba(202, 195, 216, 0.5);
+  font-size: 0.64rem;
+}
+
+.af-prd-workflow-share-divider::before,
+.af-prd-workflow-share-divider::after {
+  height: 1px;
+  flex: 1;
+  background: rgba(202, 195, 216, 0.1);
+  content: "";
 }
 
 .af-display-link-modal__url {
@@ -20819,6 +20911,10 @@ button.af-exec-history-card {
 
 .af-display-share-modal {
   width: min(36rem, calc(100vw - 2rem));
+}
+
+.af-display-share-modal.af-display-link-modal {
+  width: min(48rem, calc(100vw - 2rem));
 }
 
 .af-workspace-conflict-modal {

@@ -14,6 +14,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
   const workspaceRoot = path.join(tempRoot, "project");
   const reportPath = path.join(tempRoot, "workflow-report.json");
   const artifactPath = path.join(tempRoot, "workflow-artifact.json");
+  const accessPath = path.join(tempRoot, "workflow-access.json");
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.writeFileSync(reportPath, JSON.stringify({
     source: "cli-test",
@@ -62,6 +63,15 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
     artifactLabel: "CLI Markdown 预览",
     durability: "temporary",
   }), "utf8");
+  fs.writeFileSync(accessPath, JSON.stringify({
+    authority: {
+      type: "tapd",
+      owner: "cli-workflow-reporter",
+      participants: ["cli-viewer"],
+      observedAt: "2026-08-05T08:00:00.000Z",
+      revision: "cli-access-r1",
+    },
+  }), "utf8");
 
   const previousHome = process.env.AGENTFLOW_HOME;
   process.env.AGENTFLOW_HOME = dataRoot;
@@ -73,6 +83,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
       import(`../bin/lib/ui-server.mjs?agentflow-cli-workflow=${nonce}`),
     ]);
     const user = loginOrCreateUser("cli-workflow-reporter", "reporter-password");
+    loginOrCreateUser("cli-viewer", "viewer-password");
     server = await startUiServer({
       workspaceRoot,
       host: "127.0.0.1",
@@ -85,6 +96,18 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
       "--base-url", `http://127.0.0.1:${address.port}`,
       "--token", user.token,
     ];
+
+    const access = await execFileAsync(process.execPath, [
+      cliPath,
+      "workflow-access-sync",
+      "--workflow", "tapd:1015046",
+      "--file", accessPath,
+      ...commonArgs,
+    ]);
+    const accessPayload = JSON.parse(access.stdout);
+    assert.equal(accessPayload.ok, true);
+    assert.equal(accessPayload.collaboration.ownerSource, "tapd");
+    assert.equal(accessPayload.matchedParticipants[0].username, "cli-viewer");
 
     const report = await execFileAsync(process.execPath, [
       cliPath,

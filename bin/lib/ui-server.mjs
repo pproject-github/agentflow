@@ -165,6 +165,7 @@ import {
   prdWorkflowCollaborationSummary,
   removePrdWorkflowCollaborationMember,
   revokePrdWorkflowShareLink,
+  syncPrdWorkflowAuthority,
 } from "./prd-workflow-collaboration.mjs";
 import {
   createTeam,
@@ -3337,6 +3338,21 @@ function findWorkspaceShareUser(username) {
     }
   }
   return null;
+}
+
+function workflowAuthorityIdentity(value) {
+  if (typeof value === "string" || typeof value === "number") return String(value || "").trim();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return String(value.username || value.userId || value.user_id || value.nick || value.name || "").trim();
+}
+
+function workflowAuthorityIdentities(value) {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return [...new Set(values.flatMap((item) => {
+    if (typeof item === "string") return item.split(/[;,，；]/).map((entry) => entry.trim()).filter(Boolean);
+    const identity = workflowAuthorityIdentity(item);
+    return identity ? [identity] : [];
+  }))];
 }
 
 function workspaceCollaborationSummaryWithUsers(record, userId) {
@@ -7870,7 +7886,8 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     return { error: "PRD Workflow collaboration edit permission denied", status: 403 };
   }
   const ownerId = String(adminOwner?.userId || collaboration?.ownerId || userCtx?.userId || "").trim();
-  const stateRoot = path.resolve(getAgentflowUserDataRoot(ownerId));
+  const stateOwnerId = String(adminOwner?.userId || collaboration?.stateOwnerId || collaboration?.ownerId || userCtx?.userId || "").trim();
+  const stateRoot = path.resolve(getAgentflowUserDataRoot(stateOwnerId));
   let executionRoot = path.resolve(workspaceRoot);
   if (flowId) {
     const projectScope = resolveWorkspaceScopeRoot(workspaceRoot, {
@@ -7892,6 +7909,7 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     executionRoot,
     stateRoot,
     ownerId,
+    stateOwnerId,
     collaboration,
     collaborationAccess: access,
     shareToken,
@@ -7908,7 +7926,7 @@ function prdWorkflowKey(userCtx = {}, flowSource = "user", flowId = "", tapdId =
   const collaboration = getPrdWorkflowCollaborationByShareToken(shareToken)
     || getPrdWorkflowCollaborationForUser(id, userCtx?.userId);
   const adminOwnerId = userCtx?.isAdmin === true ? String(userCtx?.adminOwnerId || "").trim() : "";
-  const actorScope = `user:${String(collaboration?.ownerId || adminOwnerId || userCtx?.userId || "")}`;
+  const actorScope = `user:${String(collaboration?.stateOwnerId || collaboration?.ownerId || adminOwnerId || userCtx?.userId || "")}`;
   return [actorScope, id].join("\t");
 }
 
@@ -12928,6 +12946,95 @@ export function startUiServer({
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/api/workflows/access/sync") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 256 * 1024));
+      } catch (error) {
+        json(res, error?.status === 413 ? 413 : 400, { error: error?.status === 413 ? error.message : "Invalid JSON body" });
+        return;
+      }
+      try {
+        const workflow = normalizeWorkflowReference(payload);
+        if (workflow.error) {
+          json(res, 400, { error: workflow.error });
+          return;
+        }
+        if (workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported Workflow authority namespace: ${workflow.namespace}` });
+          return;
+        }
+        const authorityPayload = payload?.authority && typeof payload.authority === "object" && !Array.isArray(payload.authority)
+          ? payload.authority
+          : {};
+        const authorityType = String(authorityPayload.type || payload.authorityType || "tapd").trim().toLowerCase();
+        const ownerIdentity = workflowAuthorityIdentity(authorityPayload.owner ?? payload.owner);
+        const participantIdentities = workflowAuthorityIdentities(authorityPayload.participants ?? payload.participants);
+        if (!ownerIdentity) {
+          json(res, 400, { error: "authority.owner is required" });
+          return;
+        }
+        const ownerUser = findWorkspaceShareUser(ownerIdentity);
+        if (!ownerUser) {
+          json(res, 422, {
+            error: "TAPD owner has not registered or logged in to AgentFlow",
+            owner: ownerIdentity,
+          });
+          return;
+        }
+        const resolvedParticipants = [];
+        const unresolvedParticipants = [];
+        for (const identity of participantIdentities) {
+          const user = findWorkspaceShareUser(identity);
+          if (user) resolvedParticipants.push(user);
+          else unresolvedParticipants.push(identity);
+        }
+        const result = syncPrdWorkflowAuthority({
+          tapdId: workflow.id,
+          userId: userCtx.userId,
+          isAdmin: userCtx.isAdmin === true,
+          authority: authorityType,
+          ownerUserId: ownerUser.userId,
+          ownerIdentity,
+          participantUserIds: resolvedParticipants.map((user) => user.userId),
+          participantIdentities,
+          unresolvedParticipants,
+          observedAt: authorityPayload.observedAt || authorityPayload.observed_at || payload.observedAt || payload.observed_at,
+          revision: authorityPayload.revision || payload.revision,
+        });
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        const collaboration = prdWorkflowCollaborationSummaryWithUsers(result.record, userCtx.userId);
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, "", "", workflow.id), {
+          type: "authority.synced",
+          tapdId: workflow.id,
+          ownerId: result.record.ownerId,
+        });
+        json(res, 200, {
+          ok: true,
+          workflow,
+          created: result.created === true,
+          ownerChanged: result.ownerChanged === true,
+          collaboration,
+          matchedParticipants: resolvedParticipants.map((user) => ({
+            userId: user.userId,
+            username: user.username,
+            role: "viewer",
+            source: "tapd",
+          })),
+          unresolvedParticipants,
+        });
+      } catch (error) {
+        json(res, 500, { error: (error && error.message) || String(error) });
+      }
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/prd-workflows") {
       if (!authUser?.userId) {
         json(res, 401, { error: "Unauthorized" });
@@ -12951,7 +13058,7 @@ export function startUiServer({
           records = listPrdWorkflowCollaborationsForUser(userCtx.userId);
         }
         const workflows = records.map((record) => {
-          const stateRoot = path.resolve(getAgentflowUserDataRoot(record.ownerId));
+          const stateRoot = path.resolve(getAgentflowUserDataRoot(record.stateOwnerId || record.ownerId));
           const tapdId = String(record.tapdId || "").trim();
           const project = prdWorkflowReadProjectState(stateRoot, tapdId);
           const latestClient = prdWorkflowLatestClientSnapshot(stateRoot, stateRoot, tapdId);
@@ -13144,7 +13251,12 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           collaboration: prdWorkflowCollaborationSummaryWithUsers(record, userCtx.userId),
-          member: { userId: targetUser.userId, username: targetUser.username, role: "editor" },
+          member: {
+            userId: targetUser.userId,
+            username: targetUser.username,
+            role: payload?.role === "viewer" ? "viewer" : "reporter",
+            source: "explicit",
+          },
         });
       } catch (error) {
         json(res, 400, { error: (error && error.message) || String(error) });

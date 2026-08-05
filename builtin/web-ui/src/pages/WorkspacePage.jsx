@@ -7357,6 +7357,7 @@ function PrdWorkflowTimelinePanel({
   flowParams = {},
   tapdId,
   setTapdId,
+  collaborationOpenRequest = 0,
   snapshot,
   loading,
   error,
@@ -7380,6 +7381,11 @@ function PrdWorkflowTimelinePanel({
   const [shareCanCreate, setShareCanCreate] = useState(false);
   const [shareCopyState, setShareCopyState] = useState("");
   const [sharing, setSharing] = useState(null);
+  const [accessCollaboration, setAccessCollaboration] = useState(null);
+  const [memberUsername, setMemberUsername] = useState("");
+  const [memberRole, setMemberRole] = useState("reporter");
+  const [memberBusy, setMemberBusy] = useState(false);
+  const [memberRemovingId, setMemberRemovingId] = useState("");
   const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
   const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
   const issueGroups = prdWorkflowIssueGroups(snapshot);
@@ -7413,6 +7419,7 @@ function PrdWorkflowTimelinePanel({
     const id = String(tapdId || "").trim();
     if (!id) {
       setSharing(null);
+      setAccessCollaboration(null);
       return;
     }
     setShareLoading(true);
@@ -7421,9 +7428,16 @@ function PrdWorkflowTimelinePanel({
     try {
       const query = new URLSearchParams({ tapdId: id });
       if (flowParams.workflowShare) query.set("workflowShare", flowParams.workflowShare);
-      const response = await fetch(`/api/prd-workflow/share?${query.toString()}`);
-      const payload = await response.json().catch(() => ({}));
+      const [response, collaborationResponse] = await Promise.all([
+        fetch(`/api/prd-workflow/share?${query.toString()}`),
+        fetch(`/api/prd-workflow/collaboration?tapdId=${encodeURIComponent(id)}`),
+      ]);
+      const [payload, collaborationPayload] = await Promise.all([
+        response.json().catch(() => ({})),
+        collaborationResponse.json().catch(() => ({})),
+      ]);
       if (!response.ok) throw new Error(payload.error || "读取 Workflow 分享状态失败");
+      if (collaborationResponse.ok) setAccessCollaboration(collaborationPayload.collaboration || null);
       let share = payload.share || null;
       const canCreate = payload.canCreate === true && !flowParams.workflowShare;
       setShareCanCreate(canCreate);
@@ -7436,6 +7450,11 @@ function PrdWorkflowTimelinePanel({
         const createPayload = await createResponse.json().catch(() => ({}));
         if (!createResponse.ok) throw new Error(createPayload.error || "生成 Workflow 分享链接失败");
         share = createPayload.share || null;
+        if (!collaborationPayload.collaboration) {
+          const createdCollaborationResponse = await fetch(`/api/prd-workflow/collaboration?tapdId=${encodeURIComponent(id)}`);
+          const createdCollaborationPayload = await createdCollaborationResponse.json().catch(() => ({}));
+          if (createdCollaborationResponse.ok) setAccessCollaboration(createdCollaborationPayload.collaboration || null);
+        }
       }
       setSharing(share);
     } catch (shareLoadError) {
@@ -7444,10 +7463,16 @@ function PrdWorkflowTimelinePanel({
       setShareLoading(false);
     }
   }, [flowParams, tapdId]);
-  const openSharing = () => {
+  const lastCollaborationOpenRequestRef = useRef(0);
+  const openSharing = useCallback(() => {
     setShareOpen(true);
     void loadSharing();
-  };
+  }, [loadSharing]);
+  useEffect(() => {
+    if (!collaborationOpenRequest || collaborationOpenRequest === lastCollaborationOpenRequestRef.current) return;
+    lastCollaborationOpenRequestRef.current = collaborationOpenRequest;
+    openSharing();
+  }, [collaborationOpenRequest, openSharing]);
   const createSharingLink = async () => {
     if (!tapdId || shareBusy || flowParams.workflowShare) return;
     setShareBusy(true);
@@ -7463,6 +7488,9 @@ function PrdWorkflowTimelinePanel({
       if (!response.ok) throw new Error(payload.error || "生成 Workflow 分享链接失败");
       setSharing(payload.share || null);
       setShareCanCreate(true);
+      const collaborationResponse = await fetch(`/api/prd-workflow/collaboration?tapdId=${encodeURIComponent(tapdId)}`);
+      const collaborationPayload = await collaborationResponse.json().catch(() => ({}));
+      if (collaborationResponse.ok) setAccessCollaboration(collaborationPayload.collaboration || null);
     } catch (shareCreateError) {
       setShareError(String(shareCreateError.message || shareCreateError));
     } finally {
@@ -7494,7 +7522,49 @@ function PrdWorkflowTimelinePanel({
       setShareBusy(false);
     }
   };
+  const saveWorkflowMember = async (username = memberUsername, role = memberRole) => {
+    const identity = String(username || "").trim();
+    if (!tapdId || !identity || memberBusy) return;
+    setMemberBusy(true);
+    setShareError("");
+    try {
+      const response = await fetch("/api/prd-workflow/collaboration/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, username: identity, role }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "更新成员权限失败");
+      setAccessCollaboration(payload.collaboration || null);
+      setMemberUsername("");
+    } catch (memberError) {
+      setShareError(String(memberError.message || memberError));
+    } finally {
+      setMemberBusy(false);
+    }
+  };
+  const removeWorkflowMember = async (member) => {
+    const memberUserId = String(member?.userId || "").trim();
+    if (!tapdId || !memberUserId || memberRemovingId) return;
+    setMemberRemovingId(memberUserId);
+    setShareError("");
+    try {
+      const response = await fetch("/api/prd-workflow/collaboration/share", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, memberUserId }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "移除成员授权失败");
+      setAccessCollaboration(payload.collaboration || null);
+    } catch (memberError) {
+      setShareError(String(memberError.message || memberError));
+    } finally {
+      setMemberRemovingId("");
+    }
+  };
   const sharingUrl = sharing?.shortUrl || sharing?.url || "";
+  const canManageMembers = accessCollaboration?.role === "owner";
   return (
     <main className="af-prd-workflow af-prd-workflow--timeline" aria-label="PRD Workflow">
       <section className="af-prd-workflow__statusbar">
@@ -7552,10 +7622,6 @@ function PrdWorkflowTimelinePanel({
             <button type="submit" disabled={loading}>
               <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "sync"}</span>
               {loading ? "读取中" : tapdId ? "刷新" : "读取"}
-            </button>
-            <button type="button" disabled={!tapdId || flowParams.workflowDemo} onClick={openSharing} title={flowParams.workflowDemo ? "本地示例不可分享" : "分享 Workflow"}>
-              <span className="material-symbols-outlined" aria-hidden>share</span>
-              分享
             </button>
           </div>
         </form>
@@ -7814,19 +7880,98 @@ function PrdWorkflowTimelinePanel({
       </section>
       {shareOpen ? createPortal(
         <div className="af-flow-snippet-modal-overlay">
-          <div className="af-flow-snippet-modal af-display-share-modal af-display-link-modal" role="dialog" aria-modal="true" aria-label="分享需求 Workflow">
+          <div className="af-flow-snippet-modal af-display-share-modal af-display-link-modal" role="dialog" aria-modal="true" aria-label="需求协作">
             <div className="af-flow-snippet-modal__head">
               <span className="af-flow-snippet-modal__title">
-                <span className="material-symbols-outlined" aria-hidden>share</span>
-                分享需求 Workflow
+                <span className="material-symbols-outlined" aria-hidden>group_add</span>
+                需求协作
               </span>
               <button type="button" className="af-flow-snippet-modal__close" onClick={() => setShareOpen(false)} aria-label="关闭">
                 <span className="material-symbols-outlined" aria-hidden>close</span>
               </button>
             </div>
             <div className="af-flow-snippet-modal__body">
+              <section className="af-prd-workflow-access-panel" aria-label="Workflow 成员权限">
+                <div className="af-prd-workflow-access-panel__head">
+                  <div>
+                    <strong>成员权限</strong>
+                    <small>TAPD Owner 自动管理；TAPD 参与人默认只读</small>
+                  </div>
+                  {accessCollaboration?.authority?.type === "tapd" ? <span>TAPD 已同步</span> : <span>待 TAPD 同步</span>}
+                </div>
+                {canManageMembers ? (
+                  <div className="af-workspace-member-add af-prd-workflow-member-add">
+                    <input
+                      type="text"
+                      value={memberUsername}
+                      onChange={(event) => setMemberUsername(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && memberUsername.trim() && !memberBusy) {
+                          event.preventDefault();
+                          void saveWorkflowMember();
+                        }
+                      }}
+                      placeholder="输入 AgentFlow 用户名"
+                      aria-label="成员用户名"
+                    />
+                    <select value={memberRole} onChange={(event) => setMemberRole(event.target.value)} aria-label="成员权限">
+                      <option value="reporter">可上报</option>
+                      <option value="viewer">只读</option>
+                    </select>
+                    <button type="button" disabled={memberBusy || !memberUsername.trim()} onClick={() => void saveWorkflowMember()}>
+                      {memberBusy ? "保存中..." : "保存权限"}
+                    </button>
+                  </div>
+                ) : null}
+                <div className="af-workspace-member-list">
+                  {(accessCollaboration?.members || []).map((member) => {
+                    const isOwner = member.role === "owner" || member.userId === accessCollaboration?.ownerId;
+                    const isExplicit = member.source === "explicit";
+                    const roleLabel = isOwner
+                      ? "需求 Owner"
+                      : member.role === "reporter"
+                      ? "可上报"
+                      : member.source === "tapd"
+                      ? "TAPD 参与人 · 只读"
+                      : "只读";
+                    return (
+                      <div className="af-workspace-member-row" key={member.userId}>
+                        <span className="material-symbols-outlined" aria-hidden>{isOwner ? "shield_person" : "person"}</span>
+                        <div>
+                          <strong>{member.username || member.userId}</strong>
+                          <small>{roleLabel}</small>
+                        </div>
+                        {canManageMembers && !isOwner ? (
+                          <div className="af-prd-workflow-member-actions">
+                            <select
+                              value={member.role === "reporter" ? "reporter" : "viewer"}
+                              disabled={memberBusy || Boolean(memberRemovingId)}
+                              onChange={(event) => void saveWorkflowMember(member.username || member.userId, event.target.value)}
+                              aria-label={`${member.username || member.userId} 的权限`}
+                            >
+                              <option value="reporter">可上报</option>
+                              <option value="viewer">只读</option>
+                            </select>
+                            {isExplicit ? (
+                              <button type="button" disabled={memberRemovingId === member.userId} onClick={() => void removeWorkflowMember(member)}>
+                                {memberRemovingId === member.userId ? "移除中..." : "移除授权"}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+                {accessCollaboration?.authority?.unresolvedParticipants?.length ? (
+                  <p className="af-prd-workflow-access-panel__unresolved">
+                    尚未匹配 AgentFlow 账号：{accessCollaboration.authority.unresolvedParticipants.join("、")}
+                  </p>
+                ) : null}
+              </section>
+              <div className="af-prd-workflow-share-divider"><span>只读链接</span></div>
               <p className="af-display-link-modal__empty">
-                通过只读链接分享 TAPD {tapdId} 的需求流程；不会分享当前 Project、画布或项目文件。
+                通过链接分享 TAPD {tapdId}；不会授予上报权限，也不会分享当前 Project、画布或项目文件。
               </p>
               {shareLoading ? <div className="af-display-link-modal__empty">正在生成分享链接...</div> : null}
               {!shareLoading && sharingUrl ? (
@@ -8053,6 +8198,7 @@ function WorkspacePageInner() {
   const [workspaceShareTeam, setWorkspaceShareTeam] = useState(null);
   const [workspaceShareTeamRole, setWorkspaceShareTeamRole] = useState("viewer");
   const [workspaceShareTeamBusy, setWorkspaceShareTeamBusy] = useState(false);
+  const [workflowCollaborationOpenRequest, setWorkflowCollaborationOpenRequest] = useState(0);
   const [workspaceConflict, setWorkspaceConflict] = useState(null);
   const [workspaceConflictOpen, setWorkspaceConflictOpen] = useState(false);
   const [workspaceConflictChoices, setWorkspaceConflictChoices] = useState({});
@@ -13653,14 +13799,26 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-workspace-display-share-btn"
-            disabled={!workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
-            onClick={openWorkspaceShareDialog}
-            title={workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
-              ? "仅 Workspace 所有者可以创建邀请"
-              : "邀请其他成员协作编辑"}
+            disabled={isWorkflowMode
+              ? !workflowTapdId
+              : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
+            onClick={() => {
+              if (isWorkflowMode) {
+                setWorkflowCollaborationOpenRequest((request) => request + 1);
+              } else {
+                openWorkspaceShareDialog();
+              }
+            }}
+            title={isWorkflowMode
+              ? !workflowTapdId
+                ? "先读取一个 TAPD 需求"
+                : "管理当前需求的成员权限和只读链接"
+              : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
+                ? "仅 Workspace 所有者可以管理项目协作"
+                : "管理项目的团队和成员协作"}
           >
             <span className="material-symbols-outlined" aria-hidden>group_add</span>
-            协作分享
+            协作
           </button>
           {!adminReview ? (
             <button
@@ -14023,6 +14181,7 @@ function WorkspacePageInner() {
             flowParams={flowParams}
             tapdId={workflowTapdId}
             setTapdId={setWorkflowTapdId}
+            collaborationOpenRequest={workflowCollaborationOpenRequest}
             snapshot={workflowSnapshot}
             loading={workflowLoading}
             error={workflowError}
@@ -15062,11 +15221,11 @@ function WorkspacePageInner() {
         ) : null}
         {workspaceShareOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
-            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="协作分享">
+            <div className="af-flow-snippet-modal af-display-share-modal" role="dialog" aria-modal="true" aria-label="项目协作">
               <div className="af-flow-snippet-modal__head">
                 <span className="af-flow-snippet-modal__title">
                   <span className="material-symbols-outlined" aria-hidden>group_add</span>
-                  协作分享
+                  项目协作
                 </span>
                 <button
                   type="button"
