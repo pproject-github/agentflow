@@ -4,7 +4,7 @@ import path from "path";
 import { getAgentflowDataRoot } from "./paths.mjs";
 import { getTeamForUser } from "./teams.mjs";
 
-const REGISTRY_VERSION = 2;
+const REGISTRY_VERSION = 3;
 
 function registryPath() {
   return path.join(getAgentflowDataRoot(), "collaboration", "prd-workflows.json");
@@ -63,6 +63,26 @@ function normalizedMemberMap(value) {
     .filter(([userId, role]) => userId && role));
 }
 
+function normalizeKnowledgeBindings(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const workspaceId = String(entry.workspaceId || entry.id || "").trim();
+    if (!workspaceId || seen.has(workspaceId)) return [];
+    seen.add(workspaceId);
+    return [{
+      workspaceId,
+      label: String(entry.label || workspaceId).trim() || workspaceId,
+      kind: String(entry.kind || "git").trim().toLowerCase(),
+      type: String(entry.type || "knowledge").trim().toLowerCase(),
+      branch: String(entry.branch || "").trim(),
+      boundBy: normalizeUserId(entry.boundBy),
+      boundAt: String(entry.boundAt || "").trim(),
+    }];
+  });
+}
+
 function collaborationMembers(record) {
   const ownerId = normalizeUserId(record?.ownerId);
   const explicit = normalizedMemberMap(record?.members);
@@ -107,6 +127,7 @@ function publicWorkflow(record, userId = "") {
         ? record.authority.unresolvedParticipants.map((value) => String(value || "")).filter(Boolean)
         : [],
     } : null,
+    knowledgeBindings: normalizeKnowledgeBindings(record.knowledgeBindings),
     shareActive: Boolean(record.shareToken),
     shareCreatedAt: record.shareCreatedAt || "",
     createdAt: record.createdAt || "",
@@ -230,6 +251,31 @@ export function ensurePrdWorkflowCollaboration({ tapdId, userId }) {
 
 export function prdWorkflowCollaborationSummary(record, userId) {
   return publicWorkflow(record, userId);
+}
+
+export function setPrdWorkflowKnowledgeBindings({ tapdId, userId, bindings = [] }) {
+  const record = getPrdWorkflowCollaborationForUser(tapdId, userId);
+  if (!record) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const actorId = normalizeUserId(userId);
+  if (prdWorkflowCollaborationAccess(record, actorId).role !== "owner") {
+    return { error: "Only the Workflow owner can manage knowledge bindings", status: 403 };
+  }
+  const registry = readRegistry();
+  const stored = registry.workflows[record.id];
+  if (!stored) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const now = new Date().toISOString();
+  stored.knowledgeBindings = normalizeKnowledgeBindings(bindings).map((binding) => ({
+    ...binding,
+    boundBy: actorId,
+    boundAt: binding.boundAt || now,
+  }));
+  stored.updatedAt = now;
+  writeRegistry(registry);
+  return {
+    record: stored,
+    workflow: publicWorkflow(stored, actorId),
+    knowledgeBindings: normalizeKnowledgeBindings(stored.knowledgeBindings),
+  };
 }
 
 export function ensurePrdWorkflowShareLink({ tapdId, userId }) {

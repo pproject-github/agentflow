@@ -862,6 +862,10 @@ export default function WorkflowReportGuidePage() {
             <article><strong>业务节点与技术日志分离</strong><p>Action 只表达可理解的阶段。轮询、重试、刷新留在接入方日志，不污染时间轴。</p></article>
             <article><strong>通用存储与专用渲染分离</strong><p>extensions 可以保存任意生产方结构，但专用面板必须显式注册 schema 和 renderer。</p></article>
           </div>
+          <div className="af-wr-callout">
+            <span className="material-symbols-outlined" aria-hidden>psychology</span>
+            <p><strong>Workflow AI 不属于 Report 协议。</strong>需求 Owner 在详情页“协作 → AI 知识工作区”绑定平台已有的 Git 知识工作区；成员通过顶部 AI 提问。AgentFlow 会把当前 Workflow snapshot 与隔离的 detached commit 快照一并交给 AI：优先使用上报且能匹配仓库的 commit/ref，否则使用绑定分支或本地 HEAD。它不会 fetch、切换或修改真实仓库，公开只读链接也不能调用 AI。绑定配置由 <code>GET/PUT /api/workflows/knowledge-bindings</code> 管理，问答使用 <code>POST /api/workflows/query</code>，不会写入 <code>globalState</code>、Action、Artifact 或 extensions。</p>
+          </div>
         </section>
 
         <section className="af-wr-section af-wr-ai" id="ai">

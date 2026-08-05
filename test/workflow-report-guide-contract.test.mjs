@@ -81,6 +81,9 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(page, /prd-flow 仅作为 TAPD 研发场景的参考实现/);
   assert.match(page, /read → merge → report → verify/);
   assert.match(page, /保留其他生产方条目/);
+  assert.match(page, /Workflow AI 不属于 Report 协议/);
+  assert.match(page, /\/api\/workflows\/knowledge-bindings/);
+  assert.match(page, /POST \/api\/workflows\/query/);
   assert.match(css, /\.af-wr-page\s*\{/);
   assert.match(css, /\.af-wr-endpoint-grid\s*\{/);
   assert.match(css, /\.af-wr-region-grid\s*\{/);

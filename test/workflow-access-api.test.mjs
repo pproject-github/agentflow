@@ -9,6 +9,8 @@ test("Workflow access sync derives TAPD viewers and preserves state across owner
   const dataRoot = path.join(tempRoot, "data");
   const workspaceRoot = path.join(tempRoot, "workspace");
   fs.mkdirSync(workspaceRoot, { recursive: true });
+  const knowledgeRoot = path.join(tempRoot, "knowledge");
+  fs.mkdirSync(knowledgeRoot, { recursive: true });
   const previousHome = process.env.AGENTFLOW_HOME;
   process.env.AGENTFLOW_HOME = dataRoot;
   let server;
@@ -66,6 +68,40 @@ test("Workflow access sync derives TAPD viewers and preserves state across owner
       syncedPayload.collaboration.members.find((member) => member.username === "tapd-participant")?.role,
       "viewer",
     );
+
+    fs.writeFileSync(path.join(dataRoot, "workspaces.json"), JSON.stringify({
+      version: 1,
+      workspaces: [{ id: "mobile", label: "Mobile", kind: "local", path: knowledgeRoot, type: "code" }],
+    }), "utf-8");
+    const ownerBindings = await request(owner.token, "/api/workflows/knowledge-bindings?tapdId=30001");
+    const ownerBindingsPayload = await ownerBindings.json();
+    assert.equal(ownerBindings.status, 200, JSON.stringify(ownerBindingsPayload));
+    assert.equal(ownerBindingsPayload.canManage, true);
+    assert.equal(ownerBindingsPayload.availableWorkspaces[0].workspaceId, "mobile");
+    assert.equal("path" in ownerBindingsPayload.availableWorkspaces[0], false);
+
+    const savedBindings = await request(owner.token, "/api/workflows/knowledge-bindings", {
+      method: "PUT",
+      body: JSON.stringify({ tapdId: "30001", workspaceIds: ["mobile"] }),
+    });
+    const savedBindingsPayload = await savedBindings.json();
+    assert.equal(savedBindings.status, 200, JSON.stringify(savedBindingsPayload));
+    assert.equal(savedBindingsPayload.bindings[0].workspaceId, "mobile");
+
+    const participantBindings = await request(participant.token, "/api/workflows/knowledge-bindings?tapdId=30001");
+    const participantBindingsPayload = await participantBindings.json();
+    assert.equal(participantBindings.status, 200, JSON.stringify(participantBindingsPayload));
+    assert.equal(participantBindingsPayload.canManage, false);
+    assert.deepEqual(participantBindingsPayload.availableWorkspaces, []);
+    assert.equal(participantBindingsPayload.bindings[0].workspaceId, "mobile");
+
+    const participantBindingWrite = await request(participant.token, "/api/workflows/knowledge-bindings", {
+      method: "PUT",
+      body: JSON.stringify({ tapdId: "30001", workspaceIds: [] }),
+    });
+    assert.equal(participantBindingWrite.status, 403);
+    const anonymousBindings = await fetch(`${baseUrl}/api/workflows/knowledge-bindings?tapdId=30001`);
+    assert.equal(anonymousBindings.status, 401);
 
     const participantDashboard = await request(participant.token, "/api/prd-workflows");
     const participantDashboardPayload = await participantDashboard.json();

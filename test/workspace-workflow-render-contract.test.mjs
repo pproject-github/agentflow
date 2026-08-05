@@ -7,6 +7,10 @@ const workspacePagePath = new URL(
   import.meta.url,
 );
 const appPath = new URL("../builtin/web-ui/src/App.jsx", import.meta.url);
+const workflowAssistantPath = new URL(
+  "../builtin/web-ui/src/components/WorkflowAssistantThread.jsx",
+  import.meta.url,
+);
 
 test("Workflow timeline receives flow params without relying on an undeclared variable", async () => {
   const source = await readFile(workspacePagePath, "utf8");
@@ -114,6 +118,39 @@ test("the top collaboration entry opens the permission surface for the active sc
   assert.doesNotMatch(source, />\s*协作分享\s*<\//);
   assert.doesNotMatch(source, /title=\{flowParams\.workflowDemo \? "本地示例不可分享" : "分享 Workflow"\}/);
   assert.doesNotMatch(source, /本地只读示例不能配置需求协作/);
+});
+
+test("Workflow AI uses owner-managed knowledge bindings and a dedicated query surface", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+  const assistantSource = await readFile(workflowAssistantPath, "utf8");
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(source, /fetch\(`\/api\/workflows\/knowledge-bindings\?tapdId=/);
+  assert.match(source, /method: "PUT"[\s\S]*workspaceIds: knowledgeSelection/);
+  assert.match(source, /fetch\("\/api\/workflows\/query"/);
+  assert.match(source, /setWorkflowAssistantOpenRequest/);
+  assert.match(source, /assistantOpenRequest=\{workflowAssistantOpenRequest\}/);
+  assert.match(source, /AI 知识工作区/);
+  assert.match(source, /需求与代码只读分析/);
+  assert.match(source, /<WorkflowAssistantThread/);
+  assert.match(assistantSource, /from "@assistant-ui\/react"/);
+  assert.match(assistantSource, /useExternalStoreRuntime\(/);
+  assert.match(assistantSource, /<ThreadPrimitive\.Viewport/);
+  assert.match(assistantSource, /<ComposerPrimitive\.Input/);
+  assert.match(assistantSource, /<MessagePrimitive\.Parts/);
+  assert.match(assistantSource, /MarkdownDisplayContent/);
+  assert.match(
+    assistantSource,
+    /const \{ text \} = useMessagePartText\(\);/,
+    "assistant-ui returns a text-part state object; only its text field may be rendered",
+  );
+  assert.match(source, /af-composer-topbar-btn--workflow/);
+  assert.match(source, /\{isWorkflowMode \? "需求 AI" : "AI"\}/);
+  assert.match(source, /\{!isWorkflowMode \? \(\s*<button type="button" className="af-btn-primary af-btn-primary--lg"/s);
+  assert.match(css, /\.af-workflow-ai-drawer\s*\{[^}]*position:\s*fixed;/s);
+  assert.match(css, /\.af-workflow-assistant-viewport\s*\{/);
+  assert.match(css, /\.af-workflow-assistant-composer\s*\{/);
+  assert.match(css, /\.af-composer-topbar-btn--workflow\s*\{/);
 });
 
 test("Workflow progress fields use a compact responsive grid", async () => {
