@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   legacyOverallToGlobalState,
+  materializeWorkflowExtensions,
   materializeWorkflowGlobalState,
   materializeWorkflowProjections,
   mergeWorkflowArtifactLists,
@@ -15,6 +16,7 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
   const report = normalizeWorkflowReport({
     schemaVersion: 1,
     workflow: { namespace: "tapd", id: "1015046" },
+    source: "prd-flow",
     action: {
       key: "implementation:android:issue-2",
       title: "Android 实现",
@@ -62,6 +64,7 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
   assert.equal(report.event.action, "implementation:android:issue-2");
   assert.equal(report.event.stageKey, "implementation:android:issue-2");
   assert.equal(report.event.artifacts[0].scope, "action");
+  assert.equal(report.event.artifacts[0].producer, "prd-flow");
   assert.equal(report.event.globalStatePatch.title, "Remote Config");
   assert.equal(report.event.projections.timeline[0].key, "prd-flow:version:android-5.63.0");
   assert.equal(report.event.idempotencyKey, "issue-2-mr-943");
@@ -86,7 +89,7 @@ test("supports global-only reports and rejects malformed reports", () => {
   );
   assert.match(
     normalizeWorkflowReport({ workflow: { namespace: "tapd", id: "1015046" } }).error,
-    /requires action/,
+    /requires observation, action/,
   );
   assert.match(
     normalizeWorkflowReport({
@@ -95,6 +98,30 @@ test("supports global-only reports and rejects malformed reports", () => {
     }).error,
     /requires kind and id/,
   );
+});
+
+test("normalizes observations and materializes namespaced extensions", () => {
+  const report = normalizeWorkflowReport({
+    workflow: { namespace: "tapd", id: "1015046" },
+    observation: {
+      schema: "prd-flow/v1",
+      clientId: "prd-flow-local",
+      observedAt: "2026-08-04T10:00:00.000Z",
+      state: { phase: "implementing", pointer: "Android 实现中" },
+    },
+    extensions: {
+      "prd-flow": {
+        issues: [{ key: "runtime-hook", title: "Runtime Hook" }],
+        aiDocs: [{ key: "tech-design", title: "技术方案" }],
+      },
+    },
+  });
+  assert.equal(report.observation.schema, "prd-flow/v1");
+  assert.equal(report.observation.state.phase, "implementing");
+  assert.equal(report.event.extensionsPatch["prd-flow"].issues[0].key, "runtime-hook");
+
+  const extensions = materializeWorkflowExtensions({}, [report.event]);
+  assert.equal(extensions["prd-flow"].aiDocs[0].title, "技术方案");
 });
 
 test("materializes producer-owned timeline projections with replace semantics", () => {
@@ -189,6 +216,23 @@ test("deduplicates keyless legacy artifacts after a stable key is introduced", (
   );
   assert.equal(artifacts.length, 1);
   assert.equal(artifacts[0].key, "gitlab-issue:gift-cache:android");
+});
+
+test("keeps identical artifact keys isolated between report producers", () => {
+  const artifacts = mergeWorkflowArtifactLists(
+    [{ key: "build", producer: "adapter-a", url: "https://example.test/a" }],
+    [{ key: "build", producer: "adapter-b", url: "https://example.test/b" }],
+  );
+  assert.equal(artifacts.length, 2);
+  assert.deepEqual(artifacts.map((item) => item.producer), ["adapter-a", "adapter-b"]);
+});
+
+test("requires a stable normalized report source", () => {
+  assert.match(normalizeWorkflowReport({
+    workflow: { namespace: "tapd", id: "1015046" },
+    source: "Invalid Source",
+    action: { key: "implementation", status: "done" },
+  }).error, /Invalid workflow report source/);
 });
 
 test("accepts canonical workflow keys and ignores unsafe state keys", () => {

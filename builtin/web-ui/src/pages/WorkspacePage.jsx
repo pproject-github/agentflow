@@ -203,6 +203,7 @@ const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "
 
 function readFlowParamsFromUrl() {
   const sp = new URLSearchParams(window.location.search);
+  const returnTo = String(sp.get("returnTo") || "").trim();
   return {
     flowId: sp.get("flowId") || "",
     flowSource: sp.get("flowSource") || "user",
@@ -210,6 +211,8 @@ function readFlowParamsFromUrl() {
     workflowShare: sp.get("workflowShare") || "",
     adminOwnerId: sp.get("adminOwnerId") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
+    returnTo: returnTo === "/workflows" ? returnTo : "",
+    workflowDemo: sp.get("workflowDemo") === "1",
   };
 }
 
@@ -221,7 +224,20 @@ function flowParamsQuery(params) {
   if (params.workflowShare) q.set("workflowShare", params.workflowShare);
   if (params.adminOwnerId) q.set("adminOwnerId", params.adminOwnerId);
   if (params.archived) q.set("archived", "1");
+  if (params.returnTo) q.set("returnTo", params.returnTo);
+  if (params.workflowDemo) q.set("workflowDemo", "1");
   return q;
+}
+
+function readWorkflowDemoSnapshot(tapdId) {
+  const id = String(tapdId || "").trim();
+  if (!id) return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(`agentflow.workflow.demo:${id}`) || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function clipConversationText(value, max = 4000) {
@@ -1057,6 +1073,21 @@ function prdWorkflowAiDocLinks(snapshot, actionRows = []) {
       issueKey: prdWorkflowIssueKey(issue),
       platform: prdWorkflowPlatformLabel(issue?.platform),
       documentTitle: String(issue?.title || issue?.name || issue?.summary || "").trim(),
+    });
+  }
+  const prdFlowExtension = snapshot?.extensions?.["prd-flow"] && typeof snapshot.extensions["prd-flow"] === "object"
+    ? snapshot.extensions["prd-flow"]
+    : {};
+  for (const item of [
+    ...(Array.isArray(snapshot?.aiDocs) ? snapshot.aiDocs : []),
+    ...(Array.isArray(snapshot?.ai_docs) ? snapshot.ai_docs : []),
+    ...(Array.isArray(prdFlowExtension.aiDocs) ? prdFlowExtension.aiDocs : []),
+    ...(Array.isArray(prdFlowExtension.ai_docs) ? prdFlowExtension.ai_docs : []),
+  ]) {
+    collect(item, {
+      issueKey: String(item?.issueKey || item?.issue_key || "").trim(),
+      platform: prdWorkflowPlatformLabel(item?.platform),
+      documentTitle: String(item?.title || item?.label || "").trim(),
     });
   }
   return dedupeConfirmedAiDocs(candidates, window.location.origin);
@@ -7471,7 +7502,7 @@ function PrdWorkflowTimelinePanel({
           </span>
           <h1>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "选择 TAPD 需求后读取状态")}</h1>
           <p className="af-prd-workflow__status-subtitle">
-            {tapdId ? <>TAPD <strong>{tapdId}</strong> · 独立需求 Workflow</> : <>尚未选择 TAPD 需求</>}
+            {tapdId ? <>TAPD <strong>{tapdId}</strong> · {flowParams.workflowDemo ? "本地只读示例" : "独立需求 Workflow"}</> : <>尚未选择 TAPD 需求</>}
           </p>
           {error ? <p className="af-prd-workflow-error">{error}</p> : null}
           {(activeAction || collaboration.subscribers) ? (
@@ -7510,6 +7541,7 @@ function PrdWorkflowTimelinePanel({
               <input
                 value={tapdId}
                 onChange={(event) => setTapdId(event.target.value)}
+                readOnly={flowParams.workflowDemo}
                 placeholder="输入需求 ID"
                 autoComplete="off"
                 spellCheck={false}
@@ -7519,7 +7551,7 @@ function PrdWorkflowTimelinePanel({
               <span className="material-symbols-outlined" aria-hidden>{loading ? "hourglass_empty" : "sync"}</span>
               {loading ? "读取中" : tapdId ? "刷新" : "读取"}
             </button>
-            <button type="button" disabled={!tapdId} onClick={openSharing}>
+            <button type="button" disabled={!tapdId || flowParams.workflowDemo} onClick={openSharing} title={flowParams.workflowDemo ? "本地示例不可分享" : "分享 Workflow"}>
               <span className="material-symbols-outlined" aria-hidden>share</span>
               分享
             </button>
@@ -7625,9 +7657,13 @@ function PrdWorkflowTimelinePanel({
                               {meta.length ? (
                                 <div className="af-prd-workflow-action__meta">
                                   {meta.map((entry) => (
-                                    <span key={`${entry.label}-${entry.value}`}>
+                                    <span
+                                      key={`${entry.label}-${entry.value}`}
+                                      className={`af-prd-workflow-action__meta-item af-prd-workflow-action__meta-item--${entry.label === "Issue" ? "issue" : "platform"}`}
+                                      title={`${entry.label} · ${entry.value}`}
+                                    >
                                       <b>{entry.label}</b>
-                                      {entry.value}
+                                      <span className="af-prd-workflow-action__meta-value">{entry.value}</span>
                                     </span>
                                   ))}
                                 </div>
@@ -8752,6 +8788,15 @@ function WorkspacePageInner() {
     setWorkflowLoading(true);
     setWorkflowError("");
     try {
+      if (flowParams.workflowDemo) {
+        const demoSnapshot = readWorkflowDemoSnapshot(tapdId);
+        if (!demoSnapshot) throw new Error("本地示例数据已失效，请返回迭代页重新载入示例");
+        setWorkflowSnapshot(demoSnapshot);
+        setWorkflowActionOutput("");
+        setWorkflowPendingConfirm(null);
+        setWorkflowConflict(null);
+        return;
+      }
       const q = flowParamsQuery(flowParams);
       q.set("tapdId", tapdId);
       q.set("runtimeOnly", "1");
@@ -8852,12 +8897,12 @@ function WorkspacePageInner() {
     setWorkflowReviewPublishing(true);
     setWorkflowError("");
     try {
-      const res = await fetch("/api/prd-workflow/review-link", {
+      const res = await fetch("/api/workflow-artifacts/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...flowParams,
-          tapdId: workflowTapdId,
+          workflow: { namespace: "tapd", id: workflowTapdId },
           title,
           markdown,
           action: prdWorkflowActionId(targetAction),
@@ -11250,7 +11295,7 @@ function WorkspacePageInner() {
   }, [isWorkflowMode]);
 
   useEffect(() => {
-    if (!isWorkflowMode || !workflowTapdId) return undefined;
+    if (!isWorkflowMode || !workflowTapdId || flowParams.workflowDemo) return undefined;
     const q = flowParamsQuery(flowParams);
     q.set("tapdId", workflowTapdId);
     let events = null;
@@ -13508,7 +13553,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-icon-btn af-pipeline-back"
-            onClick={() => navigate(flowParams.adminOwnerId ? "/admin/usage" : "/projects")}
+            onClick={() => navigate(flowParams.adminOwnerId ? "/admin/usage" : flowParams.returnTo || "/projects")}
             aria-label="返回"
           >
             <span className="material-symbols-outlined">arrow_back</span>

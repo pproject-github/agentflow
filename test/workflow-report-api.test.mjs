@@ -71,6 +71,7 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     const reportPayload = {
       schemaVersion: 1,
       workflow: { namespace: "tapd", id: "1015046" },
+      source: "prd-flow",
       action: {
         key: "implementation:android:issue-2",
         title: "Android 实现",
@@ -158,6 +159,46 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     assert.equal(replay.status, 200, JSON.stringify(replayResult));
     assert.equal(replayResult.alreadyApplied, true);
 
+    const replayWithStaleRevision = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({ ...reportPayload, expectedRevision: "runtime:stale" }),
+    });
+    const replayWithStaleRevisionResult = await replayWithStaleRevision.json();
+    assert.equal(replayWithStaleRevision.status, 200, JSON.stringify(replayWithStaleRevisionResult));
+    assert.equal(replayWithStaleRevisionResult.alreadyApplied, true);
+
+    const otherProducer = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        workflow: { namespace: "tapd", id: "1015046" },
+        source: "release-bot",
+        action: {
+          key: "implementation:android:issue-2",
+          title: "Release Bot 校验完成",
+          status: "done",
+          group: "implementation",
+          platform: "android",
+          issueKey: "issue-2",
+        },
+        artifacts: [{
+          key: "mr-943",
+          type: "release-check",
+          title: "Release check",
+          url: "https://example.test/release-check/943",
+        }],
+        idempotencyKey: "report-1015046-issue-2",
+      }),
+    });
+    const otherProducerResult = await otherProducer.json();
+    assert.equal(otherProducer.status, 200, JSON.stringify(otherProducerResult));
+    assert.notEqual(otherProducerResult.alreadyApplied, true);
+    assert.equal(otherProducerResult.event.source, "release-bot");
+    assert.equal(
+      otherProducerResult.snapshot.runtimeEvents.filter((event) => event.issueKey === "issue-2").length,
+      2,
+    );
+
     const stale = await request("/api/workflows/report", {
       method: "POST",
       body: JSON.stringify({
@@ -167,6 +208,41 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
       }),
     });
     assert.equal(stale.status, 409);
+
+    const observationReport = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        workflow: { namespace: "tapd", id: "1015046" },
+        source: "prd-flow",
+        observation: {
+          schema: "prd-flow/v1",
+          clientId: "prd-flow-test",
+          observedAt: "2026-08-04T10:00:00.000Z",
+          state: {
+            tapdId: "1015046",
+            phase: "testing",
+            pointer: "Android 已提测",
+            actions: [{ key: "submit-test", title: "提交测试", status: "done" }],
+          },
+        },
+        extensions: {
+          "prd-flow": {
+            issues: [{ key: "gift-cache", title: "Gift Cache", platform: "android" }],
+            aiDocs: [{ key: "tech-design", title: "技术方案" }],
+          },
+        },
+        idempotencyKey: "prd-flow-observation-1015046-v1",
+      }),
+    });
+    const observationResult = await observationReport.json();
+    assert.equal(observationReport.status, 200, JSON.stringify(observationResult));
+    assert.equal(observationResult.observation.accepted, true);
+    assert.equal(observationResult.observation.schema, "prd-flow/v1");
+    assert.equal(observationResult.snapshot.phase, "testing");
+    assert.equal(observationResult.snapshot.pointer, "Android 已提测");
+    assert.equal(observationResult.snapshot.extensions["prd-flow"].aiDocs[0].key, "tech-design");
+    assert.equal(observationResult.snapshot.issues[0].key, "gift-cache");
 
     const legacy = await request("/api/prd-workflow/event", {
       method: "POST",
@@ -187,6 +263,8 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     });
     const legacyResult = await legacy.json();
     assert.equal(legacy.status, 200, JSON.stringify(legacyResult));
+    assert.equal(legacy.headers.get("deprecation"), "true");
+    assert.equal(legacyResult.compatibility.replacement, "/api/workflows/report with action/artifacts/extensions");
     assert.equal(legacyResult.snapshot.overall.requirement.status.label, "已提测");
     assert.equal(legacyResult.snapshot.globalState.status.label, "已提测");
     assert.ok(legacyResult.snapshot.runtimeEvents.some((event) => event.stageKey === "submit-test"));
@@ -232,10 +310,11 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
       ["gitlab-mr"],
     );
 
-    const reviewLink = await request("/api/prd-workflow/review-link", {
+    const reviewLink = await request("/api/workflow-artifacts/publish", {
       method: "POST",
       body: JSON.stringify({
-        tapdId: "1015046",
+        workflow: { namespace: "tapd", id: "1015046" },
+        source: "prsrc",
         reviewId: "code-review-1015046-gift-cache-android",
         title: "Gift Cache Code Review",
         markdown: "# Code Review\n\n审查通过",
@@ -251,6 +330,8 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     });
     const reviewLinkResult = await reviewLink.json();
     assert.equal(reviewLink.status, 200, JSON.stringify(reviewLinkResult));
+    assert.equal(reviewLink.headers.get("deprecation"), null);
+    assert.equal(reviewLinkResult.artifact.key, "code-review:gift-cache:android");
     assert.equal(reviewLinkResult.event.aggregateByStage, false);
     assert.equal(
       reviewLinkResult.event.id,

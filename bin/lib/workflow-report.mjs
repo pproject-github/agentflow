@@ -144,6 +144,32 @@ function normalizeWorkflowProjectionState(value = {}) {
   return raw;
 }
 
+export function normalizeWorkflowExtensions(value = {}) {
+  const raw = plainObject(value);
+  const out = {};
+  for (const [namespace, extension] of Object.entries(raw)) {
+    const key = cleanString(namespace, 120).toLowerCase();
+    if (!key || !/^[a-z][a-z0-9._-]{0,119}$/.test(key)) continue;
+    if (!extension || typeof extension !== "object" || Array.isArray(extension)) continue;
+    out[key] = mergeWorkflowGlobalState({}, extension);
+  }
+  return out;
+}
+
+export function materializeWorkflowExtensions(snapshot = {}, runtimeEvents = []) {
+  let extensions = normalizeWorkflowExtensions(
+    snapshot.extensions || snapshot.workflowExtensions || snapshot.workflow_extensions || {},
+  );
+  const events = [...(Array.isArray(runtimeEvents) ? runtimeEvents : [])]
+    .sort((left, right) => eventTime(left) - eventTime(right));
+  for (const event of events) {
+    const patch = event?.extensionsPatch || event?.extensions_patch;
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) continue;
+    extensions = mergeWorkflowGlobalState(extensions, normalizeWorkflowExtensions(patch));
+  }
+  return extensions;
+}
+
 export function materializeWorkflowProjections(snapshot = {}, runtimeEvents = []) {
   const base =
     snapshot.projections ||
@@ -241,6 +267,24 @@ export function normalizeWorkflowReport(payload = {}) {
   const workflow = normalizeWorkflowReference(payload);
   if (workflow.error) return workflow;
   const rawWorkflow = plainObject(payload.workflow);
+  const source = cleanString(payload.source || "agentflow-cli", 120).toLowerCase() || "agentflow-cli";
+  if (!/^[a-z][a-z0-9._-]{0,119}$/.test(source)) {
+    return { error: "Invalid workflow report source" };
+  }
+
+  const rawObservation = plainObject(payload.observation);
+  const hasObservation = Object.keys(rawObservation).length > 0;
+  const observationState = plainObject(rawObservation.state || rawObservation.facts || rawObservation.value);
+  if (hasObservation && !Object.keys(observationState).length) {
+    return { error: "observation requires state" };
+  }
+  const observation = hasObservation ? {
+    schema: cleanString(rawObservation.schema || rawObservation.model || "workflow-observation/v1", 160),
+    state: mergeWorkflowGlobalState({}, observationState),
+    observedAt: cleanString(rawObservation.observedAt || rawObservation.observed_at, 80),
+    clientId: cleanString(rawObservation.clientId || rawObservation.client_id, 160),
+    scope: cleanString(rawObservation.scope || "client", 80).toLowerCase() || "client",
+  } : null;
 
   const rawAction = plainObject(payload.action);
   const hasAction = Object.keys(rawAction).length > 0;
@@ -269,7 +313,10 @@ export function normalizeWorkflowReport(payload = {}) {
   const rawArtifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
   const artifacts = rawArtifacts
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
-    .map((item, index) => normalizeWorkflowArtifact(item, index, action ? "action" : "global"));
+    .map((item, index) => ({
+      ...normalizeWorkflowArtifact(item, index, action ? "action" : "global"),
+      producer: source,
+    }));
 
   const rawProjections = plainObject(payload.projections || payload.workflowProjections || payload.workflow_projections);
   const hasProjections = Object.keys(rawProjections).length > 0 || hasOwn(payload, "projections");
@@ -287,6 +334,13 @@ export function normalizeWorkflowReport(payload = {}) {
   }
   const projections = hasProjections ? normalizeWorkflowProjectionState(rawProjections) : null;
 
+  const rawExtensions = plainObject(payload.extensions);
+  const hasExtensions = Object.keys(rawExtensions).length > 0;
+  const extensions = hasExtensions ? normalizeWorkflowExtensions(rawExtensions) : null;
+  if (hasExtensions && !Object.keys(extensions).length) {
+    return { error: "extensions requires at least one valid namespace object" };
+  }
+
   const rawGlobalState = plainObject(payload.globalState || payload.global_state);
   const hasGlobalState = Object.keys(rawGlobalState).length > 0;
   const globalStatePatch = plainObject(rawGlobalState.patch);
@@ -296,8 +350,8 @@ export function normalizeWorkflowReport(payload = {}) {
   if (hasGlobalState && !Object.keys(globalStatePatch).length && !globalStateRemove.length) {
     return { error: "globalState requires patch or remove" };
   }
-  if (!action && !artifacts.length && !hasGlobalState && !hasProjections) {
-    return { error: "Workflow report requires action, artifacts, globalState, or projections" };
+  if (!action && !artifacts.length && !hasGlobalState && !hasProjections && !hasExtensions && !hasObservation) {
+    return { error: "Workflow report requires observation, action, artifacts, globalState, projections, or extensions" };
   }
 
   const idempotencyKey = cleanString(
@@ -310,7 +364,7 @@ export function normalizeWorkflowReport(payload = {}) {
   const event = {
     schemaVersion,
     type: "workflow-report",
-    source: cleanString(payload.source || "agentflow-cli", 120) || "agentflow-cli",
+    source,
     workflow,
     workflowKey: workflow.key,
     aggregateByStage: Boolean(action),
@@ -339,6 +393,7 @@ export function normalizeWorkflowReport(payload = {}) {
     }),
     artifacts,
     ...(hasProjections ? { projections } : {}),
+    ...(hasExtensions ? { extensionsPatch: extensions } : {}),
     ...(hasGlobalState ? {
       globalStatePatch,
       globalStateRemove,
@@ -351,6 +406,9 @@ export function normalizeWorkflowReport(payload = {}) {
     action,
     artifacts,
     projections,
+    extensions,
+    observation,
+    hasRuntimeUpdate: Boolean(action || artifacts.length || hasGlobalState || hasProjections || hasExtensions),
     globalState: hasGlobalState ? {
       mode: "merge",
       patch: globalStatePatch,
@@ -491,20 +549,22 @@ export function mergeWorkflowArtifactLists(left = [], right = [], defaultScope =
   };
   const artifactAliases = (artifact) => {
     const aliases = [];
+    const producer = cleanString(artifact?.producer || artifact?.reportSource || artifact?.report_source, 120).toLowerCase();
+    const ownedAlias = (alias) => producer ? `producer:${producer}:${alias}` : alias;
     const explicitKey = cleanString(
       artifact?.key || artifact?.artifactKey || artifact?.artifact_key,
       500,
     );
-    if (explicitKey) aliases.push(`key:${explicitKey}`);
+    if (explicitKey) aliases.push(ownedAlias(`key:${explicitKey}`));
     const url = normalizedUrl(
       artifact?.canonicalUrl
       || artifact?.canonical_url
       || artifact?.href
       || artifact?.url,
     );
-    if (url) aliases.push(`url:${url}`);
+    if (url) aliases.push(ownedAlias(`url:${url}`));
     const artifactPath = cleanString(artifact?.path, 4000);
-    if (artifactPath) aliases.push(`path:${artifactPath}`);
+    if (artifactPath) aliases.push(ownedAlias(`path:${artifactPath}`));
     return aliases;
   };
   const add = (artifact) => {
@@ -531,7 +591,7 @@ export function mergeWorkflowArtifactLists(left = [], right = [], defaultScope =
   return out;
 }
 
-export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtimeEvents = [], projections = {}) {
+export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtimeEvents = [], projections = {}, extensions = {}) {
   const events = (Array.isArray(runtimeEvents) ? runtimeEvents : []).map((event) => ({
     id: event?.id || "",
     action: event?.action || event?.actionId || "",
@@ -541,10 +601,11 @@ export function workflowRuntimeRevision(globalState = {}, artifacts = [], runtim
     globalStatePatch: event?.globalStatePatch || {},
     globalStateRemove: event?.globalStateRemove || [],
     projections: event?.projections || {},
+    extensionsPatch: event?.extensionsPatch || {},
   }));
   const hash = crypto
     .createHash("sha256")
-    .update(JSON.stringify(stableValue({ globalState, artifacts, projections, events })))
+    .update(JSON.stringify(stableValue({ globalState, artifacts, projections, extensions, events })))
     .digest("hex")
     .slice(0, 24);
   return `runtime:${hash}`;

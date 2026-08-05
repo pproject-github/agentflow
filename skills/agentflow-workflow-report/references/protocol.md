@@ -1,337 +1,558 @@
-# AgentFlow Workflow Report Protocol
+# AgentFlow Workflow Report 接入协议
 
-## Contents
+## 目录
 
-1. Contract boundary
-2. Transport and authentication
-3. Read endpoint
-4. Report envelope
-5. Action model
-6. Artifact model
-7. Global-state model
-8. Timeline projection model
-9. Concurrency and idempotency
-10. Producer integration procedure
-11. Examples
-12. Acceptance checklist
+1. 接入边界
+2. 认证、身份与权限
+3. 数据区域模型
+4. GET /api/workflows/state
+5. POST /api/workflows/report
+6. POST /api/workflow-artifacts/publish
+7. 字段模型
+8. 覆盖、合并与删除规则
+9. 并发、幂等与错误码
+10. 三个关键接入场景
+11. prd-flow 参考映射
+12. 验收清单
 
-## 1. Contract boundary
+## 1. 接入边界
 
-AgentFlow owns transport, validation, event persistence, materialization, permissions, optimistic concurrency, idempotency, and dashboard aggregation.
+新接入只使用以下三个正式接口：
 
-The producer owns the meaning and internal schema of `globalState`. AgentFlow must not parse private fields to infer version, sprint, release, or milestone membership.
+| 方法 | 路径 | 用途 | 是否修改 Workflow |
+| --- | --- | --- | --- |
+| `GET` | `/api/workflows/state` | 读取当前快照和并发 revision | 否 |
+| `POST` | `/api/workflows/report` | 上报全局信息、Action、普通产物、迭代归属和自定义区域 | 是 |
+| `POST` | `/api/workflow-artifacts/publish` | 把本地 Markdown 内容发布成浏览器可访问的预览链接 | 是 |
 
-The producer derives `projections` from its current state. Projections are replaceable indexes for generic AgentFlow views, not a second source of truth.
+`agentflow-workflow-report` 是接入规格；`workflow-report-client.mjs` 是可复用客户端；`agentflow-cli` 是命令行包装；AgentFlow 服务才负责鉴权、存储、合并和展示。Skill 不参与运行时传输，CLI 也不是数据生产方。
 
-## 2. Transport and authentication
+接入方负责采集业务系统事实并解释业务含义。例如 prd-flow 会读取 TAPD、ai-doc、GitLab 和 Jenkins；其他接入方可以读取完全不同的数据源。AgentFlow 不会替接入方修改这些上游系统。
 
-Default service URL:
+当前服务端仅支持 `tapd` Workflow namespace。稳定身份为 `tapd:<short-id>`，标题、版本名或阶段名都不能作为 Workflow 身份。这是“当前身份适配器的边界”，不是 Workflow Report 数据模型只能描述 TAPD；其他 namespace 要先扩展服务端身份、协作和存储适配器，不能只改请求字符串。
 
-```text
-http://ai.mengma.bigo.inner/
-```
+## 2. 认证、身份与权限
 
-Use bearer authentication through `AGENTFLOW_TOKEN` or `AGENTFLOW_SESSION_TOKEN`. For local testing only, set `AGENTFLOW_BASE_URL` to the local server URL.
+### 2.1 认证
 
-Preferred transport is the bundled CLI because it resolves env files and auth headers without exposing tokens. Direct HTTP integrations may call the endpoints below with `Authorization: Bearer <token>` and `Content-Type: application/json`.
-
-## 3. Read endpoint
-
-CLI:
-
-```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-get \
-  --workflow tapd:1015046 \
-  --runtime-only
-```
-
-HTTP:
+使用 Bearer Token：
 
 ```http
-GET /api/workflows/state?workflow=tapd%3A1015046&runtimeOnly=1
+Authorization: Bearer <AGENTFLOW_TOKEN>
+Content-Type: application/json
 ```
 
-Use the returned `snapshot.runtimeRevision` as `expectedRevision`. Read the existing `snapshot.globalState` before producing a patch and the existing `snapshot.projections.timeline` before replacing timeline membership.
+CLI 从 `AGENTFLOW_TOKEN` 或 `AGENTFLOW_SESSION_TOKEN` 读取凭证。不得把 Token 放入请求 JSON、Action、Artifact、日志或代码仓库。
 
-The deployed server currently supports the `tapd` Workflow namespace. The reference object remains namespaced for future producers:
+### 2.2 权限
+
+| 身份 | 读取 | 上报 / 发布预览 | 管理成员与分享 |
+| --- | --- | --- | --- |
+| Workflow owner | 是 | 是 | 是 |
+| 显式 editor | 是 | 是 | 否 |
+| 显式 viewer | 是 | 否 | 否 |
+| owner 同团队成员 | 是，团队视图自动获得 viewer 权限 | 否 | 否 |
+| 分享链接访问者 | 是 | 否 | 否 |
+| 超级管理员代看 | 是 | 否，只读审阅 | 否 |
+
+首次由已认证用户上报一个尚未登记的 TAPD ID 时，该用户成为这个 Workflow 的 owner。后续写入解析到 owner 的状态空间；没有写权限的调用返回 `403`，不会回退成调用者自己的副本。
+
+## 3. 数据区域模型
+
+Workflow 页面由三类数据区域组成：
+
+### 3.1 全局区域
+
+描述“这个需求现在是什么”：标题、状态、负责人、平台、当前分支、研发进度、版本原始事实等。
+
+- 完整的生产方观察放在 `observation.state`。
+- 可独立增量更新的生产方事实放在 `globalState`。
+- 个人/团队迭代所需的版本、Sprint、里程碑归属放在 `projections.timeline`。
+
+`globalState` 是生产方拥有的事实；`projections` 是可从事实重建的通用索引，不能反过来作为业务真相。
+
+### 3.2 Action 时间轴
+
+描述“关键阶段发生了什么”：方案确认、开始实现、MR 创建、提测、发布完成等。
+
+- 阶段本身使用 `action`。
+- MR、构建、测试报告、外部文档链接使用 `artifacts`。
+- `action.key` 是稳定阶段身份；同一个 key 的重复上报更新同一阶段，而不是制造一条新业务阶段。
+
+Action 是业务节点，不是运行日志。轮询、刷新、重试等技术动作不应各自创建 Action。
+
+### 3.3 自定义区域
+
+描述只有某个接入实现才理解的结构化面板，例如 prd-flow 的 AI Docs 和 Issues。
+
+- 数据放入 `extensions["<producer-namespace>"]`。
+- namespace 必须为小写稳定标识，例如 `prd-flow`。
+- AgentFlow 对未知扩展按不透明 JSON 保存；只有注册了渲染器的 namespace 才会显示成专用面板。
+
+AI Docs / Issues 不是通用固定字段。当前唯一注册的 extension renderer 是 `prd-flow`，它识别 AI Docs 链接列表和带父子层级、平台、MR 状态及关联链接的 Issues 树。其他 namespace 会被保存并参与 revision，但不会自动出现页面。
+
+普通的负责人、平台、分支、风险列表和文档链接不需要 extension。优先使用下面的 `globalState.sections` 通用渲染器；只有现有组件无法表达的树形结构、复杂交互或专用业务面板，才定义新的 extension schema 和前端 renderer。
+
+### 3.4 当前可直接使用的通用渲染器
+
+| 页面组件 | 上报字段 | 展示样式 | 是否需要前端开发 |
+| --- | --- | --- | --- |
+| 需求概览 | `globalState.title/url/status` | 标题、外链和状态标签 | 否 |
+| 自定义概览分区 | `globalState.sections` | 分区卡片与固定字段样式 | 否 |
+| Action 时间轴 | `action` | 按日期分组的状态点、时间、标题、详情和维度标签 | 否 |
+| Action 产物 | `artifacts[scope=action]` | Action 下的链接按钮 | 否 |
+| 关联产物 | `artifacts[scope=global]` | 侧栏链接列表，展示标题和产物类型 | 否 |
+| 迭代时间线 | `projections.timeline` | 版本/Sprint/里程碑时间线卡片与筛选 | 否 |
+| prd-flow AI Docs / Issues | `extensions["prd-flow"]` | 文档链接列表、层级 Issue 卡片 | 已注册，仅供 prd-flow schema |
+| 其他专用面板 | `extensions["<namespace>"]` | 由接入方设计 | 是，需要注册 schema、空态/错误态、响应式样式和 renderer |
+
+`globalState.sections` schema：
 
 ```json
 {
-  "namespace": "tapd",
-  "id": "1015046"
+  "globalState": {
+    "mode": "merge",
+    "patch": {
+      "title": "Remote Config 拉取频控",
+      "url": "https://tapd.example.test/1020124",
+      "status": "实现中",
+      "sections": {
+        "ownership": {
+          "title": "归属信息",
+          "fields": {
+            "owner": {
+              "label": "负责人",
+              "type": "user",
+              "value": { "username": "alice" }
+            },
+            "platforms": {
+              "label": "平台",
+              "type": "chips",
+              "value": ["Android", "iOS"]
+            },
+            "branch": {
+              "label": "需求分支",
+              "type": "text",
+              "value": "story/1020124"
+            },
+            "risks": {
+              "label": "当前风险",
+              "type": "list",
+              "value": ["等待服务端字段确认", "灰度策略待补充"]
+            },
+            "design": {
+              "label": "技术方案",
+              "type": "link",
+              "value": "打开方案文档",
+              "url": "https://docs.example.test/1020124"
+            }
+          }
+        }
+      }
+    }
+  }
 }
 ```
 
-## 4. Report envelope
+通用字段类型：
 
-Endpoint:
+| `type` | `value` | 页面样式 |
+| --- | --- | --- |
+| `text` | 字符串、数字或可提取 label/name/value 的对象 | 普通文本，无胶囊背景 |
+| `user` | 字符串或含 username/userId/name 的对象 | 负责人强调文本 |
+| `chips` | 标量或数组 | 一个或多个标签胶囊 |
+| `list` | 标量或数组 | 纵向项目符号列表 |
+| `link` | 显示值，加 field 或 value 中的 `url/href` | 可点击文本和外链图标 |
+
+section key 为 `progress` 时使用紧凑响应式网格；其他 section 默认纵向排列。空 value 不渲染，未知 type 回退为 `text`。
+
+## 4. GET /api/workflows/state
+
+读取当前物化快照。任何写入前都应先调用它，并保存 `snapshot.runtimeRevision`。
+
+### 4.1 请求
 
 ```http
-POST /api/workflows/report
+GET /api/workflows/state?workflow=tapd%3A1020124&runtimeOnly=1
+Authorization: Bearer <AGENTFLOW_TOKEN>
 ```
 
-Top-level fields:
+| Query 参数 | 类型 | 必填 | 含义 |
+| --- | --- | --- | --- |
+| `workflow` | string | 与 namespace/id 二选一 | 规范 key，例如 `tapd:1020124` |
+| `namespace` | string | 与 workflow 二选一 | 当前仅支持 `tapd` |
+| `id` | string | 与 workflow 二选一 | TAPD short ID |
+| `runtimeOnly` | `0 \| 1` | 否 | `1` 只读取已保存运行态，不主动刷新上游；CLI 的 `--runtime-only` 使用它 |
+| `flowId` | string | 否 | 关联 AgentFlow 项目时指定项目 ID |
+| `flowSource` | string | 否 | 项目来源，默认 `user` |
+| `workspaceId` | string | 否 | 项目工作区上下文 |
+| `workflowShare` | string | 否 | 只读分享 token；不能用于写接口 |
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `schemaVersion` | No | Protocol version; defaults to `1` |
-| `workflow` | Yes | `{ namespace, id }` or canonical key |
-| `action` | Conditional | One lifecycle/progress update |
-| `artifacts` | Conditional | Evidence associated with the action or global state |
-| `globalState` | Conditional | Producer-owned merge patch and removals |
-| `projections` | Conditional | Generic replaceable dashboard indexes |
-| `expectedRevision` | For mutations | Revision returned by the latest read |
-| `idempotencyKey` | Recommended | Stable identity of the logical operation |
-| `source` | No | Reporting producer, default `agentflow-cli` |
-| `flowId` | No | Related AgentFlow project identifier |
-| `flowSource` | No | Related project source, default `user` |
-
-Include at least one of `action`, `artifacts`, `globalState`, or `projections`.
-
-## 5. Action model
+### 4.2 成功响应
 
 ```json
 {
-  "key": "implementation:android:issue-2",
+  "ok": true,
+  "workflow": { "namespace": "tapd", "id": "1020124", "key": "tapd:1020124" },
+  "snapshot": {
+    "runtimeRevision": "runtime:...",
+    "globalState": {},
+    "actions": [],
+    "artifacts": [],
+    "projections": { "timeline": [] },
+    "extensions": {}
+  }
+}
+```
+
+`snapshot` 只由服务端返回。客户端不得把一份旧 `snapshot` 原样 POST 回去。
+
+## 5. POST /api/workflows/report
+
+统一写入口。一次请求可以只更新一个区域，也可以原子地组合 Action、产物、全局事实、迭代归属和自定义区域。
+
+### 5.1 请求 Envelope
+
+```json
+{
+  "schemaVersion": 1,
+  "workflow": { "namespace": "tapd", "id": "1020124" },
+  "source": "my-adapter",
+  "expectedRevision": "runtime:...",
+  "idempotencyKey": "implementation-finished:android:issue-1:v1",
+  "observation": {},
+  "action": {},
+  "artifacts": [],
+  "globalState": {},
+  "projections": {},
+  "extensions": {}
+}
+```
+
+| 顶层字段 | 类型 | 必填 | 含义 / 写入区域 |
+| --- | --- | --- | --- |
+| `schemaVersion` | number | 否 | 当前固定为 `1` |
+| `workflow` | object/string | 是 | `{namespace,id}` 或规范 key；当前 namespace 仅支持 `tapd` |
+| `source` | string | 强烈建议 | 小写稳定的业务 Adapter 名称；默认 `agentflow-cli` 仅用于兼容，不应作为正式接入的生产方身份 |
+| `expectedRevision` | string | 修改已有状态时建议必填 | 最近一次 GET 返回的 runtime revision |
+| `idempotencyKey` | string | 强烈建议 | 一次业务语义操作的稳定身份，不使用时间戳或随机 UUID |
+| `observation` | object | 条件必填 | 同一 `clientId` 的完整生产方观察 |
+| `action` | object | 条件必填 | 一条关键业务阶段 |
+| `artifacts` | array | 条件必填 | Action 证据或全局证据 |
+| `globalState` | object | 条件必填 | 生产方事实的 merge patch / remove |
+| `projections` | object | 条件必填 | 通用迭代索引；当前包含完整 `timeline` 数组 |
+| `extensions` | object | 条件必填 | 按生产方 namespace 组织的自定义区域数据 |
+| `flowId` | string | 否 | 关联项目 ID |
+| `flowSource` | string | 否 | 关联项目来源，默认 `user` |
+
+`observation`、`action`、`artifacts`、`globalState`、`projections`、`extensions` 至少出现一个。
+
+### 5.2 成功响应
+
+```json
+{
+  "ok": true,
+  "alreadyApplied": false,
+  "report": {},
+  "event": {},
+  "observation": { "accepted": true, "clientId": "my-adapter" },
+  "snapshot": { "runtimeRevision": "runtime:new-revision" }
+}
+```
+
+没有 `observation` 时，响应中的 `observation` 为 `null`。同一 `source + idempotencyKey` 的幂等重放返回 `alreadyApplied: true`，应按成功处理；不同 source 可以安全复用相同业务 key。
+
+## 6. POST /api/workflow-artifacts/publish：发布 Markdown 预览
+
+把客户端本地 Markdown 内容保存成可访问的运行态副本，并返回预览链接。服务端不能读取客户端文件路径，所以必须发送 `markdown` 内容。
+
+### 6.1 请求
+
+```json
+{
+  "workflow": { "namespace": "tapd", "id": "1020124" },
+  "source": "my-adapter",
+  "title": "Issue1 · Android 方案草稿",
+  "markdown": "# 方案内容\n...",
+  "stage": "issue-plan:runtime-hook",
+  "issueKey": "runtime-hook",
+  "platform": "android",
+  "artifactKey": "plan:runtime-hook:android",
+  "artifactLabel": "方案预览",
+  "durability": "temporary",
+  "ttlDays": 7,
+  "expectedRevision": "runtime:...",
+  "idempotencyKey": "review:plan:runtime-hook:android:<content-digest>"
+}
+```
+
+| 字段 | 类型 | 必填 | 含义 |
+| --- | --- | --- | --- |
+| `workflow` | object/string | 是 | 目标 Workflow |
+| `source` | string | 强烈建议 | 真实业务 Adapter 的稳定名称；不是 `agentflow-cli` |
+| `title` | string | 是 | Review 页面标题 |
+| `markdown` | string | 是 | Markdown 实际内容，不是本地路径 |
+| `stage` / `stageKey` | string | 建议 | 关联的稳定 Action 阶段 |
+| `issueKey` | string | 否 | 自定义 Issue 身份 |
+| `platform` | string | 否 | 平台维度 |
+| `artifactKey` | string | 是 | 预览 Artifact 的稳定槽位 |
+| `artifactLabel` | string | 否 | 页面按钮文案，默认 `Markdown Review` |
+| `durability` | string | 否 | `temporary` 或 `durable`；默认临时 |
+| `ttlDays` | number | 临时预览建议 | 临时副本有效天数，通常为 7 |
+| `expectedRevision` | string | 修改已有状态时建议必填 | 最近一次 GET 返回的 runtime revision；过期返回 `409` |
+| `idempotencyKey` | string | 强烈建议 | 建议包含内容摘要；同一 source + key 重放返回同一个预览，不创建新副本 |
+
+### 6.2 成功响应
+
+响应包含：
+
+- `artifact`：可挂到页面的标准 Artifact。
+- `review.url`：规范预览 URL。
+- `review.shortUrl`：通常可直接分享的 `/r/<code>` 短链。
+- `event`：辅助运行态事件，不推进业务阶段。
+- `snapshot`：发布后的最新 Workflow 快照。
+
+发布预览不会确认方案、修改本地文件、提交 ai-doc、创建 GitLab Issue 或推进 Action。外部系统已经提供 HTTP URL 时，不需要调用本接口，直接在 `/api/workflows/report` 的 `artifacts` 中上报即可。
+
+## 7. 字段模型
+
+### 7.1 observation：完整生产方观察
+
+```json
+{
+  "schema": "my-adapter/v1",
+  "clientId": "my-adapter-main",
+  "observedAt": "2026-08-05T10:00:00.000Z",
+  "scope": "client",
+  "state": { "phase": "implementing", "pointer": "Android 实现中" }
+}
+```
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `schema` | 否 | 生产方状态 schema，默认 `workflow-observation/v1` |
+| `clientId` | 建议 | 观察来源稳定身份；同一 clientId 的新观察替换旧观察 |
+| `observedAt` | 建议 | ISO 时间 |
+| `scope` | 否 | 默认 `client` |
+| `state` | 是 | 完整观察对象，不是 patch |
+
+### 7.2 action：Action 时间轴节点
+
+```json
+{
+  "key": "implementation:runtime-hook:android",
   "title": "Android 实现完成",
-  "detail": "Remote Config 拉取频控已实现",
+  "detail": "MR !957 已合并",
   "status": "done",
   "group": "implementation",
-  "scope": "remote-config-android",
+  "scope": "runtime-hook",
   "platform": "android",
-  "issueKey": "issue-2",
-  "tags": ["remote-config"],
-  "occurredAt": "2026-08-04T08:00:00.000Z"
+  "issueKey": "runtime-hook",
+  "tags": ["client"],
+  "occurredAt": "2026-08-05T08:00:00.000Z"
 }
 ```
 
-`key` is required and stable. Supported normalized statuses are `pending`, `running`, `done`, `error`, `conflict`, `skipped`, `cancelled`, and `observed`. Common aliases such as `completed` and `success` normalize to `done`.
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `key` | 是 | 稳定阶段身份；同 key 更新同一阶段 |
+| `title` | 否 | 卡片标题，默认 key |
+| `detail` | 否 | 阶段摘要，最长按服务端约束截断 |
+| `status` | 否 | `pending/running/done/error/conflict/skipped/cancelled/observed` |
+| `group` | 否 | 阶段分组，例如 `implementation` |
+| `scope` | 否 | 业务范围 |
+| `platform` | 否 | 平台维度 |
+| `issueKey` | 否 | 自定义 Issue 身份 |
+| `tags` | 否 | 字符串数组 |
+| `occurredAt` | 否 | 业务发生时间；不要用重试时间覆盖它 |
 
-Repeated reports for the same stage may update its visible timeline entry. Use a new action key only for a semantically different action.
+`completed/success` 会规范化为 `done`，`failed` 会规范化为 `error`，未知状态回退为 `pending`。
 
-## 6. Artifact model
+### 7.3 artifacts：Action 或全局证据
 
 ```json
 {
-  "key": "implementation-mr:issue-2:android",
+  "key": "implementation-mr:runtime-hook:android",
   "type": "gitlab-mr",
-  "title": "Android 实现 MR",
-  "url": "https://git.example.test/group/project/-/merge_requests/123",
+  "title": "实现 MR !957",
+  "url": "https://git.example.test/merge_requests/957",
   "scope": "action",
   "status": "ready"
 }
 ```
 
-Use stable keys. `scope` is `action` or `global`. Action-scoped artifacts appear with an action; global artifacts appear in the related-artifacts area. URL and path aliases may be deduplicated, but producers must not rely on title-based identity.
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| `key` | 强烈建议 | 稳定证据身份；不要依赖标题去重 |
+| `type` | 否 | 产物类型，默认 `artifact` |
+| `title` | 否 | 展示标题 |
+| `url` / `path` | 至少一个 | 外部 URL 或可识别路径 |
+| `scope` | 否 | `action` 或 `global`；有 Action 时默认 `action` |
+| `status` | 否 | 生产方定义的证据状态 |
 
-## 7. Global-state model
-
-AgentFlow defines only the update operation:
+### 7.4 globalState：全局事实 patch
 
 ```json
 {
   "mode": "merge",
-  "patch": {
-    "producerDefined": {
-      "anySafeJsonShape": true
-    }
-  },
-  "remove": ["obsolete.path"]
+  "patch": { "myProducer": { "owner": "alice", "platforms": ["android"] } },
+  "remove": ["myProducer.obsoleteField"]
 }
 ```
 
-Rules:
+`mode` 当前只能是 `merge`。`patch` 与 `remove` 至少有一个。
 
-- `mode` must be `merge`.
-- `patch` recursively merges objects; arrays and scalar values replace the existing value.
-- `null` removes a field during merge.
-- `remove` contains dot-separated paths and is applied after the patch.
-- Never send the entire state unless the producer intentionally owns and has reconciled every field.
-- AgentFlow does not require Android/iOS sections or any prd-flow-specific layout.
-
-## 8. Timeline projection model
-
-Timeline projections give generic personal and team dashboards enough metadata to group Workflows without reading producer state:
+### 7.5 projections.timeline：迭代归属
 
 ```json
 {
-  "timeline": [
-    {
-      "kind": "version",
-      "id": "android-5.63.0",
-      "title": "Likee Android 5.63.0",
-      "date": "2026-08-20",
-      "source": "prd-flow",
-      "dimensions": {
-        "platform": "android"
-      },
-      "order": 0
-    }
-  ]
+  "timeline": [{
+    "kind": "version",
+    "id": "android:1133202860001000338",
+    "key": "my-adapter:version:android:1133202860001000338",
+    "title": "Likee Android 5.63.0",
+    "date": "2026-08-31",
+    "source": "my-adapter",
+    "dimensions": { "platform": "android" },
+    "order": 0
+  }]
 }
 ```
 
-Fields:
-
-| Field | Required | Meaning |
+| 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `kind` | Yes | Generic membership type, such as `version`, `release`, `sprint`, or `milestone` |
-| `id` | Yes | Stable producer identity within the kind |
-| `title` | No | Display title; defaults to `id` |
-| `date` | No | ISO-compatible target date used for timeline sorting |
-| `source` | No | Producer namespace, such as `prd-flow` |
-| `dimensions` | No | Opaque grouping and filtering facets |
-| `order` | No | Stable fallback ordering when dates are absent or equal |
-| `key` | No | Explicit aggregate key; otherwise derived from `source`, `kind`, and `id` |
+| `kind` | 是 | `version`、`sprint`、`milestone` 等通用类型 |
+| `id` | 是 | 生产方稳定身份；改名、改期时保持不变 |
+| `key` | 否但建议 | 聚合身份；缺省时由 `source + kind + id` 推导 |
+| `title` | 否 | 展示标题，默认 id |
+| `date` | 否 | ISO 兼容日期，用于时间线排序 |
+| `source` | 否 | 生产方 namespace |
+| `dimensions` | 否 | 不透明筛选维度，例如 platform/team |
+| `order` | 否 | 日期缺失或相同时的稳定顺序 |
 
-Replacement semantics:
+每次最多保留 100 条合法 timeline 项。
 
-- When `projections.timeline` is present, it is the complete current timeline membership and replaces the previous array.
-- `"timeline": []` explicitly clears all membership.
-- Omitting `projections` leaves the previous projection unchanged.
-- Multiple entries allow one Workflow to belong to multiple generic timelines.
-- Unknown `kind` and `dimensions` values remain valid and opaque.
+### 7.6 extensions：自定义区域
 
-Dashboard aggregation uses the explicit `key` when supplied; otherwise it derives one from `source + kind + id`. Invalid entries without `kind` or `id` are rejected on report.
+```json
+{
+  "prd-flow": {
+    "aiDocs": [{ "key": "tech-design", "title": "技术方案", "url": "https://..." }],
+    "issues": [{ "key": "runtime-hook", "title": "Runtime Hook", "platform": "android" }]
+  }
+}
+```
 
-## 9. Concurrency and idempotency
+扩展字段由生产方 schema 定义。AgentFlow 通用协议只校验 namespace 和顶层对象，不解释 `aiDocs`、`issues` 等私有字段。
 
-Use optimistic concurrency for every state or projection mutation:
+## 8. 覆盖、合并与删除规则
 
-1. Read the Workflow.
-2. Retain `snapshot.runtimeRevision`.
-3. Compute the semantic patch and complete derived projection.
-4. Report with `expectedRevision`.
-5. On 409, read again, reapply the same semantic intent, and retry once.
+| 区域 | 省略字段 | 重复上报 | 删除 / 清空 |
+| --- | --- | --- | --- |
+| `observation.state` | 保持旧观察 | 同一 `clientId` 的完整 state 替换旧观察 | 上报生产方定义的空值结构；不要用它删除其他 client 的观察 |
+| `globalState` | 不修改 | 对象递归 merge；数组和标量整体替换 | patch 中 `null` 删除字段；`remove` 在 patch 后删除 dot path |
+| `action` | 不修改 Action | 同 `source + action.key` 更新同一业务阶段的可见状态 | 当前协议不提供物理删除 Action；用业务状态表达取消/跳过 |
+| `artifacts` | 不修改产物 | 同 `source + stable key` 更新/归并同一可见证据 | 当前协议不提供通用物理删除；不要通过改 key 伪造删除 |
+| `projections.timeline` | 不修改 | **整数组替换**，不是按 key merge | `[]` 清空全部迭代归属 |
+| `extensions` | 不修改扩展 | namespace 内对象递归 merge；数组/标量替换 | 对应字段上报 `null` 删除；不要覆盖别人的 namespace |
 
-Do not blindly replace remote state after a conflict.
+更新 `projections.timeline` 前必须先 GET，保留不属于当前生产方的条目，再替换当前生产方拥有的 key。服务端不会自动按 `source` 帮你合并。
 
-Use an idempotency key that identifies the logical operation, not the HTTP attempt:
+## 9. 并发、幂等与错误码
+
+### 9.1 安全写入顺序
+
+1. GET 当前 Workflow。
+2. 保存 `snapshot.runtimeRevision`。
+3. 基于最新快照计算语义 patch，以及完整 timeline 数组。
+4. POST 时带稳定 `source`、`expectedRevision` 与 `idempotencyKey`。
+5. 收到 `409` 后重新 GET、重新合并，只重试一次。
+
+不得在 revision 冲突后原样重放旧的完整数组。
+
+### 9.2 幂等键
+
+幂等键标识业务操作，不标识 HTTP 尝试：
 
 ```text
 <operation>:<scope>:<entity>:<semantic-version>
 ```
 
-Examples:
+例如：
 
 ```text
-implementation-finished:android:issue-2:v1
-timeline-membership:tapd-1015046:android-5.63.0:v1
+implementation-finished:android:runtime-hook:v1
+timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 ```
 
-A replay may return `alreadyApplied: true`; treat it as successful completion.
+同一 `source + idempotencyKey` 的 Workflow Report 或 Artifact Publish 重放返回 `alreadyApplied: true`。Publish 会返回第一次创建的预览，不会先生成一个新文件再去重。业务内容发生变化时提高语义版本或使用内容摘要；不要使用请求时间。
 
-## 10. Producer integration procedure
+### 9.3 错误码
 
-Implement the producer adapter in this order:
+| HTTP | 含义 | 处理方式 |
+| --- | --- | --- |
+| `400` | JSON、namespace、字段或 schema 不合法 | 按协议修正；不要降级校验 |
+| `401` | 缺少或无效认证 | 停止并配置 Token；不要把 Token 打印出来 |
+| `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 停止；由 owner 授予 editor 或改用正确身份 |
+| `404` | 分享链接、owner 或目标资源不存在 | 重新解析目标，不要创建影子副本 |
+| `409` | runtime revision 已变化 | GET 最新状态、重新合并、重试一次 |
+| `500` | 服务端异常 | 保留幂等键，记录脱敏上下文后重试或上报 |
 
-1. Define its private `globalState` schema outside AgentFlow.
-2. Define a deterministic function from current producer state to the complete `projections.timeline` array.
-3. Make projection identities stable across title and date changes.
-4. Read the current materialized Workflow before reporting.
-5. Patch only owned global-state fields.
-6. Report the complete derived projection with the same operation when relevant.
-7. Persist or derive a stable idempotency key.
-8. Handle one revision-conflict retry.
-9. Verify the returned materialized state and projection.
-10. Confirm the personal and team iteration views group the Workflow correctly.
+## 10. 三个关键接入场景
 
-## 11. Examples
+### 10.1 更新迭代：绑定或切换版本
 
-### Action, artifact, state, and timeline together
+1. 从业务系统取得稳定版本 ID、标题、日期和平台。
+2. GET 当前 Workflow。
+3. 用 `globalState.patch` 保存生产方拥有的完整版本事实。
+4. 从现有 timeline 中保留其他生产方条目，替换自己的 `kind=version` 条目。
+5. 使用最新 revision 上报。
 
-```json
-{
-  "schemaVersion": 1,
-  "workflow": { "namespace": "tapd", "id": "1015046" },
-  "source": "prd-flow",
-  "action": {
-    "key": "implementation:android:issue-2",
-    "title": "Android 实现完成",
-    "status": "done",
-    "group": "implementation",
-    "platform": "android",
-    "issueKey": "issue-2"
-  },
-  "artifacts": [
-    {
-      "key": "implementation-mr:issue-2:android",
-      "type": "gitlab-mr",
-      "title": "Android 实现 MR",
-      "url": "https://git.example.test/group/project/-/merge_requests/123",
-      "scope": "action",
-      "status": "ready"
-    }
-  ],
-  "globalState": {
-    "mode": "merge",
-    "patch": {
-      "prdFlowOwnedState": {
-        "status": "implementing"
-      }
-    },
-    "remove": []
-  },
-  "projections": {
-    "timeline": [
-      {
-        "kind": "version",
-        "id": "android-5.63.0",
-        "title": "Likee Android 5.63.0",
-        "date": "2026-08-20",
-        "source": "prd-flow",
-        "dimensions": { "platform": "android" }
-      }
-    ]
-  },
-  "expectedRevision": "runtime:replace-with-current-revision",
-  "idempotencyKey": "implementation-finished:android:issue-2:v1"
-}
-```
+版本改名或改期时保持 `id/key` 不变，只改 `title/date`；切换版本时移除旧自有 key、加入新 key；取消归属时只移除自己的版本条目。
 
-### Projection-only synchronization
+### 10.2 上报 Action 与产物链接
 
-```json
-{
-  "workflow": { "namespace": "tapd", "id": "1015046" },
-  "source": "prd-flow",
-  "projections": {
-    "timeline": [
-      {
-        "kind": "sprint",
-        "id": "2026-w32",
-        "title": "2026 第 32 周",
-        "date": "2026-08-03",
-        "source": "prd-flow",
-        "dimensions": { "team": "client" }
-      }
-    ]
-  },
-  "expectedRevision": "runtime:replace-with-current-revision",
-  "idempotencyKey": "timeline-membership:tapd-1015046:2026-w32:v1"
-}
-```
+1. 先完成真实业务动作，例如创建 MR 或完成构建。
+2. 使用稳定 `action.key` 上报阶段结果。
+3. 已有 HTTP URL 的 MR、构建、测试报告直接放入同一 Report 的 `artifacts`。
+4. 本地 Markdown 先调用 Artifact Publish，取得 URL 后再作为阶段证据使用。
+5. 重复刷新同一阶段继续使用原 key；不要每次新建 Action。
 
-### Clear timeline membership
+### 10.3 上报自定义区域
 
-```json
-{
-  "workflow": { "namespace": "tapd", "id": "1015046" },
-  "projections": { "timeline": [] },
-  "expectedRevision": "runtime:replace-with-current-revision",
-  "idempotencyKey": "timeline-membership-clear:tapd-1015046:v1"
-}
-```
+1. 先判断 `globalState.sections` 的 `text/user/chips/list/link` 是否足够；足够时直接使用通用渲染器。
+2. 只有通用组件不能表达时，才定义稳定 namespace 和版本化扩展 schema。
+3. 把专用结构化事实放入 `extensions[namespace]`。
+4. 注册对应页面渲染器；否则数据只会被保存，不会自动出现专用 UI。当前只有 `extensions["prd-flow"]` 已注册。
+5. 更新数组时发送该数组的完整新值；更新对象字段时可以递归 merge；用 `null` 删除自有字段。
 
-## 12. Acceptance checklist
+## 11. prd-flow 参考映射
 
-- The producer can read the current Workflow using only token-backed configuration.
-- The producer never prints or stores the token in report data.
-- Global-state changes preserve unrelated fields.
-- Actions and artifacts use stable keys.
-- Timeline entries use stable `kind` and `id` values.
-- Timeline replacement and explicit clearing both work.
-- Revision conflicts trigger one read-merge-retry cycle.
-- Replaying an idempotency key does not duplicate visible state.
-- Returned `snapshot.runtimeRevision` changes after a real update.
-- Personal and team iteration pages show the same canonical grouping for accessible Workflows.
+prd-flow 只是一个接入实现，不是协议依赖：
+
+| prd-flow 事实 | 通用协议位置 | 页面结果 |
+| --- | --- | --- |
+| TAPD short ID | `workflow = tapd:<id>` | 串起同一需求、权限和分享 |
+| 计算出的完整当前状态 | `observation.state` | Workflow 全局概览和当前指针 |
+| TAPD 当前版本原始信息 | `globalState.tapdCurrentVersion` | 保留版本业务事实 |
+| 由版本事实派生的归属 | `projections.timeline[kind=version]` | 个人/团队迭代时间线 |
+| 方案确认、实现、提测、发布 | `action` | Action 时间轴和进度 |
+| MR、Jenkins、测试报告 URL | `artifacts` | Action 下产物入口 |
+| 本地方案 Markdown | Artifact Publish | 可分享方案预览 URL |
+| AI Docs / Issues | `extensions["prd-flow"]` | prd-flow 专用文档区和 Issue 区 |
+
+旧的 `/api/prd-workflow/snapshot`、`/api/prd-workflow/event`、`/api/prd-workflow/review-link` 仅供旧客户端迁移，返回弃用提示。新接入不得使用。
+
+## 12. 验收清单
+
+- 能使用 Token GET 当前 Workflow，并读到 runtime revision。
+- 首次写入能建立 owner；editor 能写，viewer、团队成员、分享链接和管理员代看不能写。
+- `globalState` 更新不会覆盖其他生产方路径，数组替换行为符合预期。
+- 同一 Action key 重报不产生重复业务阶段。
+- Action 下能看到稳定 key 的 MR、构建或测试产物。
+- Markdown Publish 返回可访问 URL，但不会推进业务状态。
+- 版本改名/改期不产生新迭代节点，版本切换不会删除第三方 Sprint。
+- 自定义 extension 能保存；注册渲染器后能显示对应文档区 / Issue 区。
+- 409 会触发一次 read → re-merge → retry。
+- 幂等重放返回成功且不重复应用。
+- Token 不出现在 JSON、日志、Artifact 或最终输出中。

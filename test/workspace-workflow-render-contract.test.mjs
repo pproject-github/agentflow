@@ -59,6 +59,37 @@ test("shared Workflow links render the Workflow content without the project top 
   );
 });
 
+test("Workflow details preserve an explicit Dashboard return route", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, /returnTo: returnTo === "\/workflows" \? returnTo : ""/);
+  assert.match(source, /if \(params\.returnTo\) q\.set\("returnTo", params\.returnTo\)/);
+  assert.match(
+    source,
+    /flowParams\.adminOwnerId \? "\/admin\/usage" : flowParams\.returnTo \|\| "\/projects"/,
+  );
+});
+
+test("Workflow details can render a read-only local demo snapshot", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, /workflowDemo: sp\.get\("workflowDemo"\) === "1"/);
+  assert.match(source, /function readWorkflowDemoSnapshot\(tapdId\)/);
+  assert.match(source, /if \(flowParams\.workflowDemo\) \{/);
+  assert.match(source, /本地只读示例/);
+  assert.match(source, /readOnly=\{flowParams\.workflowDemo\}/);
+  assert.match(source, /!tapdId \|\| flowParams\.workflowDemo/);
+});
+
+test("Workflow details use the canonical Artifact publish endpoint and registered prd-flow extensions", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, /fetch\("\/api\/workflow-artifacts\/publish"/);
+  assert.doesNotMatch(source, /fetch\("\/api\/prd-workflow\/review-link"/);
+  assert.match(source, /snapshot\?\.extensions\?\.\["prd-flow"\]/);
+  assert.match(source, /Array\.isArray\(prdFlowExtension\.aiDocs\)/);
+});
+
 test("Workflow progress fields use a compact responsive grid", async () => {
   const source = await readFile(workspacePagePath, "utf8");
   const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
@@ -82,5 +113,48 @@ test("Workflow progress fields use a compact responsive grid", async () => {
     css,
     /\.af-prd-overall-platform--compact \.af-prd-overall-platform__fields\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,/s,
     "Compact progress fields should flow horizontally and wrap responsively",
+  );
+});
+
+test("Workflow overview keeps long status text from squeezing its title", async () => {
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(
+    css,
+    /\.af-prd-overall > \.af-prd-workflow-card__head\s*\{[^}]*flex-direction:\s*column;/s,
+  );
+  assert.match(
+    css,
+    /\.af-prd-workflow-card__head \.af-prd-overall__status\s*\{[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
+});
+
+test("Workflow action Issue metadata stays on one line", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(source, /className="af-prd-workflow-action__meta-value"/);
+  assert.match(source, /title=\{`\$\{entry\.label\} · \$\{entry\.value\}`\}/);
+  assert.match(
+    css,
+    /\.af-prd-workflow-action__meta-value\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s,
+  );
+});
+
+test("Workflow detail uses one neutral surface palette", async () => {
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(css, /--af-workflow-surface:\s*rgba\(30, 29, 33, 0\.9\)/);
+  assert.match(
+    css,
+    /\.af-prd-workflow__status-main\s*\{[^}]*background:\s*var\(--af-workflow-surface\);/s,
+  );
+  assert.match(
+    css,
+    /\.af-prd-workflow-actions\s*\{[^}]*background:\s*var\(--af-workflow-surface\);/s,
+  );
+  assert.match(
+    css,
+    /\.af-prd-workflow-card\s*\{[^}]*background:\s*var\(--af-workflow-surface\);/s,
   );
 });

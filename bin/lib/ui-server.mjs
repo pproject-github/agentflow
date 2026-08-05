@@ -176,6 +176,7 @@ import {
 } from "./teams.mjs";
 import {
   legacyOverallToGlobalState,
+  materializeWorkflowExtensions,
   materializeWorkflowGlobalState,
   materializeWorkflowProjections,
   mergeWorkflowArtifactLists,
@@ -7997,7 +7998,17 @@ function prdWorkflowSafeStateId(value) {
 }
 
 function prdWorkflowReviewIdFromRequest(tapdId, payload = {}, durability = "temporary") {
-  if (durability === "temporary") return `r-${crypto.randomBytes(5).toString("hex")}`;
+  if (durability === "temporary") {
+    const idempotencyKey = String(payload.idempotencyKey || payload.idempotency_key || "").trim();
+    if (!idempotencyKey) return `r-${crypto.randomBytes(5).toString("hex")}`;
+    const source = String(payload.source || "agentflow-cli").trim().toLowerCase() || "agentflow-cli";
+    const digest = crypto
+      .createHash("sha256")
+      .update(JSON.stringify({ tapdId: String(tapdId || ""), source, idempotencyKey }))
+      .digest("hex")
+      .slice(0, 12);
+    return `r-${digest}`;
+  }
   const requested = String(payload.reviewId || payload.review_id || "").trim();
   if (!requested) return `review_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
   const safeRequested = prdWorkflowSafeStateId(requested);
@@ -10171,6 +10182,89 @@ function prdWorkflowSnapshotMetaFromReport(payload = {}, rawSnapshot = {}, req =
   };
 }
 
+function prdWorkflowStoreClientObservation({
+  scopedRoot,
+  tapdId,
+  rawState,
+  payload = {},
+  req = null,
+  userCtx = {},
+  flowSource = "user",
+  flowId = "",
+}) {
+  const normalizedSnapshot = {
+    ...prdWorkflowSnapshotFromParsed(scopedRoot, tapdId, rawState, userCtx, { flowSource, flowId }),
+    clientReportedAt: new Date().toISOString(),
+    sources: {
+      ...(rawState.sources && typeof rawState.sources === "object" ? rawState.sources : {}),
+      executionMode: "workflow-report",
+    },
+  };
+  const reportMeta = prdWorkflowSnapshotMetaFromReport(payload, rawState, req, userCtx);
+  const reportSource = {
+    ...(normalizedSnapshot.sources && typeof normalizedSnapshot.sources === "object" ? normalizedSnapshot.sources : {}),
+    executionMode: "workflow-report",
+    truth: "observation",
+    authority: "client",
+    persistence: "runtime",
+    clientId: reportMeta.clientId,
+    clientUserId: reportMeta.userId,
+    clientReportedAt: reportMeta.reportedAt,
+    clientObservedAt: reportMeta.observedAt,
+    baseRevision: reportMeta.baseRevision,
+    scope: reportMeta.scope,
+    platform: reportMeta.platform,
+    issueKey: reportMeta.issueKey,
+    stageKey: reportMeta.stageKey,
+  };
+  const existingClientState = prdWorkflowReadClientState(scopedRoot, tapdId);
+  const existingClientId = prdWorkflowSafeStateId(reportMeta.clientId || "anonymous");
+  const previousClientSnapshot = existingClientState.clients?.[existingClientId]?.snapshot || null;
+  const stampedSnapshot = prdWorkflowStampCurrentActionEntryTimes(
+    scopedRoot,
+    tapdId,
+    normalizedSnapshot,
+    existingClientState,
+    reportMeta,
+  );
+  const storedObservationSnapshot = prdWorkflowStoredObservationSnapshot(stampedSnapshot, reportSource);
+  const actionChanges = prdWorkflowSnapshotActionChanges(previousClientSnapshot || {}, storedObservationSnapshot);
+  prdWorkflowWriteClientObservation(scopedRoot, tapdId, reportMeta, storedObservationSnapshot);
+  prdWorkflowAppendAudit(scopedRoot, tapdId, {
+    type: "workflow-report-observation-stored",
+    flowSource,
+    flowId,
+    clientId: reportMeta.clientId,
+    userId: reportMeta.userId,
+    observedAt: reportMeta.observedAt,
+    reportedAt: reportMeta.reportedAt,
+    phase: String(storedObservationSnapshot?.phase || ""),
+    pointer: String(storedObservationSnapshot?.pointer || ""),
+    revision: String(storedObservationSnapshot?.revision || ""),
+    actionCount: prdWorkflowSnapshotActionCount(storedObservationSnapshot),
+    truth: "observation",
+    authority: "client",
+    persistence: "runtime",
+    note: "producer observation accepted through the canonical Workflow Report endpoint",
+  });
+  for (const change of actionChanges) {
+    prdWorkflowAppendAudit(scopedRoot, tapdId, {
+      type: "snapshot-action-change",
+      source: "workflow-report",
+      clientId: reportMeta.clientId,
+      userId: reportMeta.userId,
+      observedAt: reportMeta.observedAt,
+      reportedAt: reportMeta.reportedAt,
+      revision: String(storedObservationSnapshot.revision || ""),
+      previousRevision: String(previousClientSnapshot?.revision || ""),
+      pointer: String(storedObservationSnapshot.pointer || ""),
+      previousPointer: String(previousClientSnapshot?.pointer || ""),
+      ...change,
+    });
+  }
+  return { reportMeta, storedObservationSnapshot, previousClientSnapshot };
+}
+
 function prdWorkflowSnapshotReportConflict(existingRecord, incomingSnapshot, meta) {
   if (!existingRecord?.snapshot || meta.force) return null;
   const current = existingRecord.snapshot;
@@ -10565,6 +10659,13 @@ function prdWorkflowRuntimeEventCanonicalAction(stage = "") {
     : "";
 }
 
+function prdWorkflowRuntimeEventProducer(event = {}) {
+  return String(event.source || event.producer || "agentflow")
+    .trim()
+    .toLowerCase()
+    .slice(0, 120) || "agentflow";
+}
+
 function prdWorkflowRuntimeOwnedArtifacts(values, stage = "") {
   if (!Array.isArray(values)) return values;
   const ownsOnlyChangedArtifact = /^(?:issue-plan|implementation|bugfix|integration):/.test(String(stage || ""));
@@ -10588,14 +10689,14 @@ function prdWorkflowRuntimeEventId(event = {}) {
   const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
   if ((stage || action) && aggregateByStage) {
     const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
-    const key = [scope, issue, platform, stage || action].filter(Boolean).join(":");
+    const key = [prdWorkflowRuntimeEventProducer(event), scope, issue, platform, stage || action].filter(Boolean).join(":");
     return `stage_${prdWorkflowSafeStateId(key)}`;
   }
   const existing = String(event.id || event.eventId || event.event_id || "").trim();
   if (existing) return existing.slice(0, 160);
   if (stage || action) {
     const issue = String(event.issueKey || event.issue_key || event.issue || "").trim();
-    const key = [scope, issue, platform, stage || action].filter(Boolean).join(":");
+    const key = [prdWorkflowRuntimeEventProducer(event), scope, issue, platform, stage || action].filter(Boolean).join(":");
     return `stage_${prdWorkflowSafeStateId(key)}`;
   }
   return `evt_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
@@ -10659,8 +10760,13 @@ function prdWorkflowNormalizeRuntimeEvent(tapdId, event = {}) {
     entry.stage = stage;
     entry.stageKey = stage;
   }
-  entry.artifacts = prdWorkflowRuntimeOwnedArtifacts(entry.artifacts, stage);
-  entry.links = prdWorkflowRuntimeOwnedArtifacts(entry.links, stage);
+  const attachProducer = (values) => (Array.isArray(values) ? values.map((item) => (
+    item && typeof item === "object" && !Array.isArray(item)
+      ? { ...item, producer: String(item.producer || source).trim().toLowerCase() || source }
+      : item
+  )) : values);
+  entry.artifacts = attachProducer(prdWorkflowRuntimeOwnedArtifacts(entry.artifacts, stage));
+  entry.links = attachProducer(prdWorkflowRuntimeOwnedArtifacts(entry.links, stage));
   if (scope) entry.scope = scope;
   if (platform) entry.platform = platform;
   if (!entry.createdAt) entry.createdAt = event.startedAt || now;
@@ -10759,8 +10865,12 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
     const current = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
     const entry = prdWorkflowNormalizeRuntimeEvent(tapdId, event);
     const entryIdem = String(entry.idempotencyKey || "").trim();
+    const entryProducer = prdWorkflowRuntimeEventProducer(entry);
+    const entryDedupeKey = prdWorkflowRuntimeEventDedupeKey(entry);
     const index = current.events.findIndex((item) => {
+      if (prdWorkflowRuntimeEventProducer(item) !== entryProducer) return false;
       if (String(item?.id || "") === entry.id) return true;
+      if (prdWorkflowRuntimeEventDedupeKey(item) === entryDedupeKey) return true;
       if (!entryIdem) return false;
       if (String(item?.idempotencyKey || "").trim() === entryIdem) return true;
       return Array.isArray(item?.idempotencyHistory) && item.idempotencyHistory.includes(entryIdem);
@@ -10871,36 +10981,43 @@ function prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, event = {}) {
   }
 }
 
-function prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey) {
+function prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source = "", completedOnly = true) {
   const key = String(idempotencyKey || "").trim();
   if (!key) return null;
+  const producer = String(source || "").trim().toLowerCase();
   const events = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId).events;
   return [...events].reverse().find((event) => (
+    (!producer || prdWorkflowRuntimeEventProducer(event) === producer) &&
     (String(event?.idempotencyKey || "") === key || (Array.isArray(event?.idempotencyHistory) && event.idempotencyHistory.includes(key))) &&
-    ["done", "success", "completed"].includes(String(event?.status || "").toLowerCase())
+    (!completedOnly || ["done", "success", "completed"].includes(String(event?.status || "").toLowerCase()))
   )) || null;
 }
 
+function prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source = "") {
+  return prdWorkflowFindIdempotencyEvent(scopedRoot, tapdId, idempotencyKey, source, true);
+}
+
 function prdWorkflowRuntimeEventDedupeKey(event = {}, index = 0) {
+  const producer = prdWorkflowRuntimeEventProducer(event);
   const stage = prdWorkflowRuntimeEventCanonicalStage(event);
   const aggregateByStage = event.aggregateByStage !== false && event.aggregate_by_stage !== false;
   if (stage) {
     const issue = event?.issueKey || event?.issue_key || event?.issue;
     const platform = event?.platform;
     if (aggregateByStage || issue || platform) {
-      return ["stage", event?.scope, issue, platform, stage]
+      return ["producer", producer, "stage", event?.scope, issue, platform, stage]
         .map((value) => String(value || "").trim())
         .join(":");
     }
   }
   const id = String(event?.id || event?.eventId || event?.event_id || "").trim();
-  if (id) return `id:${id}`;
+  if (id) return `producer:${producer}:id:${id}`;
   if (stage) {
-    return ["stage", event?.scope, event?.issueKey || event?.issue_key || event?.issue, event?.platform, stage]
+    return ["producer", producer, "stage", event?.scope, event?.issueKey || event?.issue_key || event?.issue, event?.platform, stage]
       .map((value) => String(value || "").trim())
       .join(":");
   }
-  return `idx:${index}`;
+  return `producer:${producer}:idx:${index}`;
 }
 
 function prdWorkflowMergeRuntimeEventList(snapshotEvents = [], runtimeEvents = []) {
@@ -11169,14 +11286,24 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   const globalState = prdWorkflowGlobalStateFromEvents(tapdId, snapshot, runtimeEvents);
   const artifacts = mergeWorkflowArtifacts(snapshot?.artifacts, runtimeEvents);
   const projections = materializeWorkflowProjections(snapshot, runtimeEvents);
+  const extensions = materializeWorkflowExtensions(snapshot, runtimeEvents);
+  const prdFlowExtension = extensions["prd-flow"] && typeof extensions["prd-flow"] === "object"
+    ? extensions["prd-flow"]
+    : {};
+  const prdFlowExtensionView = {};
+  for (const key of ["issues", "issueGroups", "issue_groups", "epics", "epicGroups", "epic_groups", "aiDocs", "ai_docs"]) {
+    if (Object.prototype.hasOwnProperty.call(prdFlowExtension, key)) prdFlowExtensionView[key] = prdFlowExtension[key];
+  }
   return {
     ...snapshot,
+    ...prdFlowExtensionView,
     workflow: globalState.workflow,
     overall,
     globalState,
     artifacts,
     projections,
-    runtimeRevision: workflowRuntimeRevision(globalState, artifacts, runtimeEvents, projections),
+    extensions,
+    runtimeRevision: workflowRuntimeRevision(globalState, artifacts, runtimeEvents, projections, extensions),
     runtimeEvents,
     events,
     sources: {
@@ -12955,6 +13082,8 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/snapshot") {
+      res.setHeader("Deprecation", "true");
+      res.setHeader("Link", "</api/workflows/report>; rel=\"successor-version\"");
       if (!authUser?.userId) {
         json(res, 401, { error: "Authentication required" });
         return;
@@ -13188,6 +13317,10 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           snapshot: withDiagnostic,
+          compatibility: {
+            deprecatedEndpoint: "/api/prd-workflow/snapshot",
+            replacement: "/api/workflows/report with observation.state",
+          },
           ...(workflowShare ? { workflowShare, shareUrl: workflowShare.shortUrl || workflowShare.url } : {}),
         });
       } catch (e) {
@@ -13751,6 +13884,24 @@ export function startUiServer({
           String(currentSnapshot.runtimeRevision || "").trim(),
           String(currentSnapshot.revision || "").trim(),
         ].filter(Boolean));
+        if (report.idempotencyKey) {
+          const existing = prdWorkflowFindCompletedIdempotencyEvent(
+            scopedRoot,
+            tapdId,
+            report.idempotencyKey,
+            report.event.source,
+          );
+          if (existing) {
+            json(res, 200, {
+              ok: true,
+              alreadyApplied: true,
+              report,
+              event: existing,
+              snapshot: currentSnapshot,
+            });
+            return;
+          }
+        }
         if (report.expectedRevision && acceptedRevisions.size && !acceptedRevisions.has(report.expectedRevision)) {
           json(res, 409, {
             error: "Workflow state changed; refresh before reporting",
@@ -13764,28 +13915,36 @@ export function startUiServer({
           });
           return;
         }
-        if (report.idempotencyKey) {
-          const existing = prdWorkflowFindCompletedIdempotencyEvent(scopedRoot, tapdId, report.idempotencyKey);
-          if (existing) {
-            json(res, 200, {
-              ok: true,
-              alreadyApplied: true,
-              report,
-              event: existing,
-              snapshot: currentSnapshot,
-            });
-            return;
-          }
+        let observation = null;
+        if (report.observation) {
+          const observationPayload = {
+            ...payload,
+            tapdId,
+            clientId: report.observation.clientId || payload.clientId || payload.source || "workflow-reporter",
+            observedAt: report.observation.observedAt || payload.observedAt || "",
+            scope: report.observation.scope || payload.scope || "client",
+          };
+          observation = prdWorkflowStoreClientObservation({
+            scopedRoot,
+            tapdId,
+            rawState: report.observation.state,
+            payload: observationPayload,
+            req,
+            userCtx,
+            flowSource,
+            flowId,
+          });
         }
-        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
+        const shouldStoreEvent = report.hasRuntimeUpdate || Boolean(report.idempotencyKey);
+        const event = shouldStoreEvent ? prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
           ...report.event,
           tapdId,
           actor: {
             userId: String(userCtx.userId || ""),
             username: String(authUser.username || userCtx.userId || ""),
           },
-        });
-        if (!event) throw new Error("Failed to store workflow report");
+        }) : null;
+        if (shouldStoreEvent && !event) throw new Error("Failed to store workflow report");
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
           prdWorkflowMaterializeSnapshot(
             workflowScope.executionRoot,
@@ -13798,9 +13957,20 @@ export function startUiServer({
         );
         prdWorkflowBroadcast(
           prdWorkflowKey(userCtx, flowSource, flowId, tapdId),
-          { type: "workflow-report", tapdId, workflow: report.workflow, event, snapshot },
+          { type: "workflow-report", tapdId, workflow: report.workflow, event, observation: Boolean(observation), snapshot },
         );
-        json(res, 200, { ok: true, report, event, snapshot });
+        json(res, 200, {
+          ok: true,
+          report,
+          event,
+          observation: observation ? {
+            accepted: true,
+            clientId: observation.reportMeta.clientId,
+            observedAt: observation.reportMeta.observedAt,
+            schema: report.observation.schema,
+          } : null,
+          snapshot,
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -13808,6 +13978,8 @@ export function startUiServer({
     }
 
     if (req.method === "POST" && url.pathname === "/api/prd-workflow/event") {
+      res.setHeader("Deprecation", "true");
+      res.setHeader("Link", "</api/workflows/report>; rel=\"successor-version\"");
       if (!authUser?.userId) {
         json(res, 401, { error: "Authentication required" });
         return;
@@ -13858,14 +14030,26 @@ export function startUiServer({
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "runtime-event", tapdId, event, snapshot });
-        json(res, 200, { ok: true, event, snapshot });
+        json(res, 200, {
+          ok: true,
+          event,
+          snapshot,
+          compatibility: {
+            deprecatedEndpoint: "/api/prd-workflow/event",
+            replacement: "/api/workflows/report with action/artifacts/extensions",
+          },
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/prd-workflow/review-link") {
+    if (req.method === "POST" && (
+      url.pathname === "/api/workflow-artifacts/publish" ||
+      url.pathname === "/api/prd-workflow/review-link"
+    )) {
+      const legacyReviewEndpoint = url.pathname === "/api/prd-workflow/review-link";
       if (!authUser?.userId) {
         json(res, 401, { error: "Authentication required" });
         return;
@@ -13878,11 +14062,16 @@ export function startUiServer({
         return;
       }
       try {
-        const tapdId = String(payload.tapdId || payload.tapd_id || "").trim();
-        if (!tapdId) {
-          json(res, 400, { error: "Missing tapdId" });
+        const workflow = normalizeWorkflowReference(payload);
+        if (workflow.error) {
+          json(res, 400, { error: workflow.error });
           return;
         }
+        if (workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported workflow namespace: ${workflow.namespace}` });
+          return;
+        }
+        const tapdId = workflow.id;
         const flowId = String(payload.flowId || "").trim();
         const flowSource = String(payload.flowSource || "user").trim() || "user";
         const archived = payload.archived === true || payload.flowArchived === true;
@@ -13899,6 +14088,68 @@ export function startUiServer({
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, tapdId);
+        const producer = String(payload.source || "agentflow-cli").trim().toLowerCase() || "agentflow-cli";
+        if (!/^[a-z][a-z0-9._-]{0,119}$/.test(producer)) {
+          json(res, 400, { error: "Invalid workflow report source" });
+          return;
+        }
+        const idempotencyKey = String(
+          payload.idempotencyKey || payload.idempotency_key || "",
+        ).trim();
+        const currentSnapshot = prdWorkflowMaterializeSnapshot(
+          workflowScope.executionRoot,
+          scopedRoot,
+          tapdId,
+          userCtx,
+          { flowSource, flowId },
+        );
+        const expectedRevision = String(payload.expectedRevision || payload.expected_revision || "").trim();
+        const acceptedRevisions = new Set([
+          String(currentSnapshot.runtimeRevision || "").trim(),
+          String(currentSnapshot.revision || "").trim(),
+        ].filter(Boolean));
+        if (idempotencyKey) {
+          const existing = prdWorkflowFindIdempotencyEvent(
+            scopedRoot,
+            tapdId,
+            idempotencyKey,
+            producer,
+            false,
+          );
+          if (existing) {
+            const artifact = Array.isArray(existing.artifacts) ? existing.artifacts[0] : null;
+            json(res, 200, {
+              ok: true,
+              alreadyApplied: true,
+              workflow,
+              artifact,
+              review: artifact ? {
+                id: existing.reviewId || "",
+                url: artifact.canonicalUrl || artifact.url || "",
+                shortUrl: artifact.shortUrl || "",
+                shortCode: existing.reviewShortCode || "",
+                durability: existing.durability || artifact.durability || "",
+                expiresAt: existing.expiresAt || artifact.expiresAt || "",
+              } : null,
+              event: existing,
+              snapshot: currentSnapshot,
+            });
+            return;
+          }
+        }
+        if (expectedRevision && acceptedRevisions.size && !acceptedRevisions.has(expectedRevision)) {
+          json(res, 409, {
+            error: "Workflow state changed; refresh before publishing",
+            conflict: {
+              type: "workflow-revision-conflict",
+              expectedRevision,
+              currentRevision: currentSnapshot.runtimeRevision || currentSnapshot.revision || "",
+              workflow,
+            },
+            snapshot: currentSnapshot,
+          });
+          return;
+        }
         const review = prdWorkflowCreateReview(
           scopedRoot,
           tapdId,
@@ -13932,9 +14183,6 @@ export function startUiServer({
         const reviewSource = review.source && typeof review.source === "object" && !Array.isArray(review.source)
           ? review.source
           : { kind: durability === "durable" ? "ai-doc" : "local-draft", durability };
-        const idempotencyKey = String(
-          payload.idempotencyKey || payload.idempotency_key || "",
-        ).trim();
         const artifact = {
           key: artifactKey,
           label: payload.artifactLabel || "Markdown Review",
@@ -13950,6 +14198,7 @@ export function startUiServer({
           issueKey: payload.issueKey || payload.issue_key || "",
           platform: payload.platform || "",
           stageKey: reviewStageKey,
+          producer,
           ...(reviewMrUrl ? { mrUrl: reviewMrUrl } : {}),
           ...(reviewMrIid ? { mrIid: reviewMrIid } : {}),
           ...(reviewCommitSha ? { commitSha: reviewCommitSha } : {}),
@@ -13957,6 +14206,7 @@ export function startUiServer({
         const event = prdWorkflowAppendRuntimeEvent(scopedRoot, tapdId, {
           id: `review-link:${artifactKey}`,
           type: "review-link",
+          source: producer,
           auxiliary: true,
           aggregateByStage: false,
           conflictOnArtifact: false,
@@ -13988,6 +14238,7 @@ export function startUiServer({
             persistence: "runtime",
             durability,
             source: reviewSource,
+            producer,
             expiresAt: review.expiresAt || "",
             issueKey: artifact.issueKey,
             platform: artifact.platform,
@@ -14004,8 +14255,14 @@ export function startUiServer({
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, tapdId), { type: "review-link", tapdId, event, snapshot });
+        if (legacyReviewEndpoint) {
+          res.setHeader("Deprecation", "true");
+          res.setHeader("Link", "</api/workflow-artifacts/publish>; rel=\"successor-version\"");
+        }
         json(res, 200, {
           ok: true,
+          workflow,
+          artifact,
           review: {
             ...review,
             url: reviewUrl,
@@ -14014,6 +14271,12 @@ export function startUiServer({
           },
           event,
           snapshot,
+          ...(legacyReviewEndpoint ? {
+            compatibility: {
+              deprecatedEndpoint: "/api/prd-workflow/review-link",
+              replacement: "/api/workflow-artifacts/publish",
+            },
+          } : {}),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

@@ -120,7 +120,7 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs display-outputs --flow-id Te
 
 ## Workflow reporting
 
-The CLI implements `workflow-get` and `workflow-report`, but their state model, projection contract, concurrency rules, and AI procedure belong to the separate [`agentflow-workflow-report`](../agentflow-workflow-report/SKILL.md) skill. Use that skill whenever reading or mutating Workflow state; do not reconstruct the protocol from this general CLI guide.
+The reusable transport lives in `scripts/workflow-report-client.mjs`. The CLI exposes it through `workflow-get`, `workflow-report`, and `workflow-artifact-publish`; their state model, extension contract, concurrency rules, and AI procedure belong to the separate [`agentflow-workflow-report`](../agentflow-workflow-report/SKILL.md) skill. Use that skill whenever reading or mutating Workflow state; do not reconstruct the protocol from this general CLI guide.
 
 ## Workflow
 
