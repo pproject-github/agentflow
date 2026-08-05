@@ -214,3 +214,60 @@ test("TAPD authority sync protects bootstrap, stale snapshots, and owner transfe
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("Workflow knowledge bindings are owner-managed safe summaries", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-prd-knowledge-"));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  process.env.AGENTFLOW_HOME = tempRoot;
+  try {
+    const moduleUrl = new URL(`../bin/lib/prd-workflow-collaboration.mjs?test=${Date.now()}-knowledge`, import.meta.url);
+    const {
+      addPrdWorkflowCollaborationMember,
+      ensurePrdWorkflowCollaboration,
+      getPrdWorkflowCollaborationForUser,
+      prdWorkflowCollaborationSummary,
+      setPrdWorkflowKnowledgeBindings,
+    } = await import(moduleUrl);
+    const created = ensurePrdWorkflowCollaboration({ tapdId: "30001", userId: "owner" });
+    addPrdWorkflowCollaborationMember({
+      workflowId: created.record.id,
+      userId: "owner",
+      memberUserId: "viewer",
+      role: "viewer",
+    });
+    const denied = setPrdWorkflowKnowledgeBindings({
+      tapdId: "30001",
+      userId: "viewer",
+      bindings: [{ workspaceId: "mobile" }],
+    });
+    assert.equal(denied.status, 403);
+
+    const saved = setPrdWorkflowKnowledgeBindings({
+      tapdId: "30001",
+      userId: "owner",
+      bindings: [{
+        workspaceId: "mobile",
+        label: "Mobile Client",
+        kind: "git",
+        type: "code",
+        repoUrl: "git@example.test:mobile.git",
+        branch: "main",
+        path: "/secret/local/path",
+      }],
+    });
+    assert.equal(saved.error, undefined);
+    assert.equal(saved.knowledgeBindings.length, 1);
+    assert.equal(saved.knowledgeBindings[0].workspaceId, "mobile");
+    assert.equal("path" in saved.knowledgeBindings[0], false);
+    assert.equal("repoUrl" in saved.knowledgeBindings[0], false);
+
+    const viewerRecord = getPrdWorkflowCollaborationForUser("30001", "viewer");
+    const summary = prdWorkflowCollaborationSummary(viewerRecord, "viewer");
+    assert.equal(summary.knowledgeBindings[0].branch, "main");
+    assert.equal("path" in summary.knowledgeBindings[0], false);
+  } finally {
+    if (previousHome == null) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

@@ -16,7 +16,7 @@ import {
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
@@ -89,6 +89,8 @@ import {
 } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
+
+const WorkflowAssistantThread = lazy(() => import("../components/WorkflowAssistantThread.jsx"));
 
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX = "agentflow.workspace.sidebarCollapsed";
@@ -7358,6 +7360,7 @@ function PrdWorkflowTimelinePanel({
   tapdId,
   setTapdId,
   collaborationOpenRequest = 0,
+  assistantOpenRequest = 0,
   snapshot,
   loading,
   error,
@@ -7386,6 +7389,16 @@ function PrdWorkflowTimelinePanel({
   const [memberRole, setMemberRole] = useState("reporter");
   const [memberBusy, setMemberBusy] = useState(false);
   const [memberRemovingId, setMemberRemovingId] = useState("");
+  const [knowledgeBindings, setKnowledgeBindings] = useState([]);
+  const [knowledgeWorkspaces, setKnowledgeWorkspaces] = useState([]);
+  const [knowledgeSelection, setKnowledgeSelection] = useState([]);
+  const [knowledgeCanManage, setKnowledgeCanManage] = useState(false);
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantMessages, setAssistantMessages] = useState([]);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantError, setAssistantError] = useState("");
+  const [assistantSources, setAssistantSources] = useState([]);
   const phase = String(snapshot?.phase || (tapdId ? "unavailable" : "unselected"));
   const issues = Array.isArray(snapshot?.issues) ? snapshot.issues : [];
   const issueGroups = prdWorkflowIssueGroups(snapshot);
@@ -7415,6 +7428,18 @@ function PrdWorkflowTimelinePanel({
   const rawOutput = String(snapshot?.rawOutput || "");
   const globalState = snapshot?.globalState && typeof snapshot.globalState === "object" ? snapshot.globalState : null;
   const workflowSteps = prdWorkflowFlowSteps(phase);
+  const loadKnowledgeBindings = useCallback(async () => {
+    const id = String(tapdId || "").trim();
+    if (!id || flowParams.workflowShare) return;
+    const response = await fetch(`/api/workflows/knowledge-bindings?tapdId=${encodeURIComponent(id)}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "读取知识工作区绑定失败");
+    const bindings = Array.isArray(payload.bindings) ? payload.bindings : [];
+    setKnowledgeBindings(bindings);
+    setKnowledgeSelection(bindings.map((binding) => binding.workspaceId).filter(Boolean));
+    setKnowledgeWorkspaces(Array.isArray(payload.availableWorkspaces) ? payload.availableWorkspaces : []);
+    setKnowledgeCanManage(payload.canManage === true);
+  }, [flowParams.workflowShare, tapdId]);
   const loadSharing = useCallback(async () => {
     const id = String(tapdId || "").trim();
     if (!id) {
@@ -7467,12 +7492,79 @@ function PrdWorkflowTimelinePanel({
   const openSharing = useCallback(() => {
     setShareOpen(true);
     void loadSharing();
-  }, [loadSharing]);
+    void loadKnowledgeBindings().catch((loadError) => setShareError(String(loadError.message || loadError)));
+  }, [loadKnowledgeBindings, loadSharing]);
   useEffect(() => {
     if (!collaborationOpenRequest || collaborationOpenRequest === lastCollaborationOpenRequestRef.current) return;
     lastCollaborationOpenRequestRef.current = collaborationOpenRequest;
     openSharing();
   }, [collaborationOpenRequest, openSharing]);
+  const lastAssistantOpenRequestRef = useRef(0);
+  const openAssistant = useCallback(async () => {
+    if (!tapdId || flowParams.workflowShare) return;
+    setAssistantOpen(true);
+    setAssistantError("");
+    try {
+      const [bindingResult, conversationResponse] = await Promise.all([
+        loadKnowledgeBindings(),
+        fetch(`/api/workflows/conversation?tapdId=${encodeURIComponent(tapdId)}`),
+      ]);
+      void bindingResult;
+      const conversationPayload = await conversationResponse.json().catch(() => ({}));
+      if (conversationResponse.ok) setAssistantMessages(Array.isArray(conversationPayload.messages) ? conversationPayload.messages : []);
+    } catch (assistantLoadError) {
+      setAssistantError(String(assistantLoadError.message || assistantLoadError));
+    }
+  }, [flowParams.workflowShare, loadKnowledgeBindings, tapdId]);
+  useEffect(() => {
+    if (!assistantOpenRequest || assistantOpenRequest === lastAssistantOpenRequestRef.current) return;
+    lastAssistantOpenRequestRef.current = assistantOpenRequest;
+    void openAssistant();
+  }, [assistantOpenRequest, openAssistant]);
+  const saveKnowledgeBindings = async () => {
+    if (!tapdId || knowledgeBusy || !knowledgeCanManage) return;
+    setKnowledgeBusy(true);
+    setShareError("");
+    try {
+      const response = await fetch("/api/workflows/knowledge-bindings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, workspaceIds: knowledgeSelection }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "保存知识工作区绑定失败");
+      setKnowledgeBindings(Array.isArray(payload.bindings) ? payload.bindings : []);
+      if (payload.collaboration) setAccessCollaboration(payload.collaboration);
+    } catch (knowledgeError) {
+      setShareError(String(knowledgeError.message || knowledgeError));
+    } finally {
+      setKnowledgeBusy(false);
+    }
+  };
+  const submitWorkflowQuestion = async (question) => {
+    const text = String(question || "").trim();
+    if (!tapdId || !text || assistantBusy) return;
+    const optimistic = [...assistantMessages, { role: "user", content: text }];
+    setAssistantMessages(optimistic);
+    setAssistantBusy(true);
+    setAssistantError("");
+    try {
+      const response = await fetch("/api/workflows/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId, question: text, messages: assistantMessages }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Workflow AI 分析失败");
+      setAssistantMessages(Array.isArray(payload.messages) ? payload.messages : [...optimistic, { role: "assistant", content: payload.content || "" }]);
+      setAssistantSources(Array.isArray(payload.sources) ? payload.sources : []);
+    } catch (questionError) {
+      setAssistantError(String(questionError.message || questionError));
+      setAssistantMessages(assistantMessages);
+    } finally {
+      setAssistantBusy(false);
+    }
+  };
   const createSharingLink = async () => {
     if (!tapdId || shareBusy || flowParams.workflowShare) return;
     setShareBusy(true);
@@ -7969,6 +8061,50 @@ function PrdWorkflowTimelinePanel({
                   </p>
                 ) : null}
               </section>
+              {!flowParams.workflowShare ? (
+                <section className="af-prd-workflow-access-panel af-workflow-knowledge-panel" aria-label="Workflow 知识工作区">
+                  <div className="af-prd-workflow-access-panel__head">
+                    <div>
+                      <strong>AI 知识工作区</strong>
+                      <small>AI 会结合需求上下文，在隔离的代码快照中回答问题；不会修改真实仓库</small>
+                    </div>
+                    <span>{knowledgeBindings.length ? `已绑定 ${knowledgeBindings.length} 个` : "未绑定"}</span>
+                  </div>
+                  {knowledgeCanManage ? (
+                    <>
+                      <div className="af-workflow-knowledge-options">
+                        {knowledgeWorkspaces.length ? knowledgeWorkspaces.map((workspace) => {
+                          const checked = knowledgeSelection.includes(workspace.workspaceId);
+                          return (
+                            <label key={workspace.workspaceId} className={checked ? "is-selected" : ""}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => setKnowledgeSelection((current) => checked
+                                  ? current.filter((id) => id !== workspace.workspaceId)
+                                  : [...current, workspace.workspaceId])}
+                              />
+                              <span>
+                                <strong>{workspace.label}</strong>
+                                <small>{[workspace.type, workspace.branch, workspace.repoUrl].filter(Boolean).join(" · ")}</small>
+                              </span>
+                            </label>
+                          );
+                        }) : <p className="af-prd-workflow-muted">暂无可绑定的知识工作区，请先在知识库页面配置并同步 Git 仓库。</p>}
+                      </div>
+                      <button type="button" className="af-flow-snippet-modal__btn" disabled={knowledgeBusy} onClick={() => void saveKnowledgeBindings()}>
+                        {knowledgeBusy ? "保存中..." : "保存知识绑定"}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="af-workflow-knowledge-bindings">
+                      {knowledgeBindings.length ? knowledgeBindings.map((binding) => (
+                        <span key={binding.workspaceId}>{binding.label}{binding.branch ? ` · ${binding.branch}` : ""}</span>
+                      )) : <p className="af-prd-workflow-muted">Owner 尚未绑定代码知识工作区；仍可只基于需求上下文提问。</p>}
+                    </div>
+                  )}
+                </section>
+              ) : null}
               <div className="af-prd-workflow-share-divider"><span>只读链接</span></div>
               <p className="af-display-link-modal__empty">
                 通过链接分享 TAPD {tapdId}；不会授予上报权限，也不会分享当前 Project、画布或项目文件。
@@ -8013,6 +8149,44 @@ function PrdWorkflowTimelinePanel({
             </div>
           </div>
         </div>,
+        document.body,
+      ) : null}
+      {assistantOpen ? createPortal(
+        <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workflow-ai-drawer" aria-label="Workflow AI">
+          <div className="af-composer-sidebar">
+            <div className="af-pipeline-drawer-head">
+              <div>
+                <h2 className="af-pipeline-drawer-title">Workflow AI</h2>
+                <small>TAPD {tapdId} · 需求与代码只读分析</small>
+              </div>
+              <button type="button" className="af-pipeline-drawer-close af-icon-btn" onClick={() => setAssistantOpen(false)} aria-label="关闭 Workflow AI">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="af-workflow-ai-context">
+              <span className="material-symbols-outlined" aria-hidden>verified_user</span>
+              <div>
+                <strong>{knowledgeBindings.length ? `${knowledgeBindings.length} 个代码知识工作区` : "仅需求上下文"}</strong>
+                <small>{knowledgeBindings.length ? "优先使用上报 commit/ref，否则使用绑定分支或本地 HEAD" : "请让需求 Owner 在“协作”中绑定代码仓库"}</small>
+              </div>
+            </div>
+            <Suspense fallback={(
+              <div className="af-workflow-assistant-loading" role="status">
+                <span className="material-symbols-outlined" aria-hidden>auto_awesome</span>
+                正在准备需求 AI…
+              </div>
+            )}>
+              <WorkflowAssistantThread
+                messages={assistantMessages}
+                running={assistantBusy}
+                error={assistantError}
+                sources={assistantSources}
+                suggestions={["这个需求目前做到哪里了？", "核心实现逻辑在哪些文件？", "当前实现还有哪些风险或遗漏？"]}
+                onSend={submitWorkflowQuestion}
+              />
+            </Suspense>
+          </div>
+        </aside>,
         document.body,
       ) : null}
     </main>
@@ -8199,6 +8373,7 @@ function WorkspacePageInner() {
   const [workspaceShareTeamRole, setWorkspaceShareTeamRole] = useState("viewer");
   const [workspaceShareTeamBusy, setWorkspaceShareTeamBusy] = useState(false);
   const [workflowCollaborationOpenRequest, setWorkflowCollaborationOpenRequest] = useState(0);
+  const [workflowAssistantOpenRequest, setWorkflowAssistantOpenRequest] = useState(0);
   const [workspaceConflict, setWorkspaceConflict] = useState(null);
   const [workspaceConflictOpen, setWorkspaceConflictOpen] = useState(false);
   const [workspaceConflictChoices, setWorkspaceConflictChoices] = useState({});
@@ -13741,15 +13916,17 @@ function WorkspacePageInner() {
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
-          <span
-            className={`af-workspace-sync-light is-${workspaceSyncPhase}`}
-            title={`${workspaceSyncLabel} · ${workspaceSyncDetail}`}
-            role="status"
-            aria-label={`${workspaceSyncLabel}：${workspaceSyncDetail}`}
-          >
-            <span className="af-workspace-sync-light__dot" aria-hidden />
-          </span>
-          {workspaceConflict ? (
+          {!isWorkflowMode ? (
+            <span
+              className={`af-workspace-sync-light is-${workspaceSyncPhase}`}
+              title={`${workspaceSyncLabel} · ${workspaceSyncDetail}`}
+              role="status"
+              aria-label={`${workspaceSyncLabel}：${workspaceSyncDetail}`}
+            >
+              <span className="af-workspace-sync-light__dot" aria-hidden />
+            </span>
+          ) : null}
+          {!isWorkflowMode && workspaceConflict ? (
             <button
               type="button"
               className="af-workspace-display-share-btn"
@@ -13820,7 +13997,7 @@ function WorkspacePageInner() {
             <span className="material-symbols-outlined" aria-hidden>group_add</span>
             协作
           </button>
-          {!adminReview ? (
+          {!adminReview && !isWorkflowMode ? (
             <button
               type="button"
               className="af-workspace-display-share-btn"
@@ -13831,26 +14008,30 @@ function WorkspacePageInner() {
               我的分享
             </button>
           ) : null}
-          <button
-            type="button"
-            className="af-icon-btn"
-            disabled={!canManageCurrentFlow}
-            onClick={() => setArchiveModalOpen(true)}
-            aria-label={t("project:archiveModal.title")}
-            title={t("project:archiveModal.title")}
-          >
-            <span className="material-symbols-outlined">archive</span>
-          </button>
-          <button
-            type="button"
-            className="af-icon-btn af-icon-btn--danger"
-            disabled={!canManageCurrentFlow && !canLeaveSharedFlow}
-            onClick={() => setDeleteModalOpen(true)}
-            aria-label={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
-            title={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
-          >
-            <span className="material-symbols-outlined">{canLeaveSharedFlow ? "logout" : "delete_forever"}</span>
-          </button>
+          {!isWorkflowMode ? (
+            <>
+              <button
+                type="button"
+                className="af-icon-btn"
+                disabled={!canManageCurrentFlow}
+                onClick={() => setArchiveModalOpen(true)}
+                aria-label={t("project:archiveModal.title")}
+                title={t("project:archiveModal.title")}
+              >
+                <span className="material-symbols-outlined">archive</span>
+              </button>
+              <button
+                type="button"
+                className="af-icon-btn af-icon-btn--danger"
+                disabled={!canManageCurrentFlow && !canLeaveSharedFlow}
+                onClick={() => setDeleteModalOpen(true)}
+                aria-label={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
+                title={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
+              >
+                <span className="material-symbols-outlined">{canLeaveSharedFlow ? "logout" : "delete_forever"}</span>
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="af-icon-btn"
@@ -13862,21 +14043,29 @@ function WorkspacePageInner() {
           </button>
           <button
             type="button"
-            className={"af-composer-topbar-btn" + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
-            disabled={!workspaceWritable || isDisplayMode || isWorkflowMode}
+            className={"af-composer-topbar-btn" + (isWorkflowMode ? " af-composer-topbar-btn--workflow" : "") + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
+            disabled={isDisplayMode || (isWorkflowMode ? !workflowTapdId || Boolean(flowParams.workflowShare) : !workspaceWritable)}
             onClick={() => {
+              if (isWorkflowMode) {
+                setWorkflowAssistantOpenRequest((request) => request + 1);
+                return;
+              }
               setWorkspaceRunLogsTarget(null);
               setComposerSidebarOpen((v) => {
                 if (!v) setActiveComposerSessionId(latestComposerSessionId());
                 return !v;
               });
             }}
+            title={isWorkflowMode ? "结合需求上下文和绑定代码仓库进行 AI 问答" : "打开 Workspace AI"}
           >
-            AI
+            {isWorkflowMode ? <span className="material-symbols-outlined" aria-hidden>auto_awesome</span> : null}
+            {isWorkflowMode ? "需求 AI" : "AI"}
           </button>
-          <button type="button" className="af-btn-primary af-btn-primary--lg" disabled={!workspaceWritable} onClick={() => saveGraph().catch((e) => setStatus(String(e.message || e)))}>
-            Save
-          </button>
+          {!isWorkflowMode ? (
+            <button type="button" className="af-btn-primary af-btn-primary--lg" disabled={!workspaceWritable} onClick={() => saveGraph().catch((e) => setStatus(String(e.message || e)))}>
+              Save
+            </button>
+          ) : null}
         </div>
         </header>
       ) : null}
@@ -14182,6 +14371,7 @@ function WorkspacePageInner() {
             tapdId={workflowTapdId}
             setTapdId={setWorkflowTapdId}
             collaborationOpenRequest={workflowCollaborationOpenRequest}
+            assistantOpenRequest={workflowAssistantOpenRequest}
             snapshot={workflowSnapshot}
             loading={workflowLoading}
             error={workflowError}
