@@ -132,6 +132,9 @@ test("Workflow AI uses owner-managed knowledge bindings and a dedicated query su
   assert.match(source, /assistantOpenRequest=\{workflowAssistantOpenRequest\}/);
   assert.match(source, /AI 知识工作区/);
   assert.match(source, /需求与代码只读分析/);
+  assert.match(source, /knowledgeBindings\.slice\(0, 3\)\.map/);
+  assert.match(source, /className="af-prd-workflow-knowledge-chip"/);
+  assert.match(source, /\[binding\.type, binding\.branch\]\.filter\(Boolean\)\.join\(" · "\)/);
   assert.match(source, /<WorkflowAssistantThread/);
   assert.match(assistantSource, /from "@assistant-ui\/react"/);
   assert.match(assistantSource, /useExternalStoreRuntime\(/);
@@ -150,6 +153,7 @@ test("Workflow AI uses owner-managed knowledge bindings and a dedicated query su
   assert.match(css, /\.af-workflow-ai-drawer\s*\{[^}]*position:\s*fixed;/s);
   assert.match(css, /\.af-workflow-assistant-viewport\s*\{/);
   assert.match(css, /\.af-workflow-assistant-composer\s*\{/);
+  assert.match(css, /\.af-prd-workflow-collab \.af-prd-workflow-knowledge-chip\s*\{/);
   assert.match(css, /\.af-composer-topbar-btn--workflow\s*\{/);
 });
 
@@ -201,6 +205,11 @@ test("Workflow action Issue metadata stays on one line", async () => {
   assert.match(
     css,
     /\.af-prd-workflow-action__meta-value\s*\{[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s,
+  );
+  assert.match(
+    css,
+    /\.af-prd-workflow-action__meta-item--issue\s*\{[^}]*flex:\s*0 1 auto;[^}]*max-width:\s*min\(28rem, 100%\);/s,
+    "Issue metadata should size to its content instead of reserving a 28rem column",
   );
 });
 

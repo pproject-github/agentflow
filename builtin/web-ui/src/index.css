@@ -8605,6 +8605,24 @@ button.af-project-card {
   white-space: nowrap;
 }
 
+.af-prd-workflow-collab .af-prd-workflow-knowledge-chip {
+  max-width: min(18rem, 100%);
+  border-color: rgba(125, 207, 255, 0.2);
+  background: rgba(125, 207, 255, 0.075);
+  color: rgba(202, 235, 255, 0.9);
+}
+
+.af-prd-workflow-collab .af-prd-workflow-knowledge-chip > .material-symbols-outlined {
+  color: rgba(151, 218, 255, 0.82);
+}
+
+.af-prd-workflow-collab .af-prd-workflow-knowledge-chip--more {
+  color: rgba(202, 195, 216, 0.68);
+  border-style: dashed;
+  border-color: rgba(202, 195, 216, 0.16);
+  background: transparent;
+}
+
 .af-prd-workflow-conflict {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
@@ -8993,7 +9011,8 @@ button.af-project-card {
 }
 
 .af-prd-workflow-action__meta-item--issue {
-  flex: 0 1 28rem;
+  flex: 0 1 auto;
+  max-width: min(28rem, 100%);
 }
 
 .af-prd-workflow-action__meta-value {
