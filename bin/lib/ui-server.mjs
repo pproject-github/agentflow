@@ -3761,11 +3761,11 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}, projec
     ? snapshot.overall.requirement
     : {};
   const title = String(
-    requirement.title
+    snapshot?.globalState?.title
+    || requirement.title
     || requirement.name
     || snapshot?.prd?.title
     || snapshot?.raw?.prd?.title
-    || snapshot?.title
     || "",
   ).trim();
   const timeline = Array.isArray(snapshot?.projections?.timeline)

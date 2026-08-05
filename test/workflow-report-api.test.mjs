@@ -148,6 +148,8 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     assert.equal(dashboardResult.timeline.length, 1);
     assert.equal(dashboardResult.timeline[0].key, "prd-flow:version:1133202860001000338");
     assert.equal(dashboardResult.timeline[0].workflowCount, 1);
+    assert.equal(dashboardResult.workflows[0].title, "双端 Remote Config");
+    assert.notEqual(dashboardResult.workflows[0].title, reportPayload.action.title);
     assert.deepEqual(dashboardResult.workflows[0].timeline[0].dimensions.platform, ["android", "ios"]);
     assert.equal(dashboardResult.unassignedCount, 0);
 
