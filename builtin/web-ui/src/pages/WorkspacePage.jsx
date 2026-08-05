@@ -570,6 +570,24 @@ function prdWorkflowActionLabel(action) {
   return String(action.label || action.title || action.name || action.id || action.action || "").trim();
 }
 
+function prdWorkflowRequirementTitle(snapshot, tapdId = "") {
+  const globalState = snapshot?.globalState && typeof snapshot.globalState === "object"
+    ? snapshot.globalState
+    : {};
+  const requirement = snapshot?.overall?.requirement && typeof snapshot.overall.requirement === "object"
+    ? snapshot.overall.requirement
+    : {};
+  const title = String(
+    globalState.title
+    || requirement.title
+    || requirement.name
+    || snapshot?.prd?.title
+    || snapshot?.raw?.prd?.title
+    || "",
+  ).trim();
+  return title || (tapdId ? `TAPD ${tapdId}` : "选择 TAPD 需求后读取状态");
+}
+
 function prdWorkflowNormalizeHref(href) {
   const clean = String(href || "").trim();
   if (!clean) return "";
@@ -7429,6 +7447,7 @@ function PrdWorkflowTimelinePanel({
   const clientObservations = Array.isArray(snapshot?.clientObservations) ? snapshot.clientObservations : [];
   const rawOutput = String(snapshot?.rawOutput || "");
   const globalState = snapshot?.globalState && typeof snapshot.globalState === "object" ? snapshot.globalState : null;
+  const requirementTitle = prdWorkflowRequirementTitle(snapshot, tapdId);
   const workflowSteps = prdWorkflowFlowSteps(phase);
   const loadKnowledgeBindings = useCallback(async () => {
     const id = String(tapdId || "").trim();
@@ -7680,7 +7699,7 @@ function PrdWorkflowTimelinePanel({
           <span className={`af-prd-workflow-phase af-prd-workflow-phase--${phase.toLowerCase().replace(/[^a-z0-9_-]+/gi, "_")}`}>
             {prdWorkflowPhaseLabel(phase)}
           </span>
-          <h1>{snapshot?.pointer || (tapdId ? "等待 prd-flow 返回状态" : "选择 TAPD 需求后读取状态")}</h1>
+          <h1>{requirementTitle}</h1>
           <p className="af-prd-workflow__status-subtitle">
             {tapdId ? <>TAPD <strong>{tapdId}</strong> · {flowParams.workflowDemo ? "本地只读示例" : "独立需求 Workflow"}</> : <>尚未选择 TAPD 需求</>}
           </p>

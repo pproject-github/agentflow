@@ -670,7 +670,7 @@ export default function WorkflowsPage() {
                         </span>
                       ) : null}
                     </div>
-                    <h2>{workflow.title || workflow.pointer || `需求 ${workflow.tapdId}`}</h2>
+                    <h2>{workflow.title || `TAPD ${workflow.tapdId}`}</h2>
                     <div className="af-workflow-card__meta">
                       <span>{workflow.phase || "未识别阶段"}</span>
                       <span>{workflow.issueCount || 0} Issues</span>

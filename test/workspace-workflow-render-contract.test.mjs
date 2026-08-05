@@ -74,6 +74,20 @@ test("Workflow details preserve an explicit Dashboard return route", async () =>
   );
 });
 
+test("Workflow list and details use the TAPD requirement title instead of the current Action", async () => {
+  const workspaceSource = await readFile(workspacePagePath, "utf8");
+  const workflowsSource = await readFile(
+    new URL("../builtin/web-ui/src/pages/WorkflowsPage.jsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(workspaceSource, /function prdWorkflowRequirementTitle\(snapshot, tapdId = ""\)/);
+  assert.match(workspaceSource, /globalState\.title[\s\S]*requirement\.title/);
+  assert.match(workspaceSource, /<h1>\{requirementTitle\}<\/h1>/);
+  assert.doesNotMatch(workflowsSource, /workflow\.title \|\| workflow\.pointer/);
+  assert.match(workflowsSource, /<h2>\{workflow\.title \|\| `TAPD \$\{workflow\.tapdId\}`\}<\/h2>/);
+});
+
 test("Workflow Project navigation requires an explicit binding", async () => {
   const source = await readFile(workspacePagePath, "utf8");
 
