@@ -53,7 +53,7 @@ test("PRD Workflow sharing is keyed by TAPD ID instead of Project", async () => 
   }
 });
 
-test("a user cannot join two shared Workflows for the same TAPD ID", async () => {
+test("a TAPD ID has one canonical shared Workflow owner", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-prd-collab-conflict-"));
   const previousHome = process.env.AGENTFLOW_HOME;
   process.env.AGENTFLOW_HOME = tempRoot;
@@ -65,17 +65,14 @@ test("a user cannot join two shared Workflows for the same TAPD ID", async () =>
     } = await import(moduleUrl);
     const first = ensurePrdWorkflowCollaboration({ tapdId: "1015046", userId: "owner-a" });
     const second = ensurePrdWorkflowCollaboration({ tapdId: "1015046", userId: "owner-b" });
+    assert.equal(second.status, 403);
+    assert.match(second.error, /another owner/);
     assert.equal(addPrdWorkflowCollaborationMember({
       workflowId: first.workflow.id,
       userId: "owner-a",
       memberUserId: "guest",
     }).error, undefined);
-    const conflict = addPrdWorkflowCollaborationMember({
-      workflowId: second.workflow.id,
-      userId: "owner-b",
-      memberUserId: "guest",
-    });
-    assert.equal(conflict.status, 409);
+    assert.equal(first.workflow.tapdId, "1015046");
   } finally {
     if (previousHome == null) delete process.env.AGENTFLOW_HOME;
     else process.env.AGENTFLOW_HOME = previousHome;

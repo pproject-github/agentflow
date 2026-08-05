@@ -78,6 +78,7 @@ test("team APIs manage membership and expose team-scoped iterations and projects
       method: "POST",
       body: JSON.stringify({
         workflow: { namespace: "tapd", id: "778899" },
+        source: "prd-flow",
         projections: {
           timeline: [{
             kind: "release",

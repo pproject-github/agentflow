@@ -66,7 +66,7 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(page, /权限矩阵/);
   assert.match(page, /覆盖矩阵/);
   assert.match(page, /同团队成员/);
-  assert.match(page, /整数组替换/);
+  assert.match(page, /当前 source 的完整切片替换/);
   assert.match(page, /"prd-flow":/);
   assert.match(page, /Workflow Report Client/);
   assert.match(page, /observation\.state/);
@@ -112,7 +112,9 @@ test("Workflow reporting specification is isolated in its own skill", async () =
   assert.match(protocol, /覆盖、合并与删除规则/);
   assert.match(protocol, /Workflow owner/);
   assert.match(protocol, /显式 editor/);
-  assert.match(protocol, /整数组替换/);
+  assert.match(protocol, /替换当前 `source` 拥有的完整切片/);
+  assert.match(protocol, /resourceVersions/);
+  assert.match(protocol, /任意一个 key 冲突时整次请求不落库/);
   assert.match(protocol, /expectedRevision/);
   assert.match(protocol, /idempotencyKey/);
   assert.match(protocol, /当前身份适配器的边界/);

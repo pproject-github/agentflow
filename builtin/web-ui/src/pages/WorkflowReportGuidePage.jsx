@@ -21,20 +21,22 @@ const QUICKSTART_REPORT = `{
     "status": "done",
     "occurredAt": "2026-08-05T08:00:00.000Z"
   },
+  "expectedVersions": {
+    "action:my-adapter:requirement-imported": "absent"
+  },
   "idempotencyKey": "requirement-imported:1020124:v1"
 }`;
 
-const QUICKSTART_COMMANDS = `# 1. 读取；记录返回的 snapshot.runtimeRevision
+const QUICKSTART_COMMANDS = `# 1. 读取；记录本次要修改 key 的 snapshot.resourceVersions
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-get \\
   --workflow tapd:1020124 --runtime-only
 
 # 2. 将右侧 JSON 保存为 workflow-report.json 后上报
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-report \\
   --workflow tapd:1020124 \\
-  --file workflow-report.json \\
-  --expected-revision 'runtime:<current-revision>'
+  --file workflow-report.json
 
-# 3. 再读一次，确认 action 和 runtimeRevision 已更新
+# 3. 再读一次，确认 action 和对应 resourceVersions 已更新
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workflow-get \\
   --workflow tapd:1020124 --runtime-only`;
 
@@ -50,6 +52,9 @@ const READ_RESPONSE = `{
   },
   "snapshot": {
     "runtimeRevision": "runtime:<current-revision>",
+    "resourceVersions": {
+      "action:my-adapter:requirement-imported": "rv:<resource-version>"
+    },
     "globalState": {},
     "actions": [],
     "artifacts": [],
@@ -76,11 +81,6 @@ const VERSION_REPORT = `{
   "projections": {
     "timeline": [
       {
-        "kind": "sprint",
-        "id": "2026-w32",
-        "key": "another-producer:sprint:2026-w32"
-      },
-      {
         "kind": "version",
         "id": "android:1133202860001000338",
         "key": "prd-flow:version:android:1133202860001000338",
@@ -91,7 +91,13 @@ const VERSION_REPORT = `{
       }
     ]
   },
-  "expectedRevision": "runtime:<current-revision>",
+  "expectedVersions": {
+    "global:tapdCurrentVersion.id": "rv:<version-from-get-or-absent>",
+    "global:tapdCurrentVersion.name": "rv:<version-from-get-or-absent>",
+    "global:tapdCurrentVersion.date": "rv:<version-from-get-or-absent>",
+    "global:tapdCurrentVersion.platform": "rv:<version-from-get-or-absent>",
+    "projection:prd-flow:version:android:1133202860001000338": "absent"
+  },
   "idempotencyKey": "timeline:1020124:android-version-1133202860001000338:v1"
 }`;
 
@@ -117,7 +123,10 @@ const ACTION_REPORT = `{
     "scope": "action",
     "status": "ready"
   }],
-  "expectedRevision": "runtime:<current-revision>",
+  "expectedVersions": {
+    "action:prd-flow:implementation:runtime-hook:android": "absent",
+    "artifact:prd-flow:implementation-mr:runtime-hook:android": "absent"
+  },
   "idempotencyKey": "implementation-finished:android:runtime-hook:v1"
 }`;
 
@@ -140,7 +149,10 @@ const EXTENSION_REPORT = `{
       }]
     }
   },
-  "expectedRevision": "runtime:<current-revision>",
+  "expectedVersions": {
+    "extension:prd-flow:aiDocs": "rv:<version-from-get-or-absent>",
+    "extension:prd-flow:issues": "rv:<version-from-get-or-absent>"
+  },
   "idempotencyKey": "prd-panels:1020124:<semantic-digest>"
 }`;
 
@@ -206,14 +218,16 @@ Content-Type: application/json
   "artifactLabel": "方案预览",
   "durability": "temporary",
   "ttlDays": 7,
-  "expectedRevision": "runtime:<current-revision>",
+  "expectedVersions": {
+    "artifact:prd-flow:plan:runtime-hook:android": "absent"
+  },
   "idempotencyKey": "review:plan:runtime-hook:android:<content-digest>"
 }`;
 
 const AI_GUIDE = `请使用 $agentflow-workflow-report 接入一个生产方，并完整阅读 references/protocol.md。
 
 目标只有三个正式接口：
-1. GET /api/workflows/state：读取 snapshot.runtimeRevision 和当前状态。
+1. GET /api/workflows/state：读取当前状态和 snapshot.resourceVersions。
 2. POST /api/workflows/report：写全局信息、Action、普通产物、迭代投影或自定义区域。
 3. POST /api/workflow-artifacts/publish：把本地 Markdown 内容发布成预览 URL。
 
@@ -231,10 +245,10 @@ const AI_GUIDE = `请使用 $agentflow-workflow-report 接入一个生产方，�
 - globalState 只 patch 自己拥有的路径；对象递归合并，数组/标量替换。
 - source 使用真实业务 Adapter 的稳定小写名称；agentflow-cli 只是传输工具。
 - 同一 source + action.key 更新同一阶段，不为刷新或重试创建新 key。
-- timeline 是完整数组替换；先读取并保留其他生产方条目。
+- timeline 只提交当前 source 的完整切片；服务端原子保留其他生产方条目。
 - globalState.sections 是当前通用自定义卡片能力；优先使用现有 field type。
 - extensions 只写自己的 namespace；当前仅 prd-flow 注册了 AI Docs / Issues 专用 renderer，保存其他 namespace 不会自动出现 UI。
-- 携带 expectedRevision 与稳定 idempotencyKey；409 后重新读取、重新合并，只重试一次。
+- 为本次触及的每个业务 key 携带 expectedVersions 与稳定 idempotencyKey；任一 key 冲突时整次请求不落库，刷新冲突 key 后只重试一次。
 - 不输出 Token，不新增生产方专用写接口，不使用 /api/prd-workflow/* 兼容接口。
 
 最后验证 Workflow 全局区域、Action 时间轴、产物链接、个人/团队迭代和自定义区域。`;
@@ -244,7 +258,7 @@ const ENDPOINTS = [
     method: "GET",
     path: "/api/workflows/state",
     title: "读取当前 Workflow",
-    detail: "取得服务端物化快照与 runtimeRevision；安全写入的第一步。",
+    detail: "取得服务端物化快照与每个业务 key 的 resourceVersions；安全写入的第一步。",
     permission: "可访问该 Workflow 的用户可读",
     effect: "只读，不修改任何状态",
   },
@@ -277,7 +291,8 @@ const STATE_QUERY_FIELDS = [
 
 const STATE_RESPONSE_FIELDS = [
   ["workflow", "object", "规范身份 {namespace,id,key}"],
-  ["snapshot.runtimeRevision", "string", "下一次安全写入使用的并发版本"],
+  ["snapshot.resourceVersions", "object", "业务 key 到并发版本的映射；新接入按本次触及 key 取值"],
+  ["snapshot.runtimeRevision", "string", "整份运行态版本；页面缓存与旧客户端兼容使用"],
   ["snapshot.globalState", "object", "服务端合并后的全局区域"],
   ["snapshot.actions", "array", "已物化的 Action 时间轴"],
   ["snapshot.artifacts", "array", "已物化的全局产物"],
@@ -288,14 +303,15 @@ const STATE_RESPONSE_FIELDS = [
 const REPORT_FIELDS = [
   ["schemaVersion", "number", "否", "当前固定为 1"],
   ["workflow", "object | string", "是", "{namespace,id} 或规范 key"],
-  ["source", "string", "建议", "真实业务 Adapter 的稳定小写名称；默认 agentflow-cli 仅用于兼容"],
-  ["expectedRevision", "string", "建议", "最近一次 GET 返回的 runtimeRevision"],
+  ["source", "string", "是", "真实业务 Adapter 的稳定小写名称；agentflow-cli 仅负责传输"],
+  ["expectedVersions", "object", "生产建议", "本次触及的每个 resource key 及读取时版本；新建 key 使用 absent"],
+  ["expectedRevision", "string", "兼容", "仅未提供 expectedVersions 时启用的整 Workflow 锁"],
   ["idempotencyKey", "string", "建议", "业务操作稳定身份，不使用时间戳或随机 UUID"],
   ["observation", "object", "条件", "同一 clientId 的完整生产方观察"],
   ["globalState", "object", "条件", "全局事实的 merge patch 与 remove"],
   ["action", "object", "条件", "一个关键业务阶段；key 必填"],
   ["artifacts", "array", "条件", "Action 证据或全局证据"],
-  ["projections", "object", "条件", "完整 timeline 迭代归属数组"],
+  ["projections", "object", "条件", "当前 source 的完整 timeline 迭代归属切片"],
   ["extensions", "object", "条件", "按生产方 namespace 组织的自定义区域"],
 ];
 
@@ -332,7 +348,7 @@ const SECTION_FIELDS = [
 ];
 
 const PROJECTION_FIELDS = [
-  ["timeline", "array", "是", "完整数组替换；省略 projections 才表示不修改"],
+  ["timeline", "array", "是", "替换当前 source 的完整切片；省略 projections 才表示不修改"],
   ["timeline[].kind", "string", "是", "version / sprint / milestone 或生产方自定义类型"],
   ["timeline[].id", "string", "是", "业务对象稳定 ID；改名或改期不改变"],
   ["timeline[].key", "string", "建议", "建议 source:kind:id，避免不同生产方碰撞"],
@@ -360,7 +376,7 @@ const ARTIFACT_FIELDS = [
 
 const PUBLISH_FIELDS = [
   ["workflow", "object | string", "是", "目标 Workflow"],
-  ["source", "string", "建议", "真实生产方身份；agentflow-cli 只是传输工具"],
+  ["source", "string", "是", "真实生产方身份；agentflow-cli 只是传输工具"],
   ["title", "string", "是", "Review 页面标题"],
   ["markdown", "string", "是", "Markdown 实际内容，不是本地文件路径"],
   ["stage / stageKey", "string", "建议", "关联的稳定 Action 阶段"],
@@ -369,7 +385,8 @@ const PUBLISH_FIELDS = [
   ["artifactLabel", "string", "否", "页面按钮文案"],
   ["durability", "enum", "否", "temporary 或 durable"],
   ["ttlDays", "number", "临时建议", "临时预览有效期，通常 7 天"],
-  ["expectedRevision", "string", "建议", "发布前读取的 runtimeRevision；过期返回 409"],
+  ["expectedVersions", "object", "生产建议", "目标 artifact:source:key 的当前版本；新建使用 absent"],
+  ["expectedRevision", "string", "兼容", "仅未提供 expectedVersions 时启用的整 Workflow 锁"],
   ["idempotencyKey", "string", "建议", "包含内容摘要；同 source + key 重放返回同一预览"],
 ];
 
@@ -413,8 +430,8 @@ const OVERWRITE_RULES = [
   ["globalState", "对象递归合并；数组/标量替换", "null 或 remove 删除", "只 patch 自己拥有的路径"],
   ["action", "同 source + action.key 更新同一阶段", "无通用物理删除", "取消/跳过使用业务状态表达"],
   ["artifacts", "同 source + 稳定 key 更新/归并", "无通用物理删除", "不要改 key 来伪造删除"],
-  ["projections.timeline", "整数组替换", "[] 清空全部归属", "先 GET，并保留其他生产方条目"],
-  ["extensions", "namespace 内对象递归合并；数组/标量替换", "null 删除自有字段", "不要写别人的 namespace"],
+  ["projections.timeline", "当前 source 的完整切片替换", "[] 只清空当前 source", "其他生产方条目由服务端原子保留"],
+  ["extensions", "仅 extensions[source] 内对象递归合并；数组/标量替换", "null 删除自有字段", "不能写别人的 namespace"],
 ];
 
 const PERMISSIONS = [
@@ -652,7 +669,7 @@ export default function WorkflowReportGuidePage() {
             <CodePanel title="可直接执行的三步命令" value={QUICKSTART_COMMANDS} copyKey="quickstart" copied={copied} onCopy={copy} />
             <CodePanel title="workflow-report.json 最小请求" value={QUICKSTART_REPORT} copyKey="quickstart-report" copied={copied} onCopy={copy} />
           </div>
-          <div className="af-wr-success-check"><span className="material-symbols-outlined" aria-hidden>check_circle</span><p><strong>成功标准：</strong>POST 返回 <code>ok: true</code>，再次 GET 能看到 <code>requirement-imported</code>，且 <code>snapshot.runtimeRevision</code> 已变化。</p></div>
+          <div className="af-wr-success-check"><span className="material-symbols-outlined" aria-hidden>check_circle</span><p><strong>成功标准：</strong>POST 返回 <code>ok: true</code> 和实际 <code>resourceKeys</code>，再次 GET 能看到 <code>requirement-imported</code>，且对应 <code>snapshot.resourceVersions</code> 已从 <code>absent</code> 变为新版本。</p></div>
         </section>
 
         <section className="af-wr-section" id="model">
@@ -718,7 +735,7 @@ export default function WorkflowReportGuidePage() {
 
           <article className="af-wr-endpoint">
             <EndpointHeader method="GET" path="/api/workflows/state" title="读取当前 Workflow" permission="owner / editor / viewer / team viewer / share viewer" effect="无" />
-            <p className="af-wr-endpoint__intro">写入前读取当前快照，保存 <code>snapshot.runtimeRevision</code>。客户端提交的完整状态叫 <code>observation.state</code>；只有服务端返回的数据才叫 <code>snapshot</code>。</p>
+            <p className="af-wr-endpoint__intro">写入前读取当前快照，从 <code>snapshot.resourceVersions</code> 保存本次将触及的业务 key 版本；不存在的 key 使用 <code>absent</code>。客户端提交的完整状态叫 <code>observation.state</code>；只有服务端返回的数据才叫 <code>snapshot</code>。</p>
             <FieldTable rows={STATE_QUERY_FIELDS} label="Workflow state query 参数" />
             <h4>成功响应</h4>
             <FieldTable columns={["字段", "类型", "含义"]} rows={STATE_RESPONSE_FIELDS} label="Workflow state 成功响应" />
@@ -730,7 +747,7 @@ export default function WorkflowReportGuidePage() {
 
           <article className="af-wr-endpoint">
             <EndpointHeader method="POST" path="/api/workflows/report" title="统一上报 Workflow" permission="owner / editor" effect="修改运行态并返回新 snapshot" />
-            <p className="af-wr-endpoint__intro">至少提交 observation、globalState、action、artifacts、projections、extensions 之一。一次请求可以组合多个区域，并用一个 revision 和幂等键保护整次语义更新。</p>
+            <p className="af-wr-endpoint__intro">至少提交 observation、globalState、action、artifacts、projections、extensions 之一。一次请求可以组合多个区域：每个业务 key 独立校验版本，任一冲突则整次请求原子失败，不会只写入一半。</p>
             <h4>Envelope</h4>
             <FieldTable rows={REPORT_FIELDS} label="Workflow Report 顶层参数" />
             <div className="af-wr-subreference">
@@ -744,7 +761,7 @@ export default function WorkflowReportGuidePage() {
               <article><h4>projections.timeline</h4><p>个人/团队 Dashboard 使用的可重建索引。</p><FieldTable rows={PROJECTION_FIELDS} label="Timeline Projection 参数" /></article>
               <article><h4>extensions</h4><p>只有专用 renderer 才能显示的 namespace 数据。</p><FieldTable rows={EXTENSION_FIELDS} label="Workflow Extensions 参数" /></article>
             </div>
-            <p className="af-wr-table-note"><strong>生产方隔离：</strong>Action、幂等键和 Artifact 的服务端身份按 <code>source + key</code> 组合；不同 source 可以复用相同业务 key。<code>globalState</code> 与完整 timeline 仍是共享区域，必须先读后合并，只修改自己拥有的路径或条目。</p>
+            <p className="af-wr-table-note"><strong>生产方隔离：</strong>Action、Artifact、Projection、Observation 和 Extension 都使用带 <code>source</code> 的资源 key；不同 source 可以复用相同业务 key。<code>globalState</code> 按叶子路径分 key 并记录首次写入者，不能覆盖其他 source 的路径；timeline 只替换当前 source 的切片。</p>
           </article>
 
           <article className="af-wr-endpoint">
@@ -768,8 +785,8 @@ export default function WorkflowReportGuidePage() {
         <section className="af-wr-section" id="scenarios">
           <SectionHead number="05" title="三个关键接入场景" detail="以 prd-flow 为例说明接口组合；它是 TAPD 研发流程的一种实现，不是协议依赖。" />
           <div className="af-wr-scenario">
-            <div className="af-wr-scenario__copy"><span>场景 A</span><h3>更新迭代：绑定或切换版本</h3><ol><li>Adapter 从业务系统得到稳定 version ID、标题、日期、平台；prd-flow 的来源恰好是 TAPD。</li><li>GET 当前 snapshot 与完整 timeline。</li><li>版本事实写入 globalState；归属索引写入 kind=version projection。</li><li>保留其他 source 的 Sprint/版本，只替换自己的条目。</li></ol><p><strong>改名/改期：</strong>保持 ID 和 key 不变。<strong>取消归属：</strong>移除自有条目后上报剩余完整数组；只有确实要清空全部归属时才发送空数组。</p></div>
-            <CodePanel title="版本事实 + 完整迭代投影" value={VERSION_REPORT} copyKey="version" copied={copied} onCopy={copy} />
+            <div className="af-wr-scenario__copy"><span>场景 A</span><h3>更新迭代：绑定或切换版本</h3><ol><li>Adapter 从业务系统得到稳定 version ID、标题、日期、平台；prd-flow 的来源恰好是 TAPD。</li><li>GET 当前 snapshot，取版本事实叶子路径及自有 projection 的 resourceVersions。</li><li>版本事实写入 globalState；归属索引写入 kind=version projection。</li><li>只提交当前 source 的完整投影切片；其他 source 的 Sprint/版本由服务端保留。</li></ol><p><strong>改名/改期：</strong>保持 ID 和 key 不变。<strong>取消归属：</strong>移除自有条目后上报剩余自有切片；发送空数组只清空当前 source。</p></div>
+            <CodePanel title="版本事实 + 当前生产方迭代投影" value={VERSION_REPORT} copyKey="version" copied={copied} onCopy={copy} />
           </div>
           <div className="af-wr-scenario">
             <div className="af-wr-scenario__copy"><span>场景 B</span><h3>上报 Action 和产物链接</h3><ol><li>先完成真实业务动作，例如创建并合并 MR。</li><li>用稳定 action.key 报告阶段，用 artifact.key 报告证据。</li><li>同一阶段刷新继续使用相同 key；occurredAt 使用业务时间。</li><li>本地 Markdown 先 publish，已有 HTTP URL 直接作为 Artifact。</li></ol><p>AgentFlow 只记录和展示结果，不替接入方操作 TAPD、GitLab 或 Jenkins。</p></div>
@@ -787,9 +804,9 @@ export default function WorkflowReportGuidePage() {
             <div><h3>权限矩阵</h3><FieldTable columns={["身份", "读取", "上报", "说明"]} rows={PERMISSIONS} label="Workflow 权限矩阵" /><p className="af-wr-table-note">首次由已认证用户上报未登记的 TAPD ID 时，该用户成为 owner。团队成员自动获得 viewer，不会自动获得写权限。</p></div>
             <div><h3>覆盖矩阵</h3><FieldTable columns={["区域", "重复上报", "删除/清空", "接入方责任"]} rows={OVERWRITE_RULES} label="Workflow 覆盖矩阵" /></div>
           </div>
-          <div className="af-wr-conflict-flow"><span>GET snapshot.runtimeRevision</span><i>→</i><span>计算语义 patch</span><i>→</i><span>POST + source + expectedRevision + idempotencyKey</span><i>→</i><span>409 时重新 GET / 合并 / 只重试一次</span></div>
+          <div className="af-wr-conflict-flow"><span>GET snapshot.resourceVersions</span><i>→</i><span>计算触及的 resource keys</span><i>→</i><span>POST + expectedVersions + idempotencyKey</span><i>→</i><span>409 时只刷新冲突 key / 重算 / 重试一次</span></div>
           <div className="af-wr-errors">
-            <div><code>400</code><p>字段或 schema 错误；按协议修正</p></div><div><code>401</code><p>缺少认证；停止并配置 Token</p></div><div><code>403</code><p>只读或无权限；由 owner 授权 editor</p></div><div><code>409</code><p>revision 冲突；不得原样重放旧数组</p></div>
+            <div><code>400</code><p>字段或 schema 错误；按协议修正</p></div><div><code>401</code><p>缺少认证；停止并配置 Token</p></div><div><code>403</code><p>只读或无权限；由 owner 授权 editor</p></div><div><code>409</code><p>资源 key 变化或路径属于其他 source；整次请求未落库</p></div>
           </div>
         </section>
 

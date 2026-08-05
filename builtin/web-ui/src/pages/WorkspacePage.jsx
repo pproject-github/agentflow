@@ -561,7 +561,9 @@ function prdWorkflowActionLabel(action) {
 
 function prdWorkflowNormalizeHref(href) {
   const clean = String(href || "").trim();
-  if (!/^https?:\/\//i.test(clean)) return clean;
+  if (!clean) return "";
+  if ((clean.startsWith("/") && !clean.startsWith("//")) || clean.startsWith("#")) return clean;
+  if (!/^https?:\/\//i.test(clean)) return "";
   try {
     const url = new URL(clean);
     if (url.hostname === "0.0.0.0" || url.hostname === "::" || url.hostname === "[::]") {
@@ -582,7 +584,7 @@ function prdWorkflowArtifactHref(item) {
   const url = String(item?.url || item?.href || "").trim();
   if (url) return prdWorkflowNormalizeHref(url);
   const p = String(item?.path || "").trim();
-  return p ? `file://${p}` : "";
+  return p && /^https?:\/\//i.test(p) ? prdWorkflowNormalizeHref(p) : "";
 }
 
 function prdWorkflowActionStatus(status) {
@@ -7262,7 +7264,7 @@ function WorkflowGlobalStateField({ fieldKey, field }) {
   }
   if (type === "link") {
     const rawValue = field.value && typeof field.value === "object" && !Array.isArray(field.value) ? field.value : {};
-    const href = String(field.href || field.url || rawValue.href || rawValue.url || "").trim();
+    const href = prdWorkflowNormalizeHref(field.href || field.url || rawValue.href || rawValue.url || "");
     return (
       <div className="af-prd-overall-platform__row af-prd-overall-platform__row--link">
         <small>{label}</small>
@@ -7312,7 +7314,7 @@ function WorkflowGlobalStateCard({ globalState, tapdId }) {
   const workflow = state.workflow && typeof state.workflow === "object" && !Array.isArray(state.workflow) ? state.workflow : {};
   const sections = state.sections && typeof state.sections === "object" && !Array.isArray(state.sections) ? state.sections : {};
   const title = String(state.title || "").trim();
-  const url = String(state.url || "").trim();
+  const url = prdWorkflowNormalizeHref(state.url || "");
   const status = prdWorkflowOverallDisplayValue(state.status);
   const workflowId = String(workflow.id || tapdId || "").trim();
   const sectionEntries = Object.entries(sections).filter(([sectionKey, section]) => (

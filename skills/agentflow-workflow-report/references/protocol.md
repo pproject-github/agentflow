@@ -21,7 +21,7 @@
 
 | 方法 | 路径 | 用途 | 是否修改 Workflow |
 | --- | --- | --- | --- |
-| `GET` | `/api/workflows/state` | 读取当前快照和并发 revision | 否 |
+| `GET` | `/api/workflows/state` | 读取当前快照和资源 key 版本 | 否 |
 | `POST` | `/api/workflows/report` | 上报全局信息、Action、普通产物、迭代归属和自定义区域 | 是 |
 | `POST` | `/api/workflow-artifacts/publish` | 把本地 Markdown 内容发布成浏览器可访问的预览链接 | 是 |
 
@@ -166,9 +166,24 @@ AI Docs / Issues 不是通用固定字段。当前唯一注册的 extension rend
 
 section key 为 `progress` 时使用紧凑响应式网格；其他 section 默认纵向排列。空 value 不渲染，未知 type 回退为 `text`。
 
+### 3.5 资源 key
+
+并发冲突与所有权都落在稳定资源 key，而不是整份 JSON：
+
+```text
+action:<source>:<action.key>
+artifact:<source>:<artifact.key>
+projection:<source>:<kind>:<id>
+global:<dot.path>
+extension:<source>:<dot.path>
+observation:<source>:<clientId>
+```
+
+同一请求可以触及多个 key。服务端在 Workflow 写锁内一次性校验全部 key；任意一个 key 冲突时整次请求不落库。`resourceKeys` 会随成功响应返回，便于接入方记录实际写入边界。
+
 ## 4. GET /api/workflows/state
 
-读取当前物化快照。任何写入前都应先调用它，并保存 `snapshot.runtimeRevision`。
+读取当前物化快照。任何写入前都应先调用它，并保存本次会触及 key 对应的 `snapshot.resourceVersions`。
 
 ### 4.1 请求
 
@@ -196,6 +211,10 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "workflow": { "namespace": "tapd", "id": "1020124", "key": "tapd:1020124" },
   "snapshot": {
     "runtimeRevision": "runtime:...",
+    "resourceVersions": {
+      "action:my-adapter:implementation:issue-1": "rv:...",
+      "projection:my-adapter:version:android-123": "rv:..."
+    },
     "globalState": {},
     "actions": [],
     "artifacts": [],
@@ -205,7 +224,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 }
 ```
 
-`snapshot` 只由服务端返回。客户端不得把一份旧 `snapshot` 原样 POST 回去。
+`snapshot` 只由服务端返回。`runtimeRevision` 用于页面缓存和旧客户端的整 Workflow 严格锁；新接入使用 `resourceVersions` 做 key 级并发控制。客户端不得把一份旧 `snapshot` 原样 POST 回去。
 
 ## 5. POST /api/workflows/report
 
@@ -218,7 +237,9 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "schemaVersion": 1,
   "workflow": { "namespace": "tapd", "id": "1020124" },
   "source": "my-adapter",
-  "expectedRevision": "runtime:...",
+  "expectedVersions": {
+    "action:my-adapter:implementation:android:issue-1": "rv:..."
+  },
   "idempotencyKey": "implementation-finished:android:issue-1:v1",
   "observation": {},
   "action": {},
@@ -233,14 +254,15 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | --- | --- | --- | --- |
 | `schemaVersion` | number | 否 | 当前固定为 `1` |
 | `workflow` | object/string | 是 | `{namespace,id}` 或规范 key；当前 namespace 仅支持 `tapd` |
-| `source` | string | 强烈建议 | 小写稳定的业务 Adapter 名称；默认 `agentflow-cli` 仅用于兼容，不应作为正式接入的生产方身份 |
-| `expectedRevision` | string | 修改已有状态时建议必填 | 最近一次 GET 返回的 runtime revision |
+| `source` | string | 是 | 小写稳定的业务 Adapter 名称；`agentflow-cli` 只是传输工具，不能作为默认生产方身份 |
+| `expectedVersions` | object | 修改已有资源时建议必填 | 本次触及的全部资源 key 及 GET 返回的版本；创建新 key 使用 `absent` |
+| `expectedRevision` | string | 兼容字段 | 仅在没有 `expectedVersions` 时启用的整 Workflow 严格锁；新接入不要使用 |
 | `idempotencyKey` | string | 强烈建议 | 一次业务语义操作的稳定身份，不使用时间戳或随机 UUID |
 | `observation` | object | 条件必填 | 同一 `clientId` 的完整生产方观察 |
 | `action` | object | 条件必填 | 一条关键业务阶段 |
 | `artifacts` | array | 条件必填 | Action 证据或全局证据 |
 | `globalState` | object | 条件必填 | 生产方事实的 merge patch / remove |
-| `projections` | object | 条件必填 | 通用迭代索引；当前包含完整 `timeline` 数组 |
+| `projections` | object | 条件必填 | 通用迭代索引；提交当前 source 的完整 `timeline` 切片 |
 | `extensions` | object | 条件必填 | 按生产方 namespace 组织的自定义区域数据 |
 | `flowId` | string | 否 | 关联项目 ID |
 | `flowSource` | string | 否 | 关联项目来源，默认 `user` |
@@ -254,13 +276,19 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "ok": true,
   "alreadyApplied": false,
   "report": {},
+  "resourceKeys": ["action:my-adapter:implementation:android:issue-1"],
   "event": {},
   "observation": { "accepted": true, "clientId": "my-adapter" },
-  "snapshot": { "runtimeRevision": "runtime:new-revision" }
+  "snapshot": {
+    "runtimeRevision": "runtime:new-revision",
+    "resourceVersions": {
+      "action:my-adapter:implementation:android:issue-1": "rv:new-resource-version"
+    }
+  }
 }
 ```
 
-没有 `observation` 时，响应中的 `observation` 为 `null`。同一 `source + idempotencyKey` 的幂等重放返回 `alreadyApplied: true`，应按成功处理；不同 source 可以安全复用相同业务 key。
+没有 `observation` 时，响应中的 `observation` 为 `null`。同一 `workflow + source + operation + idempotencyKey` 的幂等重放返回 `alreadyApplied: true`，应按成功处理；Report 与 Artifact Publish 使用独立操作域。
 
 ## 6. POST /api/workflow-artifacts/publish：发布 Markdown 预览
 
@@ -281,7 +309,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "artifactLabel": "方案预览",
   "durability": "temporary",
   "ttlDays": 7,
-  "expectedRevision": "runtime:...",
+  "expectedVersions": { "artifact:my-adapter:plan:runtime-hook:android": "absent" },
   "idempotencyKey": "review:plan:runtime-hook:android:<content-digest>"
 }
 ```
@@ -289,7 +317,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | 字段 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
 | `workflow` | object/string | 是 | 目标 Workflow |
-| `source` | string | 强烈建议 | 真实业务 Adapter 的稳定名称；不是 `agentflow-cli` |
+| `source` | string | 是 | 真实业务 Adapter 的稳定名称；不是 `agentflow-cli` |
 | `title` | string | 是 | Review 页面标题 |
 | `markdown` | string | 是 | Markdown 实际内容，不是本地路径 |
 | `stage` / `stageKey` | string | 建议 | 关联的稳定 Action 阶段 |
@@ -298,8 +326,9 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `artifactKey` | string | 是 | 预览 Artifact 的稳定槽位 |
 | `artifactLabel` | string | 否 | 页面按钮文案，默认 `Markdown Review` |
 | `durability` | string | 否 | `temporary` 或 `durable`；默认临时 |
-| `ttlDays` | number | 临时预览建议 | 临时副本有效天数，通常为 7 |
-| `expectedRevision` | string | 修改已有状态时建议必填 | 最近一次 GET 返回的 runtime revision；过期返回 `409` |
+| `ttlDays` | number | 临时预览建议 | 1–30 的整数，通常为 7 |
+| `expectedVersions` | object | 修改已有 Artifact 时建议必填 | 只需包含目标 `artifact:source:key`；创建时使用 `absent` |
+| `expectedRevision` | string | 兼容字段 | 仅在没有 `expectedVersions` 时使用整 Workflow 严格锁 |
 | `idempotencyKey` | string | 强烈建议 | 建议包含内容摘要；同一 source + key 重放返回同一个预览，不创建新副本 |
 
 ### 6.2 成功响应
@@ -312,7 +341,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 - `event`：辅助运行态事件，不推进业务阶段。
 - `snapshot`：发布后的最新 Workflow 快照。
 
-发布预览不会确认方案、修改本地文件、提交 ai-doc、创建 GitLab Issue 或推进 Action。外部系统已经提供 HTTP URL 时，不需要调用本接口，直接在 `/api/workflows/report` 的 `artifacts` 中上报即可。
+发布预览不会确认方案、修改本地文件、提交 ai-doc、创建 GitLab Issue 或推进 Action。Markdown 最大 500,000 bytes；`durability` 只能是 `temporary/durable`。外部系统已经提供 HTTP URL 时，不需要调用本接口，直接在 `/api/workflows/report` 的 `artifacts` 中上报即可。
 
 ## 7. 字段模型
 
@@ -357,7 +386,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | --- | --- | --- |
 | `key` | 是 | 稳定阶段身份；同 key 更新同一阶段 |
 | `title` | 否 | 卡片标题，默认 key |
-| `detail` | 否 | 阶段摘要，最长按服务端约束截断 |
+| `detail` | 否 | 阶段摘要，最多 4,000 字符；超限返回 `400`，不会截断 |
 | `status` | 否 | `pending/running/done/error/conflict/skipped/cancelled/observed` |
 | `group` | 否 | 阶段分组，例如 `implementation` |
 | `scope` | 否 | 业务范围 |
@@ -366,7 +395,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `tags` | 否 | 字符串数组 |
 | `occurredAt` | 否 | 业务发生时间；不要用重试时间覆盖它 |
 
-`completed/success` 会规范化为 `done`，`failed` 会规范化为 `error`，未知状态回退为 `pending`。
+`completed/success` 会规范化为 `done`，`failed` 会规范化为 `error`；未知状态返回 `400`，不会静默回退。
 
 ### 7.3 artifacts：Action 或全局证据
 
@@ -386,7 +415,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `key` | 强烈建议 | 稳定证据身份；不要依赖标题去重 |
 | `type` | 否 | 产物类型，默认 `artifact` |
 | `title` | 否 | 展示标题 |
-| `url` / `path` | 至少一个 | 外部 URL 或可识别路径 |
+| `url` / `path` | 至少一个 | URL 只允许 `http/https` 或站内绝对路径；本地文件必须先 Publish，不能直接形成可访问链接 |
 | `scope` | 否 | `action` 或 `global`；有 Action 时默认 `action` |
 | `status` | 否 | 生产方定义的证据状态 |
 
@@ -430,7 +459,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `dimensions` | 否 | 不透明筛选维度，例如 platform/team |
 | `order` | 否 | 日期缺失或相同时的稳定顺序 |
 
-每次最多保留 100 条合法 timeline 项。
+每个 source 最多上报 100 条合法 timeline 项；超过限制返回错误，不会截断。
 
 ### 7.6 extensions：自定义区域
 
@@ -443,32 +472,33 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 }
 ```
 
-扩展字段由生产方 schema 定义。AgentFlow 通用协议只校验 namespace 和顶层对象，不解释 `aiDocs`、`issues` 等私有字段。
+扩展字段由生产方 schema 定义。一次请求只能更新 `extensions[source]`；AgentFlow 通用协议不解释 `aiDocs`、`issues` 等私有字段。
 
 ## 8. 覆盖、合并与删除规则
 
 | 区域 | 省略字段 | 重复上报 | 删除 / 清空 |
 | --- | --- | --- | --- |
 | `observation.state` | 保持旧观察 | 同一 `clientId` 的完整 state 替换旧观察 | 上报生产方定义的空值结构；不要用它删除其他 client 的观察 |
-| `globalState` | 不修改 | 对象递归 merge；数组和标量整体替换 | patch 中 `null` 删除字段；`remove` 在 patch 后删除 dot path |
+| `globalState` | 不修改 | 对象递归 merge；数组和标量整体替换；首次写入路径的 source 获得该路径所有权 | patch 中 `null` 删除字段；`remove` 在 patch 后删除 dot path；其他 source 不能改写已归属路径 |
 | `action` | 不修改 Action | 同 `source + action.key` 更新同一业务阶段的可见状态 | 当前协议不提供物理删除 Action；用业务状态表达取消/跳过 |
 | `artifacts` | 不修改产物 | 同 `source + stable key` 更新/归并同一可见证据 | 当前协议不提供通用物理删除；不要通过改 key 伪造删除 |
-| `projections.timeline` | 不修改 | **整数组替换**，不是按 key merge | `[]` 清空全部迭代归属 |
-| `extensions` | 不修改扩展 | namespace 内对象递归 merge；数组/标量替换 | 对应字段上报 `null` 删除；不要覆盖别人的 namespace |
+| `projections.timeline` | 不修改 | 替换当前 `source` 拥有的完整切片，服务端原子保留其他 source | `[]` 只清空当前 source 的迭代归属 |
+| `extensions` | 不修改扩展 | 只允许 `extensions[source]` 内对象递归 merge；数组/标量替换 | 对应字段上报 `null` 删除 |
 
-更新 `projections.timeline` 前必须先 GET，保留不属于当前生产方的条目，再替换当前生产方拥有的 key。服务端不会自动按 `source` 帮你合并。
+客户端可以在兼容 payload 中携带未修改的其他 source 条目，但服务端只接受完全一致的副本且不会使用它覆盖现状。推荐只发送当前 source 的完整切片，由服务端按 `source + kind + id` 合并。
 
 ## 9. 并发、幂等与错误码
 
 ### 9.1 安全写入顺序
 
 1. GET 当前 Workflow。
-2. 保存 `snapshot.runtimeRevision`。
-3. 基于最新快照计算语义 patch，以及完整 timeline 数组。
-4. POST 时带稳定 `source`、`expectedRevision` 与 `idempotencyKey`。
-5. 收到 `409` 后重新 GET、重新合并，只重试一次。
+2. 根据本次业务操作计算会触及的 `resourceKeys`。
+3. 从 `snapshot.resourceVersions` 复制这些 key 的版本；不存在的 key 使用 `absent`。
+4. POST 时带稳定 `source`、完整的 `expectedVersions` 与 `idempotencyKey`。
+5. 服务端在同一 Workflow 写锁内原子执行“校验所有 key → 合并 → 落盘”；无关 key 的变化不会冲突。
+6. 收到 `409` 后只刷新 `conflict.conflicts` 列出的 key，重新计算并重试一次。
 
-不得在 revision 冲突后原样重放旧的完整数组。
+不得在资源 key 冲突后原样重放旧 payload。
 
 ### 9.2 幂等键
 
@@ -485,7 +515,7 @@ implementation-finished:android:runtime-hook:v1
 timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 ```
 
-同一 `source + idempotencyKey` 的 Workflow Report 或 Artifact Publish 重放返回 `alreadyApplied: true`。Publish 会返回第一次创建的预览，不会先生成一个新文件再去重。业务内容发生变化时提高语义版本或使用内容摘要；不要使用请求时间。
+同一 `workflow + source + operation + idempotencyKey` 的重放返回 `alreadyApplied: true`，包括 `running/error/pending` Action。`report` 与 `artifact.publish` 可以安全复用同一业务 key。Publish 会返回第一次创建的预览，不会先生成一个新文件再去重。业务内容发生变化时提高语义版本或使用内容摘要；不要使用请求时间。
 
 ### 9.3 错误码
 
@@ -495,7 +525,7 @@ timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 | `401` | 缺少或无效认证 | 停止并配置 Token；不要把 Token 打印出来 |
 | `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 停止；由 owner 授予 editor 或改用正确身份 |
 | `404` | 分享链接、owner 或目标资源不存在 | 重新解析目标，不要创建影子副本 |
-| `409` | runtime revision 已变化 | GET 最新状态、重新合并、重试一次 |
+| `409` | 同一资源 key 已变化，或路径属于其他 source | 读取 `conflict.conflicts`，只刷新冲突资源并重试一次；所有 key 通过前请求不会部分落库 |
 | `500` | 服务端异常 | 保留幂等键，记录脱敏上下文后重试或上报 |
 
 ## 10. 三个关键接入场景
@@ -503,10 +533,10 @@ timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 ### 10.1 更新迭代：绑定或切换版本
 
 1. 从业务系统取得稳定版本 ID、标题、日期和平台。
-2. GET 当前 Workflow。
+2. GET 当前 Workflow，并读取对应 GlobalState 路径与 Projection key 的资源版本。
 3. 用 `globalState.patch` 保存生产方拥有的完整版本事实。
-4. 从现有 timeline 中保留其他生产方条目，替换自己的 `kind=version` 条目。
-5. 使用最新 revision 上报。
+4. 发送当前 source 的完整 `kind=version` 切片；服务端保留其他 source 的 Sprint/Version。
+5. 使用这些 key 的 `expectedVersions` 上报。
 
 版本改名或改期时保持 `id/key` 不变，只改 `title/date`；切换版本时移除旧自有 key、加入新 key；取消归属时只移除自己的版本条目。
 
@@ -523,7 +553,7 @@ timeline-membership:tapd-1020124:android-version-1133202860001000338:v1
 1. 先判断 `globalState.sections` 的 `text/user/chips/list/link` 是否足够；足够时直接使用通用渲染器。
 2. 只有通用组件不能表达时，才定义稳定 namespace 和版本化扩展 schema。
 3. 把专用结构化事实放入 `extensions[namespace]`。
-4. 注册对应页面渲染器；否则数据只会被保存，不会自动出现专用 UI。当前只有 `extensions["prd-flow"]` 已注册。
+4. 在 AgentFlow 前端代码中注册对应页面渲染器并重新发布；当前不是运行时插件注册。否则数据只会被保存，不会自动出现专用 UI。当前只有 `extensions["prd-flow"]` 已注册。
 5. 更新数组时发送该数组的完整新值；更新对象字段时可以递归 merge；用 `null` 删除自有字段。
 
 ## 11. prd-flow 参考映射
@@ -545,14 +575,15 @@ prd-flow 只是一个接入实现，不是协议依赖：
 
 ## 12. 验收清单
 
-- 能使用 Token GET 当前 Workflow，并读到 runtime revision。
+- 能使用 Token GET 当前 Workflow，并读到 `snapshot.resourceVersions`。
 - 首次写入能建立 owner；editor 能写，viewer、团队成员、分享链接和管理员代看不能写。
-- `globalState` 更新不会覆盖其他生产方路径，数组替换行为符合预期。
+- `globalState` 更新不会覆盖其他生产方拥有的路径，数组替换行为符合预期。
 - 同一 Action key 重报不产生重复业务阶段。
 - Action 下能看到稳定 key 的 MR、构建或测试产物。
 - Markdown Publish 返回可访问 URL，但不会推进业务状态。
 - 版本改名/改期不产生新迭代节点，版本切换不会删除第三方 Sprint。
 - 自定义 extension 能保存；注册渲染器后能显示对应文档区 / Issue 区。
-- 409 会触发一次 read → re-merge → retry。
+- 不同资源 key 可并发更新；同 key 旧版本返回包含具体 `resourceKey` 的 409。
+- 409 会触发一次 key 级 read → re-merge → retry，且失败请求不会部分落库。
 - 幂等重放返回成功且不重复应用。
 - Token 不出现在 JSON、日志、Artifact 或最终输出中。

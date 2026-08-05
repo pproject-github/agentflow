@@ -91,6 +91,14 @@ export function getPrdWorkflowCollaborationById(workflowId) {
   return readRegistry().workflows[String(workflowId || "").trim()] || null;
 }
 
+export function getPrdWorkflowCollaborationByTapdId(tapdId) {
+  const normalizedTapdId = normalizeTapdId(tapdId);
+  if (!normalizedTapdId) return null;
+  return Object.values(readRegistry().workflows)
+    .filter((record) => record?.tapdId === normalizedTapdId)
+    .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")))[0] || null;
+}
+
 export function getPrdWorkflowCollaborationByShareToken(shareToken) {
   const token = normalizeShareToken(shareToken);
   if (!token) return null;
@@ -139,10 +147,12 @@ export function ensurePrdWorkflowCollaboration({ tapdId, userId }) {
   if (!ownerId) return { error: "Authentication required", status: 401 };
   if (!normalizedTapdId) return { error: "Missing tapdId", status: 400 };
   const registry = readRegistry();
-  let record = Object.values(registry.workflows).find((item) => (
-    item?.tapdId === normalizedTapdId && item?.ownerId === ownerId
-  )) || null;
-  if (record) return { record, workflow: publicWorkflow(record, ownerId), created: false };
+  let record = Object.values(registry.workflows).find((item) => item?.tapdId === normalizedTapdId) || null;
+  if (record) {
+    const access = prdWorkflowCollaborationAccess(record, ownerId);
+    if (!access.allowed) return { error: "Workflow already belongs to another owner", status: 403 };
+    return { record, workflow: publicWorkflow(record, ownerId), created: false };
+  }
   const now = new Date().toISOString();
   const workflowId = `prd_${crypto.randomBytes(12).toString("hex")}`;
   record = {

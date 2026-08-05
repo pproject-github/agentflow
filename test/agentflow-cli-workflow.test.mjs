@@ -16,6 +16,7 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
   const artifactPath = path.join(tempRoot, "workflow-artifact.json");
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.writeFileSync(reportPath, JSON.stringify({
+    source: "cli-test",
     action: {
       key: "verify-cli-report",
       title: "验证 CLI 上报",
@@ -47,12 +48,13 @@ test("agentflow-cli reads and reports the generic Workflow model", async () => {
         id: "verification-complete",
         title: "验证完成",
         date: "2026-08-04",
-        source: "prd-flow",
+        source: "cli-test",
         dimensions: { channel: "internal" },
       }],
     },
   }), "utf8");
   fs.writeFileSync(artifactPath, JSON.stringify({
+    source: "cli-test",
     title: "CLI Markdown 预览",
     markdown: "# CLI Markdown\n\n统一 Artifact 发布接口。",
     stage: "verification",
