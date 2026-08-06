@@ -341,6 +341,7 @@ function buildPaletteNode(def, id, position, instances, palette) {
   return mergeNodeWithPalette(raw, instances, palette);
 }
 
+const LEGACY_FLOW_EXECUTION_DISABLED = true;
 const DEFAULT_FLOW_NODE_WIDTH = 320;
 const MIN_FLOW_NODE_WIDTH = 220;
 const MAX_FLOW_NODE_WIDTH = 1600;
@@ -3665,6 +3666,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   }, []);
 
   const handleRun = useCallback(async (/** @type {{ runUuid?: string | null, cliInputsOverride?: Record<string, { type: "str" | "file", value?: string, path?: string }>, prepareOnly?: boolean }} */ opts = {}) => {
+    if (LEGACY_FLOW_EXECUTION_DISABLED) {
+      setFlowSnippetToast("旧版 Start/End Pipeline 执行已下线，请在 Workspace 中使用 Run。");
+      return;
+    }
     if (!selected) return;
     const runUuid =
       opts.runUuid != null && String(opts.runUuid).trim() ? String(opts.runUuid).trim() : null;

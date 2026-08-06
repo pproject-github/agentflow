@@ -83,6 +83,7 @@ import {
   workspacePreviewFlowDir,
   writeWorkspacePreviewMetadata,
 } from "./workspace-preview.mjs";
+import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 import {
   createComposerSession,
   logComposerEvent,
@@ -13604,6 +13605,16 @@ export function startUiServer({
       isAdmin: Boolean(authUser.isAdmin),
       adminOwnerId: String(url.searchParams.get("adminOwnerId") || "").trim(),
     } : {};
+    const legacyFlowManagementPath = new Set([
+      "/api/flow/run-config",
+      "/api/flow/schedule",
+      "/api/flow/schedules",
+      "/api/flow/schedule/disable",
+    ]);
+    if (LEGACY_FLOW_EXECUTION_DISABLED && legacyFlowManagementPath.has(url.pathname)) {
+      json(res, 410, { error: LEGACY_FLOW_EXECUTION_MESSAGE, code: "legacy_flow_execution_disabled" });
+      return;
+    }
     if (req.method === "GET" && url.pathname.startsWith("/w/")) {
       const parts = url.pathname.split("/").filter(Boolean);
       if (parts.length !== 2) {
@@ -20580,6 +20591,10 @@ finishedAt: "${new Date().toISOString()}"
     }
 
     if (req.method === "POST" && url.pathname === "/api/flow/run") {
+      if (LEGACY_FLOW_EXECUTION_DISABLED) {
+        json(res, 410, { error: LEGACY_FLOW_EXECUTION_MESSAGE, code: "legacy_flow_execution_disabled" });
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(await readBody(req));

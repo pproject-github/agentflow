@@ -22,6 +22,7 @@ import {
 import { Table } from "./table.mjs";
 import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
+import { LEGACY_FLOW_NODE_IDS } from "./legacy-flow-execution.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -261,6 +262,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
     for (const e of files) {
       const id = e.name.replace(/\.mdx?$/i, "").replace(/\.markdown$/i, "");
+      if (LEGACY_FLOW_NODE_IDS.has(id)) continue;
       let type = "agent";
       if (/^control/i.test(id)) type = "control";
       else if (/^provide/i.test(id)) type = "provide";

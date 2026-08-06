@@ -55,6 +55,13 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
 
     const flowsResponse = await fetch(`${baseUrl}/api/flows`, { headers: { Authorization: `Bearer ${user.token}` } });
     assert.equal((await flowsResponse.json()).some((item) => item.id === payload.flowId), false);
+
+    const retiredRunResponse = await fetch(`${baseUrl}/api/flow/run`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: payload.flowId, flowSource: "user" }),
+    });
+    assert.equal(retiredRunResponse.status, 410);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

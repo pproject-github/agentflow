@@ -36,6 +36,7 @@ import { cancelScheduledRun, listScheduleStatuses, startScheduler } from "./sche
 import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 import { startMcpServer } from "./mcp-server.mjs";
 import { writeStaticFlowPreview } from "./flow-static-preview.mjs";
+import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -553,6 +554,7 @@ export async function main() {
   if (sub === "list") {
     listPipelines(workspaceRoot);
   } else if (sub === "apply") {
+    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
     const aiMode = argv[0] === "-ai" || argv[0] === "--ai";
     if (aiMode) {
       argv.shift();
@@ -584,12 +586,14 @@ export async function main() {
     }
     await apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel, force, parallel, cliInputs);
   } else if (sub === "resume") {
+    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
     const flowName = shift();
     const uuidArg = shift();
     if (!flowName || !uuidArg) throw new Error("Usage: agentflow resume <FlowName> <uuid> [instanceId]");
     const instanceIdOpt = argv.length > 0 && !argv[0].startsWith("--") ? shift() : undefined;
     await resume(workspaceRoot, flowName, uuidArg, instanceIdOpt, agentModel, force, parallel);
   } else if (sub === "replay") {
+    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
     const a = shift(),
       b = shift(),
       c = shift();
