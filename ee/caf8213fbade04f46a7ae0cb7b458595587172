@@ -1,0 +1,46 @@
+bin/lib/flow-write.mjs
+  s_3224f1713ea56a::t_3b3b6245e39a7e 251-288
+README.md
+  s_6f989e4ed000e0::t_fb9ec5c19aec55 27-33
+README.zh-CN.md
+  s_6f989e4ed000e0::t_83b5454f1cf911 27-32
+bin/lib/ui-server.mjs
+  s_6f989e4ed000e0::t_eab96573a9b487 33,20122-20161
+builtin/web-ui/src/i18n/locales/en/project.json
+  s_6f989e4ed000e0::t_f6145639f8119d 40-41
+builtin/web-ui/src/i18n/locales/zh/project.json
+  s_6f989e4ed000e0::t_95b0a7ffcfb7c1 40-41
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_6f989e4ed000e0::t_9f7e8f79c15c83 411,491-512,1485-1487,1532,1538-1542
+skills/agentflow-author-flow/SKILL.md
+  s_6f989e4ed000e0::t_6422ca3942635d 6,8-13,28,36
+skills/agentflow-cli/SKILL.md
+  s_6f989e4ed000e0::t_45c159f54d5f2f 8-24,177
+test/flow-restore.test.mjs
+  s_6f989e4ed000e0::t_ea67b74b31b8fc 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "eecaf8213fbade04f46a7ae0cb7b458595587172",
+  "prompts": {},
+  "logical_commit_id": "eecaf8213fbade04f46a7ae0cb7b458595587172",
+  "sessions": {
+    "s_3224f1713ea56a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd653-b4fa-7492-827b-a36b33339177",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_6f989e4ed000e0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd708-e54e-7fd0-aeab-ca9f72cec3b9",
+        "model": "unknown"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
