@@ -33,6 +33,7 @@ Commands:
   config
   list-workspace | list-workspaces
   list-flows
+  publish-flow --flow-id <id> --file <flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
@@ -166,7 +167,36 @@ async function httpJson(args, pathname, { method = "GET", body, tokenRequired = 
   }
   if (!response.ok) {
     const message = data?.error || data?.message || text || `HTTP ${response.status}`;
-    throw new Error(`${method} ${url.pathname} failed: ${message}`);
+    const error = new Error(`${method} ${url.pathname} failed: ${message}`);
+    error.status = response.status;
+    error.response = data;
+    throw error;
+  }
+  return data;
+}
+
+async function httpMultipart(args, pathname, form) {
+  const token = authToken(args);
+  const url = new URL(pathname, normalizedBaseUrl(args));
+  const headers = { Accept: "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers.Cookie = `af_session=${encodeURIComponent(token)}`;
+  }
+  const response = await fetch(url, { method: "POST", headers, body: form });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { text };
+  }
+  if (!response.ok) {
+    const message = data?.error || data?.message || text || `HTTP ${response.status}`;
+    const error = new Error(`POST ${url.pathname} failed: ${message}`);
+    error.status = response.status;
+    error.response = data;
+    throw error;
   }
   return data;
 }
@@ -277,6 +307,54 @@ function readJsonFile(filePath) {
   }
 }
 
+function readFlowYamlFile(filePath) {
+  const requested = String(filePath || "").trim();
+  if (!requested) throw new Error("Missing --file <flow.yaml>.");
+  const resolved = path.resolve(requested);
+  let flowYaml;
+  try {
+    flowYaml = fs.readFileSync(resolved, "utf8");
+  } catch (error) {
+    throw new Error(`Cannot read flow file ${resolved}: ${error?.message || String(error)}`);
+  }
+  if (!flowYaml.trim()) throw new Error(`Flow file is empty: ${resolved}`);
+  return { resolved, flowYaml };
+}
+
+function targetDestinationFromArgs(args) {
+  const requested = (option(args, "target-space") || option(args, "flow-source") || "personal").toLowerCase();
+  if (requested === "personal" || requested === "user") return { flowSource: "user", shareWithTeam: false };
+  if (requested === "workspace") return { flowSource: "workspace", shareWithTeam: false };
+  if (requested === "team") return { flowSource: "workspace", shareWithTeam: true };
+  throw new Error("Invalid --target-space. Use personal|workspace|team (alias: user).");
+}
+
+async function importFlow(args, { flowId, targetSpace, resolved, flowYaml }) {
+  const form = new FormData();
+  form.set("flowId", flowId);
+  form.set("targetSpace", targetSpace);
+  form.set("file", new Blob([flowYaml], { type: "application/yaml" }), path.basename(resolved));
+  return httpMultipart(args, "/api/flows/import", form);
+}
+
+async function resolvePublishTeam(args, shareWithTeam) {
+  if (!shareWithTeam) return null;
+  const result = await httpJson(args, "/api/teams/me");
+  if (!result?.team?.id) {
+    throw new Error("Cannot publish to team: the current AgentFlow account is not assigned to an active team.");
+  }
+  return result.team;
+}
+
+async function sharePublishedFlowWithTeam(args, { flowId, flowSource, team }) {
+  if (!team) return null;
+  const result = await httpJson(args, "/api/workspace/collaboration/team-share", {
+    method: "POST",
+    body: { flowId, flowSource, teamId: team.id, role: "editor" },
+  });
+  return result?.team || team;
+}
+
 async function main() {
   loadEnvFiles();
   const args = parseArgv(process.argv.slice(2));
@@ -309,6 +387,47 @@ async function main() {
 
   if (command === "list-flows" || command === "list-flow") {
     printJson(await httpJson(args, "/api/flows"));
+    return;
+  }
+
+  if (command === "publish-flow") {
+    const flowId = requireFlowId(args);
+    const destination = targetDestinationFromArgs(args);
+    const targetSpace = destination.flowSource;
+    const source = readFlowYamlFile(option(args, "file"));
+    const replace = args.replace === true;
+    const team = await resolvePublishTeam(args, destination.shareWithTeam);
+
+    if (!replace) {
+      const result = await importFlow(args, { flowId, targetSpace, ...source });
+      const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
+      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      return;
+    }
+
+    let current = null;
+    try {
+      current = await httpJson(args, `/api/flow${query({ flowId, flowSource: targetSpace })}`);
+    } catch (error) {
+      if (error?.status !== 404) throw error;
+    }
+    if (!current) {
+      const result = await importFlow(args, { flowId, targetSpace, ...source });
+      const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
+      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      return;
+    }
+    const result = await httpJson(args, "/api/flow", {
+      method: "POST",
+      body: {
+        flowId,
+        flowSource: targetSpace,
+        flowYaml: source.flowYaml,
+        baseRevision: current.revision,
+      },
+    });
+    const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
+    printJson({ ...result, flowId, flowSource: targetSpace, action: "updated", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
     return;
   }
 

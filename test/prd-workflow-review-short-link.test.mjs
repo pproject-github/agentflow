@@ -79,6 +79,15 @@ test("review-link returns a stable shortUrl and keeps the canonical url", async 
 });
 
 
+test("review-link preserves the artifact business label on its display link", async (t) => {
+  const { baseUrl, token } = await createServer(t);
+  const result = await publishReview(baseUrl, token, { artifactLabel: "ST-01 自测证据" });
+
+  assert.equal(result.event.artifacts[0].label, "ST-01 自测证据");
+  assert.equal(result.event.links[0].label, "ST-01 自测证据");
+});
+
+
 test("short review url redirects to the canonical review and renders it", async (t) => {
   const { baseUrl, token } = await createServer(t);
   const result = await publishReview(baseUrl, token);

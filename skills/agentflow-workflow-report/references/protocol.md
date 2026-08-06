@@ -316,6 +316,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `expectedRevision` | string | 兼容字段 | 仅在没有 `expectedVersions` 时启用的整 Workflow 严格锁；新接入不要使用 |
 | `idempotencyKey` | string | 强烈建议 | 一次业务语义操作的稳定身份，不使用时间戳或随机 UUID |
 | `adminOperation` | string | 管理员特例 | 仅 `repair-version-membership`；详见 5.3 |
+| `adminReason` | string | 管理员 UI 建议必填 | 版本归属修复原因，最多 500 字符；写入审计事件 |
 | `observation` | object | 条件必填 | 同一 `clientId` 的完整生产方观察 |
 | `action` | object | 条件必填 | 一条关键业务阶段 |
 | `artifacts` | array | 条件必填 | Action 证据或全局证据 |
@@ -358,6 +359,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "workflow": "tapd:1013667",
   "source": "prd-flow",
   "adminOperation": "repair-version-membership",
+  "adminReason": "清理测试版本并归属到正式迭代",
   "projections": {
     "timeline": [{
       "kind": "version",
@@ -380,6 +382,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 - 所有新投影必须是 `kind=version`；当前 source 的非版本投影和其他 source 的全部投影原子保留。
 - `expectedRevision` 与 `idempotencyKey` 必填。并发变化返回 `409`，失败时不产生部分写入。
 - 运行态事件写入 `administrativeRepair.kind=version-attribution`、管理员 actor 和时间，供审计追踪。
+- 管理 UI 必须提交 `adminReason`；旧 CLI 请求可暂时省略以保持兼容。
 - 空 `timeline` 表示清空该 source 的版本归属，但仍保留该 source 的 Sprint/Milestone 等非版本条目。
 
 ## 6. POST /api/workflow-artifacts/publish：发布 Markdown 预览

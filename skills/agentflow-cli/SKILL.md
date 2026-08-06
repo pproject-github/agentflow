@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow platform operation through a bundled token-backed CLI, without MCP. Use when Codex needs to list AgentFlow workspaces or flows, start or inspect runs, read graphs and logs, or fetch display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env. Default AgentFlow base URL is http://ai.mengma.bigo.inner/.
+description: Direct AgentFlow platform operation through a bundled token-backed CLI, without MCP. Use when Codex needs to list or publish AgentFlow flows, start or inspect runs, read graphs and logs, or fetch display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env. Default AgentFlow base URL is http://ai.mengma.bigo.inner/.
 ---
 
 # AgentFlow CLI
@@ -71,6 +71,17 @@ List flows:
 node skills/agentflow-cli/scripts/agentflow-cli.mjs list-flows
 ```
 
+Publish a new local Flow after the user has reviewed it:
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs publish-flow \
+  --flow-id release-check \
+  --file .workspace/agentflow/pipelines/release-check/flow.yaml \
+  --target-space personal
+```
+
+Destinations are `personal`, `workspace`, and `team`. `team` creates a workspace Flow and shares it as editor with the current account's active team. Publishing is create-only by default. If the exact Flow already exists, stop and ask whether to update it; only after explicit confirmation rerun with `--replace`. Replacement first reads the server revision and submits it with the update.
+
 Read one flow graph:
 
 ```bash
@@ -132,13 +143,15 @@ The only admin write exception is audited version-membership repair. Read its st
 ## Workflow
 
 1. Check token availability with `config`.
-2. Use `list-workspace` or `list-flows` to discover targets.
+2. Use `list-workspace` or `list-flows` to discover targets. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
 3. Use `run` to start the flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
 4. Use `status`, `list-run-by-workspace`, and `logs` when a run is active, failed, or needs debugging.
 
 ## Failure Handling
 
 - If the CLI says the token is missing, ask the user to set `AGENTFLOW_TOKEN` in env or `.env`.
+- If `publish-flow` returns 409, do not add `--replace` automatically. Ask the user to confirm updating the existing Flow.
+- If team publishing says no active team is assigned, keep the local draft and ask the user to choose personal/workspace or have an admin assign the account to a team.
 - If the API returns 401/403, do not retry with a printed token. Ask the user to refresh the token.
 - If `run` fails because a flow is already running, call `status` and `list-run-by-workspace` before retrying.
 - If local debugging is needed, override `AGENTFLOW_BASE_URL`; otherwise keep the default internal URL.

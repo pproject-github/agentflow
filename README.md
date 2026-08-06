@@ -58,6 +58,9 @@ npm install -g @fieldwangai/agentflow
 # Launch Web UI (port 8765)
 agentflow ui
 
+# Generate and open a single-file static preview using the platform canvas (no local server)
+agentflow flow preview ./my-flow/flow.yaml
+
 # Or run a flow directly
 agentflow apply <FlowName>
 ```
@@ -125,12 +128,16 @@ AgentFlow provides specialized skills for common operations:
 
 | Skill | Description |
 |-------|-------------|
+| `agentflow-author-flow` | Generate a Flow from natural language in Codex/Cursor, validate it, open a static preview, and publish it to personal, workspace, or team scope after confirmation |
+| `agentflow-cli` | Query, publish, and run platform Flows directly with a token and no MCP |
 | `agentflow-flow-add-instances` | Add new nodes to flow.yaml with proper YAML structure, connection design, and positioning |
 | `agentflow-flow-edit-node-fields` | Edit allowed fields in existing nodes (label, body, role, input/output values) without breaking topology |
 | `agentflow-flow-sync-ui` | Sync flow.yaml changes to Web UI canvas after saving to disk |
 | `nestjs-route-order-debug` | Debug NestJS route conflicts between parameter routes (`:id`) and concrete routes |
 
 Skills are automatically loaded when relevant tasks are detected, providing domain-specific instructions and workflows.
+
+For example, tell Codex/Cursor: “Use `agentflow-author-flow` to generate a Flow that sends a WeCom notification after a Jenkins build, open the local preview first, and publish it to my team after I confirm.” The agent handles the local files, validation, preview, and publish command; the user only confirms the result.
 
 ## Tutorials
 
@@ -144,6 +151,7 @@ Skills are automatically loaded when relevant tasks are detected, providing doma
 |---------|-------------|
 | `list` | List all pipelines |
 | `ui` | Start Web UI |
+| `flow preview <FlowName\|flow.yaml>` | Generate a single-file static Flow preview; use `--output` to choose the HTML path |
 | `apply` | Execute flow |
 | `validate` | Validate flow structure |
 | `resume` | Resume from breakpoint |

@@ -88,6 +88,58 @@ export function readAuthUsers() {
   return readJsonObject(usersPath());
 }
 
+export function listAuthUsers() {
+  return Object.entries(readAuthUsers())
+    .map(([userId, user]) => ({
+      userId,
+      username: String(user?.username || userId),
+      isAdmin: Boolean(user?.isAdmin),
+      createdAt: String(user?.createdAt || ""),
+      updatedAt: String(user?.updatedAt || user?.createdAt || ""),
+    }))
+    .sort((left, right) => left.username.localeCompare(right.username));
+}
+
+export function resetAuthUserPassword(userId, password) {
+  const normalizedUserId = sanitizeAgentflowUserId(userId);
+  if (!normalizedUserId) return { ok: false, status: 400, error: "用户名无效" };
+  const nextPassword = String(password || "");
+  if (nextPassword.length < 4) return { ok: false, status: 400, error: "密码至少 4 位" };
+
+  const users = readAuthUsers();
+  const user = users[normalizedUserId];
+  if (!user) return { ok: false, status: 404, error: "用户不存在" };
+
+  const nextCredential = hashPassword(nextPassword);
+  users[normalizedUserId] = {
+    ...user,
+    salt: nextCredential.salt,
+    hash: nextCredential.hash,
+    updatedAt: new Date().toISOString(),
+  };
+  writeJsonObject(usersPath(), users);
+
+  const sessions = readJsonObject(sessionsPath());
+  let revokedSessions = 0;
+  for (const [sessionKey, session] of Object.entries(sessions)) {
+    if (session?.userId !== normalizedUserId) continue;
+    delete sessions[sessionKey];
+    revokedSessions += 1;
+  }
+  writeJsonObject(sessionsPath(), sessions);
+
+  return {
+    ok: true,
+    user: {
+      userId: normalizedUserId,
+      username: String(user.username || normalizedUserId),
+      isAdmin: Boolean(user.isAdmin),
+      updatedAt: users[normalizedUserId].updatedAt,
+    },
+    revokedSessions,
+  };
+}
+
 export function authSetupRequired() {
   return Object.keys(readAuthUsers()).length === 0;
 }

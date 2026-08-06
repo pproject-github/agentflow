@@ -109,10 +109,12 @@ import {
   getAuthUserFromRequest,
   getSessionTokenFromRequest,
   isAuthUserAllowed,
+  listAuthUsers,
   loginOrCreateUser,
   logoutRequest,
   readAuthUsers,
   readUserAllowlist,
+  resetAuthUserPassword,
   writeUserAllowlist,
 } from "./auth.mjs";
 import { readGlobalEnvRows, readMergedEnvObject, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
@@ -3905,6 +3907,8 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
     for (const entry of Array.isArray(workflow?.timeline) ? workflow.timeline : []) {
       const memberKey = String(entry?.key || [entry?.source, entry?.kind, entry?.id].filter(Boolean).join(":"));
       const identity = prdWorkflowDashboardTimelineIdentity(entry);
+      const rawId = String(entry?.id || "").trim();
+      const projectionId = identity && identity !== rawId.toLowerCase() ? identity : rawId;
       const groupKey = prdWorkflowDashboardTimelineGroupKey(entry);
       if (!memberKey || !groupKey) continue;
       assignedWorkflowIds.add(workflowId);
@@ -3912,6 +3916,7 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
         key: memberKey,
         kind: String(entry.kind || ""),
         id: identity || String(entry.id || ""),
+        projectionId,
         title: String(entry.title || entry.id || ""),
         date: String(entry.date || ""),
         startDate: String(entry.startDate || ""),
@@ -3928,6 +3933,7 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
         memberKeys: [],
       };
       current.kind = String(entry.kind || current.kind);
+      current.projectionId = projectionId || current.projectionId;
       current.title = String(entry.title || current.title);
       current.date = String(entry.date || current.date);
       current.startDate = String(entry.startDate || current.startDate);
@@ -11721,10 +11727,17 @@ function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx 
   if (!report.expectedRevision) {
     return { requested: true, status: 400, error: "Admin version repair requires expectedRevision" };
   }
-  return intent;
+  const rawReason = String(payload.adminReason || payload.admin_reason || "");
+  if (rawReason.length > 500) {
+    return { requested: true, status: 400, error: "Admin version repair reason exceeds 500 characters" };
+  }
+  if (/[\0\r\n]/.test(rawReason)) {
+    return { requested: true, status: 400, error: "Admin version repair reason contains control characters" };
+  }
+  return { ...intent, reason: rawReason.trim() };
 }
 
-function prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot = {}) {
+function prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot = {}, adminIntent = {}) {
   const source = prdWorkflowRuntimeEventProducer(report?.event || {});
   const current = Array.isArray(currentSnapshot?.projections?.timeline) ? currentSnapshot.projections.timeline : [];
   const incoming = Array.isArray(report?.projections?.timeline) ? report.projections.timeline : [];
@@ -11736,6 +11749,7 @@ function prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot = {}) {
   const administrativeRepair = {
     kind: "version-attribution",
     operation: "repair-version-membership",
+    ...(adminIntent.reason ? { reason: adminIntent.reason } : {}),
   };
   return {
     ...report,
@@ -13485,7 +13499,6 @@ export function startUiServer({
   const root = path.resolve(workspaceRoot);
   const uiPort = port;
   const uiConfig = { hideCommunityLinks: Boolean(hideCommunityLinks) };
-
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const reqStart = Date.now();
@@ -15622,7 +15635,7 @@ export function startUiServer({
           return;
         }
         report = adminVersionRepair.requested
-          ? prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot)
+          ? prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot, adminVersionRepair)
           : prdWorkflowMergeProducerTimeline(report, currentSnapshot);
         if (report.error) {
           json(res, 400, { error: report.error });
@@ -16082,7 +16095,7 @@ export function startUiServer({
           artifacts: [artifact],
           links: [{
             key: artifactKey,
-            label: "Markdown Review",
+            label: artifact.label,
             kind: artifact.kind,
             url: displayUrl,
             canonicalUrl: reviewUrl,
@@ -16666,6 +16679,40 @@ export function startUiServer({
         }
         return;
       }
+    }
+
+    if (url.pathname === "/api/admin/users" || url.pathname === "/api/admin/users/reset-password") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/admin/users") {
+        json(res, 200, { users: listAuthUsers() });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/admin/users/reset-password") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const targetUserId = String(payload?.userId || "").trim();
+        if (targetUserId === userCtx.userId) {
+          json(res, 400, { error: "不能在当前会话中重置自己的密码" });
+          return;
+        }
+        const result = resetAuthUserPassword(targetUserId, payload?.password);
+        if (!result.ok) {
+          json(res, result.status || 400, { error: result.error || "Password reset failed" });
+          return;
+        }
+        json(res, 200, result);
+        return;
+      }
+      json(res, 405, { error: "Method not allowed" });
+      return;
     }
 
     if (url.pathname === "/api/flows") {

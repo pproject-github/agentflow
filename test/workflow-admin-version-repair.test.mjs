@@ -127,6 +127,7 @@ test("admin may repair version membership without gaining general Workflow write
     const repairPath = path.join(tempRoot, "admin-version-repair.json");
     fs.writeFileSync(repairPath, JSON.stringify({
       source: "prd-flow",
+      adminReason: "清理测试版本并修复到正式迭代",
       projections: {
         timeline: [{
           kind: "version",
@@ -153,9 +154,11 @@ test("admin may repair version membership without gaining general Workflow write
     assert.deepEqual(repairedResult.administrativeRepair, {
       kind: "version-attribution",
       operation: "repair-version-membership",
+      reason: "清理测试版本并修复到正式迭代",
     });
     assert.equal(repairedResult.event.actor.userId, admin.user.userId);
     assert.equal(repairedResult.event.administrativeRepair.kind, "version-attribution");
+    assert.equal(repairedResult.event.administrativeRepair.reason, "清理测试版本并修复到正式迭代");
     assert.deepEqual(
       repairedResult.snapshot.projections.timeline.map((entry) => `${entry.kind}:${entry.id}`).sort(),
       ["milestone:code-freeze", "version:1133202860001000338"],

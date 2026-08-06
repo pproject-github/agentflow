@@ -224,6 +224,14 @@ export default function SettingsPage({ authUser }) {
   const [allowlistLoading, setAllowlistLoading] = useState(false);
   const [allowlistSaving, setAllowlistSaving] = useState(false);
   const [allowlistErr, setAllowlistErr] = useState("");
+  const [authUsers, setAuthUsers] = useState([]);
+  const [authUsersLoading, setAuthUsersLoading] = useState(false);
+  const [authUsersErr, setAuthUsersErr] = useState("");
+  const [passwordResetUserId, setPasswordResetUserId] = useState("");
+  const [passwordResetDraft, setPasswordResetDraft] = useState("");
+  const [passwordResetConfirm, setPasswordResetConfirm] = useState("");
+  const [passwordResetSaving, setPasswordResetSaving] = useState(false);
+  const [passwordResetMessage, setPasswordResetMessage] = useState("");
   const [dataRootDraft, setDataRootDraft] = useState("");
   const [skillsRootDraft, setSkillsRootDraft] = useState("");
   const [dataRootConfig, setDataRootConfig] = useState(null);
@@ -334,6 +342,22 @@ export default function SettingsPage({ authUser }) {
       setAllowlistErr(String(/** @type {{ message?: string }} */ (e).message || e));
     } finally {
       setAllowlistSaving(false);
+    }
+  }, [authUser?.isAdmin]);
+
+  const loadAuthUsers = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setAuthUsersLoading(true);
+    setAuthUsersErr("");
+    try {
+      const r = await fetch("/api/admin/users");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      setAuthUsers(Array.isArray(j.users) ? j.users : []);
+    } catch (e) {
+      setAuthUsersErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setAuthUsersLoading(false);
     }
   }, [authUser?.isAdmin]);
 
@@ -477,6 +501,7 @@ export default function SettingsPage({ authUser }) {
       void loadContext();
       void loadLists();
       void loadUserAllowlist();
+      void loadAuthUsers();
       void loadStorageConfig();
       void (async () => {
         try {
@@ -506,7 +531,7 @@ export default function SettingsPage({ authUser }) {
       setWorkspaceRoot("");
       opencodeConfigReady.current = false;
     }
-  }, [authUser?.isAdmin, loadContext, loadLists, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
+  }, [authUser?.isAdmin, loadAuthUsers, loadContext, loadLists, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
 
   useEffect(() => {
     if (!envConfigReady.current) return;
@@ -731,6 +756,53 @@ export default function SettingsPage({ authUser }) {
     if (!target) return;
     void saveUserAllowlist(allowlistFileUsers.filter((item) => String(item || "").trim().toLowerCase() !== target));
   }, [allowlistFileUsers, saveUserAllowlist]);
+
+  const beginPasswordReset = useCallback((userId) => {
+    setPasswordResetUserId(String(userId || ""));
+    setPasswordResetDraft("");
+    setPasswordResetConfirm("");
+    setPasswordResetMessage("");
+    setAuthUsersErr("");
+  }, []);
+
+  const cancelPasswordReset = useCallback(() => {
+    setPasswordResetUserId("");
+    setPasswordResetDraft("");
+    setPasswordResetConfirm("");
+  }, []);
+
+  const submitPasswordReset = useCallback(async (event) => {
+    event.preventDefault();
+    if (!passwordResetUserId || passwordResetSaving) return;
+    if (passwordResetDraft.length < 4) {
+      setAuthUsersErr(t("settings:accounts.passwordTooShort"));
+      return;
+    }
+    if (passwordResetDraft !== passwordResetConfirm) {
+      setAuthUsersErr(t("settings:accounts.passwordMismatch"));
+      return;
+    }
+    setPasswordResetSaving(true);
+    setAuthUsersErr("");
+    setPasswordResetMessage("");
+    try {
+      const r = await fetch("/api/admin/users/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: passwordResetUserId, password: passwordResetDraft }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      const username = String(j.user?.username || passwordResetUserId);
+      setPasswordResetMessage(t("settings:accounts.resetSuccess", { username }));
+      cancelPasswordReset();
+      await loadAuthUsers();
+    } catch (e) {
+      setAuthUsersErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setPasswordResetSaving(false);
+    }
+  }, [cancelPasswordReset, loadAuthUsers, passwordResetConfirm, passwordResetDraft, passwordResetSaving, passwordResetUserId, t]);
 
   const handleLanguageChange = useCallback((e) => {
     const newLang = e.target.value;
@@ -1336,6 +1408,88 @@ export default function SettingsPage({ authUser }) {
                     SkillHub 新安装、更新和卸载都作用于 Skills Root；普通用户只通过 Workspace 的 Load Skills 使用。
                     {dataRootConfig?.skillsEnvLocked ? " 当前设置了 AGENTFLOW_SKILLS_ROOT，需要改环境变量才能生效。" : ""}
                   </p>
+                </section>
+              ) : null}
+
+              {authUser?.isAdmin ? (
+                <section className="af-set-card af-set-card--wide af-set-card--accounts">
+                  <div className="af-set-env-head">
+                    <div className="af-set-card-head">
+                      <div className="af-set-env-icon-wrap">
+                        <span className="material-symbols-outlined af-set-icon--primary">key</span>
+                      </div>
+                      <div>
+                        <h2 className="af-set-h2">{t("settings:accounts.title")}</h2>
+                        <p className="af-set-card-subtitle">{t("settings:accounts.description")}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="af-set-btn-outline af-set-btn-outline--compact"
+                      onClick={() => void loadAuthUsers()}
+                      disabled={authUsersLoading}
+                    >
+                      {authUsersLoading ? t("settings:accounts.refreshing") : t("common:common.refresh")}
+                    </button>
+                  </div>
+                  {authUsersErr ? <p className="af-err af-set-hint af-set-hint--inline">{authUsersErr}</p> : null}
+                  {passwordResetMessage ? <p className="af-set-account-success">{passwordResetMessage}</p> : null}
+                  <div className="af-set-account-list">
+                    {authUsers.map((user) => {
+                      const isCurrent = user.userId === authUser?.userId;
+                      const editing = user.userId === passwordResetUserId;
+                      return (
+                        <div key={user.userId} className={"af-set-account-row" + (editing ? " is-editing" : "")}>
+                          <div className="af-set-account-main">
+                            <strong>{user.username || user.userId}</strong>
+                            <span>
+                              <code>{user.userId}</code>
+                              {user.isAdmin ? <em>{t("settings:accounts.admin")}</em> : null}
+                              {isCurrent ? <em>{t("settings:accounts.current")}</em> : null}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="af-set-btn-outline af-set-btn-outline--compact"
+                            onClick={() => beginPasswordReset(user.userId)}
+                            disabled={isCurrent || passwordResetSaving}
+                            title={isCurrent ? t("settings:accounts.selfResetDisabled") : t("settings:accounts.reset")}
+                          >
+                            {t("settings:accounts.reset")}
+                          </button>
+                          {editing ? (
+                            <form className="af-set-password-reset" onSubmit={submitPasswordReset}>
+                              <input
+                                className="af-set-input af-set-input--sm"
+                                type="password"
+                                value={passwordResetDraft}
+                                onChange={(event) => setPasswordResetDraft(event.target.value)}
+                                placeholder={t("settings:accounts.newPassword")}
+                                autoComplete="new-password"
+                                autoFocus
+                              />
+                              <input
+                                className="af-set-input af-set-input--sm"
+                                type="password"
+                                value={passwordResetConfirm}
+                                onChange={(event) => setPasswordResetConfirm(event.target.value)}
+                                placeholder={t("settings:accounts.confirmPassword")}
+                                autoComplete="new-password"
+                              />
+                              <button type="button" className="af-set-btn-outline af-set-btn-outline--compact" onClick={cancelPasswordReset} disabled={passwordResetSaving}>
+                                {t("common:common.cancel")}
+                              </button>
+                              <button type="submit" className="af-set-btn-add" disabled={passwordResetSaving || !passwordResetDraft || !passwordResetConfirm}>
+                                {passwordResetSaving ? t("settings:accounts.saving") : t("settings:accounts.confirmReset")}
+                              </button>
+                            </form>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                    {!authUsersLoading && authUsers.length === 0 ? <div className="af-allowlist-empty">{t("settings:accounts.empty")}</div> : null}
+                  </div>
+                  <p className="af-set-hint af-set-hint--inline">{t("settings:accounts.sessionHint")}</p>
                 </section>
               ) : null}
 

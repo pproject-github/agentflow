@@ -92,6 +92,24 @@
     "unionHint": "The file allowlist and env allowlist are combined. This only stores usernames, never passwords.",
     "add": "Add"
   },
+  "accounts": {
+    "title": "Account Passwords",
+    "description": "Administrators can assign a new password to a registered user without changing account data or permissions.",
+    "refreshing": "Refreshing...",
+    "admin": "Admin",
+    "current": "Current account",
+    "reset": "Reset password",
+    "selfResetDisabled": "The current signed-in account cannot be reset here",
+    "newPassword": "Enter new password",
+    "confirmPassword": "Enter new password again",
+    "confirmReset": "Confirm reset",
+    "saving": "Resetting...",
+    "passwordTooShort": "Password must be at least 4 characters.",
+    "passwordMismatch": "The passwords do not match.",
+    "resetSuccess": "A new password was set for {{username}}.",
+    "empty": "No registered users.",
+    "sessionHint": "Resetting immediately revokes every existing session for that user. Flows, Workspaces, teams, and collaboration permissions are preserved."
+  },
   "system": {
     "title": "System Status",
     "normal": "Service normal",

@@ -14,7 +14,7 @@ test("Workflow Dashboard is reachable from the main navigation", async () => {
   ]);
 
   assert.match(app, /import WorkflowsPage from "\.\/pages\/WorkflowsPage\.jsx";/);
-  assert.match(app, /if \(path === "\/workflows"\) return <WorkflowsPage \/>;/);
+  assert.match(app, /if \(path === "\/workflows"\) return <WorkflowsPage authUser=\{authUser\} \/>;/);
   assert.match(sidebar, /\{ to: "\/workflows", label: "迭代", icon: "timeline" \}/);
 });
 
@@ -25,6 +25,7 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   ]);
 
   assert.match(page, /fetch\(`\/api\/prd-workflows\?\$\{params\.toString\(\)\}`\)/);
+  assert.match(page, /setLoading\(true\);\s*setError\(""\);\s*setWorkflows\(\[\]\);/);
   assert.match(page, />个人迭代<\/button>/);
   assert.match(page, />团队迭代<\/button>/);
   assert.match(page, /view: "workflow"/);
@@ -50,7 +51,10 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(page, /function timelineStatus\(entry\)/);
   assert.match(page, /const TIMELINE_WINDOW_SIZE = 8;/);
   assert.match(page, /const TIMELINE_WINDOW_MAX = 24;/);
-  assert.match(page, /function initialTimelineWindow\(entries\)/);
+  assert.match(page, /function initialTimelineWindow\(entries, focusKey = ""\)/);
+  assert.match(page, /setTimelineFocusKey\(nextDefaultTimelineKey\)/);
+  assert.match(page, /previousElementSibling\?\.dataset\?\.timelineKey/);
+  assert.match(page, /rail\.scrollLeft = Math\.max\(0, previousNode\.offsetLeft - railPadding\)/);
   assert.match(page, /function loadWorkflowPageState\(\)/);
   assert.match(page, /function isLocalWorkflowRuntime\(\)/);
   assert.match(page, /\["127\.0\.0\.1", "localhost", "::1"\]/);
@@ -63,6 +67,15 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(page, /setDemoMode\(false\); setView\("team"\)/);
   assert.match(page, /payload\.selectedTimelineKey/);
   assert.match(page, /className="af-workflows-pagination"/);
+  assert.match(page, /function AdminIterationManager/);
+  assert.match(page, /authUser\?\.isAdmin && !demoMode/);
+  assert.match(page, /管理迭代/);
+  assert.match(page, /adminOperation: "repair-version-membership"/);
+  assert.match(page, /adminReason: reason\.trim\(\)/);
+  assert.match(page, /expectedRevision: revision/);
+  assert.match(page, /reportResponse\.status === 409 && attempt < 1/);
+  assert.match(page, /移至未归属/);
+  assert.match(page, /变更预览/);
   assert.match(page, /WORKFLOW_PAGE_SIZES = \[20, 50, 100\]/);
   assert.match(page, /onScroll=\{handleTimelineScroll\}/);
   assert.doesNotMatch(page, /timelineViewport/);
@@ -79,4 +92,7 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(css, /\.af-workflows-demo-button\s*\{/);
   assert.match(css, /\.af-workflows-demo-toggle\.is-active\s*\{/);
   assert.match(css, /\.af-workflows-pagination\s*\{/);
+  assert.match(css, /\.af-workflows-admin-backdrop\s*\{/);
+  assert.match(css, /\.af-workflows-admin-dialog\s*\{/);
+  assert.match(css, /\.af-workflows-admin-preview\s*\{/);
 });

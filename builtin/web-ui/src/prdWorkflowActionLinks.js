@@ -118,16 +118,28 @@ export function isPrdWorkflowReviewLink(link) {
   return hasReviewMetadata && /\/r\/[A-Za-z0-9_-]{8,32}(?:[?#]|$)/.test(href);
 }
 
+function isGenericReviewLabel(value) {
+  return /^(?:markdown\s+review|review|markdown\s*预览|文档预览|预览)$/i.test(text(value));
+}
+
+function linkDisplayLabel(link) {
+  const label = text(link?.label);
+  const title = text(link?.title);
+  if (label && !isGenericReviewLabel(label)) return label;
+  if (title && !isGenericReviewLabel(title)) return title;
+  return label || title;
+}
+
 function reviewRank(link) {
+  const label = linkDisplayLabel(link);
+  if (label && !isGenericReviewLabel(label)) return 100;
   const descriptor = [
-    link?.label,
+    label,
     link?.kind,
     link?.type,
     link?.durability,
     sourceKind(link?.source),
   ].map(text).join(" ");
-  if (/方案文档/.test(descriptor)) return 50;
-  if (/临时/.test(descriptor)) return 40;
   if (/Markdown Review/i.test(descriptor)) return 20;
   if (/预览|review/i.test(descriptor)) return 10;
   return 0;
@@ -150,8 +162,12 @@ function linkIdentities(link) {
 function dedupeLinks(links) {
   const out = [];
   const seen = new Map();
-  for (const link of links) {
-    if (!link) continue;
+  for (const rawLink of links) {
+    if (!rawLink) continue;
+    const displayLabel = linkDisplayLabel(rawLink);
+    const link = displayLabel && displayLabel !== text(rawLink?.label)
+      ? { ...rawLink, label: displayLabel }
+      : rawLink;
     const identities = linkIdentities(link);
     const index = identities.map((identity) => seen.get(identity)).find((value) => value != null);
     if (index == null) {
@@ -161,19 +177,16 @@ function dedupeLinks(links) {
     }
     const existing = out[index];
     const preferredLabel = reviewRank(link) >= reviewRank(existing)
-      ? text(link?.label) || text(existing?.label)
-      : text(existing?.label) || text(link?.label);
+      ? linkDisplayLabel(link) || linkDisplayLabel(existing)
+      : linkDisplayLabel(existing) || linkDisplayLabel(link);
     const existingHasStableKey = Boolean(artifactKey(existing));
     const linkHasStableKey = Boolean(artifactKey(link));
     const preferred = existingHasStableKey && !linkHasStableKey ? existing : link;
     const fallback = preferred === existing ? link : existing;
-    const finalLabel = artifactKey(preferred) && !artifactKey(fallback)
-      ? text(preferred?.label) || preferredLabel
-      : preferredLabel;
     out[index] = {
       ...fallback,
       ...preferred,
-      ...(finalLabel ? { label: finalLabel } : {}),
+      ...(preferredLabel ? { label: preferredLabel } : {}),
     };
     linkIdentities(out[index]).forEach((identity) => seen.set(identity, index));
   }

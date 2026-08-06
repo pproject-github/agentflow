@@ -122,6 +122,7 @@ const ADMIN_VERSION_REPAIR = `{
   "workflow": "tapd:1013667",
   "source": "prd-flow",
   "adminOperation": "repair-version-membership",
+  "adminReason": "清理测试版本并归属到正式迭代",
   "projections": {
     "timeline": [{
       "kind": "version",
@@ -542,6 +543,7 @@ const REPORT_FIELDS = [
   ["expectedRevision", "string", "兼容", "仅未提供 expectedVersions 时启用的整 Workflow 锁"],
   ["idempotencyKey", "string", "建议", "业务操作稳定身份，不使用时间戳或随机 UUID"],
   ["adminOperation", "string", "管理员特例", "仅 repair-version-membership；请求只能含 kind=version 的 projections.timeline，且必须带 expectedRevision 与 idempotencyKey"],
+  ["adminReason", "string", "管理 UI 必填", "版本归属修复原因，最多 500 字符；写入管理员审计事件"],
   ["observation", "object", "条件", "同一 clientId 的完整生产方观察"],
   ["globalState", "object", "条件", "全局事实的 merge patch 与 remove"],
   ["action", "object", "条件", "一个关键业务阶段；key 必填"],
@@ -1115,11 +1117,14 @@ export default function WorkflowReportGuidePage() {
             <div className="af-wr-hero__boundary"><strong>当前边界</strong><span>可接入任意事实来源</span><i>·</i><span>Workflow key 目前必须是 tapd:&lt;short-id&gt;</span></div>
           </div>
           <div className="af-wr-hero__actions">
+            <button type="button" onClick={() => navigate("/workflows")}>
+              <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+              返回 Workflow Dashboard
+            </button>
             <button type="button" className="is-primary" onClick={() => void copy("ai", AI_GUIDE)}>
               <span className="material-symbols-outlined" aria-hidden>{copied === "ai" ? "check" : "smart_toy"}</span>
               {copied === "ai" ? "已复制 AI 引导" : "复制 AI 接入引导"}
             </button>
-            <button type="button" onClick={() => navigate("/workflows")}>打开 Workflow Dashboard</button>
           </div>
         </section>
 
@@ -1331,7 +1336,7 @@ export default function WorkflowReportGuidePage() {
               <article><h4>extensions</h4><p>只有专用 renderer 才能显示的 namespace 数据。</p><FieldTable rows={EXTENSION_FIELDS} label="Workflow Extensions 参数" /></article>
             </div>
             <p className="af-wr-table-note"><strong>生产方隔离：</strong>Action、Artifact、Projection、Observation 和 Extension 都使用带 <code>source</code> 的资源 key；不同 source 可以复用相同业务 key。<code>globalState</code> 按叶子路径分 key 并记录首次写入者，不能覆盖其他 source 的路径；timeline 只替换当前 source 的切片。</p>
-            <div className="af-wr-callout"><span className="material-symbols-outlined" aria-hidden>admin_panel_settings</span><p><strong>管理员版本归属修复是唯一窄写例外。</strong>先在 GET state 显式携带 <code>adminOperation=repair-version-membership</code> 读取当前 <code>runtimeRevision</code>；再用同一意图执行 Report。Report 只能包含 <code>kind=version</code> 的 <code>projections.timeline</code>，并提供整 Workflow 的 <code>expectedRevision</code> 与幂等键。version id 必须是版本自身的稳定 ID，不能使用 TAPD 需求 ID。Action、Artifact、observation、globalState、extensions 和非版本投影都会被拒绝；事件记录管理员 actor 供审计。</p></div>
+            <div className="af-wr-callout"><span className="material-symbols-outlined" aria-hidden>admin_panel_settings</span><p><strong>管理员版本归属修复是唯一窄写例外。</strong>先在 GET state 显式携带 <code>adminOperation=repair-version-membership</code> 读取当前 <code>runtimeRevision</code>；再用同一意图执行 Report。Report 只能包含 <code>kind=version</code> 的 <code>projections.timeline</code>，并提供整 Workflow 的 <code>expectedRevision</code> 与幂等键；管理 UI 还必须填写 <code>adminReason</code>。version id 必须是版本自身的稳定 ID，不能使用 TAPD 需求 ID。Action、Artifact、observation、globalState、extensions 和非版本投影都会被拒绝；事件记录管理员 actor、原因和时间供审计。</p></div>
             <CodePanel title="管理员：读取版本修复严格锁" value={ADMIN_VERSION_REPAIR_READ} copyKey="admin-version-repair-read" copied={copied} onCopy={copy} />
             <CodePanel title="管理员：仅修复版本归属" value={ADMIN_VERSION_REPAIR} copyKey="admin-version-repair" copied={copied} onCopy={copy} />
           </article>
@@ -1382,7 +1387,7 @@ export default function WorkflowReportGuidePage() {
             <CodePanel title="release-bot 通用 Checklist" value={CHECKLIST_REPORT} copyKey="checklist-scenario" copied={copied} onCopy={copy} />
           </div>
           <div className="af-wr-scenario">
-            <div className="af-wr-scenario__copy"><span>场景 E · ADMIN AUDIT</span><h3>批量修复错误的版本归属</h3><ol><li>管理员用 <code>adminOperation=repair-version-membership</code> GET 当前 Workflow，保存 <code>runtimeRevision</code>。</li><li>核对版本自身的稳定 ID；不能把 TAPD 需求 ID 当作 version id。</li><li>Report 使用同一意图，只提交目标 source 的 version 切片。</li><li>服务端保留该 source 的非版本投影及其他 source 数据，并记录管理员 actor。</li><li>发生并发变化返回 409；刷新后重新核对，只重试一次。</li></ol><p>这不是 Reporter 替代方案。普通 Workflow Report、Action 和业务状态写入仍必须由 Owner 或 Reporter 完成。</p></div>
+            <div className="af-wr-scenario__copy"><span>场景 E · ADMIN AUDIT</span><h3>批量修复错误的版本归属</h3><ol><li>管理员用 <code>adminOperation=repair-version-membership</code> GET 当前 Workflow，保存 <code>runtimeRevision</code>。</li><li>核对版本自身的稳定 ID；不能把 TAPD 需求 ID 当作 version id。</li><li>Report 使用同一意图，只提交目标 source 的 version 切片，并填写 <code>adminReason</code>。</li><li>服务端保留该 source 的非版本投影及其他 source 数据，并记录管理员 actor、原因和时间。</li><li>发生并发变化返回 409；刷新后重新核对，只重试一次。</li></ol><p>这不是 Reporter 替代方案。普通 Workflow Report、Action 和业务状态写入仍必须由 Owner 或 Reporter 完成。</p></div>
             <CodePanel title="管理员版本归属修复" value={ADMIN_VERSION_REPAIR} copyKey="admin-version-scenario" copied={copied} onCopy={copy} />
           </div>
         </section>

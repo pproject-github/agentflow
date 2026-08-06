@@ -20,7 +20,7 @@
 }
 
 .af-wr-inner {
-  width: min(92rem, calc(100% - 3rem));
+  width: min(116rem, calc(100% - 3rem));
   margin: 0 auto;
   padding: 2.2rem 0 5rem;
 }
@@ -1867,6 +1867,12 @@
   line-height: 1.45;
 }
 
+@media (max-width: 1500px) {
+  .af-wr-effect-workbench {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1320px) {
   .af-wr-endpoint-grid,
   .af-wr-region-grid,
@@ -1877,7 +1883,6 @@
 
   .af-wr-renderer-feature,
   .af-wr-runtime,
-  .af-wr-effect-workbench,
   .af-wr-trigger-jenkins {
     grid-template-columns: 1fr;
   }

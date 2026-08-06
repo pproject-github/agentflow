@@ -81,6 +81,9 @@ test("Action checklists keep cards concise and open a dedicated document route",
   assert.match(checklistSource, /fetch\(`\/api\/workflows\/checklist\?/);
   assert.match(checklistSource, /method: "PATCH"/);
   assert.match(checklistSource, /保存并标记通过/);
+  assert.match(checklistSource, /修改结果/);
+  assert.match(checklistSource, /target="_blank" rel="noreferrer"/);
+  assert.match(checklistSource, /setEditingResult\(nextStatus === "pending"\)/);
   assert.match(checklistSource, /!canWrite \? <span>只读<\/span>/);
   assert.match(checklistSource, /ACTION CHECKLIST · LOCAL DEMO/);
   assert.match(checklistSource, /withWorkflowChecklistProgress/);

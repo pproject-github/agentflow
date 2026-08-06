@@ -16,6 +16,7 @@ import WorkflowsPage from "./pages/WorkflowsPage.jsx";
 import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
 import WorkflowChecklistPage from "./pages/WorkflowChecklistPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
+import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
 import AppVersionNotice from "./components/AppVersionNotice.jsx";
@@ -90,12 +91,13 @@ function RoutedContent({ authUser }) {
   if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
-  if (path === "/workflows") return <WorkflowsPage />;
+  if (path === "/workflows") return <WorkflowsPage authUser={authUser} />;
   if (path === "/workflow-report") return <WorkflowReportGuidePage />;
   if (path === "/workflow-checklist") return <WorkflowChecklistPage />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
   if (path === "/node-studio") return <NodeStudioPage />;
+  if (path === "/flow-preview") return <FlowEditorPage previewMode />;
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
@@ -214,12 +216,14 @@ function AuthGate({ children }) {
 
 function AppShell({ authUser, onLogout }) {
   const { path } = useRoute();
-  const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist";
+  const workflowReportStandalone = path === "/workflow-report";
+  const pipelineFullBleed = path === "/flow" || path === "/flow-preview" || path === "/workspace" || path === "/workflow-checklist";
+  const fullBleed = pipelineFullBleed || workflowReportStandalone;
   return (
     <div className="af-app">
-      {path !== "/settings" ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
-      {!pipelineFullBleed ? <Sidebar authUser={authUser} onLogout={onLogout} /> : null}
-      <div className={pipelineFullBleed ? "af-main af-main--pipeline" : "af-main"}>
+      {path !== "/settings" && !workflowReportStandalone ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
+      {!fullBleed ? <Sidebar authUser={authUser} onLogout={onLogout} /> : null}
+      <div className={fullBleed ? "af-main af-main--pipeline" : "af-main"}>
         <RoutedContent authUser={authUser} />
       </div>
       <RunningIndicator />
@@ -240,6 +244,7 @@ export default function App() {
 
 function PublicOrAuthedApp() {
   const { path } = useRoute();
+  if (path === "/flow-preview" || window.__AGENTFLOW_STATIC_FLOW_PREVIEW__) return <FlowEditorPage previewMode />;
   if (path.startsWith("/display")) return <DisplayPage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   if (isWorkflowSharePath(path)) return path === "/workflow-checklist" ? <WorkflowChecklistPage /> : <WorkspacePage />;

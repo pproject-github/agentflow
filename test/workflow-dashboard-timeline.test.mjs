@@ -34,6 +34,7 @@ test("Workflow Dashboard merges platform variants of the same scheduled iteratio
 
   assert.equal(result.timeline.length, 1);
   assert.equal(result.timeline[0].id, "563");
+  assert.equal(result.timeline[0].projectionId, "563");
   assert.deepEqual(result.timeline[0].dimensions.platform, ["android", "ios"]);
   assert.equal(result.timeline[0].dimensions.workspace, "33202860");
   assert.equal(result.timeline[0].workflowCount, 2, "one Workflow assigned to both platforms is counted once");
@@ -71,6 +72,24 @@ test("Workflow Dashboard does not merge different iteration IDs that share a tit
   ]);
 
   assert.equal(result.timeline.length, 2);
+});
+
+test("Workflow Dashboard preserves the original projection ID for admin reassignment", () => {
+  const result = prdWorkflowDashboardTimeline([{
+    id: "workflow-a",
+    state: "active",
+    timeline: [{
+      key: "release-bot:version:Release-Candidate-A",
+      kind: "version",
+      id: "Release-Candidate-A",
+      title: "Release Candidate A",
+      date: "2026-08-11",
+      source: "release-bot",
+    }],
+  }]);
+
+  assert.equal(result.timeline[0].id, "release-candidate-a");
+  assert.equal(result.timeline[0].projectionId, "Release-Candidate-A");
 });
 
 test("Workflow Dashboard defaults to the iteration covering today or the nearest upcoming date", () => {

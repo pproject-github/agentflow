@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentFlow Flow Authoring"
+  short_description: "Generate, preview, confirm, and publish AgentFlow flows"
+  default_prompt: "Use $agentflow-author-flow to generate a local AgentFlow, open its platform-style preview, and publish it after I confirm."

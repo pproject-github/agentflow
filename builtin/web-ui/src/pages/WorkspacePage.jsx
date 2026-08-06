@@ -953,46 +953,7 @@ function prdWorkflowActionLinks(item) {
   collect(item?.results, "结果");
   collect(item?.result, "结果");
   collect(item?.files, "文件");
-  const reviewKey = (href) => {
-    const text = String(href || "").trim();
-    try {
-      const url = new URL(text, window.location.origin);
-      return `${url.origin}${url.pathname}`;
-    } catch (_) {
-      return text.split(/[?#]/)[0];
-    }
-  };
-  const reviewRank = (label) => {
-    const text = String(label || "");
-    if (/方案文档/.test(text)) return 50;
-    if (/临时/.test(text)) return 40;
-    if (/Markdown Review/i.test(text)) return 20;
-    if (/预览|review/i.test(text)) return 10;
-    return 0;
-  };
-  const seen = new Map();
-  for (const link of out) {
-    const isReview = isPrdWorkflowReviewLink(link);
-    const stableKey = String(link.key || link.artifactKey || link.artifact_key || "").trim();
-    const key = stableKey
-      ? `key:${stableKey}`
-      : isReview
-        ? `review:${reviewKey(link.canonicalUrl || link.canonical_url || link.href)}`
-        : `${link.label}\n${link.href}`;
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, link);
-      continue;
-    }
-    if (isReview) {
-      const existingRank = reviewRank(existing.label);
-      const nextRank = reviewRank(link.label);
-      if (nextRank > existingRank || (nextRank === existingRank && String(link.label || "").length > String(existing.label || "").length)) {
-        seen.set(key, link);
-      }
-    }
-  }
-  return selectCurrentPrdWorkflowActionLinks(Array.from(seen.values()), item);
+  return selectCurrentPrdWorkflowActionLinks(out, item);
 }
 
 function prdWorkflowAiDocLinks(snapshot, actionRows = []) {

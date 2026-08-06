@@ -229,7 +229,7 @@ export function parseNodeFrontmatter(raw) {
  * @param {string} workspaceRoot
  * @param {string} flowId
  * @param {string} flowSource
- * @param {{ archived?: boolean }} [opts]
+ * @param {{ archived?: boolean, staticFlowPath?: string }} [opts]
  */
 export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
@@ -238,7 +238,14 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const byId = new Map();
   const pipelineTranslations = {};
   let marketplaceFlowData = null;
-  if (flowId && flowSource) {
+  const staticFlowPath = opts.staticFlowPath ? path.resolve(String(opts.staticFlowPath)) : "";
+  const staticFlowDir = staticFlowPath ? path.dirname(staticFlowPath) : "";
+  if (staticFlowPath && fs.existsSync(staticFlowPath) && fs.statSync(staticFlowPath).isFile()) {
+    try {
+      const parsed = yaml.load(fs.readFileSync(staticFlowPath, "utf-8"));
+      if (parsed && typeof parsed === "object") marketplaceFlowData = parsed;
+    } catch (_) {}
+  } else if (flowId && flowSource) {
     const flowPath = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
     if (flowPath.path && fs.existsSync(flowPath.path)) {
       try {
@@ -314,6 +321,24 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       packageDir: manifest.packageDir,
       runtime: manifest.runtime,
     });
+  }
+  if (staticFlowDir) {
+    addFromDir(path.join(staticFlowDir, "nodes"), "flow", flowId);
+    const flowData = marketplaceFlowData;
+    if (flowData?.instances) {
+      pipelineTranslations[flowId] = pipelineTranslations[flowId] || {};
+      for (const [nodeId, inst] of Object.entries(flowData.instances)) {
+        pipelineTranslations[flowId][nodeId] = {
+          label: inst?.label,
+          body: inst?.body,
+          description: inst?.description || inst?.userDescription,
+        };
+      }
+    }
+    if (flowData?.ui?.description) {
+      pipelineTranslations[flowId] = pipelineTranslations[flowId] || {};
+      pipelineTranslations[flowId].__flowDescription = flowData.ui.description;
+    }
   }
   if (flowId && flowSource) {
     if (flowSource === "builtin") {

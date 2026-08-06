@@ -58,6 +58,9 @@ npm install -g @fieldwangai/agentflow
 # 启动 Web UI（端口 8765）
 agentflow ui
 
+# 生成并打开平台同款画布的单文件静态预览（无需本地服务）
+agentflow flow preview ./my-flow/flow.yaml
+
 # 或直接运行流程
 agentflow apply <FlowName>
 ```
@@ -125,12 +128,16 @@ AgentFlow 提供专用技能用于常见操作：
 
 | 技能 | 说明 |
 |------|------|
+| `agentflow-author-flow` | 在 Codex/Cursor 中根据自然语言生成 Flow，自动校验并打开静态预览；确认后发布到个人、Workspace 或团队 |
+| `agentflow-cli` | 通过 token 直接查询、发布和运行平台 Flow，无需 MCP |
 | `agentflow-flow-add-instances` | 向 flow.yaml 添加新节点，包括正确的 YAML 结构、连线设计和位置定位 |
 | `agentflow-flow-edit-node-fields` | 编辑已有节点的允许字段（label、body、role、input/output 值）而不破坏拓扑 |
 | `agentflow-flow-sync-ui` | 保存 flow.yaml 到磁盘后同步变更到 Web UI 画布 |
 | `nestjs-route-order-debug` | 调试 NestJS 路由冲突（参数路由 `:id` 与具体路由之间） |
 
 技能在检测到相关任务时自动加载，提供领域特定的指令和工作流。
+
+例如直接对 Codex/Cursor 说：“用 `agentflow-author-flow` 生成一个 Jenkins 构建完成后通知企业微信的 Flow，先打开本地预览，我确认后发布到团队。” Agent 会处理本地文件、校验、预览和发布命令；用户只负责确认效果。
 
 ## 教程
 
@@ -144,6 +151,7 @@ AgentFlow 提供专用技能用于常见操作：
 |------|------|
 | `list` | 列出所有流水线 |
 | `ui` | 启动 Web UI |
+| `flow preview <FlowName\|flow.yaml>` | 生成平台同款画布的单文件静态 Flow 预览；可用 `--output` 指定 HTML |
 | `apply` | 执行流程 |
 | `validate` | 校验流程结构 |
 | `resume` | 断点续跑 |

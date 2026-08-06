@@ -20,8 +20,12 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
 
   assert.match(app, /import WorkflowReportGuidePage from "\.\/pages\/WorkflowReportGuidePage\.jsx";/);
   assert.match(app, /if \(path === "\/workflow-report"\) return <WorkflowReportGuidePage \/>;/);
+  assert.match(app, /const workflowReportStandalone = path === "\/workflow-report";/);
+  assert.match(app, /const fullBleed = pipelineFullBleed \|\| workflowReportStandalone;/);
+  assert.match(app, /!fullBleed \? <Sidebar/);
   assert.doesNotMatch(sidebar, /to: "\/workflow-report"/);
   assert.match(page, /Workflow 接入文档/);
+  assert.match(page, /返回 Workflow Dashboard/);
   assert.match(page, /className="af-wr-doc-shell"/);
   assert.match(page, /className="af-wr-toc"/);
   assert.match(page, /hidden=\{activeSection !== "renderers"\}/);
@@ -107,6 +111,7 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(page, /批量修复错误的版本归属/);
   assert.match(page, /adminOperation/);
   assert.match(page, /repair-version-membership/);
+  assert.match(page, /adminReason/);
   assert.match(page, /release-bot/);
   assert.match(page, /GENERIC · NEW FEATURE/);
   assert.match(page, /打开本地 Todo 预览/);
@@ -143,6 +148,8 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(css, /\.af-wr-doc-shell\s*\{/);
   assert.match(css, /\.af-wr-effect-picker\s*\{/);
   assert.match(css, /\.af-wr-effect-workbench\s*\{/);
+  assert.match(css, /width: min\(116rem, calc\(100% - 3rem\)\);/);
+  assert.match(css, /@media \(max-width: 1500px\)/);
   assert.match(css, /\.af-wr-effect-preview__canvas\s*\{/);
   assert.match(css, /\.af-wr-effect-code-tabs\s*\{/);
   assert.match(css, /\.af-wr-trigger-boundary\s*\{/);

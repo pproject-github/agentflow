@@ -216,6 +216,42 @@ test("legacy short links deduplicate through canonicalUrl without an artifact ke
   );
 });
 
+test("review aliases keep the business label instead of a generic Markdown Review label", () => {
+  const key = "prd-review:1021708:self-test:android:st-01";
+  const specific = {
+    key,
+    label: "ST-01 自测证据",
+    href: "http://ai.example.test/r/selftest01",
+    canonicalUrl: reviewUrl("selftest-01"),
+    kind: "review",
+  };
+  const generic = {
+    key,
+    label: "Markdown Review",
+    href: "http://ai.example.test/r/selftest01",
+    canonicalUrl: reviewUrl("selftest-01"),
+    kind: "review",
+  };
+
+  for (const links of [[specific, generic], [generic, specific]]) {
+    const selected = selectCurrentPrdWorkflowActionLinks(links, { stage: "self-test:android" });
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].label, "ST-01 自测证据");
+  }
+});
+
+test("review aliases use a specific title when the label is generic", () => {
+  const selected = selectCurrentPrdWorkflowActionLinks([{
+    key: "prd-review:1021708:self-test:android:st-02",
+    label: "Markdown Review",
+    title: "ST-02 自测证据（含根因定位）",
+    href: "http://ai.example.test/r/selftest02",
+    kind: "review",
+  }], { stage: "self-test:android" });
+
+  assert.equal(selected[0].label, "ST-02 自测证据（含根因定位）");
+});
+
 test("formal plan without a durable preview hides stale temporary reviews", () => {
   const document = {
     label: "方案文档",

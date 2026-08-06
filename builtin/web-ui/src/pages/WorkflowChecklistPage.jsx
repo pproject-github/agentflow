@@ -38,6 +38,7 @@ export default function WorkflowChecklistPage() {
   const [status, setStatus] = useState("pending");
   const [note, setNote] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [editingResult, setEditingResult] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -93,6 +94,7 @@ export default function WorkflowChecklistPage() {
     setStatus(String(state.status || "pending"));
     setNote(String(state.note || ""));
     setEvidenceUrl(String(state.evidence?.[0]?.url || ""));
+    setEditingResult(String(state.status || "pending") === "pending");
   }, [selectedItem?.key, selectedItem?.state?.version]);
 
   const save = async (nextStatus = status) => {
@@ -122,6 +124,7 @@ export default function WorkflowChecklistPage() {
           },
         }));
         setStatus(nextStatus);
+        setEditingResult(nextStatus === "pending");
         return;
       }
       const body = {
@@ -148,6 +151,7 @@ export default function WorkflowChecklistPage() {
       if (!response.ok) throw new Error(payload.error || "保存 Checklist 失败");
       setAction((current) => current ? { ...current, checklist: payload.checklist || current.checklist } : current);
       setStatus(nextStatus);
+      setEditingResult(nextStatus === "pending");
     } catch (saveError) {
       setError(String(saveError.message || saveError));
     } finally {
@@ -159,6 +163,10 @@ export default function WorkflowChecklistPage() {
   const selectedIndex = Math.max(0, items.findIndex((item) => item.key === selectedItem?.key));
   const detail = selectedItem?.detail || {};
   const sections = Array.isArray(detail.sections) ? detail.sections : [];
+  const savedStatus = String(selectedItem?.state?.status || "pending");
+  const hasSavedResult = savedStatus !== "pending";
+  const savedEvidence = Array.isArray(selectedItem?.state?.evidence) ? selectedItem.state.evidence : [];
+  const showResultEditor = canWrite && (editingResult || !hasSavedResult);
 
   return (
     <main className="af-checklist-doc">
@@ -224,21 +232,42 @@ export default function WorkflowChecklistPage() {
                 <section className="af-checklist-doc__result">
                   <div className="af-checklist-doc__result-head">
                     <div><small>执行结果</small><h3>记录状态与证据</h3></div>
-                    {demo ? <span>本地预览 · 不会保存</span> : !canWrite ? <span>只读</span> : null}
+                    {demo && showResultEditor ? <span>本地预览 · 不会保存</span> : !canWrite ? <span>只读</span> : hasSavedResult && !showResultEditor ? <span>已记录</span> : null}
                   </div>
-                  <div className="af-checklist-doc__status-options">
-                    {STATUS_OPTIONS.map(([value, label]) => (
-                      <button type="button" key={value} className={status === value ? "is-active" : ""} disabled={!canWrite || saving} onClick={() => setStatus(value)}>{label}</button>
-                    ))}
-                  </div>
-                  <label><span>备注</span><textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={!canWrite || saving} placeholder="补充执行结论、异常现象或豁免原因" /></label>
-                  <label><span>证据链接{selectedItem.evidenceRequired ? "（必填）" : ""}</span><input value={evidenceUrl} onChange={(event) => setEvidenceUrl(event.target.value)} disabled={!canWrite || saving} placeholder="https://…" /></label>
-                  {canWrite ? (
-                    <div className="af-checklist-doc__actions">
-                      <button type="button" disabled={saving} onClick={() => void save(status)}>{saving ? "保存中…" : "保存"}</button>
-                      <button type="button" className="is-primary" disabled={saving || (selectedItem.evidenceRequired && !evidenceUrl.trim())} onClick={() => void save("passed")}>保存并标记通过</button>
+                  {showResultEditor ? (
+                    <>
+                      <div className="af-checklist-doc__status-options">
+                        {STATUS_OPTIONS.map(([value, label]) => (
+                          <button type="button" key={value} className={status === value ? "is-active" : ""} disabled={saving} onClick={() => setStatus(value)}>{label}</button>
+                        ))}
+                      </div>
+                      <label><span>备注</span><textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={saving} placeholder="补充执行结论、异常现象或豁免原因" /></label>
+                      <label><span>证据链接{selectedItem.evidenceRequired ? "（必填）" : ""}</span><input value={evidenceUrl} onChange={(event) => setEvidenceUrl(event.target.value)} disabled={saving} placeholder="https://…" /></label>
+                      <div className="af-checklist-doc__actions">
+                        {hasSavedResult ? <button type="button" disabled={saving} onClick={() => setEditingResult(false)}>取消</button> : null}
+                        <button type="button" disabled={saving} onClick={() => void save(status)}>{saving ? "保存中…" : "保存"}</button>
+                        <button type="button" className="is-primary" disabled={saving || (selectedItem.evidenceRequired && !evidenceUrl.trim())} onClick={() => void save("passed")}>保存并标记通过</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="af-checklist-doc__result-summary">
+                      <div className="af-checklist-doc__result-status">
+                        <span className={`af-checklist-state af-checklist-state--${savedStatus}`}><span className="material-symbols-outlined" aria-hidden>{savedStatus === "passed" ? "check" : savedStatus === "failed" ? "close" : savedStatus === "blocked" ? "block" : savedStatus === "skipped" ? "skip_next" : "radio_button_unchecked"}</span></span>
+                        <strong>{statusLabel(savedStatus)}</strong>
+                      </div>
+                      <div className="af-checklist-doc__result-note"><small>备注</small><p>{selectedItem.state?.note || "未填写备注"}</p></div>
+                      <div className="af-checklist-doc__result-evidence">
+                        <small>证据</small>
+                        {savedEvidence.length ? <div>{savedEvidence.map((evidence, index) => (
+                          <a key={`${evidence.url || evidence.href}-${index}`} href={evidence.url || evidence.href} target="_blank" rel="noreferrer">
+                            <span>{evidence.title || evidence.label || `执行证据 ${index + 1}`}</span>
+                            <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                          </a>
+                        ))}</div> : <p>未上传证据</p>}
+                      </div>
+                      {canWrite ? <div className="af-checklist-doc__actions"><button type="button" onClick={() => setEditingResult(true)}>修改结果</button></div> : null}
                     </div>
-                  ) : null}
+                  )}
                 </section>
 
                 <footer className="af-checklist-doc__pager">

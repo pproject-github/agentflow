@@ -930,11 +930,13 @@ function FlowBoard({
   hideMinimapAndControls,
   /** 底部与缩略图、缩放控件同一行的 AI 输入区 */
   bottomSlot,
+  /** 本地预览：保留选择、缩放和拖动画布，禁用任何图结构修改 */
+  readOnly = false,
 }) {
   const { t } = useTranslation();
   const isRunMode = !onNodesChange;
-  const panOnDrag = isRunMode ? true : (canvasTool === "pan" ? true : [1, 2]);
-  const selectionOnDrag = isRunMode ? false : (canvasTool === "select");
+  const panOnDrag = isRunMode || readOnly ? true : (canvasTool === "pan" ? true : [1, 2]);
+  const selectionOnDrag = isRunMode || readOnly ? false : (canvasTool === "select");
   const flowClassName =
     "af-flow-canvas" +
     (isRunMode ? " af-flow-canvas--run-mode" : "") +
@@ -1018,24 +1020,24 @@ function FlowBoard({
       edges={coloredEdges}
       onNodesChange={onNodesChange || noop}
       onEdgesChange={onEdgesChange || noop}
-      onConnect={isRunMode ? undefined : onConnect}
-      onConnectStart={isRunMode ? undefined : onConnectStart}
-      onConnectEnd={isRunMode ? undefined : onConnectEnd}
-      isValidConnection={isRunMode ? undefined : isValidConnection}
-      onNodesDelete={isRunMode ? undefined : onNodesDelete}
+      onConnect={isRunMode || readOnly ? undefined : onConnect}
+      onConnectStart={isRunMode || readOnly ? undefined : onConnectStart}
+      onConnectEnd={isRunMode || readOnly ? undefined : onConnectEnd}
+      isValidConnection={isRunMode || readOnly ? undefined : isValidConnection}
+      onNodesDelete={isRunMode || readOnly ? undefined : onNodesDelete}
       onNodeClick={onNodeClick}
-      onNodeDoubleClick={isRunMode ? undefined : onNodeDoubleClick}
-      onEdgeClick={isRunMode ? undefined : onEdgeClick}
+      onNodeDoubleClick={isRunMode || readOnly ? undefined : onNodeDoubleClick}
+      onEdgeClick={isRunMode || readOnly ? undefined : onEdgeClick}
       onInit={onFlowInit}
-      onDrop={isRunMode ? undefined : onDrop}
-      onDragOver={isRunMode ? undefined : onDragOver}
+      onDrop={isRunMode || readOnly ? undefined : onDrop}
+      onDragOver={isRunMode || readOnly ? undefined : onDragOver}
       nodeTypes={nodeTypes}
       selectionOnDrag={selectionOnDrag}
       panOnDrag={panOnDrag}
-      nodesDraggable={!isRunMode}
-      nodesConnectable={!isRunMode}
+      nodesDraggable={!isRunMode && !readOnly}
+      nodesConnectable={!isRunMode && !readOnly}
       elementsSelectable={!isRunMode}
-      edgesFocusable={!isRunMode}
+      edgesFocusable={!isRunMode && !readOnly}
       panActivationKeyCode="Space"
       proOptions={{ hideAttribution: true }}
       fitView={false}
@@ -1114,10 +1116,10 @@ function FlowBoard({
   );
 }
 
-function replaceFlowUrl(flow) {
+function replaceFlowUrl(flow, previewMode = false) {
   if (!window.location.pathname.startsWith("/flow")) return;
   if (!flow) {
-    window.history.replaceState({}, "", "/flow");
+    window.history.replaceState({}, "", previewMode ? "/flow-preview?preview=1" : "/flow");
     return;
   }
   const current = new URLSearchParams(window.location.search);
@@ -1126,8 +1128,9 @@ function replaceFlowUrl(flow) {
     flowSource: flow.source ?? "user",
   });
   if (flow.archived) q.set("flowArchived", "1");
+  if (previewMode) q.set("preview", "1");
   if (current.get("panel") === "settings") q.set("panel", "settings");
-  window.history.replaceState({}, "", "/flow?" + q.toString());
+  window.history.replaceState({}, "", (previewMode ? "/flow-preview?" : "/flow?") + q.toString());
 }
 
 /** 保存 flow.yaml 的 API flowSource：内置来源写入工作区副本 */
@@ -1184,9 +1187,12 @@ function readRunConsoleHeightPx() {
   }
 }
 
-export default function FlowEditorPage() {
+export default function FlowEditorPage({ previewMode = false }) {
   const { t, i18n } = useTranslation();
   const { navigate, path } = useRoute();
+  const staticPreview = previewMode && window.__AGENTFLOW_STATIC_FLOW_PREVIEW__
+    ? window.__AGENTFLOW_STATIC_FLOW_PREVIEW__
+    : null;
   const updateNodeInternalsRef = useRef(null);
   const nodeHandleSignaturesRef = useRef(new Map());
   const handleNodeInternalsRefreshReady = useCallback((fn) => {
@@ -1277,6 +1283,10 @@ export default function FlowEditorPage() {
   // ── Engine online detection ──
   const [engineOnline, setEngineOnline] = useState(true);
   useEffect(() => {
+    if (previewMode) {
+      setEngineOnline(true);
+      return undefined;
+    }
     let cancelled = false;
     const check = () => {
       fetch("/api/flows", { method: "HEAD" })
@@ -1286,22 +1296,24 @@ export default function FlowEditorPage() {
     check();
     const id = window.setInterval(check, 5000);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
+    if (previewMode) return undefined;
     let cancelled = false;
     fetch("/api/dev-info")
       .then((r) => r.json())
       .then((data) => { if (!cancelled) setIsDevMode(Boolean(data?.isDev)); })
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
+    if (previewMode) return;
     if (!selected?.id) return;
     if (isReadonlyBuiltinFlowSource(selected.source)) return;
     recordPipelineView(selected.id, selected.source ?? "user", "pipeline", Boolean(selected.archived));
-  }, [selected?.id, selected?.source, selected?.archived]);
+  }, [previewMode, selected?.id, selected?.source, selected?.archived]);
 
   useEffect(() => {
     if (!selected?.id || !isReadonlyBuiltinFlowSource(selected.source)) return;
@@ -1860,6 +1872,7 @@ export default function FlowEditorPage() {
   }, [edges, executingNodes, runFocusIds]);
 
   useEffect(() => {
+    if (previewMode) return;
     if (!selected) {
       setRunPresets({});
       setActivePresetName(null);
@@ -1885,7 +1898,7 @@ export default function FlowEditorPage() {
         setRunPresets({});
         setActivePresetName(null);
       });
-  }, [selected?.id, selected?.source, selected?.archived]);
+  }, [previewMode, selected?.id, selected?.source, selected?.archived]);
 
   const updateScheduleDraft = useCallback((updater) => {
     scheduleEditSeqRef.current += 1;
@@ -1893,6 +1906,7 @@ export default function FlowEditorPage() {
   }, []);
 
   const loadSchedule = useCallback(async (flow, opts = {}) => {
+    if (previewMode) return;
     if (!flow) return;
     const quiet = Boolean(opts.quiet);
     const force = Boolean(opts.force);
@@ -1924,9 +1938,10 @@ export default function FlowEditorPage() {
     } finally {
       setScheduleLoading(false);
     }
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
+    if (previewMode) return;
     if (!selected) return;
     let cancelled = false;
     const run = async () => {
@@ -1937,7 +1952,7 @@ export default function FlowEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, selected?.source, selected?.archived, loadSchedule]);
+  }, [previewMode, selected?.id, selected?.source, selected?.archived, loadSchedule]);
 
   // 将活跃预设值同步到 cliInputs，确保主 RUN 按钮使用正确的预设
   useEffect(() => {
@@ -2127,6 +2142,15 @@ export default function FlowEditorPage() {
 
   const loadFlowList = useCallback(async () => {
     setListError("");
+    if (previewMode) {
+      if (staticPreview?.flow) {
+        setFlows([staticPreview.flow]);
+      } else {
+        setFlows([]);
+        setListError("Static Flow preview data is missing");
+      }
+      return;
+    }
     try {
       const r = await fetch("/api/flows");
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -2134,7 +2158,7 @@ export default function FlowEditorPage() {
     } catch (e) {
       setListError(String(e.message || e));
     }
-  }, []);
+  }, [previewMode, staticPreview]);
 
   useEffect(() => {
     loadFlowList();
@@ -2156,6 +2180,7 @@ export default function FlowEditorPage() {
   }, [path, selected?.id, selected?.source]);
 
   useEffect(() => {
+    if (previewMode) return undefined;
     let cancelled = false;
     const load = () => {
       fetch("/api/model-lists")
@@ -2178,9 +2203,10 @@ export default function FlowEditorPage() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
+    if (previewMode) return undefined;
     let cancelled = false;
     fetch("/api/skills")
       .then((r) => r.json())
@@ -2203,9 +2229,10 @@ export default function FlowEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
+    if (previewMode) return undefined;
     let cancelled = false;
     fetch("/api/skill-collections")
       .then((r) => r.json())
@@ -2219,7 +2246,7 @@ export default function FlowEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [previewMode]);
 
   useEffect(() => {
     setComposerSkillsStorageReadyKey("");
@@ -2250,18 +2277,34 @@ export default function FlowEditorPage() {
     if (flowArchived) nodeQ.set("archived", "1");
     nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
 
-    const [fr, nr] = await Promise.all([fetch("/api/flow?" + q.toString()), fetch("/api/nodes?" + nodeQ.toString())]);
-    const flowRes = await fr.json();
-    if (!fr.ok || flowRes.error) throw new Error(flowRes.error || t("flow:nodePropsError.loadFlowFailed"));
-    const paletteJson = await nr.json();
-    if (!nr.ok) throw new Error(t("flow:nodePropsError.loadNodesFailed"));
+    let flowRes;
+    let paletteJson;
+    if (previewMode) {
+      if (!staticPreview) throw new Error("Static Flow preview data is missing");
+      flowRes = {
+        flowYaml: String(staticPreview.flowYaml || ""),
+        revision: String(staticPreview.revision || ""),
+      };
+      paletteJson = staticPreview.nodeCatalog || { nodes: [], pipelineTranslations: {} };
+    } else {
+      const [fr, nr] = await Promise.all([fetch("/api/flow?" + q.toString()), fetch("/api/nodes?" + nodeQ.toString())]);
+      flowRes = await fr.json();
+      if (!fr.ok || flowRes.error) throw new Error(flowRes.error || t("flow:nodePropsError.loadFlowFailed"));
+      paletteJson = await nr.json();
+      if (!nr.ok) throw new Error(t("flow:nodePropsError.loadNodesFailed"));
+    }
     const paletteList = Array.isArray(paletteJson) ? paletteJson : Array.isArray(paletteJson?.nodes) ? paletteJson.nodes : [];
     const pipelineTranslations = (!Array.isArray(paletteJson) && paletteJson?.pipelineTranslations) || {};
 
     const result = deserializeFromFlowYaml(flowRes.flowYaml || "");
     if (result.error) throw new Error(result.error);
     const instances = { ...(result.instances || {}) };
-    const mergedNodes = result.nodes.map((n) => mergeNodeWithPalette(n, instances, paletteList, pipelineTranslations, flow.id));
+    const mergedNodes = result.nodes.map((n) => {
+      const merged = mergeNodeWithPalette(n, instances, paletteList, pipelineTranslations, flow.id);
+      return previewMode
+        ? { ...merged, data: { ...merged.data, readOnly: true } }
+        : merged;
+    });
     const validEdges = filterValidEdges(result.edges, mergedNodes);
     return {
       flowSource,
@@ -2273,7 +2316,7 @@ export default function FlowEditorPage() {
       edges: validEdges,
       revision: String(flowRes.revision || ""),
     };
-  }, [i18n.language, t]);
+  }, [i18n.language, previewMode, staticPreview, t]);
 
   const loadFlow = useCallback(
     /**
@@ -2308,7 +2351,7 @@ export default function FlowEditorPage() {
         setNodes([]);
         setEdges([]);
       }
-      replaceFlowUrl(flow);
+      replaceFlowUrl(flow, previewMode);
       try {
         const nextGraph = await fetchFlowGraphData(flow);
         setPalette(nextGraph.paletteList);
@@ -2421,7 +2464,7 @@ export default function FlowEditorPage() {
         setLoadError(String(e.message || e));
       }
     },
-    [fetchFlowGraphData, resetCanvasHistory, setNodes, setEdges],
+    [fetchFlowGraphData, previewMode, resetCanvasHistory, setNodes, setEdges],
   );
 
   const reloadPaletteForSelectedFlow = useCallback(async () => {
@@ -2470,10 +2513,11 @@ export default function FlowEditorPage() {
   }, []);
 
   useEffect(() => {
+    if (previewMode) return;
     if (!selected) return;
     void loadMarketplaceCatalog();
     void loadFlowSnippets();
-  }, [selected?.id, selected?.source, selected?.archived, loadMarketplaceCatalog, loadFlowSnippets]);
+  }, [previewMode, selected?.id, selected?.source, selected?.archived, loadMarketplaceCatalog, loadFlowSnippets]);
 
   const installMarketplaceNodeForFlow = useCallback(
     async (node) => {
@@ -2561,9 +2605,9 @@ export default function FlowEditorPage() {
   useEffect(() => {
     if (urlLoadedRef.current || flows.length === 0) return;
     const sp = new URLSearchParams(window.location.search);
-    const id = sp.get("flowId");
+    const id = sp.get("flowId") || (previewMode ? flows[0]?.id : "");
     if (!id) return;
-    const source = sp.get("flowSource") ?? "user";
+    const source = sp.get("flowSource") ?? (previewMode ? flows[0]?.source || "preview" : "user");
     const wantArchived = sp.get("flowArchived") === "1";
     const f = flows.find(
       (x) => x.id === id && (x.source ?? "user") === source && Boolean(x.archived) === wantArchived,
@@ -2572,12 +2616,13 @@ export default function FlowEditorPage() {
       urlLoadedRef.current = true;
       loadFlow(f);
     }
-  }, [flows, loadFlow]);
+  }, [flows, loadFlow, previewMode]);
 
   /** 外部（Composer / curl）写入 flow.yaml 后自动刷新画布。
    *  使用短轮询（2 s）替代 SSE，避免 HTTP/1.1 连接数耗尽导致 /api/flow/run 等请求排队。 */
   const syncVersionRef = useRef(0);
   useEffect(() => {
+    if (previewMode) return;
     if (!selected) return;
     const flowId = selected.id;
     const flowSource = selected.source ?? "user";
@@ -2624,7 +2669,7 @@ export default function FlowEditorPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [selected?.id, selected?.source, selected?.archived, loadFlow, loadSchedule, setNodes]);
+  }, [previewMode, selected?.id, selected?.source, selected?.archived, loadFlow, loadSchedule, setNodes]);
 
   /** 左下角 toast 语义色 */
   const paletteTipMods = useMemo(() => {
@@ -2991,6 +3036,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
   // 加载期、非 edit 模式（ready/running 等）、archived 流水线下不触发。
   // loadEpoch 快照避免切流水线后旧 timer 把旧状态写入新 flow。
   useEffect(() => {
+    if (previewMode) return;
     if (!selected || !hasLoadedRef.current) return;
     if (runMode !== "edit") return;
     if (selected.archived) return;
@@ -3001,7 +3047,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       persistFlowToServer(nodesRef.current, edgesRef.current);
     }, 400);
     return () => clearTimeout(timer);
-  }, [nodes, edges, flowDescription, runMode, selected, persistFlowToServer]);
+  }, [nodes, edges, flowDescription, previewMode, runMode, selected, persistFlowToServer]);
 
   const handleMoveFlow = useCallback(
     async (toSource) => {
@@ -3311,6 +3357,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   // 节点属性 draft 变化 → 400ms debounce 自动提交（newId 除外，由 blur 处理）
   useEffect(() => {
+    if (previewMode) return;
     if (!nodePropDraft) return;
     if (!selected || !hasLoadedRef.current) return;
     if (runMode !== "edit") return;
@@ -3318,7 +3365,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       applyNodePropertiesNoRenameRef.current();
     }, 400);
     return () => clearTimeout(timer);
-  }, [nodePropDraft, selected, runMode]);
+  }, [nodePropDraft, previewMode, selected, runMode]);
 
   // newId 输入框 blur 时提交重命名：复用 applyNodeProperties 的完整校验路径。
   // 校验失败会在 nodePropsError banner 显示，draft 保留用户输入。
@@ -3341,6 +3388,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   useEffect(() => {
     const onKeyDown = (/** @type {KeyboardEvent} */ e) => {
+      if (previewMode) return;
       if (runMode !== "edit") return;
       const editable = isEditableFocus(e.target);
 
@@ -3485,6 +3533,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     soleSelectedNode,
     nodePropDraft,
     applyNodeProperties,
+    previewMode,
     runMode,
     undoCanvas,
     redoCanvas,
@@ -3948,6 +3997,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   // ── 页面加载 / 刷新后检测活跃 run，恢复 run 模式 ──
   useEffect(() => {
+    if (previewMode) return;
     if (!selected?.id) return;
     if (runMode !== "edit") return; // 已在 run 模式则跳过
     let cancelled = false;
@@ -4005,7 +4055,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
-  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [previewMode, selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── run 模式下轮询节点状态（刷新后继续看到推进、完成自动翻转） ──
   useEffect(() => {
@@ -4107,6 +4157,10 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
 
   // 加载当前 pipeline 目录下的文件列表
   useEffect(() => {
+    if (previewMode) {
+      setPipelineFiles({ files: [] });
+      return;
+    }
     if (!selected) {
       setPipelineFiles({ files: [] });
       return;
@@ -4137,7 +4191,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     return () => {
       cancelled = true;
     };
-  }, [selected]);
+  }, [previewMode, selected]);
 
   const runsForCurrentFlow = useMemo(() => {
     if (!selected) return [];
@@ -5522,14 +5576,16 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
     <ReactFlowProvider>
       <NodeInternalsRefreshBridge onReady={handleNodeInternalsRefreshReady} />
       <FlowNodeContext.Provider value={{ modelLists, onModelChange: handleNodeModelChange }}>
-        <div className={"af-pipeline-page" + (runMode !== "edit" ? " af-pipeline-page--run-mode" : "")}>
+        <div className={"af-pipeline-page" + (runMode !== "edit" ? " af-pipeline-page--run-mode" : "") + (previewMode ? " af-pipeline-page--preview" : "")}>
           <header className="af-pipeline-top">
             <div className="af-pipeline-top-left">
               <button
                 type="button"
                 className="af-icon-btn af-pipeline-back"
                 onClick={() => {
-                  if (runMode === "running") {
+                  if (previewMode) {
+                    window.history.back();
+                  } else if (runMode === "running") {
                     setBackPromptOpen(true);
                   } else if (runMode !== "edit") {
                     handleBackToEdit();
@@ -5537,22 +5593,23 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                     navigate("/projects");
                   }
                 }}
-                aria-label={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
-                title={runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
+                aria-label={previewMode ? "返回" : runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
+                title={previewMode ? "返回" : runMode !== "edit" ? t("flow:topbar.backToEdit") : t("flow:topbar.backToProjects")}
             >
               <span className="material-symbols-outlined">arrow_back</span>
             </button>
             <div className="af-pipeline-brand">
-              <span className="af-pipeline-brand-name">PIPELINE</span>
-              <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
+              <span className="af-pipeline-brand-name">{previewMode ? "LOCAL PREVIEW" : "PIPELINE"}</span>
+              <span className="af-pipeline-brand-ver">{previewMode ? selected?.id || "flow.yaml" : `V${APP_VERSION}-STABLE`}</span>
             </div>
-            <div className="af-view-switch" aria-label="视图切换">
+            {!previewMode ? <div className="af-view-switch" aria-label="视图切换">
               <button type="button" className="af-view-switch__active">Pipeline</button>
               <button type="button" onClick={() => navigate(flowUrlForView(selected, "workspace"))}>Workspace</button>
               <button type="button" onClick={() => navigate(flowUrlForView(selected, "display"))}>Display</button>
-            </div>
+            </div> : <span className="af-flow-preview-badge"><span className="material-symbols-outlined" aria-hidden>visibility</span>只读</span>}
           </div>
           <div className="af-pipeline-top-right af-flow-toolbar-actions">
+            {previewMode ? null : <>
             {isDevMode && (
               <button
                 type="button"
@@ -5818,6 +5875,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 )}
               </div>
             )}
+            </>}
           </div>
         </header>
         {flowSnippetToast ? (
@@ -5830,8 +5888,8 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
           </div>
         ) : null}
 
-        <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "")}>
-          {runMode === "edit" && rightPanel !== "settings" ? (
+        <div className={"af-pipeline-body" + (runMode !== "edit" ? " af-pipeline-body--run-mode" : "") + (previewMode ? " af-pipeline-body--preview" : "")}>
+          {!previewMode && runMode === "edit" && rightPanel !== "settings" ? (
           <aside className="af-node-palette af-flow-left-panel" id="af-node-palette" aria-label={t("flow:palette2.nodePalette")}>
             {/* 工作区切换区域 - 可展开 */}
             <div className={`af-palette-workspace${workspaceExpanded ? " af-palette-workspace--expanded" : ""}`}>
@@ -6177,7 +6235,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <div className="af-flow-slot-warnings-head">
                   <div className="af-flow-slot-warnings-title">{t("flow:palette.validationWarnings")}</div>
                   <div className="af-flow-slot-warnings-head-actions">
-                    <button
+                    {!previewMode ? <button
                       type="button"
                       className="af-icon-btn"
                       disabled={slotWarningsRefreshing}
@@ -6188,7 +6246,7 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                       <span className="material-symbols-outlined" aria-hidden>
                         refresh
                       </span>
-                    </button>
+                    </button> : null}
                     <button
                       type="button"
                       className="af-icon-btn"
@@ -6232,14 +6290,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                 <span className="af-flow-slot-warnings-collapsed-text">
                   {t("flow:validation.slotWarningCount", { count: flowSlotEdgeWarnings.length })}
                 </span>
-                <button
+                {!previewMode ? <button
                   type="button"
                   className="af-flow-slot-warnings-kbd-hint"
                   onClick={toggleShortcutsPanel}
                   title={t("flow:validation.shortcutHint")}
                 >
                   <kbd>?</kbd> {t("flow:validation.shortcutHintLabel")}
-                </button>
+                </button> : null}
                 <div className="af-flow-slot-warnings-collapsed-actions">
                   <button
                     type="button"
@@ -6248,14 +6306,14 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   >
                     {t("flow:validation.show")}
                   </button>
-                  <button
+                  {!previewMode ? <button
                     type="button"
                     className="af-flow-slot-warnings-collapsed-btn"
                     disabled={slotWarningsRefreshing}
                     onClick={() => void handleSlotWarningsRefresh()}
                   >
                     {t("common:common.refresh")}
-                  </button>
+                  </button> : null}
                 </div>
               </div>
             ) : null}
@@ -6289,8 +6347,9 @@ if (!r.ok || !data.success) throw new Error(data.error || t("flow:status.saveFai
                   onDrop={handlePaletteDrop}
                   onDragOver={handlePaletteDragOver}
                   hideMinimapAndControls={Boolean(selected && rightPanel)}
+                  readOnly={previewMode}
                   bottomSlot={
-                    runMode === "edit" ? (
+                    previewMode ? null : runMode === "edit" ? (
                     <div className="af-bottom-composer-stack af-flow-bottom-composer">
                     <div className="af-pipeline-composer-inner">
                 <div className="af-composer-selected" aria-label={t("flow:composer.selectedNodesAriaLabel")}>

@@ -99,16 +99,17 @@ function dateFromToday(offsetDays) {
   return date.toISOString().slice(0, 10);
 }
 
-function initialTimelineWindow(entries) {
+function initialTimelineWindow(entries, focusKey = "") {
   const total = Array.isArray(entries) ? entries.length : 0;
   if (total <= TIMELINE_WINDOW_SIZE) return { start: 0, end: total };
   const now = Date.now();
-  let anchor = entries.findIndex((entry) => {
+  let anchor = entries.findIndex((entry) => entry?.key === focusKey);
+  if (anchor < 0) anchor = entries.findIndex((entry) => {
     const timestamp = Date.parse(String(entry?.date || ""));
     return Number.isFinite(timestamp) && timestamp >= now;
   });
   if (anchor < 0) anchor = total - 1;
-  const start = Math.max(0, Math.min(anchor - 3, total - TIMELINE_WINDOW_SIZE));
+  const start = Math.max(0, Math.min(anchor - 1, total - TIMELINE_WINDOW_SIZE));
   return { start, end: Math.min(total, start + TIMELINE_WINDOW_SIZE) };
 }
 
@@ -388,12 +389,230 @@ function openWorkflow(navigate, workflow) {
   navigate(workflowUrl(workflow, returnTo));
 }
 
-export default function WorkflowsPage() {
+function workflowVersionEntries(workflow, source = "") {
+  const wantedSource = String(source || "").trim().toLowerCase();
+  return (Array.isArray(workflow?.timeline) ? workflow.timeline : []).filter((entry) => (
+    String(entry?.kind || "").trim().toLowerCase() === "version"
+    && (!wantedSource || String(entry?.source || "").trim().toLowerCase() === wantedSource)
+  ));
+}
+
+function adminVersionProjection(entry) {
+  if (!entry) return null;
+  return {
+    kind: "version",
+    id: String(entry.projectionId || entry.id || "").trim(),
+    title: String(entry.title || entry.id || "").trim(),
+    ...(entry.date ? { date: String(entry.date) } : {}),
+    ...(entry.startDate ? { startDate: String(entry.startDate) } : {}),
+    ...(entry.endDate ? { endDate: String(entry.endDate) } : {}),
+    ...(entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
+      ? { dimensions: entry.dimensions }
+      : {}),
+    ...(Number.isFinite(Number(entry.order)) ? { order: Number(entry.order) } : {}),
+  };
+}
+
+function adminRepairError(payload, fallback) {
+  const conflict = payload?.conflict;
+  if (conflict?.type === "workflow-revision-conflict") return "Workflow 已发生变化，请重新核对后再试";
+  return String(payload?.error || fallback || "版本归属修复失败");
+}
+
+function AdminIterationManager({ open, workflows, timeline, selectedTimelineKey, onClose, onCompleted }) {
+  const selectedTimeline = timeline.find((entry) => entry.key === selectedTimelineKey) || null;
+  const versionTimeline = useMemo(() => timeline.filter((entry) => (
+    String(entry?.kind || "").trim().toLowerCase() === "version"
+    && String(entry?.id || "").trim()
+    && String(entry?.source || "").trim()
+  )), [timeline]);
+  const availableSources = useMemo(() => Array.from(new Set([
+    ...versionTimeline.map((entry) => String(entry.source || "").trim().toLowerCase()),
+    ...workflows.flatMap((workflow) => workflowVersionEntries(workflow).map((entry) => String(entry.source || "").trim().toLowerCase())),
+  ].filter(Boolean))).sort(), [versionTimeline, workflows]);
+  const [source, setSource] = useState("");
+  const [targetKey, setTargetKey] = useState("");
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const [results, setResults] = useState([]);
+
+  useEffect(() => {
+    if (!open) return;
+    const preferredSource = String(
+      String(selectedTimeline?.kind || "").toLowerCase() === "version" ? selectedTimeline?.source || "" : "",
+    ).trim().toLowerCase();
+    setSource(availableSources.includes(preferredSource) ? preferredSource : availableSources[0] || "");
+    setTargetKey("");
+    setSelectedIds([]);
+    setReason("");
+    setSubmitting(false);
+    setProgress({ completed: 0, total: 0 });
+    setResults([]);
+  }, [open]);
+
+  const sourceTargets = versionTimeline.filter((entry) => String(entry.source || "").trim().toLowerCase() === source);
+  const target = sourceTargets.find((entry) => entry.key === targetKey) || null;
+  const selectableWorkflows = workflows.filter((workflow) => !workflow.demo && workflow.tapdId);
+  const selectedWorkflows = selectableWorkflows.filter((workflow) => selectedIds.includes(String(workflow.id || workflow.tapdId)));
+  const allSelected = selectableWorkflows.length > 0 && selectedWorkflows.length === selectableWorkflows.length;
+  const canSubmit = selectedWorkflows.length > 0
+    && source
+    && (targetKey === "unassigned" || Boolean(target))
+    && reason.trim().length >= 3
+    && !submitting;
+
+  const toggleWorkflow = (workflow) => {
+    const id = String(workflow.id || workflow.tapdId);
+    setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    setResults([]);
+  };
+
+  const repairWorkflow = async (workflow, attempt = 0) => {
+    const workflowKey = `tapd:${workflow.tapdId}`;
+    const stateParams = new URLSearchParams({
+      workflow: workflowKey,
+      runtimeOnly: "1",
+      adminOperation: "repair-version-membership",
+    });
+    const stateResponse = await fetch(`/api/workflows/state?${stateParams.toString()}`);
+    const statePayload = await stateResponse.json().catch(() => ({}));
+    if (!stateResponse.ok) throw new Error(adminRepairError(statePayload, "无法读取管理员修复快照"));
+    const revision = String(statePayload?.snapshot?.runtimeRevision || "").trim();
+    if (!revision) throw new Error("当前 Workflow 缺少 runtimeRevision，无法安全修复");
+    const projection = targetKey === "unassigned" ? null : adminVersionProjection(target);
+    if (targetKey !== "unassigned" && !projection?.id) throw new Error("目标迭代缺少稳定 ID");
+    const semanticTarget = projection?.id || "unassigned";
+    const revisionKey = revision.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(-60);
+    const reportResponse = await fetch("/api/workflows/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: 1,
+        workflow: workflowKey,
+        source,
+        adminOperation: "repair-version-membership",
+        adminReason: reason.trim(),
+        projections: { timeline: projection ? [projection] : [] },
+        expectedRevision: revision,
+        idempotencyKey: `admin-ui-version-repair:${workflow.tapdId}:${source}:${semanticTarget}:${revisionKey}`,
+      }),
+    });
+    const reportPayload = await reportResponse.json().catch(() => ({}));
+    if (reportResponse.status === 409 && attempt < 1) return repairWorkflow(workflow, attempt + 1);
+    if (!reportResponse.ok) throw new Error(adminRepairError(reportPayload));
+    return reportPayload;
+  };
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setResults([]);
+    setProgress({ completed: 0, total: selectedWorkflows.length });
+    const nextResults = [];
+    for (const workflow of selectedWorkflows) {
+      try {
+        await repairWorkflow(workflow);
+        nextResults.push({ tapdId: workflow.tapdId, title: workflow.title, ok: true });
+      } catch (submitError) {
+        nextResults.push({ tapdId: workflow.tapdId, title: workflow.title, ok: false, error: String(submitError.message || submitError) });
+      }
+      setProgress({ completed: nextResults.length, total: selectedWorkflows.length });
+      setResults([...nextResults]);
+    }
+    setSubmitting(false);
+    if (nextResults.some((item) => item.ok)) await onCompleted();
+  };
+
+  if (!open) return null;
+  return (
+    <div className="af-workflows-admin-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !submitting) onClose();
+    }}>
+      <section className="af-workflows-admin-dialog" role="dialog" aria-modal="true" aria-labelledby="workflow-admin-title">
+        <header>
+          <div>
+            <span>ADMIN · VERSION ATTRIBUTION</span>
+            <h2 id="workflow-admin-title">迭代归属管理</h2>
+            <p>只修改版本归属投影，不会改动需求标题、Action、Checklist、产物或外部 TAPD 版本。</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={submitting} aria-label="关闭迭代归属管理">
+            <span className="material-symbols-outlined" aria-hidden>close</span>
+          </button>
+        </header>
+
+        <div className="af-workflows-admin-dialog__body">
+          <section className="af-workflows-admin-step">
+            <div className="af-workflows-admin-step__head">
+              <div><em>01</em><strong>选择 Workflow</strong></div>
+              <button type="button" onClick={() => setSelectedIds(allSelected ? [] : selectableWorkflows.map((workflow) => String(workflow.id || workflow.tapdId)))} disabled={submitting || selectableWorkflows.length === 0}>
+                {allSelected ? "取消全选" : "全选当前列表"}
+              </button>
+            </div>
+            <p className="af-workflows-admin-hint">当前筛选与当前分页共 {selectableWorkflows.length} 项；批量执行按 Workflow 独立加锁和审计。</p>
+            <div className="af-workflows-admin-workflows">
+              {selectableWorkflows.map((workflow) => {
+                const id = String(workflow.id || workflow.tapdId);
+                const versions = workflowVersionEntries(workflow, source);
+                return (
+                  <label key={id} className={selectedIds.includes(id) ? "is-selected" : ""}>
+                    <input type="checkbox" checked={selectedIds.includes(id)} onChange={() => toggleWorkflow(workflow)} disabled={submitting} />
+                    <span><strong>{workflow.title || `TAPD ${workflow.tapdId}`}</strong><small>TAPD {workflow.tapdId} · 当前：{versions.map((entry) => entry.title || entry.id).join("、") || `${source || "所选来源"} 未归属`}</small></span>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="af-workflows-admin-step">
+            <div className="af-workflows-admin-step__head"><div><em>02</em><strong>选择治理来源和目标迭代</strong></div></div>
+            <div className="af-workflows-admin-fields">
+              <label><span>治理来源</span><select value={source} onChange={(event) => { setSource(event.target.value); setTargetKey(""); setResults([]); }} disabled={submitting}>{availableSources.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <label><span>目标迭代</span><select value={targetKey} onChange={(event) => { setTargetKey(event.target.value); setResults([]); }} disabled={submitting || !source}><option value="">请选择已有迭代</option><option value="unassigned">移至未归属（清空该来源版本归属）</option>{sourceTargets.map((entry) => <option key={entry.key} value={entry.key}>{entry.title || entry.id} · {formatTimelineDate(entry.date)}</option>)}</select></label>
+            </div>
+            <label className="af-workflows-admin-reason"><span>操作原因</span><textarea value={reason} onChange={(event) => setReason(event.target.value.slice(0, 500))} placeholder="例如：清理测试版本并归属到正式迭代" disabled={submitting} /><small>{reason.length}/500 · 至少 3 个字符，将写入管理员审计事件</small></label>
+          </section>
+
+          <section className="af-workflows-admin-step">
+            <div className="af-workflows-admin-step__head"><div><em>03</em><strong>变更预览</strong></div></div>
+            {selectedWorkflows.length === 0 ? <p className="af-workflows-admin-empty">请选择至少一个 Workflow。</p> : (
+              <div className="af-workflows-admin-preview">
+                {selectedWorkflows.map((workflow) => {
+                  const current = workflowVersionEntries(workflow, source).map((entry) => entry.title || entry.id).join("、") || "未归属";
+                  const next = targetKey === "unassigned" ? "未归属" : target ? target.title || target.id : "待选择";
+                  return <div key={workflow.id || workflow.tapdId}><span>TAPD {workflow.tapdId}</span><strong>{current}</strong><i className="material-symbols-outlined" aria-hidden>arrow_forward</i><strong>{next}</strong></div>;
+                })}
+              </div>
+            )}
+          </section>
+
+          {submitting || results.length > 0 ? (
+            <section className="af-workflows-admin-results" aria-live="polite">
+              <div><strong>{submitting ? "正在执行修复" : "执行结果"}</strong><span>{progress.completed}/{progress.total}</span></div>
+              {results.map((item) => <p key={item.tapdId} className={item.ok ? "is-success" : "is-error"}><span className="material-symbols-outlined" aria-hidden>{item.ok ? "check_circle" : "error"}</span><strong>TAPD {item.tapdId}</strong><span>{item.ok ? "归属已更新" : item.error}</span></p>)}
+            </section>
+          ) : null}
+        </div>
+
+        <footer>
+          <p><span className="material-symbols-outlined" aria-hidden>verified_user</span>提交后记录管理员、原因、时间与变更事件；冲突只重读并重试一次。</p>
+          <div><button type="button" onClick={onClose} disabled={submitting}>取消</button><button type="button" className="is-primary" onClick={() => void submit()} disabled={!canSubmit}>{submitting ? `处理中 ${progress.completed}/${progress.total}` : `确认修复 ${selectedWorkflows.length} 项`}</button></div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+export default function WorkflowsPage({ authUser }) {
   const { navigate } = useRoute();
   const [initialPageState] = useState(loadWorkflowPageState);
   const [initialDemo] = useState(() => initialPageState.demo ? createWorkflowDemo() : null);
   const [workflows, setWorkflows] = useState(() => initialDemo?.workflows || []);
   const [timeline, setTimeline] = useState(() => initialDemo?.timeline || []);
+  const [timelineFocusKey, setTimelineFocusKey] = useState(() => (
+    initialDemo ? defaultTimelineKey(initialDemo.timeline) : ""
+  ));
   const [unassignedCount, setUnassignedCount] = useState(() => initialDemo?.unassignedCount || 0);
   const [availableCount, setAvailableCount] = useState(() => initialDemo?.workflows?.length || 0);
   const [timelineKey, setTimelineKey] = useState(() => {
@@ -422,17 +641,20 @@ export default function WorkflowsPage() {
     hasNext: false,
   });
   const [demoMode, setDemoMode] = useState(initialPageState.demo);
+  const [adminManagerOpen, setAdminManagerOpen] = useState(false);
   const [timelineWindow, setTimelineWindow] = useState({ start: 0, end: 0 });
   const timelineRailRef = useRef(null);
   const timelineAnchorRef = useRef(null);
   const timelineLoadingRef = useRef(false);
   const timelineUnlockTimerRef = useRef(0);
   const timelineScrollFrameRef = useRef(0);
+  const timelineAutoPositionRef = useRef("");
 
   const loadWorkflows = useCallback(async () => {
     setDemoMode(false);
     setLoading(true);
     setError("");
+    setWorkflows([]);
     try {
       const params = new URLSearchParams({
         view,
@@ -448,8 +670,10 @@ export default function WorkflowsPage() {
       if (!response.ok) throw new Error(payload.error || "读取迭代列表失败");
       const nextWorkflows = Array.isArray(payload.workflows) ? payload.workflows : [];
       const nextTimeline = Array.isArray(payload.timeline) ? payload.timeline : [];
+      const nextDefaultTimelineKey = String(payload.defaultTimelineKey || defaultTimelineKey(nextTimeline));
       setWorkflows(nextWorkflows);
       setTimeline(nextTimeline);
+      setTimelineFocusKey(nextDefaultTimelineKey);
       setUnassignedCount(Number(payload.unassignedCount || 0));
       setAvailableCount(Number(payload.availableCount || 0));
       setTimelineKey(String(payload.selectedTimelineKey || payload.defaultTimelineKey || "all"));
@@ -463,6 +687,7 @@ export default function WorkflowsPage() {
       setError(String(loadError.message || loadError));
       setWorkflows([]);
       setTimeline([]);
+      setTimelineFocusKey("");
       setUnassignedCount(0);
       setAvailableCount(0);
       setTeam(null);
@@ -475,6 +700,7 @@ export default function WorkflowsPage() {
     const demo = createWorkflowDemo();
     setWorkflows(demo.workflows);
     setTimeline(demo.timeline);
+    setTimelineFocusKey(defaultTimelineKey(demo.timeline));
     setUnassignedCount(demo.unassignedCount);
     setAvailableCount(demo.workflows.length);
     setTimelineKey(defaultTimelineKey(demo.timeline));
@@ -528,8 +754,8 @@ export default function WorkflowsPage() {
   }, [demoMode, page, pageSize, query, scope, state, timelineKey, view]);
 
   useEffect(() => {
-    setTimelineWindow(initialTimelineWindow(timeline));
-  }, [timeline]);
+    setTimelineWindow(initialTimelineWindow(timeline, timelineFocusKey));
+  }, [timeline, timelineFocusKey]);
 
   useLayoutEffect(() => {
     const anchor = timelineAnchorRef.current;
@@ -541,12 +767,29 @@ export default function WorkflowsPage() {
       if (anchorNode) {
         rail.scrollLeft = anchor.scrollLeft + anchorNode.offsetLeft - anchor.offsetLeft;
       }
+    } else if (timelineFocusKey) {
+      const initialWindow = initialTimelineWindow(timeline, timelineFocusKey);
+      if (timelineWindow.start === initialWindow.start && timelineWindow.end === initialWindow.end) {
+        const timelineIdentity = timeline.map((entry) => String(entry?.key || "")).join("\t");
+        const positionIdentity = `${view}\t${timelineFocusKey}\t${timelineIdentity}`;
+        if (timelineAutoPositionRef.current !== positionIdentity) {
+          const focusNode = Array.from(rail.children).find((node) => node.dataset.timelineKey === timelineFocusKey);
+          if (focusNode) {
+            const previousNode = focusNode.previousElementSibling?.dataset?.timelineKey
+              ? focusNode.previousElementSibling
+              : focusNode;
+            const railPadding = Number.parseFloat(window.getComputedStyle(rail).paddingLeft) || 0;
+            rail.scrollLeft = Math.max(0, previousNode.offsetLeft - railPadding);
+            timelineAutoPositionRef.current = positionIdentity;
+          }
+        }
+      }
     }
     window.clearTimeout(timelineUnlockTimerRef.current);
     timelineUnlockTimerRef.current = window.setTimeout(() => {
       timelineLoadingRef.current = false;
     }, 80);
-  }, [timelineWindow]);
+  }, [timeline, timelineFocusKey, timelineWindow, view]);
 
   useEffect(() => () => {
     window.clearTimeout(timelineUnlockTimerRef.current);
@@ -667,6 +910,16 @@ export default function WorkflowsPage() {
               <p className="af-settings-lead">{view === "team" ? `汇总${team?.name ? `「${team.name}」` : "当前团队"}的需求 Workflow，按负责人追踪进度与风险。` : "集中查看我创建和参与的需求 Workflow，追踪阶段、Action 进度与最新动态。"}</p>
             </div>
             <div className="af-workflows-hero-actions">
+              {authUser?.isAdmin && !demoMode ? (
+                <button
+                  type="button"
+                  className="af-workflows-guide-link af-workflows-admin-open"
+                  onClick={() => setAdminManagerOpen(true)}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>admin_panel_settings</span>
+                  管理迭代
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="af-workflows-guide-link"
@@ -931,6 +1184,16 @@ export default function WorkflowsPage() {
           ) : null}
         </div>
       </div>
+      {authUser?.isAdmin ? (
+        <AdminIterationManager
+          open={adminManagerOpen}
+          workflows={displayedWorkflows}
+          timeline={timeline}
+          selectedTimelineKey={timelineKey}
+          onClose={() => setAdminManagerOpen(false)}
+          onCompleted={loadWorkflows}
+        />
+      ) : null}
     </div>
   );
 }
