@@ -1,0 +1,38 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-D7pDlErt.js
+  s_b8fd1696dd8226::t_00b24b27bdd8d2 1
+builtin/web-ui/dist/assets/index-CmcHE_Cf.js
+  s_b8fd1696dd8226::t_2c012fad785de3 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91,93,97-100,102,106-107,110,114-116,118,121-122,135,138-140,142,221-227,231,233,236,280-281,285,288-295,299-300,302-304,308,310,325,327,331,339,341,345,353-359,366,380,391-392,395,413,422,458,476,539,555,579,623,642,654,669,680,712,725,745,776,791,802,818,832,840,849-859,863,889
+builtin/web-ui/dist/assets/index-DZ328oSo.css
+  s_b8fd1696dd8226::t_5cb18280a77903 1
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_ef81753ea4ca2d 33-34
+bin/lib/prd-workflow-collaboration.mjs
+  s_b8fd1696dd8226::t_b5511e8f8e5c96 243-255
+bin/lib/ui-server.mjs
+  s_b8fd1696dd8226::t_0fdeaf13be048e 164,14702-14709,14717,14728-14730,14734-14735,14755-14793
+builtin/web-ui/src/index.css
+  s_b8fd1696dd8226::t_530f854cf5d6a1 8189-8199
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b8fd1696dd8226::t_43e35eba9a5187 8538,9252-9254,9274-9296,14264-14275
+skills/agentflow-cli/SKILL.md
+  s_b8fd1696dd8226::t_00dde6202b6d88 74-87
+skills/agentflow-node-authoring/SKILL.md
+  s_b8fd1696dd8226::t_0fb8c8d68ea9b2 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "393dfb01cbe6cb6db7e724605b0c260cba3d2900",
+  "prompts": {},
+  "logical_commit_id": "393dfb01cbe6cb6db7e724605b0c260cba3d2900",
+  "sessions": {
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
