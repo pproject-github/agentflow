@@ -248,6 +248,44 @@ export function archiveFlowPipeline(workspaceRoot, flowId, flowSource, opts = {}
 }
 
 /**
+ * 将归档流水线目录恢复到活动目录（仅 user / workspace）。
+ * @param {string} workspaceRoot
+ * @param {string} flowId
+ * @param {FlowWriteSource} flowSource
+ * @returns {{ success: true } | { success: false, error: string }}
+ */
+export function restoreArchivedFlowPipeline(workspaceRoot, flowId, flowSource, opts = {}) {
+  if (flowSource !== "user" && flowSource !== "workspace") {
+    return { success: false, error: "仅支持恢复用户目录或工作区流水线" };
+  }
+  if (!flowId || typeof flowId !== "string" || /[/\\.]/.test(flowId) || flowId === "..") {
+    return { success: false, error: "invalid flowId" };
+  }
+  const archivedRes = resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
+  if (archivedRes.error || !archivedRes.flowDir) {
+    return { success: false, error: archivedRes.error || "无法解析归档路径" };
+  }
+  const fromDir = archivedRes.flowDir;
+  if (!fs.existsSync(path.join(fromDir, FLOW_YAML_FILENAME))) {
+    return { success: false, error: "找不到归档流水线" };
+  }
+  const activeRes = resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
+  if (activeRes.error || !activeRes.flowDir) {
+    return { success: false, error: activeRes.error || "无法解析活动路径" };
+  }
+  if (fs.existsSync(activeRes.flowDir)) {
+    return { success: false, error: "活动目录已存在同名流水线" };
+  }
+  try {
+    fs.mkdirSync(path.dirname(activeRes.flowDir), { recursive: true });
+    fs.renameSync(fromDir, activeRes.flowDir);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) };
+  }
+}
+
+/**
  * 在用户目录与工作区之间移动整个流水线目录（含 nodes 等）。
  * @param {string} workspaceRoot
  * @param {string} flowId

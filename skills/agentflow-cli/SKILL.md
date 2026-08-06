@@ -5,6 +5,23 @@ description: Direct AgentFlow platform operation through a bundled token-backed 
 
 # AgentFlow CLI
 
+## Resource boundary: Flow/Pipeline vs Workflow
+
+AgentFlow has two different resource families:
+
+- **Flow/Pipeline**: an executable node graph backed by `flow.yaml`. The
+  `list-flows`, `publish-flow`, `get-graph`, `run`, and schedule commands in
+  this skill operate on this family.
+- **Workflow**: a TAPD-derived product/requirement record addressed as
+  `tapd:<id>`. It is not a Flow/Pipeline and must be read or changed through
+  the `workflow-*` commands and the `agentflow-workflow-report` protocol.
+
+Never infer that a Flow with a similar name is the corresponding Workflow.
+Never archive, delete, disable, or replace a Flow as a way to clean up or
+change Workflow data. Before any Flow write, show the exact `flowId`, source,
+and destination; before any Workflow write, resolve the canonical `tapd:<id>`
+reference and follow the Workflow skill's read/merge/concurrency rules.
+
 Use this skill when the task is to operate AgentFlow itself from an AI agent. Do not configure or call MCP for this skill. Use the bundled CLI script instead:
 
 ```bash
@@ -157,7 +174,7 @@ The only admin write exception is audited version-membership repair. Read its st
 ## Workflow
 
 1. Check token availability with `config`.
-2. Use `list-workspace` or `list-flows` to discover targets. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
+2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
 3. Use `run` to start the flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
 4. Use `status`, `list-run-by-workspace`, and `logs` when a run is active, failed, or needs debugging.
 

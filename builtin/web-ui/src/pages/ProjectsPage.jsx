@@ -408,6 +408,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
   const [hideCommunityLinks, setHideCommunityLinks] = useState(false);
   const [adminBuiltinBusy, setAdminBuiltinBusy] = useState("");
   const [adminBuiltinConfig, setAdminBuiltinConfig] = useState({ hiddenBuiltins: [], promoted: [] });
+  const [flowRestoreBusy, setFlowRestoreBusy] = useState("");
   const dragDepthRef = useRef(0);
   const mountIdRef = useRef(0);
   const resourceLoadIdRef = useRef(0);
@@ -486,6 +487,28 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       setAdminBuiltinBusy("");
     }
   }, [authUser?.isAdmin, authUser?.userId, loadFlows]);
+
+  const restoreFlow = useCallback(async (flow) => {
+    if (!flow?.id || !flow.archived || (flow.source !== "user" && flow.source !== "workspace")) return;
+    if (flow.collaboration?.role && flow.collaboration.role !== "owner") return;
+    const key = `${flow.source}:${flow.id}`;
+    setFlowRestoreBusy(key);
+    setListError("");
+    try {
+      const res = await fetch("/api/flow/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flowId: flow.id, flowSource: flow.source }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "恢复流水线失败");
+      await loadFlows();
+    } catch (e) {
+      setListError(String(e.message || e));
+    } finally {
+      setFlowRestoreBusy("");
+    }
+  }, [loadFlows]);
 
   const loadResources = useCallback(async () => {
     const loadId = ++resourceLoadIdRef.current;
@@ -1459,6 +1482,9 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   const canUnpromote = authUser?.isAdmin && f.source === "admin";
                   const canHideBuiltin = authUser?.isAdmin && f.source === "builtin";
                   const busyAction = adminBuiltinBusy.endsWith(`:${f.source}:${f.id}`);
+                  const canRestore = f.archived && (f.source === "user" || f.source === "workspace")
+                    && (!f.collaboration?.role || f.collaboration.role === "owner");
+                  const restoreBusy = flowRestoreBusy === `${f.source}:${f.id}`;
                   return (
                   <div
                     key={`${f.id}:${f.source ?? "user"}:${f.archived ? "a" : ""}:${f.collaboration?.id || "own"}`}
@@ -1503,12 +1529,17 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                           <HighlightMatch query={pipelineSearch}>{sourcePathHint(f)}</HighlightMatch>
                         </span>
                       </div>
-                      {authUser?.isAdmin ? (
+                      {authUser?.isAdmin || canRestore ? (
                         <div
                           className="af-project-admin-actions"
                           onClick={(event) => event.stopPropagation()}
                           onKeyDown={(event) => event.stopPropagation()}
                         >
+                          {canRestore ? (
+                            <button type="button" disabled={restoreBusy} onClick={() => restoreFlow(f)}>
+                              {restoreBusy ? t("project:restoringActive") : t("project:restoreActive")}
+                            </button>
+                          ) : null}
                           {canPromote ? (
                             <button type="button" disabled={busyAction} onClick={() => updateAdminBuiltinFlow(f, "promote")}>
                               设为内置

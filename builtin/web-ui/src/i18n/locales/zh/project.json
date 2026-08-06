@@ -37,6 +37,8 @@
   "skillsPurposeTitle": "Composer/Agent 的操作指南",
   "skillsPurposeDesc": "Skills 告诉 AI 在特定任务里应遵守什么规则、如何修改 flow、如何复用项目约定。",
   "noArchived": "暂无归档项目。",
+  "restoreActive": "恢复为 Active",
+  "restoringActive": "恢复中…",
   "noActive": "暂无未归档流水线；已归档项在 Archived 标签中查看。",
   "noNodes": "暂无可用全局 nodes。",
   "noMyNodes": "暂无已发布的 marketplace nodes。",

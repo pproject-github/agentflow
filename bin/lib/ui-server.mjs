@@ -30,6 +30,7 @@ import {
   deleteFlowPipeline,
   moveFlowDirectory,
   resolveFlowDirForWrite,
+  restoreArchivedFlowPipeline,
   validateUserPipelineId,
   writeFlowYaml,
 } from "./flow-write.mjs";
@@ -20118,6 +20119,46 @@ finishedAt: "${new Date().toISOString()}"
         archived: true,
       });
       json(res, 200, { success: true, flowId, flowSource, archived: true });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/flow/restore") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const flowId = typeof payload.flowId === "string" ? payload.flowId.trim() : "";
+      const flowSource = payload.flowSource || "user";
+      if (!flowId) {
+        json(res, 400, { error: "Missing or invalid flowId" });
+        return;
+      }
+      if (flowSource !== "user" && flowSource !== "workspace") {
+        json(res, 400, { error: "仅支持恢复用户目录或工作区流水线" });
+        return;
+      }
+      const collaborationDenied = workspaceFlowCollaborationGuard(flowId, flowSource, true, userCtx, "owner");
+      if (collaborationDenied) {
+        json(res, collaborationDenied.status, { error: collaborationDenied.error });
+        return;
+      }
+      const result = restoreArchivedFlowPipeline(root, flowId, flowSource, userCtx);
+      if (!result.success) {
+        json(res, 400, { error: result.error || "恢复失败" });
+        return;
+      }
+      updateWorkspaceCollaborationFlow({
+        previousFlowId: flowId,
+        previousArchived: true,
+        flowSource,
+        ownerId: userCtx.userId,
+        flowId,
+        archived: false,
+      });
+      json(res, 200, { success: true, flowId, flowSource, archived: false });
       return;
     }
 

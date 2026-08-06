@@ -24,6 +24,12 @@
 
 ![Running Status](docs/running.png)
 
+### 术语边界
+
+本仓库中的可执行节点图称为 **Flow**（编辑器中也显示为流水线），以
+`flow.yaml` 保存。产品需求 **Workflow** 是另一套由 TAPD 驱动、使用
+`tapd:<id>` 标识的需求实体；它不由 Flow 编辑器创建、归档或修改。
+
 ## 解决什么问题
 
 Cursor、Claude Code、Codex 这些 Coding Agent 很好用——直到任务变长。

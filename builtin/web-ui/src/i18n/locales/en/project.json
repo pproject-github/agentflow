@@ -37,6 +37,8 @@
   "skillsPurposeTitle": "Operating guides for Composer and agents",
   "skillsPurposeDesc": "Skills tell AI which rules to follow for a task, how to change flows, and how to reuse project conventions.",
   "noArchived": "No archived projects.",
+  "restoreActive": "Restore to Active",
+  "restoringActive": "Restoring…",
   "noActive": "No active pipelines; archived items are in the Archived tab.",
   "noNodes": "No global nodes available.",
   "noMyNodes": "No marketplace nodes have been published.",

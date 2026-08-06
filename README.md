@@ -24,6 +24,13 @@
 
 ![Running Status](docs/running.png)
 
+### Terminology
+
+In this repository, an executable node graph is called a **Flow** (also
+shown as a Pipeline in the editor) and is stored in `flow.yaml`. A product
+requirement **Workflow** is a separate TAPD-backed record addressed as
+`tapd:<id>`; it is not created, archived, or updated by the Flow editor.
+
 ## The Problem
 
 Coding agents like Cursor, Claude Code, and Codex are great — until the task gets long.
