@@ -11676,10 +11676,8 @@ function prdWorkflowMergeProducerTimeline(report, currentSnapshot = {}) {
   };
 }
 
-function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx = {}) {
-  const operation = String(
-    payload.adminOperation || payload.admin_operation || payload.administrativeOperation || payload.administrative_operation || "",
-  ).trim().toLowerCase();
+function prdWorkflowAdminVersionRepairOperation(value = "", userCtx = {}) {
+  const operation = String(value || "").trim().toLowerCase();
   if (!operation) return { requested: false };
   if (operation !== "repair-version-membership") {
     return { requested: true, status: 400, error: `Unsupported admin Workflow operation: ${operation}` };
@@ -11687,6 +11685,15 @@ function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx 
   if (userCtx.isAdmin !== true) {
     return { requested: true, status: 403, error: "Admin permission required" };
   }
+  return { requested: true, operation };
+}
+
+function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx = {}) {
+  const intent = prdWorkflowAdminVersionRepairOperation(
+    payload.adminOperation || payload.admin_operation || payload.administrativeOperation || payload.administrative_operation || "",
+    userCtx,
+  );
+  if (!intent.requested || intent.error) return intent;
   const forbiddenKeys = ["action", "artifacts", "observation", "globalState", "global_state", "extensions", "extension"]
     .filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
   if (forbiddenKeys.length) {
@@ -11714,7 +11721,7 @@ function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx 
   if (!report.expectedRevision) {
     return { requested: true, status: 400, error: "Admin version repair requires expectedRevision" };
   }
-  return { requested: true, operation };
+  return intent;
 }
 
 function prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot = {}) {
@@ -14356,6 +14363,14 @@ export function startUiServer({
         }
         const flowId = String(url.searchParams.get("flowId") || "").trim();
         const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const adminVersionRepair = prdWorkflowAdminVersionRepairOperation(
+          url.searchParams.get("adminOperation") || url.searchParams.get("admin_operation") || "",
+          userCtx,
+        );
+        if (adminVersionRepair.error) {
+          json(res, adminVersionRepair.status || 400, { error: adminVersionRepair.error });
+          return;
+        }
         const workflowScope = resolvePrdWorkflowScope(root, {
           tapdId: workflow.id,
           flowId,
@@ -14363,14 +14378,15 @@ export function startUiServer({
           archived: url.searchParams.get("archived") === "1",
           workspaceId: url.searchParams.get("workspaceId") || "",
           workflowShare: url.searchParams.get("workflowShare") || "",
-        }, userCtx);
+        }, userCtx, adminVersionRepair.requested ? "admin-version-repair" : "read");
         if (workflowScope.error) {
           json(res, workflowScope.status || 400, { error: workflowScope.error });
           return;
         }
         const scopedRoot = workflowScope.stateRoot;
         prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, workflow.id);
-        const runtimeOnly = url.searchParams.get("runtimeOnly") === "1" ||
+        const runtimeOnly = adminVersionRepair.requested ||
+          url.searchParams.get("runtimeOnly") === "1" ||
           url.searchParams.get("runtime_only") === "1" ||
           url.searchParams.get("cached") === "1";
         const baseSnapshot = runtimeOnly

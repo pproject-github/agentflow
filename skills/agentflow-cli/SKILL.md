@@ -124,6 +124,11 @@ The reusable transport lives in `scripts/workflow-report-client.mjs`. The CLI ex
 
 Every write requires the real business adapter `source`. Put the key-level `expectedVersions` map in the JSON file; use `absent` for a new resource key. `--expected-revision` is retained only for legacy whole-Workflow locking and should not be used by new integrations.
 
+The only admin write exception is audited version-membership repair. Read its strict revision with
+`workflow-get --runtime-only --admin-operation repair-version-membership`, then send the matching
+`workflow-report --admin-operation repair-version-membership` request as defined by
+`agentflow-workflow-report`. This flag does not grant general Workflow read or write access.
+
 ## Workflow
 
 1. Check token availability with `config`.

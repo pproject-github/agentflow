@@ -41,9 +41,9 @@ Commands:
   logs --run-id <id>
   display-outputs --flow-id <id> [--flow-source user]
   sync-workspace --workspace <id>
-  workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only]
+  workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only] [--admin-operation repair-version-membership]
   workflow-access-sync --workflow tapd:<id> --file <access.json>
-  workflow-report --workflow tapd:<id> --file <report.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
+  workflow-report --workflow tapd:<id> --file <report.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>] [--admin-operation repair-version-membership]
   workflow-artifact-publish --workflow tapd:<id> --file <artifact.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>]
 `;
 }
@@ -390,12 +390,14 @@ async function main() {
     const flowId = option(args, "flow-id") || option(args, "flow");
     const flowSource = option(args, "flow-source") || "user";
     const runtimeOnly = args["runtime-only"] === true || args.cached === true ? "1" : "";
+    const adminOperation = option(args, "admin-operation") || "";
     const client = createWorkflowReportClient({ baseUrl: normalizedBaseUrl(args), token: authToken(args) });
     printJson(await client.getState({
       workflow: workflow.key,
       flowId,
       flowSource,
       runtimeOnly: runtimeOnly === "1",
+      adminOperation,
     }));
     return;
   }
@@ -412,11 +414,13 @@ async function main() {
     const expectedRevision = option(args, "expected-revision");
     const idempotencyKey = option(args, "idempotency-key");
     const reportSource = option(args, "source");
+    const adminOperation = option(args, "admin-operation");
     const flowId = option(args, "flow-id") || option(args, "flow");
     const flowSource = option(args, "flow-source");
     if (expectedRevision) body.expectedRevision = expectedRevision;
     if (idempotencyKey) body.idempotencyKey = idempotencyKey;
     if (reportSource) body.source = reportSource;
+    if (adminOperation) body.adminOperation = adminOperation;
     if (!String(body.source || "").trim()) throw new Error("Missing Workflow report source. Pass --source <adapter> or include source in the JSON file.");
     if (flowId) body.flowId = flowId;
     if (flowSource) body.flowSource = flowSource;

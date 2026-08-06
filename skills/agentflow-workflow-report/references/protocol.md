@@ -240,12 +240,20 @@ GET /api/workflows/state?workflow=tapd%3A1020124&runtimeOnly=1
 Authorization: Bearer <AGENTFLOW_TOKEN>
 ```
 
+管理员为版本归属修复读取严格锁时，必须显式声明同一受限意图：
+
+```http
+GET /api/workflows/state?workflow=tapd%3A1013667&runtimeOnly=1&adminOperation=repair-version-membership
+Authorization: Bearer <AGENTFLOW_TOKEN>
+```
+
 | Query 参数 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
 | `workflow` | string | 与 namespace/id 二选一 | 规范 key，例如 `tapd:1020124` |
 | `namespace` | string | 与 workflow 二选一 | 当前仅支持 `tapd` |
 | `id` | string | 与 workflow 二选一 | TAPD short ID |
 | `runtimeOnly` | `0 \| 1` | 否 | `1` 只读取已保存运行态，不主动刷新上游；CLI 的 `--runtime-only` 使用它 |
+| `adminOperation` | string | 管理员版本修复时必填 | 仅 `repair-version-membership`；只授予取得严格锁所需的受限读取，不授予普通 Workflow 写权限；服务端强制按 runtime-only 读取 |
 | `flowId` | string | 否 | 关联 AgentFlow 项目时指定项目 ID |
 | `flowSource` | string | 否 | 项目来源，默认 `user` |
 | `workspaceId` | string | 否 | 项目工作区上下文 |
@@ -353,14 +361,15 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
   "projections": {
     "timeline": [{
       "kind": "version",
-      "id": "1013667",
+      "id": "1133202860001000338",
+      "key": "prd-flow:tapd-current-version:1133202860001000338",
       "title": "Likee Android&iOS V5.63",
       "date": "2026-08-11",
       "source": "prd-flow"
     }]
   },
   "expectedRevision": "runtime:<revision-from-get>",
-  "idempotencyKey": "admin-version-repair:1013667:v563"
+  "idempotencyKey": "admin-version-repair:1013667:version-1133202860001000338"
 }
 ```
 
@@ -708,7 +717,7 @@ timeline-membership:tapd-1020124:version-1133202860001000338:v1
 ### 10.5 管理员修复版本归属
 
 1. 仅在批量治理版本归属时使用；普通业务状态仍由 Owner/Reporter 上报。
-2. 管理员 GET 当前 Workflow，人工或程序核对目标版本并保存 `runtimeRevision`。
+2. 管理员使用 `adminOperation=repair-version-membership` GET 当前 Workflow，人工或程序核对目标版本自身的稳定 ID，并保存 `runtimeRevision`；不得把 TAPD 需求 ID 当作版本 ID。
 3. 发送只含 `kind=version` timeline 的 `repair-version-membership` 请求。
 4. 验证响应包含 `administrativeRepair`，事件 actor 是操作管理员，且非版本/其他 source 投影未变化。
 5. `409` 时重新读取、重新核对并只重试一次；不得绕过严格锁。
@@ -748,7 +757,7 @@ prd-flow 只是一个接入实现，不是协议依赖：
 - Action 下能看到稳定 key 的 MR、构建或测试产物。
 - Markdown Publish 返回可访问 URL，但不会推进业务状态。
 - 版本改名/改期不产生新迭代节点，版本切换不会删除第三方 Sprint。
-- 管理员版本归属修复只能改 `kind=version` 投影，要求 runtimeRevision/幂等键并留下管理员 actor 审计；普通 Report 仍返回 403。
+- 管理员只有显式携带版本修复意图时才能 GET 当前 runtimeRevision；修复只能改 `kind=version` 投影，要求 runtimeRevision/幂等键并留下管理员 actor 审计；无意图读取与普通 Report 仍返回 403。
 - 自定义 extension 能保存；注册渲染器后能显示对应文档区 / Issue 区。
 - 不同资源 key 可并发更新；同 key 旧版本返回包含具体 `resourceKey` 的 409。
 - 409 会触发一次 key 级 read → re-merge → retry，且失败请求不会部分落库。

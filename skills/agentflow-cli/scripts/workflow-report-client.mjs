@@ -50,12 +50,13 @@ export function createWorkflowReportClient({ baseUrl, token, fetchImpl = globalT
   };
 
   return {
-    getState({ workflow, flowId = "", flowSource = "user", runtimeOnly = false } = {}) {
+    getState({ workflow, flowId = "", flowSource = "user", runtimeOnly = false, adminOperation = "" } = {}) {
       return request(`/api/workflows/state${workflowQuery({
         workflow,
         flowId,
         flowSource,
         runtimeOnly: runtimeOnly ? "1" : "",
+        adminOperation,
       })}`);
     },
     syncAccess(body = {}) {

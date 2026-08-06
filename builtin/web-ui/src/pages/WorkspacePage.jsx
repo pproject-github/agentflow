@@ -14194,24 +14194,6 @@ function WorkspacePageInner() {
               <span className="af-workspace-sync-light__dot" aria-hidden />
             </span>
           ) : null}
-          {isWorkflowMode && !flowParams.workflowShare && !flowParams.workflowDemo ? (
-            <button
-              type="button"
-              className="af-workspace-display-share-btn"
-              onClick={() => {
-                setWorkflowProjectPendingMode("workspace");
-                setWorkflowProjectBindingOpen(true);
-                setWorkflowProjectBindingError("");
-                void loadWorkflowProjectBindings().catch((bindingError) => {
-                  setWorkflowProjectBindingError(String(bindingError.message || bindingError));
-                });
-              }}
-              title="管理当前迭代绑定的 Projects"
-            >
-              <span className="material-symbols-outlined" aria-hidden>hub</span>
-              Projects{workflowProjectBindings.length ? ` · ${workflowProjectBindings.length}` : ""}
-            </button>
-          ) : null}
           {!isWorkflowMode && workspaceConflict ? (
             <button
               type="button"
