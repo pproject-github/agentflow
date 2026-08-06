@@ -68,6 +68,8 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(page, /else if \(view === "personal" && isLocalWorkflowRuntime\(\)\) params\.set\("demo", "0"\)/);
   assert.match(page, /demoMode \? "退出示例" : "本地示例"/);
   assert.match(page, /onClick=\{demoMode \? exitDemo : loadDemo\}/);
+  assert.match(page, /view === "personal" && isLocalWorkflowRuntime\(\) \?/);
+  assert.match(page, /\{isLocalWorkflowRuntime\(\) \? \(\s*<button type="button" className="af-workflows-demo-button"/);
   assert.match(page, /setDemoMode\(false\); setView\("team"\)/);
   assert.match(page, /payload\.selectedTimelineKey/);
   assert.match(page, /className="af-workflows-pagination"/);

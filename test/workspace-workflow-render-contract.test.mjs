@@ -108,6 +108,14 @@ test("Workflow details return to the iteration list with its filters and paginat
   assert.match(source, /onClick=\{\(\) => navigate\(workspaceBackTarget\)\}/);
 });
 
+test("Workflow details do not render an empty Action state before the snapshot arrives", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+
+  assert.match(source, /const workflowSnapshotLoading = Boolean\(loading && tapdId && !snapshot\)/);
+  assert.match(source, /<LoadingState\s+className="af-prd-workflow-action-loading"/);
+  assert.match(source, /const \[workflowLoading, setWorkflowLoading\] = useState\(\(\) => Boolean\(workflowTapdId\)\)/);
+});
+
 test("Workflow list and details use the TAPD requirement title instead of the current Action", async () => {
   const workspaceSource = await readFile(workspacePagePath, "utf8");
   const workflowsSource = await readFile(

@@ -233,6 +233,13 @@ export function listPrdWorkflowCollaborationsForUser(userId) {
     .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
 }
 
+// Administrators can inspect the complete registry for governance and repair
+// operations, regardless of owner or explicit collaboration membership.
+export function listPrdWorkflowCollaborationsForAdmin() {
+  return Object.values(readRegistry().workflows)
+    .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
+}
+
 export function listPrdWorkflowCollaborationsForTeam(teamId) {
   const id = String(teamId || "").trim();
   if (!id) return [];

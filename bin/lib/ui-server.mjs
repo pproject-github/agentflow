@@ -163,6 +163,7 @@ import {
   getPrdWorkflowCollaborationForUser,
   ensurePrdWorkflowShareLink,
   listPrdWorkflowCollaborationsForUser,
+  listPrdWorkflowCollaborationsForAdmin,
   listPrdWorkflowCollaborationsForTeam,
   listPrdWorkflowProjectBindings,
   prdWorkflowCollaborationAccess,
@@ -13720,7 +13721,10 @@ export function startUiServer({
           team = requestedTeamId && authUser?.isAdmin
             ? getTeamById(requestedTeamId)
             : getTeamForUser(userCtx.userId);
-          if (!team || team.status !== "active") {
+          if (authUser?.isAdmin && !requestedTeamId) {
+            // Admin team view is the cross-team governance view.
+            records = listPrdWorkflowCollaborationsForAdmin();
+          } else if (!team || team.status !== "active") {
             json(res, 200, {
               ok: true,
               view: "team",
@@ -13734,10 +13738,13 @@ export function startUiServer({
               pagination: { page: 1, pageSize: 20, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
             });
             return;
+          } else {
+            records = listPrdWorkflowCollaborationsForTeam(team.id);
           }
-          records = listPrdWorkflowCollaborationsForTeam(team.id);
         } else {
-          records = listPrdWorkflowCollaborationsForUser(userCtx.userId);
+          records = authUser?.isAdmin
+            ? listPrdWorkflowCollaborationsForAdmin()
+            : listPrdWorkflowCollaborationsForUser(userCtx.userId);
         }
         const accessibleProjects = listAccessibleProjectFlows(root, userCtx);
         const workflows = records.map((record) => {

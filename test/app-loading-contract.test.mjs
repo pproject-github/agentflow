@@ -12,6 +12,8 @@ test("AgentFlow owns the complete startup loading experience", async () => {
   ]);
 
   assert.match(indexSource, /id="root">[\s\S]*class="af-app-loading"/);
+  assert.match(indexSource, /class="af-app-loading__mark"[^>]*aria-hidden="true"[\s\S]*<svg/);
+  assert.doesNotMatch(indexSource, /class="af-app-loading__mark"><img/);
   assert.match(indexSource, /AgentFlow 正在启动/);
   assert.match(indexSource, /正在连接工作空间…/);
   assert.match(appSource, /function AppLoading\(\)/);

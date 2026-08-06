@@ -27,6 +27,7 @@ import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealCo
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
+import LoadingState from "../components/LoadingState.jsx";
 import {
   ComposerAssistantActivity,
   ComposerAssistantInput,
@@ -7422,6 +7423,7 @@ function PrdWorkflowTimelinePanel({
   const clientObservations = Array.isArray(snapshot?.clientObservations) ? snapshot.clientObservations : [];
   const rawOutput = String(snapshot?.rawOutput || "");
   const globalState = snapshot?.globalState && typeof snapshot.globalState === "object" ? snapshot.globalState : null;
+  const workflowSnapshotLoading = Boolean(loading && tapdId && !snapshot);
   const requirementTitle = prdWorkflowRequirementTitle(snapshot, tapdId);
   const workflowSteps = prdWorkflowFlowSteps(phase);
   const openChecklistDocument = useCallback((item, itemKey = "") => {
@@ -7841,7 +7843,14 @@ function PrdWorkflowTimelinePanel({
             </div>
           ) : null}
           <div className="af-prd-workflow-action-list">
-            {filteredActionRows.length ? actionDayGroups.map((group) => (
+            {workflowSnapshotLoading ? (
+              <LoadingState
+                className="af-prd-workflow-action-loading"
+                title="正在读取 Workflow"
+                detail="同步 Action、阶段进度与关联产物…"
+                rows={4}
+              />
+            ) : filteredActionRows.length ? actionDayGroups.map((group) => (
               <section key={group.day} className="af-prd-workflow-action-day">
                 <div className="af-prd-workflow-action-day__label">
                   <span>{group.day}</span>
@@ -8524,7 +8533,7 @@ function WorkspacePageInner() {
     }
   });
   const [workflowSnapshot, setWorkflowSnapshot] = useState(null);
-  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowLoading, setWorkflowLoading] = useState(() => Boolean(workflowTapdId));
   const [workflowError, setWorkflowError] = useState("");
   const [workflowActionRunning, setWorkflowActionRunning] = useState(false);
   const [workflowActionOutput, setWorkflowActionOutput] = useState("");

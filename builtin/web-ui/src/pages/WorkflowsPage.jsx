@@ -944,7 +944,7 @@ export default function WorkflowsPage({ authUser }) {
                 <span className="material-symbols-outlined" aria-hidden>integration_instructions</span>
                 接入说明
               </button>
-              {view === "personal" ? (
+              {view === "personal" && isLocalWorkflowRuntime() ? (
                 <button
                   type="button"
                   className={`af-workflows-guide-link af-workflows-demo-toggle${demoMode ? " is-active" : ""}`}
@@ -1071,10 +1071,12 @@ export default function WorkflowsPage({ authUser }) {
               <span className="material-symbols-outlined" aria-hidden>timeline</span>
               <strong>{view === "team" && !team ? "尚未加入团队" : "暂无迭代"}</strong>
               <p>{view === "team" && !team ? "请联系超级管理员完成团队划分。" : "当 prd-flow 上报 Workflow 后，它会出现在这里。"}</p>
-              <button type="button" className="af-workflows-demo-button" onClick={loadDemo}>
-                <span className="material-symbols-outlined" aria-hidden>science</span>
-                载入本地示例时间线
-              </button>
+              {isLocalWorkflowRuntime() ? (
+                <button type="button" className="af-workflows-demo-button" onClick={loadDemo}>
+                  <span className="material-symbols-outlined" aria-hidden>science</span>
+                  载入本地示例时间线
+                </button>
+              ) : null}
             </div>
           ) : null}
           {!loading && availableCount > 0 && visiblePagination.total === 0 ? (
