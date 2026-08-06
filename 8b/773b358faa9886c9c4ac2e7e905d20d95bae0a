@@ -1,0 +1,44 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-y9lvqk7W.js
+  s_6f989e4ed000e0::t_8c1ed58ffe97bd 1
+builtin/web-ui/dist/assets/index-BY-_12Kd.js
+  s_6f989e4ed000e0::t_e9e7c770646327 1,9,17,25,33-34,37-38,40,42,44,52,60,65-67,69,71,73,75,78-79,84,87,89,91,93-94,96-102,106-107,110,121-122,135,138-140,221-227,233,236,281,285,289,291-295,299-300,302-304,325,327,341,353-356,358-359,392,395,849,851,854-858,862,888
+builtin/web-ui/dist/index.html
+  s_6f989e4ed000e0::t_484d6dac5ee598 33
+package-lock.json
+  s_6f989e4ed000e0::t_2958c97cf6815f 3,9
+package.json
+  s_6f989e4ed000e0::t_7b7c957e37946d 3
+bin/lib/catalog-flows.mjs
+  s_6f989e4ed000e0::t_d297894368793d 25,265
+bin/lib/help.mjs
+  s_6f989e4ed000e0::t_c2d3acdfc0613e 29,100
+bin/lib/legacy-flow-execution.mjs
+  s_6f989e4ed000e0::t_495af61d6526b3 1-6
+bin/lib/main.mjs
+  s_6f989e4ed000e0::t_26c0ba0243a8a4 39,557,589,596
+bin/lib/ui-server.mjs
+  s_6f989e4ed000e0::t_423d63f7d6033e 86,13608-13617,20594-20597
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_6f989e4ed000e0::t_4706c866864cf6 344,3669-3672
+skills/agentflow-cli/SKILL.md
+  s_6f989e4ed000e0::t_c463c0dbfa8a18 135,140-142
+test/workspace-preview-api.test.mjs
+  s_6f989e4ed000e0::t_6797d06397072f 58-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8b773b358faa9886c9c4ac2e7e905d20d95bae0a",
+  "prompts": {},
+  "logical_commit_id": "8b773b358faa9886c9c4ac2e7e905d20d95bae0a",
+  "sessions": {
+    "s_6f989e4ed000e0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd708-e54e-7fd0-aeab-ca9f72cec3b9",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
