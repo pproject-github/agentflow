@@ -240,6 +240,19 @@ export function listPrdWorkflowCollaborationsForAdmin() {
     .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
 }
 
+export function deletePrdWorkflowCollaboration({ tapdId } = {}) {
+  const normalizedTapdId = normalizeTapdId(tapdId);
+  if (!normalizedTapdId) return { error: "Missing tapdId", status: 400 };
+  const registry = readRegistry();
+  const entry = Object.entries(registry.workflows)
+    .find(([, record]) => record?.tapdId === normalizedTapdId);
+  if (!entry) return { error: "PRD Workflow collaboration not found", status: 404 };
+  const [workflowId, record] = entry;
+  delete registry.workflows[workflowId];
+  writeRegistry(registry);
+  return { record, deleted: true };
+}
+
 export function listPrdWorkflowCollaborationsForTeam(teamId) {
   const id = String(teamId || "").trim();
   if (!id) return [];

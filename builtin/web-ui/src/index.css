@@ -8186,6 +8186,17 @@ button.af-project-card {
   background: rgba(30, 41, 59, 0.78);
 }
 
+.af-workspace-display-share-btn--danger {
+  color: #ffb4ab;
+  border-color: rgba(255, 120, 110, 0.38);
+}
+
+.af-workspace-display-share-btn--danger:hover:not(:disabled) {
+  color: #ffd8d2;
+  border-color: rgba(255, 120, 110, 0.72);
+  background: rgba(255, 80, 70, 0.14);
+}
+
 .af-workspace-display-share-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;

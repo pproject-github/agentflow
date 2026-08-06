@@ -71,6 +71,20 @@ List flows:
 node skills/agentflow-cli/scripts/agentflow-cli.mjs list-flows
 ```
 
+For local marketplace node authoring, use the packaged AgentFlow CLI (the
+node-authoring workflow is documented in `agentflow-node-authoring`):
+
+```bash
+agentflow marketplace list --json
+agentflow marketplace publish-node ./my-node --json
+agentflow marketplace install-node MyFlow marketplace:my-node@1.0.0 --json
+agentflow validate MyFlow --json
+```
+
+These commands operate on the local workspace marketplace. They are usable
+after any Agent CLI (Cursor, Codex, Claude Code, or OpenCode) has generated the
+node package; no MCP server is required for publishing.
+
 Publish a new local Flow after the user has reviewed it:
 
 ```bash

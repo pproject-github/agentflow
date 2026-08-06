@@ -161,6 +161,7 @@ import {
   getPrdWorkflowCollaborationByShareToken,
   getPrdWorkflowCollaborationByTapdId,
   getPrdWorkflowCollaborationForUser,
+  deletePrdWorkflowCollaboration,
   ensurePrdWorkflowShareLink,
   listPrdWorkflowCollaborationsForUser,
   listPrdWorkflowCollaborationsForAdmin,
@@ -14698,6 +14699,14 @@ export function startUiServer({
         const flowId = String(url.searchParams.get("flowId") || "").trim();
         const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
         const archived = url.searchParams.get("archived") === "1";
+        const adminVersionRepair = prdWorkflowAdminVersionRepairOperation(
+          url.searchParams.get("adminOperation") || url.searchParams.get("admin_operation") || "",
+          userCtx,
+        );
+        if (adminVersionRepair.error) {
+          json(res, adminVersionRepair.status || 400, { error: adminVersionRepair.error });
+          return;
+        }
         const workflowScope = resolvePrdWorkflowScope(root, {
           tapdId,
           flowId,
@@ -14705,7 +14714,7 @@ export function startUiServer({
           archived,
           workspaceId: url.searchParams.get("workspaceId") || "",
           workflowShare: url.searchParams.get("workflowShare") || "",
-        }, userCtx);
+        }, userCtx, adminVersionRepair.requested ? "admin-version-repair" : "read");
         if (workflowScope.error) {
           json(res, workflowScope.status || 400, { error: workflowScope.error });
           return;
@@ -14716,11 +14725,14 @@ export function startUiServer({
         const runtimeOnly = url.searchParams.get("runtimeOnly") === "1" ||
           url.searchParams.get("runtime_only") === "1" ||
           url.searchParams.get("cached") === "1";
+        const snapshotUserCtx = adminVersionRepair.requested
+          ? { ...userCtx, userId: workflowScope.stateOwnerId }
+          : userCtx;
         const baseSnapshot = useMock
           ? prdWorkflowMockSnapshot(scopedRoot, tapdId || "mock-prd")
           : runtimeOnly
-            ? prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId })
-            : await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, userCtx, { flowSource, flowId });
+            ? prdWorkflowMaterializeSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, snapshotUserCtx, { flowSource, flowId })
+            : await prdWorkflowSnapshot(workflowScope.executionRoot, scopedRoot, tapdId, snapshotUserCtx, { flowSource, flowId });
         const snapshot = prdWorkflowWithAgentflowTokenDiagnostic(
           baseSnapshot,
           getSessionTokenFromRequest(req) || "",
@@ -14740,6 +14752,45 @@ export function startUiServer({
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workflows/admin/delete") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      if (authUser.isAdmin !== true) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        const payload = JSON.parse(await readBody(req, 64 * 1024));
+        const tapdId = String(payload?.tapdId || payload?.tapd_id || "").trim();
+        const result = deletePrdWorkflowCollaboration({ tapdId });
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        const ownerRoot = path.resolve(getAgentflowUserDataRoot(result.record.stateOwnerId || result.record.ownerId));
+        const cleanupPaths = [
+          prdWorkflowStatePath(ownerRoot, tapdId),
+          prdWorkflowCachePath(ownerRoot, tapdId),
+          prdWorkflowProjectPath(ownerRoot, tapdId),
+          prdWorkflowClientsPath(ownerRoot, tapdId),
+          prdWorkflowEventsPath(ownerRoot, tapdId),
+          prdWorkflowEventsArchivePath(ownerRoot, tapdId),
+          prdWorkflowAuditPath(ownerRoot, tapdId),
+        ];
+        for (const cleanupPath of cleanupPaths) {
+          try { fs.unlinkSync(cleanupPath); } catch (error) {
+            if (error?.code !== "ENOENT") log.warn(`admin workflow cleanup failed: ${cleanupPath} · ${error?.message || error}`);
+          }
+        }
+        json(res, 200, { ok: true, deleted: true, tapdId });
+      } catch (error) {
+        json(res, 400, { error: error?.message || "Invalid JSON body" });
       }
       return;
     }

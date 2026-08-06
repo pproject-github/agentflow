@@ -8535,6 +8535,7 @@ function WorkspacePageInner() {
   const [workflowSnapshot, setWorkflowSnapshot] = useState(null);
   const [workflowLoading, setWorkflowLoading] = useState(() => Boolean(workflowTapdId));
   const [workflowError, setWorkflowError] = useState("");
+  const [workflowDeleteBusy, setWorkflowDeleteBusy] = useState(false);
   const [workflowActionRunning, setWorkflowActionRunning] = useState(false);
   const [workflowActionOutput, setWorkflowActionOutput] = useState("");
   const [workflowPendingConfirm, setWorkflowPendingConfirm] = useState(null);
@@ -9248,6 +9249,9 @@ function WorkspacePageInner() {
       const q = flowParamsQuery(flowParams);
       q.set("tapdId", tapdId);
       q.set("runtimeOnly", "1");
+      if (authUser?.isAdmin === true && !flowParams.workflowShare) {
+        q.set("adminOperation", "repair-version-membership");
+      }
       const res = await fetch(`/api/prd-workflow/snapshot?${q.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "读取 PRD Workflow 失败");
@@ -9267,7 +9271,29 @@ function WorkspacePageInner() {
     } finally {
       setWorkflowLoading(false);
     }
-  }, [flowParams, workflowTapdId]);
+  }, [authUser, flowParams, workflowTapdId]);
+
+  const deleteWorkflowAsAdmin = useCallback(async () => {
+    const id = String(workflowTapdId || "").trim();
+    if (!id || authUser?.isAdmin !== true || workflowDeleteBusy) return;
+    if (!window.confirm(`确认清理测试 Workflow TAPD ${id}？此操作会移除协作记录和运行快照，无法恢复。`)) return;
+    setWorkflowDeleteBusy(true);
+    setWorkflowError("");
+    try {
+      const response = await fetch("/api/workflows/admin/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tapdId: id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "清理 Workflow 失败");
+      navigate(flowParams.returnTo || "/workflows");
+    } catch (error) {
+      setWorkflowError(String(error.message || error));
+    } finally {
+      setWorkflowDeleteBusy(false);
+    }
+  }, [authUser, flowParams.returnTo, navigate, workflowDeleteBusy, workflowTapdId]);
 
   const loadWorkflowProjectBindings = useCallback(async () => {
     const tapdId = String(workflowTapdId || "").trim();
@@ -14235,6 +14261,18 @@ function WorkspacePageInner() {
             <span className="material-symbols-outlined" aria-hidden>group_add</span>
             协作
           </button>
+          {isWorkflowMode && authUser?.isAdmin === true && !flowParams.workflowShare && !flowParams.workflowDemo ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn af-workspace-display-share-btn--danger"
+              disabled={!workflowTapdId || workflowDeleteBusy}
+              onClick={() => void deleteWorkflowAsAdmin()}
+              title="清理测试 Workflow 及其运行快照"
+            >
+              <span className="material-symbols-outlined" aria-hidden>{workflowDeleteBusy ? "hourglass_empty" : "delete_forever"}</span>
+              {workflowDeleteBusy ? "清理中" : "清理 Workflow"}
+            </button>
+          ) : null}
           {!adminReview && !isWorkflowMode ? (
             <button
               type="button"
