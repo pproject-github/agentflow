@@ -188,6 +188,8 @@ import {
   mergeWorkflowArtifactLists,
   mergeWorkflowArtifacts,
   mergeWorkflowGlobalState,
+  isSafeWorkflowUrl,
+  normalizeWorkflowChecklistItemStatus,
   normalizeWorkflowReference,
   normalizeWorkflowReport,
   removeWorkflowGlobalStatePath,
@@ -3777,6 +3779,8 @@ function prdWorkflowDashboardSummary(record, snapshot = {}, userCtx = {}, projec
           id: String(entry.id || ""),
           title: String(entry.title || entry.label || entry.id || ""),
           date: String(entry.date || ""),
+          startDate: String(entry.startDate || entry.start_date || entry.start || ""),
+          endDate: String(entry.endDate || entry.end_date || entry.end || entry.date || ""),
           source: String(entry.source || ""),
           dimensions: entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
             ? entry.dimensions
@@ -3910,6 +3914,8 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
         id: identity || String(entry.id || ""),
         title: String(entry.title || entry.id || ""),
         date: String(entry.date || ""),
+        startDate: String(entry.startDate || ""),
+        endDate: String(entry.endDate || entry.date || ""),
         source: String(entry.source || ""),
         dimensions: entry.dimensions && typeof entry.dimensions === "object" && !Array.isArray(entry.dimensions)
           ? entry.dimensions
@@ -3924,6 +3930,8 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
       current.kind = String(entry.kind || current.kind);
       current.title = String(entry.title || current.title);
       current.date = String(entry.date || current.date);
+      current.startDate = String(entry.startDate || current.startDate);
+      current.endDate = String(entry.endDate || entry.date || current.endDate);
       current.source = String(entry.source || current.source);
       current.dimensions = prdWorkflowDashboardMergeTimelineDimensions(current.dimensions, entry.dimensions);
       current.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : current.order;
@@ -3953,6 +3961,112 @@ export function prdWorkflowDashboardTimeline(workflows = []) {
   return {
     timeline,
     unassignedCount: rows.filter((workflow) => !assignedWorkflowIds.has(String(workflow?.id || workflow?.tapdId || ""))).length,
+  };
+}
+
+function prdWorkflowTimelineTimestamp(value, endOfDay = false) {
+  const text = String(value || "").trim();
+  if (!text) return Number.NaN;
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) return Number.NaN;
+  return endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? timestamp + (24 * 60 * 60 * 1000) - 1
+    : timestamp;
+}
+
+export function prdWorkflowDefaultTimelineKey(timeline = [], now = Date.now()) {
+  const rows = (Array.isArray(timeline) ? timeline : [])
+    .map((entry) => ({
+      entry,
+      startAt: prdWorkflowTimelineTimestamp(entry?.startDate || entry?.start),
+      endAt: prdWorkflowTimelineTimestamp(entry?.endDate || entry?.end || entry?.date, true),
+    }))
+    .filter(({ entry, endAt }) => String(entry?.key || "").trim() && Number.isFinite(endAt));
+  const active = rows
+    .filter(({ startAt, endAt }) => Number.isFinite(startAt) && startAt <= now && now <= endAt)
+    .sort((left, right) => left.endAt - right.endAt);
+  if (active.length > 0) return String(active[0].entry.key);
+  const upcoming = rows
+    .filter(({ endAt }) => endAt >= now)
+    .sort((left, right) => left.endAt - right.endAt);
+  if (upcoming.length > 0) return String(upcoming[0].entry.key);
+  const latestPast = rows.sort((left, right) => right.endAt - left.endAt)[0];
+  return latestPast ? String(latestPast.entry.key) : "all";
+}
+
+function prdWorkflowDashboardSearchValues(workflow = {}) {
+  return [
+    workflow.tapdId,
+    workflow.title,
+    workflow.pointer,
+    workflow.phase,
+    workflow.ownerUsername,
+    workflow.latestAction?.title,
+    ...(Array.isArray(workflow.timeline) ? workflow.timeline : []).flatMap((entry) => [
+      entry?.title,
+      entry?.kind,
+      entry?.date,
+      ...Object.values(entry?.dimensions || {}).flatMap((value) => Array.isArray(value) ? value : [value]),
+    ]),
+  ];
+}
+
+export function prdWorkflowDashboardPage(workflows = [], dashboardTimeline = {}, options = {}) {
+  const allWorkflows = Array.isArray(workflows) ? workflows : [];
+  const timeline = Array.isArray(dashboardTimeline?.timeline) ? dashboardTimeline.timeline : [];
+  const unassignedCount = Number(dashboardTimeline?.unassignedCount || 0);
+  const defaultTimelineKey = prdWorkflowDefaultTimelineKey(timeline, options.now);
+  const requestedTimelineKey = String(options.timelineKey || "").trim();
+  const matchedTimeline = timeline.find((entry) => (
+    entry.key === requestedTimelineKey
+    || (Array.isArray(entry.memberKeys) && entry.memberKeys.includes(requestedTimelineKey))
+  ));
+  const selectedTimelineKey = requestedTimelineKey === "all"
+    ? "all"
+    : requestedTimelineKey === "unassigned" && unassignedCount > 0
+      ? "unassigned"
+      : matchedTimeline?.key || defaultTimelineKey;
+  const selectedTimeline = timeline.find((entry) => entry.key === selectedTimelineKey) || null;
+  const selectedWorkflowIds = new Set(
+    Array.isArray(selectedTimeline?.workflowIds)
+      ? selectedTimeline.workflowIds.map((value) => String(value))
+      : [],
+  );
+  const query = String(options.query || "").trim().toLowerCase();
+  const scope = ["owned", "collaborating"].includes(options.scope) ? options.scope : "all";
+  const state = ["active", "completed", "blocked"].includes(options.state) ? options.state : "all";
+  const filtered = allWorkflows.filter((workflow) => {
+    const workflowId = String(workflow?.id || workflow?.tapdId || "");
+    if (selectedTimelineKey === "unassigned" && (workflow.timeline || []).length > 0) return false;
+    if (selectedTimeline && !selectedWorkflowIds.has(workflowId)) return false;
+    if (scope === "owned" && workflow.role !== "owner") return false;
+    if (scope === "collaborating" && workflow.role === "owner") return false;
+    if (state !== "all" && workflow.state !== state) return false;
+    if (query && !prdWorkflowDashboardSearchValues(workflow).some(
+      (value) => String(value || "").toLowerCase().includes(query),
+    )) return false;
+    return true;
+  });
+  const requestedPageSize = Number.parseInt(String(options.pageSize || "20"), 10);
+  const pageSize = [20, 50, 100].includes(requestedPageSize) ? requestedPageSize : 20;
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const requestedPage = Number.parseInt(String(options.page || "1"), 10);
+  const page = Math.min(totalPages, Math.max(1, Number.isFinite(requestedPage) ? requestedPage : 1));
+  const start = (page - 1) * pageSize;
+  return {
+    workflows: filtered.slice(start, start + pageSize),
+    availableCount: allWorkflows.length,
+    selectedTimelineKey,
+    defaultTimelineKey,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasPrevious: page > 1,
+      hasNext: page < totalPages,
+    },
   };
 }
 
@@ -8185,6 +8299,10 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     return { error: "Admin permission required", status: 403 };
   }
   const adminOwner = adminOwnerId ? adminWorkspaceOwnerSummary(adminOwnerId) : null;
+  const adminVersionRepair = capability === "admin-version-repair";
+  if (adminVersionRepair && userCtx.isAdmin !== true) {
+    return { error: "Admin permission required", status: 403 };
+  }
   if (adminOwnerId && !adminOwner) {
     return { error: "Workspace owner not found", status: 404 };
   }
@@ -8200,19 +8318,24 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     ? getPrdWorkflowCollaborationForUser(tapdId, userCtx?.userId)
     : null;
   const existingCollaboration = tapdId ? getPrdWorkflowCollaborationByTapdId(tapdId) : null;
-  if (!adminOwner && !linkCollaboration && existingCollaboration && !memberCollaboration) {
+  if (!adminOwner && !linkCollaboration && existingCollaboration && !memberCollaboration && !adminVersionRepair) {
     return { error: "PRD Workflow collaboration permission denied", status: 403 };
   }
-  const collaboration = adminOwner ? null : (linkCollaboration || memberCollaboration);
+  if (adminVersionRepair && !existingCollaboration) {
+    return { error: "PRD Workflow collaboration not found", status: 404 };
+  }
+  const collaboration = adminOwner ? null : (adminVersionRepair ? existingCollaboration : (linkCollaboration || memberCollaboration));
   const access = adminOwner
     ? { allowed: true, writable: false, role: "admin-viewer", via: "admin-review" }
+    : adminVersionRepair
+    ? { allowed: true, writable: true, role: "admin-version-repair", via: "admin-version-repair" }
     : linkCollaboration
     ? { allowed: true, writable: false, role: "viewer", via: "share-link" }
     : prdWorkflowCollaborationAccess(collaboration, userCtx?.userId);
   if (collaboration && !access.allowed) {
     return { error: "PRD Workflow collaboration permission denied", status: 403 };
   }
-  if (capability === "write" && (linkCollaboration || (collaboration && !access.writable))) {
+  if ((capability === "write" || adminVersionRepair) && (linkCollaboration || (collaboration && !access.writable))) {
     return { error: "PRD Workflow collaboration edit permission denied", status: 403 };
   }
   const ownerId = String(adminOwner?.userId || collaboration?.ownerId || userCtx?.userId || "").trim();
@@ -8245,6 +8368,7 @@ function resolvePrdWorkflowScope(workspaceRoot, params = {}, userCtx = {}, capab
     shareToken,
     sharedByLink: Boolean(linkCollaboration),
     adminReadonly: Boolean(adminOwner),
+    adminVersionRepair,
     flowId,
     flowSource,
     archived,
@@ -11552,6 +11676,72 @@ function prdWorkflowMergeProducerTimeline(report, currentSnapshot = {}) {
   };
 }
 
+function prdWorkflowAdminVersionRepairIntent(payload = {}, report = {}, userCtx = {}) {
+  const operation = String(
+    payload.adminOperation || payload.admin_operation || payload.administrativeOperation || payload.administrative_operation || "",
+  ).trim().toLowerCase();
+  if (!operation) return { requested: false };
+  if (operation !== "repair-version-membership") {
+    return { requested: true, status: 400, error: `Unsupported admin Workflow operation: ${operation}` };
+  }
+  if (userCtx.isAdmin !== true) {
+    return { requested: true, status: 403, error: "Admin permission required" };
+  }
+  const forbiddenKeys = ["action", "artifacts", "observation", "globalState", "global_state", "extensions", "extension"]
+    .filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
+  if (forbiddenKeys.length) {
+    return {
+      requested: true,
+      status: 400,
+      error: `Admin version repair may only update projections.timeline; remove: ${forbiddenKeys.join(", ")}`,
+    };
+  }
+  const projections = payload.projections;
+  if (!projections || typeof projections !== "object" || Array.isArray(projections) || !Array.isArray(projections.timeline)) {
+    return { requested: true, status: 400, error: "Admin version repair requires projections.timeline" };
+  }
+  const extraProjectionKeys = Object.keys(projections).filter((key) => key !== "timeline");
+  if (extraProjectionKeys.length) {
+    return { requested: true, status: 400, error: "Admin version repair may only update projections.timeline" };
+  }
+  const nonVersionEntry = report?.projections?.timeline?.find((item) => String(item?.kind || "").trim().toLowerCase() !== "version");
+  if (nonVersionEntry) {
+    return { requested: true, status: 400, error: "Admin version repair only accepts timeline entries with kind=version" };
+  }
+  if (!report.idempotencyKey) {
+    return { requested: true, status: 400, error: "Admin version repair requires idempotencyKey" };
+  }
+  if (!report.expectedRevision) {
+    return { requested: true, status: 400, error: "Admin version repair requires expectedRevision" };
+  }
+  return { requested: true, operation };
+}
+
+function prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot = {}) {
+  const source = prdWorkflowRuntimeEventProducer(report?.event || {});
+  const current = Array.isArray(currentSnapshot?.projections?.timeline) ? currentSnapshot.projections.timeline : [];
+  const incoming = Array.isArray(report?.projections?.timeline) ? report.projections.timeline : [];
+  const retained = current.filter((item) => (
+    prdWorkflowRuntimeEventProducer(item) !== source
+    || String(item?.kind || "").trim().toLowerCase() !== "version"
+  ));
+  const timeline = [...retained, ...incoming];
+  const administrativeRepair = {
+    kind: "version-attribution",
+    operation: "repair-version-membership",
+  };
+  return {
+    ...report,
+    projections: { ...report.projections, timeline },
+    event: {
+      ...report.event,
+      projections: { ...report.event.projections, timeline },
+      administrativeRepair,
+      administrative_repair: administrativeRepair,
+    },
+  };
+}
+
 function prdWorkflowRuntimeEventDedupeKey(event = {}, index = 0) {
   const producer = prdWorkflowRuntimeEventProducer(event);
   const operation = prdWorkflowRuntimeEventOperation(event);
@@ -11838,6 +12028,136 @@ function prdWorkflowGlobalStateFromEvents(tapdId, snapshot = {}, runtimeEvents =
   return state;
 }
 
+function prdWorkflowChecklistActionKey(action = {}) {
+  return String(
+    action?.actionModel?.key ||
+    action?.key ||
+    action?.actionKey ||
+    action?.action_key ||
+    action?.action ||
+    action?.actionId ||
+    action?.action_id ||
+    action?.stageKey ||
+    action?.stage_key ||
+    "",
+  ).trim();
+}
+
+function prdWorkflowChecklistResourceKey(producer, actionKey, itemKey) {
+  return `checklist:${String(producer || "").trim().toLowerCase()}:${String(actionKey || "").trim()}:${String(itemKey || "").trim()}`;
+}
+
+function prdWorkflowChecklistStateEntries(runtimeEvents = []) {
+  const states = new Map();
+  for (const event of Array.isArray(runtimeEvents) ? runtimeEvents : []) {
+    const state = event?.checklistState || event?.checklist_state;
+    if (!state || typeof state !== "object" || Array.isArray(state)) continue;
+    const producer = String(state.producer || state.source || "").trim().toLowerCase();
+    const actionKey = String(state.actionKey || state.action_key || "").trim();
+    const itemKey = String(state.itemKey || state.item_key || "").trim();
+    if (!producer || !actionKey || !itemKey) continue;
+    const resourceKey = prdWorkflowChecklistResourceKey(producer, actionKey, itemKey);
+    const version = workflowSnapshotResourceVersions({ runtimeEvents: [event] })[resourceKey] || "absent";
+    states.set(resourceKey, { ...state, producer, actionKey, itemKey, resourceKey, version });
+  }
+  return states;
+}
+
+function prdWorkflowMaterializeChecklists(snapshot = {}, runtimeEvents = []) {
+  const actionSources = new Map();
+  for (const event of Array.isArray(runtimeEvents) ? runtimeEvents : []) {
+    const actionKey = prdWorkflowChecklistActionKey(event);
+    const producer = String(event?.source || event?.producer || "").trim().toLowerCase();
+    if (!actionKey || !producer || (!event?.checklist && !event?.actionModel?.checklist)) continue;
+    const existing = actionSources.get(actionKey);
+    actionSources.set(actionKey, existing && existing !== producer ? "" : producer);
+  }
+  const stateEntries = prdWorkflowChecklistStateEntries(runtimeEvents);
+  const terminalStatuses = new Set(["passed", "skipped"]);
+  const decorate = (action) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) return action;
+    const definition = action.checklist || action.actionModel?.checklist;
+    if (!definition || typeof definition !== "object" || Array.isArray(definition)) return action;
+    const actionKey = prdWorkflowChecklistActionKey(action);
+    const producer = String(
+      definition.source || action.source || action.producer || action.actionModel?.source || actionSources.get(actionKey) || "",
+    ).trim().toLowerCase();
+    const items = (Array.isArray(definition.items) ? definition.items : []).map((item) => {
+      const itemKey = String(item?.key || item?.id || "").trim();
+      const resourceKey = producer && actionKey && itemKey
+        ? prdWorkflowChecklistResourceKey(producer, actionKey, itemKey)
+        : "";
+      const stored = resourceKey ? stateEntries.get(resourceKey) : null;
+      const state = stored || {
+        producer,
+        actionKey,
+        itemKey,
+        status: "pending",
+        note: "",
+        evidence: [],
+        resourceKey,
+        version: "absent",
+      };
+      return { ...item, state };
+    });
+    const required = items.filter((item) => item.required !== false);
+    const completed = items.filter((item) => terminalStatuses.has(String(item?.state?.status || "pending"))).length;
+    const requiredCompleted = required.filter((item) => terminalStatuses.has(String(item?.state?.status || "pending"))).length;
+    const completionPolicy = String(definition.completionPolicy || definition.completion_policy || "all_required").trim().toLowerCase();
+    const completionCandidates = required.length ? required : items;
+    const ready = completionPolicy === "manual"
+      ? false
+      : completionPolicy === "any_required"
+        ? completionCandidates.some((item) => terminalStatuses.has(String(item?.state?.status || "pending")))
+        : completionCandidates.length > 0 && completionCandidates.every((item) => terminalStatuses.has(String(item?.state?.status || "pending")));
+    const checklist = {
+      ...definition,
+      source: producer,
+      items,
+      progress: {
+        total: items.length,
+        completed,
+        required: required.length,
+        requiredCompleted,
+        percent: items.length ? Math.round((completed / items.length) * 100) : 0,
+        ready,
+      },
+    };
+    return {
+      ...action,
+      checklist,
+      ...(action.actionModel && typeof action.actionModel === "object" && !Array.isArray(action.actionModel)
+        ? { actionModel: { ...action.actionModel, checklist } }
+        : {}),
+    };
+  };
+  const out = { ...snapshot };
+  for (const key of ["actions", "workflowActions", "workflow_actions", "timeline", "history", "events", "runtimeEvents", "runtime_events"]) {
+    if (Array.isArray(snapshot?.[key])) out[key] = snapshot[key].map(decorate);
+  }
+  out.checklistStates = [...stateEntries.values()];
+  return out;
+}
+
+function prdWorkflowFindChecklistAction(snapshot = {}, producer = "", actionKey = "") {
+  const wantedProducer = String(producer || "").trim().toLowerCase();
+  const wantedActionKey = String(actionKey || "").trim();
+  const matches = [];
+  for (const key of ["actions", "workflowActions", "workflow_actions", "timeline", "history", "events", "runtimeEvents", "runtime_events"]) {
+    for (const action of Array.isArray(snapshot?.[key]) ? snapshot[key] : []) {
+      if (!action || typeof action !== "object" || Array.isArray(action)) continue;
+      const checklist = action.checklist || action.actionModel?.checklist;
+      if (!checklist || typeof checklist !== "object" || Array.isArray(checklist)) continue;
+      const resolvedActionKey = prdWorkflowChecklistActionKey(action);
+      const resolvedProducer = String(checklist.source || action.source || action.producer || "").trim().toLowerCase();
+      if (resolvedActionKey !== wantedActionKey) continue;
+      if (wantedProducer && resolvedProducer !== wantedProducer) continue;
+      matches.push({ ...action, checklist, source: resolvedProducer || wantedProducer });
+    }
+  }
+  return matches.at(-1) || null;
+}
+
 function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   const runtime = prdWorkflowReadRuntimeEvents(scopedRoot, tapdId);
   const runtimeEvents = runtime.events;
@@ -11854,7 +12174,7 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
   for (const key of ["issues", "issueGroups", "issue_groups", "epics", "epicGroups", "epic_groups", "aiDocs", "ai_docs"]) {
     if (Object.prototype.hasOwnProperty.call(prdFlowExtension, key)) prdFlowExtensionView[key] = prdFlowExtension[key];
   }
-  const materialized = {
+  let materialized = {
     ...snapshot,
     ...prdFlowExtensionView,
     workflow: globalState.workflow,
@@ -11871,6 +12191,7 @@ function prdWorkflowMergeRuntimeEvents(scopedRoot, tapdId, snapshot) {
       runtimeEventsUpdatedAt: runtime.updatedAt || "",
     },
   };
+  materialized = prdWorkflowMaterializeChecklists(materialized, runtimeEvents);
   materialized.resourceVersions = workflowSnapshotResourceVersions(materialized);
   return materialized;
 }
@@ -13380,7 +13701,18 @@ export function startUiServer({
             ? getTeamById(requestedTeamId)
             : getTeamForUser(userCtx.userId);
           if (!team || team.status !== "active") {
-            json(res, 200, { ok: true, view: "team", team: null, workflows: [], timeline: [], unassignedCount: 0 });
+            json(res, 200, {
+              ok: true,
+              view: "team",
+              team: null,
+              workflows: [],
+              timeline: [],
+              unassignedCount: 0,
+              availableCount: 0,
+              selectedTimelineKey: "all",
+              defaultTimelineKey: "all",
+              pagination: { page: 1, pageSize: 20, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
+            });
             return;
           }
           records = listPrdWorkflowCollaborationsForTeam(team.id);
@@ -13400,11 +13732,19 @@ export function startUiServer({
           return prdWorkflowDashboardSummary(record, materialized, userCtx, projectBindings);
         });
         const dashboardTimeline = prdWorkflowDashboardTimeline(workflows);
+        const dashboardPage = prdWorkflowDashboardPage(workflows, dashboardTimeline, {
+          timelineKey: url.searchParams.has("timelineKey") ? url.searchParams.get("timelineKey") : "",
+          query: url.searchParams.get("q"),
+          scope: url.searchParams.get("scope"),
+          state: url.searchParams.get("state"),
+          page: url.searchParams.get("page"),
+          pageSize: url.searchParams.get("pageSize"),
+        });
         json(res, 200, {
           ok: true,
           view: view === "team" ? "team" : "personal",
           team: teamSummaryWithUsers(team),
-          workflows,
+          ...dashboardPage,
           ...dashboardTimeline,
         });
       } catch (error) {
@@ -14043,6 +14383,276 @@ export function startUiServer({
         json(res, 200, { ok: true, workflow, snapshot });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/workflows/checklist") {
+      try {
+        const workflow = normalizeWorkflowReference({ workflow: url.searchParams.get("workflow") || "" });
+        if (workflow.error) {
+          json(res, 400, { error: workflow.error });
+          return;
+        }
+        if (workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported workflow namespace: ${workflow.namespace}` });
+          return;
+        }
+        const source = String(url.searchParams.get("source") || "").trim().toLowerCase();
+        const actionKey = String(url.searchParams.get("actionKey") || url.searchParams.get("action_key") || "").trim();
+        if (!/^[a-z][a-z0-9._-]{0,119}$/.test(source)) {
+          json(res, 400, { error: "Invalid checklist source" });
+          return;
+        }
+        if (!actionKey || actionKey.length > 240 || /[\0\r\n]/.test(actionKey)) {
+          json(res, 400, { error: "Invalid checklist actionKey" });
+          return;
+        }
+        const flowId = String(url.searchParams.get("flowId") || "").trim();
+        const flowSource = String(url.searchParams.get("flowSource") || "user").trim() || "user";
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          tapdId: workflow.id,
+          flowId,
+          flowSource,
+          archived: url.searchParams.get("archived") === "1",
+          workspaceId: url.searchParams.get("workspaceId") || "",
+          workflowShare: url.searchParams.get("workflowShare") || "",
+        }, userCtx, "read");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
+        }
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, workflowScope.stateRoot, workflow.id);
+        const snapshot = prdWorkflowMaterializeSnapshot(
+          workflowScope.executionRoot,
+          workflowScope.stateRoot,
+          workflow.id,
+          userCtx,
+          { flowSource, flowId },
+        );
+        const action = prdWorkflowFindChecklistAction(snapshot, source, actionKey);
+        if (!action) {
+          json(res, 404, { error: "Workflow Action checklist not found" });
+          return;
+        }
+        const access = workflowScope.collaborationAccess || {};
+        const canWrite = Boolean(authUser?.userId) && !workflowScope.sharedByLink && !workflowScope.adminReadonly && (
+          workflowScope.collaboration ? access.writable === true : true
+        );
+        json(res, 200, {
+          ok: true,
+          workflow,
+          action: {
+            key: actionKey,
+            source,
+            title: String(action.title || action.label || actionKey),
+            status: String(action.status || "pending"),
+            checklist: action.checklist,
+          },
+          canWrite,
+        });
+      } catch (error) {
+        json(res, 500, { error: (error && error.message) || String(error) });
+      }
+      return;
+    }
+    if (req.method === "PATCH" && url.pathname === "/api/workflows/checklist") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 1024 * 1024));
+      } catch (error) {
+        json(res, error?.status === 413 ? 413 : 400, { error: error?.status === 413 ? error.message : "Invalid JSON body" });
+        return;
+      }
+      let releaseWorkflowWriteLock = null;
+      try {
+        const workflow = normalizeWorkflowReference(payload);
+        if (workflow.error) {
+          json(res, 400, { error: workflow.error });
+          return;
+        }
+        if (workflow.namespace !== "tapd") {
+          json(res, 400, { error: `Unsupported workflow namespace: ${workflow.namespace}` });
+          return;
+        }
+        const source = String(payload.source || "").trim().toLowerCase();
+        const actionKey = String(payload.actionKey || payload.action_key || "").trim();
+        const itemKey = String(payload.itemKey || payload.item_key || "").trim();
+        if (!/^[a-z][a-z0-9._-]{0,119}$/.test(source)) {
+          json(res, 400, { error: "Invalid checklist source" });
+          return;
+        }
+        if (!actionKey || actionKey.length > 240 || /[\0\r\n]/.test(actionKey)) {
+          json(res, 400, { error: "Invalid checklist actionKey" });
+          return;
+        }
+        if (!itemKey || itemKey.length > 240 || /[\0\r\n]/.test(itemKey)) {
+          json(res, 400, { error: "Invalid checklist itemKey" });
+          return;
+        }
+        const rawStatus = String(payload.status || "pending").trim().toLowerCase();
+        if (!["pending", "passed", "failed", "blocked", "skipped", "done", "complete", "completed", "success", "error", "cancelled", "canceled"].includes(rawStatus)) {
+          json(res, 400, { error: `Invalid checklist item status: ${rawStatus}` });
+          return;
+        }
+        const status = normalizeWorkflowChecklistItemStatus(rawStatus);
+        const note = String(payload.note || "").trim();
+        if (note.length > 4000) {
+          json(res, 400, { error: "Checklist note exceeds 4000 characters" });
+          return;
+        }
+        const rawEvidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+        if (rawEvidence.length > 20) {
+          json(res, 400, { error: "Checklist evidence supports at most 20 entries" });
+          return;
+        }
+        const evidence = [];
+        for (let index = 0; index < rawEvidence.length; index += 1) {
+          const item = rawEvidence[index];
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            json(res, 400, { error: `evidence[${index}] must be an object` });
+            return;
+          }
+          const evidenceUrl = String(item.url || item.href || "").trim();
+          if (!evidenceUrl || evidenceUrl.length > 4000 || !isSafeWorkflowUrl(evidenceUrl)) {
+            json(res, 400, { error: `evidence[${index}].url must use http, https, or an absolute application path` });
+            return;
+          }
+          evidence.push({
+            title: String(item.title || item.label || `证据 ${index + 1}`).trim().slice(0, 500),
+            url: evidenceUrl,
+          });
+        }
+        const expectedVersion = String(payload.expectedVersion || payload.expected_version || "").trim();
+        if (!expectedVersion) {
+          json(res, 400, { error: "Checklist update requires expectedVersion" });
+          return;
+        }
+        const flowId = String(payload.flowId || payload.flow_id || "").trim();
+        const flowSource = String(payload.flowSource || payload.flow_source || "user").trim() || "user";
+        const workflowScope = resolvePrdWorkflowScope(root, {
+          ...payload,
+          tapdId: workflow.id,
+          flowId,
+          flowSource,
+        }, userCtx, "write");
+        if (workflowScope.error) {
+          json(res, workflowScope.status || 400, { error: workflowScope.error });
+          return;
+        }
+        if (!workflowScope.collaboration) {
+          const ensured = ensurePrdWorkflowCollaboration({ tapdId: workflow.id, userId: userCtx.userId });
+          if (ensured.error) {
+            json(res, ensured.status || 400, { error: ensured.error });
+            return;
+          }
+        }
+        const scopedRoot = workflowScope.stateRoot;
+        prdWorkflowMigrateLegacyState(workflowScope.executionRoot, scopedRoot, workflow.id);
+        releaseWorkflowWriteLock = await prdWorkflowAcquireWriteLock(`${scopedRoot}\t${workflow.id}`);
+        let snapshot = prdWorkflowMaterializeSnapshot(
+          workflowScope.executionRoot,
+          scopedRoot,
+          workflow.id,
+          userCtx,
+          { flowSource, flowId },
+        );
+        const idempotencyKey = String(payload.idempotencyKey || payload.idempotency_key || "").trim().slice(0, 500);
+        if (idempotencyKey) {
+          const existing = prdWorkflowFindIdempotencyEvent(scopedRoot, workflow.id, idempotencyKey, "agentflow-checklist", false, "checklist.update");
+          if (existing) {
+            json(res, 200, { ok: true, alreadyApplied: true, workflow, checklistState: existing.checklistState, snapshot });
+            return;
+          }
+        }
+        const action = prdWorkflowFindChecklistAction(snapshot, source, actionKey);
+        const checklistItem = action?.checklist?.items?.find((item) => String(item?.key || "") === itemKey);
+        if (!action || !checklistItem) {
+          json(res, 404, { error: "Workflow Action checklist item not found" });
+          return;
+        }
+        if (status === "passed" && checklistItem.evidenceRequired === true && evidence.length === 0) {
+          json(res, 400, { error: "Checklist item requires evidence before it can pass" });
+          return;
+        }
+        const resourceKey = prdWorkflowChecklistResourceKey(source, actionKey, itemKey);
+        const currentVersion = String(snapshot.resourceVersions?.[resourceKey] || "absent");
+        if (expectedVersion !== currentVersion) {
+          json(res, 409, {
+            error: "Checklist item changed; refresh it before saving",
+            conflict: { type: "workflow-resource-conflict", conflicts: [{ resourceKey, expectedVersion, currentVersion }], workflow },
+            snapshot,
+          });
+          return;
+        }
+        const now = new Date().toISOString();
+        const checklistState = {
+          producer: source,
+          actionKey,
+          itemKey,
+          status,
+          note,
+          evidence,
+          updatedAt: now,
+          updatedBy: {
+            userId: String(userCtx.userId || ""),
+            username: String(authUser.username || userCtx.userId || ""),
+          },
+        };
+        const event = prdWorkflowAppendRuntimeEvent(scopedRoot, workflow.id, {
+          id: `checklist_state_${prdWorkflowSafeStateId([source, actionKey, itemKey].join(":"))}`,
+          type: "workflow-checklist-update",
+          operation: "checklist.update",
+          source: "agentflow-checklist",
+          auxiliary: true,
+          aggregateByStage: false,
+          status: "done",
+          checklistState,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        });
+        if (!event) throw new Error("Failed to store checklist state");
+        snapshot = prdWorkflowMaterializeSnapshot(
+          workflowScope.executionRoot,
+          scopedRoot,
+          workflow.id,
+          userCtx,
+          { flowSource, flowId },
+        );
+        const updatedAction = prdWorkflowFindChecklistAction(snapshot, source, actionKey);
+        const updatedItem = updatedAction?.checklist?.items?.find((item) => String(item?.key || "") === itemKey);
+        prdWorkflowAppendAudit(scopedRoot, workflow.id, {
+          type: "checklist-item-updated",
+          source,
+          actionKey,
+          itemKey,
+          status,
+          resourceKey,
+          actorUserId: String(userCtx.userId || ""),
+        });
+        prdWorkflowBroadcast(prdWorkflowKey(userCtx, flowSource, flowId, workflow.id), {
+          type: "workflow-checklist-updated",
+          tapdId: workflow.id,
+          source,
+          actionKey,
+          itemKey,
+          checklistState: updatedItem?.state || checklistState,
+          snapshot,
+        });
+        json(res, 200, {
+          ok: true,
+          alreadyApplied: false,
+          workflow,
+          checklistState: updatedItem?.state || checklistState,
+          checklist: updatedAction?.checklist || null,
+          snapshot,
+        });
+      } catch (error) {
+        json(res, 500, { error: (error && error.message) || String(error) });
+      } finally {
+        releaseWorkflowWriteLock?.();
       }
       return;
     }
@@ -14867,6 +15477,11 @@ export function startUiServer({
           json(res, 400, { error: `Unsupported workflow namespace: ${report.workflow.namespace}` });
           return;
         }
+        const adminVersionRepair = prdWorkflowAdminVersionRepairIntent(payload, report, userCtx);
+        if (adminVersionRepair.error) {
+          json(res, adminVersionRepair.status || 400, { error: adminVersionRepair.error });
+          return;
+        }
         const tapdId = report.workflow.id;
         const flowId = report.flowId;
         const flowSource = report.flowSource || "user";
@@ -14877,12 +15492,12 @@ export function startUiServer({
           flowId,
           flowSource,
           archived,
-        }, userCtx, "write");
+        }, userCtx, adminVersionRepair.requested ? "admin-version-repair" : "write");
         if (workflowScope.error) {
           json(res, workflowScope.status || 400, { error: workflowScope.error });
           return;
         }
-        if (!workflowScope.collaboration) {
+        if (!workflowScope.collaboration && !adminVersionRepair.requested) {
           const ensured = ensurePrdWorkflowCollaboration({ tapdId, userId: userCtx.userId });
           if (ensured.error) {
             json(res, ensured.status || 400, { error: ensured.error });
@@ -14990,7 +15605,9 @@ export function startUiServer({
           });
           return;
         }
-        report = prdWorkflowMergeProducerTimeline(report, currentSnapshot);
+        report = adminVersionRepair.requested
+          ? prdWorkflowMergeAdminVersionTimeline(report, currentSnapshot)
+          : prdWorkflowMergeProducerTimeline(report, currentSnapshot);
         if (report.error) {
           json(res, 400, { error: report.error });
           return;
@@ -15037,11 +15654,17 @@ export function startUiServer({
           getSessionTokenFromRequest(req) || "",
         );
         prdWorkflowBroadcast(
-          prdWorkflowKey(userCtx, flowSource, flowId, tapdId),
+          prdWorkflowKey(
+            adminVersionRepair.requested ? { userId: workflowScope.stateOwnerId } : userCtx,
+            flowSource,
+            flowId,
+            tapdId,
+          ),
           { type: "workflow-report", tapdId, workflow: report.workflow, event, observation: Boolean(observation), snapshot },
         );
         json(res, 200, {
           ok: true,
+          ...(adminVersionRepair.requested ? { administrativeRepair: report.event.administrativeRepair } : {}),
           report,
           resourceKeys,
           event,

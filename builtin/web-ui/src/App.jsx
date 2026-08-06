@@ -14,6 +14,7 @@ import NodeStudioPage from "./pages/NodeStudioPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import WorkflowsPage from "./pages/WorkflowsPage.jsx";
 import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
+import WorkflowChecklistPage from "./pages/WorkflowChecklistPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
@@ -24,9 +25,9 @@ function isLikeeContextPath(path) {
 }
 
 function isWorkflowSharePath(path) {
-  if (path !== "/workspace") return false;
+  if (path !== "/workspace" && path !== "/workflow-checklist") return false;
   const params = new URLSearchParams(window.location.search);
-  return Boolean(String(params.get("workflowShare") || "").trim());
+  return Boolean(String(params.get("workflowShare") || "").trim()) || (path === "/workflow-checklist" && params.get("demo") === "1");
 }
 
 function RedirectFlowToWorkspace() {
@@ -91,6 +92,7 @@ function RoutedContent({ authUser }) {
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage />;
   if (path === "/workflow-report") return <WorkflowReportGuidePage />;
+  if (path === "/workflow-checklist") return <WorkflowChecklistPage />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
   if (path === "/node-studio") return <NodeStudioPage />;
@@ -212,7 +214,7 @@ function AuthGate({ children }) {
 
 function AppShell({ authUser, onLogout }) {
   const { path } = useRoute();
-  const pipelineFullBleed = path === "/flow" || path === "/workspace";
+  const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist";
   return (
     <div className="af-app">
       {path !== "/settings" ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
@@ -240,7 +242,7 @@ function PublicOrAuthedApp() {
   const { path } = useRoute();
   if (path.startsWith("/display")) return <DisplayPage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
-  if (isWorkflowSharePath(path)) return <WorkspacePage />;
+  if (isWorkflowSharePath(path)) return path === "/workflow-checklist" ? <WorkflowChecklistPage /> : <WorkspacePage />;
   return (
     <AuthGate>
       {({ user, onLogout }) => <AppShell authUser={user} onLogout={onLogout} />}

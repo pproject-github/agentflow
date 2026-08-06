@@ -73,6 +73,43 @@ test("normalizes action, artifacts, and global state into one runtime event", ()
   assert.equal(report.event.idempotencyKey, "issue-2-mr-943");
 });
 
+test("normalizes a generic Action checklist without client-specific fields", () => {
+  const report = normalizeWorkflowReport({
+    workflow: "tapd:1015046",
+    source: "release-bot",
+    action: {
+      key: "release-readiness",
+      title: "发布检查",
+      status: "running",
+      checklist: {
+        completionPolicy: "all_required",
+        document: { title: "发布检查详情", artifactKey: "release-runbook" },
+        items: [{
+          key: "smoke-test",
+          title: "冒烟测试",
+          required: true,
+          evidenceRequired: true,
+          detail: {
+            summary: "验证核心链路",
+            sections: [{ key: "steps", title: "执行步骤", content: ["打开应用", "完成一次发布"] }],
+          },
+        }],
+      },
+    },
+  });
+
+  assert.equal(report.action.checklist.schemaVersion, 1);
+  assert.equal(report.action.checklist.items[0].key, "smoke-test");
+  assert.deepEqual(report.event.checklist, report.action.checklist);
+  assert.equal(report.event.actionModel.checklist.document.artifactKey, "release-runbook");
+
+  assert.match(normalizeWorkflowReport({
+    workflow: "tapd:1015046",
+    source: "release-bot",
+    action: { key: "release-readiness", checklist: { items: [{ key: "same" }, { key: "same" }] } },
+  }).error, /must be unique/);
+});
+
 test("supports global-only reports and rejects malformed reports", () => {
   const report = normalizeWorkflowReport({
     workflow: { namespace: "tapd", id: "1015046" },

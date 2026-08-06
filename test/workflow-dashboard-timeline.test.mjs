@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { prdWorkflowDashboardTimeline } from "../bin/lib/ui-server.mjs";
+import {
+  prdWorkflowDashboardPage,
+  prdWorkflowDashboardTimeline,
+  prdWorkflowDefaultTimelineKey,
+} from "../bin/lib/ui-server.mjs";
 
 test("Workflow Dashboard merges platform variants of the same scheduled iteration", () => {
   const shared = {
@@ -67,4 +71,55 @@ test("Workflow Dashboard does not merge different iteration IDs that share a tit
   ]);
 
   assert.equal(result.timeline.length, 2);
+});
+
+test("Workflow Dashboard defaults to the iteration covering today or the nearest upcoming date", () => {
+  const timeline = [
+    { key: "past", startDate: "2026-07-01", endDate: "2026-07-24", date: "2026-07-24" },
+    { key: "current", startDate: "2026-07-25", endDate: "2026-08-11", date: "2026-08-11" },
+    { key: "future", startDate: "2026-08-12", endDate: "2026-08-30", date: "2026-08-30" },
+  ];
+  assert.equal(
+    prdWorkflowDefaultTimelineKey(timeline, Date.parse("2026-08-05T12:00:00Z")),
+    "current",
+  );
+  assert.equal(
+    prdWorkflowDefaultTimelineKey(timeline.map(({ startDate, endDate, ...entry }) => entry), Date.parse("2026-08-05T12:00:00Z")),
+    "current",
+  );
+});
+
+test("Workflow Dashboard filters before applying server-side pagination while preserving full timeline totals", () => {
+  const workflows = Array.from({ length: 25 }, (_, index) => ({
+    id: `workflow-${index + 1}`,
+    tapdId: String(1000000 + index),
+    title: `需求 ${index + 1}`,
+    role: index % 2 === 0 ? "owner" : "viewer",
+    state: index === 0 ? "blocked" : "active",
+    timeline: [{ key: "version-current", kind: "version", id: "current", date: "2026-08-11" }],
+  }));
+  const dashboardTimeline = prdWorkflowDashboardTimeline(workflows);
+  const result = prdWorkflowDashboardPage(workflows, dashboardTimeline, {
+    now: Date.parse("2026-08-05T12:00:00Z"),
+    timelineKey: "version-current",
+    page: 2,
+    pageSize: 20,
+  });
+
+  assert.equal(dashboardTimeline.timeline[0].workflowCount, 25);
+  assert.equal(result.selectedTimelineKey, "version-current");
+  assert.equal(result.pagination.total, 25);
+  assert.equal(result.pagination.totalPages, 2);
+  assert.equal(result.workflows.length, 5);
+
+  const filtered = prdWorkflowDashboardPage(workflows, dashboardTimeline, {
+    now: Date.parse("2026-08-05T12:00:00Z"),
+    scope: "owned",
+    state: "blocked",
+    page: 1,
+    pageSize: 20,
+  });
+  assert.equal(filtered.pagination.total, 1);
+  assert.equal(filtered.workflows[0].id, "workflow-1");
+  assert.equal(dashboardTimeline.timeline[0].workflowCount, 25);
 });

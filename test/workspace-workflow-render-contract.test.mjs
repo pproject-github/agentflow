@@ -53,8 +53,8 @@ test("shared Workflow links render the Workflow content without the project top 
   );
   assert.match(
     appSource,
-    /if \(isWorkflowSharePath\(path\)\) return <WorkspacePage \/>;/,
-    "Workflow share routes must render without AuthGate",
+    /if \(isWorkflowSharePath\(path\)\) return path === "\/workflow-checklist" \? <WorkflowChecklistPage \/> : <WorkspacePage \/>;/,
+    "Workflow and Checklist share routes must render without AuthGate",
   );
   assert.match(
     source,
@@ -63,15 +63,46 @@ test("shared Workflow links render the Workflow content without the project top 
   );
 });
 
-test("Workflow details preserve an explicit Dashboard return route", async () => {
+test("Action checklists keep cards concise and open a dedicated document route", async () => {
+  const source = await readFile(workspacePagePath, "utf8");
+  const appSource = await readFile(appPath, "utf8");
+  const checklistSource = await readFile(new URL("../builtin/web-ui/src/pages/WorkflowChecklistPage.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../builtin/web-ui/src/index.css", import.meta.url), "utf8");
+
+  assert.match(source, /className="af-prd-workflow-checklist__items"/);
+  assert.match(source, /checklistItems\.slice\(0, 6\)\.map/);
+  assert.match(source, /openChecklistDocument\(item, checkItem\.key\)/);
+  assert.match(source, /aria-expanded=\{checklistExpanded\}/);
+  assert.match(source, /checklistExpansionOverrides\.has\(checklistCardKey\)/);
+  assert.match(source, /: status === "current"/);
+  assert.match(source, /toggleChecklist\(checklistCardKey, checklistExpanded\)/);
+  assert.match(source, /window\.open\(`\/workflow-checklist\?\$\{query\.toString\(\)\}`, "_blank", "noopener,noreferrer"\)/);
+  assert.match(appSource, /if \(path === "\/workflow-checklist"\) return <WorkflowChecklistPage \/>;/);
+  assert.match(checklistSource, /fetch\(`\/api\/workflows\/checklist\?/);
+  assert.match(checklistSource, /method: "PATCH"/);
+  assert.match(checklistSource, /保存并标记通过/);
+  assert.match(checklistSource, /!canWrite \? <span>只读<\/span>/);
+  assert.match(checklistSource, /ACTION CHECKLIST · LOCAL DEMO/);
+  assert.match(checklistSource, /withWorkflowChecklistProgress/);
+  assert.match(source, /if \(flowParams\.workflowDemo\) query\.set\("demo", "1"\)/);
+  assert.match(appSource, /params\.get\("demo"\) === "1"/);
+  assert.match(css, /\.af-checklist-doc__layout\s*\{/);
+  assert.match(css, /\.af-prd-workflow-checklist__items\s*\{/);
+});
+
+test("Workflow details return to the iteration list with its filters and pagination", async () => {
   const source = await readFile(workspacePagePath, "utf8");
 
-  assert.match(source, /returnTo: returnTo === "\/workflows" \? returnTo : ""/);
+  assert.match(
+    source,
+    /returnTo: returnTo === "\/workflows" \|\| returnTo\.startsWith\("\/workflows\?"\) \? returnTo : ""/,
+  );
   assert.match(source, /if \(params\.returnTo\) q\.set\("returnTo", params\.returnTo\)/);
   assert.match(
     source,
-    /flowParams\.adminOwnerId \? "\/admin\/usage" : flowParams\.returnTo \|\| "\/projects"/,
+    /flowParams\.returnTo \|\| \(workspaceMode === "workflow" \? "\/workflows" : "\/projects"\)/,
   );
+  assert.match(source, /onClick=\{\(\) => navigate\(workspaceBackTarget\)\}/);
 });
 
 test("Workflow list and details use the TAPD requirement title instead of the current Action", async () => {

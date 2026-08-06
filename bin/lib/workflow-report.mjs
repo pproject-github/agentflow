@@ -11,6 +11,8 @@ const WORKFLOW_ACTION_STATUSES = new Set([
   "cancelled",
   "observed",
 ]);
+const WORKFLOW_CHECKLIST_COMPLETION_POLICIES = new Set(["all_required", "any_required", "manual"]);
+const WORKFLOW_CHECKLIST_ITEM_STATUSES = new Set(["pending", "passed", "failed", "blocked", "skipped"]);
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function plainObject(value) {
@@ -107,6 +109,98 @@ export function isSafeWorkflowUrl(value, { allowRelative = true } = {}) {
 function normalizeStringList(value, maxItems = 100) {
   const list = Array.isArray(value) ? value : value == null || value === "" ? [] : [value];
   return uniqueValues(list.map((item) => cleanString(item, 240)).filter(Boolean)).slice(0, maxItems);
+}
+
+function normalizeChecklistSection(value, index = 0) {
+  const raw = plainObject(value);
+  const rawContent = raw.content ?? raw.value ?? raw.text ?? "";
+  const content = Array.isArray(rawContent)
+    ? rawContent.map((item) => cleanString(item, 4000)).filter(Boolean).slice(0, 100)
+    : cleanString(rawContent, 12000);
+  return {
+    key: cleanString(raw.key || raw.id || `section-${index + 1}`, 120),
+    title: cleanString(raw.title || raw.label || `Section ${index + 1}`, 500),
+    content,
+  };
+}
+
+function normalizeWorkflowChecklist(value) {
+  const raw = plainObject(value);
+  const rawDocument = plainObject(raw.document);
+  const items = (Array.isArray(raw.items) ? raw.items : []).map((value, index) => {
+    const item = plainObject(value);
+    const rawDetail = item.detail;
+    const detailObject = plainObject(rawDetail);
+    const sections = Array.isArray(detailObject.sections)
+      ? detailObject.sections.map((section, sectionIndex) => normalizeChecklistSection(section, sectionIndex))
+      : [];
+    const summary = typeof rawDetail === "string"
+      ? cleanString(rawDetail, 4000)
+      : cleanString(detailObject.summary || detailObject.description, 4000);
+    return {
+      key: cleanString(item.key || item.id, 240),
+      title: cleanString(item.title || item.label || item.key || item.id || `Item ${index + 1}`, 500),
+      required: item.required !== false,
+      ...(summary || sections.length ? { detail: { ...(summary ? { summary } : {}), ...(sections.length ? { sections } : {}) } } : {}),
+      ...(item.evidenceRequired === true || item.evidence_required === true ? { evidenceRequired: true } : {}),
+    };
+  });
+  const completionPolicy = cleanString(raw.completionPolicy || raw.completion_policy || "all_required", 40).toLowerCase();
+  const documentUrl = cleanString(rawDocument.url || rawDocument.href, 4000);
+  return {
+    schemaVersion: 1,
+    completionPolicy,
+    document: {
+      title: cleanString(rawDocument.title || rawDocument.label || "Checklist 详情", 500),
+      ...(rawDocument.artifactKey || rawDocument.artifact_key ? { artifactKey: cleanString(rawDocument.artifactKey || rawDocument.artifact_key, 500) } : {}),
+      ...(documentUrl ? { url: documentUrl } : {}),
+    },
+    items,
+  };
+}
+
+function validateWorkflowChecklist(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "action.checklist must be an object";
+  const raw = plainObject(value);
+  const schemaVersion = Number(raw.schemaVersion ?? raw.schema_version ?? 1);
+  if (schemaVersion !== 1) return `Unsupported action.checklist schemaVersion: ${schemaVersion}`;
+  const completionPolicy = rawString(raw.completionPolicy || raw.completion_policy || "all_required").toLowerCase();
+  if (!WORKFLOW_CHECKLIST_COMPLETION_POLICIES.has(completionPolicy)) {
+    return `Invalid action.checklist completionPolicy: ${completionPolicy}`;
+  }
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return "action.checklist requires at least one item";
+  if (raw.items.length > 100) return "action.checklist supports at most 100 items";
+  const seen = new Set();
+  for (let index = 0; index < raw.items.length; index += 1) {
+    const item = raw.items[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)) return `action.checklist.items[${index}] must be an object`;
+    const key = rawString(item.key || item.id);
+    if (!key || key.length > 240 || /[\0\r\n]/.test(key)) return `action.checklist.items[${index}].key is invalid`;
+    if (seen.has(key)) return `action.checklist.items[${index}].key must be unique`;
+    seen.add(key);
+    if (stringExceeds(item.title || item.label || key, 500)) return `action.checklist.items[${index}].title exceeds 500 characters`;
+    if (item.detail != null && typeof item.detail !== "string" && (!item.detail || typeof item.detail !== "object" || Array.isArray(item.detail))) {
+      return `action.checklist.items[${index}].detail must be a string or object`;
+    }
+    const detail = plainObject(item.detail);
+    if (typeof item.detail === "string" && stringExceeds(item.detail, 4000)) return `action.checklist.items[${index}].detail exceeds 4000 characters`;
+    if (stringExceeds(detail.summary || detail.description, 4000)) return `action.checklist.items[${index}].detail.summary exceeds 4000 characters`;
+    if (detail.sections != null && !Array.isArray(detail.sections)) return `action.checklist.items[${index}].detail.sections must be an array`;
+    if (Array.isArray(detail.sections) && detail.sections.length > 50) return `action.checklist.items[${index}].detail.sections supports at most 50 entries`;
+  }
+  const document = plainObject(raw.document);
+  if (stringExceeds(document.title || document.label, 500)) return "action.checklist.document.title exceeds 500 characters";
+  if (stringExceeds(document.artifactKey || document.artifact_key, 500)) return "action.checklist.document.artifactKey exceeds 500 characters";
+  const documentUrl = rawString(document.url || document.href);
+  if (documentUrl && !isSafeWorkflowUrl(documentUrl)) return "action.checklist.document.url must use http, https, or an absolute application path";
+  return "";
+}
+
+export function normalizeWorkflowChecklistItemStatus(value) {
+  const raw = cleanString(value, 40).toLowerCase();
+  const aliases = { done: "passed", complete: "passed", completed: "passed", success: "passed", error: "failed", cancelled: "skipped", canceled: "skipped" };
+  const normalized = aliases[raw] || raw || "pending";
+  return WORKFLOW_CHECKLIST_ITEM_STATUSES.has(normalized) ? normalized : "pending";
 }
 
 function normalizeWorkflowArtifact(value, index = 0, defaultScope = "action") {
@@ -347,6 +441,11 @@ export function normalizeWorkflowReport(payload = {}) {
   if (stringExceeds(rawAction.issueKey || rawAction.issue_key, 240)) return { error: "Workflow action issueKey exceeds 240 characters" };
   const rawTags = Array.isArray(rawAction.tags) ? rawAction.tags : rawAction.tags == null ? [] : [rawAction.tags];
   if (rawTags.length > 100 || rawTags.some((tag) => stringExceeds(tag, 240))) return { error: "Workflow action tags exceed supported limits" };
+  const hasChecklist = hasOwn(rawAction, "checklist");
+  if (hasChecklist) {
+    const checklistError = validateWorkflowChecklist(rawAction.checklist);
+    if (checklistError) return { error: checklistError };
+  }
   if (hasAction && !isKnownActionStatus(rawAction.status)) return { error: `Invalid workflow action status: ${rawAction.status}` };
   const rawOccurredAt = rawString(rawAction.occurredAt || rawAction.occurred_at || rawAction.completedAt || rawAction.startedAt);
   if (rawOccurredAt && !Number.isFinite(Date.parse(rawOccurredAt))) return { error: "action.occurredAt must be an ISO-compatible date" };
@@ -361,6 +460,7 @@ export function normalizeWorkflowReport(payload = {}) {
     ...(rawAction.platform ? { platform: cleanString(rawAction.platform, 80) } : {}),
     ...(rawAction.issueKey || rawAction.issue_key ? { issueKey: cleanString(rawAction.issueKey || rawAction.issue_key, 240) } : {}),
     ...(rawAction.tags != null ? { tags: normalizeStringList(rawAction.tags) } : {}),
+    ...(hasChecklist ? { checklist: normalizeWorkflowChecklist(rawAction.checklist) } : {}),
     occurredAt: cleanString(
       rawAction.occurredAt ||
       rawAction.occurred_at ||
@@ -539,6 +639,7 @@ export function normalizeWorkflowReport(payload = {}) {
       ...(action.platform ? { platform: action.platform } : {}),
       ...(action.issueKey ? { issueKey: action.issueKey } : {}),
       ...(action.tags ? { tags: action.tags } : {}),
+      ...(action.checklist ? { checklist: action.checklist } : {}),
       ...(action.occurredAt ? { occurredAt: action.occurredAt } : {}),
     } : {
       title: cleanString(payload.title || "Workflow 全局状态更新", 500),
@@ -600,6 +701,24 @@ function resourceVersion(value) {
   return `rv:${semanticHash(value)}`;
 }
 
+function actionDefinitionForVersion(event = {}) {
+  const action = plainObject(event.actionModel);
+  if (!Object.keys(action).length) return event;
+  const checklist = plainObject(action.checklist);
+  if (!Object.keys(checklist).length) return action;
+  const items = Array.isArray(checklist.items)
+    ? checklist.items.map((item) => {
+        const clean = { ...plainObject(item) };
+        delete clean.state;
+        return clean;
+      })
+    : [];
+  const cleanChecklist = { ...checklist, items };
+  delete cleanChecklist.progress;
+  delete cleanChecklist.source;
+  return { ...action, checklist: cleanChecklist };
+}
+
 function addObjectResourceVersions(out, prefix, value, path = []) {
   if (value === undefined) return;
   if (path.length) out[`${prefix}:${path.join(".")}`] = resourceVersion(value);
@@ -617,8 +736,15 @@ export function workflowSnapshotResourceVersions(snapshot = {}) {
     : [];
   for (const event of runtimeEvents) {
     const source = cleanString(event?.source || event?.producer || "agentflow", 120).toLowerCase() || "agentflow";
+    const checklistState = plainObject(event?.checklistState || event?.checklist_state);
+    const checklistSource = cleanString(checklistState.producer || checklistState.source, 120).toLowerCase();
+    const checklistActionKey = cleanString(checklistState.actionKey || checklistState.action_key, 240);
+    const checklistItemKey = cleanString(checklistState.itemKey || checklistState.item_key, 240);
+    if (checklistSource && checklistActionKey && checklistItemKey) {
+      out[`checklist:${checklistSource}:${checklistActionKey}:${checklistItemKey}`] = resourceVersion(checklistState);
+    }
     const actionKey = cleanString(event?.actionModel?.key || event?.action || event?.actionId || event?.stageKey, 240);
-    if (actionKey && event?.auxiliary !== true) out[`action:${source}:${actionKey}`] = resourceVersion(event);
+    if (actionKey && event?.auxiliary !== true) out[`action:${source}:${actionKey}`] = resourceVersion(actionDefinitionForVersion(event));
     for (const artifact of Array.isArray(event?.artifacts) ? event.artifacts : []) {
       const producer = cleanString(artifact?.producer || source, 120).toLowerCase() || source;
       const key = cleanString(artifact?.key || artifact?.artifactKey || artifact?.artifact_key, 500);

@@ -3,8 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import yaml from "js-yaml";
-
 import { listNodesJson } from "../bin/lib/catalog-flows.mjs";
 import { getBuiltinNodeSchemas, _resetSchemaCache } from "../bin/lib/composer-node-schema.mjs";
 import { getLanguage, setLanguage, translateNodeDef } from "../bin/lib/i18n.mjs";
@@ -30,16 +28,12 @@ test("Jenkins Build has user-facing node catalog translations", () => {
   }
 });
 
-test("Composer exposes the durable Jenkins Build schema and builtin notification workflow", () => {
+test("Composer exposes the durable Jenkins Build schema without installing a notification workflow", () => {
   _resetSchemaCache();
   const schema = getBuiltinNodeSchemas().tool_jenkins_build;
   assert.deepEqual(schema.input.map((slot) => slot.name), ["prev", "job", "parameters", "credentialRef", "pollInterval", "timeout"]);
   assert.deepEqual(schema.output.map((slot) => slot.name), ["next", "status", "url", "qrUrl"]);
-
-  const flow = yaml.load(fs.readFileSync(path.join(repoRoot, "builtin/pipelines/jenkins-build-notify/flow.yaml"), "utf-8"));
-  assert.equal(flow.instances.jenkins_build.definitionId, "tool_jenkins_build");
-  assert.equal(flow.instances.notify.definitionId, "tool_wecom_send_group_markdown");
-  assert.ok(flow.edges.some((edge) => edge.source === "jenkins_build" && edge.target === "format_notification" && edge.sourceHandle === "output-1"));
+  assert.equal(fs.existsSync(path.join(repoRoot, "builtin/pipelines/jenkins-build-notify")), false);
 });
 
 test("Jenkins disk state maps waiting and business failure separately from execution status", () => {

@@ -7,6 +7,8 @@ description: Safely synchronize TAPD-derived Workflow access, then read, merge, 
 
 Treat Workflow reporting as one canonical producer-adapter protocol. The producer reports facts through `POST /api/workflows/report`; AgentFlow alone materializes and returns `snapshot`. Do not introduce producer-specific write endpoints for new integrations.
 
+Action Checklist is a generic optional Action capability, not a prd-flow extension. Producers own the stable checklist definition through the canonical Report endpoint; AgentFlow owns per-item interactive state through `GET/PATCH /api/workflows/checklist`. Keep those two ownership domains separate so a producer refresh cannot erase user-entered status, notes, or evidence.
+
 ## Prerequisites
 
 Use the Workflow Report client bundled with the sibling `agentflow-cli` skill. The CLI is its command-line wrapper for AI, scripts, and local verification:
@@ -51,6 +53,7 @@ Include at least one capability:
 
 - `observation`: report the producer's complete current observation when it computes a deterministic workflow view.
 - `action`: report a stable progress or lifecycle event.
+- `action.checklist`: declare stable executable items when a stage needs human or agent follow-up; cards show progress/titles and the dedicated document page shows details.
 - `artifacts`: attach evidence; use stable artifact keys.
 - `globalState`: merge producer-owned durable state or remove explicit paths.
 - `projections`: replace generic derived indexes used by AgentFlow dashboards.
@@ -72,6 +75,7 @@ For local Markdown or other content that must become a browser URL, publish it f
 - Keep `schemaVersion` at `1` unless the server advertises another version.
 - Keep the runtime chain singular: producer adapter → Workflow Report client → AgentFlow. The Skill is guidance, not a transport hop.
 - Give every action a stable `key`.
+- Give every checklist item a stable Action-local `key`. A producer may update item titles/details, but must not report mutable item execution state inside the Action definition.
 - Send a stable lowercase `source` on every report and Markdown publish; it is required. Action, idempotency, Artifact, Projection, Extension, Observation, and GlobalState ownership are isolated by source-aware resource keys.
 - Give every timeline entry stable `kind` and `id` values.
 - Base a timeline `id` and `key` on the scheduled business object itself. Keep platform, team, and
@@ -86,10 +90,11 @@ For local Markdown or other content that must become a browser URL, publish it f
 ## Permissions and overwrite semantics
 
 - Treat TAPD personnel as derived authority when the Adapter can read them: TAPD Owner maps to Workflow Owner and registered TAPD participants map to Viewer.
-- Keep explicit grants separate from derived TAPD membership. Allow Owner and explicit Reporter writes. Treat TAPD participant Viewer, explicit Viewer, same-team Viewer, share-link Viewer, and admin review as read-only. Accept legacy `editor` only as a compatibility alias for Reporter.
+- Keep explicit grants separate from derived TAPD membership. Allow Owner and explicit Reporter writes. Treat TAPD participant Viewer, explicit Viewer, same-team Viewer, share-link Viewer, and ordinary admin review as read-only. The only admin write exception is an explicit audited `adminOperation=repair-version-membership` Report containing only `kind=version` timeline projections, with required `expectedRevision` and `idempotencyKey`; it must never admit Action, Artifact, Observation, GlobalState, Extension, Checklist, or non-version projection writes. Accept legacy `editor` only as a compatibility alias for Reporter.
 - `observation.state` replaces the complete previous observation for the same `clientId`.
 - `globalState.patch` recursively merges objects; arrays and scalars replace; `null` and `remove` delete explicit paths. The first reporting source to write a path owns it; another source cannot overwrite an owned path.
 - Reusing an `action.key` updates the same semantic stage. Do not create a new key for refreshes or retries.
+- Checklist state is keyed by `checklist:<source>:<action.key>:<item.key>`. Owner/Reporter may update it through the generic Checklist API; Viewer/team/share/admin review remain read-only. Re-reporting the Action definition preserves this state.
 - `projections.timeline` replaces only the current source's entries; AgentFlow preserves other sources atomically.
 - `extensions` can update only `extensions[source]`; objects recursively merge, arrays/scalars replace, and `null` deletes producer-owned fields.
 - Publishing Markdown creates or updates a preview Artifact and review copy; it does not confirm a document or advance an Action.

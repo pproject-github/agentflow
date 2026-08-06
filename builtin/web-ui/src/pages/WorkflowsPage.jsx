@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
+import { WORKFLOW_CHECKLIST_DEMO_ACTION, withWorkflowChecklistProgress } from "../workflowChecklistDemo.js";
 
 const WORKFLOW_VIEW_STORAGE_KEY = "agentflow.workflows.scopeView";
 const TIMELINE_WINDOW_SIZE = 8;
 const TIMELINE_WINDOW_MAX = 24;
+const WORKFLOW_PAGE_SIZES = [20, 50, 100];
 
 function loadWorkflowView() {
   if (typeof localStorage === "undefined") return "personal";
@@ -12,6 +14,44 @@ function loadWorkflowView() {
   } catch {
     return "personal";
   }
+}
+
+function isLocalWorkflowRuntime() {
+  if (typeof window === "undefined") return false;
+  return ["127.0.0.1", "localhost", "::1"].includes(String(window.location.hostname || "").toLowerCase());
+}
+
+function loadWorkflowPageState() {
+  const params = typeof window === "undefined"
+    ? new URLSearchParams()
+    : new URLSearchParams(window.location.search);
+  const storedView = loadWorkflowView();
+  const view = params.get("view") === "team"
+    ? "team"
+    : params.get("view") === "personal"
+      ? "personal"
+      : storedView;
+  const scope = ["owned", "collaborating"].includes(params.get("scope"))
+    ? params.get("scope")
+    : "all";
+  const state = ["active", "completed", "blocked"].includes(params.get("state"))
+    ? params.get("state")
+    : "all";
+  const requestedPageSize = Number.parseInt(params.get("pageSize") || "20", 10);
+  const requestedDemo = params.get("demo");
+  return {
+    view,
+    demo: view === "personal" && (
+      requestedDemo === "1"
+      || (requestedDemo === null && isLocalWorkflowRuntime())
+    ),
+    timelineKey: params.has("timelineKey") ? String(params.get("timelineKey") || "all") : "",
+    query: String(params.get("q") || ""),
+    scope,
+    state,
+    page: Math.max(1, Number.parseInt(params.get("page") || "1", 10) || 1),
+    pageSize: WORKFLOW_PAGE_SIZES.includes(requestedPageSize) ? requestedPageSize : 20,
+  };
 }
 
 function formatDate(value) {
@@ -70,6 +110,36 @@ function initialTimelineWindow(entries) {
   if (anchor < 0) anchor = total - 1;
   const start = Math.max(0, Math.min(anchor - 3, total - TIMELINE_WINDOW_SIZE));
   return { start, end: Math.min(total, start + TIMELINE_WINDOW_SIZE) };
+}
+
+function defaultTimelineKey(entries) {
+  const rows = (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const rawDate = String(entry?.endDate || entry?.end || entry?.date || "");
+      const timestamp = Date.parse(rawDate);
+      return {
+        entry,
+        timestamp: Number.isFinite(timestamp) && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+          ? timestamp + (24 * 60 * 60 * 1000) - 1
+          : timestamp,
+      };
+    })
+    .filter(({ entry, timestamp }) => entry?.key && Number.isFinite(timestamp));
+  const next = rows.filter(({ timestamp }) => timestamp >= Date.now()).sort((left, right) => left.timestamp - right.timestamp)[0];
+  if (next) return next.entry.key;
+  return rows.sort((left, right) => right.timestamp - left.timestamp)[0]?.entry?.key || "all";
+}
+
+function paginationItems(page, totalPages) {
+  const pages = Array.from(new Set([1, totalPages, page - 1, page, page + 1]
+    .filter((value) => value >= 1 && value <= totalPages)))
+    .sort((left, right) => left - right);
+  const items = [];
+  pages.forEach((value, index) => {
+    if (index > 0 && value - pages[index - 1] > 1) items.push(`gap-${value}`);
+    items.push(value);
+  });
+  return items;
 }
 
 function createWorkflowDemo() {
@@ -209,11 +279,11 @@ function platformLabel(platform) {
   return platform || "";
 }
 
-function workflowUrl(workflow) {
+function workflowUrl(workflow, returnTo = "/workflows") {
   const query = new URLSearchParams({
     view: "workflow",
     tapdId: String(workflow?.tapdId || ""),
-    returnTo: "/workflows",
+    returnTo,
   });
   const projectBindings = Array.isArray(workflow?.projectBindings) ? workflow.projectBindings : [];
   if (projectBindings.length === 1) {
@@ -243,6 +313,8 @@ function createWorkflowDemoSnapshot(workflow) {
     ? Number(workflow?.completedActionCount || 0) / Number(workflow.actionCount)
     : 0;
   const completedSlots = Math.round(visibleActionCount * completedRatio);
+  const checklistAction = withWorkflowChecklistProgress(WORKFLOW_CHECKLIST_DEMO_ACTION);
+  const checklistIndex = Math.min(3, visibleActionCount - 1);
   const actions = actionTemplates.slice(0, visibleActionCount).map(([title, detail], index) => ({
     id: `demo-action-${index + 1}`,
     actionId: `demo-action-${index + 1}`,
@@ -253,6 +325,11 @@ function createWorkflowDemoSnapshot(workflow) {
     issueKey: `demo-${tapdId.toLowerCase()}`,
     platform,
     updatedAt: new Date(Date.now() - (visibleActionCount - index) * 45 * 60 * 1000).toISOString(),
+    ...(index === checklistIndex ? {
+      source: checklistAction.source,
+      actionKey: checklistAction.key,
+      checklist: checklistAction.checklist,
+    } : {}),
   }));
   return {
     revision: `demo-${tapdId}`,
@@ -305,23 +382,46 @@ function openWorkflow(navigate, workflow) {
       /* the detail page will show a local-example error when storage is unavailable */
     }
   }
-  navigate(workflowUrl(workflow));
+  const returnTo = typeof window === "undefined"
+    ? "/workflows"
+    : `${window.location.pathname}${window.location.search}`;
+  navigate(workflowUrl(workflow, returnTo));
 }
 
 export default function WorkflowsPage() {
   const { navigate } = useRoute();
-  const [workflows, setWorkflows] = useState([]);
-  const [timeline, setTimeline] = useState([]);
-  const [unassignedCount, setUnassignedCount] = useState(0);
-  const [timelineKey, setTimelineKey] = useState("all");
-  const [view, setView] = useState(loadWorkflowView);
+  const [initialPageState] = useState(loadWorkflowPageState);
+  const [initialDemo] = useState(() => initialPageState.demo ? createWorkflowDemo() : null);
+  const [workflows, setWorkflows] = useState(() => initialDemo?.workflows || []);
+  const [timeline, setTimeline] = useState(() => initialDemo?.timeline || []);
+  const [unassignedCount, setUnassignedCount] = useState(() => initialDemo?.unassignedCount || 0);
+  const [availableCount, setAvailableCount] = useState(() => initialDemo?.workflows?.length || 0);
+  const [timelineKey, setTimelineKey] = useState(() => {
+    if (!initialDemo) return initialPageState.timelineKey;
+    if (initialPageState.timelineKey === "all") return "all";
+    if (initialPageState.timelineKey === "unassigned") return "unassigned";
+    if (initialDemo.timeline.some((entry) => entry.key === initialPageState.timelineKey)) return initialPageState.timelineKey;
+    return defaultTimelineKey(initialDemo.timeline);
+  });
+  const [view, setView] = useState(initialPageState.view);
   const [team, setTeam] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
-  const [scope, setScope] = useState("all");
-  const [state, setState] = useState("all");
-  const [demoMode, setDemoMode] = useState(false);
+  const [query, setQuery] = useState(initialPageState.query);
+  const [serverQuery, setServerQuery] = useState(initialPageState.query);
+  const [scope, setScope] = useState(initialPageState.scope);
+  const [state, setState] = useState(initialPageState.state);
+  const [page, setPage] = useState(initialPageState.page);
+  const [pageSize, setPageSize] = useState(initialPageState.pageSize);
+  const [pagination, setPagination] = useState({
+    page: initialPageState.page,
+    pageSize: initialPageState.pageSize,
+    total: 0,
+    totalPages: 1,
+    hasPrevious: false,
+    hasNext: false,
+  });
+  const [demoMode, setDemoMode] = useState(initialPageState.demo);
   const [timelineWindow, setTimelineWindow] = useState({ start: 0, end: 0 });
   const timelineRailRef = useRef(null);
   const timelineAnchorRef = useRef(null);
@@ -334,7 +434,16 @@ export default function WorkflowsPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`/api/prd-workflows?view=${encodeURIComponent(view)}`);
+      const params = new URLSearchParams({
+        view,
+        q: serverQuery,
+        scope,
+        state,
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (timelineKey) params.set("timelineKey", timelineKey);
+      const response = await fetch(`/api/prd-workflows?${params.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "读取迭代列表失败");
       const nextWorkflows = Array.isArray(payload.workflows) ? payload.workflows : [];
@@ -342,42 +451,57 @@ export default function WorkflowsPage() {
       setWorkflows(nextWorkflows);
       setTimeline(nextTimeline);
       setUnassignedCount(Number(payload.unassignedCount || 0));
-      setTimelineKey((current) => (
-        current === "all"
-        || (current === "unassigned" && Number(payload.unassignedCount || 0) > 0)
-        || nextTimeline.some((entry) => entry.key === current)
-          ? current
-          : "all"
-      ));
+      setAvailableCount(Number(payload.availableCount || 0));
+      setTimelineKey(String(payload.selectedTimelineKey || payload.defaultTimelineKey || "all"));
+      const nextPagination = payload.pagination && typeof payload.pagination === "object"
+        ? payload.pagination
+        : { page: 1, pageSize, total: nextWorkflows.length, totalPages: 1, hasPrevious: false, hasNext: false };
+      setPagination(nextPagination);
+      if (Number(nextPagination.page) !== page) setPage(Number(nextPagination.page) || 1);
       setTeam(payload.team || null);
     } catch (loadError) {
       setError(String(loadError.message || loadError));
       setWorkflows([]);
       setTimeline([]);
       setUnassignedCount(0);
-      setTimelineKey("all");
+      setAvailableCount(0);
       setTeam(null);
     } finally {
       setLoading(false);
     }
-  }, [view]);
+  }, [page, pageSize, scope, serverQuery, state, timelineKey, view]);
 
   const loadDemo = useCallback(() => {
     const demo = createWorkflowDemo();
     setWorkflows(demo.workflows);
     setTimeline(demo.timeline);
     setUnassignedCount(demo.unassignedCount);
-    setTimelineKey("all");
+    setAvailableCount(demo.workflows.length);
+    setTimelineKey(defaultTimelineKey(demo.timeline));
     setQuery("");
+    setServerQuery("");
     setScope("all");
     setState("all");
+    setPage(1);
     setError("");
     setDemoMode(true);
   }, []);
 
+  const exitDemo = useCallback(() => {
+    setDemoMode(false);
+    setTimelineKey("");
+    setPage(1);
+  }, []);
+
   useEffect(() => {
+    if (demoMode) return;
     void loadWorkflows();
-  }, [loadWorkflows]);
+  }, [demoMode, loadWorkflows]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setServerQuery(query), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   useEffect(() => {
     try {
@@ -386,6 +510,22 @@ export default function WorkflowsPage() {
       /* ignore storage failures */
     }
   }, [view]);
+
+  useEffect(() => {
+    if (view === "team" && demoMode) return;
+    const params = new URLSearchParams({
+      view,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (timelineKey) params.set("timelineKey", timelineKey);
+    if (query.trim()) params.set("q", query.trim());
+    if (scope !== "all") params.set("scope", scope);
+    if (state !== "all") params.set("state", state);
+    if (demoMode) params.set("demo", "1");
+    else if (view === "personal" && isLocalWorkflowRuntime()) params.set("demo", "0");
+    window.history.replaceState({}, "", `/workflows?${params.toString()}`);
+  }, [demoMode, page, pageSize, query, scope, state, timelineKey, view]);
 
   useEffect(() => {
     setTimelineWindow(initialTimelineWindow(timeline));
@@ -470,6 +610,7 @@ export default function WorkflowsPage() {
   );
 
   const filtered = useMemo(() => {
+    if (!demoMode) return workflows;
     const keyword = query.trim().toLowerCase();
     return workflows.filter((workflow) => {
       if (timelineKey === "unassigned" && (workflow.timeline || []).length > 0) return false;
@@ -500,7 +641,20 @@ export default function WorkflowsPage() {
         ]),
       ].some((value) => String(value || "").toLowerCase().includes(keyword));
     });
-  }, [query, scope, selectedTimelineEntry, state, timelineKey, workflows]);
+  }, [demoMode, query, scope, selectedTimelineEntry, state, timelineKey, workflows]);
+  const displayedWorkflows = demoMode
+    ? filtered.slice((page - 1) * pageSize, page * pageSize)
+    : workflows;
+  const visiblePagination = demoMode
+    ? {
+        page,
+        pageSize,
+        total: filtered.length,
+        totalPages: Math.max(1, Math.ceil(filtered.length / pageSize)),
+        hasPrevious: page > 1,
+        hasNext: page < Math.max(1, Math.ceil(filtered.length / pageSize)),
+      }
+    : pagination;
 
   return (
     <div className="af-settings-page af-workflows-page">
@@ -521,9 +675,19 @@ export default function WorkflowsPage() {
                 <span className="material-symbols-outlined" aria-hidden>integration_instructions</span>
                 接入说明
               </button>
+              {view === "personal" ? (
+                <button
+                  type="button"
+                  className={`af-workflows-guide-link af-workflows-demo-toggle${demoMode ? " is-active" : ""}`}
+                  onClick={demoMode ? exitDemo : loadDemo}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>{demoMode ? "close" : "science"}</span>
+                  {demoMode ? "退出示例" : "本地示例"}
+                </button>
+              ) : null}
               <div className="af-scope-switch" aria-label="迭代视图">
-                <button type="button" className={view === "personal" ? "is-active" : ""} onClick={() => setView("personal")}>个人迭代</button>
-                <button type="button" className={view === "team" ? "is-active" : ""} onClick={() => setView("team")}>团队迭代</button>
+                <button type="button" className={view === "personal" ? "is-active" : ""} onClick={() => { setView("personal"); setTimelineKey(""); setPage(1); }}>个人迭代</button>
+                <button type="button" className={view === "team" ? "is-active" : ""} onClick={() => { setDemoMode(false); setView("team"); setTimelineKey(""); setPage(1); }}>团队迭代</button>
               </div>
               <button
                 type="button"
@@ -546,8 +710,7 @@ export default function WorkflowsPage() {
                   {demoMode ? <em>本地示例</em> : null}
                 </div>
                 <div className="af-workflows-timeline__actions">
-                  {timelineKey !== "all" ? <button type="button" onClick={() => setTimelineKey("all")}>查看全部</button> : null}
-                  {demoMode ? <button type="button" onClick={() => void loadWorkflows()}>退出示例</button> : null}
+                  {timelineKey !== "all" ? <button type="button" onClick={() => { setTimelineKey("all"); setPage(1); }}>查看全部</button> : null}
                 </div>
               </div>
               <div
@@ -565,7 +728,7 @@ export default function WorkflowsPage() {
                       data-timeline-key={entry.key}
                       className={`is-${status.key}${timelineKey === entry.key ? " is-active" : ""}`}
                       aria-pressed={timelineKey === entry.key}
-                      onClick={() => setTimelineKey((current) => current === entry.key ? "all" : entry.key)}
+                      onClick={() => { setTimelineKey(entry.key); setPage(1); }}
                     >
                       <span className="af-workflows-timeline__date">
                         {formatTimelineDate(entry.date)}
@@ -586,7 +749,7 @@ export default function WorkflowsPage() {
                     type="button"
                     className={`af-workflows-timeline__unassigned${timelineKey === "unassigned" ? " is-active" : ""}`}
                     aria-pressed={timelineKey === "unassigned"}
-                    onClick={() => setTimelineKey((current) => current === "unassigned" ? "all" : "unassigned")}
+                    onClick={() => { setTimelineKey("unassigned"); setPage(1); }}
                   >
                     <span className="af-workflows-timeline__date">未排期</span>
                     <strong>未归属</strong>
@@ -602,7 +765,7 @@ export default function WorkflowsPage() {
               <span className="material-symbols-outlined" aria-hidden>search</span>
               <input
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => { setQuery(event.target.value); setPage(1); }}
                 placeholder="搜索 TAPD、需求、阶段或成员"
                 aria-label="搜索迭代"
               />
@@ -618,13 +781,13 @@ export default function WorkflowsPage() {
                   type="button"
                   className={scope === value ? "is-active" : ""}
                   aria-pressed={scope === value}
-                  onClick={() => setScope(value)}
+                  onClick={() => { setScope(value); setPage(1); }}
                 >
                   {label}
                 </button>
               ))}
             </div>
-            <select value={state} onChange={(event) => setState(event.target.value)} aria-label="迭代状态">
+            <select value={state} onChange={(event) => { setState(event.target.value); setPage(1); }} aria-label="迭代状态">
               <option value="all">全部状态</option>
               <option value="active">进行中</option>
               <option value="completed">已完成</option>
@@ -634,7 +797,7 @@ export default function WorkflowsPage() {
 
           {error ? <div className="af-workflows-message af-workflows-message--error">{error}</div> : null}
           {loading ? <div className="af-workflows-message">正在读取迭代...</div> : null}
-          {!loading && !error && workflows.length === 0 ? (
+          {!loading && !error && availableCount === 0 ? (
             <div className="af-workflows-empty">
               <span className="material-symbols-outlined" aria-hidden>timeline</span>
               <strong>{view === "team" && !team ? "尚未加入团队" : "暂无迭代"}</strong>
@@ -645,12 +808,12 @@ export default function WorkflowsPage() {
               </button>
             </div>
           ) : null}
-          {!loading && workflows.length > 0 && filtered.length === 0 ? (
+          {!loading && availableCount > 0 && visiblePagination.total === 0 ? (
             <div className="af-workflows-message">没有符合当前筛选条件的迭代。</div>
           ) : null}
 
           <div className="af-workflows-list">
-            {filtered.map((workflow) => {
+            {displayedWorkflows.map((workflow) => {
               const progress = workflow.actionCount > 0
                 ? Math.round((workflow.completedActionCount / workflow.actionCount) * 100)
                 : 0;
@@ -717,6 +880,55 @@ export default function WorkflowsPage() {
               );
             })}
           </div>
+          {!loading && !error && visiblePagination.total > 0 ? (
+            <nav className="af-workflows-pagination" aria-label="Workflow 列表分页">
+              <span>共 {visiblePagination.total} 项</span>
+              <div className="af-workflows-pagination__pages">
+                <button
+                  type="button"
+                  disabled={!visiblePagination.hasPrevious}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  aria-label="上一页"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>chevron_left</span>
+                </button>
+                {paginationItems(visiblePagination.page, visiblePagination.totalPages).map((item) => (
+                  typeof item === "string"
+                    ? <span key={item} className="af-workflows-pagination__gap">…</span>
+                    : (
+                      <button
+                        type="button"
+                        key={item}
+                        className={visiblePagination.page === item ? "is-active" : ""}
+                        aria-current={visiblePagination.page === item ? "page" : undefined}
+                        onClick={() => setPage(item)}
+                      >
+                        {item}
+                      </button>
+                    )
+                ))}
+                <button
+                  type="button"
+                  disabled={!visiblePagination.hasNext}
+                  onClick={() => setPage((current) => Math.min(visiblePagination.totalPages, current + 1))}
+                  aria-label="下一页"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>chevron_right</span>
+                </button>
+              </div>
+              <label>
+                每页
+                <select
+                  value={pageSize}
+                  onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}
+                  aria-label="每页数量"
+                >
+                  {WORKFLOW_PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+                项
+              </label>
+            </nav>
+          ) : null}
         </div>
       </div>
     </div>

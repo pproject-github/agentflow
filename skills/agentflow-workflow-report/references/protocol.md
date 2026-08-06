@@ -11,13 +11,13 @@
 7. 字段模型
 8. 覆盖、合并与删除规则
 9. 并发、幂等与错误码
-10. 三个关键接入场景
+10. 五个关键接入场景
 11. prd-flow 参考映射
 12. 验收清单
 
 ## 1. 接入边界
 
-新接入使用三个运行态数据接口，以及一个独立的权限控制面接口：
+新接入的生产方使用三个运行态数据接口，以及一个独立的权限控制面接口。带人工执行项的 Action 另外使用一组通用 Checklist 交互接口；它们不是生产方上报入口：
 
 | 方法 | 路径 | 用途 | 是否修改 Workflow |
 | --- | --- | --- | --- |
@@ -25,6 +25,8 @@
 | `POST` | `/api/workflows/report` | 上报全局信息、Action、普通产物、迭代归属和自定义区域 | 是 |
 | `POST` | `/api/workflow-artifacts/publish` | 把本地 Markdown 内容发布成浏览器可访问的预览链接 | 是 |
 | `POST` | `/api/workflows/access/sync` | 同步 TAPD Owner 和参与人的派生权限 | 只修改权限 |
+| `GET` | `/api/workflows/checklist` | 读取某个 Action 的独立清单文档和逐项状态 | 否 |
+| `PATCH` | `/api/workflows/checklist` | 更新一个条目的状态、备注和证据 | 只修改 AgentFlow 交互态 |
 
 `agentflow-workflow-report` 是接入规格；`workflow-report-client.mjs` 是可复用客户端；`agentflow-cli` 是命令行包装；AgentFlow 服务才负责鉴权、存储、合并和展示。Skill 不参与运行时传输，CLI 也不是数据生产方。
 
@@ -55,11 +57,13 @@ CLI 从 `AGENTFLOW_TOKEN` 或 `AGENTFLOW_SESSION_TOKEN` 读取凭证。不得把
 | 显式 Viewer | 是 | 否 | 否 |
 | owner 同团队成员 | 是，团队视图自动获得 viewer 权限 | 否 | 否 |
 | 分享链接访问者 | 是 | 否 | 否 |
-| 超级管理员代看 | 是 | 否，只读审阅 | 否 |
+| 超级管理员代看 | 是 | 仅显式版本归属修复 | 否 |
 
 完成权限同步后，TAPD 需求 Owner 就是 Workflow Owner。TAPD 参与人匹配到已注册的 AgentFlow 账号后，默认得到派生 Viewer，不会自动获得上报权限。Owner 可在 AgentFlow 中显式授予 Reporter 或 Viewer。
 
-派生权限和显式授权分开保存：后续 TAPD 刷新可以增加或移除派生 Viewer，但不能抹掉 Owner 主动给出的显式授权。尚未同步 TAPD 人员的历史 Workflow 保留已有 Owner，避免升级时突然撤销权限。兼容客户端若跳过 access sync，首次上报仍会建立 `legacy` Owner；新接入不得依赖这个回退，应先同步 TAPD 权限。旧角色字符串 `editor` 作为兼容别名继续接受，并统一物化为 `reporter`。没有写权限的调用返回 `403`，不会回退成调用者自己的副本。
+派生权限和显式授权分开保存：后续 TAPD 刷新可以增加或移除派生 Viewer，但不能抹掉 Owner 主动给出的显式授权。尚未同步 TAPD 人员的历史 Workflow 保留已有 Owner，避免升级时突然撤销权限。兼容客户端若跳过 access sync，首次上报仍会建立 `legacy` Owner；新接入不得依赖这个回退，应先同步 TAPD 权限。旧角色字符串 `editor` 作为兼容别名继续接受，并统一物化为 `reporter`。没有写权限的普通调用返回 `403`，不会回退成调用者自己的副本。
+
+超级管理员仍不能代替 Owner/Reporter 写 Action、Artifact、Observation、GlobalState、Extension 或 Checklist。唯一窄写例外是显式的版本归属修复：通过同一个 Report 接口携带 `adminOperation=repair-version-membership`，只修改 `kind=version` 的 timeline 投影，并记录管理员 actor 供审计。
 
 ### 2.3 TAPD 权限同步
 
@@ -121,6 +125,8 @@ Workflow 页面由三类数据区域组成：
 
 Action 是业务节点，不是运行日志。轮询、刷新、重试等技术动作不应各自创建 Action。
 
+Action 可以选择携带通用 `checklist` 定义。时间轴卡片只显示整体进度和条目标题；条目的摘要、章节、执行结果、备注与证据在独立详情文档中展示。Producer 通过 Report 拥有定义，AgentFlow 通过 Checklist API 拥有逐项运行态。不得把状态写回 Action 定义，否则 Producer 刷新会覆盖人工结果。
+
 ### 3.3 自定义区域
 
 描述只有某个接入实现才理解的结构化面板，例如 prd-flow 的 AI Docs 和 Issues。
@@ -140,6 +146,7 @@ AI Docs / Issues 不是通用固定字段。当前唯一注册的 extension rend
 | 需求概览 | `globalState.title/url/status` | 标题、外链和状态标签 | 否 |
 | 自定义概览分区 | `globalState.sections` | 分区卡片与固定字段样式 | 否 |
 | Action 时间轴 | `action` | 按日期分组的状态点、时间、标题、详情和维度标签 | 否 |
+| Action Checklist | `action.checklist` + Checklist API | 卡片进度/标题列表与独立详情文档 | 否 |
 | Action 产物 | `artifacts[scope=action]` | Action 下的链接按钮 | 否 |
 | 关联产物 | `artifacts[scope=global]` | 侧栏链接列表，展示标题和产物类型 | 否 |
 | 迭代时间线 | `projections.timeline` | 版本/Sprint/里程碑时间线卡片与筛选 | 否 |
@@ -212,6 +219,7 @@ section key 为 `progress` 时使用紧凑响应式网格；其他 section 默�
 
 ```text
 action:<source>:<action.key>
+checklist:<source>:<action.key>:<item.key>
 artifact:<source>:<artifact.key>
 projection:<source>:<kind>:<id>
 global:<dot.path>
@@ -257,6 +265,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
     },
     "globalState": {},
     "actions": [],
+    "checklistStates": [],
     "artifacts": [],
     "projections": { "timeline": [] },
     "extensions": {}
@@ -298,6 +307,7 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `expectedVersions` | object | 修改已有资源时建议必填 | 本次触及的全部资源 key 及 GET 返回的版本；创建新 key 使用 `absent` |
 | `expectedRevision` | string | 兼容字段 | 仅在没有 `expectedVersions` 时启用的整 Workflow 严格锁；新接入不要使用 |
 | `idempotencyKey` | string | 强烈建议 | 一次业务语义操作的稳定身份，不使用时间戳或随机 UUID |
+| `adminOperation` | string | 管理员特例 | 仅 `repair-version-membership`；详见 5.3 |
 | `observation` | object | 条件必填 | 同一 `clientId` 的完整生产方观察 |
 | `action` | object | 条件必填 | 一条关键业务阶段 |
 | `artifacts` | array | 条件必填 | Action 证据或全局证据 |
@@ -329,6 +339,39 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 ```
 
 没有 `observation` 时，响应中的 `observation` 为 `null`。同一 `workflow + source + operation + idempotencyKey` 的幂等重放返回 `alreadyApplied: true`，应按成功处理；Report 与 Artifact Publish 使用独立操作域。
+
+### 5.3 超级管理员修复版本归属
+
+用于批量治理错误或重复的版本归属，不是通用代写权限。管理员必须先 GET 当前快照，并以整 Workflow 的当前 `runtimeRevision` 做严格并发锁：
+
+```json
+{
+  "schemaVersion": 1,
+  "workflow": "tapd:1013667",
+  "source": "prd-flow",
+  "adminOperation": "repair-version-membership",
+  "projections": {
+    "timeline": [{
+      "kind": "version",
+      "id": "1013667",
+      "title": "Likee Android&iOS V5.63",
+      "date": "2026-08-11",
+      "source": "prd-flow"
+    }]
+  },
+  "expectedRevision": "runtime:<revision-from-get>",
+  "idempotencyKey": "admin-version-repair:1013667:v563"
+}
+```
+
+约束：
+
+- 调用账号必须是 AgentFlow 超级管理员；目标 Workflow 必须已存在，管理员不会成为 Owner。
+- 请求只能包含 `projections.timeline`，不得携带 `action/artifacts/observation/globalState/extensions`。
+- 所有新投影必须是 `kind=version`；当前 source 的非版本投影和其他 source 的全部投影原子保留。
+- `expectedRevision` 与 `idempotencyKey` 必填。并发变化返回 `409`，失败时不产生部分写入。
+- 运行态事件写入 `administrativeRepair.kind=version-attribution`、管理员 actor 和时间，供审计追踪。
+- 空 `timeline` 表示清空该 source 的版本归属，但仍保留该 source 的 Sprint/Milestone 等非版本条目。
 
 ## 6. POST /api/workflow-artifacts/publish：发布 Markdown 预览
 
@@ -383,6 +426,37 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 
 发布预览不会确认方案、修改本地文件、提交 ai-doc、创建 GitLab Issue 或推进 Action。Markdown 最大 500,000 bytes；`durability` 只能是 `temporary/durable`。外部系统已经提供 HTTP URL 时，不需要调用本接口，直接在 `/api/workflows/report` 的 `artifacts` 中上报即可。
 
+### 6.3 GET / PATCH `/api/workflows/checklist`
+
+这是 AgentFlow 托管的通用交互态，不属于任何单一 Producer。`release-bot`、验收机器人、合规审阅、prd-flow 等客户端都使用同一接口。
+
+读取：
+
+```http
+GET /api/workflows/checklist?workflow=tapd%3A1020124&source=release-bot&actionKey=release-readiness
+```
+
+更新一个条目：
+
+```json
+{
+  "workflow": "tapd:1020124",
+  "source": "release-bot",
+  "actionKey": "release-readiness",
+  "itemKey": "smoke-test",
+  "status": "passed",
+  "note": "核心链路通过",
+  "evidence": [{ "title": "测试报告", "url": "https://example.test/report" }],
+  "expectedVersion": "absent",
+  "idempotencyKey": "release-readiness:smoke-test:passed:v1"
+}
+```
+
+状态为 `pending/passed/failed/blocked/skipped`。每次只更新一个 item，使用
+`checklist:<source>:<actionKey>:<itemKey>` 的当前版本做乐观锁；不同 item 可并发，同一 item 的旧版本返回 `409`。Owner 和显式 Reporter 可写，Viewer、团队成员、分享链接与管理员代看只读。
+
+达到 `completionPolicy` 只表示清单“可确认完成”。AgentFlow 不会因此自动修改 TAPD、GitLab、Jenkins 或客户端工作区；Producer 必须读取状态并执行自己的业务确认。
+
 ## 7. 字段模型
 
 ### 7.1 observation：完整生产方观察
@@ -434,6 +508,28 @@ Authorization: Bearer <AGENTFLOW_TOKEN>
 | `issueKey` | 否 | 自定义 Issue 身份 |
 | `tags` | 否 | 字符串数组 |
 | `occurredAt` | 否 | 业务发生时间；不要用重试时间覆盖它 |
+
+可选的 `action.checklist`：
+
+```json
+{
+  "schemaVersion": 1,
+  "completionPolicy": "all_required",
+  "document": { "title": "发布检查详情" },
+  "items": [{
+    "key": "smoke-test",
+    "title": "冒烟测试",
+    "required": true,
+    "evidenceRequired": true,
+    "detail": {
+      "summary": "验证发布后的核心链路",
+      "sections": [{ "key": "steps", "title": "执行步骤", "content": ["打开应用", "完成核心操作"] }]
+    }
+  }]
+}
+```
+
+`completionPolicy` 支持 `all_required/any_required/manual`。每个 Action 最多 100 个 item，`item.key` 在 Action 内必须稳定且唯一。详情章节 `content` 可以是文本或字符串数组。Action 卡片不得内联长详情；点击标题进入独立文档。
 
 `completed/success` 会规范化为 `done`，`failed` 会规范化为 `error`；未知状态返回 `400`，不会静默回退。
 
@@ -524,6 +620,8 @@ Android 和 iOS 时仍只上报一项，并在 `dimensions.platform` 中使用�
 | `observation.state` | 保持旧观察 | 同一 `clientId` 的完整 state 替换旧观察 | 上报生产方定义的空值结构；不要用它删除其他 client 的观察 |
 | `globalState` | 不修改 | 对象递归 merge；数组和标量整体替换；首次写入路径的 source 获得该路径所有权 | patch 中 `null` 删除字段；`remove` 在 patch 后删除 dot path；其他 source 不能改写已归属路径 |
 | `action` | 不修改 Action | 同 `source + action.key` 更新同一业务阶段的可见状态 | 当前协议不提供物理删除 Action；用业务状态表达取消/跳过 |
+| `action.checklist` 定义 | 不修改定义 | 随同 Action 更新标题、详情和完成策略 | 不携带人工状态；移除 item 前应由 Producer 处理历史状态语义 |
+| Checklist 运行态 | 不修改状态 | 同 `source + action.key + item.key` 独立更新 | 可写回 pending 重置；Action 重报不会覆盖 |
 | `artifacts` | 不修改产物 | 同 `source + stable key` 更新/归并同一可见证据 | 当前协议不提供通用物理删除；不要通过改 key 伪造删除 |
 | `projections.timeline` | 不修改 | 替换当前 `source` 拥有的完整切片，服务端原子保留其他 source | `[]` 只清空当前 source 的迭代归属 |
 | `extensions` | 不修改扩展 | 只允许 `extensions[source]` 内对象递归 merge；数组/标量替换 | 对应字段上报 `null` 删除 |
@@ -566,12 +664,12 @@ timeline-membership:tapd-1020124:version-1133202860001000338:v1
 | --- | --- | --- |
 | `400` | JSON、namespace、字段或 schema 不合法 | 按协议修正；不要降级校验 |
 | `401` | 缺少或无效认证 | 停止并配置 Token；不要把 Token 打印出来 |
-| `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 停止；由 Owner 授予 Reporter 或改用正确身份 |
+| `403` | 当前用户只有 viewer 权限或无权访问目标项目 | 普通写入由 Owner 授予 Reporter；仅版本治理可使用管理员修复模式 |
 | `404` | 分享链接、owner 或目标资源不存在 | 重新解析目标，不要创建影子副本 |
 | `409` | 同一资源 key 已变化，或路径属于其他 source | 读取 `conflict.conflicts`，只刷新冲突资源并重试一次；所有 key 通过前请求不会部分落库 |
 | `500` | 服务端异常 | 保留幂等键，记录脱敏上下文后重试或上报 |
 
-## 10. 三个关键接入场景
+## 10. 五个关键接入场景
 
 ### 10.1 更新迭代：绑定或切换版本
 
@@ -599,6 +697,22 @@ timeline-membership:tapd-1020124:version-1133202860001000338:v1
 4. 在 AgentFlow 前端代码中注册对应页面渲染器并重新发布；当前不是运行时插件注册。否则数据只会被保存，不会自动出现专用 UI。当前只有 `extensions["prd-flow"]` 已注册。
 5. 更新数组时发送该数组的完整新值；更新对象字段时可以递归 merge；用 `null` 删除自有字段。
 
+### 10.4 上报并执行 Action Checklist
+
+1. Producer 选择稳定 `action.key` 和 Action 内稳定唯一的 `items[].key`，通过 `/api/workflows/report` 上报定义。
+2. 页面卡片显示进度和标题；完整详情由独立 Checklist 文档渲染。
+3. Owner/Reporter 通过通用 Checklist API 逐项保存状态、备注和证据；每项使用自己的 `expectedVersion`。
+4. Producer 需要推进业务时读取物化状态，校验 required/evidence 规则，再执行自己的确认命令并重新上报 Action 业务状态。
+5. Producer 刷新标题、步骤或其它事实时继续复用同一 Action/item key；不得把 AgentFlow 交互态塞回定义。
+
+### 10.5 管理员修复版本归属
+
+1. 仅在批量治理版本归属时使用；普通业务状态仍由 Owner/Reporter 上报。
+2. 管理员 GET 当前 Workflow，人工或程序核对目标版本并保存 `runtimeRevision`。
+3. 发送只含 `kind=version` timeline 的 `repair-version-membership` 请求。
+4. 验证响应包含 `administrativeRepair`，事件 actor 是操作管理员，且非版本/其他 source 投影未变化。
+5. `409` 时重新读取、重新核对并只重试一次；不得绕过严格锁。
+
 ## 11. prd-flow 参考映射
 
 prd-flow 只是一个接入实现，不是协议依赖：
@@ -611,6 +725,8 @@ prd-flow 只是一个接入实现，不是协议依赖：
 | TAPD 当前版本原始信息 | `globalState.tapdCurrentVersion` | 保留版本业务事实 |
 | 由版本事实派生的归属 | `projections.timeline[kind=version]` | 个人/团队迭代时间线 |
 | 方案确认、实现、提测、发布 | `action` | Action 时间轴和进度 |
+| 自测 Case 定义 | `action.checklist` | 卡片进度/标题和独立详情文档 |
+| 自测 Case 执行状态与证据 | Checklist API | AgentFlow 托管逐项状态；prd-flow 完成命令读取并校验 |
 | MR、Jenkins、测试报告 URL | `artifacts` | Action 下产物入口 |
 | 本地方案 Markdown | Artifact Publish | 可分享方案预览 URL |
 | AI Docs / Issues | `extensions["prd-flow"]` | prd-flow 专用文档区和 Issue 区 |
@@ -620,13 +736,19 @@ prd-flow 只是一个接入实现，不是协议依赖：
 ## 12. 验收清单
 
 - 能使用 Token GET 当前 Workflow，并读到 `snapshot.resourceVersions`。
-- TAPD Owner 同步后成为 Workflow Owner；TAPD 参与人自动成为 Viewer；显式 Reporter 能写，Viewer、团队成员、分享链接和管理员代看不能写。
+- TAPD Owner 同步后成为 Workflow Owner；TAPD 参与人自动成为 Viewer；显式 Reporter 能写，Viewer、团队成员和分享链接不能写。管理员普通代看只读，只有显式版本归属修复可写。
 - TAPD 派生参与人刷新不会覆盖显式授权；过期的权限快照返回 `409`。
 - `globalState` 更新不会覆盖其他生产方拥有的路径，数组替换行为符合预期。
 - 同一 Action key 重报不产生重复业务阶段。
+- 任意 Producer 都能上报 Action Checklist；卡片只显示进度和标题，详情进入独立文档。
+- Producer 重报 Checklist 定义不会覆盖逐项状态、备注和证据。
+- 不同 Checklist item 可并发更新，同 item 旧版本返回具体资源 key 的 `409`。
+- Viewer、团队成员、分享链接和管理员代看不能更新 Checklist。
+- Checklist 达标只显示“可确认完成”，不会静默推进外部业务系统。
 - Action 下能看到稳定 key 的 MR、构建或测试产物。
 - Markdown Publish 返回可访问 URL，但不会推进业务状态。
 - 版本改名/改期不产生新迭代节点，版本切换不会删除第三方 Sprint。
+- 管理员版本归属修复只能改 `kind=version` 投影，要求 runtimeRevision/幂等键并留下管理员 actor 审计；普通 Report 仍返回 403。
 - 自定义 extension 能保存；注册渲染器后能显示对应文档区 / Issue 区。
 - 不同资源 key 可并发更新；同 key 旧版本返回包含具体 `resourceKey` 的 409。
 - 409 会触发一次 key 级 read → re-merge → retry，且失败请求不会部分落库。

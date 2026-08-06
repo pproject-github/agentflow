@@ -218,7 +218,7 @@ function readFlowParamsFromUrl() {
     workflowShare: sp.get("workflowShare") || "",
     adminOwnerId: sp.get("adminOwnerId") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
-    returnTo: returnTo === "/workflows" ? returnTo : "",
+    returnTo: returnTo === "/workflows" || returnTo.startsWith("/workflows?") ? returnTo : "",
     workflowDemo: sp.get("workflowDemo") === "1",
   };
 }
@@ -1251,6 +1251,19 @@ function prdWorkflowIssueGroups(snapshot) {
 
 function prdWorkflowActionId(item) {
   return String(item?.actionId || item?.action_id || item?.action || item?.id || "").trim();
+}
+
+function prdWorkflowChecklistActionKey(item) {
+  return String(item?.actionModel?.key || item?.key || item?.actionKey || item?.action_key || item?.action || item?.actionId || item?.action_id || item?.stageKey || item?.stage_key || "").trim();
+}
+
+function prdWorkflowChecklistStatusIcon(status) {
+  const value = String(status || "pending");
+  if (value === "passed") return "check";
+  if (value === "failed") return "close";
+  if (value === "blocked") return "block";
+  if (value === "skipped") return "skip_next";
+  return "radio_button_unchecked";
 }
 
 function prdWorkflowStageKey(item) {
@@ -7397,6 +7410,7 @@ function PrdWorkflowTimelinePanel({
 }) {
   const [auditFilter, setAuditFilter] = useState("all");
   const [actionFilter, setActionFilter] = useState("all");
+  const [checklistExpansionOverrides, setChecklistExpansionOverrides] = useState(() => new Map());
   const [shareOpen, setShareOpen] = useState(false);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
@@ -7449,6 +7463,33 @@ function PrdWorkflowTimelinePanel({
   const globalState = snapshot?.globalState && typeof snapshot.globalState === "object" ? snapshot.globalState : null;
   const requirementTitle = prdWorkflowRequirementTitle(snapshot, tapdId);
   const workflowSteps = prdWorkflowFlowSteps(phase);
+  const openChecklistDocument = useCallback((item, itemKey = "") => {
+    const checklist = item?.checklist || item?.actionModel?.checklist;
+    const source = String(checklist?.source || item?.source || item?.producer || "").trim().toLowerCase();
+    const actionKey = prdWorkflowChecklistActionKey(item);
+    if (!tapdId || !source || !actionKey) return;
+    const query = new URLSearchParams({
+      workflow: `tapd:${tapdId}`,
+      source,
+      actionKey,
+      returnTo: `${window.location.pathname}${window.location.search}`,
+    });
+    if (itemKey) query.set("itemKey", itemKey);
+    if (flowParams.workflowDemo) query.set("demo", "1");
+    for (const key of ["flowId", "flowSource", "workspaceId", "workflowShare", "adminOwnerId"]) {
+      const value = flowParams[key];
+      if (value) query.set(key, value);
+    }
+    if (flowParams.archived) query.set("archived", "1");
+    window.open(`/workflow-checklist?${query.toString()}`, "_blank", "noopener,noreferrer");
+  }, [flowParams, tapdId]);
+  const toggleChecklist = useCallback((key, expanded) => {
+    setChecklistExpansionOverrides((current) => {
+      const next = new Map(current);
+      next.set(key, !expanded);
+      return next;
+    });
+  }, []);
   const loadKnowledgeBindings = useCallback(async () => {
     const id = String(tapdId || "").trim();
     if (!id || flowParams.workflowShare) {
@@ -7854,6 +7895,19 @@ function PrdWorkflowTimelinePanel({
                     const meta = prdWorkflowActionMeta(item);
                     const title = prdWorkflowActionDisplayTitle(item, index);
                     const detail = prdWorkflowActionDisplayDetail(item);
+                    const checklist = item?.checklist || item?.actionModel?.checklist;
+                    const checklistItems = Array.isArray(checklist?.items) ? checklist.items : [];
+                    const checklistProgress = checklist?.progress || { completed: 0, total: checklistItems.length, percent: 0 };
+                    const checklistCardKey = [
+                      item?.source || item?.producer,
+                      prdWorkflowChecklistActionKey(item),
+                      item?.id || item?.actionId,
+                      group.day,
+                      index,
+                    ].filter((value) => value !== undefined && value !== null && value !== "").join(":");
+                    const checklistExpanded = checklistExpansionOverrides.has(checklistCardKey)
+                      ? checklistExpansionOverrides.get(checklistCardKey)
+                      : status === "current";
                     return (
                       <div key={item.id || item.actionId || `${prdWorkflowActionTitle(item, index)}-${index}`} className={`af-prd-workflow-action af-prd-workflow-action--${status}`}>
                         <div className="af-prd-workflow-action__rail">
@@ -7884,6 +7938,46 @@ function PrdWorkflowTimelinePanel({
                             </div>
                             <span className="af-prd-workflow-action__status">{prdWorkflowActionDisplayStatus(item)}</span>
                           </div>
+                          {checklistItems.length ? (
+                            <section className="af-prd-workflow-checklist" aria-label={`${title} Checklist`}>
+                              <button
+                                type="button"
+                                className="af-prd-workflow-checklist__head"
+                                aria-expanded={checklistExpanded}
+                                onClick={() => toggleChecklist(checklistCardKey, checklistExpanded)}
+                              >
+                                <div>
+                                  <strong>执行清单</strong>
+                                  <span>{checklistProgress.completed || 0}/{checklistProgress.total || checklistItems.length}</span>
+                                </div>
+                                <div>
+                                  <small>{checklistProgress.ready ? "可确认完成" : `${checklistProgress.percent || 0}%`}</small>
+                                  <span className="material-symbols-outlined" aria-hidden>{checklistExpanded ? "expand_less" : "expand_more"}</span>
+                                </div>
+                              </button>
+                              <div className="af-prd-workflow-checklist__meter"><span style={{ width: `${checklistProgress.percent || 0}%` }} /></div>
+                              {checklistExpanded ? (
+                                <>
+                                  <div className="af-prd-workflow-checklist__items">
+                                    {checklistItems.slice(0, 6).map((checkItem) => (
+                                      <button type="button" key={checkItem.key} onClick={() => openChecklistDocument(item, checkItem.key)}>
+                                        <span className={`af-prd-workflow-checklist__state is-${checkItem.state?.status || "pending"}`}>
+                                          <span className="material-symbols-outlined" aria-hidden>{prdWorkflowChecklistStatusIcon(checkItem.state?.status)}</span>
+                                        </span>
+                                        <strong>{checkItem.title}</strong>
+                                        <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <button type="button" className="af-prd-workflow-checklist__open" onClick={() => openChecklistDocument(item)}>
+                                    <span>{checklist.document?.title || "查看完整 Checklist 文档"}</span>
+                                    {checklistItems.length > 6 ? <small>还有 {checklistItems.length - 6} 项</small> : null}
+                                    <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                                  </button>
+                                </>
+                              ) : null}
+                            </section>
+                          ) : null}
                           {links.length ? (
                             <div className="af-prd-workflow-action__links">
                               {links.map((link) => (
@@ -14038,6 +14132,9 @@ function WorkspacePageInner() {
   const displayShareSelectableNodes = singleNodeDisplayShare && displayShareSourceNode
     ? [displayShareSourceNode]
     : workspaceDisplayNodes;
+  const workspaceBackTarget = flowParams.adminOwnerId
+    ? "/admin/usage"
+    : flowParams.returnTo || (workspaceMode === "workflow" ? "/workflows" : "/projects");
 
   return (
     <div className="af-workspace-page">
@@ -14047,7 +14144,7 @@ function WorkspacePageInner() {
           <button
             type="button"
             className="af-icon-btn af-pipeline-back"
-            onClick={() => navigate(flowParams.adminOwnerId ? "/admin/usage" : flowParams.returnTo || "/projects")}
+            onClick={() => navigate(workspaceBackTarget)}
             aria-label="返回"
           >
             <span className="material-symbols-outlined">arrow_back</span>

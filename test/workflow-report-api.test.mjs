@@ -314,6 +314,126 @@ test("generic Workflow reports materialize beside legacy PRD events", async () =
     assert.equal(missingPublishResourceVersion.status, 400, JSON.stringify(missingPublishResourceVersionResult));
     assert.deepEqual(missingPublishResourceVersionResult.missingExpectedVersionKeys, ["artifact:prd-flow:expected-version-proof"]);
 
+    const checklistActionKey = "release-readiness";
+    const checklistActionResourceKey = `action:release-bot:${checklistActionKey}`;
+    const checklistReport = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        expectedVersions: { [checklistActionResourceKey]: "absent" },
+        idempotencyKey: "release-readiness:v1",
+        action: {
+          key: checklistActionKey,
+          title: "发布检查",
+          status: "running",
+          checklist: {
+            document: { title: "发布检查详情" },
+            items: [
+              { key: "smoke", title: "冒烟测试", evidenceRequired: true, detail: { sections: [{ key: "steps", title: "执行步骤", content: ["打开应用", "完成发布"] }] } },
+              { key: "metrics", title: "指标检查" },
+            ],
+          },
+        },
+      }),
+    });
+    const checklistReportResult = await checklistReport.json();
+    assert.equal(checklistReport.status, 200, JSON.stringify(checklistReportResult));
+    const checklistQuery = "/api/workflows/checklist?workflow=tapd%3A1015046&source=release-bot&actionKey=release-readiness";
+    const checklistRead = await request(checklistQuery);
+    const checklistReadResult = await checklistRead.json();
+    assert.equal(checklistRead.status, 200, JSON.stringify(checklistReadResult));
+    assert.equal(checklistReadResult.action.checklist.progress.completed, 0);
+    assert.equal(checklistReadResult.action.checklist.items[0].state.version, "absent");
+    assert.equal(checklistReadResult.canWrite, true);
+
+    const unauthorizedChecklistUpdate = await request("/api/workflows/checklist", {
+      method: "PATCH",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        actionKey: checklistActionKey,
+        itemKey: "smoke",
+        status: "passed",
+        expectedVersion: "absent",
+      }),
+    }, false);
+    assert.equal(unauthorizedChecklistUpdate.status, 401);
+
+    const missingChecklistEvidence = await request("/api/workflows/checklist", {
+      method: "PATCH",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        actionKey: checklistActionKey,
+        itemKey: "smoke",
+        status: "passed",
+        expectedVersion: "absent",
+      }),
+    });
+    const missingChecklistEvidenceResult = await missingChecklistEvidence.json();
+    assert.equal(missingChecklistEvidence.status, 400, JSON.stringify(missingChecklistEvidenceResult));
+    assert.match(missingChecklistEvidenceResult.error, /requires evidence/);
+
+    const checklistUpdate = await request("/api/workflows/checklist", {
+      method: "PATCH",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        actionKey: checklistActionKey,
+        itemKey: "smoke",
+        status: "passed",
+        note: "核心链路通过",
+        evidence: [{ title: "测试报告", url: "https://example.test/reports/smoke" }],
+        expectedVersion: "absent",
+        idempotencyKey: "release-readiness:smoke:passed:v1",
+      }),
+    });
+    const checklistUpdateResult = await checklistUpdate.json();
+    assert.equal(checklistUpdate.status, 200, JSON.stringify(checklistUpdateResult));
+    assert.equal(checklistUpdateResult.checklistState.status, "passed");
+    assert.match(checklistUpdateResult.checklistState.version, /^rv:/);
+    assert.equal(checklistUpdateResult.checklist.progress.completed, 1);
+
+    const staleChecklistUpdate = await request("/api/workflows/checklist", {
+      method: "PATCH",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        actionKey: checklistActionKey,
+        itemKey: "smoke",
+        status: "failed",
+        expectedVersion: "absent",
+      }),
+    });
+    const staleChecklistUpdateResult = await staleChecklistUpdate.json();
+    assert.equal(staleChecklistUpdate.status, 409, JSON.stringify(staleChecklistUpdateResult));
+    assert.equal(staleChecklistUpdateResult.conflict.conflicts[0].resourceKey, "checklist:release-bot:release-readiness:smoke");
+
+    const checklistActionVersion = checklistUpdateResult.snapshot.resourceVersions[checklistActionResourceKey];
+    const checklistRefresh = await request("/api/workflows/report", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow: "tapd:1015046",
+        source: "release-bot",
+        expectedVersions: { [checklistActionResourceKey]: checklistActionVersion },
+        idempotencyKey: "release-readiness:v2",
+        action: {
+          key: checklistActionKey,
+          title: "发布检查（已刷新）",
+          status: "running",
+          checklist: {
+            document: { title: "发布检查详情" },
+            items: [{ key: "smoke", title: "冒烟测试", evidenceRequired: true }, { key: "metrics", title: "指标检查" }],
+          },
+        },
+      }),
+    });
+    const checklistRefreshResult = await checklistRefresh.json();
+    assert.equal(checklistRefresh.status, 200, JSON.stringify(checklistRefreshResult));
+    const refreshedChecklistAction = checklistRefreshResult.snapshot.runtimeEvents.find((event) => event.source === "release-bot" && event.action === checklistActionKey);
+    assert.equal(refreshedChecklistAction.checklist.items[0].state.status, "passed");
+
     const otherProducer = await request("/api/workflows/report", {
       method: "POST",
       body: JSON.stringify({

@@ -24,17 +24,19 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
     readFile(cssPath, "utf8"),
   ]);
 
-  assert.match(page, /fetch\(`\/api\/prd-workflows\?view=\$\{encodeURIComponent\(view\)\}`\)/);
+  assert.match(page, /fetch\(`\/api\/prd-workflows\?\$\{params\.toString\(\)\}`\)/);
   assert.match(page, />个人迭代<\/button>/);
   assert.match(page, />团队迭代<\/button>/);
   assert.match(page, /view: "workflow"/);
   assert.match(page, /tapdId: String\(workflow\?\.tapdId \|\| ""\)/);
-  assert.match(page, /returnTo: "\/workflows"/);
+  assert.match(page, /function workflowUrl\(workflow, returnTo = "\/workflows"\)/);
   assert.match(page, /projectBindings\.length === 1/);
   assert.match(page, /query\.set\("workspaceId", String\(project\.workspaceId\)\)/);
   assert.match(page, /Project · \{project\.label \|\| project\.flowId\}/);
   assert.match(page, /workflowDemo/);
   assert.match(page, /createWorkflowDemoSnapshot/);
+  assert.match(page, /withWorkflowChecklistProgress\(WORKFLOW_CHECKLIST_DEMO_ACTION\)/);
+  assert.match(page, /checklist: checklistAction\.checklist/);
   assert.match(page, /查看示例/);
   assert.match(page, /scope === "owned"/);
   assert.match(page, /scope === "collaborating"/);
@@ -44,10 +46,24 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.match(page, /function createWorkflowDemo\(\)/);
   assert.match(page, /载入本地示例时间线/);
   assert.match(page, /本地示例/);
+  assert.match(page, /if \(demoMode\) return;\s*void loadWorkflows\(\);/);
   assert.match(page, /function timelineStatus\(entry\)/);
   assert.match(page, /const TIMELINE_WINDOW_SIZE = 8;/);
   assert.match(page, /const TIMELINE_WINDOW_MAX = 24;/);
   assert.match(page, /function initialTimelineWindow\(entries\)/);
+  assert.match(page, /function loadWorkflowPageState\(\)/);
+  assert.match(page, /function isLocalWorkflowRuntime\(\)/);
+  assert.match(page, /\["127\.0\.0\.1", "localhost", "::1"\]/);
+  assert.match(page, /requestedDemo === null && isLocalWorkflowRuntime\(\)/);
+  assert.match(page, /initialPageState\.demo \? createWorkflowDemo\(\) : null/);
+  assert.match(page, /if \(demoMode\) params\.set\("demo", "1"\)/);
+  assert.match(page, /else if \(view === "personal" && isLocalWorkflowRuntime\(\)\) params\.set\("demo", "0"\)/);
+  assert.match(page, /demoMode \? "退出示例" : "本地示例"/);
+  assert.match(page, /onClick=\{demoMode \? exitDemo : loadDemo\}/);
+  assert.match(page, /setDemoMode\(false\); setView\("team"\)/);
+  assert.match(page, /payload\.selectedTimelineKey/);
+  assert.match(page, /className="af-workflows-pagination"/);
+  assert.match(page, /WORKFLOW_PAGE_SIZES = \[20, 50, 100\]/);
   assert.match(page, /onScroll=\{handleTimelineScroll\}/);
   assert.doesNotMatch(page, /timelineViewport/);
   assert.doesNotMatch(page, />更早</);
@@ -61,4 +77,6 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.doesNotMatch(css, /\.af-workflows-timeline__range\s*\{/);
   assert.match(css, /scroll-snap-type: x proximity;/);
   assert.match(css, /\.af-workflows-demo-button\s*\{/);
+  assert.match(css, /\.af-workflows-demo-toggle\.is-active\s*\{/);
+  assert.match(css, /\.af-workflows-pagination\s*\{/);
 });
