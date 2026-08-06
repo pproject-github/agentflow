@@ -68,4 +68,4 @@ description: >-
 
 ## 输出要求
 
-当用户要求“生成/展示/放到 workspace 画布”时，直接编辑 `workspace.graph.json`。完成后简要说明新增或修改了哪些 workspace 节点。
+当用户要求“生成/展示/放到 workspace 画布”时，直接编辑 `workspace.graph.json`。如果用户要求所见即所得的线上画布，随后使用 `agentflow-cli workspace-preview` 上传到服务器临时 Workspace；不要把临时项目当作正式源版本。完成后简要说明新增或修改了哪些 workspace 节点。

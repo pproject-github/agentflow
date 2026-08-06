@@ -68,6 +68,11 @@ agentflow ui
 # Generate and open a single-file static preview using the platform canvas (no local server)
 agentflow flow preview ./my-flow/flow.yaml
 
+# Upload a Workspace graph to a server-side temporary preview project
+node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
+  --file .workspace/agentflow/pipelines/my-flow/workspace.graph.json \
+  --ttl-seconds 7200
+
 # Or run a flow directly
 agentflow apply <FlowName>
 ```

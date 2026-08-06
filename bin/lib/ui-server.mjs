@@ -75,6 +75,15 @@ import {
 } from "./flow-import.mjs";
 import { getWorkspaceTree, getPipelineFiles } from "./workspace-tree.mjs";
 import {
+  DEFAULT_WORKSPACE_PREVIEW_TTL_MS,
+  createWorkspacePreviewId,
+  listExpiredWorkspacePreviews,
+  normalizeWorkspacePreviewTtlMs,
+  readWorkspacePreviewMetadata,
+  workspacePreviewFlowDir,
+  writeWorkspacePreviewMetadata,
+} from "./workspace-preview.mjs";
+import {
   createComposerSession,
   logComposerEvent,
   truncateForLog,
@@ -8235,6 +8244,23 @@ function isReadonlyBuiltinFlowSource(s) {
 /** POST 写 flow */
 function isValidFlowSourceWrite(s) {
   return s === "user" || s === "workspace";
+}
+
+function cleanupExpiredWorkspacePreviews() {
+  const roots = new Set(listAgentflowUserIds().map((id) => getUserPipelinesRoot(id)));
+  roots.add(getUserPipelinesRoot(""));
+  let removed = 0;
+  for (const pipelinesRoot of roots) {
+    for (const item of listExpiredWorkspacePreviews(pipelinesRoot)) {
+      try {
+        fs.rmSync(item.flowDir, { recursive: true, force: true });
+        removed += 1;
+      } catch (e) {
+        log.debug(`[workspace-preview] cleanup failed: ${(e && e.message) || String(e)}`);
+      }
+    }
+  }
+  return removed;
 }
 
 /** Composer 打开的画布通过 SSE 订阅；POST /api/flow-editor-sync 向对应 flow 推送刷新 */
@@ -17368,6 +17394,77 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/preview") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 4 * 1024 * 1024));
+      } catch {
+        json(res, 400, { error: "Invalid JSON" });
+        return;
+      }
+      const graph = payload?.graph;
+      if (!graph || typeof graph !== "object" || Array.isArray(graph)) {
+        json(res, 400, { error: "graph must be an object" });
+        return;
+      }
+      const instances = graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances)
+        ? graph.instances
+        : {};
+      if (Object.values(instances).some((item) => String(item?.definitionId || "") === "workspace_scheduled_run")) {
+        json(res, 400, { error: "Temporary Workspace preview cannot contain scheduled-run nodes" });
+        return;
+      }
+      const rawRequestedId = String(payload.previewId || "").trim();
+      const flowId = rawRequestedId || createWorkspacePreviewId();
+      const flowDir = workspacePreviewFlowDir(flowId, authUser.userId);
+      if (!flowDir) {
+        json(res, 400, { error: "Invalid previewId" });
+        return;
+      }
+      const existing = readWorkspacePreviewMetadata(flowDir);
+      if (existing && existing.ownerId !== authUser.userId) {
+        json(res, 403, { error: "Preview ownership denied" });
+        return;
+      }
+      if (rawRequestedId && !existing && fs.existsSync(flowDir)) {
+        json(res, 409, { error: "Preview project already exists but is not a preview" });
+        return;
+      }
+      const now = Date.now();
+      const ttlInput = payload.ttlMs != null
+        ? Number(payload.ttlMs)
+        : payload.ttlSeconds != null
+          ? Number(payload.ttlSeconds) * 1000
+          : DEFAULT_WORKSPACE_PREVIEW_TTL_MS;
+      const ttlMs = normalizeWorkspacePreviewTtlMs(ttlInput);
+      const metadata = {
+        version: 1,
+        flowId,
+        ownerId: authUser.userId,
+        title: String(payload.title || "Workspace Preview").trim().slice(0, 200),
+        createdAt: existing?.createdAt || new Date(now).toISOString(),
+        updatedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + ttlMs).toISOString(),
+      };
+      try {
+        fs.mkdirSync(flowDir, { recursive: true });
+        fs.writeFileSync(path.join(flowDir, "flow.yaml"), "instances: {}\nedges: []\n", "utf8");
+        fs.writeFileSync(path.join(flowDir, "workspace.graph.json"), `${JSON.stringify(graph, null, 2)}\n`, "utf8");
+        writeWorkspacePreviewMetadata(flowDir, metadata);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+        return;
+      }
+      const baseUrl = `${url.protocol}//${url.host}`;
+      const workspaceUrl = `${baseUrl}/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`;
+      json(res, 200, { ok: true, flowId, flowSource: "user", preview: true, expiresAt: metadata.expiresAt, url: workspaceUrl });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace/graph") {
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -21210,6 +21307,22 @@ finishedAt: "${new Date().toISOString()}"
       }
     }, 1000).unref?.();
   }
+
+  const workspacePreviewCleanupTimer = setInterval(() => {
+    try {
+      const removed = cleanupExpiredWorkspacePreviews();
+      if (removed > 0) log.debug(`[workspace-preview] removed ${removed} expired preview project(s)`);
+    } catch (e) {
+      log.debug(`[workspace-preview] cleanup poll failed: ${(e && e.message) || String(e)}`);
+    }
+  }, 60_000);
+  try {
+    workspacePreviewCleanupTimer.unref?.();
+  } catch (_) {}
+  server.on("close", () => clearInterval(workspacePreviewCleanupTimer));
+  try {
+    cleanupExpiredWorkspacePreviews();
+  } catch (_) {}
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);

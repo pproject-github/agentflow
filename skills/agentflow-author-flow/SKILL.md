@@ -1,6 +1,6 @@
 ---
 name: agentflow-author-flow
-description: Generate or revise an AgentFlow flow locally from a natural-language request, validate its flow.yaml, open a single-file platform-style preview, and publish it to personal, workspace, or team scope after user confirmation. Use when a user asks Codex, Cursor, Claude Code, or another coding agent to create, draw, preview, sync, upload, or publish an AgentFlow flow without using AI Composer or manually dragging nodes.
+description: Generate or revise an AgentFlow flow locally from a natural-language request, validate its flow.yaml, preview it in the platform Workspace canvas when requested, and publish it to personal, workspace, or team scope after user confirmation. Use when a user asks Codex, Cursor, Claude Code, or another coding agent to create, draw, preview, sync, upload, or publish an AgentFlow flow without using AI Composer or manually dragging nodes.
 ---
 
 # Author an AgentFlow Flow
@@ -30,7 +30,14 @@ Read [prompt and handler checks](../../reference/flow-prompt-handler-check.md) w
 3. Create the draft at `.workspace/agentflow/pipelines/<flow-id>/flow.yaml`. Start from the packaged `builtin/pipelines/new/flow.yaml` when available. Preserve any unrelated workspace files.
 4. Build nodes from authoritative definitions. Never invent `definitionId`, slot order, slot type, handle index, or control semantics. Give every instance a unique position and keep the main path left-to-right.
 5. Validate the draft with `agentflow validate <flow-id> --json`. In this repository, use `node bin/agentflow.mjs validate <flow-id> --json`. Fix all errors before continuing; surface warnings that affect behavior.
-6. Generate and open the static preview with `agentflow flow preview <path-to-flow.yaml>`. In this repository, use `node bin/agentflow.mjs flow preview <path-to-flow.yaml>`. This command must exit after opening the generated `file://` HTML; do not start `agentflow ui` or another server.
+6. For a formal Flow-only review, the static preview remains available through `node bin/agentflow.mjs flow preview <path-to-flow.yaml>`. When the user asks for a Workspace canvas or “所见即所得”, prefer the server-side temporary Workspace preview:
+
+   ```bash
+   node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
+     --file .workspace/agentflow/pipelines/<flow-id>/workspace.graph.json
+   ```
+
+   Open the returned URL. The temporary project is TTL-bound, hidden from the normal Flow list, and is not the durable source of truth.
 7. Report the draft path and a compact node/edge summary, then wait for the user's visual confirmation. Do not write to the AgentFlow platform before confirmation unless the user explicitly requested direct publish without review.
 8. Ask for `personal`, `workspace`, or `team` only if the user has not already chosen the destination. `team` means a workspace Flow shared as editor with the current account's active team.
 9. Publish through the sibling `agentflow-cli` skill. Publishing a Flow does not publish or update a Workflow:

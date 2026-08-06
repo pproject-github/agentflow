@@ -35,6 +35,7 @@ Commands:
   list-flows
   publish-flow --flow-id <id> --file <flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
+  workspace-preview --file <workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
   list-run-by-workspace | list-runs-by-workspace --workspace <flowId> [--limit 20]
@@ -435,6 +436,21 @@ async function main() {
     const flowId = requireFlowId(args);
     const flowSource = option(args, "flow-source") || "user";
     printJson(await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`));
+    return;
+  }
+
+  if (command === "workspace-preview" || command === "preview-workspace") {
+    const graph = readJsonFile(option(args, "file"));
+    const result = await httpJson(args, "/api/workspace/preview", {
+      method: "POST",
+      body: {
+        graph,
+        previewId: option(args, "preview-id") || "",
+        title: option(args, "title") || "Workspace Preview",
+        ttlSeconds: option(args, "ttl-seconds") ? Number(option(args, "ttl-seconds")) : undefined,
+      },
+    });
+    printJson(result);
     return;
   }
 

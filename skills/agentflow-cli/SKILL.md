@@ -119,6 +119,19 @@ Read one flow graph:
 node skills/agentflow-cli/scripts/agentflow-cli.mjs get-graph --flow-id TestNodes --flow-source user
 ```
 
+Upload a Workspace graph to a server-side temporary preview project (the
+server returns a Workspace URL and cleans the project after its TTL):
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
+  --file .workspace/agentflow/pipelines/<flow-id>/workspace.graph.json \
+  --ttl-seconds 7200
+```
+
+This is for visual review only. It does not publish a formal Flow/Pipeline or
+create schedules. The returned temporary project is hidden from the normal
+Flow list and must not be treated as a durable source of truth.
+
 Run a flow:
 
 ```bash

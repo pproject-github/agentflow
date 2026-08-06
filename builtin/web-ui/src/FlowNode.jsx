@@ -924,7 +924,10 @@ export function FlowNode({
                 onBlur={handleProvideValueBlur}
                 placeholder="输入密码或密钥"
                 title={passwordVisible ? provideDraft : "密码已隐藏"}
-                autoComplete="off"
+                // This is a pipeline secret, not an account credential. Tell
+                // browser password managers not to offer save/update prompts.
+                autoComplete="new-password"
+                name="agentflow-secret"
                 readOnly={readOnly}
               />
               <button

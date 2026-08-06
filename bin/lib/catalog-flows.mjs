@@ -21,6 +21,7 @@ import {
 } from "./admin-builtin-pipelines.mjs";
 import { Table } from "./table.mjs";
 import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
+import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -29,6 +30,7 @@ export function collectPipelineNamesFromDir(dirPath) {
   return entries
     .filter((e) => e.isDirectory())
     .filter((e) => fs.existsSync(path.join(dirPath, e.name, "flow.yaml")))
+    .filter((e) => !isWorkspacePreviewDir(path.join(dirPath, e.name)))
     .map((e) => e.name);
 }
 
