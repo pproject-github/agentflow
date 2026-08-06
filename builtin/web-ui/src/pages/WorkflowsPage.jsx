@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import { WORKFLOW_CHECKLIST_DEMO_ACTION, withWorkflowChecklistProgress } from "../workflowChecklistDemo.js";
+import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
 
 const WORKFLOW_VIEW_STORAGE_KEY = "agentflow.workflows.scopeView";
 const TIMELINE_WINDOW_SIZE = 8;
 const TIMELINE_WINDOW_MAX = 24;
 const WORKFLOW_PAGE_SIZES = [20, 50, 100];
+
+function WorkflowLoading() {
+  return (
+    <section className="af-workflows-loading" role="status" aria-live="polite">
+      <div className="af-workflows-loading__brand">
+        <img src={agentflowIconUrl} alt="" />
+        <div><strong>正在读取迭代</strong><span>同步 Workflow、Action 进度与排期归属…</span></div>
+      </div>
+      <div className="af-workflows-loading__track" aria-hidden><span /></div>
+      <div className="af-workflows-loading__cards" aria-hidden>
+        <i /><i /><i />
+      </div>
+    </section>
+  );
+}
 
 function loadWorkflowView() {
   if (typeof localStorage === "undefined") return "personal";
@@ -624,7 +640,7 @@ export default function WorkflowsPage({ authUser }) {
   });
   const [view, setView] = useState(initialPageState.view);
   const [team, setTeam] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => !initialDemo);
   const [error, setError] = useState("");
   const [query, setQuery] = useState(initialPageState.query);
   const [serverQuery, setServerQuery] = useState(initialPageState.query);
@@ -1049,7 +1065,7 @@ export default function WorkflowsPage({ authUser }) {
           </section>
 
           {error ? <div className="af-workflows-message af-workflows-message--error">{error}</div> : null}
-          {loading ? <div className="af-workflows-message">正在读取迭代...</div> : null}
+          {loading ? <WorkflowLoading /> : null}
           {!loading && !error && availableCount === 0 ? (
             <div className="af-workflows-empty">
               <span className="material-symbols-outlined" aria-hidden>timeline</span>
@@ -1065,7 +1081,7 @@ export default function WorkflowsPage({ authUser }) {
             <div className="af-workflows-message">没有符合当前筛选条件的迭代。</div>
           ) : null}
 
-          <div className="af-workflows-list">
+          {!loading ? <div className="af-workflows-list">
             {displayedWorkflows.map((workflow) => {
               const progress = workflow.actionCount > 0
                 ? Math.round((workflow.completedActionCount / workflow.actionCount) * 100)
@@ -1132,7 +1148,7 @@ export default function WorkflowsPage({ authUser }) {
                 </article>
               );
             })}
-          </div>
+          </div> : null}
           {!loading && !error && visiblePagination.total > 0 ? (
             <nav className="af-workflows-pagination" aria-label="Workflow 列表分页">
               <span>共 {visiblePagination.total} 项</span>

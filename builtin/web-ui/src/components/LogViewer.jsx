@@ -354,7 +354,7 @@ export default function LogViewer({ open, onClose, flowId }) {
           background: "#0e0e0e",
           flexShrink: 0,
         }}>
-          {loading && <div style={{ padding: 12, fontSize: 12, color: "#9a9a9a" }}>Loading…</div>}
+          {loading && <div style={{ padding: 12, fontSize: 12, color: "#9a9a9a" }}>正在读取执行记录…</div>}
           {!loading && sessions.length === 0 && (
             <div style={{ padding: 12, fontSize: 12, color: "#9a9a9a" }}>
               {filterFlow && flowId ? "no sessions for this flow" : "no sessions"}
@@ -457,7 +457,7 @@ export default function LogViewer({ open, onClose, flowId }) {
               </div>
             )}
             {detailLoading && !sessionDetail && (
-              <div style={{ color: "#9a9a9a", fontSize: 12, padding: 20 }}>Loading…</div>
+              <div style={{ color: "#9a9a9a", fontSize: 12, padding: 20 }}>正在读取日志详情…</div>
             )}
             {sessionDetail && filteredEvents.length === 0 && (
               <div style={{ color: "#9a9a9a", fontSize: 12, padding: 20 }}>

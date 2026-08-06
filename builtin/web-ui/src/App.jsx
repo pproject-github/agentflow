@@ -20,6 +20,7 @@ import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
 import AppVersionNotice from "./components/AppVersionNotice.jsx";
+import agentflowIconUrl from "./assets/agentflow-icon.svg?url";
 
 function isLikeeContextPath(path) {
   return path === "/likee-context" || path === "/likee_context";
@@ -29,6 +30,20 @@ function isWorkflowSharePath(path) {
   if (path !== "/workspace" && path !== "/workflow-checklist") return false;
   const params = new URLSearchParams(window.location.search);
   return Boolean(String(params.get("workflowShare") || "").trim()) || (path === "/workflow-checklist" && params.get("demo") === "1");
+}
+
+function AppLoading() {
+  return (
+    <div className="af-app-loading" role="status" aria-live="polite" aria-label="AgentFlow 正在启动">
+      <div className="af-app-loading__content">
+        <div className="af-app-loading__mark"><img src={agentflowIconUrl} alt="" /></div>
+        <h1>AgentFlow</h1>
+        <p>Orchestration Engine</p>
+        <div className="af-app-loading__track" aria-hidden><span /></div>
+        <small>正在连接工作空间…</small>
+      </div>
+    </div>
+  );
 }
 
 function RedirectFlowToWorkspace() {
@@ -164,7 +179,7 @@ function AuthGate({ children }) {
   };
 
   if (auth.loading) {
-    return <div className="af-auth-screen"><div className="af-auth-panel">Loading...</div></div>;
+    return <AppLoading />;
   }
   if (!auth.authenticated) {
     return (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
+import LoadingState from "../components/LoadingState.jsx";
 
 function formatFeedbackTime(iso) {
   if (!iso) return "";
@@ -23,7 +24,7 @@ export default function FeedbackPage({ authUser }) {
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(authUser?.isAdmin));
   const [listError, setListError] = useState("");
 
   const isAdmin = Boolean(authUser?.isAdmin);
@@ -100,7 +101,7 @@ export default function FeedbackPage({ authUser }) {
 
           {listError ? <p className="af-err af-feedback-error">{listError}</p> : null}
           <div className="af-feedback-list af-feedback-list--page">
-            {items.length > 0 ? items.map((item) => (
+            {loading ? <LoadingState title="正在读取反馈" detail="同步用户提交的问题与建议…" rows={3} /> : items.length > 0 ? items.map((item) => (
               <article key={item.id} className="af-feedback-item">
                 <header className="af-feedback-item__head">
                   <div>
@@ -116,9 +117,7 @@ export default function FeedbackPage({ authUser }) {
                 {item.pageUrl ? <code className="af-feedback-item__url">{item.pageUrl}</code> : null}
               </article>
             )) : (
-              <div className="af-feedback-empty">
-                {loading ? "正在加载反馈..." : "暂无反馈"}
-              </div>
+              <div className="af-feedback-empty">暂无反馈</div>
             )}
           </div>
         </section>

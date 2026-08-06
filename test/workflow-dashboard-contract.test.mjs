@@ -26,6 +26,10 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
 
   assert.match(page, /fetch\(`\/api\/prd-workflows\?\$\{params\.toString\(\)\}`\)/);
   assert.match(page, /setLoading\(true\);\s*setError\(""\);\s*setWorkflows\(\[\]\);/);
+  assert.match(page, /function WorkflowLoading\(\)/);
+  assert.match(page, /const \[loading, setLoading\] = useState\(\(\) => !initialDemo\)/);
+  assert.match(page, /loading \? <WorkflowLoading \/> : null/);
+  assert.match(page, /!loading \? <div className="af-workflows-list">/);
   assert.match(page, />个人迭代<\/button>/);
   assert.match(page, />团队迭代<\/button>/);
   assert.match(page, /view: "workflow"/);
@@ -85,6 +89,7 @@ test("Workflow Dashboard lists user workflows and opens the existing Workflow vi
   assert.doesNotMatch(page, /<p>\{workflow\.pointer/);
   assert.match(css, /\.af-workflow-card\s*\{/);
   assert.match(css, /\.af-workflows-toolbar\s*\{/);
+  assert.match(css, /\.af-workflows-loading\s*\{/);
   assert.match(css, /\.af-workflows-timeline\s*\{/);
   assert.match(css, /\.af-workflows-timeline__rail > button::after/);
   assert.doesNotMatch(css, /\.af-workflows-timeline__range\s*\{/);

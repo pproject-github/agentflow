@@ -168,7 +168,7 @@ export default function WorkspaceRunLogsDrawer({
       <div className="af-work-run-logs__body">
         <div className="af-work-run-logs__list">
           <div className="af-work-run-logs__section-title">最近执行</div>
-          {loadingRuns ? <div className="af-work-run-logs__empty">Loading...</div> : null}
+          {loadingRuns ? <div className="af-work-run-logs__empty">正在读取执行记录…</div> : null}
           {!loadingRuns && runs.length === 0 ? <div className="af-work-run-logs__empty">暂无执行日志</div> : null}
           {runs.map((run) => (
             <button
@@ -200,7 +200,7 @@ export default function WorkspaceRunLogsDrawer({
             <span className="material-symbols-outlined" aria-hidden>search</span>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索事件、节点、错误" />
           </label>
-          {loadingDetail ? <div className="af-work-run-logs__empty">Loading...</div> : null}
+          {loadingDetail ? <div className="af-work-run-logs__empty">正在读取日志详情…</div> : null}
           {detail?.error ? <div className="af-work-run-logs__error">{detail.error}</div> : null}
           {!loadingDetail && !filteredEvents.length ? <div className="af-work-run-logs__empty">暂无事件</div> : null}
           <div className="af-work-run-logs__events">

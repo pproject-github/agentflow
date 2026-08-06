@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import { scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
+import LoadingState from "../components/LoadingState.jsx";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -28,7 +29,7 @@ function statusLabel(schedule) {
 export default function SchedulesPage() {
   const { navigate } = useRoute();
   const [schedules, setSchedules] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [updatingKey, setUpdatingKey] = useState("");
 
@@ -112,10 +113,10 @@ export default function SchedulesPage() {
           </div>
 
           {error ? <div className="af-schedules-error">{error}</div> : null}
-          {loading ? <div className="af-schedules-empty">Loading...</div> : null}
+          {loading ? <LoadingState title="正在读取定时任务" detail="同步 Pipeline 与 Workspace 调度状态…" rows={3} /> : null}
           {!loading && schedules.length === 0 ? <div className="af-schedules-empty">暂无定时任务</div> : null}
 
-          <div className="af-schedules-list">
+          {!loading ? <div className="af-schedules-list">
             {schedules.map((schedule) => {
               const key = `${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
               const busy = updatingKey === key;
@@ -170,7 +171,7 @@ export default function SchedulesPage() {
                 </article>
               );
             })}
-          </div>
+          </div> : null}
         </div>
       </div>
     </div>

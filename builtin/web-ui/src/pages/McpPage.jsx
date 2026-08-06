@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import LoadingState from "../components/LoadingState.jsx";
 
 function newId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -266,7 +267,7 @@ export default function McpPage() {
   const [servers, setServers] = useState([]);
   const [draft, setDraft] = useState(emptyDraft);
   const [selectedName, setSelectedName] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState({});
@@ -582,7 +583,7 @@ export default function McpPage() {
                   </button>
                 </div>
               </div>
-              {loading ? <p className="af-set-p">加载中...</p> : null}
+              {loading ? <LoadingState variant="compact" title="正在读取 MCP 服务" detail="同步服务配置与连接状态…" /> : null}
               {servers.length === 0 && !loading ? (
                 <div className="af-mcp-empty">
                   <p className="af-set-p">暂无 MCP server。</p>

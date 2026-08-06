@@ -38,6 +38,176 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.af-app-loading {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(124, 77, 255, 0.13), transparent 28rem),
+    var(--af-surface-lowest);
+  color: var(--af-on-surface);
+}
+
+.af-app-loading__content {
+  display: grid;
+  justify-items: center;
+  width: min(22rem, calc(100vw - 3rem));
+  text-align: center;
+}
+
+.af-app-loading__mark {
+  width: 4.5rem;
+  height: 4.5rem;
+  padding: 1rem;
+  border: 1px solid rgba(205, 189, 255, 0.22);
+  border-radius: 1.3rem;
+  background: rgba(28, 27, 27, 0.82);
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.36);
+}
+
+.af-app-loading__mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.af-app-loading h1 {
+  margin: 1.15rem 0 0.25rem;
+  font-family: var(--af-headline);
+  font-size: 1.65rem;
+  letter-spacing: -0.03em;
+}
+
+.af-app-loading p {
+  margin: 0;
+  color: rgba(202, 195, 216, 0.55);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.af-app-loading__track {
+  width: 8.5rem;
+  height: 2px;
+  margin-top: 1.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.1);
+}
+
+.af-app-loading__track span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, #9f7cff, #d8cdff, transparent);
+  animation: af-app-loading-slide 1.25s ease-in-out infinite;
+}
+
+.af-app-loading small {
+  margin-top: 0.75rem;
+  color: rgba(202, 195, 216, 0.42);
+  font-size: 0.7rem;
+}
+
+@keyframes af-app-loading-slide {
+  from { transform: translateX(-115%); }
+  to { transform: translateX(250%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-app-loading__track span {
+    width: 100%;
+    animation: none;
+  }
+}
+
+.af-loading-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: center;
+  min-height: 10rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(124, 87, 255, 0.08), transparent 18rem),
+    rgba(255, 255, 255, 0.025);
+  padding: 1.5rem;
+}
+
+.af-loading-state__spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 2px solid rgba(205, 189, 255, 0.13);
+  border-top-color: #9f7cff;
+  border-radius: 999px;
+  animation: af-loading-state-spin 0.85s linear infinite;
+}
+
+.af-loading-state__copy {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.af-loading-state__copy strong {
+  color: rgba(244, 240, 255, 0.88);
+  font-size: 0.82rem;
+}
+
+.af-loading-state__copy span {
+  color: rgba(216, 210, 230, 0.46);
+  font-size: 0.68rem;
+}
+
+.af-loading-state__skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.af-loading-state__skeleton i {
+  display: block;
+  height: 3.4rem;
+  border: 1px solid rgba(178, 170, 200, 0.06);
+  border-radius: 8px;
+  background: linear-gradient(100deg, rgba(255,255,255,.018) 20%, rgba(205,189,255,.055) 42%, rgba(255,255,255,.018) 64%);
+  background-size: 240% 100%;
+  animation: af-workflows-loading-shimmer 1.6s ease-in-out infinite;
+}
+
+.af-loading-state--compact {
+  min-height: 4.5rem;
+  padding: 1rem;
+}
+
+.af-loading-state--compact .af-loading-state__spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.af-loading-state--page {
+  width: 100%;
+  min-height: 100vh;
+  place-content: center;
+  grid-template-columns: auto minmax(0, 16rem);
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(circle at 50% 42%, rgba(124,77,255,.13), transparent 28rem), var(--af-surface-lowest);
+}
+
+@keyframes af-loading-state-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-loading-state__spinner,
+  .af-loading-state__skeleton i { animation: none; }
+}
+
 ::selection {
   background: var(--af-primary-container);
   color: var(--af-on-primary-container);
@@ -4374,6 +4544,93 @@ button.af-project-card {
 .af-workflows-message--error {
   border-color: rgba(255, 117, 117, 0.3);
   color: #ffb8b8;
+}
+
+.af-workflows-loading {
+  display: grid;
+  gap: 1rem;
+  min-height: 18rem;
+  border: 1px solid rgba(178, 170, 200, 0.12);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(124, 87, 255, 0.09), transparent 22rem),
+    rgba(255, 255, 255, 0.025);
+  padding: 2.5rem clamp(1rem, 4vw, 3rem);
+}
+
+.af-workflows-loading__brand {
+  display: flex;
+  align-items: center;
+  justify-self: center;
+  gap: 0.8rem;
+}
+
+.af-workflows-loading__brand img {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0.5rem;
+  border: 1px solid rgba(205, 189, 255, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(124, 87, 255, 0.08);
+}
+
+.af-workflows-loading__brand div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.af-workflows-loading__brand strong {
+  color: rgba(244, 240, 255, 0.88);
+  font-size: 0.86rem;
+}
+
+.af-workflows-loading__brand span {
+  color: rgba(216, 210, 230, 0.45);
+  font-size: 0.68rem;
+}
+
+.af-workflows-loading__track {
+  justify-self: center;
+  width: min(18rem, 80%);
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(205, 189, 255, 0.09);
+}
+
+.af-workflows-loading__track span {
+  display: block;
+  width: 36%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, #9f7cff, #d8cdff, transparent);
+  animation: af-app-loading-slide 1.25s ease-in-out infinite;
+}
+
+.af-workflows-loading__cards {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.af-workflows-loading__cards i {
+  display: block;
+  height: 4.3rem;
+  overflow: hidden;
+  border: 1px solid rgba(178, 170, 200, 0.07);
+  border-radius: 8px;
+  background: linear-gradient(100deg, rgba(255,255,255,.018) 20%, rgba(205,189,255,.055) 42%, rgba(255,255,255,.018) 64%);
+  background-size: 240% 100%;
+  animation: af-workflows-loading-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes af-workflows-loading-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-workflows-loading__track span,
+  .af-workflows-loading__cards i { animation: none; }
 }
 
 .af-workflows-empty {

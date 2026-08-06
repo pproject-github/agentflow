@@ -15853,7 +15853,7 @@ function WorkspacePageInner() {
                   </button>
                 </div>
                 {displaySharesError ? <div className="af-flow-snippet-error">{displaySharesError}</div> : null}
-                {displaySharesLoading ? <div className="af-display-link-modal__empty">Loading...</div> : null}
+                {displaySharesLoading ? <div className="af-display-link-modal__empty">正在读取展示分享…</div> : null}
                 {!displaySharesLoading && displayShares.length === 0 ? (
                   <div className="af-display-link-modal__empty">还没有创建过展示分享</div>
                 ) : null}

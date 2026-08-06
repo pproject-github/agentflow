@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import { WORKFLOW_CHECKLIST_DEMO_ACTION, withWorkflowChecklistProgress } from "../workflowChecklistDemo.js";
+import LoadingState from "../components/LoadingState.jsx";
 
 const STATUS_OPTIONS = [
   ["pending", "待执行"],
@@ -187,7 +188,7 @@ export default function WorkflowChecklistPage() {
       </header>
 
       {error ? <div className="af-checklist-doc__error">{error}</div> : null}
-      {loading ? <div className="af-checklist-doc__loading">正在读取 Checklist…</div> : (
+      {loading ? <LoadingState className="af-checklist-doc__loading" title="正在读取 Checklist" detail="同步执行项、状态与证据…" rows={4} /> : (
         <div className="af-checklist-doc__layout">
           <aside className="af-checklist-doc__toc">
             <div className="af-checklist-doc__meter"><span style={{ width: `${progress.percent || 0}%` }} /></div>

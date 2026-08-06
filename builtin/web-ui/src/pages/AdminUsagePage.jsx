@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AdminRunDetailDrawer from "../components/AdminRunDetailDrawer.jsx";
 import { useRoute } from "../routeContext.jsx";
+import LoadingState from "../components/LoadingState.jsx";
 
 function compactNumber(value) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.max(0, Number(value || 0)));
@@ -60,7 +61,7 @@ function statusText(status) {
 export default function AdminUsagePage({ authUser }) {
   const { navigate } = useRoute();
   const [usage, setUsage] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedRun, setSelectedRun] = useState(null);
   const [workspaceOwner, setWorkspaceOwner] = useState(null);
@@ -363,7 +364,7 @@ export default function AdminUsagePage({ authUser }) {
             </thead>
             <tbody>
               {loading && !usage ? (
-                <tr><td colSpan={6}>正在加载...</td></tr>
+                <tr><td colSpan={6}><LoadingState variant="compact" title="正在读取使用统计" detail="汇总用户、Pipeline 与 Run 数据…" /></td></tr>
               ) : (usage?.users || []).length === 0 ? (
                 <tr><td colSpan={6}>暂无用户数据</td></tr>
               ) : (

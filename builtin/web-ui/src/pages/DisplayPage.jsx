@@ -8,6 +8,7 @@ import "@xyflow/react/dist/style.css";
 import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { useRoute } from "../routeContext.jsx";
+import LoadingState from "../components/LoadingState.jsx";
 
 function displayContent(node) {
   const slots = [...(node?.inputs || []), ...(node?.outputs || [])];
@@ -388,7 +389,7 @@ export default function DisplayPage() {
   }, [state.share?.viewport]);
 
   if (state.loading) {
-    return <main className="af-public-display-page"><div className="af-public-display-status">Loading...</div></main>;
+    return <main className="af-public-display-page"><LoadingState variant="page" title="正在打开展示页" detail="同步节点内容与画布布局…" /></main>;
   }
   if (state.error) {
     return (
