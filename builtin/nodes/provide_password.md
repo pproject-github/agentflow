@@ -1,5 +1,6 @@
 ---
 # Built-in node: directly provide a hidden password/secret value
+runtime: native
 description: Provide a secret text value without showing it on the node card
 displayName: Password
 input: []

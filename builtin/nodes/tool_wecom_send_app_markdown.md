@@ -1,5 +1,6 @@
 ---
 # Built-in node: WeCom direct markdown message
+runtime: native
 description: Send Markdown message to WeCom users through an enterprise application
 displayName: WeCom Direct Markdown
 input:

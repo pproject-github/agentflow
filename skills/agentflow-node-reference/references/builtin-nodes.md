@@ -20,6 +20,14 @@
 - Inputs: 0. `prev`:node; 1. `workspaceContext`:text; 2. `skillsContext`:text; 3. `mcpContext`:text; 4. `knowledgeContext`:text
 - Outputs: 0. `next`:node; 1. `result`:text
 
+### workspace_one_click_task
+
+- Display: 一键任务
+- Description: 输入任务描述，选择 Skills、workspace 上下文和输出类型后直接运行；等价于「Load Skills + 子 Agent + Display」的合并节点。
+- Runtime: agent/runner
+- Inputs: 0. `prev`:node; 1. `skillKeys`:text; 2. `includeWorkspaceContext`:bool = true; 3. `displayType`:text = markdown; 4. `knowledgeContext`:text; 5. `workspaceContext`:text
+- Outputs: 0. `next`:node; 1. `content`:text; 2. `displayType`:text = markdown
+
 ## control
 
 ### control_cd_workspace
@@ -27,8 +35,8 @@
 - Display: 加载知识库
 - Description: Load one or more read-only knowledge sources for downstream Agent nodes. This node does not change the runtime cwd. It publishes `knowledgeContext` for reading/searching referenced repos or folders. `workspaceContext` and `cwd` are retained as legacy compatibility outputs for the first source.
 - Runtime: local-only
-- Inputs: 0. `prev`:node; 1. `knowledgeContext`:text; 2. `path`:text; 3. `mode`:text = set; 4. `label`:text; 5. `workspaceContext`:text
-- Outputs: 0. `next`:node; 1. `knowledgeContext`:text; 2. `workspaceContext`:text; 3. `cwd`:file; 4. `previous`:text
+- Inputs: 0. `prev`:node; 1. `path`:text; 2. `label`:text; 3. `knowledgeContext`:text; 4. `workspaceContext`:text
+- Outputs: 0. `next`:node; 1. `knowledgeContext`:text; 2. `workspaceContext`:text; 3. `cwd`:file
 
 ### control_if
 
@@ -38,13 +46,21 @@
 - Inputs: 0. `prev`:node; 1. `prediction`:bool
 - Outputs: 0. `next1`:node; 1. `next2`:node
 
+### control_load_mcp
+
+- Display: Load MCP
+- Description: 加载所选 Cursor MCP Server 的工具清单，通过 mcpContext 传给下游 agent 节点。
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `serverNames`:text
+- Outputs: 0. `next`:node; 1. `mcpContext`:text
+
 ### control_load_skills
 
 - Display: Load Skills
-- Description: Load selected public Skills from the AgentFlow skill registry into the current workspace context. Connect `workspaceContext` from CD Workspace, set `skillKeys` to skill names or registry keys, then connect `skillsContext` to downstream agent/tool nodes. Loaded skills are injected into the node prompt under "已加载 Skills" while downstream execution still uses the CD Workspace context. Skill key examples: - `agentflow-flow-add-instances` - `workspace-agents:agentflow-flow-edit-node-fields` - `global-codex:some-skill` Merge modes: - `replace` - `append` - `prepend`
+- Description: Load the currently selected Workspace skill collection for downstream agent nodes. Set `skillKeys` to skill names or registry keys, then connect `skillsContext` to downstream agent/tool nodes. Loaded skills are injected into the node prompt under "已加载 Skills"。 Skill key examples: - `agentflow-flow-add-instances` - `workspace-agents:agentflow-flow-edit-node-fields` - `global-codex:some-skill`
 - Runtime: local-only
-- Inputs: 0. `prev`:node; 1. `skillKeys`:text; 2. `mergeMode`:text = replace; 3. `workspaceContext`:text; 4. `skillsContext`:text
-- Outputs: 0. `next`:node; 1. `skillsContext`:text; 2. `loadedCount`:text; 3. `summary`:text
+- Inputs: 0. `prev`:node; 1. `skillKeys`:text
+- Outputs: 0. `next`:node; 1. `skillsContext`:text
 
 ### control_user_workspace
 
@@ -53,6 +69,22 @@
 - Runtime: local-only
 - Inputs: 0. `prev`:node
 - Outputs: 0. `next`:node; 1. `workspaceContext`:text; 2. `cwd`:file
+
+### workspace_run
+
+- Display: Run
+- Description: Workspace 图的运行入口。点击运行时，从本节点出发沿控制边选出子图并执行；本节点自身不产生输出。
+- Runtime: local-only
+- Inputs: 0. `prev`:node
+- Outputs: 0. `next`:node
+
+### workspace_scheduled_run
+
+- Display: Scheduled Run
+- Description: 定时运行入口。与 Run 相同的执行语义，区别是由调度器按节点 body 中的 JSON 排程配置触发。
+- Runtime: local-only
+- Inputs: 0. `prev`:node
+- Outputs: 0. `next`:node
 
 ## tool
 
@@ -92,7 +124,7 @@
 
 - Display: Create GitLab MR
 - Description: Create or reuse a GitLab merge request for the current branch. - `gitContext` and `workspaceContext` can be connected from Git Checkout / Load Worktree. - `repoPath` is optional. When empty, AgentFlow uses `gitContext.worktreePath`, `gitContext.repoPath`, or `workspaceContext.cwd`. - `sourceBranch`, `targetBranch`, `title`, `description`, `draft`, and `labels` are optional. When empty, AgentFlow derives sensible defaults from git. - `tokenEnv` is optional. Defaults to `GITLAB_TOKEN,GITLAB_PRIVATE_TOKEN`. - `gitlabApiBase` is optional. When empty, AgentFlow uses `https://${gitContext.host}/api/v4`.
-- Runtime: agent/runner
+- Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `repoPath`:file; 2. `gitContext`:text; 3. `workspaceContext`:text; 4. `sourceBranch`:text; 5. `targetBranch`:text; 6. `title`:text; 7. `description`:text; 8. `draft`:bool = false; 9. `labels`:text; 10. `push`:bool = true; 11. `remote`:text = origin; 12. `tokenEnv`:text; 13. `gitlabApiBase`:text; 14. `removeSourceBranch`:bool = false; 15. `squash`:bool = false
 - Outputs: 0. `next`:node; 1. `mrUrl`:text; 2. `created`:bool; 3. `mrIid`:text; 4. `projectId`:text; 5. `sourceBranch`:text; 6. `targetBranch`:text; 7. `title`:text; 8. `message`:text
 
@@ -116,7 +148,7 @@
 
 - Display: WeCom Direct Markdown
 - Description: Send Markdown message to WeCom users through an enterprise application
-- Runtime: agent/runner
+- Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `markdown`:text; 2. `toUser`:text; 3. `corpId`:text; 4. `corpSecret`:text; 5. `agentId`:text; 6. `accessToken`:text
 - Outputs: 0. `next`:node; 1. `sent`:bool; 2. `message`:text; 3. `response`:text
 
@@ -124,9 +156,75 @@
 
 - Display: WeCom Group Chat Markdown
 - Description: Send Markdown message to a WeCom group robot webhook
-- Runtime: agent/runner
+- Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `markdown`:text; 2. `webhookUrl`:text; 3. `webhookKey`:text
 - Outputs: 0. `next`:node; 1. `sent`:bool; 2. `message`:text; 3. `response`:text
+
+## display
+
+### display_ascii
+
+- Display: ASCII Display
+- Description: Display ASCII diagram content in workspace canvas; passes diagram text downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_chart
+
+- Display: Chart Display
+- Description: Display a JSON ChartSpec with ECharts in workspace canvas; passes the JSON downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_html
+
+- Display: HTML Display
+- Description: Display HTML content in workspace canvas; passes HTML downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_image
+
+- Display: Image Display
+- Description: Display an image URL, data URL, or image path in workspace canvas; passes source downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `src`:text; 2. `filePath`:file; 3. `alt`:text; 4. `workspaceContext`:text
+- Outputs: 0. `src`:text; 1. `next`:node
+
+### display_markdown
+
+- Display: Markdown Display
+- Description: Display Markdown content in workspace canvas; passes content downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_mermaid
+
+- Display: Mermaid Display
+- Description: Display Mermaid diagram source in workspace canvas; passes diagram source downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_react_app
+
+- Display: React App
+- Description: Display a small React project in a sandboxed workspace iframe and pass the project JSON downstream
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
+- Outputs: 0. `content`:text; 1. `next`:node
+
+### display_table
+
+- Display: Table Display
+- Description: Display table data in workspace canvas; accepts JSON, Markdown table, CSV, or TSV and passes the text downstream
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
+- Outputs: 0. `content`:text; 1. `next`:node
 
 ## provide
 
@@ -161,69 +259,3 @@
 - Runtime: local-only
 - Inputs: 无
 - Outputs: 0. `value`:text
-
-## other
-
-### display_ascii
-
-- Display: ASCII Display
-- Description: Display ASCII diagram content in workspace canvas; passes diagram text downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_chart
-
-- Display: Chart Display
-- Description: Display a JSON ChartSpec with ECharts in workspace canvas; passes the JSON downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_html
-
-- Display: HTML Display
-- Description: Display HTML content in workspace canvas; passes HTML downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_image
-
-- Display: Image Display
-- Description: Display an image URL, data URL, or image path in workspace canvas; passes source downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `src`:text; 2. `filePath`:file; 3. `alt`:text; 4. `workspaceContext`:text
-- Outputs: 0. `src`:text; 1. `next`:node
-
-### display_markdown
-
-- Display: Markdown Display
-- Description: Display Markdown content in workspace canvas; passes content downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_mermaid
-
-- Display: Mermaid Display
-- Description: Display Mermaid diagram source in workspace canvas; passes diagram source downstream as text
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_react_app
-
-- Display: React App
-- Description: Display a small React project in a sandboxed workspace iframe and pass the project JSON downstream
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
-- Outputs: 0. `content`:text; 1. `next`:node
-
-### display_table
-
-- Display: Table Display
-- Description: Display table data in workspace canvas; accepts JSON, Markdown table, CSV, or TSV and passes the text downstream
-- Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
-- Outputs: 0. `content`:text; 1. `next`:node

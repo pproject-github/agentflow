@@ -1,5 +1,7 @@
 ---
 # 内置节点：AI 转布尔（agent 执行）
+runtime: degraded
+palette: hidden
 description: "AI-powered boolean judgment: an agent evaluates the input value and writes true/false to prediction. Use for non-deterministic scenarios requiring semantic understanding."
 displayName: Agent ToBool
 input:

@@ -1,5 +1,7 @@
 ---
 # 内置节点：按 key 读取
+runtime: none
+palette: hidden
 description: Load key-value from global storage
 displayName: LoadKey
 input:

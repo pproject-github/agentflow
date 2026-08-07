@@ -167,6 +167,22 @@ function normalizeFrontmatterSlots(arr) {
   });
 }
 
+/** Workspace 运行时对该节点类型的支持程度；未声明按 native 处理（兼容旧的自定义节点 .md）。 */
+const NODE_RUNTIME_TIERS = new Set(["native", "degraded", "none"]);
+
+function normalizeNodeRuntimeTier(value) {
+  const tier = String(value ?? "").trim().toLowerCase();
+  return NODE_RUNTIME_TIERS.has(tier) ? tier : "native";
+}
+
+/** 节点分类；未声明时由 id 前缀推断。 */
+const NODE_CATEGORY_TYPES = new Set(["control", "provide", "agent"]);
+
+function normalizeNodeCategory(value) {
+  const type = String(value ?? "").trim().toLowerCase();
+  return NODE_CATEGORY_TYPES.has(type) ? type : "";
+}
+
 /**
  * 解析 .md 节点文件的 frontmatter。
  * 优先用 js-yaml 解析整块 frontmatter，以支持 description: | / >- 等多行字段；
@@ -174,7 +190,16 @@ function normalizeFrontmatterSlots(arr) {
  */
 export function parseNodeFrontmatter(raw) {
   const m = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  const data = { input: [], output: [], displayName: undefined, description: undefined, guide: undefined };
+  const data = {
+    input: [],
+    output: [],
+    displayName: undefined,
+    description: undefined,
+    guide: undefined,
+    runtime: "native",
+    type: "",
+    paletteHidden: false,
+  };
   if (!m) return data;
   const fm = m[1];
   try {
@@ -189,6 +214,9 @@ export function parseNodeFrontmatter(raw) {
       if (parsed.guide && typeof parsed.guide === "object" && !Array.isArray(parsed.guide)) {
         data.guide = parsed.guide;
       }
+      data.runtime = normalizeNodeRuntimeTier(parsed.runtime);
+      data.type = normalizeNodeCategory(parsed.type);
+      data.paletteHidden = String(parsed.palette ?? "").trim().toLowerCase() === "hidden";
       data.input = normalizeFrontmatterSlots(parsed.input);
       data.output = normalizeFrontmatterSlots(parsed.output);
       return data;
@@ -225,6 +253,9 @@ export function parseNodeFrontmatter(raw) {
   const displayM = fm.match(/\bdisplayName:\s*["']?([^"'\n#][^\n]*)["']?/);
   if (descM) data.description = descM[1].trim().replace(/^["']|["']$/g, "");
   if (displayM) data.displayName = displayM[1].trim().replace(/^["']|["']$/g, "");
+  data.runtime = normalizeNodeRuntimeTier((fm.match(/^\s*runtime:\s*(\S+)/m) || [])[1]);
+  data.type = normalizeNodeCategory((fm.match(/^\s*type:\s*(\S+)/m) || [])[1]);
+  data.paletteHidden = /^\s*palette:\s*hidden\s*$/m.test(fm);
   return data;
 }
 
@@ -270,6 +301,10 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       try {
         const raw = fs.readFileSync(path.join(dir, e.name), "utf-8");
         const data = parseNodeFrontmatter(raw);
+        // frontmatter 的 type: 优先于按 id 前缀的推断（workspace_run 等不带前缀的节点靠它归类）
+        if (data.type) type = data.type;
+        // frontmatter 的 palette: hidden 与 RETIRED_NODE_IDS 等价，让节点自带可见性
+        if (data.paletteHidden) continue;
         const strippedId =
           id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
         const label = data.displayName ?? strippedId;
@@ -287,6 +322,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         byId.set(id, {
           id,
           type,
+          runtimeTier: data.runtime,
           label: translatedDisplayName || label,
           displayName: translatedDisplayName || data.displayName,
           description: translatedDescription || data.description,
@@ -632,6 +668,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       if (/^control/i.test(nodeId)) type = "control";
       else if (/^provide/i.test(nodeId)) type = "provide";
       else if (/^tool/i.test(nodeId)) type = "agent";
+      if (data.type) type = data.type;
       const strippedId =
         nodeId
           .replace(/\.md$/, "")
@@ -642,6 +679,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       const label = data.displayName ?? strippedId;
       return {
         type,
+        runtimeTier: data.runtime,
         label,
         displayName: data.displayName,
         inputs: data.input,

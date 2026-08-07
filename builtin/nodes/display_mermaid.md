@@ -1,5 +1,6 @@
 ---
 # 内置节点：Mermaid 展示
+runtime: native
 description: Display Mermaid diagram source in workspace canvas; passes diagram source downstream as text
 displayName: Mermaid Display
 input:

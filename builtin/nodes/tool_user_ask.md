@@ -1,5 +1,7 @@
 ---
 # 内置节点：用户选择（Switch 分支）
+runtime: none
+palette: hidden
 description: 等待用户从多个选项中选择一个，流程暂停；按用户选择沿对应出边分支继续。每个 output 槽位对应一条分支，槽位的 description 作为选项文案。
 displayName: UserAsk
 input:

@@ -1,5 +1,6 @@
 ---
 # 内置节点：ASCII 图展示
+runtime: native
 description: Display ASCII diagram content in workspace canvas; passes diagram text downstream as text
 displayName: ASCII Display
 input:

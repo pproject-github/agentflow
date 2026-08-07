@@ -1,5 +1,6 @@
 ---
 # 内置节点：Git Checkout
+runtime: native
 description: |
   Clone or update a Git repository and expose it as a workspace context for downstream nodes.
 

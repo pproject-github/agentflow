@@ -1,5 +1,6 @@
 ---
 # Built-in node: Image Display
+runtime: native
 description: Display an image URL, data URL, or image path in workspace canvas; passes source downstream as text
 displayName: Image Display
 input:

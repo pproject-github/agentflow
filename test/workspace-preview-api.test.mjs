@@ -29,8 +29,10 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
         workspace_run_1: {
           definitionId: "workspace_run",
           label: "Run",
-          input: [{ type: "node", name: "prev", value: "" }],
-          output: [{ type: "node", name: "next", value: "" }],
+          // showOnNode 与 builtin/nodes/workspace_run.md 的定义一致；否则读取时会被
+          // hydrateWorkspaceSlotMetaFromDefinitions 回填，往返就不是恒等
+          input: [{ type: "node", name: "prev", value: "", showOnNode: true }],
+          output: [{ type: "node", name: "next", value: "", showOnNode: true }],
         },
       },
       edges: [],

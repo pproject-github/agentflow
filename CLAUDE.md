@@ -125,14 +125,18 @@ AgentFlow/
 3. **No loops**: the Workspace run planner rejects cyclic graphs
    (`Workspace run graph contains a cycle`). The old `control_anyOne` + `control_toBool` +
    `control_if` check-fix-loop only worked under the retired Start/End runtime
-4. **Node coverage**: the Workspace runtime has explicit handlers for `agent_subAgent`,
-   `tool_nodejs`, `control_if`, `provide_*`, `control_cd_workspace`,
-   `control_user_workspace`, `control_load_skills`, `control_load_mcp`,
-   `tool_git_checkout`, `tool_git_worktree_load` / `_unload`, `tool_gitlab_create_mr`,
-   `tool_set_run_env`, `tool_display_share_link`, `tool_wecom_send_*`,
-   `workspace_run` / `workspace_scheduled_run`. Other builtin node types still appear in
-   the palette but fall through to the generic agent path — they do **not** get their
-   documented semantics
+4. **Node coverage**: every node type declares its own support tier in the `runtime:`
+   frontmatter field of `builtin/nodes/<id>.md` — this is the single source of truth:
+   - `native` — the Workspace runtime has an explicit handler
+   - `degraded` — no dedicated handler; works via the generic agent path plus the output
+     envelope, so the documented semantics hold only by convention
+   - `none` — no implementation; the definition exists only so historical graphs still
+     parse. These also carry `palette: hidden` and never reach the node palette,
+     `/api/nodes`, or the Composer node reference
+
+   `skills/agentflow-node-reference/references/builtin-nodes.md` is generated from these
+   files by `scripts/generate-agentflow-skill-references.mjs`; rerun it after editing any
+   node definition (a test enforces this)
 
 ---
 
@@ -177,10 +181,14 @@ When adding **new nodes** to a flow:
 | Condition | Recommended `definitionId` |
 |-----------|---------------------------|
 | Behavior fully determined by input, no AI reasoning | `tool_nodejs` + `script` |
-| Display prominent output to user | `tool_print` |
+| Display prominent output to user | `tool_print` ⚠️ |
 | Requires AI understanding, judgment, content generation | `agent_subAgent` |
-| Pause and wait for the user to confirm/edit content | `tool_user_check` |
-| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` |
+| Pause and wait for the user to confirm/edit content | `tool_user_check` ⚠️ |
+| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` ⚠️ |
+
+⚠️ = `runtime: none` in `builtin/nodes/<id>.md`. These only ever ran under the retired
+Start/End Pipeline runtime. **Never put them in a Workspace graph** — use `display_markdown`
+instead of `tool_print`; there is no Workspace equivalent for the two human-gate nodes.
 
 **YAML structure:**
 ```yaml
@@ -205,18 +213,23 @@ ui:
       y: <number>
 ```
 
-**Handle quick reference:**
+**Handle quick reference** (⚠️ = `runtime: none`, legacy Start/End only — never in a Workspace graph):
 | definitionId | Common outputs | Common inputs |
 |--------------|----------------|---------------|
-| control_start | next → output-0 | — |
-| control_end | — | prev → input-0 |
+| control_start ⚠️ | next → output-0 | — |
+| control_end ⚠️ | — | prev → input-0 |
 | control_if | next1(TRUE) → output-0, next2(FALSE) → output-1 | prev → input-0, prediction → input-1 |
-| control_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
+| control_toBool ⚠️ | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
 | control_agent_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
-| control_anyOne | next → output-0 | prev1 → input-0, prev2 → input-1 |
+| control_anyOne ⚠️ | next → output-0 | prev1 → input-0, prev2 → input-1 |
 | tool_nodejs | next → output-0, result → output-1 | prev → input-0, [dynamic inputs] |
-| tool_user_check | next → output-0, content → output-1 | prev → input-0, content → input-1 |
-| tool_user_ask | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+| tool_user_check ⚠️ | next → output-0, content → output-1 | prev → input-0, content → input-1 |
+| tool_user_ask ⚠️ | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+
+`control_agent_toBool` is `runtime: degraded` — it does run, but only because the generic
+agent path honors the output envelope. Nothing constrains the model's `prediction` value,
+and `parse-bool.mjs` accepts only exactly `true` / `1` / `yes` / `on`; `是` or
+`true（因为…）` silently yields false.
 
 **Edge fan-out / fan-in rule:** One output can connect to multiple inputs (fan-out OK). One input can only have one incoming edge (fan-in forbidden). Never write two edges with the same `target + targetHandle` — runtime only uses the first match, the rest are silently ignored.
 

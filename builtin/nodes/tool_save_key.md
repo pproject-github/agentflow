@@ -1,5 +1,7 @@
 ---
 # 内置节点：按 key 写入
+runtime: none
+palette: hidden
 description: Save key-value pair to global storage
 displayName: SaveKey
 input:

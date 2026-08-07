@@ -1,5 +1,6 @@
 ---
 # Built-in node: HTML Display
+runtime: native
 description: Display HTML content in workspace canvas; passes HTML downstream as text
 displayName: HTML Display
 input:

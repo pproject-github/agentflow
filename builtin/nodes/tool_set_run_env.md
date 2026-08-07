@@ -1,5 +1,6 @@
 ---
 # Built-in node: set environment variables for the current run only
+runtime: native
 description: Set environment variables for downstream nodes in the current workspace run
 displayName: Set Run Env
 input:

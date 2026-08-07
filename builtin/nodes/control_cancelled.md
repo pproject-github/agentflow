@@ -1,5 +1,7 @@
 ---
 # 内置节点：取消判断
+runtime: none
+palette: hidden
 description: Check whether the current wait/run has been cancelled. Use cancelled output with control_if.
 displayName: Cancel Check
 input:

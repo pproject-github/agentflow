@@ -1,5 +1,6 @@
 ---
 # 内置节点：Markdown 展示
+runtime: native
 description: Display Markdown content in workspace canvas; passes content downstream as text
 displayName: Markdown Display
 input:

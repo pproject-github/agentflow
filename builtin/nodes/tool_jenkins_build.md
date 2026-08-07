@@ -1,5 +1,7 @@
 ---
 # Built-in node: durable Jenkins build
+runtime: none
+palette: hidden
 description: |
   Trigger one Jenkins job and durably monitor it until completion.
 

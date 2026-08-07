@@ -101,95 +101,6 @@ const WorkflowAssistantThread = lazy(() => import("../components/WorkflowAssista
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX = "agentflow.workspace.sidebarCollapsed";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
-const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp", "control_cd_workspace", "control_user_workspace"]);
-const WORKSPACE_RUN_DEFINITION = {
-  id: "workspace_run",
-  displayName: "Run",
-  label: "Run",
-  description: "Run the downstream workspace subgraph connected from this node.",
-  type: "control",
-  inputs: [{ type: "node", name: "prev", default: "" }],
-  outputs: [{ type: "node", name: "next", default: "" }],
-};
-const WORKSPACE_SCHEDULED_RUN_DEFINITION = {
-  id: "workspace_scheduled_run",
-  displayName: "Scheduled Run",
-  label: "Scheduled Run",
-  description: "Run the downstream workspace subgraph on a schedule.",
-  type: "control",
-  inputs: [{ type: "node", name: "prev", default: "" }],
-  outputs: [{ type: "node", name: "next", default: "" }],
-};
-const WORKSPACE_LOAD_SKILLS_DEFINITION = {
-  id: "control_load_skills",
-  displayName: "Load Skills",
-  label: "Load Skills",
-  description: "Load the currently selected Workspace skill collection for downstream agent nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "skillKeys", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "skillsContext", default: "", showOnNode: true },
-  ],
-};
-const WORKSPACE_LOAD_MCP_DEFINITION = {
-  id: "control_load_mcp",
-  displayName: "Load MCP",
-  label: "Load MCP",
-  description: "Load selected Cursor MCP server tool manifests for downstream agent nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "serverNames", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "mcpContext", default: "", showOnNode: true },
-  ],
-};
-const WORKSPACE_LOAD_WORKSPACE_DEFINITION = {
-  id: "control_cd_workspace",
-  displayName: "加载知识库",
-  label: "加载知识库",
-  description: "Select one or more knowledge sources and pass knowledgeContext to downstream nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "path", default: "", showOnNode: false },
-    { type: "text", name: "label", default: "", showOnNode: false },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: true },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-    { type: "file", name: "cwd", default: "", showOnNode: false },
-  ],
-};
-const WORKSPACE_CONTEXT_RUN_DEFINITION = {
-  id: "workspace_one_click_task",
-  displayName: "一键任务",
-  label: "一键任务",
-  description: "输入任务，选择 Skills、workspace 上下文和输出类型后直接运行。",
-  type: "agent",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "skillKeys", default: "", showOnNode: false },
-    { type: "bool", name: "includeWorkspaceContext", default: "true", showOnNode: false },
-    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "content", default: "", showOnNode: true },
-    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
-  ],
-};
 
 const WORKSPACE_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 const DEFAULT_WORKSPACE_NODE_WIDTH = 320;
@@ -9054,13 +8965,8 @@ function WorkspacePageInner() {
     const paletteList = background
       ? paletteRef.current
       : [
-          ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
-          WORKSPACE_CONTEXT_RUN_DEFINITION,
-          WORKSPACE_LOAD_WORKSPACE_DEFINITION,
-          WORKSPACE_LOAD_SKILLS_DEFINITION,
-          WORKSPACE_LOAD_MCP_DEFINITION,
-          WORKSPACE_RUN_DEFINITION,
-          WORKSPACE_SCHEDULED_RUN_DEFINITION,
+          // 节点定义单一来源：builtin/nodes/*.md（面板可见性由 frontmatter 的 palette: hidden 决定）
+          ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []),
         ];
     if (!background) {
       paletteRef.current = paletteList;

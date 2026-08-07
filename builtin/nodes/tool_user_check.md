@@ -1,5 +1,7 @@
 ---
 # 内置节点：用户确认
+runtime: none
+palette: hidden
 description: 等待用户确认，流程暂停。展示确认内容给用户，用户可编辑/AI修改后保存，回复 "继续" 后重启流程。
 displayName: UserCheck
 input:

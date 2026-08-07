@@ -1,5 +1,6 @@
 ---
 # 内置节点：执行 Node.js
+runtime: native
 description: |
   Execute a Node.js script. The Workspace runtime spawns the command directly — no agent involved.
 

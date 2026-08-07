@@ -1,5 +1,6 @@
 ---
 # Built-in node: Chart Display
+runtime: native
 description: Display a JSON ChartSpec with ECharts in workspace canvas; passes the JSON downstream as text
 displayName: Chart Display
 input:

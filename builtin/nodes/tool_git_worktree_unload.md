@@ -1,5 +1,6 @@
 ---
 # Built-in node: Git Worktree Unload
+runtime: native
 description: |
   Remove a Git worktree.
 

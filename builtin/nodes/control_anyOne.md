@@ -1,5 +1,7 @@
 ---
 # 内置节点：任一满足
+runtime: none
+palette: hidden
 description: Continues to next when any upstream input is ready
 displayName: AnyOne
 input:

@@ -1,5 +1,7 @@
 ---
 # 内置节点：醒目输出
+runtime: none
+palette: hidden
 description: Output content to user with special font style
 displayName: Print
 input:

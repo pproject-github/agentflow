@@ -1,5 +1,7 @@
 ---
 # Built-in node: User Workspace
+runtime: native
+palette: hidden
 description: Output a workspace context pointing to the current user's home directory.
 displayName: User Workspace
 input:

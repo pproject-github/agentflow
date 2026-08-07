@@ -1,5 +1,6 @@
 ---
 # Built-in node: GitLab Create MR
+runtime: native
 description: |
   Create or reuse a GitLab merge request for the current branch.
 

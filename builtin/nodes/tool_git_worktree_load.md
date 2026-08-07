@@ -1,5 +1,6 @@
 ---
 # Built-in node: Git Worktree Load
+runtime: native
 description: |
   Create or reuse a Git worktree and expose it as the downstream workspace context.
 

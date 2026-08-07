@@ -1,5 +1,6 @@
 ---
 # Built-in node: WeCom group robot markdown message
+runtime: native
 description: Send Markdown message to a WeCom group robot webhook
 displayName: WeCom Group Chat Markdown
 input:

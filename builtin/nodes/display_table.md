@@ -1,5 +1,6 @@
 ---
 # Built-in node: Table Display
+runtime: native
 description: Display table data in workspace canvas; accepts JSON, Markdown table, CSV, or TSV and passes the text downstream
 displayName: Table Display
 input:

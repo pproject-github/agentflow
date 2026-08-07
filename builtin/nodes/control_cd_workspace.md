@@ -1,5 +1,7 @@
 ---
 # 内置节点：加载知识库
+runtime: native
+type: control
 description: |
   Load one or more read-only knowledge sources for downstream Agent nodes.
 
@@ -12,19 +14,15 @@ input:
     name: prev
     default: ""
   - type: text
-    name: knowledgeContext
-    default: ""
-    showOnNode: false
-  - type: text
     name: path
     default: ""
     showOnNode: false
   - type: text
-    name: mode
-    default: "set"
+    name: label
+    default: ""
     showOnNode: false
   - type: text
-    name: label
+    name: knowledgeContext
     default: ""
     showOnNode: false
   - type: text
@@ -46,10 +44,6 @@ output:
     showOnNode: false
   - type: file
     name: cwd
-    default: ""
-    showOnNode: false
-  - type: text
-    name: previous
     default: ""
     showOnNode: false
 ---

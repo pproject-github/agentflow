@@ -1,5 +1,7 @@
 ---
 # 内置节点：等待到指定时间
+runtime: none
+palette: hidden
 description: Persistently wait until an absolute time, then continue when scheduler resumes this run.
 displayName: WaitUntil
 input:

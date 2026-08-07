@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import fs from "fs";
 import path from "path";
-import yaml from "js-yaml";
 import { fileURLToPath } from "url";
-import { RETIRED_NODE_IDS } from "../bin/lib/legacy-flow-execution.mjs";
+import { parseNodeFrontmatter } from "../bin/lib/catalog-flows.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -19,23 +18,27 @@ function stripFrontmatter(raw) {
 
 function parseNodeDefinition(filePath) {
   const raw = fs.readFileSync(filePath, "utf-8");
-  const fm = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  let meta = {};
-  if (fm) {
-    try { meta = yaml.load(fm[1]) || {}; } catch (_) {}
-  }
   const id = path.basename(filePath, ".md");
+  const meta = parseNodeFrontmatter(raw);
   return {
     id,
     displayName: String(meta.displayName || id).trim(),
     description: String(meta.description || "").trim().replace(/\s+/g, " "),
-    input: Array.isArray(meta.input) ? meta.input : [],
-    output: Array.isArray(meta.output) ? meta.output : [],
+    input: meta.input,
+    output: meta.output,
+    runtime: meta.runtime,
+    category: meta.type,
     body: stripFrontmatter(raw),
   };
 }
 
-function categoryForNode(id) {
+/** 分组用；display_ 单独成组，其余优先看 frontmatter 的 type:，再回落到 id 前缀。 */
+function categoryForNode(node) {
+  const id = node.id;
+  if (id.startsWith("display_")) return "display";
+  if (node.category === "agent") return "agent";
+  if (node.category === "control") return "control";
+  if (node.category === "provide") return "provide";
   if (id.startsWith("control_")) return "control";
   if (id.startsWith("tool_")) return "tool";
   if (id.startsWith("provide_")) return "provide";
@@ -59,25 +62,13 @@ function generateNodeReference() {
   const dir = path.join(root, "builtin", "nodes");
   const nodes = fs.readdirSync(dir)
     .filter((name) => name.endsWith(".md"))
-    // 已下线的节点类型不进参考文档：Composer 读到就会照着生成跑不了的图。
-    .filter((name) => !RETIRED_NODE_IDS.has(path.basename(name, ".md")))
     .map((name) => parseNodeDefinition(path.join(dir, name)))
+    // 只收 Workspace 运行时有专用 handler 的类型：Composer 读到 none/degraded 就会照着
+    // 生成拿不到文档承诺语义的图。分级来自各节点 .md 的 `runtime:` 字段。
+    .filter((node) => node.runtime === "native")
     .sort((a, b) => a.id.localeCompare(b.id));
-  const localOnly = new Set([
-    "control_if",
-    "control_cd_workspace",
-    "control_user_workspace",
-    "control_load_skills",
-    "tool_git_checkout",
-    "tool_git_worktree_load",
-    "tool_git_worktree_unload",
-    "tool_set_run_env",
-    "tool_display_share_link",
-    "provide_str",
-    "provide_file",
-    "provide_bool",
-    "provide_password",
-  ]);
+  // native 里唯一会真正调 agent 的三个；其余都由 runtime 本地执行完。
+  const agentBacked = new Set(["agent_subAgent", "tool_nodejs", "workspace_one_click_task"]);
   const lines = [
     "# AgentFlow Builtin Nodes Reference",
     "",
@@ -92,8 +83,8 @@ function generateNodeReference() {
     "- Edge handles are positional: `input-0`, `output-0`, etc. Match slot order exactly.",
     "",
   ];
-  for (const cat of ["agent", "control", "tool", "provide", "other"]) {
-    const group = nodes.filter((n) => categoryForNode(n.id) === cat);
+  for (const cat of ["agent", "control", "tool", "display", "provide", "other"]) {
+    const group = nodes.filter((n) => categoryForNode(n) === cat);
     if (group.length === 0) continue;
     lines.push(`## ${cat}`, "");
     for (const node of group) {
@@ -101,7 +92,9 @@ function generateNodeReference() {
       lines.push("");
       lines.push(`- Display: ${node.displayName}`);
       if (node.description) lines.push(`- Description: ${node.description}`);
-      lines.push(`- Runtime: ${localOnly.has(node.id) ? "local-only" : node.id === "tool_nodejs" ? "direct script when script exists, otherwise agent" : "agent/runner"}`);
+      lines.push(`- Runtime: ${node.id === "tool_nodejs"
+        ? "direct script when script exists, otherwise agent"
+        : agentBacked.has(node.id) ? "agent/runner" : "local-only"}`);
       lines.push(`- Inputs: ${slotsTable(node.input)}`);
       lines.push(`- Outputs: ${slotsTable(node.output)}`);
       lines.push("");

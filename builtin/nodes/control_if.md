@@ -1,5 +1,6 @@
 ---
 # 内置节点：If 分支
+runtime: native
 description: Has exactly one bool type input. Continues to next1 if true, next2 if false
 displayName: If
 input:

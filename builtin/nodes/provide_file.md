@@ -1,5 +1,6 @@
 ---
 # 内置节点：直接提供文件
+runtime: native
 description: Provide file path or content directly, value will be passed to downstream as-is
 displayName: File
 input: []

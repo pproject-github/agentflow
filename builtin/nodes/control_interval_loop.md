@@ -1,5 +1,7 @@
 ---
 # 内置节点：间隔循环
+runtime: none
+palette: hidden
 description: Wait by interval and branch to continue, done, timeout, or cancelled for watch-style flows.
 displayName: IntervalLoop
 input:

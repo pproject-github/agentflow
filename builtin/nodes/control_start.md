@@ -1,5 +1,7 @@
 ---
 # 内置节点：开始
+runtime: none
+palette: hidden
 description: Entry point of AgentFlow, all flows should start from this node
 displayName: Start
 input: []

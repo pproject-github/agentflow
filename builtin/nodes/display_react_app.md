@@ -1,5 +1,6 @@
 ---
 # Built-in node: React App Display
+runtime: native
 description: Display a small React project in a sandboxed workspace iframe and pass the project JSON downstream
 displayName: React App
 input:

@@ -1,5 +1,6 @@
 ---
 # Built-in node: create share link for Display nodes
+runtime: native
 description: Create a public share link for upstream Display nodes
 displayName: Display Share Link
 input:
