@@ -137,6 +137,38 @@ function generatePlaceholderReference() {
   ].join("\n");
 }
 
+/**
+ * DSL 的节点调用表。手写会漂——上一版表里还留着运行时早就不读的 mergeMode / previous
+ * 这些槽，所以从定义表直接生成。
+ */
+async function generateDslNodeTable() {
+  const { DEFINITIONS, apiName } = await import("../bin/lib/flow-dsl/defs.mjs");
+  const CTRL = new Set(["prev", "next", "next1", "next2"]);
+  const rows = Object.entries(DEFINITIONS)
+    .filter(([, def]) => def.runtime === "native")
+    .map(([id, def]) => {
+      const fmt = (slots) => slots
+        .filter((s) => !CTRL.has(s.name))
+        .map((s) => `${s.name}:${s.type}`)
+        .join(", ") || "—";
+      return { call: apiName(id), input: fmt(def.input), output: fmt(def.output) };
+    })
+    .sort((a, b) => a.call.localeCompare(b.call));
+  return [
+    "# AgentFlow Flow DSL — 内置节点调用表",
+    "",
+    "> Generated from `builtin/nodes/*.md` by `scripts/generate-agentflow-skill-references.mjs`.",
+    "> 只列 `runtime: native` 的节点——其余类型 lint 会直接报错。",
+    "",
+    "`prev` / `next` / `next1` / `next2` 是控制引脚，由 `flow()` 自动接，**不要手写**。",
+    "",
+    "| 调用 | 输入引脚 | 输出引脚 |",
+    "|------|----------|----------|",
+    ...rows.map((r) => `| \`${r.call}\` | ${r.input} | ${r.output} |`),
+    "",
+  ].join("\n");
+}
+
 function writeGenerated(relPath, content) {
   const abs = path.join(root, relPath);
   ensureDir(path.dirname(abs));
@@ -145,4 +177,5 @@ function writeGenerated(relPath, content) {
 
 writeGenerated("skills/agentflow-node-reference/references/builtin-nodes.md", generateNodeReference());
 writeGenerated("skills/agentflow-placeholder-reference/references/placeholders.md", generatePlaceholderReference());
+writeGenerated("skills/agentflow-flow-dsl/references/node-calls.md", await generateDslNodeTable());
 console.log("Generated AgentFlow skill references.");

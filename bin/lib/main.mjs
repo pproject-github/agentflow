@@ -316,6 +316,59 @@ export async function main() {
     process.stdout.write(JSON.stringify(result.success ? { success: true } : result) + "\n");
     process.exit(result.success ? 0 : 1);
   }
+  if (sub === "flow" && argv[0] === "dsl") {
+    shift();
+    const action = shift();
+    const target = shift();
+    const usage = "Usage: agentflow flow dsl <export|import|lint> <FlowName|dir> [--out <dir>]";
+    if (!action || !target) throw new Error(usage);
+    let outDir = "";
+    const outIdx = argv.indexOf("--out");
+    if (outIdx >= 0 && argv[outIdx + 1]) {
+      outDir = path.resolve(workspaceRoot, argv[outIdx + 1]);
+      argv.splice(outIdx, 2);
+    }
+    if (argv.length > 0) throw new Error(`Unknown flow dsl option: ${argv[0]}`);
+
+    const direct = path.resolve(workspaceRoot, target);
+    const dir = fs.existsSync(direct) && fs.statSync(direct).isDirectory()
+      ? direct
+      : getFlowDir(workspaceRoot, target);
+    if (!dir || !fs.existsSync(dir)) throw new Error(`Flow not found: ${target}`);
+
+    const { exportFlowDsl, importFlowDsl, lintFlowDir } = await import("./flow-dsl/cli.mjs");
+
+    if (action === "export") {
+      const result = exportFlowDsl(dir, outDir);
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      else {
+        process.stderr.write(`Exported to ${result.outDir}\n`);
+        for (const rel of result.written) process.stderr.write(`  ${rel}\n`);
+      }
+      return;
+    }
+    if (action === "import") {
+      const result = importFlowDsl(dir, outDir);
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      else {
+        process.stderr.write(`Wrote ${result.graphPath}\n  ${result.nodeCount} 节点 / ${result.edgeCount} 边\n`);
+        for (const w of result.warnings) process.stderr.write(`  warning: ${w}\n`);
+      }
+      return;
+    }
+    if (action === "lint") {
+      const result = lintFlowDir(dir);
+      if (jsonMode) process.stdout.write(JSON.stringify({ errors: result.errors, warnings: result.warnings }) + "\n");
+      else {
+        for (const e of result.errors) process.stderr.write(`${chalk.red("error")}  ${e}\n`);
+        for (const w of result.warnings) process.stderr.write(`${chalk.yellow("warn")}   ${w}\n`);
+        if (!result.errors.length) process.stderr.write(`${chalk.green("ok")}     lint 通过\n`);
+      }
+      if (result.errors.length) process.exitCode = 1;
+      return;
+    }
+    throw new Error(usage);
+  }
   if (sub === "flow" && argv[0] === "preview") {
     shift();
     const target = shift();

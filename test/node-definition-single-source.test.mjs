@@ -138,17 +138,20 @@ test("WorkspacePage.jsx 不再硬编码节点定义", () => {
   }
 });
 
-test("skills 节点参考是 builtin/nodes 的最新生成物", () => {
-  const generated = path.join(repoRoot, "skills", "agentflow-node-reference", "references", "builtin-nodes.md");
-  const before = fs.readFileSync(generated, "utf-8");
+test("skills 参考文档都是 builtin/nodes 的最新生成物", () => {
+  const generated = [
+    path.join(repoRoot, "skills", "agentflow-node-reference", "references", "builtin-nodes.md"),
+    path.join(repoRoot, "skills", "agentflow-flow-dsl", "references", "node-calls.md"),
+  ];
+  const before = generated.map((f) => fs.readFileSync(f, "utf-8"));
   execFileSync(process.execPath, [path.join(repoRoot, "scripts", "generate-agentflow-skill-references.mjs")], {
     cwd: repoRoot,
     stdio: "pipe",
   });
-  const after = fs.readFileSync(generated, "utf-8");
-  if (before !== after) {
-    fs.writeFileSync(generated, before, "utf-8");
-    assert.fail("builtin/nodes/*.md 改过但没重跑 scripts/generate-agentflow-skill-references.mjs");
+  const stale = generated.filter((f, i) => fs.readFileSync(f, "utf-8") !== before[i]);
+  if (stale.length) {
+    generated.forEach((f, i) => fs.writeFileSync(f, before[i], "utf-8"));
+    assert.fail(`builtin/nodes/*.md 改过但没重跑生成器：${stale.map((f) => path.basename(f)).join(", ")}`);
   }
 });
 
