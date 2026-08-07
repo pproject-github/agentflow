@@ -1,0 +1,20 @@
+.claude/settings.local.json
+  s_3c7aa58eee5b09::t_49db07daef3ee7 55-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "95e5c4e9776143eb4e5943b115afe27e071e5ad3",
+  "prompts": {},
+  "logical_commit_id": "95e5c4e9776143eb4e5943b115afe27e071e5ad3",
+  "sessions": {
+    "s_3c7aa58eee5b09": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a52b061-a88f-4fb5-88c5-9f7a6c164ceb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
