@@ -52,7 +52,24 @@
       "Bash(lsof -iTCP:8765 -sTCP:LISTEN -n -P)",
       "Bash(~/.pyenv/versions/3.11.0/bin/python3 *)",
       "Bash(AGENTFLOW_NO_OPEN=1 node bin/agentflow.mjs ui --no-open)",
-      "Bash(kill 26859)"
+      "Bash(kill 26859)",
+      "Bash(sort -t: -k2)",
+      "Bash(python3 -)",
+      "Bash(npm test *)",
+      "Bash(echo \"--- exit=$?\")",
+      "Bash(pkill -f \"agentflow.mjs ui --port 8791\")",
+      "Bash(pkill -f \"agentflow.mjs ui --port 8792\")",
+      "Bash(git rm *)",
+      "Bash(pkill -f \"agentflow.mjs ui --port 8793\")",
+      "Bash(read n *)",
+      "Bash([ -f \"bin/pipeline/$n\" ])",
+      "Bash(python3 -c \"import json;print\\(json.load\\(open\\('package.json'\\)\\)['files']\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(pkill -f \"agentflow.mjs ui --port 8794\")",
+      "Bash(python3 /private/tmp/claude-501/-Users-bigo-Documents-AIProject-AgentFlow/3a52b061-a88f-4fb5-88c5-9f7a6c164ceb/scratchpad/prune.py)",
+      "Bash(npx eslint *)",
+      "Bash(npm i *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
