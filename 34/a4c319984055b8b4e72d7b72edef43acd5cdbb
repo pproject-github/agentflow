@@ -1,0 +1,146 @@
+docs/wiki/node-definitions.zh-CN.md
+  s_0475a63dba5f18::t_489575d28a46d6 1-91
+builtin/nodes/display_markdown.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_interval_loop.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/tool_gitlab_create_mr.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_0475a63dba5f18::t_f15f798065310e 8968-8969
+builtin/nodes/provide_str.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/agent_subAgent.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_cancelled.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/workspace_run.md
+  s_0475a63dba5f18::t_b3a50b6ba7b76c 1-16
+builtin/nodes/display_ascii.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_load_key.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+bin/lib/catalog-flows.mjs
+  s_0475a63dba5f18::t_d6763a09a5f68c 170-185,193-202,217-218
+  s_0475a63dba5f18::t_7cda2a389b6ea9 304-306
+  s_0475a63dba5f18::t_d60189d9a8ceb8 256-257
+  s_0475a63dba5f18::t_24177ac8137190 219,258,307,325,671,682
+builtin/nodes/provide_file.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_start.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/display_html.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+scripts/generate-agentflow-skill-references.mjs
+  s_0475a63dba5f18::t_97afd86c0da0f1 66-68,70-71
+  s_0475a63dba5f18::t_3005de95cd2e4f 22,27-29,38
+  s_0475a63dba5f18::t_595039357fc983 30
+  s_0475a63dba5f18::t_6608e7a817369f 35-37,39-41
+  s_0475a63dba5f18::t_9d63d41becca7a 5
+  s_0475a63dba5f18::t_c15cac49086259 86-87,95-97
+builtin/nodes/tool_user_ask.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+test/node-definition-single-source.test.mjs
+  s_0475a63dba5f18::t_23caf386af2c5d 73
+  s_0475a63dba5f18::t_e3b38fc16b3713 1,3-72,74-140,155-161
+  s_0475a63dba5f18::t_2e64f9c39edd99 141-154
+  s_0475a63dba5f18::t_162ab748ec3d33 2
+builtin/nodes/provide_password.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_user_workspace.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/control_load_mcp.md
+  s_0475a63dba5f18::t_7d10c870e0b5cd 1-24
+builtin/nodes/tool_get_env.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/tool_wecom_send_group_markdown.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_wecom_send_app_markdown.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/provide_bool.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_git_worktree_load.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+CLAUDE.md
+  s_0475a63dba5f18::t_21801f6a92c383 216,219-220,222,224,226-232
+  s_0475a63dba5f18::t_1b4321a3a66567 192
+  s_0475a63dba5f18::t_930e5b5ec8fa62 128-139
+  s_0475a63dba5f18::t_2d41219cfdaa65 184,186-191
+builtin/nodes/display_react_app.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+docs/wiki/node-definitions.en.md
+  s_0475a63dba5f18::t_108723e52a25a7 1-96
+builtin/nodes/control_agent_toBool.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/tool_display_share_link.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_git_checkout.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_if.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_set_run_env.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/display_image.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_wait_until.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/display_mermaid.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_end.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/control_load_skills.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+  s_0475a63dba5f18::t_e5d1a22396b108 4,6,8-10,33,35
+builtin/nodes/tool_save_key.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/tool_print.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/control_toBool.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_0475a63dba5f18::t_bd117582df3cd4 23-30,38-39,48-56,60,62-63,72-88,127,151,159,163,169,177,185,193,201,209,217,225,228-261
+test/workspace-preview-api.test.mjs
+  s_0475a63dba5f18::t_2c36a74a67bc27 32-35
+builtin/nodes/tool_user_check.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/control_delay.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/display_chart.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/control_anyOne.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/display_table.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/workspace_one_click_task.md
+  s_0475a63dba5f18::t_d7930048d44f09 1-44
+builtin/nodes/workspace_scheduled_run.md
+  s_0475a63dba5f18::t_0e35bcd7815933 1-16
+builtin/nodes/control_cd_workspace.md
+  s_0475a63dba5f18::t_b88f1a3ffdb97e 4,21-22,25
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_nodejs.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+builtin/nodes/tool_jenkins_build.md
+  s_0475a63dba5f18::t_6c1763f0498989 3-4
+builtin/nodes/tool_git_worktree_unload.md
+  s_0475a63dba5f18::t_6c1763f0498989 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "34a4c319984055b8b4e72d7b72edef43acd5cdbb",
+  "prompts": {},
+  "logical_commit_id": "34a4c319984055b8b4e72d7b72edef43acd5cdbb",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 5270,
+      "total_deletions": 259
+    }
+  }
+}
