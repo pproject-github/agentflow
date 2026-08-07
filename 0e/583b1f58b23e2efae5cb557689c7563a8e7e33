@@ -1,0 +1,47 @@
+bin/lib/catalog-flows.mjs
+  s_0475a63dba5f18::t_e95cc4d5fffcbf 342-351,353-360,363
+  s_0475a63dba5f18::t_4a1488e10390d2 23-28
+  s_0475a63dba5f18::t_23d032d3374a86 341
+  s_0475a63dba5f18::t_7b2a70ee4b32be 352,361-362
+package-lock.json
+  s_0475a63dba5f18::t_accbbbfbbfc3c1 13,586-597
+package.json
+  s_0475a63dba5f18::t_1377fc2d8f57c4 60
+CLAUDE.md
+  s_0475a63dba5f18::t_2d4f9a3cd7988a 85-123
+bin/lib/marketplace.mjs
+  s_0475a63dba5f18::t_52c4a9637aaeee 12,84-96,280,284,306,312,345-383,391-394,398,408,423
+bin/lib/node-package-bootstrap.mjs
+  s_0475a63dba5f18::t_be4883459c3827 1-72
+bin/lib/node-package-manifest.mjs
+  s_0475a63dba5f18::t_3da59364d5afe1 1-174
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_a03e7eb9f6cf85 13,3293-3294,3304-3308
+docs/wiki/code-node-packages.en.md
+  s_0475a63dba5f18::t_fe4f030129f25d 1-98
+docs/wiki/code-node-packages.zh-CN.md
+  s_0475a63dba5f18::t_754475a7f87443 1-91
+test/node-package-graph-hydration.test.mjs
+  s_0475a63dba5f18::t_8010c5c13c698a 1-126
+test/node-package-runtime.test.mjs
+  s_0475a63dba5f18::t_f921a5a68c2832 1-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0e583b1f58b23e2efae5cb557689c7563a8e7e33",
+  "prompts": {},
+  "logical_commit_id": "0e583b1f58b23e2efae5cb557689c7563a8e7e33",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 5270,
+      "total_deletions": 259
+    }
+  }
+}
