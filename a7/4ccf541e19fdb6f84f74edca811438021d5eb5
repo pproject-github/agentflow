@@ -1,0 +1,44 @@
+skills/agentflow-cli/SKILL.md
+  s_6f989e4ed000e0::t_4dad3360020e03 3,12-16
+skills/agentflow-flow-add-instances/SKILL.md
+  s_6f989e4ed000e0::t_585b382831b9d2 3,6,8,10,12-13,16
+skills/agentflow-runtime-reference/SKILL.md
+  s_6f989e4ed000e0::t_f6a4e00ccdd6b3 4,21
+skills/agentflow-node-reference/SKILL.md
+  s_6f989e4ed000e0::t_f6a4e00ccdd6b3 4,13,18-19
+skills/agentflow-workspace-graph/SKILL.md
+  s_6f989e4ed000e0::t_75a00b5be16fdf 14,54
+skills/agentflow-flow-recipes/SKILL.md
+  s_6f989e4ed000e0::t_4dad3360020e03 3,6,8,10
+skills/agentflow-flow-edit-node-fields/SKILL.md
+  s_6f989e4ed000e0::t_585b382831b9d2 3,6,8,10
+skills/agentflow-author-flow/SKILL.md
+  s_6f989e4ed000e0::t_585b382831b9d2 3,6,8,10,12-14,16
+skills/agentflow-flow-sync-ui/SKILL.md
+  s_6f989e4ed000e0::t_585b382831b9d2 3,6,8
+skills/agentflow-placeholder-reference/SKILL.md
+  s_6f989e4ed000e0::t_f6a4e00ccdd6b3 4,20
+package-lock.json
+  s_6f989e4ed000e0::t_7099c6e8e25c8f 3,9
+package.json
+  s_6f989e4ed000e0::t_61d20736c66ed8 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a74ccf541e19fdb6f84f74edca811438021d5eb5",
+  "prompts": {},
+  "logical_commit_id": "a74ccf541e19fdb6f84f74edca811438021d5eb5",
+  "sessions": {
+    "s_6f989e4ed000e0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd708-e54e-7fd0-aeab-ca9f72cec3b9",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 42,
+      "total_deletions": 460
+    }
+  }
+}
