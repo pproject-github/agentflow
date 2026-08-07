@@ -11,7 +11,7 @@ description: >-
 
 ## 目标文件
 
-优先修改当前 pipeline 目录下的 `workspace.graph.json`。不要修改正式 `flow.yaml`，除非用户明确要求并且 UI 勾选允许修改 flow.yaml。
+优先修改当前 Workspace 项目目录下的 `workspace.graph.json`。不要修改历史 `flow.yaml`，除非用户明确要求迁移或审计。
 
 `workspace.graph.json` 结构：
 
@@ -51,7 +51,7 @@ description: >-
 - 用 `display_image` 展示图片 URL、data URL 或图片路径。
 - 用 `display_chart` 展示 ChartSpec JSON 图表。
 - 用 `display_table` 展示结构化表格数据。
-- 用普通 pipeline 节点作为上下文节点时，保持 `instances` 结构与 flow.yaml instance 一致，但它只属于 workspace graph。
+- 用普通 Workspace 节点作为上下文节点时，保持 `instances` 结构与节点定义一致；它只属于 workspace graph。
 - 每个新增 instance 必须有 `ui.nodePositions`。
 - 展示节点建议写 `ui.nodeSizes`，避免内容区域过小。
 

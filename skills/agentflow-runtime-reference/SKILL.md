@@ -1,7 +1,7 @@
 ---
 name: agentflow-runtime-reference
 description: >-
-  AgentFlow 运行时参考。用于理解 pipeline/workspace 目录、runBuild、
+  AgentFlow Workspace 运行时参考。用于理解 workspace 图、runBuild、
   intermediate/output/result 文件、workspaceContext/skillsContext 传递和 CD Workspace 行为。
 ---
 
@@ -18,7 +18,7 @@ description: >-
 
 - 读 [runtime.md](references/runtime.md) 了解目录与上下文。
 - 下游 agent/tool 的当前执行目录由 `workspaceContext` 决定。
-- pipeline 自己的文件永远通过 `pipelineWorkspace` / `flowDir` 找，不要在 CD 后误用 `workspaceRoot`。
+- 新任务优先使用 Workspace 图和 `workspaceRoot`；历史 Pipeline 的 `pipelineWorkspace` / `flowDir` 仅用于迁移和审计。
 
 ## Reference
 

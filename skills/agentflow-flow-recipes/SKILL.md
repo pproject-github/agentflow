@@ -1,24 +1,10 @@
 ---
 name: agentflow-flow-recipes
-description: >-
-  AgentFlow 常见流程模板。用于新建 Git 项目分析、加载项目 skills、打印结果、
-  以及组合 Git Checkout → CD Workspace → Load Skills → Agent → Print 的标准流水线。
+description: Legacy Pipeline recipes are retired. Use Workspace Graph recipes for new AgentFlow canvas tasks.
 ---
 
-# AgentFlow Flow Recipes
+# Legacy Flow Recipes（已下线）
 
-使用本技能处理这些问题：
+旧的 `Start → … → End` 流水线 recipe 不再用于新任务。需要组合 Git Checkout、CD Workspace、Load Skills、Agent、Print 时，请在 `workspace.graph.json` 中以 `workspace_run` 为入口组织节点，并使用 `agentflow-workspace-graph` 校验槽位和连线。
 
-- 用户要求“新建流水线拉仓库、cd 进去、让 agent 分析、print 结果”。
-- 需要把 Git 项目作为工作区分析，并可加载项目自身 skills。
-- 需要避免临场猜 slot/handle，按标准 recipe 搭图。
-
-## 必读规则
-
-- 读 [recipes.md](references/recipes.md)。
-- Git 项目分析的标准链路是：`Start → Git Checkout → CD Workspace → Load Skills → Agent → Print → End`。
-- `tool_print.content` 应接 agent 输出内容；没有接 content 时才 fallback 打印上游 result。
-
-## Reference
-
-- [Flow recipes](references/recipes.md)
+历史 recipes 仅供迁移参考，不得生成 `control_start` 或 `control_end`。

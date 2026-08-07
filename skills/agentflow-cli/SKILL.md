@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow platform operation through a bundled token-backed CLI, without MCP. Use when Codex needs to list or publish AgentFlow flows, start or inspect runs, read graphs and logs, or fetch display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env. Default AgentFlow base URL is http://ai.mengma.bigo.inner/.
+description: Direct AgentFlow Workspace operation through a bundled token-backed CLI, without MCP. Use when Codex needs to upload temporary Workspace previews, run or inspect Workspace graphs, read graphs and display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env. Default AgentFlow base URL is http://ai.mengma.bigo.inner/.
 ---
 
 # AgentFlow CLI
@@ -9,9 +9,11 @@ description: Direct AgentFlow platform operation through a bundled token-backed 
 
 AgentFlow has two different resource families:
 
-- **Flow/Pipeline**: an executable node graph backed by `flow.yaml`. The
-  `list-flows`, `publish-flow`, `get-graph`, `run`, and schedule commands in
-  this skill operate on this family.
+- **Flow/Pipeline**: historical `flow.yaml` resources. Start/End execution and
+  new Pipeline authoring are retired; only read/migration operations remain.
+- **Workspace**: the active node graph backed by `workspace.graph.json`.
+  `workspace-preview`, `get-graph`, `run`, and display-output commands target
+  this family.
 - **Workflow**: a TAPD-derived product/requirement record addressed as
   `tapd:<id>`. It is not a Flow/Pipeline and must be read or changed through
   the `workflow-*` commands and the `agentflow-workflow-report` protocol.

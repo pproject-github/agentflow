@@ -1,7 +1,7 @@
 ---
 name: agentflow-placeholder-reference
 description: >-
-  AgentFlow 占位符参考。用于编写 body/script 中的 ${workspaceRoot}、${pipelineWorkspace}、
+  AgentFlow Workspace 节点占位符参考。用于编写 body/script 中的 ${workspaceRoot}、${pipelineWorkspace}、
   ${flowDir}、${runDir}、${input.xxx}、${output.xxx} 等变量。
 ---
 
@@ -17,7 +17,7 @@ description: >-
 
 - 读 [placeholders.md](references/placeholders.md)。
 - 不要在 `script` 中给 `${workspaceRoot}` 这类占位符再包一层双引号；AgentFlow 会 shell-quote。
-- flow 自带脚本优先用 `${flowDir}/scripts/...`。
+- Workspace 节点脚本优先使用 `${workspaceRoot}`；`${flowDir}` / `${pipelineWorkspace}` 仅兼容历史 Pipeline 资源。
 
 ## Reference
 
