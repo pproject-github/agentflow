@@ -1,5 +1,20 @@
 # How to Create a Figma UI Implementation Workflow
 
+> [!WARNING]
+> **This guide targets the retired Start/End Pipeline runtime.**
+>
+> `control_start` / `control_end` topologies, `agentflow apply` / `resume` / `replay`
+> and `/api/flow/run` have all been removed. Loop patterns built from
+> `control_anyOne` + `control_toBool` + `control_if` no longer work either — the
+> Workspace run planner is a DAG and rejects cyclic graphs outright.
+>
+> Runs now start from the Workspace graph: open the flow in the Web UI and hit
+> **Run**, or add a `workspace_scheduled_run` node for scheduled execution. This
+> document is kept for migration and audit reference — **do not copy** its node
+> choices or wiring directly. For the current node set see
+> `skills/agentflow-node-reference/references/builtin-nodes.md`.
+
+
 ## Background
 
 Converting Figma designs to frontend code is a common development task. For complex UIs (such as multi-page applications, complex interactive components), one-time implementation faces the following challenges:

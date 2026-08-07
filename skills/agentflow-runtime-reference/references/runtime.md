@@ -61,4 +61,4 @@ Important files:
 
 - Edge values are resolved by handle index.
 - File slots usually pass paths; text slots may read upstream output file content.
-- `tool_print.content` should receive the display text. If missing, `tool_print` may fallback to upstream result body.
+- `display_*.content` should receive the text to render. Pick the display type that matches the payload (`display_markdown`, `display_html`, `display_table`, `display_chart`, …).

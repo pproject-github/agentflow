@@ -359,6 +359,9 @@
     "saving": "Saving…",
     "saved": "Saved"
   },
+  "drawer": {
+    "close": "Close sidebar"
+  },
   "settings": {
     "title": "Pipeline Settings",
     "subtitle": "Manage basic information, storage, node marketplace, scheduled runs, and metadata.",

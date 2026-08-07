@@ -1,5 +1,18 @@
 # Quickstart: 用 AgentFlow 自动化 PR 流程
 
+> [!WARNING]
+> **本篇基于已下线的 Start/End Pipeline 运行时。**
+>
+> `control_start` / `control_end` 拓扑、`agentflow apply` / `resume` / `replay`
+> 以及 `/api/flow/run` 均已移除；`control_anyOne` + `control_toBool` + `control_if`
+> 这类回环写法也不再可用——Workspace 运行计划是 DAG，遇到环会直接拒绝执行。
+>
+> 现在的执行入口是 Workspace 图：在 Web UI 里打开流程点 **Run**，或用
+> `workspace_scheduled_run` 节点做定时执行。本文保留作迁移与审计参考，
+> 其中的节点选型与连线方式**不要直接照搬**。可用节点清单见
+> `skills/agentflow-node-reference/references/builtin-nodes.md`。
+
+
 > **真实故事**：我是如何驯服混乱的 PR 审查流程，实现 100% 可靠执行的。
 
 ## 痛点："AI 有时会忘记步骤"

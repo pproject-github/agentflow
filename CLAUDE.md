@@ -9,16 +9,26 @@ AgentFlow is an orchestration system for long-running complex agent tasks. It us
 - **Persistence, Not Volatility**: Every node's inputs, outputs, and execution state are recorded in intermediate files.
 - **CI-Friendly**: Long-running, fixed workflows, recoverable—suitable for CI/CD integration.
 
+## Execution Model
+
+**Execution happens in the Workspace graph only.** Runs are started from the Web UI
+(`/api/workspace/run`) or by a `workspace_scheduled_run` node. The graph lives in
+`workspace.graph.json` inside the flow directory.
+
+The legacy Start/End Pipeline runtime (`flow.yaml` + `control_start` / `control_end`,
+driven by `agentflow apply`) is **retired**. `agentflow apply` / `resume` / `replay` /
+`scheduler` all fail with `Legacy Start/End Pipeline execution has been retired.`, and
+`/api/flow/run`, `/api/flow/run/stop`, `/api/flow/run-config`, `/api/flow/schedule*`
+all return HTTP 410. `flow.yaml` is now read/migrate/audit material only.
+
 ## Key Commands
 
 | Command | Description |
 |---------|-------------|
 | `agentflow list` | List all pipelines |
 | `agentflow ui` | Start Web UI (port 8765) |
-| `agentflow apply <FlowName>` | Execute flow |
 | `agentflow validate <FlowName>` | Validate flow structure |
-| `agentflow resume <FlowName> <uuid>` | Resume from breakpoint |
-| `agentflow replay <FlowName> <uuid> <instanceId>` | Retry a specific node |
+| `agentflow flow preview <FlowName>` | Generate a single-file static canvas preview |
 | `agentflow run-status <FlowName> <uuid>` | View node execution status |
 | `agentflow extract-thinking <FlowName> <uuid>` | Extract agent thinking process |
 
@@ -58,22 +68,41 @@ When working with AgentFlow nodes, understand the node type and apply appropriat
 - General-purpose node executor
 - Follow node context and task body to complete work
 
-## Environment Variables
+## Node Runtime Contract (Workspace)
 
-When executing nodes, only reference these explicitly provided variables:
+### `tool_nodejs` script placeholders
 
-- `workspaceRoot`: Workspace root directory
-- `flowName`: Name of the flow
-- `uuid`: Unique run identifier
-- `instanceId`: Node instance identifier
+`script` / `scriptRef` are resolved against these constants plus every input and output
+slot name (`${slotName}`):
 
-## Reporting Failures
+- `${workspaceRoot}` / `${pipelineWorkspace}` / `${flowDir}`: the scoped workspace root
+- `${cwd}`: working directory for the node
+- `${nodeRunDir}` / `${nodeTmpDir}` / `${outputsDir}`: per-node run, scratch, output dirs
+- `${scriptRef}`: absolute path of the referenced script file
 
-When a task explicitly fails, report using:
+Success/failure is the process exit code (0 = success). Do **not** wrap stdout in JSON.
 
-```bash
-agentflow apply -ai write-result ${workspaceRoot} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"failure reason"}'
+### `agent_subAgent` output protocol
+
+Agent nodes receive `AGENTFLOW_RESULT_FILE`, `AGENTFLOW_OUTPUTS_DIR`,
+`AGENTFLOW_NODE_RUN_DIR`, `AGENTFLOW_NODE_TMP_DIR` and `AGENTFLOW_OUTPUT_FILES_JSON`
+in the environment. Results are returned **in the reply**, not written by hand:
+
+- No extra output slots → reply with the result body only. AgentFlow writes it to the
+  result file itself; do not create that file and do not emit an envelope.
+- With extra output slots → emit exactly one envelope, nothing else:
+
 ```
+---agentflow
+result: |
+  <full result body, each line indented two spaces>
+outParams:
+  <slotName>: <short value>
+---end
+```
+
+A node fails by failing — a non-zero exit or an error in the reply. There is no
+`write-result` command in the workspace runtime.
 
 ## File Structure
 
@@ -91,9 +120,19 @@ AgentFlow/
 ## Workflow Tips
 
 1. **For complex flows**: Use AI Composer mode in Web UI with natural language descriptions
-2. **Loop patterns**: Use `control_anyOne` + `control_toBool` (deterministic) or `control_agent_toBool` (AI judgment) + `control_if` for check-fix-loop patterns
-3. **Checkpoint recovery**: Every node state is persisted—failures can resume from the exact failure point
-4. **Parallel execution**: Use `--parallel` flag to execute same-round nodes concurrently
+2. **Branching**: `control_if` is the branch primitive the Workspace runtime implements —
+   the taken branch runs, the other is skipped
+3. **No loops**: the Workspace run planner rejects cyclic graphs
+   (`Workspace run graph contains a cycle`). The old `control_anyOne` + `control_toBool` +
+   `control_if` check-fix-loop only worked under the retired Start/End runtime
+4. **Node coverage**: the Workspace runtime has explicit handlers for `agent_subAgent`,
+   `tool_nodejs`, `control_if`, `provide_*`, `control_cd_workspace`,
+   `control_user_workspace`, `control_load_skills`, `control_load_mcp`,
+   `tool_git_checkout`, `tool_git_worktree_load` / `_unload`, `tool_gitlab_create_mr`,
+   `tool_set_run_env`, `tool_display_share_link`, `tool_wecom_send_*`,
+   `workspace_run` / `workspace_scheduled_run`. Other builtin node types still appear in
+   the palette but fall through to the generic agent path — they do **not** get their
+   documented semantics
 
 ---
 

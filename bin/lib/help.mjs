@@ -17,19 +17,16 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code / Codex CLI 流式输�
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  浏览 Hub 上的流程
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
-  agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open] [--hide-community-links]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
+  agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
   agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]  生成平台同款画布的单文件静态 Flow 预览
   agentflow mcp                              启动 AgentFlow MCP stdio server，供 Cursor/Codex 运行流程并读取 display 输出
-  agentflow scheduler start [--poll-ms <ms>]  启动定时执行调度器（读取各流水线 schedule.json）
-  agentflow scheduler status [--json]         查看定时执行配置与状态
-  agentflow scheduler cancel <FlowName> <uuid>  取消某次等待中的 watch/run
   agentflow marketplace list [--json]         查看 workspace 本地节点市场
   agentflow marketplace publish-node <dir>    发布本地节点包到 workspace market
   agentflow marketplace install-node <FlowName> <nodeSpec>  将 market 节点依赖写入 flow
   agentflow apply <FlowName> [uuid]            已下线；请改用 Workspace Run
   agentflow validate <FlowName> [uuid]        校验流程；终端下输出易读结果，--json 或管道时输出 JSON；传 uuid 时写入 runDir/intermediate/validation.json
-  agentflow resume <FlowName> <uuid> [instanceId]  将 pending 与 failed 节点标为已确认并继续 apply
-  agentflow replay [flowName] <uuid> <instanceId>
+  agentflow resume <FlowName> <uuid> [instanceId]  已下线；请改用 Workspace Run
+  agentflow replay [flowName] <uuid> <instanceId>   已下线；请改用 Workspace Run
   agentflow run-status <flowName> <uuid>  输出该次运行的节点状态 JSON（供 UI 展示 success/pending 等角标）
   agentflow extract-thinking <flowName> <uuid>  从该次 run 的 logs/log.txt 提取 thinking，写入 logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             列出所有存在 logs/log.txt 的 run（可接 --json）
@@ -88,19 +85,16 @@ Usage:
   agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  Browse flows on Hub
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
-  agentflow ui [--host <addr>] [--port <n>] [--scheduler] [--no-open] [--hide-community-links]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
+  agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
   agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]  Generate a single-file static Flow preview using the platform canvas
   agentflow mcp                              Start the AgentFlow MCP stdio server for Cursor/Codex to run flows and read display outputs
-  agentflow scheduler start [--poll-ms <ms>]  Start the scheduled-run scheduler (reads each pipeline schedule.json)
-  agentflow scheduler status [--json]         Show scheduled-run configuration and state
-  agentflow scheduler cancel <FlowName> <uuid>  Cancel a waiting watch/run
   agentflow marketplace list [--json]         Show workspace local marketplace packages
   agentflow marketplace publish-node <dir>    Publish a local node package to the workspace market
   agentflow marketplace install-node <FlowName> <nodeSpec>  Add a marketplace node dependency to a flow
   agentflow apply <FlowName> [uuid]            Retired; use Workspace Run instead
   agentflow validate <FlowName> [uuid]        Validate flow; readable output in terminal, JSON with --json or pipe; writes to runDir/intermediate/validation.json when uuid provided
-  agentflow resume <FlowName> <uuid> [instanceId]  Mark pending and failed nodes as acknowledged and continue apply
-  agentflow replay [flowName] <uuid> <instanceId>
+  agentflow resume <FlowName> <uuid> [instanceId]  Retired; use Workspace Run instead
+  agentflow replay [flowName] <uuid> <instanceId>   Retired; use Workspace Run instead
   agentflow run-status <flowName> <uuid>  Output node status JSON for this run (for UI success/pending badges)
   agentflow extract-thinking <flowName> <uuid>  Extract thinking from run logs/log.txt, write to logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             List all runs with logs/log.txt (use --json)

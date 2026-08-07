@@ -1,6 +1,6 @@
 /**
  * 本地 HTTP：静态 UI + /api/flows（GET/POST/HEAD）、/api/flows/import（POST multipart 导入 .yaml/.zip）、/api/flow/archive（POST）、/api/flow/delete（POST 永久删除）、/api/model-lists、/api/ui-context、/api/pipeline-recent-runs、/api/run-node-statuses（GET 某次 run 各节点磁盘状态）、/api/workspace-tree（GET 工作区目录树）、/api/nodes、/api/flow（GET/POST）、
- * /api/flow-editor-sync（POST 通知画布刷新）、/api/flow-editor-sync-events（GET SSE）、/api/flow/run（POST NDJSON 流式执行 agentflow apply --machine-readable）、/api/flow/run/stop（POST 终止运行）、/api/workspace/run/stop（POST 终止 Workspace 临时运行）、
+ * /api/flow-editor-sync（POST 通知画布刷新）、/api/flow-editor-sync-events（GET SSE）、/api/workspace/run（POST NDJSON 流式执行 Workspace 图）、/api/workspace/run/stop（POST 终止 Workspace 临时运行）、
  * /api/composer-agent（POST NDJSON；有 flow 时结束后 validate-flow，失败则自动 agent 修复至多 5 次）、
  * /api/agentflow-config（GET/POST 读写 ~/agentflow/config.json 的 opencodeProvider；POST 后执行 update-model-lists）、/api/update-model-lists（POST 可选 JSON body.opencodeProvider 覆盖本次拉取用的 Provider，未保存 config 也可用）；
  * listen 后后台 updateModelLists
@@ -35,12 +35,7 @@ import {
   writeFlowYaml,
 } from "./flow-write.mjs";
 import { updateModelLists } from "./model-lists.mjs";
-import {
-  startComposerAgent,
-  startComposerMultiStep,
-  runComposerPostFlowValidationAndRepair,
-  buildScriptContentBlockForInstances,
-} from "./composer-agent.mjs";
+import { startComposerAgent } from "./composer-agent.mjs";
 import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
@@ -54,18 +49,13 @@ import {
   getModelListsAbs,
   getRunDir,
 } from "./paths.mjs";
-import { RUN_INTERRUPTED_FILENAME } from "./recent-runs.mjs";
 import {
-  detectIntents,
-  loadResourcesForIntents,
   loadResourcesForSkillKeys,
   listComposerSkills,
   readComposerSkillDetail,
-  buildSkillInjectionBlock,
   buildSkillCompactInjectionBlock,
 } from "./composer-skill-router.mjs";
 import { clearSkillRegistryCache } from "./skill-registry.mjs";
-import { COMPOSER_NODE_SPEC_FILENAME } from "./composer-planner.mjs";
 import { listRecentRunsFromDisk } from "./recent-runs.mjs";
 import { parseBool } from "../pipeline/parse-bool.mjs";
 import {
@@ -85,16 +75,11 @@ import {
 } from "./workspace-preview.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 import {
-  createComposerSession,
-  logComposerEvent,
-  truncateForLog,
   listRecentComposerSessions,
   parseComposerLogFile,
   readComposerSessionMeta,
 } from "./composer-log.mjs";
-import { runNodeScript } from "./pipeline-scripts.mjs";
-import { computeNextRunAt, readFlowSchedule, writeFlowSchedule } from "./schedule-config.mjs";
-import { cancelScheduledRun, listScheduleStatuses } from "./scheduler.mjs";
+import { computeNextRunAt } from "./schedule-config.mjs";
 import {
   mergeWorkspaceGraphs,
   workspaceDesignRevision,
@@ -263,7 +248,6 @@ function execFileBuffered(command, args, options = {}) {
   });
 }
 
-const RUN_CONFIG_FILENAME = "run-config.json";
 const SKILL_COLLECTIONS_FILENAME = "skill-collections.json";
 const BUILTIN_SKILL_COLLECTIONS = [
   {
@@ -8291,8 +8275,6 @@ function broadcastFlowEditorSync(flowId, flowSource, flowArchived = false, userI
   }
 }
 
-/** 正在执行的 flow run（flowId → { child, runUuid }）；同一 flow 只允许一个 run */
-const activeFlowRuns = new Map();
 /** 正在执行的 Workspace 临时 run（runId/sessionId → { controller, child, runNodeId, startedAt, plannedNodeIds }） */
 const activeWorkspaceRuns = new Map();
 const workspaceCollaborationSubscribers = new Map();
@@ -13486,29 +13468,6 @@ function buildComposerPromptWithFlowContext(p) {
   return prefix;
 }
 
-function flowYamlChangedSince(flowYamlAbs, beforeText) {
-  if (!flowYamlAbs || beforeText == null) return false;
-  try {
-    return fs.readFileSync(flowYamlAbs, "utf-8") !== beforeText;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeContextInstanceIds(raw) {
-  if (raw == null) return [];
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const x of raw) {
-    const s = typeof x === "string" ? x.trim() : String(x ?? "").trim();
-    if (!s || seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-  }
-  return out;
-}
-
 /**
  * @param {object} opts
  * @param {string} opts.workspaceRoot
@@ -13610,6 +13569,8 @@ export function startUiServer({
       "/api/flow/schedule",
       "/api/flow/schedules",
       "/api/flow/schedule/disable",
+      "/api/flow/run",
+      "/api/flow/run/stop",
     ]);
     if (LEGACY_FLOW_EXECUTION_DISABLED && legacyFlowManagementPath.has(url.pathname)) {
       json(res, 410, { error: LEGACY_FLOW_EXECUTION_MESSAGE, code: "legacy_flow_execution_disabled" });
@@ -20345,158 +20306,13 @@ finishedAt: "${new Date().toISOString()}"
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/flow/run-config") {
-      const flowId = url.searchParams.get("flowId");
-      const flowSource = url.searchParams.get("flowSource") || "user";
-      const flowArchived = url.searchParams.get("archived") === "1";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!isValidFlowSourceRead(flowSource)) {
-        json(res, 400, { error: "Invalid flowSource" });
-        return;
-      }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
-      if (yamlRes.error) {
-        json(res, 404, { error: yamlRes.error });
-        return;
-      }
-      const configPath = path.join(path.dirname(yamlRes.path), RUN_CONFIG_FILENAME);
-      try {
-        if (!fs.existsSync(configPath)) {
-          json(res, 200, { presets: {}, activePreset: null });
-          return;
-        }
-        const data = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        json(res, 200, {
-          presets: data.presets && typeof data.presets === "object" ? data.presets : {},
-          activePreset: typeof data.activePreset === "string" ? data.activePreset : null,
-        });
-      } catch (e) {
-        json(res, 500, { error: e.message });
-      }
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/flow/run-config") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = payload.flowId;
-      const flowSource = payload.flowSource || "user";
-      const flowArchived = payload.archived === true;
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!isValidFlowSourceWrite(flowSource)) {
-        json(res, 400, { error: "Cannot save config to builtin or archived flow" });
-        return;
-      }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
-      if (yamlRes.error) {
-        json(res, 404, { error: yamlRes.error });
-        return;
-      }
-      const configPath = path.join(path.dirname(yamlRes.path), RUN_CONFIG_FILENAME);
-      try {
-        const presets = payload.presets && typeof payload.presets === "object" ? payload.presets : {};
-        const activePreset = typeof payload.activePreset === "string" ? payload.activePreset : null;
-        const data = { presets, activePreset };
-        fs.writeFileSync(configPath, JSON.stringify(data, null, 2), "utf-8");
-        json(res, 200, { success: true });
-      } catch (e) {
-        json(res, 500, { error: e.message });
-      }
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/flow/schedule") {
-      const flowId = url.searchParams.get("flowId");
-      const flowSource = url.searchParams.get("flowSource") || "user";
-      const flowArchived = url.searchParams.get("archived") === "1";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!isValidFlowSourceRead(flowSource)) {
-        json(res, 400, { error: "Invalid flowSource" });
-        return;
-      }
-      const result = readFlowSchedule(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
-      if (!result.success) {
-        json(res, 400, { error: result.error || "Could not read schedule" });
-        return;
-      }
-      const status = listScheduleStatuses(root, userCtx).find(
-        (s) => s.flowId === flowId && (s.flowSource || "user") === (flowSource || "user"),
-      );
-      json(res, 200, { schedule: result.schedule, state: result.state || {}, status: status || null });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/flow/schedule") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = payload.flowId;
-      const flowSource = payload.flowSource || "user";
-      const flowArchived = payload.archived === true;
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (flowArchived || !isValidFlowSourceWrite(flowSource)) {
-        json(res, 400, { error: "Cannot save schedule to builtin or archived flow" });
-        return;
-      }
-      const result = writeFlowSchedule(root, flowId, flowSource, payload.schedule || {}, userCtx);
-      if (!result.success) {
-        json(res, 400, { error: result.error || "Could not save schedule" });
-        return;
-      }
-      json(res, 200, { success: true, schedule: result.schedule });
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/flow/schedules") {
-      try {
-        json(res, 200, { schedules: listScheduleStatuses(root, userCtx) });
-      } catch (e) {
-        json(res, 500, { error: (e && e.message) || String(e) });
-      }
-      return;
-    }
-
     if (req.method === "GET" && url.pathname === "/api/schedules") {
       try {
-        const pipelineSchedules = listScheduleStatuses(root, userCtx)
-          .filter((schedule) => (
-            schedule.enabled ||
-            schedule.cron ||
-            schedule.nextRunAt ||
-            schedule.lastTriggeredAt ||
-            schedule.lastRunUuid ||
-            schedule.lastError ||
-            schedule.running ||
-            schedule.waiting
-          ))
-          .map((schedule) => ({
-            kind: "pipeline",
-            ...schedule,
-          }));
+        // 旧 Pipeline schedule 随 Start/End 执行一并下线：它们只会驱动已废弃的
+        // `agentflow apply`，列出来只会给用户永远不会触发的条目。
         const workspaceSchedules = listWorkspaceScheduleStatuses(root, userCtx);
         json(res, 200, {
-          schedules: [...workspaceSchedules, ...pipelineSchedules].sort((a, b) => {
+          schedules: [...workspaceSchedules].sort((a, b) => {
             const ea = a.enabled ? 0 : 1;
             const eb = b.enabled ? 0 : 1;
             return ea - eb || String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")) || String(a.flowId || "").localeCompare(String(b.flowId || ""));
@@ -20531,302 +20347,10 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       if (kind === "pipeline") {
-        const flowId = String(payload.flowId || "").trim();
-        const flowSource = String(payload.flowSource || "user").trim() || "user";
-        if (!flowId) {
-          json(res, 400, { error: "Missing flowId" });
-          return;
-        }
-        if (!isValidFlowSourceWrite(flowSource)) {
-          json(res, 400, { error: "Cannot update schedule for builtin or readonly flow" });
-          return;
-        }
-        const current = readFlowSchedule(root, flowId, flowSource, userCtx);
-        if (!current.success) {
-          json(res, 400, { error: current.error || "Could not read schedule" });
-          return;
-        }
-        const result = writeFlowSchedule(root, flowId, flowSource, { ...current.schedule, enabled: payload.enabled === true }, userCtx);
-        if (!result.success) {
-          json(res, 400, { error: result.error || "Could not update schedule" });
-          return;
-        }
-        json(res, 200, { success: true, schedule: result.schedule });
-        return;
-      }
-      json(res, 400, { error: "Invalid schedule kind" });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/flow/schedule/disable") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = String(payload.flowId || "").trim();
-      const flowSource = String(payload.flowSource || "user").trim() || "user";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!isValidFlowSourceWrite(flowSource)) {
-        json(res, 400, { error: "Cannot disable schedule for builtin or readonly flow" });
-        return;
-      }
-      const current = readFlowSchedule(root, flowId, flowSource, userCtx);
-      if (!current.success) {
-        json(res, 400, { error: current.error || "Could not read schedule" });
-        return;
-      }
-      const result = writeFlowSchedule(root, flowId, flowSource, { ...current.schedule, enabled: false }, userCtx);
-      if (!result.success) {
-        json(res, 400, { error: result.error || "Could not disable schedule" });
-        return;
-      }
-      json(res, 200, { success: true, schedule: result.schedule });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/flow/run") {
-      if (LEGACY_FLOW_EXECUTION_DISABLED) {
         json(res, 410, { error: LEGACY_FLOW_EXECUTION_MESSAGE, code: "legacy_flow_execution_disabled" });
         return;
       }
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = typeof payload.flowId === "string" ? payload.flowId.trim() : "";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      const flowSource = payload.flowSource || "user";
-      const collaborationDenied = workspaceFlowCollaborationGuard(
-        flowId,
-        flowSource,
-        false,
-        userCtx,
-        "run",
-      );
-      if (collaborationDenied) {
-        json(res, collaborationDenied.status, { error: collaborationDenied.error });
-        return;
-      }
-      const runUuid = typeof payload.uuid === "string" ? payload.uuid.trim() : "";
-      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
-      if (activeFlowRuns.has(runKey)) {
-        json(res, 409, { error: "该流水线已在运行中" });
-        return;
-      }
-
-      // resume: 清除上次 Pause 写入的中断标记，否则 inferRunStatusFromRunDir 仍返回 "stopped"，
-      // UI 轮询会把 runMode 翻回 stopped，即便 CLI 正在运行也显示 PAUSED。
-      if (runUuid) {
-        try {
-          const runDir = getRunDir(root, flowId, runUuid, userCtx);
-          const interruptedPath = path.join(runDir, RUN_INTERRUPTED_FILENAME);
-          if (fs.existsSync(interruptedPath)) fs.unlinkSync(interruptedPath);
-        } catch (e) {
-          log.debug(`[ui] flow/run: could not clear ${RUN_INTERRUPTED_FILENAME}: ${e && e.message}`);
-        }
-      }
-
-      const agentflowBin = path.join(PACKAGE_ROOT, "bin", "agentflow.mjs");
-      const args = [agentflowBin, runUuid ? "resume" : "apply", flowId];
-      if (runUuid) args.push(runUuid);
-      args.push("--machine-readable", "--workspace-root", root);
-      if (payload.force !== false) args.push("--force");
-
-      if (payload.cliInputs && typeof payload.cliInputs === "object") {
-        for (const [name, val] of Object.entries(payload.cliInputs)) {
-          if (!name || typeof name !== "string") continue;
-          if (!val || typeof val !== "object") continue;
-          const type = val.type;
-          if (type === "file" && typeof val.path === "string") {
-            args.push("--input", `${name}=file:${val.path}`);
-          } else if (type === "str" && typeof val.value === "string") {
-            args.push("--input", `${name}=${val.value}`);
-          }
-        }
-      }
-
-      res.writeHead(200, {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Content-Type-Options": "nosniff",
-      });
-      try {
-        res.socket?.setNoDelay?.(true);
-      } catch (_) {}
-
-      let responseEnded = false;
-      let clientDisconnected = false;
-      const endSafe = () => {
-        if (responseEnded) return;
-        responseEnded = true;
-        activeFlowRuns.delete(runKey);
-        try {
-          res.end();
-        } catch (_) {}
-      };
-      const writeLine = (obj) => {
-        if (responseEnded || clientDisconnected) return;
-        try { res.write(JSON.stringify(obj) + "\n"); } catch (_) { clientDisconnected = true; }
-      };
-
-      let child;
-      try {
-        child = spawn(process.execPath, args, {
-          cwd: root,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: runtimeEnvForUser(userCtx, { FORCE_COLOR: "0" }),
-          // detached: true 使 child 成为新进程组 leader，/api/flow/run/stop 时
-          // 用 process.kill(-pid) 可以一次性 SIGTERM 整棵进程树（含 cursor-agent 等孙进程）
-          detached: true,
-        });
-      } catch (e) {
-        writeLine({ type: "error", message: `启动失败: ${e.message}` });
-        endSafe();
-        return;
-      }
-
-      /** @type {{ child: import("child_process").ChildProcess, runUuid: string | null }} */
-      const runEntry = { child, runUuid: runUuid || null, userId: userCtx.userId || "" };
-      activeFlowRuns.set(runKey, runEntry);
-      log.debug(`[ui] flow/run: spawned pid=${child.pid} flowId=${flowId}${runUuid ? ` uuid=${runUuid}` : ""}`);
-
-      let stdoutBuf = "";
-      child.stdout.on("data", (chunk) => {
-        stdoutBuf += chunk.toString("utf8");
-        const lines = stdoutBuf.split("\n");
-        stdoutBuf = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const evt = JSON.parse(line);
-            if (evt && evt.event === "apply-start" && typeof evt.uuid === "string" && evt.uuid.trim()) {
-              runEntry.runUuid = evt.uuid.trim();
-            }
-            writeLine({ type: "event", ...evt });
-          } catch {
-            writeLine({ type: "log", text: line });
-          }
-        }
-      });
-
-      let stderrBuf = "";
-      child.stderr.on("data", (chunk) => {
-        stderrBuf += chunk.toString("utf8");
-        const lines = stderrBuf.split("\n");
-        stderrBuf = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          writeLine({ type: "log", text: line });
-        }
-      });
-
-      child.on("close", (code) => {
-        if (stderrBuf.trim()) writeLine({ type: "log", text: stderrBuf.trim() });
-        if (stdoutBuf.trim()) {
-          try {
-            const evt = JSON.parse(stdoutBuf.trim());
-            writeLine({ type: "event", ...evt });
-          } catch {
-            writeLine({ type: "log", text: stdoutBuf.trim() });
-          }
-        }
-        writeLine({ type: "done", exitCode: code ?? 0 });
-        endSafe();
-      });
-
-      child.on("error", (e) => {
-        writeLine({ type: "error", message: e.message });
-        endSafe();
-      });
-
-      req.on("close", () => {
-        // 浏览器断开（刷新/关闭 tab）时不再杀子进程，让 flow 自然跑完。
-        // 用户需显式停止请走 /api/flow/run/stop。
-        clientDisconnected = true;
-      });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/flow/run/stop") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = typeof payload.flowId === "string" ? payload.flowId.trim() : "";
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      const flowSource = payload.flowSource || "user";
-      const requestedRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
-      const collaborationDenied = workspaceFlowCollaborationGuard(
-        flowId,
-        flowSource,
-        false,
-        userCtx,
-        "run",
-      );
-      if (collaborationDenied) {
-        json(res, collaborationDenied.status, { error: collaborationDenied.error });
-        return;
-      }
-      const runKey = workspaceRunKey(userCtx, flowSource, flowId);
-      const entry = activeFlowRuns.get(runKey);
-      if (!entry || !entry.child) {
-        if (requestedRunId) {
-          const cancelled = cancelScheduledRun(root, flowId, requestedRunId, userCtx);
-          if (cancelled.ok && cancelled.updatedWaits > 0) {
-            json(res, 200, { ok: true, cancelledWaitingRun: true, ...cancelled });
-            return;
-          }
-        }
-        json(res, 404, { error: "该流水线未在运行" });
-        return;
-      }
-      // 先尝试杀整个进程组（涵盖 cursor-agent / opencode 等孙进程）
-      const pid = entry.child.pid;
-      let killedGroup = false;
-      if (pid && pid > 0) {
-        try {
-          process.kill(-pid, "SIGTERM");
-          killedGroup = true;
-        } catch (_) { /* 组不存在则降级 */ }
-      }
-      if (!killedGroup) {
-        try { entry.child.kill("SIGTERM"); } catch (_) {}
-      }
-      const uuid = entry.runUuid;
-      activeFlowRuns.delete(runKey);
-      if (uuid) {
-        try {
-          const runDir = getRunDir(root, flowId, uuid, { userId: entry.userId || userCtx.userId || "" });
-          fs.mkdirSync(runDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(runDir, RUN_INTERRUPTED_FILENAME),
-            JSON.stringify({ reason: "user_stop", at: Date.now() }, null, 2),
-            "utf-8",
-          );
-        } catch (e) {
-          log.debug(`[ui] flow/run/stop: could not write ${RUN_INTERRUPTED_FILENAME}: ${e && e.message}`);
-        }
-      }
-      json(res, 200, { ok: true });
+      json(res, 400, { error: "Invalid schedule kind" });
       return;
     }
 
@@ -20868,389 +20392,6 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       json(res, 200, { skill: detail });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/composer-agent") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const prompt = payload.prompt;
-      const model = payload.model;
-      const phaseRole = typeof payload.phaseRole === "string" ? payload.phaseRole.trim() : "";
-      if (typeof prompt !== "string" || !prompt.trim()) {
-        json(res, 400, { error: "Missing or empty prompt" });
-        return;
-      }
-      if (typeof model !== "string" && model != null) {
-        json(res, 400, { error: "Invalid model" });
-        return;
-      }
-      const selectedSkillKeys = Array.isArray(payload.selectedSkills)
-        ? payload.selectedSkills.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 20)
-        : [];
-
-      const flowIdRaw = payload.flowId;
-      const flowSourceRaw = payload.flowSource;
-      const hasFlowId = flowIdRaw != null && String(flowIdRaw).trim() !== "";
-      const hasFlowSource = flowSourceRaw != null && String(flowSourceRaw).trim() !== "";
-      if (hasFlowId !== hasFlowSource) {
-        json(res, 400, { error: "flowId and flowSource must both be set or both omitted" });
-        return;
-      }
-
-      const threadRaw = Array.isArray(payload.thread) ? payload.thread : [];
-      const thread = threadRaw
-        .filter((m) => m && typeof m.text === "string" && m.text.trim() && (m.role === "user" || m.role === "assistant"))
-        .map((m) => ({ role: m.role, text: String(m.text) }));
-
-      let finalPrompt = prompt.trim();
-      let cliWorkspace = root;
-      let flowYamlAbs = null;
-      let flowId = null;
-      let flowSource = null;
-      let instanceIds = [];
-      let flowContextForMultiStep = null;
-      let flowYamlBefore = null;
-      const hasPhaseContext = payload.phaseContext && typeof payload.phaseContext === "object" && typeof payload.phaseContext.phaseIndex === "number";
-
-      if (hasFlowId) {
-        flowId = String(flowIdRaw).trim();
-        flowSource = String(flowSourceRaw).trim();
-        if (!isValidFlowSourceRead(flowSource)) {
-          json(res, 400, { error: "Invalid flowSource" });
-          return;
-        }
-        const flowArchived = Boolean(payload.flowArchived);
-        const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: flowArchived, ...userCtx });
-        if (yamlRes.error || !yamlRes.path) {
-          json(res, 400, { error: yamlRes.error || "Could not resolve flow.yaml" });
-          return;
-        }
-        flowYamlAbs = yamlRes.path;
-        try { flowYamlBefore = fs.readFileSync(flowYamlAbs, "utf-8"); } catch { flowYamlBefore = null; }
-        let workspaceWriteDirAbs;
-        let editorSyncFlowSource = flowSource;
-        let flowDirForCli = path.dirname(flowYamlAbs);
-        if (isReadonlyBuiltinFlowSource(flowSource)) {
-          const w = resolveFlowDirForWrite(root, flowId, "workspace", userCtx);
-          if (w.error || !w.flowDir) {
-            json(res, 400, { error: w.error || "Could not resolve workspace flow directory" });
-            return;
-          }
-          workspaceWriteDirAbs = w.flowDir;
-          editorSyncFlowSource = "workspace";
-          flowDirForCli = w.flowDir;
-        }
-        instanceIds = normalizeContextInstanceIds(payload.contextInstanceIds);
-
-        const syncFs = editorSyncFlowSource ?? flowSource;
-        const syncBody = { flowId, flowSource: syncFs };
-        if (flowArchived) syncBody.flowArchived = true;
-        const syncJsonArg = JSON.stringify(JSON.stringify(syncBody));
-
-        // 多步分阶段仍需要技能上下文；普通 Composer 请求直接交给 agent + skills 自行判断。
-        const multiStepIntents = detectIntents(prompt);
-        const selectedSkillResources = selectedSkillKeys.length > 0
-          ? loadResourcesForSkillKeys(selectedSkillKeys, PACKAGE_ROOT, root)
-          : { skills: [], references: [], skillsHint: "", hasContext: false };
-        const multiStepResources = selectedSkillResources.hasContext
-          ? selectedSkillResources
-          : loadResourcesForIntents(multiStepIntents, PACKAGE_ROOT);
-        const flowPipelineDir = flowYamlAbs ? path.dirname(flowYamlAbs) : "";
-        const selectedSkillBlock = selectedSkillResources.hasContext
-          ? buildSkillInjectionBlock(selectedSkillResources.skills, selectedSkillResources.references)
-          : "";
-
-        flowContextForMultiStep = {
-          flowYamlAbs,
-          flowId,
-          flowSource,
-          userId: userCtx.userId || "",
-          intents: multiStepIntents,
-          canvasInstanceIds: instanceIds,
-          skillsHint: multiStepResources.skillsHint,
-          skillInjectionBlock: multiStepResources.hasContext
-            ? buildSkillCompactInjectionBlock(multiStepResources.skills, multiStepResources.references)
-            : "",
-          syncCurlHint: `curl -sS -X POST http://127.0.0.1:${uiPort}/api/flow-editor-sync -H 'Content-Type: application/json' -d ${syncJsonArg}`,
-          composerSpecAbs: flowPipelineDir ? path.join(flowPipelineDir, COMPOSER_NODE_SPEC_FILENAME) : "",
-          pipelineScriptsDirAbs: flowPipelineDir ? path.join(flowPipelineDir, "scripts") : "",
-        };
-
-        const scriptContentBlock = buildScriptContentBlockForInstances(flowYamlAbs, instanceIds);
-        finalPrompt = buildComposerPromptWithFlowContext({
-          flowYamlAbs,
-          flowId,
-          flowSource,
-          workspaceWriteDirAbs,
-          editorSyncFlowSource,
-          instanceIds,
-          userPrompt: prompt,
-          uiPort,
-          flowArchived,
-          thread,
-          scriptContentBlock,
-          selectedSkillBlock,
-        });
-        cliWorkspace = composerCliWorkspaceForFlowDir(root, flowDirForCli);
-      }
-
-      if (!hasFlowId && thread.length > 0) {
-        finalPrompt = formatThreadHistory(thread) + "\n\n## 用户说明\n\n" + finalPrompt;
-      }
-
-      let child = null;
-      let multiStepAbort = null;
-      let responseEnded = false;
-      let clientDisconnected = false;
-      
-      const composerSession = createComposerSession(root);
-      const composerLogPath = composerSession.logPath;
-      
-      const endSafe = () => {
-        if (responseEnded) return;
-        responseEnded = true;
-        try {
-          res.end();
-        } catch (_) {}
-      };
-      const killChild = () => {
-        if (multiStepAbort) {
-          multiStepAbort();
-          return;
-        }
-        if (child && !child.killed) {
-          try {
-            child.kill("SIGTERM");
-          } catch (_) {}
-        }
-      };
-
-      // 先发送响应头，建立 NDJSON 流连接，避免后续分类阻塞导致前端超时
-      res.writeHead(200, {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Content-Type-Options": "nosniff",
-      });
-
-      const onStreamEvent = (ev) => {
-        if (responseEnded) return;
-
-        // ai-log：full prompt/response 全文落盘，不写入 NDJSON 流（前端通过 /api/composer-logs 拉）
-        if (ev && ev.type === "ai-log") {
-          logComposerEvent(composerLogPath, ev.tag || "ai-log", {
-            text: typeof ev.text === "string" ? ev.text : "",
-            meta: ev.meta || {},
-          });
-          return;
-        }
-
-        // CLI natural 事件按 kind 拆 tag，便于日志按 AI 类别过滤；error kind 单独成 error tag
-        let logTag = ev.type || "event";
-        if (ev && ev.type === "natural" && ev.kind) {
-          if (ev.kind === "error") logTag = "error";
-          else logTag = `ai-${ev.kind}`; // ai-thinking | ai-assistant | ai-result | ai-tool
-        }
-
-        // 其他事件：全文落盘（不再截断），同时写入 NDJSON 流
-        logComposerEvent(composerLogPath, logTag, ev);
-
-        try {
-          res.write(JSON.stringify(ev) + "\n");
-        } catch (_) {
-          killChild();
-        }
-      };
-
-      req.on("close", () => {
-        clientDisconnected = true;
-        if (!responseEnded) killChild();
-      });
-
-      logComposerEvent(composerLogPath, "composer-start", {
-        sessionId: composerSession.sessionId,
-        flowId: flowId || null,
-        flowSource: flowSource || null,
-        model: model || null,
-        prompt: truncateForLog(prompt.trim(), 1000),
-        hasFlowId,
-        threadLength: thread.length,
-        instanceIds: instanceIds.slice(0, 10),
-      });
-
-      onStreamEvent({ type: "status", line: t("composer.analyzing_task") });
-      log.debug(`[ui] composer-agent: flowId=${flowId || "(none)"} model=${model || "default"} promptLen=${finalPrompt.length}`);
-
-      let useMultiStep;
-      try {
-        useMultiStep = hasPhaseContext && !payload.singleStep;
-      } catch (classifyErr) {
-        log.debug(`[ui] composer classify error: ${classifyErr.message}`);
-        logComposerEvent(composerLogPath, "composer-done", {
-          status: "failed",
-          error: truncateForLog(classifyErr?.message || String(classifyErr), 500),
-          code: "CLASSIFY_FAIL",
-        });
-        onStreamEvent({ type: "error", message: t("composer.classify_failed", { message: classifyErr.message }), code: "CLASSIFY_FAIL" });
-        endSafe();
-        return;
-      }
-
-      log.debug(`[ui] composer mode: ${useMultiStep ? "multi-step" : "single-step"}`);
-
-      logComposerEvent(composerLogPath, "classify", {
-        mode: useMultiStep ? "multi-step" : "single-step",
-        hasPhaseContext,
-      });
-
-      if (useMultiStep) {
-        try {
-          onStreamEvent({ type: "status", line: t("composer.multi_step_starting") });
-          const phaseContext = payload.phaseContext && typeof payload.phaseContext === "object" ? payload.phaseContext : undefined;
-          const handle = startComposerMultiStep({
-            uiWorkspaceRoot: root,
-            cliWorkspace,
-            userPrompt: prompt.trim(),
-            fullPrompt: finalPrompt,
-            modelKey: typeof model === "string" ? model.trim() : "",
-            flowYamlAbs,
-            flowId,
-            flowSource,
-            instanceIds,
-            flowContext: flowContextForMultiStep,
-            thread,
-            phaseContext,
-            phaseRole: phaseRole || undefined,
-            agentflowUserId: userCtx.userId || "",
-            force: true,
-            onStreamEvent,
-          });
-          multiStepAbort = handle.abort;
-          handle.finished
-            .then(() => {
-              if (!responseEnded) {
-                logComposerEvent(composerLogPath, "composer-done", {
-                  status: "success",
-                  flowId: flowId || null,
-                  flowSource: flowSource || null,
-                });
-                if (flowId && flowSource) {
-                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived), userCtx.userId);
-                }
-                try { res.write(JSON.stringify({ type: "done" }) + "\n"); } catch (_) {}
-              }
-              endSafe();
-            })
-            .catch((e) => {
-              if (!responseEnded) {
-                logComposerEvent(composerLogPath, "composer-done", {
-                  status: "failed",
-                  error: truncateForLog(e?.message || String(e), 500),
-                  code: "MULTI_STEP_FAIL",
-                });
-                try {
-                  res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "MULTI_STEP_FAIL" }) + "\n");
-                } catch (_) {}
-              }
-              endSafe();
-            });
-        } catch (e) {
-          logComposerEvent(composerLogPath, "composer-done", {
-            status: "failed",
-            error: truncateForLog(e?.message || String(e), 500),
-            code: "MULTI_STEP_INIT_FAIL",
-          });
-          try {
-            res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "MULTI_STEP_INIT_FAIL" }) + "\n");
-          } catch (_) {}
-          endSafe();
-        }
-      } else {
-        try {
-          const handle = startComposerAgent({
-            uiWorkspaceRoot: root,
-            cliWorkspace,
-            prompt: finalPrompt,
-            modelKey: typeof model === "string" ? model.trim() : "",
-            agentflowUserId: userCtx.userId || "",
-            onStreamEvent,
-          });
-          child = handle.child;
-          handle.finished
-            .then(async () => {
-              if (responseEnded) {
-                endSafe();
-                return;
-              }
-              const flowYamlChanged = flowYamlChangedSince(flowYamlAbs, flowYamlBefore);
-              if (flowYamlChanged && flowYamlAbs && flowContextForMultiStep) {
-                try {
-                  await runComposerPostFlowValidationAndRepair({
-                    uiWorkspaceRoot: root,
-                    cliWorkspace,
-                    flowYamlAbs,
-                    flowContext: flowContextForMultiStep,
-                    modelKey: typeof model === "string" ? model.trim() : "",
-                    agentflowUserId: userCtx.userId || "",
-                    force: true,
-                    onStreamEvent,
-                    getAborted: () => clientDisconnected || responseEnded,
-                    setCurrentChild: (c) => {
-                      child = c;
-                    },
-                  });
-                } catch (e) {
-                  onStreamEvent({
-                    type: "natural",
-                    kind: "error",
-                    text: `校验修复异常: ${(e && e.message) || String(e)}`,
-                  });
-                }
-              }
-              if (!responseEnded) {
-                logComposerEvent(composerLogPath, "composer-done", {
-                  status: "success",
-                  flowId: flowId || null,
-                  flowSource: flowSource || null,
-                });
-                if (flowYamlChanged && flowId && flowSource) {
-                  broadcastFlowEditorSync(flowId, flowSource, Boolean(payload.flowArchived), userCtx.userId);
-                }
-                try { res.write(JSON.stringify({ type: "done" }) + "\n"); } catch (_) {}
-              }
-              endSafe();
-            })
-            .catch((e) => {
-              if (!responseEnded) {
-                logComposerEvent(composerLogPath, "composer-done", {
-                  status: "failed",
-                  error: truncateForLog(e?.message || String(e), 500),
-                  code: "SINGLE_STEP_FAIL",
-                });
-                try {
-                  res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "SINGLE_STEP_FAIL" }) + "\n");
-                } catch (_) {}
-              }
-              endSafe();
-            });
-} catch (e) {
-          logComposerEvent(composerLogPath, "composer-done", {
-            status: "failed",
-            error: truncateForLog(e?.message || String(e), 500),
-            code: "SINGLE_STEP_INIT_FAIL",
-          });
-          try {
-            res.write(JSON.stringify({ type: "error", message: (e && e.message) || String(e), code: "SINGLE_STEP_INIT_FAIL" }) + "\n");
-          } catch (_) {}
-          endSafe();
-        }
-      }
       return;
     }
 

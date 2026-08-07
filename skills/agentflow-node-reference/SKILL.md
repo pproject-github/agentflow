@@ -9,7 +9,7 @@ description: >-
 
 使用本技能处理这些问题：
 
-- 选择 `agent_subAgent`、`tool_nodejs`、`tool_git_checkout`、`control_cd_workspace`、`tool_print` 等节点。
+- 选择 `agent_subAgent`、`tool_nodejs`、`tool_git_checkout`、`control_cd_workspace`、`display_markdown` 等节点。
 - 创建或修改 Workspace Graph 时需要确认 input/output 名称、类型、顺序和 handle 索引。
 - 判断节点是否 local-only，是否会调用 agent，是否需要 `script`。
 

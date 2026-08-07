@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * AgentFlow CLI: drive apply/replay from command line.
- * Commands: agentflow apply <FlowName> [uuid], agentflow replay [flowName] <uuid> <instanceId>
- * Cursor agent execution uses --print --output-format stream-json.
+ * AgentFlow CLI entry point.
+ * Flow execution lives in the Workspace graph (Web UI Run / workspace_scheduled_run);
+ * this CLI covers catalog, validation, Hub and the local UI server.
  */
 
 import { createRequire } from "module";

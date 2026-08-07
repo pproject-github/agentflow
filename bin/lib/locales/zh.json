@@ -106,7 +106,7 @@
     "type_text": "文本",
     "pipeline_header": "流水线",
     "source_header": "来源",
-    "apply_example_header": "Apply 示例"
+    "open_example_header": "校验命令"
   },
   "composer": {
     "edit_context": "## AgentFlow 编辑上下文",

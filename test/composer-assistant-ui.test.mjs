@@ -30,10 +30,9 @@ test("AI Composer uses the shared Assistant conversation surface", async () => {
   assert.match(component, /af-composer-assistant-activity/);
   assert.match(component, /Enter 发送 · Shift \+ Enter 换行/);
 
-  assert.match(flowEditor, /ComposerAssistantTurn/);
-  assert.match(flowEditor, /ComposerAssistantActivity/);
-  assert.match(flowEditor, /pendingLabel=\{responseText \? "仍在生成并同步工作流"/);
-  assert.match(flowEditor, /label="执行过程"/);
+  // 旧 flow AI Composer 已下线：Flow 编辑器只剩只读静态预览，不再挂 Assistant 会话界面。
+  assert.doesNotMatch(flowEditor, /ComposerAssistantTurn/);
+  assert.doesNotMatch(flowEditor, /ComposerAssistantActivity/);
 
   assert.match(workspace, /ComposerAssistantTurn/);
   assert.match(workspace, /ComposerAssistantActivity/);

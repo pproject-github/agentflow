@@ -22,7 +22,7 @@ import {
 import { Table } from "./table.mjs";
 import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
-import { LEGACY_FLOW_NODE_IDS } from "./legacy-flow-execution.mjs";
+import { RETIRED_NODE_IDS } from "./legacy-flow-execution.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -262,7 +262,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
     for (const e of files) {
       const id = e.name.replace(/\.mdx?$/i, "").replace(/\.markdown$/i, "");
-      if (LEGACY_FLOW_NODE_IDS.has(id)) continue;
+      if (RETIRED_NODE_IDS.has(id)) continue;
       let type = "agent";
       if (/^control/i.test(id)) type = "control";
       else if (/^provide/i.test(id)) type = "provide";
@@ -874,13 +874,13 @@ export function listPipelines(workspaceRoot) {
     return;
   }
   const table = new Table({
-    head: [chalk.cyan(t("catalog.pipeline_header")), chalk.cyan(t("catalog.source_header")), chalk.cyan(t("catalog.apply_example_header"))],
+    head: [chalk.cyan(t("catalog.pipeline_header")), chalk.cyan(t("catalog.source_header")), chalk.cyan(t("catalog.open_example_header"))],
     colWidths: [24, 10, 48],
     style: { head: [], border: ["grey"] },
   });
   for (const row of rows) {
     const sourceLabel = row.source === "builtin" || row.source === "admin" ? "builtin" : row.source === "workspace" ? "workspace" : "user";
-    table.push([row.id, sourceLabel, `agentflow apply ${row.id}`]);
+    table.push([row.id, sourceLabel, `agentflow validate ${row.id}`]);
   }
   log.info("\n" + chalk.bold("Pipelines"));
   log.info(table.toString());

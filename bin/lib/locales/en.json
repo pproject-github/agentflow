@@ -106,7 +106,7 @@
     "type_text": "Text",
     "pipeline_header": "Pipeline",
     "source_header": "Source",
-    "apply_example_header": "Apply Example"
+    "open_example_header": "Validate Command"
   },
   "composer": {
     "edit_context": "## AgentFlow Edit Context",

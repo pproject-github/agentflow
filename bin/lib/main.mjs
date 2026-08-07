@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import chalk from "chalk";
-import { apply, replay, resume } from "./apply.mjs";
 import {
   addRoleJson,
   copyBuiltinAgentJson,
@@ -24,7 +23,7 @@ import { writeFlowYaml } from "./flow-write.mjs";
 import { printHelp } from "./help.mjs";
 import { LOG_LEVELS, log, setLogLevel, setMachineReadable } from "./log.mjs";
 import { updateModelLists } from "./model-lists.mjs";
-import { APPLY_AI_STEPS, LEGACY_PIPELINES_DIR, PIPELINES_DIR, USER_AGENTFLOW_PIPELINES_LABEL } from "./paths.mjs";
+import { LEGACY_PIPELINES_DIR, PIPELINES_DIR, USER_AGENTFLOW_PIPELINES_LABEL } from "./paths.mjs";
 import { isValidUuid, runNodeScript } from "./pipeline-scripts.mjs";
 import { Table } from "./table.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, listRunsWithLogs } from "./workspace.mjs";
@@ -32,7 +31,6 @@ import { startUiServer } from "./ui-server.mjs";
 import { hubLogin, hubLogout } from "./hub-login.mjs";
 import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
-import { cancelScheduledRun, listScheduleStatuses, startScheduler } from "./scheduler.mjs";
 import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 import { startMcpServer } from "./mcp-server.mjs";
 import { writeStaticFlowPreview } from "./flow-static-preview.mjs";
@@ -61,53 +59,25 @@ export async function main() {
     printHelp();
     process.exit(0);
   }
-  const dryRun = argv.includes("--dry-run");
-  if (dryRun) argv.splice(argv.indexOf("--dry-run"), 1);
+  if (argv.includes("--dry-run")) argv.splice(argv.indexOf("--dry-run"), 1);
   if (argv.includes("--debug")) {
     setLogLevel(LOG_LEVELS.debug);
     argv.splice(argv.indexOf("--debug"), 1);
   }
-  let force = true;
-  if (argv.includes("--no-force")) {
-    force = false;
-    argv.splice(argv.indexOf("--no-force"), 1);
-  }
-  if (argv.includes("--force")) {
-    force = true;
-    argv.splice(argv.indexOf("--force"), 1);
-  }
-  if (argv.includes("--yolo")) {
-    force = true;
-    argv.splice(argv.indexOf("--yolo"), 1);
-  }
-  let parallel = false;
-  if (argv.includes("--parallel")) {
-    parallel = true;
-    argv.splice(argv.indexOf("--parallel"), 1);
-  }
-  if (argv.includes("--no-parallel")) {
-    parallel = false;
-    argv.splice(argv.indexOf("--no-parallel"), 1);
+  // 以下开关只服务已下线的 Start/End 执行，保留解析以免旧脚本把它们当成子命令。
+  for (const legacyFlag of ["--no-force", "--force", "--yolo", "--parallel", "--no-parallel"]) {
+    while (argv.includes(legacyFlag)) argv.splice(argv.indexOf(legacyFlag), 1);
   }
   if (argv.includes("--machine-readable")) {
     setMachineReadable(true);
     argv.splice(argv.indexOf("--machine-readable"), 1);
   }
   const jsonMode = argv.includes("--json");
-  const cliInputs = {};
   while (argv.includes("--input")) {
     const idx = argv.indexOf("--input");
     const pair = argv[idx + 1];
     if (!pair || !pair.includes("=")) {
       throw new Error("Invalid --input format. Use: --input name=value");
-    }
-    const eqIdx = pair.indexOf("=");
-    const name = pair.slice(0, eqIdx);
-    const value = pair.slice(eqIdx + 1);
-    if (value.startsWith("file:")) {
-      cliInputs[name] = { type: "file", path: value.slice(5) };
-    } else {
-      cliInputs[name] = { type: "str", value };
     }
     argv.splice(idx, 2);
   }
@@ -140,12 +110,8 @@ export async function main() {
   if (jsonMode && jsonOnlySubs.includes(sub)) {
     argv.splice(argv.indexOf("--json"), 1);
   }
-  let agentModel = process.env.CURSOR_AGENT_MODEL || null;
   const modelIdx = argv.indexOf("--model");
-  if (modelIdx >= 0 && argv[modelIdx + 1]) {
-    agentModel = argv[modelIdx + 1];
-    argv.splice(modelIdx, 2);
-  }
+  if (modelIdx >= 0 && argv[modelIdx + 1]) argv.splice(modelIdx, 2);
   if (sub === "list-flows" && jsonMode) {
     const list = listFlowsJson(workspaceRoot);
     process.stdout.write(JSON.stringify(list) + "\n");
@@ -414,8 +380,6 @@ export async function main() {
   if (sub === "ui") {
     let port = 8765;
     let host = process.env.AGENTFLOW_UI_HOST || "127.0.0.1";
-    let schedulerEnabled = false;
-    let schedulerPollMs;
     let hideCommunityLinks = /^(1|true|yes|on)$/i.test(String(process.env.AGENTFLOW_HIDE_COMMUNITY_LINKS || ""));
     const portIdx = argv.indexOf("--port");
     if (portIdx >= 0 && argv[portIdx + 1]) {
@@ -426,19 +390,6 @@ export async function main() {
     if (hostIdx >= 0 && argv[hostIdx + 1]) {
       host = argv[hostIdx + 1];
       argv.splice(hostIdx, 2);
-    }
-    if (argv.includes("--scheduler")) {
-      schedulerEnabled = true;
-      argv.splice(argv.indexOf("--scheduler"), 1);
-    }
-    if (argv.includes("--no-scheduler")) {
-      schedulerEnabled = false;
-      argv.splice(argv.indexOf("--no-scheduler"), 1);
-    }
-    const schedulerPollIdx = argv.indexOf("--scheduler-poll-ms");
-    if (schedulerPollIdx >= 0 && argv[schedulerPollIdx + 1]) {
-      schedulerPollMs = parseInt(argv[schedulerPollIdx + 1], 10);
-      argv.splice(schedulerPollIdx, 2);
     }
     const noOpen = argv.includes("--no-open");
     if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
@@ -453,11 +404,6 @@ export async function main() {
       throw new Error("Invalid --host");
     }
     await startUiServer({ workspaceRoot, port, host, hideCommunityLinks });
-    if (schedulerEnabled) {
-      startScheduler(workspaceRoot, { pollMs: schedulerPollMs }).catch((e) => {
-        log.error("Scheduler failed: " + ((e && e.message) || String(e)));
-      });
-    }
     const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
     const url = "http://" + (browserHost.includes(":") ? `[${browserHost}]` : browserHost) + ":" + port;
     process.stderr.write("AgentFlow UI: " + url + (browserHost === host ? "" : ` (listening on ${host}:${port})`) + "\n");
@@ -474,60 +420,6 @@ export async function main() {
       }
     }
     await new Promise(() => {});
-  }
-  if (sub === "scheduler") {
-    const action = shift();
-    if (action === "start") {
-      let pollMs;
-      const pollIdx = argv.indexOf("--poll-ms");
-      if (pollIdx >= 0 && argv[pollIdx + 1]) {
-        pollMs = parseInt(argv[pollIdx + 1], 10);
-        argv.splice(pollIdx, 2);
-      }
-      const once = argv.includes("--once");
-      if (once) argv.splice(argv.indexOf("--once"), 1);
-      await startScheduler(workspaceRoot, { pollMs, once });
-      process.exit(0);
-    }
-    if (action === "status") {
-      if (jsonMode) {
-        process.stdout.write(JSON.stringify({ schedules: listScheduleStatuses(workspaceRoot) }) + "\n");
-        process.exit(0);
-      }
-      const rows = listScheduleStatuses(workspaceRoot);
-      const table = new Table({ head: ["flow", "source", "enabled", "cron", "timezone", "next", "running", "waiting", "lastRun", "error"], style: { head: [] } });
-      for (const r of rows) {
-        table.push([
-          r.flowId,
-          r.flowSource,
-          r.enabled ? "yes" : "no",
-          r.cron || "",
-          r.timezone || "",
-          r.nextRunAt || "",
-          r.running ? "yes" : "no",
-          String(r.waiting || 0),
-          r.lastRunUuid || "",
-          r.lastError || "",
-        ]);
-      }
-      process.stdout.write(table.toString() + "\n");
-      process.exit(0);
-    }
-    if (action === "cancel") {
-      const flowId = shift();
-      const uuid = shift();
-      if (!flowId || !uuid) throw new Error("Usage: agentflow scheduler cancel <flow> <uuid> [--json]");
-      const result = cancelScheduledRun(workspaceRoot, flowId, uuid);
-      if (jsonMode) {
-        process.stdout.write(JSON.stringify(result) + "\n");
-      } else if (result.ok) {
-        process.stdout.write(`Cancelled ${flowId}/${uuid}; updated waits: ${result.updatedWaits}\n`);
-      } else {
-        throw new Error(result.error || "cancel failed");
-      }
-      process.exit(result.ok ? 0 : 1);
-    }
-    throw new Error("Usage: agentflow scheduler <start|status|cancel> [--once] [--poll-ms <ms>] [--json]");
   }
   // ──── Hub commands ────
   if (sub === "login") {
@@ -553,52 +445,8 @@ export async function main() {
   // ──── Local commands ────
   if (sub === "list") {
     listPipelines(workspaceRoot);
-  } else if (sub === "apply") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const aiMode = argv[0] === "-ai" || argv[0] === "--ai";
-    if (aiMode) {
-      argv.shift();
-      const step = argv.shift();
-      if (!step || !APPLY_AI_STEPS.includes(step)) {
-        throw new Error(
-          "Missing or invalid step. Usage: agentflow apply -ai <step> <args...>. Steps: " + APPLY_AI_STEPS.join(", "),
-        );
-      }
-      if (argv.length === 0) {
-        throw new Error("Missing args for step " + step + ". Example: agentflow apply -ai ensure-run-dir <workspaceRoot> [uuid] <flowName>");
-      }
-      const stepWorkspaceRoot = path.resolve(argv[0]);
-      ensureReference(stepWorkspaceRoot);
-      const scriptName = step + ".mjs";
-      const result = runNodeScript(stepWorkspaceRoot, scriptName, argv, { captureStdout: false });
-      process.exit(result.status ?? 0);
-    }
-    const first = shift();
-    if (!first) throw new Error("Missing FlowName or uuid. Usage: agentflow apply <FlowName> [uuid] | agentflow apply <uuid>");
-    let flowName, uuidArg;
-    if (isValidUuid(first)) {
-      flowName = findFlowNameByUuid(workspaceRoot, first);
-      if (!flowName) throw new Error("No run found for uuid " + first + ". Run apply with FlowName first (e.g. agentflow apply <FlowName>).");
-      uuidArg = first;
-    } else {
-      flowName = first;
-      uuidArg = isValidUuid(argv[0]) ? shift() : undefined;
-    }
-    await apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel, force, parallel, cliInputs);
-  } else if (sub === "resume") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const flowName = shift();
-    const uuidArg = shift();
-    if (!flowName || !uuidArg) throw new Error("Usage: agentflow resume <FlowName> <uuid> [instanceId]");
-    const instanceIdOpt = argv.length > 0 && !argv[0].startsWith("--") ? shift() : undefined;
-    await resume(workspaceRoot, flowName, uuidArg, instanceIdOpt, agentModel, force, parallel);
-  } else if (sub === "replay") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const a = shift(),
-      b = shift(),
-      c = shift();
-    if (!a || !b) throw new Error("Usage: agentflow replay <uuid> <instanceId> or agentflow replay <flowName> <uuid> <instanceId>");
-    await replay(workspaceRoot, a, b, c, agentModel, force);
+  } else if (sub === "apply" || sub === "resume" || sub === "replay") {
+    throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
   } else if (sub === "run-status") {
     const flowName = shift();
     const uuidArg = shift();

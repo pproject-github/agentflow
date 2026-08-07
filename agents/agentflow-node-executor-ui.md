@@ -27,7 +27,17 @@ ${taskBody}
 
 ---
 
-理解设计稿或规格（Figma、标注、描述），实现或调整组件与样式，保证布局、间距、层级、断点与 RTL 等与设计一致；必要时做走查与修正，节点中如有写入文件的操作可以执行。任务完成后直接退出，结果由系统自动标记成功。**仅当任务明确失败时**，执行以下命令报告失败（`agentflow` 是可直接在终端运行的 CLI 命令）：
-```bash
-agentflow apply -ai write-result ${pipelineWorkspace} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"失败原因"}'
+理解设计稿或规格（Figma、标注、描述），实现或调整组件与样式，保证布局、间距、层级、断点与 RTL 等与设计一致；必要时做走查与修正，节点中如有写入文件的操作可以执行。
+
+**结果回传**：最终回复的正文就是本节点的结果，AgentFlow 会自行写入 `AGENTFLOW_RESULT_FILE`——不要自己创建该文件，也不要输出文件路径。若节点声明了额外的 output 槽，则最终**只**输出一个 agentflow envelope：
+
 ```
+---agentflow
+result: |
+  <完整结果正文，每行缩进两个空格>
+outParams:
+  <槽位名>: <短值>
+---end
+```
+
+**失败上报**：任务明确失败时，直接以非零退出码结束，或在回复中说明失败原因——不要调用任何 CLI 写状态。

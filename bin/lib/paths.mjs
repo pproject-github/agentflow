@@ -260,23 +260,8 @@ export const USER_AGENTFLOW_AGENTS_LABEL = "~/agentflow/agents";
 /** agents.json 中 user 角色 filepath 展示前缀（相对数据根） */
 export const USER_AGENTS_FILEPATH_PREFIX = "agentflow/agents";
 
-/** apply/replay 流水线脚本目录（随包发布） */
+/** 随包发布的 CLI 单步脚本目录（validate-flow / get-ready-nodes / extract-thinking） */
 export const PIPELINE_SCRIPTS_DIR = path.join(BIN_DIR, "pipeline");
-/** apply -ai 允许调用的单步脚本名（不含 .mjs） */
-export const APPLY_AI_STEPS = [
-  "ensure-run-dir",
-  "parse-flow",
-  "get-ready-nodes",
-  "pre-process-node",
-  "post-process-node",
-  "write-result",
-  "run-tool-nodejs",
-  "get-env",
-  "validate-flow",
-  "collect-nodes",
-  "gc",
-  "extract-thinking",
-];
 /** 项目内流水线根目录（写入与主读取路径） */
 export const PIPELINES_DIR = ".workspace/agentflow/pipelines";
 /** 用户目录或工作区 pipelines 下存放已归档流水线的子目录名 */

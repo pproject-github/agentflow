@@ -150,3 +150,13 @@ export function resolveCliAndModel(workspaceRoot, nodeModel, agentModelOverride)
     label: model === "Auto" ? "cursor: Auto" : `cursor: ${model}`,
   };
 }
+
+/** 解析 `api:<provider>/<model>` 形式的模型串；无 provider 时默认 openai。 */
+export function parseApiModel(str) {
+  const s = String(str ?? "").replace(/^api:/, "");
+  const slash = s.indexOf("/");
+  if (slash < 0) return { provider: "openai", model: s };
+  const provider = s.slice(0, slash).toLowerCase();
+  const model = s.slice(slash + 1);
+  return { provider, model };
+}

@@ -185,5 +185,5 @@ export async function hubDownload(argv) {
   if (dirInfo.flowDir) {
     log.info(chalk.dim("  Path: " + dirInfo.flowDir));
   }
-  log.info(chalk.dim("  Run with: agentflow apply " + flowId));
+  log.info(chalk.dim("  Open it in the Web UI (agentflow ui) and run it from the Workspace graph."));
 }

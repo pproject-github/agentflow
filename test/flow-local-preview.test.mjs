@@ -64,9 +64,13 @@ test("web UI routes embedded preview data to the shared read-only Flow editor", 
   assert.match(editor, /sp\.get\("flowId"\) \|\| \(previewMode \? flows\[0\]\?\.id : ""\)/);
   assert.match(editor, /readOnly=\{previewMode\}/);
   assert.match(editor, /data: \{ \.\.\.merged\.data, readOnly: true \}/);
-  assert.match(editor, /previewMode \? null : runMode === "edit"/);
+  // 旧 flow AI Composer 已下线：编辑器不再有底部 Composer 停靠栏、右侧面板或 /api/composer-agent 调用。
+  assert.doesNotMatch(editor, /af-bottom-composer-stack/);
+  assert.doesNotMatch(editor, /rightPanel === "composer"/);
+  assert.doesNotMatch(editor, /api\/composer-agent/);
   assert.doesNotMatch(editor, /重新读取/);
-  assert.match(editor, /!previewMode \? <button[\s\S]{0,300}handleSlotWarningsRefresh/);
+  // Flow 编辑器已收敛为只读预览渲染器：编辑/运行/调度类控件整体移除，不再靠 previewMode 分支隐藏。
+  assert.doesNotMatch(editor, /handleSlotWarningsRefresh/);
   assert.match(css, /\.af-flow-preview-badge\s*\{/);
   assert.match(css, /\.af-pipeline-page--preview\s*\{[\s\S]{0,100}height: 100%/);
   assert.match(main, /writeStaticFlowPreview\(/);

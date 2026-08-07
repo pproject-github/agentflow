@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
 import { fileURLToPath } from "url";
+import { RETIRED_NODE_IDS } from "../bin/lib/legacy-flow-execution.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -58,25 +59,24 @@ function generateNodeReference() {
   const dir = path.join(root, "builtin", "nodes");
   const nodes = fs.readdirSync(dir)
     .filter((name) => name.endsWith(".md"))
+    // 已下线的节点类型不进参考文档：Composer 读到就会照着生成跑不了的图。
+    .filter((name) => !RETIRED_NODE_IDS.has(path.basename(name, ".md")))
     .map((name) => parseNodeDefinition(path.join(dir, name)))
     .sort((a, b) => a.id.localeCompare(b.id));
   const localOnly = new Set([
     "control_if",
-    "control_delay",
-    "control_wait_until",
-    "control_deadline",
-    "control_cancelled",
-    "control_interval_loop",
     "control_cd_workspace",
+    "control_user_workspace",
     "control_load_skills",
-    "control_start",
-    "control_end",
     "tool_git_checkout",
-    "tool_print",
-    "tool_user_check",
-    "tool_user_ask",
+    "tool_git_worktree_load",
+    "tool_git_worktree_unload",
+    "tool_set_run_env",
+    "tool_display_share_link",
     "provide_str",
     "provide_file",
+    "provide_bool",
+    "provide_password",
   ]);
   const lines = [
     "# AgentFlow Builtin Nodes Reference",
@@ -88,6 +88,7 @@ function generateNodeReference() {
     "- `tool_nodejs` needs an executable `script`; `body` is documentation when `script` exists.",
     "- `agent_subAgent` is for semantic/code/text reasoning tasks.",
     "- Local-only nodes are executed by AgentFlow runtime and do not call an agent.",
+    "- The Workspace runtime executes a DAG; cyclic graphs are rejected. Express check-then-fix as forward steps.",
     "- Edge handles are positional: `input-0`, `output-0`, etc. Match slot order exactly.",
     "",
   ];

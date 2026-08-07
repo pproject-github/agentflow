@@ -67,9 +67,9 @@ agentflow ui
 # 生成并打开平台同款画布的单文件静态预览（无需本地服务）
 agentflow flow preview ./my-flow/flow.yaml
 
-# 或直接运行流程
-agentflow apply <FlowName>
 ```
+
+运行从 Web UI 的 Workspace 图发起；需要定时执行时在图里加 `workspace_scheduled_run` 节点。
 
 从源码开发：`git clone` → `npm install` → `npm link`
 
@@ -107,25 +107,25 @@ Web UI 中 — 新建流水线 → 从面板拖节点到画布 → 连线 → �
 4. 没通过就继续修，直到全过
 ```
 
-Composer 会自动识别循环模式，生成正确的控制流节点。复杂流程分三阶段构建：拓扑 → 节点详情 → 连线校验（自动修复最多 5 次）。
+复杂流程分三阶段构建：拓扑 → 节点详情 → 连线校验（自动修复最多 5 次）。注意 Workspace 运行时执行的是 DAG，有环的图会被拒绝，所以「检查—修复—复检」要描述成向前推进的步骤，而不是回环。
 
-## 运行与恢复
+## 运行
+
+运行从 Workspace 图发起：在 Web UI 打开流程点 **Run**，或在图里加 `workspace_scheduled_run`
+节点做定时执行。每个节点的输入、输出与状态都会持久化到该流程的 run 目录。
+
+旧版 Start/End Pipeline 运行时已下线 —— `agentflow apply` / `resume` / `replay` 与
+`/api/flow/run*` 接口不再执行任何流程。
 
 ```bash
-# 执行
-agentflow apply <FlowName>
-
-# 查看状态
+# 查看某次运行的节点状态
 agentflow run-status <FlowName> <uuid>
-
-# 断点续跑
-agentflow resume <FlowName> <uuid>
-
-# 重试单个节点
-agentflow replay <FlowName> <uuid> <instanceId>
 
 # 查看 agent 推理过程
 agentflow extract-thinking <FlowName> <uuid>
+
+# 校验流程定义
+agentflow validate <FlowName>
 ```
 
 ## 技能
