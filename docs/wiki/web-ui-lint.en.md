@@ -4,7 +4,7 @@
 
 ```bash
 cd builtin/web-ui
-npm run lint          # current baseline: 0 errors / 62 warnings
+npm run lint          # current baseline: 0 errors / 39 warnings
 npm run lint:strict   # treat warnings as failures, for tightening later
 ```
 
@@ -35,7 +35,7 @@ That effect runs on every render, so the page blanks the moment it opens. Hence
 | `no-undef` | error | See above. Currently 0 violations repo-wide |
 | `react/jsx-uses-vars` | error | **Required**. Without it `<Foo />` does not count as a reference to `Foo` |
 | `react/jsx-uses-react` | error | Same, for `React` itself |
-| `no-unused-vars` | warn | 62 pre-existing; promote to error once cleared |
+| `no-unused-vars` | warn | 39 pre-existing; promote to error once cleared |
 | `react-hooks/rules-of-hooks` | error | Hook call ordering |
 
 ### Why `react/jsx-uses-vars` is non-negotiable
