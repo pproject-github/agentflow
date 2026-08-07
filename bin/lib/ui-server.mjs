@@ -10,7 +10,7 @@ import http from "http";
 import os from "os";
 import path from "path";
 import crypto from "crypto";
-import { pathToFileURL } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { execFile, spawn } from "child_process";
 import busboy from "busboy";
 import sharp from "sharp";
@@ -3290,6 +3290,8 @@ function workspaceRuntimeArgForMarketplace(arg) {
   return workspaceShellQuote(text);
 }
 
+const NODE_PACKAGE_BOOTSTRAP = path.join(path.dirname(fileURLToPath(import.meta.url)), "node-package-bootstrap.mjs");
+
 function workspaceMarketplaceRuntimeCommand(resolved) {
   const runtime = resolved?.runtime && typeof resolved.runtime === "object" ? resolved.runtime : {};
   const entry = String(runtime.entry || "").trim().replace(/^\/+/, "");
@@ -3299,6 +3301,11 @@ function workspaceMarketplaceRuntimeCommand(resolved) {
     const packageRootWithSep = packageRoot.endsWith(path.sep) ? packageRoot : `${packageRoot}${path.sep}`;
     if (entryAbs === packageRoot || !entryAbs.startsWith(packageRootWithSep)) return "";
     const args = Array.isArray(runtime.args) ? runtime.args.map(workspaceRuntimeArgForMarketplace).filter(Boolean) : [];
+    // mode: module 的包，入口是「声明 + export run」的模块而不是脚本，直接跑只会定义完就退出；
+    // 交给 bootstrap 把 env 契约翻译成 run(inputs, outputs, dirs) 的调用。
+    if (String(runtime.mode || "").trim().toLowerCase() === "module") {
+      return ["node", workspaceShellQuote(NODE_PACKAGE_BOOTSTRAP), workspaceShellQuote(entryAbs), ...args].join(" ");
+    }
     return [workspaceRuntimeInterpreterForMarketplaceEntry(runtime, entry), workspaceShellQuote(entryAbs), ...args].join(" ");
   }
   return String(runtime.command || "").trim();

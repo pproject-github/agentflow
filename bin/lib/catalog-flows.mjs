@@ -20,7 +20,12 @@ import {
   resolveAdminBuiltinPipelineDir,
 } from "./admin-builtin-pipelines.mjs";
 import { Table } from "./table.mjs";
-import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
+import {
+  listMarketplaceNodes,
+  listNodePackagesInDir,
+  parseMarketplaceDefinitionId,
+  resolveMarketplaceNodePackage,
+} from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
 import { RETIRED_NODE_IDS } from "./legacy-flow-execution.mjs";
 
@@ -333,6 +338,29 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
           flowId: flowIdOpt,
         });
       } catch (_) {}
+    }
+    // 同一个 nodes/ 目录里，子目录形式的代码节点包（index.mjs 声明 + 实现）也进目录。
+    // 这样 AI 可以把节点实现直接写在流程目录里，不必先发布到 marketplace。
+    for (const manifest of listNodePackagesInDir(dir)) {
+      byId.set(manifest.definitionId, {
+        id: manifest.definitionId,
+        baseDefinitionId: manifest.baseDefinitionId || manifest.runtime?.type || "",
+        marketplaceDefinitionId: manifest.definitionId,
+        packageId: manifest.id,
+        version: manifest.version,
+        type: "agent",
+        runtimeTier: "native",
+        label: manifest.displayName,
+        displayName: manifest.displayName,
+        description: manifest.description,
+        inputs: manifest.input,
+        outputs: manifest.output,
+        source: flowIdOpt ? "flow" : "project",
+        flowId: flowIdOpt,
+        packageDir: manifest.packageDir,
+        // 与 marketplace 分支同名：前端 scriptFromMarketplaceRuntime 读的就是这个对象
+        runtime: manifest.runtime,
+      });
     }
   };
   addFromDir(PACKAGE_BUILTIN_NODES_DIR, "project");

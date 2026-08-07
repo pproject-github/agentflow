@@ -82,6 +82,45 @@ slot name (`${slotName}`):
 
 Success/failure is the process exit code (0 = success). Do **not** wrap stdout in JSON.
 
+### Code node packages (`<dir>/nodes/<name>/index.mjs`)
+
+A code node is a **directory**. `index.mjs` carries both the declaration and the
+implementation:
+
+```js
+import fs from "node:fs/promises";
+
+export default {
+  id: "count_lines",              // required — becomes marketplace:count_lines@<version>
+  version: "1.0.0",               // required
+  name: "统计行数",
+  description: "读一个文本文件，统计行数",
+  inputs:  { filePath: { type: "text", description: "文件路径", required: true } },
+  outputs: { total: { type: "text" } },
+};
+
+export async function run(inputs, outputs, dirs) {
+  const text = await fs.readFile(inputs.filePath, "utf-8");
+  await fs.writeFile(outputs.total, String(text.split("\n").length));
+  console.log(`共 ${text.split("\n").length} 行`);   // stdout 即节点 result
+}
+```
+
+- `export default` is read by **acorn static parse — the package is never executed** to
+  list it in the palette or render the canvas. It must therefore be a **pure object
+  literal**: any variable reference, function call, or spread is a hard error (with a
+  message), not a silent empty manifest.
+- `inputs` / `outputs` are ordered maps; slot order follows declaration order, and a
+  control slot (`prev` / `next`) is prepended automatically. Slot types: `text`, `file`,
+  `bool`, `node`, `image`, `json`.
+- `run(inputs, outputs, dirs)` — `outputs.<name>` is the **absolute path to write**, not a
+  value. `dirs` has `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir`.
+- Failure = throw or non-zero exit. stdout becomes the node result.
+- Search order when resolving `marketplace:<id>@<version>`: the flow's own
+  `<flowDir>/nodes/*/` first, then published workspace packages, then collections. A
+  flow's local implementation is never shadowed by a same-named published package.
+- `node.yaml` still works as a fallback manifest for already-published packages.
+
 ### `agent_subAgent` output protocol
 
 Agent nodes receive `AGENTFLOW_RESULT_FILE`, `AGENTFLOW_OUTPUTS_DIR`,

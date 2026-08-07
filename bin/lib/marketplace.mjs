@@ -9,6 +9,7 @@ import {
   PIPELINES_DIR,
   getUserPipelinesRoot,
 } from "./paths.mjs";
+import { isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
@@ -78,6 +79,19 @@ function normalizeSlotList(value) {
       : Boolean(normalized.required) || type.toLowerCase() === "node";
     return normalized;
   });
+}
+
+/**
+ * 读取节点包清单：`index.mjs` 的静态声明优先，回退 `node.yaml`。
+ * 声明写得不合法时不静默吞掉——按目录名报错，否则节点会莫名从面板消失。
+ */
+function readNodeManifestRaw(dir) {
+  try {
+    return readNodePackageManifest(dir, readYamlObject);
+  } catch (e) {
+    console.warn(`[agentflow] 节点包 ${path.basename(dir)} 清单无效：${(e && e.message) || e}`);
+    return null;
+  }
 }
 
 function normalizeManifest(raw, packageDir, source = "workspace") {
@@ -263,11 +277,11 @@ function findNodePackageDir(workspaceRoot, id, version) {
   const nodeBase = path.join(root, "nodes", id);
   if (version) {
     const direct = path.join(nodeBase, version);
-    if (fs.existsSync(path.join(direct, NODE_MANIFEST))) return direct;
+    if (isNodePackageDir(direct)) return direct;
   } else {
     for (const v of sortVersionsDesc(listVersionDirs(nodeBase))) {
       const direct = path.join(nodeBase, v);
-      if (fs.existsSync(path.join(direct, NODE_MANIFEST))) return direct;
+      if (isNodePackageDir(direct)) return direct;
     }
   }
   return null;
@@ -289,13 +303,13 @@ function iterCollectionNodeDirs(workspaceRoot, collectionDeps = []) {
       for (const entry of fs.readdirSync(nodesRoot, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const direct = path.join(nodesRoot, entry.name);
-        if (fs.existsSync(path.join(direct, NODE_MANIFEST))) {
+        if (isNodePackageDir(direct)) {
           out.push(direct);
           continue;
         }
         for (const nodeVersion of sortVersionsDesc(listVersionDirs(direct))) {
           const versioned = path.join(direct, nodeVersion);
-          if (fs.existsSync(path.join(versioned, NODE_MANIFEST))) out.push(versioned);
+          if (isNodePackageDir(versioned)) out.push(versioned);
         }
       }
     }
@@ -330,18 +344,58 @@ function collectionDeps(flowData) {
   return deps && Array.isArray(deps.collections) ? deps.collections : [];
 }
 
+/**
+ * flow 自带的代码节点包：`<flowDir>/nodes/<dirName>/`，不带版本子目录。
+ *
+ * 这类包跟着 flow 走——AI 生成流程时可以顺手把节点实现写在流程目录里，不必先发布到
+ * marketplace。id 以包声明为准（目录名只是回退），所以目录名和 id 可以不一致。
+ */
+function findFlowLocalNodePackageDir(flowDir, id, requestedVersion) {
+  const nodesRoot = flowDir ? path.join(path.resolve(flowDir), "nodes") : "";
+  if (!nodesRoot || !fs.existsSync(nodesRoot) || !fs.statSync(nodesRoot).isDirectory()) return null;
+  for (const entry of fs.readdirSync(nodesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(nodesRoot, entry.name);
+    if (!isNodePackageDir(dir)) continue;
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "flow");
+    if (!manifest || manifest.id !== id) continue;
+    if (requestedVersion && manifest.version !== requestedVersion) continue;
+    return dir;
+  }
+  return null;
+}
+
+/**
+ * 列出一个 `nodes/` 目录下的所有代码节点包（子目录形式，不带版本层）。
+ * 供节点目录把 flow 自带的节点一起摆进面板。
+ */
+export function listNodePackagesInDir(nodesRoot) {
+  const out = [];
+  const root = String(nodesRoot || "");
+  if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return out;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(root, entry.name);
+    if (!isNodePackageDir(dir)) continue;
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "flow");
+    if (manifest) out.push(manifest);
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 export function resolveMarketplaceNodePackage(workspaceRoot, flowDir, definitionId, flowData = null, opts = {}) {
   const parsed = parseMarketplaceDefinitionId(definitionId);
   if (!parsed) return null;
   const id = parsed.id;
   const requestedVersion = parsed.version || dependencyVersion(flowData, id) || lockVersion(flowDir, id);
-  let packageDir = findNodePackageDir(workspaceRoot, id, requestedVersion);
-  let packageSource = "marketplace";
+  // flow 自带的包优先：流程目录里的实现就是这个流程要用的那份，不该被同名的已发布包顶掉
+  let packageDir = findFlowLocalNodePackageDir(flowDir, id, requestedVersion);
+  let packageSource = packageDir ? "flow" : "marketplace";
+  if (!packageDir) packageDir = findNodePackageDir(workspaceRoot, id, requestedVersion);
 
   if (!packageDir) {
     for (const dir of iterCollectionNodeDirs(workspaceRoot, collectionDeps(flowData))) {
-      const raw = readYamlObject(path.join(dir, NODE_MANIFEST));
-      const manifest = normalizeManifest(raw, dir, "collection");
+      const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "collection");
       if (!manifest || manifest.id !== id) continue;
       if (requestedVersion && manifest.version !== requestedVersion) continue;
       packageDir = dir;
@@ -351,7 +405,7 @@ export function resolveMarketplaceNodePackage(workspaceRoot, flowDir, definition
   }
 
   if (!packageDir) return null;
-  const manifest = normalizeManifest(readYamlObject(path.join(packageDir, NODE_MANIFEST)), packageDir, packageSource);
+  const manifest = normalizeManifest(readNodeManifestRaw(packageDir), packageDir, packageSource);
   if (!manifest) return null;
   if (!canAccessMarketplaceNode(manifest, opts)) return null;
   return {
@@ -366,7 +420,7 @@ export function listMarketplaceNodes(workspaceRoot, flowData = null, opts = {}) 
   const out = [];
   const seen = new Set();
   const addManifest = (dir, source = "marketplace") => {
-    const manifest = normalizeManifest(readYamlObject(path.join(dir, NODE_MANIFEST)), dir, source);
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, source);
     if (!manifest) return;
     if (!canAccessMarketplaceNode(manifest, opts)) return;
     const key = `${manifest.id}@${manifest.version}`;
