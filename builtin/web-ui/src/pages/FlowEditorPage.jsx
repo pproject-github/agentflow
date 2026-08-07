@@ -32,16 +32,7 @@ import {
   getSlotConnectionLabel,
 } from "../nodeSchema.js";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
-import { ArchivePipelineModal } from "../ArchivePipelineModal.jsx";
-import { ConfirmModal } from "../ConfirmModal.jsx";
-import { DeletePipelineModal } from "../DeletePipelineModal.jsx";
-import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
-import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
-import { FileEditModal } from "../FileEditModal.jsx";
-import { NODE_INSTANCE_ID_RE, NodePropertiesPanel } from "../NodePropertiesPanel.jsx";
-import RunNodeContextPanel from "../RunNodeContextPanel.jsx";
-import RunConfigPanel from "../components/RunConfigPanel.jsx";
-import LogViewer from "../components/LogViewer.jsx";
+import { NODE_INSTANCE_ID_RE } from "../NodePropertiesPanel.jsx";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -986,8 +977,6 @@ export default function FlowEditorPage({ previewMode = false }) {
   const [currentRunUuid, setCurrentRunUuid] = useState(/** @type {string | null} */ (null));
   const [runContextNodeId, setRunContextNodeId] = useState(/** @type {string | null} */ (null));
   const [cliInputs, setCliInputs] = useState(/** @type {Record<string, { type: "str" | "file", value?: string, path?: string }>} */ ({}));
-  // handleRun 的 useCallback deps 只有 [selected]，闭包里的 cliInputs 会过期；
-  // ready 模式下用户在 RunConfigPanel 编辑参数后点"开始执行"，需要读最新值 → 走 ref
   const cliInputsRef = useRef(cliInputs);
   useEffect(() => { cliInputsRef.current = cliInputs; }, [cliInputs]);
   const [runPresets, setRunPresets] = useState(/** @type {Record<string, Record<string, string>>} */ ({}));
