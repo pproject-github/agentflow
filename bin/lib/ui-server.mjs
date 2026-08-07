@@ -86,6 +86,12 @@ import {
   workspaceRuntimeRevision,
 } from "./workspace-graph-merge.mjs";
 import {
+  WORKSPACE_STATE_FILENAME,
+  isEmptyWorkspaceState,
+  mergeWorkspaceState,
+  splitWorkspaceGraph,
+} from "./workspace-state.mjs";
+import {
   deleteMarketplaceFlowSnippetPackage,
   deleteMarketplaceNodePackage,
   installFlowDependency,
@@ -1500,6 +1506,7 @@ const WORKSPACE_FILE_SKIP_DIRS = new Set([
 const WORKSPACE_FILE_SKIP_FILES = new Set([
   "flow.yaml",
   "workspace.graph.json",
+  "workspace.state.json",
 ]);
 
 const WORKSPACE_TEXT_EXTS = new Set([
@@ -1770,17 +1777,55 @@ function workspaceGraphPath(workspaceRoot) {
   return path.join(path.resolve(workspaceRoot), WORKSPACE_GRAPH_FILENAME);
 }
 
+function workspaceStatePath(workspaceRoot) {
+  return path.join(path.resolve(workspaceRoot), WORKSPACE_STATE_FILENAME);
+}
+
+function writeJsonAtomic(filePath, value) {
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
+/**
+ * 设计态写 workspace.graph.json，运行态写 workspace.state.json。
+ * 先落运行态再落设计态：万一中途失败，设计态仍是上一版，两个文件不会出现
+ * 「新设计 + 空运行态」这种展示节点内容凭空消失的组合。
+ */
 function writeWorkspaceGraphAtomic(graphPath, graph) {
   fs.mkdirSync(path.dirname(graphPath), { recursive: true });
-  const tmp = `${graphPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(graph, null, 2) + "\n", "utf-8");
-  fs.renameSync(tmp, graphPath);
+  const statePath = path.join(path.dirname(graphPath), WORKSPACE_STATE_FILENAME);
+  const { design, state } = splitWorkspaceGraph(graph);
+  if (isEmptyWorkspaceState(state)) {
+    if (fs.existsSync(statePath)) fs.rmSync(statePath, { force: true });
+  } else {
+    writeJsonAtomic(statePath, state);
+  }
+  writeJsonAtomic(graphPath, design);
 }
 
 function emptyWorkspaceGraph() {
   return { version: 1, instances: {}, edges: [], ui: { nodePositions: {} } };
 }
 
+function readWorkspaceStateFile(workspaceRoot) {
+  const statePath = workspaceStatePath(workspaceRoot);
+  if (!fs.existsSync(statePath)) return null;
+  try {
+    const raw = fs.readFileSync(statePath, "utf-8");
+    if (!raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    // 运行态损坏不该让整张图打不开——产出重跑就有，设计态才是不可再生的
+    return null;
+  }
+}
+
+/**
+ * 读回合并后的完整图。没有 workspace.state.json 时（尚未拆分的旧图，运行态还内联在
+ * graph.json 里）合并是恒等操作，因此无需迁移步骤：旧图照常读，下次写入时自动拆开。
+ */
 function readWorkspaceGraph(workspaceRoot) {
   const graphPath = workspaceGraphPath(workspaceRoot);
   if (!fs.existsSync(graphPath)) return { path: graphPath, graph: emptyWorkspaceGraph() };
@@ -1788,15 +1833,13 @@ function readWorkspaceGraph(workspaceRoot) {
   if (!raw.trim()) return { path: graphPath, graph: emptyWorkspaceGraph() };
   const parsed = JSON.parse(raw);
   const graph = parsed && typeof parsed === "object" ? parsed : {};
-  return {
-    path: graphPath,
-    graph: {
-      version: Number(graph.version) || 1,
-      instances: graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
-      edges: Array.isArray(graph.edges) ? graph.edges : [],
-      ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
-    },
+  const design = {
+    version: Number(graph.version) || 1,
+    instances: graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
+    edges: Array.isArray(graph.edges) ? graph.edges : [],
+    ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
   };
+  return { path: graphPath, graph: mergeWorkspaceState(design, readWorkspaceStateFile(workspaceRoot)) };
 }
 
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
@@ -7822,7 +7865,7 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
       try {
         const currentGraph = readWorkspaceGraph(scopedRoot).graph;
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, graph, new Set([nodeId, ...nodeIds]));
-        fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+        writeWorkspaceGraphAtomic(graphPath, mergedGraph);
       } catch (e) {
         emit({ type: "natural", kind: "warning", text: `保存分享展示内容失败：${(e && e.message) || String(e)}` });
       }
@@ -13049,7 +13092,7 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
     ...instance,
     body: JSON.stringify(nextConfig),
   };
-  fs.writeFileSync(workspaceGraphPath(scoped.root), JSON.stringify(graph, null, 2) + "\n", "utf-8");
+  writeWorkspaceGraphAtomic(workspaceGraphPath(scoped.root), graph);
   const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
   return { success: true, workspaceSchedules };
 }
@@ -13319,7 +13362,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     const currentGraph = readWorkspaceGraph(scoped.root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
     const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-    fs.writeFileSync(graphPath, JSON.stringify(mergedGraph, null, 2) + "\n", "utf-8");
+    writeWorkspaceGraphAtomic(graphPath, mergedGraph);
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {
@@ -17432,7 +17475,7 @@ export function startUiServer({
       try {
         fs.mkdirSync(flowDir, { recursive: true });
         fs.writeFileSync(path.join(flowDir, "flow.yaml"), "instances: {}\nedges: []\n", "utf8");
-        fs.writeFileSync(path.join(flowDir, "workspace.graph.json"), `${JSON.stringify(graph, null, 2)}\n`, "utf8");
+        writeWorkspaceGraphAtomic(workspaceGraphPath(flowDir), graph);
         writeWorkspacePreviewMetadata(flowDir, metadata);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

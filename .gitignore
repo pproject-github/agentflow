@@ -6,6 +6,7 @@ node_modules/
 .agents/
 tmp/
 workspace.graph.json
+workspace.state.json
 
 # Env / local
 .env
