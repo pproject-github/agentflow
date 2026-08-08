@@ -12,7 +12,7 @@
  * 这一条踩过坑：把「没写 showOnNode」当成 `false` 会凭空造出一堆假的覆盖记录。
  */
 import { definitionOf } from "./defs.mjs";
-import { NODE_META_KEYS } from "./ir.mjs";
+import { NODE_META_KEYS, bodyMirrorSuppressed } from "./ir.mjs";
 
 function canonicalSlotNames(defSlots, extras) {
   return [...defSlots.map((s) => s.name), ...extras.filter((x) => !defSlots.some((s) => s.name === x))];
@@ -40,7 +40,10 @@ export function extractLayout(designGraph, ir) {
 
   const nodeMeta = { version: 1, nodes: {} };
 
-  for (const [id, instance] of Object.entries(instances)) {
+  // 按 id 排序而不是按插入顺序：instances 的键序会随一次往返而变（irToGraph 按 IR 顺序
+  // 重建），不定序会让「没改任何东西的再保存」也产生 diff。
+  for (const id of Object.keys(instances).sort()) {
+    const instance = instances[id];
     const def = definitionOf(String(instance.definitionId || ""));
     const entry = {};
 
@@ -90,6 +93,7 @@ export function extractLayout(designGraph, ir) {
     if (instance.images !== undefined && instance.images !== null) meta.images = instance.images;
     for (const key of NODE_META_KEYS) if (String(instance[key] || "").trim()) meta[key] = instance[key];
     if (instance.globalContext === true) meta.globalContext = true;
+    if (bodyMirrorSuppressed(instance)) meta.bodyMirror = false;
     if (String(instance.role || "") && String(instance.role) !== "normal") meta.role = instance.role;
     if (Object.keys(meta).length) nodeMeta.nodes[id] = meta;
   }

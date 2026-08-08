@@ -9,7 +9,7 @@ description: Legacy Pipeline authoring is retired. Redirect new AgentFlow creati
 
 新任务统一使用：
 
-- `agentflow-workspace-graph`：创建或修改 `workspace.graph.json`
+- `agentflow-workspace-graph`：创建或修改 `workspace.flow.js`
 - `agentflow-cli workspace-preview`：上传到服务器临时 Workspace，打开所见即所得画布
 - Workspace 页面中的 `Run` / `Scheduled Run`：执行 Workspace 图
 

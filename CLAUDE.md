@@ -12,8 +12,21 @@ AgentFlow is an orchestration system for long-running complex agent tasks. It us
 ## Execution Model
 
 **Execution happens in the Workspace graph only.** Runs are started from the Web UI
-(`/api/workspace/run`) or by a `workspace_scheduled_run` node. The graph lives in
-`workspace.graph.json` inside the flow directory.
+(`/api/workspace/run`) or by a `workspace_scheduled_run` node.
+
+**The graph is code.** Inside the flow directory:
+
+```
+workspace.flow.js      graph structure — restricted ESM, never executed, only statically parsed
+workspace.layout.json  canvas positions/sizes — machine-managed
+workspace.nodes.json   images, model, marketplaceRef, external-file manifest — machine-managed
+workspace.state.json   run output — machine-managed
+prompts/ docs/ scripts/  authored text longer than 3 KB
+```
+
+`workspace.graph.json` is a **read-only legacy format**: it is still read when there is no
+`workspace.flow.js`, and the next save converts the flow to code. Never write it.
+See `docs/wiki/flow-dsl.zh-CN.md` and the `agentflow-flow-dsl` skill for the syntax.
 
 The legacy Start/End Pipeline runtime (`flow.yaml` + `control_start` / `control_end`,
 driven by `agentflow apply`) is **retired**. `agentflow apply` / `resume` / `replay` /
@@ -28,6 +41,8 @@ all return HTTP 410. `flow.yaml` is now read/migrate/audit material only.
 | `agentflow list` | List all pipelines |
 | `agentflow ui` | Start Web UI (port 8765) |
 | `agentflow validate <FlowName>` | Validate flow structure |
+| `agentflow flow dsl lint <flowDir>` | Static-check `workspace.flow.js` — run after editing it |
+| `agentflow flow dsl migrate <FlowName\|dir>` | Convert a legacy `workspace.graph.json` to code |
 | `agentflow flow preview <FlowName>` | Generate a single-file static canvas preview |
 | `agentflow run-status <FlowName> <uuid>` | View node execution status |
 | `agentflow extract-thinking <FlowName> <uuid>` | Extract agent thinking process |
@@ -180,6 +195,10 @@ AgentFlow/
 ---
 
 ## Flow Editing Skills
+
+> The rest of this section is about **`flow.yaml`**, which is legacy read/migrate/audit
+> material. To change a Workspace graph, edit `workspace.flow.js` — see
+> `agentflow-workspace-graph` / `agentflow-flow-dsl`.
 
 ### Editing Existing Node Fields (`agentflow-flow-edit-node-fields`)
 

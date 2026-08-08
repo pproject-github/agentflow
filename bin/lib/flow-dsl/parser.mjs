@@ -5,8 +5,11 @@
  * 执行第三方流程文件去画一张图既慢又不安全。
  *
  * 代价是能识别的写法有限：import、`const x = call(...)`、解构声明、以及
- * `flow.resume` / `flow.detached` 这两个表达式语句。别的语法结构一律忽略（由 lint
- * 负责报出来），而不是猜。
+ * `flow.resume` / `flow.detached` 这两个表达式语句。
+ *
+ * 认不出来的东西**一律记进 `unresolved`**，绝不静默跳过。这个文件是流程的权威表示，
+ * 「解析器看不懂就当它不存在」等于：画布少画一个节点，用户随手一保存，那个节点就从
+ * 磁盘上消失了。调用方（`flowFilesToGraph` 默认、以及 lint）据此决定是报错还是列出来。
  */
 import { parse as acornParse } from "acorn";
 
@@ -34,6 +37,12 @@ const memberPath = (n) => (
 export function parseFlowSource(source, opts = {}) {
   const files = opts.files || {};
   const ast = acornParse(source, { ecmaVersion: 2022, sourceType: "module", locations: true });
+
+  /** 解析器认不出、因此没有进入图的东西。 */
+  const unresolved = [];
+  const unresolvedAt = (node, message) => {
+    unresolved.push({ line: node?.loc?.start?.line || 0, message });
+  };
 
   function stringOf(node) {
     if (!node) return null;
@@ -91,7 +100,14 @@ export function parseFlowSource(source, opts = {}) {
     const node = nodes[id];
     if (!obj || obj.type !== "ObjectExpression") return;
     for (const prop of obj.properties) {
-      if (prop.type !== "Property") continue;
+      if (prop.type !== "Property") {
+        unresolvedAt(prop, `${id}: 引脚对象里出现了展开运算，静态解析读不出引脚`);
+        continue;
+      }
+      if (prop.computed) {
+        unresolvedAt(prop, `${id}: 引脚名不能是动态表达式`);
+        continue;
+      }
       const key = prop.key.name ?? prop.key.value;
       const isCustom = !STD_SLOTS.has(key) && !defInputs.has(key);
 
@@ -113,7 +129,10 @@ export function parseFlowSource(source, opts = {}) {
         continue;
       }
       const text = stringOf(prop.value);
-      if (text === null) continue;
+      if (text === null) {
+        unresolvedAt(prop, `${id}.${key}: 引脚值既不是上游引用也不是字面量`);
+        continue;
+      }
       // provide_* 的值写在引脚对象里，但它其实是输出槽
       if (defOutputs.has(key) && !defInputs.has(key)) {
         node.outputs[key] = text;
@@ -130,6 +149,8 @@ export function parseFlowSource(source, opts = {}) {
       if (arg.type === "Identifier") out.push(arg.name);
       else if (arg.type === "CallExpression" && calleePath(arg.callee) === "flow.fork") {
         out.push({ fork: arg.arguments.map(itemsOf) });
+      } else {
+        unresolvedAt(arg, "控制流参数只能是节点变量名或 flow.fork(...)");
       }
     }
     return out;
@@ -154,11 +175,26 @@ export function parseFlowSource(source, opts = {}) {
     const decl = stmt.type === "ExportNamedDeclaration" ? stmt.declaration : stmt;
 
     if (decl?.type === "VariableDeclaration") {
+      if (decl.declarations.length !== 1) {
+        unresolvedAt(decl, "一条 const 只能声明一个节点");
+        continue;
+      }
       const d = decl.declarations[0];
-      if (d.id.type === "ObjectPattern") continue;
+      if (d.id.type === "ObjectPattern") {
+        // 前面那趟已经处理过；只有 `const {a} = notAnIdentifier` 会漏下来
+        if (d.init?.type !== "Identifier") unresolvedAt(d, "解构只能来自一个节点变量");
+        continue;
+      }
+      if (d.id.type !== "Identifier") {
+        unresolvedAt(d, "节点声明左边必须是一个变量名");
+        continue;
+      }
       const id = d.id.name;
       const init = d.init;
-      if (init?.type !== "CallExpression") continue;
+      if (init?.type !== "CallExpression") {
+        unresolvedAt(d, `${id}: 节点声明右边必须是一次节点调用`);
+        continue;
+      }
       const path = calleePath(init.callee);
       const args = [...init.arguments];
 
@@ -206,7 +242,8 @@ export function parseFlowSource(source, opts = {}) {
       const path = calleePath(decl.expression.callee);
       if (path === "flow.resume") {
         const [a, b] = decl.expression.arguments.map((x) => x.name);
-        edges.push(`${a}|next|${b}|prev`);
+        if (a && b) edges.push(`${a}|next|${b}|prev`);
+        else unresolvedAt(decl, "flow.resume 的两个参数都必须是节点变量名");
         continue;
       }
       if (path === "flow.detached") {
@@ -214,6 +251,8 @@ export function parseFlowSource(source, opts = {}) {
         continue;
       }
     }
+
+    unresolvedAt(stmt, `顶层出现了流程图表达不了的语句（${stmt.type}）`);
   }
 
   for (const run of runDecls) {
@@ -255,5 +294,5 @@ export function parseFlowSource(source, opts = {}) {
     node.extraOut = [...new Set(node.extraOut)];
   }
 
-  return { nodes, edges: [...new Set(edges)].sort() };
+  return { nodes, edges: [...new Set(edges)].sort(), unresolved };
 }

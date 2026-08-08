@@ -85,12 +85,15 @@ import {
   workspaceDesignRevision,
   workspaceRuntimeRevision,
 } from "./workspace-graph-merge.mjs";
+import { splitWorkspaceGraph } from "./workspace-state.mjs";
+import { graphToFlowFiles } from "./flow-dsl/index.mjs";
 import {
-  WORKSPACE_STATE_FILENAME,
-  isEmptyWorkspaceState,
-  mergeWorkspaceState,
-  splitWorkspaceGraph,
-} from "./workspace-state.mjs";
+  FLOW_SOURCE_FILENAME,
+  WORKSPACE_GRAPH_FILENAME,
+  WorkspaceFlowParseError,
+  readWorkspaceGraphFiles,
+  writeWorkspaceGraphFiles,
+} from "./workspace-flow-store.mjs";
 import {
   deleteMarketplaceFlowSnippetPackage,
   deleteMarketplaceNodePackage,
@@ -1503,9 +1506,13 @@ const WORKSPACE_FILE_SKIP_DIRS = new Set([
   "coverage",
 ]);
 
+// workspace.flow.js 故意不在这里——它就是画布本身，用户应该能在文件树里看到并直接改。
+// 藏起来的都是机器管理的伴生文件：坐标、图片 base64、运行产出、历史 JSON。
 const WORKSPACE_FILE_SKIP_FILES = new Set([
   "flow.yaml",
   "workspace.graph.json",
+  "workspace.layout.json",
+  "workspace.nodes.json",
   "workspace.state.json",
 ]);
 
@@ -1771,75 +1778,44 @@ function readWorkspaceFiles(workspaceRoot) {
   return { root, files: readWorkspaceFilesRecursive(root, root) };
 }
 
-const WORKSPACE_GRAPH_FILENAME = "workspace.graph.json";
-
-function workspaceGraphPath(workspaceRoot) {
-  return path.join(path.resolve(workspaceRoot), WORKSPACE_GRAPH_FILENAME);
-}
-
-function workspaceStatePath(workspaceRoot) {
-  return path.join(path.resolve(workspaceRoot), WORKSPACE_STATE_FILENAME);
-}
-
-function writeJsonAtomic(filePath, value) {
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf-8");
-  fs.renameSync(tmp, filePath);
-}
-
 /**
- * 设计态写 workspace.graph.json，运行态写 workspace.state.json。
- * 先落运行态再落设计态：万一中途失败，设计态仍是上一版，两个文件不会出现
- * 「新设计 + 空运行态」这种展示节点内容凭空消失的组合。
+ * 当前承载设计态的文件。正常是 `workspace.flow.js`；只有在往返比对没过、退回历史格式时
+ * 才是 `workspace.graph.json`。API 把它回给前端，用来告诉用户「改的是哪个文件」。
  */
-function writeWorkspaceGraphAtomic(graphPath, graph) {
-  fs.mkdirSync(path.dirname(graphPath), { recursive: true });
-  const statePath = path.join(path.dirname(graphPath), WORKSPACE_STATE_FILENAME);
-  const { design, state } = splitWorkspaceGraph(graph);
-  if (isEmptyWorkspaceState(state)) {
-    if (fs.existsSync(statePath)) fs.rmSync(statePath, { force: true });
-  } else {
-    writeJsonAtomic(statePath, state);
-  }
-  writeJsonAtomic(graphPath, design);
-}
-
-function emptyWorkspaceGraph() {
-  return { version: 1, instances: {}, edges: [], ui: { nodePositions: {} } };
-}
-
-function readWorkspaceStateFile(workspaceRoot) {
-  const statePath = workspaceStatePath(workspaceRoot);
-  if (!fs.existsSync(statePath)) return null;
-  try {
-    const raw = fs.readFileSync(statePath, "utf-8");
-    if (!raw.trim()) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    // 运行态损坏不该让整张图打不开——产出重跑就有，设计态才是不可再生的
-    return null;
-  }
+function workspaceDesignPath(workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  const legacy = path.join(root, WORKSPACE_GRAPH_FILENAME);
+  if (!fs.existsSync(path.join(root, FLOW_SOURCE_FILENAME)) && fs.existsSync(legacy)) return legacy;
+  return path.join(root, FLOW_SOURCE_FILENAME);
 }
 
 /**
- * 读回合并后的完整图。没有 workspace.state.json 时（尚未拆分的旧图，运行态还内联在
- * graph.json 里）合并是恒等操作，因此无需迁移步骤：旧图照常读，下次写入时自动拆开。
+ * 设计态写 workspace.flow.js（+ layout / nodes / 外置长文本），运行态写 workspace.state.json。
+ *
+ * 落成代码还是历史 JSON 由存储层决定——它会把生成的代码解析回来跟原图逐字段比对，
+ * 比不上就退回写 workspace.graph.json。这里只负责把降级喊出来。
+ */
+function writeWorkspaceGraph(workspaceRoot, graph) {
+  const result = writeWorkspaceGraphFiles(workspaceRoot, graph);
+  if (result.degradedReason) {
+    log.warn(`Workspace 图无法表示成代码，已退回 ${WORKSPACE_GRAPH_FILENAME}：${result.degradedReason}`);
+  }
+  return result;
+}
+
+/**
+ * 读回合并后的完整图。
+ *
+ * 设计态优先读 `workspace.flow.js`；没有就回落到历史的 `workspace.graph.json`，下一次
+ * 写入自动迁移成代码。没有 `workspace.state.json` 时合并是恒等操作，所以两种历史形态
+ * 都不需要迁移步骤。
+ *
+ * `workspace.flow.js` 解析失败会抛 `WorkspaceFlowParseError`——**不能**降级成空图：
+ * 那会让下一次保存把整张流程清空。
  */
 function readWorkspaceGraph(workspaceRoot) {
-  const graphPath = workspaceGraphPath(workspaceRoot);
-  if (!fs.existsSync(graphPath)) return { path: graphPath, graph: emptyWorkspaceGraph() };
-  const raw = fs.readFileSync(graphPath, "utf-8");
-  if (!raw.trim()) return { path: graphPath, graph: emptyWorkspaceGraph() };
-  const parsed = JSON.parse(raw);
-  const graph = parsed && typeof parsed === "object" ? parsed : {};
-  const design = {
-    version: Number(graph.version) || 1,
-    instances: graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
-    edges: Array.isArray(graph.edges) ? graph.edges : [],
-    ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
-  };
-  return { path: graphPath, graph: mergeWorkspaceState(design, readWorkspaceStateFile(workspaceRoot)) };
+  const { path: designPath, graph } = readWorkspaceGraphFiles(workspaceRoot);
+  return { path: designPath, graph };
 }
 
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
@@ -4246,11 +4222,28 @@ function workspaceSearchGuardrailsBlock() {
   ].join("\n");
 }
 
+/** 把当前图渲染成 `workspace.flow.js` 的样子，连同它引用的外置长文本清单。 */
+function workspaceGraphAsSource(graph) {
+  try {
+    const { design } = splitWorkspaceGraph(graph);
+    const out = graphToFlowFiles(design);
+    const externals = out.files.length
+      ? `\n\n引用到的外置长文本（内容在这些文件里，需要时自己读）：\n${out.files.map((f) => `- ${f.path}`).join("\n")}`
+      : "";
+    return `\n## 当前 workspace 图（${FLOW_SOURCE_FILENAME}）\n\n\`\`\`js\n${out.source}\`\`\`${externals}`;
+  } catch {
+    return `\n## 当前 workspace graph\n\n${JSON.stringify(graph, null, 2)}`;
+  }
+}
+
 function buildWorkspaceGeneratePrompt(payload) {
   const userPrompt = String(payload?.prompt || "").trim();
   const outputKind = String(payload?.outputKind || payload?.kind || "markdown").trim().toLowerCase();
   const allowFlowYaml = payload?.allowFlowYaml === true || payload?.allowFlowYaml === "1";
   const workspaceGraph = payload?.workspaceGraph && typeof payload.workspaceGraph === "object" ? payload.workspaceGraph : null;
+  // 图以代码形态给模型看：同一张图 JSON 要几万 token，代码几千，而且 `output-1 -> input-2`
+  // 这种下标边模型根本读不出连的是什么槽。生成失败就退回 JSON——上下文缺失比报错更糟。
+  const workspaceGraphBlock = workspaceGraph ? workspaceGraphAsSource(workspaceGraph) : "";
   const selectedNodeIds = Array.isArray(payload?.selectedNodeIds)
     ? payload.selectedNodeIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
@@ -4306,7 +4299,7 @@ function buildWorkspaceGeneratePrompt(payload) {
         : [
             "你是 AgentFlow Workspace Composer。",
             "默认以用户当前选择的 workspace 节点作为上下文范围；选中节点不是让你重建整张画布的授权。",
-            "默认不要修改 workspace.graph.json，不要新增/删除/重连画布节点；只有当用户明确要求“更新画布、加节点、改连线、展示成节点、生成流程”时，才编辑 workspace.graph.json。",
+            "默认不要修改 workspace.flow.js，不要新增/删除/重连画布节点；只有当用户明确要求“更新画布、加节点、改连线、展示成节点、生成流程”时，才编辑 workspace.flow.js。",
             "如果用户请求生成或恢复文档/文件，可以直接在 workspace 文件系统中完成，最终只输出简短结果：改了什么、路径在哪里、是否需要下一步。",
             "不要在最终回答中列出过程性步骤，例如“先查看结构”“继续检索”“正在生成”；这些属于执行过程，不属于最终结果。",
           ].join("\n");
@@ -4314,13 +4307,15 @@ function buildWorkspaceGeneratePrompt(payload) {
     "你正在 AgentFlow 的 Workspace 工作画布中执行任务。",
     "Workspace 是当前 pipeline 的临时工作区，用于分析、试验、生成中间文件和展示结果。",
     "Workspace 与 Pipeline 各自有独立的 Skill collection；此处只使用当前 Workspace Composer 选择的 collections / skills 作为本次行为规则与编辑依据。",
-    "当 Skills 提到修改 flow.yaml / instances / edges / ui 时，在 Workspace 视图下应映射为修改当前工作区的 workspace.graph.json，除非用户显式勾选并要求修改正式 flow.yaml。",
-    "workspace.graph.json 使用 JSON：{ version, instances, edges, ui: { nodePositions, nodeSizes } }。instances 的结构与 flow.yaml instances 一致；edges 使用 source/target/sourceHandle/targetHandle；ui.nodePositions 记录节点坐标，ui.nodeSizes 记录用户调整过的节点宽高。",
+    "当 Skills 提到修改 flow.yaml / instances / edges / ui 时，在 Workspace 视图下应映射为修改当前工作区的 workspace.flow.js，除非用户显式勾选并要求修改正式 flow.yaml。",
+    "画布就是代码：workspace.flow.js 是受限 ESM——`flow()` 是入口，一个节点是一次 `const 变量名 = 类型(\"显示名\", { 引脚 }, 正文)`，引用上游变量的引脚就是一条数据线。它永不执行，只被静态解析，所以里面禁止一切控制流（if / for / await / .map / 箭头函数 / 动态属性）。要写逻辑就建代码节点 nodes/<name>/index.mjs，那里是普通 JS。",
+    "workspace.layout.json（坐标）、workspace.nodes.json（图片等机器属性）、workspace.state.json（运行产出）都由平台维护，不要手改。",
+    "改完必须跑 `agentflow flow dsl lint <flowDir>` 自查；语法或引脚写错会让整张画布打不开。完整语法见 agentflow-flow-dsl skill。",
     allowFlowYaml
       ? "用户已允许你考虑正式 flow.yaml；如需修改仍必须明确说明影响。"
-      : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.graph.json 或回复内容中完成任务。",
+      : "默认不要修改正式 flow.yaml；优先在 workspace 文件、workspace.flow.js 或回复内容中完成任务。",
     workspaceSearchGuardrailsBlock(),
-    workspaceGraph ? `\n## 当前 workspace graph\n\n${JSON.stringify(workspaceGraph, null, 2)}` : "",
+    workspaceGraphBlock,
     selectedNodeIds.length > 0 ? `\n## 当前用户选中的 workspace 节点\n\n${selectedNodeIds.map((id) => `- ${id}`).join("\n")}` : "",
     skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
     kindInstruction,
@@ -7861,11 +7856,10 @@ async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts =
         payload.requestOrigin ||
         "";
 
-      const graphPath = workspaceGraphPath(scopedRoot);
       try {
         const currentGraph = readWorkspaceGraph(scopedRoot).graph;
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, graph, new Set([nodeId, ...nodeIds]));
-        writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+        writeWorkspaceGraph(scopedRoot, mergedGraph);
       } catch (e) {
         emit({ type: "natural", kind: "warning", text: `保存分享展示内容失败：${(e && e.message) || String(e)}` });
       }
@@ -13092,7 +13086,7 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
     ...instance,
     body: JSON.stringify(nextConfig),
   };
-  writeWorkspaceGraphAtomic(workspaceGraphPath(scoped.root), graph);
+  writeWorkspaceGraph(scoped.root, graph);
   const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
   return { success: true, workspaceSchedules };
 }
@@ -13245,7 +13239,6 @@ async function runWorkspaceScheduledEntry(root, entry) {
     });
     return;
   }
-  const graphPath = workspaceGraphPath(scoped.root);
   const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
   const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
   const instance = graph.instances?.[scheduleNodeId];
@@ -13362,7 +13355,7 @@ async function runWorkspaceScheduledEntry(root, entry) {
     const currentGraph = readWorkspaceGraph(scoped.root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
     const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-    writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+    writeWorkspaceGraph(scoped.root, mergedGraph);
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {
@@ -17475,7 +17468,7 @@ export function startUiServer({
       try {
         fs.mkdirSync(flowDir, { recursive: true });
         fs.writeFileSync(path.join(flowDir, "flow.yaml"), "instances: {}\nedges: []\n", "utf8");
-        writeWorkspaceGraphAtomic(workspaceGraphPath(flowDir), graph);
+        writeWorkspaceGraph(flowDir, graph);
         writeWorkspacePreviewMetadata(flowDir, metadata);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -17526,6 +17519,12 @@ export function startUiServer({
           workspaceSchedules: listWorkspaceScheduleStatusesForFlow(scopedUserCtx, scoped.flowSource || "user", scoped.flowId || ""),
         });
       } catch (e) {
+        // 流程文件语法错时给出可修的定位，而不是一句 500——这条路径就是手改 / AI 改
+        // workspace.flow.js 之后最常撞上的
+        if (e instanceof WorkspaceFlowParseError) {
+          json(res, 422, { error: e.message, path: e.filePath, kind: "flow_source_parse_error" });
+          return;
+        }
         json(res, 500, { error: (e && e.message) || String(e) });
       }
       return;
@@ -17610,7 +17609,6 @@ export function startUiServer({
           return;
         }
         const submittedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || payload, userCtx);
-        const graphPath = workspaceGraphPath(scoped.root);
         const currentStoredGraph = readWorkspaceGraph(scoped.root).graph;
         const currentGraph = hydrateWorkspaceGraphForRuntime(root, scoped, currentStoredGraph, userCtx);
         const currentRevision = workspaceDesignRevision(currentGraph);
@@ -17668,7 +17666,8 @@ export function startUiServer({
           return;
         }
         const graph = mergeWorkspacePersistentNodeRefs(nextGraph, currentGraph);
-        writeWorkspaceGraphAtomic(graphPath, graph);
+        writeWorkspaceGraph(scoped.root, graph);
+        const graphPath = workspaceDesignPath(scoped.root);
         const revision = workspaceDesignRevision(graph);
         const runtimeRevision = workspaceRuntimeRevision(graph);
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
@@ -17816,14 +17815,14 @@ export function startUiServer({
           json(res, 400, { error: "Missing flowId" });
           return;
         }
-        const graphPath = workspaceGraphPath(scoped.root);
         const result = await workspaceOptimizeRunImplementations(root, scoped.root, payload, userCtx, {
           emit: () => {},
         });
         const currentGraph = readWorkspaceGraph(scoped.root).graph;
         const touchedIds = new Set((result.optimized || []).map((item) => item.nodeId).filter(Boolean));
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-        writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+        writeWorkspaceGraph(scoped.root, mergedGraph);
+        const graphPath = workspaceDesignPath(scoped.root);
         const revision = workspaceDesignRevision(mergedGraph);
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, mergedGraph, authUser, userCtx);
         broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
@@ -17974,7 +17973,6 @@ export function startUiServer({
           });
         };
         if (wantsStream) {
-          const graphPath = workspaceGraphPath(scoped.root);
           const runPayload = { ...payload, requestBaseUrl: requestPublicBaseUrl(req) };
           res.writeHead(200, {
             "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -17994,7 +17992,8 @@ export function startUiServer({
             const currentGraph = readWorkspaceGraph(scoped.root).graph;
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-            writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+            writeWorkspaceGraph(scoped.root, mergedGraph);
+            const graphPath = workspaceDesignPath(scoped.root);
             const revision = workspaceDesignRevision(mergedGraph);
             const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
             const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
@@ -18061,11 +18060,11 @@ export function startUiServer({
             onActiveChild: setActiveChild,
             onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
           });
-          const graphPath = workspaceGraphPath(scoped.root);
           const currentGraph = readWorkspaceGraph(scoped.root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-          writeWorkspaceGraphAtomic(graphPath, mergedGraph);
+          writeWorkspaceGraph(scoped.root, mergedGraph);
+          const graphPath = workspaceDesignPath(scoped.root);
           const revision = workspaceDesignRevision(mergedGraph);
           const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
           const collaborationEventType = revision === workspaceDesignRevision(currentGraph)

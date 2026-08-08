@@ -1,11 +1,15 @@
 # Splitting design state from runtime state
 
-A Workspace graph is now stored as two files:
+A Workspace graph keeps design state and runtime state in separate files:
 
 ```
-workspace.graph.json   design: nodes, edges, positions, authored content
-workspace.state.json   runtime: output slot results, display run output, viewport
+workspace.flow.js      design: nodes, edges, authored content (see flow-dsl.en.md)
+workspace.layout.json  design: positions, sizes, pin visibility
+workspace.state.json   runtime: in/out slot results, display run output, viewport
 ```
+
+This page is only about **where the boundary is**; for the format of the design files see
+[flow-dsl.en.md](flow-dsl.en.md).
 
 ## Why
 
@@ -35,26 +39,33 @@ Same definition as `isRuntimePath` in `workspace-graph-merge.mjs`:
 | Content | Goes to | Note |
 |---------|---------|------|
 | `output[*].value` / `.default` on non-provide nodes | state | provide outputs are user-entered, so they are design |
+| `input[*].value` / `.default` on a slot **with a non-semantic incoming edge** | state | overwritten by the upstream on every run |
+| `input[*].value` on a context-injection slot | state | `skillsContext` / `mcpContext` / `knowledgeContext` / `workspaceContext` / `gitContext`, edge or no edge |
+| `input[*].value` on a slot with no incoming edge | **design** | an author-entered default |
 | `displayReloadKey` | state | |
 | `ui.viewport` | state | `ui.nodePositions` stays in design |
 | `body` of a display node **with a content input edge** | state | |
 | `body` of a display node **without** one | **design** | authored documentation |
 
-The last two rows are the only ones that require looking at graph structure. The corpus
-contains **29** display nodes with no content input edge — their `body` is authored
-documentation (64 KB). Treating those as runtime state deletes them.
+The rows that turn on "does it have an incoming edge" are the ones that require looking at
+graph structure. The corpus contains **29** display nodes with no content input edge — their
+`body` is authored documentation (64 KB). Treating those as runtime state deletes them.
 
 The predicate mirrors ui-server's `workspaceContentInputEdge` exactly: collect incoming
 edges, drop the ones targeting semantic slots (`type: node`, `prev`/`next`/`skillsContext`/
-`mcpContext`/`knowledgeContext`/`workspaceContext`/`gitContext`); any edge left means `body`
-is run output.
+`mcpContext`/`knowledgeContext`/`workspaceContext`/`gitContext`); any edge left means that
+slot's value is run output.
+
+Context-injection slots get their own row because the runtime always fills them in — the
+corpus has a 15 KB HTML body copied into `workspaceContext`, which is plainly not an
+author-entered default.
 
 **Approximating this with `targetHandle !== "input-0"` is wrong** — 32 instances in the
 corpus have non-canonical slot order, so `input-0` is not necessarily `prev`.
 
 ## Write order and failure handling
 
-`workspace.state.json` is written first, then `workspace.graph.json`, both via
+`workspace.state.json` is written first, then the design files, all via
 write-temp-then-rename. If the process dies in between, the design file is still the
 previous version — you never get "new design + empty runtime state", which would make
 display content vanish.
@@ -66,7 +77,7 @@ Run output is regenerable; the design is not.
 
 Four sites used to call `fs.writeFileSync(graphPath, ...)` directly, bypassing the atomic
 write (display share, schedule toggle, post-run writeback, preview upload). All now go
-through `writeWorkspaceGraphAtomic`, which gets them both the split and atomicity.
+through `writeWorkspaceGraph`, which gets them both the split and atomicity.
 
 ## Tests
 

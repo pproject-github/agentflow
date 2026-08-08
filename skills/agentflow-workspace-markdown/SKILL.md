@@ -2,7 +2,7 @@
 name: agentflow-workspace-markdown
 description: >-
   AgentFlow Workspace Markdown 展示技能。用于把分析、总结、文档、代码结构说明
-  生成 display_markdown 节点并写入 workspace.graph.json，作为后续 agent 上下文。
+  生成 display.markdown 节点并写入 workspace.flow.js，作为后续 agent 上下文。
 ---
 
 # AgentFlow Workspace Markdown
@@ -11,24 +11,18 @@ description: >-
 
 ## 生成节点
 
-新增或更新 `workspace.graph.json` 中的 `display_markdown` instance：
+在 `workspace.flow.js` 里新增或更新一个 `display.markdown` 节点：
 
-```json
-{
-  "definitionId": "display_markdown",
-  "label": "项目结构分析",
-  "body": "# 项目结构分析\n\n...",
-  "input": [
-    { "type": "node", "name": "prev", "value": "" },
-    { "type": "text", "name": "content", "value": "# 项目结构分析\n\n..." }
-  ],
-  "output": [
-    { "type": "text", "name": "content", "value": "# 项目结构分析\n\n..." }
-  ]
-}
+```js
+const structure = display.markdown("项目结构分析", {
+  content: `# 项目结构分析
+
+- src/ 业务代码`,
+});
 ```
 
-`body`、`input.content.value`、`output.content.value` 使用同一份 Markdown 内容。
+超过 3000 字符的正文抽成文件，写 `file("docs/structure.md")`。画布语法见
+**agentflow-workspace-graph** / **agentflow-flow-dsl**。
 
 ## 内容规范
 
@@ -37,8 +31,7 @@ description: >-
 - Mermaid 内容不要放进 Markdown 节点；用 `display_mermaid`。
 - ASCII 图不要放进 Markdown 节点；用 `display_ascii`。
 
-## 布局建议
+## 布局
 
-- 默认宽度 760，高度 520。
-- 多个 Markdown 节点按从左到右、从上到下排布。
-- label 放短标题，正文放 body/content。
+坐标和尺寸由平台维护（`workspace.layout.json`），不要手写。label 放短标题，正文放
+`content`。

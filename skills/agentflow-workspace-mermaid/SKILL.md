@@ -2,7 +2,7 @@
 name: agentflow-workspace-mermaid
 description: >-
   AgentFlow Workspace Mermaid 展示技能。用于生成流程图、架构图、依赖图等
-  Mermaid 源码，并写入 display_mermaid 节点的 workspace.graph.json。
+  Mermaid 源码，并写入 workspace.flow.js 的 display.mermaid 节点。
 ---
 
 # AgentFlow Workspace Mermaid
@@ -11,21 +11,13 @@ description: >-
 
 ## 生成节点
 
-新增或更新 `workspace.graph.json` 中的 `display_mermaid` instance：
+在 `workspace.flow.js` 里新增或更新一个 `display.mermaid` 节点：
 
-```json
-{
-  "definitionId": "display_mermaid",
-  "label": "流程图",
-  "body": "flowchart TD\n  A[Start] --> B[Analyze]",
-  "input": [
-    { "type": "node", "name": "prev", "value": "" },
-    { "type": "text", "name": "content", "value": "flowchart TD\n  A[Start] --> B[Analyze]" }
-  ],
-  "output": [
-    { "type": "text", "name": "content", "value": "flowchart TD\n  A[Start] --> B[Analyze]" }
-  ]
-}
+```js
+const chart = display.mermaid("流程图", {
+  content: `flowchart TD
+  A[Start] --> B[Analyze]`,
+});
 ```
 
 `body`、`input.content.value`、`output.content.value` 使用同一份 Mermaid 源码。

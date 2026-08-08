@@ -16,6 +16,25 @@ const DISPLAY_DEFINITION_KINDS = new Map([
   ["display_table", "table"],
 ]);
 
+/**
+ * `--file` 可以是流程目录、workspace.flow.js，或历史的 workspace.graph.json。
+ * 前两种要静态解析代码才能拿到图，交给 agentflow 自己的存储层——不在这里重实现一遍。
+ */
+async function readWorkspaceGraphArg(target) {
+  const file = String(target || "");
+  if (!file) throw new Error("--file is required");
+  const stat = fs.statSync(file);
+  const dir = stat.isDirectory() ? file : path.dirname(file);
+  if (!stat.isDirectory() && file.endsWith(".json")) return readJsonFile(file);
+  const store = await import(new URL("../../../bin/lib/workspace-flow-store.mjs", import.meta.url));
+  const state = await import(new URL("../../../bin/lib/workspace-state.mjs", import.meta.url));
+  const design = store.readWorkspaceDesign(dir);
+  if (design.format === "empty") throw new Error(`No workspace graph in ${dir}`);
+  const statePath = path.join(dir, state.WORKSPACE_STATE_FILENAME);
+  const runtime = fs.existsSync(statePath) ? readJsonFile(statePath) : null;
+  return state.mergeWorkspaceState(design.graph, runtime);
+}
+
 function usage() {
   return `AgentFlow direct API CLI
 
@@ -35,7 +54,7 @@ Commands:
   list-flows
   publish-flow --flow-id <id> --file <flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
-  workspace-preview --file <workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
+  workspace-preview --file <flowDir|workspace.flow.js|workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
   list-run-by-workspace | list-runs-by-workspace --workspace <flowId> [--limit 20]
@@ -440,7 +459,7 @@ async function main() {
   }
 
   if (command === "workspace-preview" || command === "preview-workspace") {
-    const graph = readJsonFile(option(args, "file"));
+    const graph = await readWorkspaceGraphArg(option(args, "file"));
     const result = await httpJson(args, "/api/workspace/preview", {
       method: "POST",
       body: {

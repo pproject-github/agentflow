@@ -19,6 +19,26 @@ import {
   isProvideDefinition,
 } from "./defs.mjs";
 
+/**
+ * 正文默认镜像自「第一个有值的文本入参」的节点类型。
+ *
+ * 展示节点的 `body` 和内容引脚在 UI 里本来就是同一份东西，代码里写两遍纯属噪音，所以
+ * 只写引脚、正文由 `irToGraph` 反推。**唯一的例外**——引脚有值但正文被清空了——反推会
+ * 凭空造出正文，所以那种情况在 nodes.json 里显式记 `bodyMirror: false`。
+ */
+export function mirrorsBodyFromPin(definitionId) {
+  return isDisplayDefinition(definitionId) || definitionId === "control_load_skills";
+}
+
+/** 这个实例是否属于上面说的例外：内容引脚有值，正文却是空的。 */
+export function bodyMirrorSuppressed(instance) {
+  if (!mirrorsBodyFromPin(String(instance?.definitionId || ""))) return false;
+  if (String(instance?.body ?? "").trim()) return false;
+  return (Array.isArray(instance?.input) ? instance.input : []).some(
+    (s) => String(s?.type) === "text" && String(s?.value ?? "").trim(),
+  );
+}
+
 /** 代码里不体现、由 nodes.json 承载的实例属性。 */
 export const NODE_META_KEYS = [
   "model",
@@ -95,8 +115,9 @@ export function graphToIr(graph) {
       const firstText = (instance.input || []).find(
         (s) => String(s?.type) === "text" && String(s?.value ?? "").trim(),
       );
-      const mirrorable = isDisplayDefinition(definitionId) || definitionId === "control_load_skills";
-      const mirrored = mirrorable && firstText && String(firstText.value) === String(instance.body);
+      const mirrored = mirrorsBodyFromPin(definitionId)
+        && firstText
+        && String(firstText.value) === String(instance.body);
       if (!mirrored) node.body = String(instance.body);
     }
 
@@ -168,7 +189,8 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
 
     const instance = { definitionId: node.definitionId };
     if (node.label) instance.label = node.label;
-    instance.role = meta.role ?? "normal";
+    // `role: "normal"` 就是没写 role 的意思，别把默认值写回图里
+    if (meta.role !== undefined) instance.role = meta.role;
     for (const key of NODE_META_KEYS) if (meta[key] !== undefined) instance[key] = meta[key];
     if (meta.images !== undefined) instance.images = meta.images;
     if (meta.globalContext === true) instance.globalContext = true;
@@ -186,15 +208,12 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     }
 
     if (node.body) instance.body = node.body;
-    if (!instance.body
-      && (isDisplayDefinition(node.definitionId) || node.definitionId === "control_load_skills")) {
-      // 与 graphToIr 的镜像判断成对：body 省略了就从第一个有值的文本入参反推
+    if (!instance.body && meta.bodyMirror !== false && mirrorsBodyFromPin(node.definitionId)) {
+      // 与 graphToIr 的镜像判断成对：body 省略了就从第一个有值的文本入参反推。
+      // 只补 body——同名输出槽的值属于运行态（在 workspace.state.json 里），这里凭空
+      // 造一个会让设计态多出一份原图没有的产出。
       const primary = input.find((s) => s.type === "text" && String(s.value || "").trim());
-      if (primary) {
-        instance.body = primary.value;
-        const oi = slotIndex[id].out.get(primary.name);
-        if (oi != null && !String(output[oi].value || "").trim()) output[oi].value = primary.value;
-      }
+      if (primary) instance.body = primary.value;
     }
 
     instances[id] = instance;

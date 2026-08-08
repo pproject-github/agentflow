@@ -11,7 +11,7 @@ AgentFlow has two different resource families:
 
 - **Flow/Pipeline**: historical `flow.yaml` resources. Start/End execution and
   new Pipeline authoring are retired; only read/migration operations remain.
-- **Workspace**: the active node graph backed by `workspace.graph.json`.
+- **Workspace**: the active node graph backed by `workspace.flow.js` (plus layout/nodes/state sidecars).
   `workspace-preview`, `get-graph`, `run`, and display-output commands target
   this family.
 - **Workflow**: a TAPD-derived product/requirement record addressed as
@@ -126,7 +126,7 @@ server returns a Workspace URL and cleans the project after its TTL):
 
 ```bash
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
-  --file .workspace/agentflow/pipelines/<flow-id>/workspace.graph.json \
+  --file .workspace/agentflow/pipelines/<flow-id> \
   --ttl-seconds 7200
 ```
 

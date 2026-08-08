@@ -56,7 +56,11 @@ export function graphToFlowFiles(graph, opts = {}) {
  *
  * 返回的是设计态；要拿到完整图，再用 `mergeWorkspaceState(design, state)` 合上运行态。
  *
- * @param {{ source: string, layout?: object, nodeMeta?: object, files?: Array<{path:string,text:string}>|Record<string,string>, resolvePackage?: Function }} input
+ * 默认是**严格模式**：解析器认不出的语句会抛错，而不是当它不存在。这是作为存储格式的
+ * 底线——静默丢一条语句，等于用户下一次保存时那部分图就没了。只想「尽力读出能读的部分」
+ * 时（lint 要把问题一次列全）传 `strict: false`。
+ *
+ * @param {{ source: string, layout?: object, nodeMeta?: object, files?: Array<{path:string,text:string}>|Record<string,string>, resolvePackage?: Function, strict?: boolean }} input
  * @returns {object} 设计态图
  */
 export function flowFilesToGraph(input) {
@@ -64,5 +68,10 @@ export function flowFilesToGraph(input) {
     ? Object.fromEntries(input.files.map((f) => [f.path, f.text]))
     : (input.files || {});
   const ir = parseFlowSource(input.source, { files, resolvePackage: input.resolvePackage });
+  if (input.strict !== false && ir.unresolved.length) {
+    const shown = ir.unresolved.slice(0, 5).map((u) => `第 ${u.line} 行：${u.message}`);
+    const more = ir.unresolved.length > shown.length ? `（还有 ${ir.unresolved.length - shown.length} 处）` : "";
+    throw new Error(`有 ${ir.unresolved.length} 处内容解析不出图结构${more}\n  ${shown.join("\n  ")}`);
+  }
   return irToGraph(ir, input.layout || { nodes: {} }, input.nodeMeta || { nodes: {} });
 }

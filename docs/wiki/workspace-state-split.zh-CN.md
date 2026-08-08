@@ -1,11 +1,15 @@
 # 设计态与运行态分离
 
-Workspace 图现在落两个文件：
+Workspace 图的设计态和运行态分开存：
 
 ```
-workspace.graph.json   设计态：节点、连线、位置、作者写的内容
-workspace.state.json   运行态：输出槽产出、展示节点的运行内容、视口
+workspace.flow.js      设计态：节点、连线、作者写的内容（见 flow-dsl.zh-CN.md）
+workspace.layout.json  设计态：坐标、尺寸、引脚显隐
+workspace.state.json   运行态：入槽/出槽产出、展示节点的运行内容、视口
 ```
+
+本文只讲**边界划在哪里**；设计态那几个文件的格式见
+[flow-dsl.zh-CN.md](flow-dsl.zh-CN.md)。
 
 ## 为什么
 
@@ -32,25 +36,31 @@ workspace.state.json   运行态：输出槽产出、展示节点的运行内容
 | 内容 | 去向 | 说明 |
 |------|------|------|
 | 非 provide 节点的 `output[*].value` / `.default` | state | provide 节点的输出值是用户填的，属设计态 |
+| **接了非语义入边**的 `input[*].value` / `.default` | state | 每次运行都会被上游覆写 |
+| 上下文注入槽的 `input[*].value` | state | `skillsContext` / `mcpContext` / `knowledgeContext` / `workspaceContext` / `gitContext`，有没有入边都一样 |
+| 没有入边的 `input[*].value` | **设计态** | 作者填的默认值 |
 | `displayReloadKey` | state | |
 | `ui.viewport` | state | `ui.nodePositions` 留在设计态 |
 | **有内容入边**的展示节点 `body` | state | |
 | 无内容入边的展示节点 `body` | **设计态** | 作者手写的文档 |
 
-最后两行是唯一需要看图结构才能判断的。语料里有 **29 个**展示节点没有内容入边——它们的
-`body` 是作者手写的说明文档（64 KB）。把它们当运行态外移就等于删掉。
+需要看图结构才能判断的是「有没有入边」这几行。语料里有 **29 个**展示节点没有内容入边
+——它们的 `body` 是作者手写的说明文档（64 KB）。把它们当运行态外移就等于删掉。
 
 判断规则逐字复刻 ui-server 的 `workspaceContentInputEdge`：收集入边，去掉指向语义槽的
 （`type: node`、`prev`/`next`/`skillsContext`/`mcpContext`/`knowledgeContext`/
-`workspaceContext`/`gitContext`），剩下任意一条就说明 `body` 是运行产出。
+`workspaceContext`/`gitContext`），剩下任意一条就说明这个槽的值是运行产出。
+
+上下文注入槽单列一行，是因为它们的值一律由运行时灌入——语料里见过 15 KB 的 HTML 正文
+被复制进 `workspaceContext`，那显然不是作者手填的默认值。
 
 **不能简单按 `targetHandle !== "input-0"` 近似**——语料里有 32 个实例槽位顺序不规范，
 `input-0` 未必是 `prev`。
 
 ## 写入顺序与失败处理
 
-先落 `workspace.state.json` 再落 `workspace.graph.json`，两个都用「写临时文件再 rename」。
-中途失败时设计态仍是上一版，不会出现「新设计 + 空运行态」这种展示内容凭空消失的组合。
+先落 `workspace.state.json` 再落设计态，全部用「写临时文件再 rename」。中途失败时设计态
+仍是上一版，不会出现「新设计 + 空运行态」这种展示内容凭空消失的组合。
 
 `workspace.state.json` 解析失败时按「没有运行态」处理，图照常打开——产出重跑就有，
 设计态才是不可再生的。
@@ -58,8 +68,7 @@ workspace.state.json   运行态：输出槽产出、展示节点的运行内容
 ## 顺带修掉的
 
 原本有 4 处 `fs.writeFileSync(graphPath, ...)` 绕过了原子写（展示分享、排程开关、
-运行结束回写、预览上传）。现在全部走 `writeWorkspaceGraphAtomic`，既拿到拆分也拿到
-原子性。
+运行结束回写、预览上传）。现在全部走 `writeWorkspaceGraph`，既拿到拆分也拿到原子性。
 
 ## 测试
 

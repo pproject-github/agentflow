@@ -10,7 +10,7 @@ description: Legacy Pipeline node authoring is retired. Redirect requests to add
 用户要在画布中加节点时，请改用 `agentflow-workspace-graph`，编辑：
 
 ```text
-.workspace/agentflow/pipelines/<id>/workspace.graph.json
+.workspace/agentflow/pipelines/<id>/workspace.flow.js
 ```
 
 Workspace 图的入口使用 `workspace_run` 或 `workspace_scheduled_run`，不要创建 `control_start`、`control_end`，也不要修改旧 Pipeline 拓扑来实现新需求。

@@ -1,6 +1,6 @@
 # AgentFlow Workspace Graph Recipes
 
-These recipes target `workspace.graph.json` and the Workspace runtime. The old
+These recipes target `workspace.flow.js` and the Workspace runtime. The old
 `control_start → … → control_end` pipeline recipes are retired — see the note at the end.
 
 ## Git Project Analysis

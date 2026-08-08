@@ -15,7 +15,7 @@ description: >-
 
 ## 必读规则
 
-- 先读 [builtin-nodes.md](references/builtin-nodes.md)，再改 `workspace.graph.json` 的 `definitionId`、`input`、`output` 或 `edges`。
+- 先读 [builtin-nodes.md](references/builtin-nodes.md)，再改 `workspace.flow.js` 的节点调用、引脚和连线；DSL 里的调用名见 **agentflow-flow-dsl** 的 node-calls.md。
 - 新图入口使用 `workspace_run` / `workspace_scheduled_run`，不要新增 `control_start` / `control_end`。
 - `input-N` / `output-N` 必须与节点定义中的槽位顺序一致。
 - `tool_nodejs` 只有写了完整 `script` 才会确定性执行；自然语言任务用 `agent_subAgent`。

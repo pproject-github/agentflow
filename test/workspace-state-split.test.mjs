@@ -348,16 +348,18 @@ test("HTTP：存图后磁盘上两个文件分开，读回来与存入语义一�
     const payload = await readBack.json();
     const flowDir = payload.root;
 
-    // 磁盘上：设计态不含运行产出
-    const onDisk = JSON.parse(fs.readFileSync(path.join(flowDir, "workspace.graph.json"), "utf-8"));
-    assert.equal(onDisk.instances.agent_1.output[1].value, undefined, "运行产出不该留在 graph.json 里");
-    assert.equal(onDisk.instances.display_1.body, undefined, "有内容入边的展示内容不该留在 graph.json 里");
-    assert.equal(
-      onDisk.instances.doc_1.body,
-      "作者手写的使用说明，不该被当成运行产出",
-      "无内容入边的展示节点正文必须留在 graph.json 里",
+    // 磁盘上：设计态是代码，且不含运行产出
+    const sourcePath = path.join(flowDir, "workspace.flow.js");
+    assert.ok(fs.existsSync(sourcePath), "没有生成 workspace.flow.js");
+    assert.ok(!fs.existsSync(path.join(flowDir, "workspace.graph.json")), "迁移后不该再留着 graph.json");
+    const source = fs.readFileSync(sourcePath, "utf-8");
+    assert.ok(!source.includes("上次跑出来的一大段产出"), "运行产出不该出现在 flow.js 里");
+    assert.ok(!source.includes("上次运行的产出正文"), "有内容入边的展示内容不该出现在 flow.js 里");
+    assert.ok(
+      source.includes("作者手写的使用说明，不该被当成运行产出"),
+      "无内容入边的展示节点正文必须留在 flow.js 里",
     );
-    assert.equal(onDisk.instances.agent_1.body, "写一段东西", "agent 的提示词是设计态");
+    assert.ok(source.includes("写一段东西"), "agent 的提示词是设计态");
 
     // 磁盘上：运行态在 state 文件里
     const statePath = path.join(flowDir, WORKSPACE_STATE_FILENAME);
@@ -373,7 +375,10 @@ test("HTTP：存图后磁盘上两个文件分开，读回来与存入语义一�
     assert.equal(back.instances.display_1.body, "上次运行的产出正文");
     assert.equal(back.instances.doc_1.body, "作者手写的使用说明，不该被当成运行产出");
 
-    // 旧图迁移：把运行态写回 graph.json、删掉 state 文件，仍应完整读出
+    // 旧图迁移：只留一个装着全部内容的 graph.json（拆分前、代码化前的形态），仍应完整读出
+    for (const name of ["workspace.flow.js", "workspace.layout.json", "workspace.nodes.json"]) {
+      fs.rmSync(path.join(flowDir, name), { force: true });
+    }
     fs.writeFileSync(path.join(flowDir, "workspace.graph.json"), JSON.stringify(graph, null, 2), "utf-8");
     fs.rmSync(statePath);
     const legacyRead = await fetch(

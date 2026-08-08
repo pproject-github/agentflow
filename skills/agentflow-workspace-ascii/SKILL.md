@@ -2,7 +2,7 @@
 name: agentflow-workspace-ascii
 description: >-
   AgentFlow Workspace ASCII 图展示技能。用于生成目录树、文本框图、流程草图等
-  等宽 ASCII 内容，并写入 display_ascii 节点的 workspace.graph.json。
+  等宽 ASCII 内容，并写入 workspace.flow.js 的 display.ascii 节点。
 ---
 
 # AgentFlow Workspace ASCII
@@ -11,21 +11,14 @@ description: >-
 
 ## 生成节点
 
-新增或更新 `workspace.graph.json` 中的 `display_ascii` instance：
+在 `workspace.flow.js` 里新增或更新一个 `display.ascii` 节点：
 
-```json
-{
-  "definitionId": "display_ascii",
-  "label": "目录树",
-  "body": "app/\n|-- src/\n|-- package.json",
-  "input": [
-    { "type": "node", "name": "prev", "value": "" },
-    { "type": "text", "name": "content", "value": "app/\n|-- src/\n|-- package.json" }
-  ],
-  "output": [
-    { "type": "text", "name": "content", "value": "app/\n|-- src/\n|-- package.json" }
-  ]
-}
+```js
+const tree = display.ascii("目录树", {
+  content: `app/
+|-- src/
+|-- package.json`,
+});
 ```
 
 `body`、`input.content.value`、`output.content.value` 使用同一份 ASCII 文本。

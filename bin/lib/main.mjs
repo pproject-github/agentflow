@@ -320,7 +320,7 @@ export async function main() {
     shift();
     const action = shift();
     const target = shift();
-    const usage = "Usage: agentflow flow dsl <export|import|lint> <FlowName|dir> [--out <dir>]";
+    const usage = "Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]";
     if (!action || !target) throw new Error(usage);
     let outDir = "";
     const outIdx = argv.indexOf("--out");
@@ -336,7 +336,22 @@ export async function main() {
       : getFlowDir(workspaceRoot, target);
     if (!dir || !fs.existsSync(dir)) throw new Error(`Flow not found: ${target}`);
 
-    const { exportFlowDsl, importFlowDsl, lintFlowDir } = await import("./flow-dsl/cli.mjs");
+    const { exportFlowDsl, importFlowDsl, lintFlowDir, migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
+
+    if (action === "migrate") {
+      const result = migrateFlowDirToDsl(dir);
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      if (result.format === "empty") process.stderr.write(`${chalk.yellow("skip")}   ${dir}：没有图\n`);
+      else if (!result.migrated && result.format === "dsl") process.stderr.write(`${chalk.green("ok")}     ${dir}：已经是代码形态\n`);
+      else if (result.migrated) {
+        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.flow.js\n`);
+        for (const rel of result.externals) process.stderr.write(`         ${rel}\n`);
+      } else {
+        process.stderr.write(`${chalk.red("keep")}   ${dir}：${result.degradedReason}，保留 workspace.graph.json\n`);
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     if (action === "export") {
       const result = exportFlowDsl(dir, outDir);

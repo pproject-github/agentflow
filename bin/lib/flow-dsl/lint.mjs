@@ -154,6 +154,11 @@ export function lintFlowDir(flowDir) {
     return { errors, warnings };
   }
 
+  // 解析器读不出图结构的地方。lint 是列全问题的地方，所以这里不抛，逐条报出来
+  for (const item of ir.unresolved) {
+    errors.push(`${FLOW_SOURCE_FILENAME}:${item.line} ${item.message}`);
+  }
+
   const N = ir.nodes;
 
   for (const [id, node] of Object.entries(N)) {

@@ -56,13 +56,16 @@ export function generateFlowSource(ir, opts = {}) {
     return rel;
   };
 
+  // 同一个节点的 body 和某个引脚值可能都超阈值，文件名必须带槽名区分：都叫
+  // `prompts/<id>.md` 的话两段不同的文本会写进同一个文件，往返时后写的覆盖先写的。
   const externalize = (id, slot, text) => {
     if (text.length < EXTERNALIZE_MIN) return null;
     const definitionId = N[id].definitionId;
+    const suffix = slot === "$body" || slot === "$script" ? "" : `.${slot.replace(/[^\w.-]/g, "_")}`;
     if (isDisplayDefinition(definitionId)) {
-      return emitFile(`docs/${id}.${displayFileExt(definitionId.slice("display_".length))}`, text);
+      return emitFile(`docs/${id}${suffix}.${displayFileExt(definitionId.slice("display_".length))}`, text);
     }
-    return emitFile(slot === "$script" ? `scripts/${id}.sh` : `prompts/${id}.md`, text);
+    return emitFile(slot === "$script" ? `scripts/${id}.sh` : `prompts/${id}${suffix}.md`, text);
   };
   const textArg = (id, slot, text) => {
     const rel = externalize(id, slot, text);

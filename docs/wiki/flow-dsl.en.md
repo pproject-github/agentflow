@@ -1,12 +1,18 @@
 # Flow graphs as code
 
-A Workspace graph converts both ways between JSON and code:
+**`workspace.flow.js` is the authoritative storage format for a Workspace graph.** Saving
+the canvas writes it; opening the canvas reads it. `workspace.graph.json` is demoted to a
+read-only legacy format.
 
 ```bash
-agentflow flow dsl export <FlowName|dir> [--out <dir>]   # graph.json -> flow.js
-agentflow flow dsl lint   <dir>                          # static validation
-agentflow flow dsl import <dir> [--out <flowDir>]        # flow.js -> graph.json
+agentflow flow dsl migrate <FlowName|dir>                # graph.json -> flow.js, in place
+agentflow flow dsl lint    <dir>                         # static validation
+agentflow flow dsl export  <FlowName|dir> [--out <dir>]  # write a copy elsewhere
+agentflow flow dsl import  <dir> [--out <flowDir>]       # back to graph.json (for audits)
 ```
+
+Existing flows need no manual migration: with no `workspace.flow.js`, `workspace.graph.json`
+is read as before and the next save converts it. `migrate` just makes that happen sooner.
 
 ## Why code
 
@@ -31,13 +37,18 @@ Now a model's coding ability applies directly, lint can validate it, and diffs a
 ```
 workspace.flow.js       structure — nodes, edges, authored content (restricted ESM)
 workspace.layout.json   canvas — positions, sizes, pin visibility and order
-workspace.nodes.json    what code can't express — pasted images, model, marketplaceRef
+workspace.nodes.json    what code can't express — pasted images, model, marketplaceRef, external-file manifest
 workspace.state.json    runtime state — owned by workspace-state.mjs, untouched by the DSL
 prompts/ docs/ scripts/ text longer than 3 KB
 ```
 
 The rule is **anything code can express stays out of the JSON**. Coordinates and base64
 images in code would only bury the structure.
+
+`externals` in `workspace.nodes.json` lists the external text files written last time. When
+a body drops below the threshold or a node is deleted, it is what makes the cleanup exact —
+no filename guessing, so an author-written script under `scripts/` is never collected.
+Manifest entries that resolve outside the flow directory are ignored.
 
 ## Key design: edges by slot name, not index
 
@@ -59,6 +70,26 @@ unsafe.
 That is also why the structure file bans all control flow: the moment `for` / `if` /
 `await` / `.map()` appears, static parsing can no longer recover the graph. Lint reports
 them as errors and points at `nodes/<name>/index.mjs`, which is plain JS and unconstrained.
+
+## Two gates against losing a graph
+
+For a storage format, "read one node fewer" is the same thing as "that node is gone on the
+user's next save". Hence:
+
+**Anything the parser cannot account for is recorded, never silently skipped.** A stray
+top-level `for`, a pin value written as a function call, one `const` declaring two nodes —
+each lands in `unresolved`. Reading (strict mode) throws `WorkspaceFlowParseError`;
+`/api/workspace/graph` answers 422 with the line number, and lint lists every occurrence.
+There is no "read as much as you can" fallback.
+
+**Before writing, the generated code is parsed back and compared field by field.** On a
+mismatch the write falls back to `workspace.graph.json` and deletes any existing
+`workspace.flow.js` — it has higher read priority, so leaving it would hand the canvas to the
+lossy version. The comparison uses a normalized fingerprint that flattens key order, the
+three ways of writing "absent" (`undefined`/`null`/`""`), `role: normal` vs unset, and
+`showOnNode` / `required` inherited from the definition table — representation differences
+only, never content. All 21 production flows pass the gate; the largest takes 5.4 ms to
+save + read.
 
 ## What lint checks
 
@@ -82,6 +113,7 @@ Verified against 21 production flows (334 nodes / 332 edges), 21/21 on all three
   an early version flattened `control_if` branches into serial execution and the edge
   **count** was unchanged, so a count-based audit missed it
 - **idempotence** — regenerating from the restored graph produces byte-identical source
+  (and when nothing changed, the files are not rewritten at all)
 
 The real corpus contains internal business content and credentials and is not vendored;
 tests cover the same shape space with synthetic graphs (branches, forks, schedules, custom

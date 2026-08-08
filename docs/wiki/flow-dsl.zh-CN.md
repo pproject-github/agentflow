@@ -1,12 +1,17 @@
 # 流程图的代码表示
 
-一张 Workspace 图可以在 JSON 和代码之间双向转换：
+**`workspace.flow.js` 就是 Workspace 图的权威存储格式。** Web UI 保存画布写的是它，
+打开画布读的也是它；`workspace.graph.json` 降级为只读的历史格式。
 
 ```bash
-agentflow flow dsl export <FlowName|dir> [--out <dir>]   # graph.json -> flow.js
-agentflow flow dsl lint   <dir>                          # 静态校验
-agentflow flow dsl import <dir> [--out <flowDir>]        # flow.js -> graph.json
+agentflow flow dsl migrate <FlowName|dir>                # graph.json -> flow.js，就地迁移
+agentflow flow dsl lint    <dir>                         # 静态校验
+agentflow flow dsl export  <FlowName|dir> [--out <dir>]  # 导出一份到别处
+agentflow flow dsl import  <dir> [--out <flowDir>]       # 反向生成 graph.json（审计用）
 ```
+
+存量流程不用手动迁移：没有 `workspace.flow.js` 时照常读 `workspace.graph.json`，下一次
+保存自动转成代码。`migrate` 只是让这件事提前发生。
 
 ## 为什么要代码
 
@@ -30,12 +35,16 @@ const display_1 = display.markdown("展示", { content: agent_1.result });
 ```
 workspace.flow.js       图结构——节点、连线、作者写的内容（受限 ESM）
 workspace.layout.json   画布状态——坐标、尺寸、引脚显隐与顺序
-workspace.nodes.json    代码里说不清的——粘贴的图片、model、marketplaceRef
+workspace.nodes.json    代码里说不清的——粘贴的图片、model、marketplaceRef、外置文件清单
 workspace.state.json    运行态——由 workspace-state.mjs 管，DSL 不碰
 prompts/ docs/ scripts/ 超过 3 KB 的长文本
 ```
 
 划分原则是**代码里说得清的就不进 JSON**。坐标和图片 base64 写进代码只会淹没结构。
+
+`workspace.nodes.json` 里的 `externals` 是上一次生成的外置文本清单。正文缩短到阈值以下
+或者节点被删时，靠它精确删掉不再需要的文件——不靠文件名猜，免得误删 `scripts/` 下作者
+手写的脚本。清单里越出流程目录的路径一律忽略。
 
 ## 关键设计：边按槽名，不按下标
 
@@ -55,6 +64,22 @@ IR（代码生成和解析的共同中间表示）里，一条边是
 这也是结构文件禁用一切控制流的原因：`for` / `if` / `await` / `.map()` 一旦出现，
 静态解析就还原不出图。lint 把它们列为错误，并提示「节点实现请放
 `nodes/<name>/index.mjs`」——那里是普通 JS，不受约束。
+
+## 两道防止丢图的闸门
+
+作为存储格式，「读的时候少读出一个节点」等价于「用户下一次保存时那个节点就没了」。
+所以：
+
+**解析器认不出的东西一律记账，绝不静默跳过。** 顶层多出一条 `for`、引脚值写成函数调用、
+一条 `const` 声明两个节点——每一处都进 `unresolved`。读图时（严格模式）直接抛
+`WorkspaceFlowParseError`，`/api/workspace/graph` 回 422 并带上行号；lint 则把它们逐条列出来。
+绝不降级成「能读多少读多少」。
+
+**写之前先把生成的代码解析回来跟原图逐字段比对。** 比不上就退回写
+`workspace.graph.json`，并把已有的 `workspace.flow.js` 删掉（它优先级更高，留着就等于让
+残缺的那张图接管）。比对用规范化指纹：抹平键顺序、`undefined`/`null`/`""` 三种缺省写法、
+`role: normal` 等价于没写、以及缺省时继承定义表的 `showOnNode` / `required`——只抹平表示
+差异，不抹平内容。21 个线上流程全部通过闸门，最大的一张 save+read 5.4 ms。
 
 ## lint 检查什么
 
@@ -76,7 +101,7 @@ IR（代码生成和解析的共同中间表示）里，一条边是
 - **节点集合**一致
 - **边身份**一致——按槽名比，不是比数量。这点踩过坑：曾经把 `control_if` 的两个分支
   拍平成串行执行，边的**数量**完全一样，只比数量的审计发现不了
-- **幂等**——还原出来的图再生成一次，源码逐字相同
+- **幂等**——还原出来的图再生成一次，源码逐字相同（内容没变时连文件都不重写）
 
 真实语料含内网业务内容和凭据，不入库；测试用等价形状的合成图覆盖（分支、分叉、
 排程、自定义输出槽、非规范槽序、外置长文本、图片元数据）。

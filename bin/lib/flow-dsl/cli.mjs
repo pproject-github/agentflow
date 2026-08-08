@@ -15,6 +15,7 @@ import {
   graphToFlowFiles,
 } from "./index.mjs";
 import { lintFlowDir } from "./lint.mjs";
+import { readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "../workspace-flow-store.mjs";
 
 const GRAPH_FILENAME = "workspace.graph.json";
 
@@ -110,6 +111,35 @@ export function importFlowDsl(srcDir, outFlowDir) {
     nodeCount: Object.keys(design.instances).length,
     edgeCount: design.edges.length,
     warnings: lint.warnings,
+  };
+}
+
+/**
+ * 把一个流程目录就地迁移成代码形态：`workspace.graph.json` -> `workspace.flow.js` + 伴生文件。
+ *
+ * 走的是 Web UI 保存时的同一条路径（`writeWorkspaceDesign`），因此同样带往返比对闸门：
+ * 生成的代码解析不回原图就不迁移，原文件原样留着。
+ *
+ * @returns {{ flowDir: string, format: "dsl"|"json", migrated: boolean, degradedReason: string|null, externals: string[] }}
+ */
+export function migrateFlowDirToDsl(flowDir) {
+  const dir = path.resolve(flowDir);
+  const current = readWorkspaceGraphFiles(dir);
+  if (current.format === "empty") {
+    return { flowDir: dir, format: "empty", migrated: false, degradedReason: null, externals: [] };
+  }
+  if (current.format === "dsl") {
+    return { flowDir: dir, format: "dsl", migrated: false, degradedReason: null, externals: [] };
+  }
+  // 走完整图这条路：历史 graph.json 里运行产出还是内联的，得先拆出去，否则那些每跑一次
+  // 就变一次的值会被当成设计态参与往返比对
+  const result = writeWorkspaceGraphFiles(dir, current.graph);
+  return {
+    flowDir: dir,
+    format: result.format,
+    migrated: result.format === "dsl",
+    degradedReason: result.degradedReason,
+    externals: result.externals,
   };
 }
 
