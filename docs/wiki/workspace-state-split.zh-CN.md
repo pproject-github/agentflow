@@ -29,6 +29,23 @@ workspace.state.json   运行态：入槽/出槽产出、展示节点的运行�
 **没有迁移步骤。** 旧图的运行态还内联在 `graph.json` 里、没有 state 文件，此时合并是
 恒等操作，照常读；下次写入时自动拆开。
 
+## 一份判断，三个用处
+
+「什么算运行态」由 `workspaceRuntimeSurface()` 一处给出，存储拆分、三路合并、
+版本号计算共用：
+
+| 用处 | 依赖它做什么 |
+|------|--------------|
+| `splitWorkspaceGraph` | 决定哪些值写进 `workspace.state.json` |
+| `mergeWorkspaceGraphs` 的 `isRuntimePath` | 双方都改了同一个位置时，是报冲突还是直接取对方的 |
+| `workspaceDesignRevision` | 决定「图变了没有」——协作基线就是这个值 |
+
+这三处必须一致，否则会得到很难查的错觉。原本 `isRuntimePath` 自己写了一份，只覆盖
+output 值和 `displayReloadKey`，漏掉了接了入边的入槽值和展示节点正文，后果是：
+
+- **跑一次流程，`designRevision` 就变**——所有协作者手里的基线同时作废，明明没人改过图
+- 两个人各跑一次，同一个输出槽被判成**字段冲突**，弹窗让人手选一个重跑就有的值
+
 ## 什么算运行态
 
 与 `workspace-graph-merge.mjs` 的 `isRuntimePath` 同一套判断：

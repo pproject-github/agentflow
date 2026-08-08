@@ -104,6 +104,20 @@ Runtime support comes straight from each node's `runtime:` frontmatter (see
 
 `import` lints first and **refuses rather than writing half a graph**.
 
+## The revision has to describe what is on disk
+
+Generating code normalizes: slots get filled in, `role: normal` is dropped, slot order is
+canonicalized. So **the graph you write and the graph you read back are not byte-identical** —
+and collaboration hangs on `designRevision`, a field-exact hash.
+
+The `revision` returned by a `/api/workspace/graph` save is computed on **what a subsequent
+read would produce**, not on what the client submitted (`writeWorkspaceDesign` hands back the
+graph it already reparsed for the verification gate, so this costs nothing). Otherwise the
+client walks away holding a revision that does not exist on disk, and its next save is
+rejected as "merge base does not match baseRevision" — in a shared workspace, nobody can save
+at all. All 21 production flows hit this; 3 of them never converge no matter how many times
+you save.
+
 ## Round-trip guarantee
 
 Verified against 21 production flows (334 nodes / 332 edges), 21/21 on all three:

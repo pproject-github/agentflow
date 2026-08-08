@@ -1804,6 +1804,27 @@ function writeWorkspaceGraph(workspaceRoot, graph) {
 }
 
 /**
+ * 落盘并给出**磁盘上那张图**的版本号。
+ *
+ * 存图必须走这里，不能自己 `writeWorkspaceGraph` 完拿手里那张图去算 revision：代码化会
+ * 做规范化，两者对不上，客户端就会攥着一个磁盘上不存在的版本号，下一次保存直接被判成
+ * 「基线不匹配」。协作场景里这意味着谁都存不进去。
+ *
+ * @returns {{ graph: object, path: string, revision: string, runtimeRevision: string, result: object }}
+ */
+function commitWorkspaceGraph(workspaceRoot, scoped, graph, userCtx) {
+  const result = writeWorkspaceGraph(scoped.root, graph);
+  const persisted = hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped, result.graph, userCtx);
+  return {
+    graph: persisted,
+    path: workspaceDesignPath(scoped.root),
+    revision: workspaceDesignRevision(persisted),
+    runtimeRevision: workspaceRuntimeRevision(persisted),
+    result,
+  };
+}
+
+/**
  * 读回合并后的完整图。
  *
  * 设计态优先读 `workspace.flow.js`；没有就回落到历史的 `workspace.graph.json`，下一次
@@ -17666,11 +17687,9 @@ export function startUiServer({
           return;
         }
         const graph = mergeWorkspacePersistentNodeRefs(nextGraph, currentGraph);
-        writeWorkspaceGraph(scoped.root, graph);
-        const graphPath = workspaceDesignPath(scoped.root);
-        const revision = workspaceDesignRevision(graph);
-        const runtimeRevision = workspaceRuntimeRevision(graph);
-        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
+        const committed = commitWorkspaceGraph(root, scoped, graph, userCtx);
+        const { path: graphPath, revision, runtimeRevision } = committed;
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
         broadcastWorkspaceCollaborationEvent(
           userCtx,
           scoped.flowSource,
@@ -17686,7 +17705,7 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           path: graphPath,
-          graph,
+          graph: committed.graph,
           revision,
           designRevision: revision,
           runtimeRevision,
@@ -17821,10 +17840,9 @@ export function startUiServer({
         const currentGraph = readWorkspaceGraph(scoped.root).graph;
         const touchedIds = new Set((result.optimized || []).map((item) => item.nodeId).filter(Boolean));
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-        writeWorkspaceGraph(scoped.root, mergedGraph);
-        const graphPath = workspaceDesignPath(scoped.root);
-        const revision = workspaceDesignRevision(mergedGraph);
-        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, mergedGraph, authUser, userCtx);
+        const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
+        const { path: graphPath, revision } = committed;
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
         broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
           type: "graph.committed",
           revision,
@@ -17834,7 +17852,7 @@ export function startUiServer({
         json(res, 200, {
           ok: true,
           path: graphPath,
-          graph: mergedGraph,
+          graph: committed.graph,
           revision,
           order: result.order,
           optimized: result.optimized,
@@ -17992,10 +18010,8 @@ export function startUiServer({
             const currentGraph = readWorkspaceGraph(scoped.root).graph;
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-            writeWorkspaceGraph(scoped.root, mergedGraph);
-            const graphPath = workspaceDesignPath(scoped.root);
-            const revision = workspaceDesignRevision(mergedGraph);
-            const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
+            const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
+            const { path: graphPath, revision, runtimeRevision } = committed;
             const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
               ? "runtime.committed"
               : "graph.committed";
@@ -18017,7 +18033,7 @@ export function startUiServer({
               actorId: userCtx.userId || "",
               source: "run",
             });
-            writeEvent({ type: "done", ok: true, path: graphPath, graph: mergedGraph, revision, runtimeRevision, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
+            writeEvent({ type: "done", ok: true, path: graphPath, graph: committed.graph, revision, runtimeRevision, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds || [] });
             res.end();
           } catch (e) {
             const endedAt = Date.now();
@@ -18063,10 +18079,8 @@ export function startUiServer({
           const currentGraph = readWorkspaceGraph(scoped.root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-          writeWorkspaceGraph(scoped.root, mergedGraph);
-          const graphPath = workspaceDesignPath(scoped.root);
-          const revision = workspaceDesignRevision(mergedGraph);
-          const runtimeRevision = workspaceRuntimeRevision(mergedGraph);
+          const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
+          const { path: graphPath, revision, runtimeRevision } = committed;
           const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
             ? "runtime.committed"
             : "graph.committed";
@@ -18088,7 +18102,7 @@ export function startUiServer({
             actorId: userCtx.userId || "",
             source: "run",
           });
-          json(res, 200, { ok: true, path: graphPath, ...result, graph: mergedGraph, revision, runtimeRevision, touchedNodeIds: Array.from(touchedIds) });
+          json(res, 200, { ok: true, path: graphPath, ...result, graph: committed.graph, revision, runtimeRevision, touchedNodeIds: Array.from(touchedIds) });
         } catch (e) {
           const endedAt = Date.now();
           if (isWorkspaceRunAbortError(e) || controller.signal.aborted) {

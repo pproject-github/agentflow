@@ -285,9 +285,13 @@ function pruneStaleExternals(dir, previous, keep) {
  * 顺序是有讲究的：**先落外置文本，再落 `workspace.flow.js`**。反过来的话，中途失败会留下
  * 一个引用着不存在文件的流程文件，下次读直接炸；现在这个顺序最坏也只是多几个没人引用的文件。
  *
+ * 返回的 `design` 是**落盘之后再读回来的那张图**，不是传进来的那张。代码化会做规范化
+ * （槽位补齐、`role: normal` 省掉、槽序归位），调用方拿它去算 revision 才和下一次 GET
+ * 对得上——不然客户端存完手里就攥着一个磁盘上根本不存在的版本号。
+ *
  * @param {string} flowDir
  * @param {object} designGraph 设计态图（运行态请先用 splitWorkspaceGraph 摘掉）
- * @returns {{ format: "dsl"|"json", changed: boolean, degradedReason: string|null, externals: string[] }}
+ * @returns {{ format: "dsl"|"json", changed: boolean, degradedReason: string|null, externals: string[], design: object }}
  */
 export function writeWorkspaceDesign(flowDir, designGraph) {
   const dir = path.resolve(flowDir);
@@ -300,6 +304,7 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
   const graphPath = path.join(dir, WORKSPACE_GRAPH_FILENAME);
 
   let generated = null;
+  let persisted = null;
   let degradedReason = null;
   try {
     generated = graphToFlowFiles(design);
@@ -310,13 +315,13 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
   if (generated) {
     // 生成的代码必须能原样解析回同一张图，否则这次不迁移
     try {
-      const back = flowFilesToGraph({
+      persisted = flowFilesToGraph({
         source: generated.source,
         layout: generated.layout,
         nodeMeta: generated.nodeMeta,
         files: Object.fromEntries(generated.files.map((f) => [f.path, f.text])),
       });
-      if (designFingerprint(back) !== designFingerprint(design)) {
+      if (designFingerprint(persisted) !== designFingerprint(design)) {
         degradedReason = "生成的代码解析回来与原图不一致";
       }
     } catch (e) {
@@ -329,7 +334,7 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
     // 那张图接管。
     for (const file of [sourcePath, layoutPath, nodesPath]) fs.rmSync(file, { force: true });
     writeTextAtomic(graphPath, `${JSON.stringify(design, null, 2)}\n`);
-    return { format: "json", changed: true, degradedReason, externals: [] };
+    return { format: "json", changed: true, degradedReason, externals: [], design };
   }
 
   const externals = generated.files.map((f) => f.path).sort();
@@ -345,7 +350,7 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
     && readTextOrNull(nodesPath) === (wantNodesFile ? nodesText : null)
     && !fs.existsSync(graphPath)
     && generated.files.every((f) => readTextOrNull(path.join(dir, f.path)) === f.text);
-  if (unchanged) return { format: "dsl", changed: false, degradedReason: null, externals };
+  if (unchanged) return { format: "dsl", changed: false, degradedReason: null, externals, design: persisted };
 
   const previousExternals = readJsonFile(nodesPath, {}).externals;
 
@@ -363,7 +368,7 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
   // 迁移完成：历史格式退场。往返已经逐字段比对过，这里删的是一份可以再生成的副本。
   fs.rmSync(graphPath, { force: true });
 
-  return { format: "dsl", changed: true, degradedReason: null, externals };
+  return { format: "dsl", changed: true, degradedReason: null, externals, design: persisted };
 }
 
 // ── 完整图（设计态 + 运行态）────────────────────────────────────────────────
@@ -395,5 +400,8 @@ export function writeWorkspaceGraphFiles(flowDir, graph) {
   const { design, state } = splitWorkspaceGraph(graph);
   if (isEmptyWorkspaceState(state)) fs.rmSync(statePath, { force: true });
   else writeTextAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
-  return writeWorkspaceDesign(dir, design);
+  const result = writeWorkspaceDesign(dir, design);
+  // `graph` 是落盘之后读回来会拿到的那张完整图。调用方用它算 revision，客户端手里的
+  // 版本号才和磁盘一致。
+  return { ...result, graph: mergeWorkspaceState(result.design, state) };
 }

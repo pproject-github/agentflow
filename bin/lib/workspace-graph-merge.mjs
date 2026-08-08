@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { splitWorkspaceGraph, workspaceRuntimeSurface } from "./workspace-state.mjs";
+
 const MISSING = Symbol("missing");
 
 function isPlainObject(value) {
@@ -36,31 +38,15 @@ function normalizedGraph(graph) {
   };
 }
 
-function isProvideInstance(instance) {
-  return String(instance?.definitionId || "").startsWith("provide_");
-}
-
-function designInstance(instance) {
-  if (!isPlainObject(instance)) return instance;
-  const next = clone(instance);
-  delete next.displayReloadKey;
-  if (!isProvideInstance(next) && Array.isArray(next.output)) {
-    next.output = next.output.map((slot) => {
-      if (!isPlainObject(slot)) return slot;
-      const clean = { ...slot };
-      delete clean.value;
-      delete clean.default;
-      return clean;
-    });
-  }
-  return next;
-}
-
+/**
+ * 设计态视图 = 存储层拆出来的设计态，一个字不多一个字不少。
+ *
+ * 以前这里自己写了一遍「什么算运行态」，只覆盖 output 值和 displayReloadKey，漏掉了
+ * 接了入边的 input 值和展示节点正文。后果是跑一次流程 designRevision 就变，协作者手里
+ * 的基线全部作废——明明没人改过图。判断规则见 `workspace-state.mjs`。
+ */
 export function workspaceDesignGraph(graph) {
-  const next = normalizedGraph(graph);
-  next.instances = Object.fromEntries(
-    Object.entries(next.instances).map(([id, instance]) => [id, designInstance(instance)]),
-  );
+  const next = normalizedGraph(splitWorkspaceGraph(normalizedGraph(graph)).design);
   delete next.ui.viewport;
   return next;
 }
@@ -125,17 +111,32 @@ function pathLabel(path) {
   ), "$");
 }
 
-function isRuntimePath(path, graphs) {
+/**
+ * 这个位置上的值是不是运行产出。是的话冲突不算冲突，直接取 incoming——重跑一次就有的
+ * 东西，没必要拦住用户让他手动选。
+ *
+ * 判断口径与 `workspaceRuntimeSurface` 完全一致；先在 incoming / current / base 里找到
+ * 第一个有这个节点的图，按那张图的槽位数组解析下标，避免三张图槽序不同时张冠李戴。
+ */
+function isRuntimePath(path, sides) {
   if (path[0] === "ui" && path[1] === "viewport") return true;
   if (path[0] !== "instances" || path.length < 3) return false;
-  if (path[2] === "displayReloadKey") return true;
-  if (path[2] !== "output" || !Number.isInteger(path[3])) return false;
-  if (path[4] !== "value" && path[4] !== "default") return false;
+
   const nodeId = path[1];
-  const instance = graphs.incoming?.instances?.[nodeId]
-    || graphs.current?.instances?.[nodeId]
-    || graphs.base?.instances?.[nodeId];
-  return !isProvideInstance(instance);
+  const side = sides.find((s) => s.graph.instances?.[nodeId]);
+  if (!side) return false;
+
+  if (path[2] === "displayReloadKey") return true;
+  if (path[2] === "body") return side.runtime.displayBodies.has(nodeId);
+
+  if (path[2] !== "input" && path[2] !== "output") return false;
+  if (!Number.isInteger(path[3])) return false;
+  if (path[4] !== "value" && path[4] !== "default") return false;
+
+  if (path[2] === "output") return !side.runtime.isProvide(nodeId);
+  const slots = side.graph.instances[nodeId]?.input;
+  const slotName = String((Array.isArray(slots) ? slots : [])[path[3]]?.name ?? "");
+  return Boolean(slotName) && Boolean(side.runtime.inputs.get(nodeId)?.has(slotName));
 }
 
 function mergeValue(base, current, incoming, path, context) {
@@ -175,7 +176,7 @@ function mergeValue(base, current, incoming, path, context) {
     ));
   }
 
-  if (isRuntimePath(path, context.graphs)) {
+  if (isRuntimePath(path, context.sides)) {
     return incoming;
   }
 
@@ -198,7 +199,13 @@ export function mergeWorkspaceGraphs({ baseGraph, currentGraph, incomingGraph })
   const incoming = graphToMergeShape(incomingGraph);
   const context = {
     conflicts: [],
-    graphs: { base, current, incoming },
+    // 运行态判断要看边，而合并形态里 edges 已经变成 map 了，所以按原图先算好。
+    // 顺序即优先级：incoming 最先，和「哪张图有这个节点」的查找顺序一致。
+    sides: [
+      { graph: incoming, runtime: workspaceRuntimeSurface(incomingGraph) },
+      { graph: current, runtime: workspaceRuntimeSurface(currentGraph) },
+      { graph: base, runtime: workspaceRuntimeSurface(baseGraph) },
+    ],
   };
   const merged = mergeValue(base, current, incoming, [], context);
   return {

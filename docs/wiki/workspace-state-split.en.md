@@ -32,6 +32,26 @@ inside slot objects: the merge appends them at the end.
 `graph.json` has no state file, so the merge is the identity — it reads normally and gets
 split on the next write.
 
+## One definition, three consumers
+
+`workspaceRuntimeSurface()` is the single answer to "what counts as runtime state", shared by
+the storage split, the three-way merge, and the revision:
+
+| Consumer | What it needs it for |
+|----------|----------------------|
+| `splitWorkspaceGraph` | which values go into `workspace.state.json` |
+| `isRuntimePath` in `mergeWorkspaceGraphs` | when both sides touched the same spot: conflict, or just take theirs |
+| `workspaceDesignRevision` | whether "the graph changed" — this value *is* the collaboration baseline |
+
+They have to agree, or you get bugs that are very hard to see. `isRuntimePath` used to carry
+its own copy covering only output values and `displayReloadKey`, missing edge-driven input
+values and display bodies. The results:
+
+- **one run bumped `designRevision`**, invalidating every collaborator's baseline even though
+  nobody edited the graph
+- two people each running the flow turned the same output slot into a **field conflict**, a
+  dialog asking a human to pick between two values that a re-run would regenerate
+
 ## What counts as runtime state
 
 Same definition as `isRuntimePath` in `workspace-graph-merge.mjs`:

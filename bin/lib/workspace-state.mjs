@@ -161,6 +161,35 @@ function restoreSlotValues(slots, state) {
 }
 
 /**
+ * 一张图里「哪些位置是运行态」的完整答案，供存储拆分、三路合并、revision 计算共用。
+ *
+ * 这三处必须用同一份判断，否则会得到很难查的错觉：存储层把某个值当运行产出移走了，
+ * revision 却仍然把它算进设计——于是跑一次流程，所有协作者手里的 designRevision 全部
+ * 作废，明明没人动过图。
+ *
+ * @param {object} graph
+ * @returns {{ inputs: Map<string, Set<string>>, displayBodies: Set<string>, isProvide: (nodeId: string) => boolean }}
+ */
+export function workspaceRuntimeSurface(graph) {
+  const instances = isPlainObject(graph?.instances) ? graph.instances : {};
+  const driven = edgeDrivenInputSlots(graph);
+  const inputs = new Map();
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    const names = new Set(driven.get(nodeId) || []);
+    for (const slot of Array.isArray(instance?.input) ? instance.input : []) {
+      const name = String(slot?.name ?? "");
+      if (name && CONTEXT_SLOT_NAMES.has(name)) names.add(name);
+    }
+    if (names.size) inputs.set(nodeId, names);
+  }
+  return {
+    inputs,
+    displayBodies: displayNodeIdsDrivenByEdges(graph),
+    isProvide: (nodeId) => isProvideDefinition(instances[nodeId]?.definitionId),
+  };
+}
+
+/**
  * 把一张完整的图拆成设计态和运行态。
  * @param {object} graph
  * @returns {{ design: object, state: object }}
