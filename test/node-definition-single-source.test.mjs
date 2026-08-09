@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -153,6 +154,74 @@ test("skills 参考文档都是 builtin/nodes 的最新生成物", () => {
     generated.forEach((f, i) => fs.writeFileSync(f, before[i], "utf-8"));
     assert.fail(`builtin/nodes/*.md 改过但没重跑生成器：${stale.map((f) => path.basename(f)).join(", ")}`);
   }
+});
+
+test("skills 里写到的引脚名都真的存在", async () => {
+  const { DEFINITIONS } = await import("../bin/lib/flow-dsl/defs.mjs");
+  // 节点自身的字段，不是引脚——`tool_nodejs.script`、`agent_subAgent.body` 这种写法合法
+  const NODE_FIELDS = new Set(["body", "script", "scriptRef", "label", "role", "model", "input", "output"]);
+  const ids = Object.keys(DEFINITIONS).sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`\\b(${ids.join("|")})\\.([A-Za-z][A-Za-z0-9_]*)`, "g");
+
+  const stale = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(abs); continue; }
+      if (!entry.name.endsWith(".md")) continue;
+      for (const match of fs.readFileSync(abs, "utf-8").matchAll(pattern)) {
+        const [, definitionId, name] = match;
+        if (NODE_FIELDS.has(name)) continue;
+        const def = DEFINITIONS[definitionId];
+        if (![...def.input, ...def.output].some((slot) => slot.name === name)) {
+          stale.push(`${path.relative(repoRoot, abs)}: ${match[0]}`);
+        }
+      }
+    }
+  };
+  walk(path.join(repoRoot, "skills"));
+  // 改了节点定义就得改教模型怎么用它的文档，否则 AI 会照着写出 lint 不过的图
+  assert.deepEqual([...new Set(stale)], [], "skills 里引用了不存在的引脚");
+});
+
+test("skills 里的完整流程示例本身能过 lint", async () => {
+  const { lintFlowDir } = await import("../bin/lib/flow-dsl/lint.mjs");
+  const { FLOW_SOURCE_FILENAME } = await import("../bin/lib/flow-dsl/index.mjs");
+
+  // 只挑带 import 的代码块——那是「照着抄就能用」的完整示例，片段不算
+  const examples = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(abs); continue; }
+      if (!entry.name.endsWith(".md")) continue;
+      const blocks = [...fs.readFileSync(abs, "utf-8").matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]);
+      blocks.forEach((source, index) => {
+        if (/from "agentflow\/flow"/.test(source)) {
+          examples.push({ label: `${path.relative(repoRoot, abs)} #${index}`, source });
+        }
+      });
+    }
+  };
+  walk(path.join(repoRoot, "skills"));
+  assert.ok(examples.length >= 3, `只找到 ${examples.length} 个完整示例，扫描大概坏了`);
+
+  const failures = [];
+  for (const example of examples) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-skill-example-"));
+    try {
+      fs.writeFileSync(path.join(dir, FLOW_SOURCE_FILENAME), example.source, "utf-8");
+      const result = lintFlowDir(dir);
+      // 示例里引用只存在于读者流程目录里的代码节点包和外置文件，这两类报错不算数
+      const errors = result.errors.filter(
+        (e) => !/节点包不存在|找不到对应文件|未知节点类型 pkg:/.test(e),
+      );
+      if (errors.length) failures.push(`${example.label}: ${errors.join("; ")}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  assert.deepEqual(failures, [], "skills 里的示例自己都过不了 lint");
 });
 
 test("面板隐藏的节点不会出现在 /api/nodes 目录里", () => {
