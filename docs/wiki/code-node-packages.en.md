@@ -20,7 +20,7 @@ export default {
 export async function run(inputs, outputs, dirs) {
   const text = await fs.readFile(inputs.filePath, "utf-8");
   await fs.writeFile(outputs.total, String(text.split("\n").length));
-  console.log(`共 ${text.split("\n").length} 行`);   // stdout becomes the node result
+  console.log(`共 ${text.split("\n").length} 行`);   // 进度日志，不会盖掉 outputs.total
 }
 ```
 
@@ -63,8 +63,24 @@ Types: `text`, `file`, `bool`, `node`, `image`, `json`. Anything else is an erro
 
 `outputs.total` is a path, not a value — the single easiest thing to get wrong.
 
-Failure is a thrown error or a non-zero exit; there is no other protocol. stdout becomes
-the node result.
+Failure is a thrown error or a non-zero exit; there is no other protocol.
+
+## How outputs reach the slots
+
+Every declared output slot gets its own file; whatever you write lands in that slot. The
+**first non-control output slot** carries the node's result body — first *non-control*, not
+index 0: the canonical order is `[next, total]`, so index 0 is the control slot. That rule
+used to be written six times across ui-server, each spelled `index === 0`, so an output slot
+not named `result` / `content` was treated as the result when writing files and not
+recognised as the result when filling slots — the value fell between the two. It is one
+function now.
+
+**stdout only becomes the result body when the result slot has no file.** Writing a file is a
+deliberate act while `console.log` is often just progress; letting a print clobber a write is
+surprising, and the example above does both.
+
+Whether a downstream node sees the **content** or the **path** depends on the target slot
+type: `text` slots read the file, `file` / `image` slots keep the path.
 
 ## Why a bootstrap is needed
 

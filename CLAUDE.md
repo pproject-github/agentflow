@@ -130,7 +130,11 @@ export async function run(inputs, outputs, dirs) {
   `bool`, `node`, `image`, `json`.
 - `run(inputs, outputs, dirs)` — `outputs.<name>` is the **absolute path to write**, not a
   value. `dirs` has `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir`.
-- Failure = throw or non-zero exit. stdout becomes the node result.
+- Each declared output slot gets its own file; whatever you write lands in that slot. The
+  **first non-control output slot** carries the node's result body.
+- Failure = throw or non-zero exit. stdout becomes the node result **only when the node did
+  not write a file for the result slot** — a `console.log` progress line never clobbers a
+  value you wrote deliberately.
 - Search order when resolving `marketplace:<id>@<version>`: the flow's own
   `<flowDir>/nodes/*/` first, then published workspace packages, then collections. A
   flow's local implementation is never shadowed by a same-named published package.

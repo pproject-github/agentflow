@@ -4448,6 +4448,34 @@ function workspaceLinkedOutputShouldStayPath(slot) {
   return /(?:^|[_-])(file|path|url|uri|ref)$/i.test(rawName) || /(?:File|Path|Url|URL|Uri|URI|Ref)$/.test(rawName);
 }
 
+/**
+ * 节点的主输出槽名——承载「结果正文」的那个槽。
+ *
+ * 判据是「第一个非控制输出槽」。**不能用 `index === 0`**：规范槽序是
+ * `[next, result]`，下标 0 是控制槽 `next`，于是自定义名字的输出槽（比如代码节点声明的
+ * `total`）在每一处都判不中——写文件那边把它当 result 写，回填槽那边又不认它是 result，
+ * 值就卡在中间谁也拿不到。名字叫 result / content 的槽历史上靠特判蒙对了，所以这个 bug
+ * 一直只在自定义输出名上发作。
+ *
+ * @returns {string} 槽名；没有非控制输出槽时返回 ""
+ */
+function workspacePrimaryOutputSlotName(instance) {
+  for (const slot of Array.isArray(instance?.output) ? instance.output : []) {
+    const name = String(slot?.name || "").trim();
+    if (!name || isWorkspaceSemanticOutputSlot(slot)) continue;
+    return name;
+  }
+  return "";
+}
+
+/** 这个输出槽是不是主输出槽。`slots` 传所在实例的完整 output 数组。 */
+function workspaceIsPrimaryOutputSlot(slot, slots) {
+  const name = String(slot?.name || "").trim();
+  if (!name) return false;
+  if (name === "result" || name === "content") return true;
+  return name === workspacePrimaryOutputSlotName({ output: slots });
+}
+
 function workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot = "") {
   const text = String(value ?? "");
   if (!text.trim() || workspaceLinkedOutputShouldStayPath(targetSlot)) return text;
@@ -4470,8 +4498,8 @@ function workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot = "") 
   const resolveValue = (value) => workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot);
   const out = outputs.get(sourceId);
   const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
-  const slotName = String(slot?.name || "").trim();
-  const isPrimaryOutput = !slot || slotName === "result" || slotName === "content" || sourceIndex === 0;
+  const isPrimaryOutput = !slot
+    || workspaceIsPrimaryOutputSlot(slot, graph?.instances?.[sourceId]?.output);
   if (isPrimaryOutput && out != null && String(out).trim()) return resolveValue(out);
   if (slot && String(slot?.type || "") !== "node") {
     const value = workspaceSlotValue(slot);
@@ -4842,12 +4870,13 @@ function workspaceApplyAgentOutputSlots(instance, content) {
       const type = String(slot?.type || "");
       if (type === "node" || name === "next" || !name) return slot;
       let value = "";
-      if (name === "result" || name === "content" || index === 0) {
-        value = text;
-      } else if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
+      // 信封里点名给了值就用点名的——比「你是主输出槽」更具体
+      if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
         value = structured.outParams[name];
       } else if (Object.prototype.hasOwnProperty.call(structured.outParams, `${name}File`)) {
         value = structured.outParams[`${name}File`];
+      } else if (workspaceIsPrimaryOutputSlot(slot, instance?.output)) {
+        value = text;
       } else {
         value = workspaceExtractNamedOutputValue(text, name);
       }
@@ -5205,9 +5234,9 @@ export function workspacePublishAgentOutputFiles(structured, runPackage) {
     : base;
 }
 
-function workspaceOutputFieldForSlot(slot, index = 0) {
+function workspaceOutputFieldForSlot(slot, slots = null) {
   const name = String(slot?.name || "").trim();
-  if (!name || name === "result" || name === "content" || index === 0) return "result";
+  if (!name || workspaceIsPrimaryOutputSlot(slot, slots)) return "result";
   return `outParams.${name}`;
 }
 
@@ -5238,12 +5267,13 @@ function workspaceDownstreamOutputDisplayBindings(graph, nodeId) {
     const index = workspaceHandleIndex(edge?.sourceHandle, "output");
     const slot = output[index] || null;
     if (isWorkspaceSemanticOutputSlot(slot)) continue;
-    const name = String(slot?.name || "").trim() || (index === 0 ? "result" : `output-${index}`);
+    const name = String(slot?.name || "").trim()
+      || (workspaceIsPrimaryOutputSlot(slot, output) ? "result" : `output-${index}`);
     bindings.push({
       kind,
       index,
       name,
-      field: workspaceOutputFieldForSlot(slot, index),
+      field: workspaceOutputFieldForSlot(slot, output),
     });
   }
   return bindings;
@@ -5384,7 +5414,7 @@ function workspaceOutParamFileSpecs(graph, nodeId) {
     const slot = outputSlots[index];
     const name = String(slot?.name || "").trim();
     const type = String(slot?.type || "").trim().toLowerCase();
-    if (!name || isWorkspaceSemanticOutputSlot(slot) || name === "result" || name === "content" || index === 0) continue;
+    if (!name || isWorkspaceSemanticOutputSlot(slot) || workspaceIsPrimaryOutputSlot(slot, outputSlots)) continue;
     const kind = displayByField.get(`outParams.${name}`) || "";
     const fileLike = ["file", "image", "audio", "video", "binary"].includes(type);
     if (!fileLike && !kind) continue;
@@ -7161,11 +7191,10 @@ function workspaceOutputFileRefsForNode(instance) {
   for (let index = 0; index < slots.length; index += 1) {
     const slot = slots[index];
     const name = String(slot?.name || "").trim();
-    const type = String(slot?.type || "");
-    if (!name || type === "node" || name === "next" || name === "prev") continue;
-    const key = name === "content" || index === 0 ? "result" : name;
-    const safe = workspaceSanitizeTmpSegment(key, "result");
-    refs[key] = `outputs/${safe}.txt`;
+    if (!name || isWorkspaceSemanticOutputSlot(slot)) continue;
+    // 键必须是**声明的槽名**：代码节点包的 run(inputs, outputs) 和脚本里的 ${slotName}
+    // 占位符都按槽名取。谁是主输出留给信封那一层判断，这里别改名。
+    refs[name] = `outputs/${workspaceSanitizeTmpSegment(name, "result")}.txt`;
   }
   if (!refs.result) refs.result = "outputs/result.txt";
   return refs;
@@ -7186,7 +7215,20 @@ function workspaceDefaultScriptCommand(scriptAbs) {
   return workspaceShellQuote(scriptAbs);
 }
 
-function workspaceEnvelopeFromOutputFiles(outputRefs, nodeRunDir) {
+/**
+ * 把节点写出来的输出文件转成输出信封。
+ *
+ * `outputRefs` 的键是声明的槽名。哪个槽是「结果正文」由 `primaryName` 指定——不能像
+ * 以前那样「找不到叫 result 的就拿第一个顶上」，那个兜底会把 `total` 之类的自定义槽
+ * 当成 result，于是它自己那个槽反而永远收不到值。
+ *
+ * `result` 是 stdout，只在主输出槽**没有**写出文件时才当结果正文。写文件是作者的明确
+ * 动作，`console.log` 常常只是进度——文档里的范例就是「写 outputs.total + 打印一行」，
+ * 让打印盖掉写入是反直觉的。
+ *
+ * @param {{ primaryName?: string, result?: string }} [opts]
+ */
+function workspaceEnvelopeFromOutputFiles(outputRefs, nodeRunDir, opts = {}) {
   const entries = Object.entries(outputRefs || {})
     .map(([name, rel]) => {
       const abs = path.resolve(nodeRunDir, rel);
@@ -7196,12 +7238,18 @@ function workspaceEnvelopeFromOutputFiles(outputRefs, nodeRunDir) {
       return { name, rel };
     })
     .filter(Boolean);
-  if (entries.length === 0) return "";
-  const result = entries.find((entry) => entry.name === "result") || entries[0];
-  const outParams = entries.filter((entry) => entry !== result);
+  const resultText = String(opts.result || "");
+  const primaryName = String(opts.primaryName || "").trim() || "result";
+  const resultEntry = entries.find((entry) => entry.name === primaryName)
+    || entries.find((entry) => entry.name === "result")
+    || null;
+  const outParams = entries.filter((entry) => entry !== resultEntry);
+  if (!resultText && !resultEntry && !outParams.length) return "";
   return [
     "---agentflow",
-    `resultFile: ${result.rel}`,
+    resultEntry
+      ? `resultFile: ${resultEntry.rel}`
+      : `result: |\n${resultText.split("\n").map((line) => `  ${line}`).join("\n")}`,
     outParams.length ? "outParams:" : "",
     ...outParams.map((entry) => `  ${entry.name}File: ${entry.rel}`),
     "---end",
@@ -7311,8 +7359,14 @@ async function workspaceRunToolNodejsScript({
       }
       const elapsedMs = Math.max(0, Date.now() - started);
       emit?.({ type: "status", line: `Timing script: ${elapsedMs}ms`, timing: { label: "script", elapsedMs } });
-      const content = stdout.trim() || workspaceEnvelopeFromOutputFiles(outputRefs, runPackage.nodeRunDir);
-      finish(() => resolve(content));
+      // stdout 和输出文件不是二选一：文档里的代码节点范例就是「写 outputs.total + 打印
+      // 一行进度」，旧写法 `stdout || 信封` 会让那一行 console.log 把所有输出文件全吃掉。
+      // 规则改成：信封照给，stdout 非空时它就是 result（覆盖 result 文件，不动其它槽）。
+      const envelope = workspaceEnvelopeFromOutputFiles(outputRefs, runPackage.nodeRunDir, {
+        primaryName: workspacePrimaryOutputSlotName(instance),
+        result: stdout.trim(),
+      });
+      finish(() => resolve(envelope || stdout.trim()));
     });
   });
 }
