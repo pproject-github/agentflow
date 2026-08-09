@@ -104,6 +104,35 @@ Runtime support comes straight from each node's `runtime:` frontmatter (see
 
 `import` lints first and **refuses rather than writing half a graph**.
 
+## Code node packages
+
+A `nodes/<name>/index.mjs` inside the flow directory is just an import:
+
+```js
+import collectMetrics from "./nodes/collect-metrics";
+
+const collect = collectMetrics("统计语料", { date: "2026-08-09" });
+const show = display.markdown("结果", { content: collect.total });
+```
+
+**The graph shape is identical to what the palette produces**: `definitionId` is the base
+type (`tool_nodejs` etc.), the package identity lives in `marketplaceRef`, and the slots come
+from the package declaration — not from the base type, which carries context slots like
+`skillsContext` that a code node does not have. The import is only the readable spelling.
+
+Outputs the package declares need no `const { total } = collect` line; reference
+`collect.total` directly.
+
+The bootstrap command needed to run it is **derived** (`marketplaceRef` → absolute local
+paths), recomputed on every read and never written into `flow.js` — otherwise the flow file
+would carry somebody's home directory and break the moment it is shared.
+
+Lint and the storage layer use **one package scan** (`flow-dsl/packages.mjs`). Splitting them
+actually happened: lint resolved packages and saw the right graph while the store did not,
+reading the import as a node with an empty slot table — so the control edge landed on the
+first data pin and two edges collided on one handle. An AI following the documented pattern
+got a green lint and a broken canvas, frozen into JSON on the next save.
+
 ## The revision has to describe what is on disk
 
 Generating code normalizes: slots get filled in, `role: normal` is dropped, slot order is

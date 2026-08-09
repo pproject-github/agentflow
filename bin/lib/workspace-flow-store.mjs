@@ -27,6 +27,7 @@ import {
   graphToFlowFiles,
 } from "./flow-dsl/index.mjs";
 import { definitionOf } from "./flow-dsl/defs.mjs";
+import { packageBindingsForGraph, packageResolverFor, scanFlowLocalPackages } from "./flow-dsl/packages.mjs";
 import { NODE_META_KEYS } from "./flow-dsl/ir.mjs";
 import {
   WORKSPACE_STATE_FILENAME,
@@ -249,6 +250,9 @@ export function readWorkspaceDesign(flowDir) {
         layout: readJsonFile(path.join(dir, FLOW_LAYOUT_FILENAME), { nodes: {} }),
         nodeMeta: readJsonFile(path.join(dir, FLOW_NODES_FILENAME), { nodes: {} }),
         files: collectExternalFiles(dir),
+        // 和 lint 用同一份包扫描。不传的话 `import x from "./nodes/x"` 会读成一个
+        // 槽位表为空的节点，控制边跟着串位——lint 绿灯、画布是错图。
+        resolvePackage: packageResolverFor(scanFlowLocalPackages(dir)),
       });
     } catch (e) {
       throw new WorkspaceFlowParseError(
@@ -301,6 +305,28 @@ function pruneStaleExternals(dir, previous, keep) {
 }
 
 /**
+ * 代码节点包实例上的 `script` 是**推导出来的**——`hydrateWorkspaceMarketplaceToolNodejsRuntime`
+ * 每次读图都会按 marketplaceRef 重新算一遍，内容是一串本机绝对路径（bootstrap 和
+ * index.mjs 的位置）。把它写进 flow.js 等于让流程文件带上某个人的主目录，发布出去、
+ * 换台机器就是错的。既然 import 已经指明了是哪个包，这里就不落盘。
+ */
+function stripDerivedPackageScripts(design, bindings) {
+  const ids = Object.keys(bindings || {});
+  if (!ids.length) return design;
+  const instances = { ...design.instances };
+  let changed = false;
+  for (const id of ids) {
+    const instance = instances[id];
+    if (!instance || !String(instance.script || "").trim()) continue;
+    const next = { ...instance };
+    delete next.script;
+    instances[id] = next;
+    changed = true;
+  }
+  return changed ? { ...design, instances } : design;
+}
+
+/**
  * 写设计态图。
  *
  * 顺序是有讲究的：**先落外置文本，再落 `workspace.flow.js`**。反过来的话，中途失败会留下
@@ -324,11 +350,15 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
   const nodesPath = path.join(dir, FLOW_NODES_FILENAME);
   const graphPath = path.join(dir, WORKSPACE_GRAPH_FILENAME);
 
+  const packages = scanFlowLocalPackages(dir);
+  const bindings = packageBindingsForGraph(design, packages);
+  const written = stripDerivedPackageScripts(design, bindings);
+
   let generated = null;
   let persisted = null;
   let degradedReason = null;
   try {
-    generated = graphToFlowFiles(design);
+    generated = graphToFlowFiles(written, { packages: bindings });
   } catch (e) {
     degradedReason = `代码生成失败：${(e && e.message) || String(e)}`;
   }
@@ -341,8 +371,9 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
         layout: generated.layout,
         nodeMeta: generated.nodeMeta,
         files: Object.fromEntries(generated.files.map((f) => [f.path, f.text])),
+        resolvePackage: packageResolverFor(packages),
       });
-      if (designFingerprint(persisted) !== designFingerprint(design)) {
+      if (designFingerprint(persisted) !== designFingerprint(written)) {
         degradedReason = "生成的代码解析回来与原图不一致";
       }
     } catch (e) {

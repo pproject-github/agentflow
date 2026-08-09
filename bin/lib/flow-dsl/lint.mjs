@@ -18,8 +18,8 @@ import fs from "fs";
 import path from "path";
 import { parse as acornParse } from "acorn";
 
-import { isNodePackageDir, readNodePackageManifest, slotMapToList } from "../node-package-manifest.mjs";
 import { CTRL_SLOTS, RUN_DEFINITIONS, DEFINITIONS, definitionOf } from "./defs.mjs";
+import { packageResolverFor, scanFlowLocalPackages } from "./packages.mjs";
 import { FLOW_SOURCE_FILENAME } from "./index.mjs";
 import { parseFlowSource } from "./parser.mjs";
 
@@ -53,33 +53,6 @@ function walk(node, visit) {
     if (Array.isArray(value)) value.forEach((v) => walk(v, visit));
     else if (value && typeof value === "object" && value.type) walk(value, visit);
   }
-}
-
-/** 扫 `<flowDir>/nodes/*` 下的代码节点包，返回 import specifier -> 定义。 */
-function scanFlowLocalPackages(flowDir) {
-  const out = {};
-  const root = path.join(flowDir, "nodes");
-  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return out;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(root, entry.name);
-    if (!isNodePackageDir(dir)) continue;
-    let manifest = null;
-    try {
-      manifest = readNodePackageManifest(dir, () => null);
-    } catch {
-      manifest = null;
-    }
-    if (!manifest) continue;
-    const record = {
-      id: manifest.id,
-      input: manifest.input || slotMapToList({}, "input"),
-      output: manifest.output || slotMapToList({}, "output"),
-    };
-    out[`./nodes/${entry.name}`] = record;
-    out[`./nodes/${entry.name}/index.mjs`] = record;
-  }
-  return out;
 }
 
 /**
@@ -123,21 +96,17 @@ export function lintFlowDir(flowDir) {
     else files[rel] = fs.readFileSync(abs, "utf-8");
   });
 
+  // 与存储层同一份扫描。分成两份就会出现「lint 绿灯、画布是错图」——包节点在图里
+  // 到底长什么样，两边必须给同一个答案。
   const packages = scanFlowLocalPackages(flowDir);
-  const localDefs = {};
-  for (const pkg of Object.values(packages)) {
-    localDefs[`local:${pkg.id}`] = { input: pkg.input, output: pkg.output, runtime: "native" };
-  }
-  const lookupDef = (definitionId) => (
-    localDefs[definitionId] || (DEFINITIONS[definitionId] ? definitionOf(definitionId) : null)
-  );
+  const lookupDef = (definitionId) => (DEFINITIONS[definitionId] ? definitionOf(definitionId) : null);
 
   for (const stmt of ast.body) {
     if (stmt.type !== "ImportDeclaration") continue;
     const spec = String(stmt.source.value);
     if (spec === "agentflow/flow") continue;
     if (spec.startsWith("./nodes/")) {
-      if (!packages[spec]) errors.push(`import ${JSON.stringify(spec)}：节点包不存在或缺 index.mjs / node.yaml`);
+      if (!packages.bySpecifier[spec]) errors.push(`import ${JSON.stringify(spec)}：节点包不存在或缺 index.mjs / node.yaml`);
     } else if (!spec.startsWith("marketplace:")) {
       warnings.push(`import ${JSON.stringify(spec)}：来源不是 ./nodes/ 也不是 marketplace:`);
     }
@@ -147,7 +116,7 @@ export function lintFlowDir(flowDir) {
   try {
     ir = parseFlowSource(source, {
       files,
-      resolvePackage: (spec) => (packages[spec] ? { definitionId: `local:${packages[spec].id}` } : {}),
+      resolvePackage: packageResolverFor(packages),
     });
   } catch (e) {
     errors.push(`解析成图失败: ${(e && e.message) || e}`);
@@ -169,12 +138,10 @@ export function lintFlowDir(flowDir) {
       continue;
     }
     // 运行时支持程度来自各节点 .md 的 runtime: 字段，不是这里的第二份清单
-    if (!definitionId.startsWith("local:")) {
-      if (def.runtime === "degraded") {
-        warnings.push(`${id}: ${definitionId} 无专用 handler，靠通用 agent + 输出契约工作；结果必须恰好是 true/false`);
-      } else if (def.runtime === "none") {
-        errors.push(`${id}: ${definitionId} 没有 Workspace 运行时实现`);
-      }
+    if (def.runtime === "degraded") {
+      warnings.push(`${id}: ${definitionId} 无专用 handler，靠通用 agent + 输出契约工作；结果必须恰好是 true/false`);
+    } else if (def.runtime === "none") {
+      errors.push(`${id}: ${definitionId} 没有 Workspace 运行时实现`);
     }
     if (CUSTOM_SLOTS_ALLOWED.has(definitionId)) {
       const defOut = new Set(def.output.map((s) => s.name));
@@ -182,7 +149,7 @@ export function lintFlowDir(flowDir) {
         if (defOut.has(slot) || (node.declaredOut || []).includes(slot)) continue;
         errors.push(`${id}.${slot}: 自定义输出槽要用 const { ${slot} } = ${id} 声明，并在 body 里按 ---agentflow 信封回填`);
       }
-    } else if (!definitionId.startsWith("local:")) {
+    } else {
       const defIn = new Set(def.input.map((s) => s.name));
       const defOut = new Set(def.output.map((s) => s.name));
       for (const slot of node.extraIn) if (!defIn.has(slot)) errors.push(`${id}[${definitionId}]: 不存在的输入槽 "${slot}"`);

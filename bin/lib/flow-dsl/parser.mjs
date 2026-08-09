@@ -67,7 +67,7 @@ export function parseFlowSource(source, opts = {}) {
     if (def) {
       packageOf.set(def.local.name, {
         specifier,
-        ...(opts.resolvePackage ? opts.resolvePackage(specifier) : {}),
+        ...(opts.resolvePackage ? opts.resolvePackage(specifier) || {} : {}),
       });
     }
   }
@@ -216,12 +216,40 @@ export function parseFlowSource(source, opts = {}) {
       }
 
       const pkg = packageOf.get(path);
-      const definitionId = pkg ? (pkg.definitionId || `pkg:${pkg.specifier}`) : definitionIdFromApi(path);
+      // 代码节点包在图里就是「基础类型 + marketplaceRef」，和画布从面板拖出来的一模一样。
+      // 解析不出包时退回 `pkg:<specifier>`——那是一张读不出槽位的图，交给上层报错，
+      // 绝不能假装它是个正常节点。
+      const definitionId = pkg
+        ? (pkg.baseDefinitionId || pkg.definitionId || `pkg:${pkg.specifier}`)
+        : definitionIdFromApi(path);
       nodes[id] = { definitionId, inputs: {}, outputs: {}, extraIn: [], extraOut: [], declaredOut: [], attrs: {} };
       if (label) nodes[id].label = label;
       if (pkg) {
         nodes[id].package = pkg.specifier;
         nodes[id].packageBinding = path;
+        // 包声明的槽位相对基础类型是「自定义槽」，得先建出来，否则 `x.total` 这条边
+        // 找不到落点，句柄下标会串到别的槽上
+        // 包自己就是这个节点的定义表——槽位以它为准，不能拿基础类型的
+        // （`tool_nodejs` 带着 workspaceContext / skillsContext 这些上下文槽，代码节点没有）
+        if (pkg.input || pkg.output) {
+          nodes[id].packageDef = { input: pkg.input || [], output: pkg.output || [] };
+        }
+        if (pkg.marketplaceRef) nodes[id].attrs.marketplaceRef = pkg.marketplaceRef;
+        if (pkg.id) nodes[id].attrs.marketplacePackageId = pkg.id;
+        if (pkg.version) nodes[id].attrs.marketplaceVersion = pkg.version;
+        const def = definitionOf(definitionId);
+        for (const [kind, declared, defSlots] of [
+          ["extraIn", pkg.input || [], def.input],
+          ["extraOut", pkg.output || [], def.output],
+        ]) {
+          for (const slot of declared) {
+            const name = String(slot?.name || "").trim();
+            if (!name || STD_SLOTS.has(name) || defSlots.some((s) => s.name === name)) continue;
+            if (!nodes[id][kind].includes(name)) nodes[id][kind].push(name);
+            // 包已经声明过了，不必再 `const { total } = x` 解构一遍
+            if (kind === "extraOut" && !nodes[id].declaredOut.includes(name)) nodes[id].declaredOut.push(name);
+          }
+        }
       }
       readPins(id, definitionId, args[0]);
 

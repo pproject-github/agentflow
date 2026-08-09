@@ -94,6 +94,31 @@ IR（代码生成和解析的共同中间表示）里，一条边是
 
 `import` 会先 lint，**不过就拒绝，不写出半张图**。
 
+## 代码节点包
+
+流程目录里的 `nodes/<name>/index.mjs` 在代码里就是一条 import：
+
+```js
+import collectMetrics from "./nodes/collect-metrics";
+
+const collect = collectMetrics("统计语料", { date: "2026-08-09" });
+const show = display.markdown("结果", { content: collect.total });
+```
+
+**图里的形态与画布从面板拖出来的完全一致**：`definitionId` 是基础类型（`tool_nodejs`
+等），包的身份放 `marketplaceRef`，槽位以包的声明为准（不是基础类型的——`tool_nodejs`
+带着 `skillsContext` 这些上下文槽，代码节点没有）。import 只是同一件事的可读写法。
+
+包声明过的输出槽不必再 `const { total } = collect` 解构一遍，直接 `collect.total` 引用。
+
+跑起来要用的 bootstrap 命令是**推导出来的**（`marketplaceRef` → 本机绝对路径），
+每次读图重新算，不写进 `flow.js`——否则流程文件会带上某个人的主目录，发布出去就是错的。
+
+lint 和存储层用**同一份包扫描**（`flow-dsl/packages.mjs`）。分成两份的后果实际发生过：
+lint 自己解析包、看到的是对的图，存储层不解析、把 import 读成一个槽位表为空的节点，
+于是控制边落到第一个数据槽上、两条边撞同一个句柄——AI 照文档写完 lint 绿灯，画布上却是
+一张错图，一保存就冻结成 JSON。
+
 ## 版本号必须描述磁盘上那张图
 
 代码化会做规范化：槽位补齐、`role: normal` 省掉、槽序归位。所以**存进去的那张图和读出来

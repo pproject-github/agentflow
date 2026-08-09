@@ -157,7 +157,11 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     const meta = nodeMeta.nodes?.[id] || {};
 
     const buildSlots = (kind) => {
-      const defSlots = kind === "in" ? def.input : def.output;
+      // 代码节点包自带槽位表；基础类型只是运行方式，不决定这个节点有哪些引脚
+      const pkgDef = node.packageDef;
+      const defSlots = pkgDef
+        ? (kind === "in" ? pkgDef.input : pkgDef.output)
+        : (kind === "in" ? def.input : def.output);
       const extras = (kind === "in" ? node.extraIn : node.extraOut)
         .filter((name) => !defSlots.some((s) => s.name === name));
       const names = layoutEntry.pinOrder?.[kind] || [...defSlots.map((s) => s.name), ...extras];
@@ -192,6 +196,9 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     // `role: "normal"` 就是没写 role 的意思，别把默认值写回图里
     if (meta.role !== undefined) instance.role = meta.role;
     for (const key of NODE_META_KEYS) if (meta[key] !== undefined) instance[key] = meta[key];
+    // 从 `import x from "./nodes/x"` 推出来的引用信息压过 nodes.json——代码里写的那个
+    // import 才是作者的意思，nodes.json 只是上一次落盘的记录
+    for (const key of NODE_META_KEYS) if (node.attrs?.[key] !== undefined) instance[key] = node.attrs[key];
     if (meta.images !== undefined) instance.images = meta.images;
     if (meta.globalContext === true) instance.globalContext = true;
     instance.input = input;

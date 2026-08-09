@@ -87,10 +87,23 @@ export function generateFlowSource(ir, opts = {}) {
 
   const isIf = (id) => N[id]?.definitionId === "control_if";
 
+  // 代码节点包自己声明了输出槽，import 已经把它们带进来，不必解构；引用时直接写
+  // `pkgNode.total`。这个集合必须先算，`outVar` 只收真的会被解构出来的槽——否则会生成
+  // 一个引用了不存在变量的文件。
+  const packageOutputs = (id) => new Set(
+    (opts.packages?.[id]?.output || []).map((slot) => String(slot?.name || "")),
+  );
+  const destructured = new Map(
+    Object.entries(N).map(([id, node]) => {
+      const declared = packageOutputs(id);
+      return [id, node.extraOut.filter((slot) => !declared.has(slot))];
+    }),
+  );
+
   // 自定义输出槽通过解构暴露成变量：`const { storyId } = node;`
   const outVar = new Map();
-  for (const [id, node] of Object.entries(N)) {
-    for (const slot of node.extraOut) {
+  for (const [id, slots] of destructured) {
+    for (const slot of slots) {
       outVar.set(`${id}|${slot}`, isIdentifier(slot) ? slot : `${id}_${slot}`);
     }
   }
@@ -199,8 +212,9 @@ export function generateFlowSource(ir, opts = {}) {
     }
 
     out.push(`${exported ? "export " : ""}const ${id} = ${callee(id)}(${args.join(", ")});\n`);
-    if (node.extraOut.length) {
-      const bindings = node.extraOut.map((slot) => {
+    const needsBinding = destructured.get(id) || [];
+    if (needsBinding.length) {
+      const bindings = needsBinding.map((slot) => {
         const v = outVar.get(`${id}|${slot}`);
         return v === slot ? slot : `${JSON.stringify(slot)}: ${v}`;
       });
