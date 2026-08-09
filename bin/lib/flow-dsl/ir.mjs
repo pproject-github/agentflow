@@ -95,6 +95,7 @@ export function graphToIr(graph) {
     if (instance.globalContext === true) node.attrs.globalContext = true;
 
     node.inputs = {};
+    node.inputTypes = {};
     node.outputs = {};
     node.extraIn = [];
     node.extraOut = [];
@@ -103,7 +104,12 @@ export function graphToIr(graph) {
       const name = String(slot?.name || "");
       if (!name) continue;
       // 既不在定义表里、也不是标准槽的，是这个实例自己加的槽，代码里要显式声明
-      if (!STD_SLOTS.has(name) && !defInputs.has(name) && String(slot.type) !== "node") node.extraIn.push(name);
+      if (!STD_SLOTS.has(name) && !defInputs.has(name) && String(slot.type) !== "node") {
+        node.extraIn.push(name);
+        // 自定义槽的类型在定义表里查不到，只能随槽本身走一趟 IR，否则往返一次
+        // bool 槽就退化成 text，代码里的 `true` 变成 `"true"`
+        if (slot.type && String(slot.type) !== "text") node.inputTypes[name] = String(slot.type);
+      }
       if (isControlSlot(slot) || wiredInputs.has(`${id}|${name}`)) continue;
       const value = String(slot.value ?? slot.default ?? "");
       if (value.trim()) node.inputs[name] = value;
@@ -168,8 +174,9 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
       const byName = new Map(defSlots.map((s) => [s.name, s]));
       return names.map((name) => {
         const d = byName.get(name);
+        const custom = kind === "in" ? node.inputTypes?.[name] : undefined;
         const slot = {
-          type: d ? d.type : (name === "prev" || name === "next" ? "node" : "text"),
+          type: d ? d.type : (custom || (name === "prev" || name === "next" ? "node" : "text")),
           name,
           value: "",
         };

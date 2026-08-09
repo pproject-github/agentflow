@@ -38,7 +38,7 @@ const collect = collectMetrics("统计语料", { date: dateStr.value });
 const analyse = agent.subAgent("解读", { metrics: collect.result }, `读 metrics 指出趋势与异常。`);
 const chart   = display.chart("规模分布", { content: analyse.result });
 
-export const run = flow("Run", dateStr, collect, analyse, chart);
+export const run = flow("Run", collect, analyse, chart);
 ```
 
 | 位置 | 含义 |
@@ -48,6 +48,8 @@ export const run = flow("Run", dateStr, collect, analyse, chart);
 | 第 3 个参数（字符串） | body：agent 是 prompt，`tool.nodejs` 是 shell 命令 |
 | `const 变量名` | **节点 id**。改名 = 重命名节点 |
 | `x.slotName` | 引用上游输出引脚 = 连一条数据线 |
+
+`provide.*` 只是数据源，没有 prev/next 槽，**不要放进 `flow(...)` 链**——被谁引用就跟谁跑。
 
 ## 四条铁律
 
@@ -88,6 +90,26 @@ flow.detached(draftA, draftB);          // 有控制链但没 run 入口
 `control.agentToBool` 是 `runtime: degraded`：它靠通用 agent 路径工作，没有任何东西
 约束模型输出，而 `parse-bool` 只认 `true` / `1` / `yes` / `on`。prompt 里必须写死
 「只回 true 或 false，多一个字都会被判成 false」。
+
+## 引脚值与正文插值
+
+引脚值可以写字符串、`file(...)`、上游引用，也可以写 `true` / `42`——非字符串会规范成
+字符串存图；只有定义表里声明为 `bool` 的槽（以及你自己用 `true`/`false` 建的槽）写回时
+还是裸的 `true`。
+
+正文（第 3 个参数）里的 `${...}` 有两种含义，按这个顺序判定：
+
+```js
+// 1) 本节点已有同名引脚 -> 运行时占位符，跑的时候换成该槽的值
+const a = agent.subAgent("解读", { metrics: collect.result }, `读 ${metrics} 指出趋势`);
+
+// 2) 引用上游 -> 自动建一个同名引脚并连线，等价于上面那种写法
+const b = agent.subAgent("解读", {}, `分析 ${dateStr.value} 的数据`);
+//   => 引脚 dateStr 接到 dateStr.value，正文存成 `分析 ${dateStr} 的数据`
+```
+
+第 2 种的槽名取**引用表达式的根标识符**（`dateStr.value` -> `dateStr`）。想让槽叫别的名字，
+就用第 1 种写法显式写引脚。插值只在正文里生效，引脚值里的 `${}` 运行时不会替换。
 
 ## 代码节点：nodes/&lt;name&gt;/index.mjs
 

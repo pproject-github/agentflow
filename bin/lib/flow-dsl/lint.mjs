@@ -175,6 +175,15 @@ export function lintFlowDir(flowDir) {
       && !(N[src].declaredOut || []).includes(fromSlot)) {
       errors.push(`${src}.${fromSlot}: 输出槽不存在（只有 ${def.output.map((s) => s.name).join("/")}）`);
     }
+    // 控制槽也得真的存在。`provide.*` 这类纯数据源没有 prev/next，写进 flow(...) 链里
+    // 这条边落不下去——不报的话它会在往返时无声消失，链子断了还看不出原因。
+    const dstDef = lookupDef(N[dst].definitionId);
+    if (CTRL_SLOTS.has(toSlot) && dstDef && !dstDef.input.some((s) => s.name === toSlot)) {
+      errors.push(`${dst}[${N[dst].definitionId}] 没有 ${toSlot} 槽，接不进控制链（这类节点只能被别的节点引用值）`);
+    }
+    if (CTRL_SLOTS.has(fromSlot) && def && !def.output.some((s) => s.name === fromSlot)) {
+      errors.push(`${src}[${N[src].definitionId}] 没有 ${fromSlot} 槽，控制流串不下去`);
+    }
     const target = `${dst}|${toSlot}`;
     if (inputSeen.has(target)) {
       errors.push(`fan-in 禁止: ${dst}.${toSlot} 被 ${inputSeen.get(target)} 和 ${src} 同时连入`);

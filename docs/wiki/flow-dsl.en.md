@@ -61,6 +61,35 @@ This is forced: handle indices depend on the instance's own slot order, and slot
 So indices are restored from `pinOrder` in `layout.json`, recorded only for instances that
 deviate; everything else is rebuilt as "definition order + custom slots seen in the code".
 
+## Body interpolation: one `${}`, two meanings
+
+The runtime's body placeholders only understand slot names — the regex in
+`workspaceBodyPlaceholderNames` is `\$\{([A-Za-z_][A-Za-z0-9_-]*)\}`, no `.` in it. So
+`` `analyse ${dateStr.value}` `` cannot land in the body verbatim. It compiles to:
+
+- body `analyse ${dateStr}`
+- a data edge `dateStr.value -> thisNode.dateStr`
+
+The slot name is the **root identifier** of the reference expression. On the way back it
+folds into JS interpolation only when slot name == root identifier; otherwise it stays as
+"explicit pin + escaped `\${slot}`", because otherwise the round trip would rename the slot.
+
+Resolution order:
+
+1. This node already has a slot by that name (or, in a `tool_nodejs` script, one of the
+   `${flowDir}`-style constants or its own output slots) → runtime placeholder, kept as is
+2. `${x.y}` or a destructured variable → upstream reference, slot created and wired
+3. Neither → recorded in `unresolved`
+
+Case 3 used to **silently drop the whole body**: `stringOf` returned null for a template
+literal, and the body branch only tested `if (body !== null)`. One save and it was gone
+from disk.
+
+Pin values likewise now accept non-string literals such as `true` / `42` (stored as strings
+in the graph). Codegen re-emits them according to the slot's `type`: a `bool` slot gets a
+bare `true`, everything else a string. Custom slots carry their `bool` type through the IR,
+so `pullIfExists: true` comes back as `true`, not `"true"`.
+
 ## Never executed
 
 `workspace.flow.js` is always read via acorn static parse. Canvas rendering, lint, and
@@ -97,7 +126,11 @@ save + read.
 |-------|--------|
 | Syntax | banned control flow, computed member access, `file()` argument must be a literal and the file must exist |
 | Semantics | node type exists; `runtime:` tier is usable (`none` errors, `degraded` warns); slots exist; custom output slots are declared via destructuring |
-| Graph | fan-in, cycles, `control.if` prediction wired to a `bool`, orphan nodes, missing run entry |
+| Graph | fan-in, cycles, control slots actually exist, `control.if` prediction wired to a `bool`, orphan nodes, missing run entry |
+
+"Control slots actually exist" was added later: `provide.*` and `tool.getEnv` have no
+`prev` / `next`, so putting them in a `flow(...)` chain produces an edge with nowhere to
+land, which then vanishes silently on the round trip. The skill's own example had this bug.
 
 Runtime support comes straight from each node's `runtime:` frontmatter (see
 [node-definitions.en.md](node-definitions.en.md)) — not a second list.

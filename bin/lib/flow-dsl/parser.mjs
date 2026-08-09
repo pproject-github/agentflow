@@ -21,6 +21,21 @@ const calleePath = (n) => (
     : (n.type === "MemberExpression" && !n.computed ? `${calleePath(n.object)}.${n.property.name}` : null)
 );
 
+/**
+ * `tool_nodejs` 脚本里除槽名之外还能用的占位符常量（见运行时的 `constants` 表）。
+ * 它们不是引脚，`${flowDir}` 这种写法必须原样留在脚本里，不能被当成 JS 插值。
+ */
+const SCRIPT_CONSTANTS = new Set([
+  "workspaceRoot",
+  "pipelineWorkspace",
+  "flowDir",
+  "cwd",
+  "nodeRunDir",
+  "nodeTmpDir",
+  "outputsDir",
+  "scriptRef",
+]);
+
 const memberPath = (n) => (
   n.type === "MemberExpression" && !n.computed
     && n.object.type === "Identifier" && n.property.type === "Identifier"
@@ -47,6 +62,15 @@ export function parseFlowSource(source, opts = {}) {
   function stringOf(node) {
     if (!node) return null;
     if (node.type === "Literal" && typeof node.value === "string") return node.value;
+    // 槽值在图里统一是字符串。`true` / `42` 是 JS 里写这类值的自然写法，收下并规范化，
+    // 不要逼作者写 `"true"`；写回时由槽的 type 决定加不加引号。
+    if (node.type === "Literal" && (typeof node.value === "boolean" || typeof node.value === "number")) {
+      return String(node.value);
+    }
+    if (node.type === "UnaryExpression" && (node.operator === "-" || node.operator === "+")
+      && node.argument.type === "Literal" && typeof node.argument.value === "number") {
+      return String(node.operator === "-" ? -node.argument.value : node.argument.value);
+    }
     if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
     if (node.type === "CallExpression" && calleePath(node.callee) === "file") {
       const rel = stringOf(node.arguments[0]);
@@ -91,6 +115,59 @@ export function parseFlowSource(source, opts = {}) {
       }
       destructures.push({ node: d.init.name, slots: d.id.properties.map((p) => p.key.name ?? p.key.value) });
     }
+  }
+
+  /**
+   * 带插值的模板字符串 -> 正文文本 + 数据边。
+   *
+   * 运行时的正文占位符只认槽名（`${slotName}`，见 `workspaceBodyPlaceholderNames` 的正则，
+   * 里面没有 `.`），所以 `` `分析 ${date.value} 的数据` `` 不能原样落进正文——它编译成
+   * 正文 `分析 ${date} 的数据` 加一条 `date.value -> 本节点.date` 的边。槽名取引用表达式
+   * 的**根标识符**，这样写回时（codegen）能原样还原成同一段代码。
+   *
+   * @returns {{ text: string, refs: Array<{slot,src,srcSlot}> } | { error: string, node } | null}
+   */
+  function interpolatedOf(id, tpl, definitionId) {
+    if (tpl?.type !== "TemplateLiteral" || !tpl.expressions.length) return null;
+    // 本节点自己就有这个名字 -> `${x}` 是运行时占位符，原样留在正文里，不是 JS 插值
+    const def = definitionOf(definitionId);
+    const isScript = definitionId === "tool_nodejs";
+    const ownSlot = (name) => def.input.some((s) => s.name === name)
+      || nodes[id].extraIn.includes(name)
+      || nodes[id].inputs[name] !== undefined
+      || edges.some((e) => e.endsWith(`|${id}|${name}`))
+      // 脚本里还能引用常量和自己的输出槽（运行时会把它们填成可写文件路径）
+      || (isScript && (
+        SCRIPT_CONSTANTS.has(name)
+        || def.output.some((s) => s.name === name)
+        || destructures.some((d) => d.node === id && d.slots.includes(name))
+      ));
+
+    const refs = [];
+    let text = tpl.quasis[0].value.cooked;
+    for (let i = 0; i < tpl.expressions.length; i += 1) {
+      const expr = tpl.expressions[i];
+      if (expr.type === "Identifier" && ownSlot(expr.name)) {
+        text += `\${${expr.name}}${tpl.quasis[i + 1].value.cooked}`;
+        continue;
+      }
+      const member = memberPath(expr);
+      let slot;
+      let src;
+      let srcSlot;
+      if (member) {
+        [src, srcSlot] = member;
+        slot = src;
+      } else if (expr.type === "Identifier" && varOf.has(expr.name)) {
+        [src, srcSlot] = varOf.get(expr.name);
+        slot = expr.name;
+      } else {
+        return { error: `${id}: 模板插值只能引用上游节点的输出（\`\${节点.槽}\` 或解构出来的变量）`, node: expr };
+      }
+      refs.push({ slot, src, srcSlot });
+      text += `\${${slot}}${tpl.quasis[i + 1].value.cooked}`;
+    }
+    return { text, refs };
   }
 
   function readPins(id, definitionId, obj) {
@@ -139,6 +216,11 @@ export function parseFlowSource(source, opts = {}) {
         continue;
       }
       node.inputs[key] = text;
+      // 自定义槽的类型代码里没别处写，只能从字面量的种类看出来。记下来，`irToGraph`
+      // 才能把槽建成 bool，写回时也才知道该写 `true` 而不是 `"true"`。
+      if (isCustom && prop.value.type === "Literal" && typeof prop.value.value === "boolean") {
+        node.inputTypes[key] = "bool";
+      }
       if (isCustom) node.extraIn.push(key);
     }
   }
@@ -222,7 +304,16 @@ export function parseFlowSource(source, opts = {}) {
       const definitionId = pkg
         ? (pkg.baseDefinitionId || pkg.definitionId || `pkg:${pkg.specifier}`)
         : definitionIdFromApi(path);
-      nodes[id] = { definitionId, inputs: {}, outputs: {}, extraIn: [], extraOut: [], declaredOut: [], attrs: {} };
+      nodes[id] = {
+        definitionId,
+        inputs: {},
+        inputTypes: {},
+        outputs: {},
+        extraIn: [],
+        extraOut: [],
+        declaredOut: [],
+        attrs: {},
+      };
       if (label) nodes[id].label = label;
       if (pkg) {
         nodes[id].package = pkg.specifier;
@@ -256,8 +347,34 @@ export function parseFlowSource(source, opts = {}) {
       if (definitionId === "control_if") {
         if (args[1]) pendingIf.push({ id, slot: "next1", call: args[1] });
         if (args[2]) pendingIf.push({ id, slot: "next2", call: args[2] });
-      } else {
-        const body = stringOf(args[1]);
+      } else if (args[1]) {
+        let body = stringOf(args[1]);
+        if (body === null) {
+          const interp = interpolatedOf(id, args[1], definitionId);
+          if (interp?.error) {
+            unresolvedAt(interp.node, interp.error);
+          } else if (interp) {
+            body = interp.text;
+            for (const ref of interp.refs) {
+              // 插值引用的槽和显式写在引脚对象里的槽撞了：两者会争同一个槽，谁赢取决于
+              // 解析顺序。不猜，报出来让作者改名。
+              const clash = nodes[id].inputs[ref.slot] !== undefined
+                || edges.some((e) => e.endsWith(`|${id}|${ref.slot}`) && !e.startsWith(`${ref.src}|${ref.srcSlot}|`));
+              if (clash) {
+                unresolvedAt(args[1], `${id}.${ref.slot}: 模板插值要占用的槽已经在引脚对象里写过了`);
+                continue;
+              }
+              edges.push(`${ref.src}|${ref.srcSlot}|${id}|${ref.slot}`);
+              if (!STD_SLOTS.has(ref.slot) && !definitionOf(definitionId).input.some((s) => s.name === ref.slot)) {
+                nodes[id].extraIn.push(ref.slot);
+              }
+            }
+          } else {
+            // 以前这里是 `if (body !== null)` 静默跳过：正文读不出来就整段消失，
+            // 保存一次磁盘上就真没了。读不懂必须记账。
+            unresolvedAt(args[1], `${id}: 正文既不是字符串字面量、file(...) 也不是模板插值`);
+          }
+        }
         if (body !== null) {
           if (definitionId === "tool_nodejs") nodes[id].script = body;
           else nodes[id].body = body;
@@ -287,6 +404,7 @@ export function parseFlowSource(source, opts = {}) {
     nodes[run.id] = {
       definitionId: run.definitionId,
       inputs: {},
+      inputTypes: {},
       outputs: {},
       extraIn: [],
       extraOut: [],

@@ -38,6 +38,20 @@ function literal(value) {
   return "`" + text.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${") + "`";
 }
 
+/**
+ * 把正文写成模板字符串，`folds` 里的占位符还原成 JS 插值。
+ *
+ * 没被折叠的 `${...}` 一律转义成 `\${...}`——那是运行时自己要解析的占位符，不是 JS 表达式。
+ */
+function interpolatedLiteral(text, folds) {
+  const escape = (s) => s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+  const parts = String(text ?? "").split(/(\$\{[A-Za-z_][A-Za-z0-9_-]*\})/);
+  return `\`${parts.map((part) => {
+    const m = /^\$\{([A-Za-z_][A-Za-z0-9_-]*)\}$/.exec(part);
+    return m && folds.has(m[1]) ? `\${${folds.get(m[1])}}` : escape(part);
+  }).join("")}\``;
+}
+
 function displayFileExt(kind) {
   return { html: "html", chart: "json", table: "json", mermaid: "mmd", ascii: "txt", react: "json" }[kind] || "md";
 }
@@ -122,16 +136,59 @@ export function generateFlowSource(ir, opts = {}) {
   }
   const callee = (id) => bindingOf.get(id)?.name || apiName(N[id].definitionId);
 
-  function pinsObject(id) {
+  const bodyTextOf = (id) => String(
+    (N[id].definitionId === "tool_nodejs" && N[id].script) ? N[id].script : (N[id].body || ""),
+  );
+
+  /**
+   * 正文里的 `${slot}` 占位符能写回成 JS 插值的那些槽。
+   *
+   * 条件很紧：引用表达式的**根标识符**必须和槽名一致。`{ date: date.value }` + 正文
+   * `${date}` 可以折叠成 `` `${date.value}` ``；而 `{ d: date.value }` 不行——解析器只能
+   * 从 `${date.value}` 推出槽名 `date`，折叠了就往返不回来。
+   */
+  function bodyFolds(id) {
+    const text = bodyTextOf(id);
+    // 正文超阈值会被外置成文件，文件里没有 JS 插值这回事
+    if (!text || text.length >= EXTERNALIZE_MIN) return new Map();
+    const folds = new Map();
+    for (const x of dataIn.get(id) || []) {
+      if (!text.includes(`\${${x.slot}}`)) continue;
+      const ref = outVar.get(`${x.from}|${x.fromSlot}`) || `${x.from}.${x.fromSlot}`;
+      if (ref.split(".")[0] !== x.slot) continue;
+      folds.set(x.slot, ref);
+    }
+    return folds;
+  }
+
+  const pkgSlots = (id, kind) => (opts.packages?.[id]?.[kind] || []);
+  const slotTypeOf = (id, name) => {
+    const node = N[id];
+    const fromPkg = pkgSlots(id, "input").find((s) => s?.name === name);
+    if (fromPkg?.type) return String(fromPkg.type);
+    const fromDef = definitionOf(node.definitionId).input.find((s) => s.name === name);
+    if (fromDef?.type) return String(fromDef.type);
+    return String(node.inputTypes?.[name] || "text");
+  };
+  /** bool 槽写回成裸 `true` / `false`；其余一律是文本。 */
+  const pinValue = (id, name, value) => {
+    const text = String(value);
+    if (slotTypeOf(id, name) === "bool" && (text === "true" || text === "false")) return text;
+    return textArg(id, name, text);
+  };
+
+  function pinsObject(id, folds = new Map()) {
     const node = N[id];
     const def = definitionOf(node.definitionId);
     const lines = [];
-    const wired = new Map((dataIn.get(id) || []).map((x) => [x.slot, x]));
+    const wired = new Map((dataIn.get(id) || []).filter((x) => !folds.has(x.slot)).map((x) => [x.slot, x]));
     const order = [...def.input.map((s) => s.name).filter((n) => !CTRL_SLOTS.has(n)), ...node.extraIn];
     const seen = new Set();
     for (const name of order) {
       if (seen.has(name)) continue;
       seen.add(name);
+      // 已经折进正文插值里的槽不再出现在引脚对象里；写两遍等于同一条边写两次
+      if (folds.has(name)) continue;
       const key = isIdentifier(name) ? name : JSON.stringify(name);
       if (wired.has(name)) {
         const x = wired.get(name);
@@ -139,14 +196,14 @@ export function generateFlowSource(ir, opts = {}) {
         continue;
       }
       if (node.inputs[name] !== undefined) {
-        lines.push(`${key}: ${textArg(id, name, String(node.inputs[name]))}`);
+        lines.push(`${key}: ${pinValue(id, name, node.inputs[name])}`);
         continue;
       }
       // 声明了但没接线也没默认值的自定义槽写成 null，否则解析回来会丢掉这个槽
       if (node.extraIn.includes(name)) lines.push(`${key}: null`);
     }
     for (const [name, value] of Object.entries(node.inputs)) {
-      if (!seen.has(name)) lines.push(`${name}: ${textArg(id, name, String(value))}`);
+      if (!seen.has(name) && !folds.has(name)) lines.push(`${name}: ${pinValue(id, name, value)}`);
     }
     if (isProvideDefinition(node.definitionId)) {
       for (const [name, value] of Object.entries(node.outputs)) {
@@ -196,9 +253,10 @@ export function generateFlowSource(ir, opts = {}) {
     for (const dep of dataIn.get(id) || []) if (!declared.has(dep.from)) declare(dep.from, true);
 
     const node = N[id];
+    const folds = isIf(id) ? new Map() : bodyFolds(id);
     const args = [];
     if (node.label) args.push(literal(node.label));
-    args.push(pinsObject(id));
+    args.push(pinsObject(id, folds));
 
     if (isIf(id)) {
       const thenIds = (controlNext.get(id) || []).filter((x) => x.slot === "next1").map((x) => x.to);
@@ -208,7 +266,11 @@ export function generateFlowSource(ir, opts = {}) {
     } else {
       const usesScript = node.definitionId === "tool_nodejs" && node.script;
       const body = usesScript ? node.script : node.body;
-      if (body) args.push(textArg(id, usesScript ? "$script" : "$body", String(body)));
+      if (body) {
+        args.push(folds.size
+          ? interpolatedLiteral(body, folds)
+          : textArg(id, usesScript ? "$script" : "$body", String(body)));
+      }
     }
 
     out.push(`${exported ? "export " : ""}const ${id} = ${callee(id)}(${args.join(", ")});\n`);
