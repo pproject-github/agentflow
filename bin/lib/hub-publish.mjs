@@ -6,10 +6,11 @@
  */
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
 import chalk from "chalk";
+import { zipSync } from "fflate";
 import yaml from "js-yaml";
 import { log } from "./log.mjs";
+import { isRuntimeArtifactPath } from "./workspace-flow-store.mjs";
 import {
   getStoredSession,
   getUserProfile,
@@ -20,6 +21,32 @@ import {
   deleteStorageObject,
 } from "./hub.mjs";
 import { getFlowDir } from "./workspace.mjs";
+
+/**
+ * 打包时要带上的文件。
+ *
+ * 排掉两类：点文件（.git、.DS_Store 之类），以及**运行产物**——`workspace.state.json`
+ * 和 `nodes/<id>/history.md` 装的是上一次运行的真实产出，发布一张流程图不该顺手把内网
+ * 业务内容一起发出去。
+ *
+ * 用 fflate 在进程内打包，不再 shell 出去调 `zip`：那个二进制不是每台机器都有，而且
+ * 拼命令行意味着目录名里的引号能改写命令。
+ */
+export function collectPublishableFlowFiles(flowDir) {
+  const root = path.resolve(flowDir);
+  const out = [];
+  const walk = (dir, prefix) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name.startsWith(".")) continue;
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(abs, rel);
+      else if (entry.isFile() && !isRuntimeArtifactPath(rel)) out.push({ rel, abs });
+    }
+  };
+  walk(root, "");
+  return out;
+}
 
 function slugify(text) {
   return text
@@ -90,9 +117,8 @@ export async function hubPublish(workspaceRoot, argv) {
   const description = descOpt || flowDesc || null;
   const tags = tagsOpt ? tagsOpt.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
-  // Check if flow directory has scripts/ or other files beyond flow.yaml
-  const entries = fs.readdirSync(flowDir);
-  const hasExtras = entries.some((e) => e !== "flow.yaml" && e !== ".DS_Store");
+  const packaged = collectPublishableFlowFiles(flowDir);
+  const hasExtras = packaged.some((entry) => entry.rel !== "flow.yaml");
 
   // Check if this author already published a flow with this title — update instead of insert.
   const existing = await findFlowByAuthorAndTitle(session.access_token, user.id, title);
@@ -103,15 +129,11 @@ export async function hubPublish(workspaceRoot, argv) {
   fileKey = `${user.id}/${slug}${ext}`;
 
   if (hasExtras) {
-    log.info("Flow has scripts/extras — creating zip...");
-    const zipPath = path.join(flowDir, ".hub-upload.zip");
-    try {
-      execSync(`cd "${flowDir}" && zip -r "${zipPath}" . -x ".*"`, { stdio: "pipe" });
-      fileBuffer = fs.readFileSync(zipPath);
-      contentType = "application/zip";
-    } finally {
-      try { fs.unlinkSync(zipPath); } catch {}
-    }
+    log.info(`Flow has scripts/extras — creating zip (${packaged.length} files)...`);
+    fileBuffer = Buffer.from(zipSync(Object.fromEntries(
+      packaged.map((entry) => [entry.rel, new Uint8Array(fs.readFileSync(entry.abs))]),
+    ), { level: 6 }));
+    contentType = "application/zip";
   } else {
     fileBuffer = Buffer.from(yamlContent, "utf8");
     contentType = "text/yaml";

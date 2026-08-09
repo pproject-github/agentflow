@@ -579,6 +579,33 @@ export async function main() {
           ", or builtin)",
       );
     }
+    // Workspace 图归 flow dsl lint 管。validate-flow.mjs 校验的是 flow.yaml，而 Workspace
+    // 流程的 flow.yaml 只是个空壳，让它去校验只会得到「必须包含 instances 且至少一个节点」
+    // 这种必然失败的结论。
+    const { lintWorkspaceFlowDir } = await import("./flow-dsl/cli.mjs");
+    const workspaceLint = lintWorkspaceFlowDir(flowDir);
+    if (workspaceLint.format !== "empty") {
+      if (wantJson || process.stdout.isTTY !== true) {
+        process.stdout.write(JSON.stringify({
+          ok: workspaceLint.errors.length === 0,
+          target: "workspace",
+          errors: workspaceLint.errors,
+          warnings: workspaceLint.warnings,
+        }) + "\n");
+      } else {
+        process.stdout.write(`\n${chalk.bold("校验: ")}${flowName}  ${
+          workspaceLint.errors.length ? chalk.red("✗ 未通过") : chalk.green("✓ 通过")
+        }\n`);
+        for (const e of workspaceLint.errors) process.stdout.write(`${chalk.red("  • ")}${e}\n`);
+        for (const w of workspaceLint.warnings) process.stdout.write(`${chalk.yellow("  ! ")}${w}\n`);
+        if (workspaceLint.format === "json") {
+          process.stdout.write(chalk.dim("  （这张图还是 workspace.graph.json；跑 agentflow flow dsl migrate 转成代码）\n"));
+        }
+      }
+      process.exit(workspaceLint.errors.length ? 1 : 0);
+      return;
+    }
+
     const args = [workspaceRoot, flowName, flowDir];
     if (uuidArg) args.push(uuidArg);
     const result = runNodeScript(workspaceRoot, "validate-flow.mjs", args, { captureStdout: true });

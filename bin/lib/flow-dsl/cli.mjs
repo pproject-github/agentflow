@@ -4,6 +4,7 @@
  * export / import 是互逆的，用同一套 IR，所以往返可证；lint 只读，不改任何文件。
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 import { WORKSPACE_STATE_FILENAME, mergeWorkspaceState } from "../workspace-state.mjs";
@@ -141,6 +142,42 @@ export function migrateFlowDirToDsl(flowDir) {
     degradedReason: result.degradedReason,
     externals: result.externals,
   };
+}
+
+/**
+ * 校验一个流程目录里的 Workspace 图，不管它是代码形态还是历史 JSON。
+ *
+ * 历史 JSON 的做法是先在临时目录里渲染成代码再 lint——校验的正是它迁移之后会变成的
+ * 样子，比「这份 JSON 能不能 parse」有用得多：引脚名、未知节点类型、环、fan-in 这些
+ * 问题在两种形态下都一样存在，只有代码形态能查出来。
+ *
+ * @returns {{ format: "dsl"|"json"|"empty", errors: string[], warnings: string[] }}
+ */
+export function lintWorkspaceFlowDir(flowDir) {
+  const dir = path.resolve(flowDir);
+  if (fs.existsSync(path.join(dir, FLOW_SOURCE_FILENAME))) {
+    return { format: "dsl", ...lintFlowDir(dir) };
+  }
+
+  const current = readWorkspaceGraphFiles(dir);
+  if (current.format === "empty") {
+    return { format: "empty", errors: [], warnings: ["这个流程还没有 Workspace 图"] };
+  }
+
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-lint-"));
+  try {
+    const out = graphToFlowFiles(current.graph);
+    writeFileEnsuringDir(path.join(staging, FLOW_SOURCE_FILENAME), out.source);
+    writeFileEnsuringDir(path.join(staging, FLOW_LAYOUT_FILENAME), `${JSON.stringify(out.layout, null, 2)}\n`);
+    writeFileEnsuringDir(path.join(staging, FLOW_NODES_FILENAME), `${JSON.stringify(out.nodeMeta, null, 2)}\n`);
+    for (const file of out.files) writeFileEnsuringDir(path.join(staging, file.path), file.text);
+    // 代码节点包在原目录里，不复制过去的话每个 import 都会报「节点包不存在」
+    const localNodes = path.join(dir, "nodes");
+    if (fs.existsSync(localNodes)) fs.cpSync(localNodes, path.join(staging, "nodes"), { recursive: true });
+    return { format: "json", ...lintFlowDir(staging) };
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 export { lintFlowDir };

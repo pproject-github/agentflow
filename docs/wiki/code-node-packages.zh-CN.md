@@ -38,6 +38,9 @@ export default.id: 只允许字面量，不允许 Identifier
 
 `node.yaml` 仍作为回退——已发布的老包不受影响。
 
+发布也走同一条读取路径：`agentflow marketplace publish-node <dir>` 认 `index.mjs`，不需要额外写一份
+`node.yaml`。
+
 ## 槽位
 
 `inputs` / `outputs` 是**有序映射**，槽位顺序 = 声明顺序，控制槽 `prev` / `next` 自动

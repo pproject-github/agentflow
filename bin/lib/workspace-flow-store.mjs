@@ -41,6 +41,27 @@ export { FLOW_SOURCE_FILENAME, FLOW_LAYOUT_FILENAME, FLOW_NODES_FILENAME };
 /** 外置长文本只会落在这几个目录里；清理陈旧文件时不越界。 */
 export const EXTERNAL_DIRS = ["prompts", "docs", "scripts"];
 
+/**
+ * 流程目录里由运行产生、不属于流程本身的文件（相对路径 glob）。
+ *
+ * 分享 / 发布一张流程图时必须排掉：这些文件每跑一次就变一次，而且装的是上一次运行的
+ * 真实产出——业务数据、接口返回、agent 写的正文。把它们打进 Hub 包等于顺手把内网内容
+ * 发出去。判断只看路径，不看内容，所以调用方不需要读文件。
+ */
+export const RUNTIME_ARTIFACT_GLOBS = [
+  WORKSPACE_STATE_FILENAME,
+  "nodes/*/history.md",
+];
+
+/** 相对路径是不是运行产物。`glob` 里只支持单层 `*`，够用且不会误伤。 */
+export function isRuntimeArtifactPath(relPath) {
+  const rel = String(relPath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  return RUNTIME_ARTIFACT_GLOBS.some((glob) => {
+    const pattern = new RegExp(`^${glob.split("*").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")}$`);
+    return pattern.test(rel);
+  });
+}
+
 /** 三个结构文件——文件浏览器里当作机器产物处理。 */
 export const WORKSPACE_DESIGN_FILENAMES = [
   FLOW_SOURCE_FILENAME,

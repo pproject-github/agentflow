@@ -9,7 +9,7 @@ import {
   PIPELINES_DIR,
   getUserPipelinesRoot,
 } from "./paths.mjs";
-import { isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
+import { NODE_PACKAGE_ENTRY, isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
@@ -601,9 +601,12 @@ export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData, opts 
 
 export function publishNodePackage(workspaceRoot, sourceDir) {
   const src = path.resolve(sourceDir);
-  const manifestPath = path.join(src, NODE_MANIFEST);
-  const manifest = normalizeManifest(readYamlObject(manifestPath), src);
-  if (!manifest) return { ok: false, error: `Invalid node package manifest: ${manifestPath}` };
+  // 走和读取同一条路径：`index.mjs` 的静态声明优先，回落 `node.yaml`。只认后者的话，
+  // 一个目录扫描、面板、运行时都跑得通的 index.mjs 包偏偏发布不出去。
+  const manifest = normalizeManifest(readNodeManifestRaw(src), src);
+  if (!manifest) {
+    return { ok: false, error: `Invalid node package manifest: ${src} 里既没有可解析的 ${NODE_PACKAGE_ENTRY}，也没有 ${NODE_MANIFEST}` };
+  }
   const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", manifest.id, manifest.version);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });

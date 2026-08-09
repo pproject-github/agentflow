@@ -42,6 +42,9 @@ palette.
 
 `node.yaml` still works as a fallback, so already-published packages are unaffected.
 
+Publishing reads the manifest the same way: `agentflow marketplace publish-node <dir>` accepts an
+`index.mjs` package, with no separate `node.yaml` to keep in sync.
+
 ## Slots
 
 `inputs` / `outputs` are **ordered maps**: slot order equals declaration order, with the
