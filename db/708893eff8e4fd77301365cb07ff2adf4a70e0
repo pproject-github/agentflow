@@ -1,0 +1,49 @@
+bin/lib/main.mjs
+  s_0475a63dba5f18::t_cb699385aa9359 582-608
+test/flow-packaging-and-validate.test.mjs
+  s_0475a63dba5f18::t_a401ed232d18c0 1-5,7,10-74,76-77,79,81-87,90-95,97,99,101-131,137-144,147-159,184
+  s_0475a63dba5f18::t_13f2eaf3034134 6,8-9,75,78,80,88-89,96,98,100,132-136
+  s_0475a63dba5f18::t_0208673f684af9 145-146,160-183
+docs/wiki/code-node-packages.zh-CN.md
+  s_0475a63dba5f18::t_c389bf4ea24729 42-43
+  s_0475a63dba5f18::t_1150a3ebdc3823 41
+docs/wiki/code-node-packages.en.md
+  s_0475a63dba5f18::t_c389bf4ea24729 46-47
+  s_0475a63dba5f18::t_1150a3ebdc3823 45
+bin/lib/hub-publish.mjs
+  s_0475a63dba5f18::t_13f2eaf3034134 35
+  s_0475a63dba5f18::t_dc841f624ecbb7 10,13,25-28,30-34,36-49
+  s_0475a63dba5f18::t_dee8ed36d623f2 29
+  s_0475a63dba5f18::t_63d927887fa906 120-121,132-136
+  s_0475a63dba5f18::t_0f133c306a4e27 50
+bin/lib/marketplace.mjs
+  s_0475a63dba5f18::t_ae7c386ea9a8cc 604-609
+  s_0475a63dba5f18::t_8be4e99552fde3 12
+bin/lib/workspace-flow-store.mjs
+  s_0475a63dba5f18::t_1031f0eace0eed 44-64
+bin/lib/flow-dsl/cli.mjs
+  s_0475a63dba5f18::t_0d66a085266510 147-180,182
+  s_0475a63dba5f18::t_b0f7612197eb34 7
+  s_0475a63dba5f18::t_49d5ae4d6a1c8c 145-146
+CLAUDE.md
+  s_0475a63dba5f18::t_0fef2cfc305902 43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "db708893eff8e4fd77301365cb07ff2adf4a70e0",
+  "prompts": {},
+  "logical_commit_id": "db708893eff8e4fd77301365cb07ff2adf4a70e0",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 5107,
+      "total_deletions": 571
+    }
+  }
+}
