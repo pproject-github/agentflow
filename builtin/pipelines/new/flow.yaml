@@ -1,7 +1,0 @@
-# 这个文件只剩两个作用：让流程目录被 catalog 认出来，以及给列表提供 ui.description。
-# 图结构在 workspace.flow.js 里，Start/End Pipeline 执行栈已经退休。
-instances: {}
-edges: []
-ui:
-  nodePositions: {}
-  description: 新建流程（规划 → 人工确认 → 生成 workspace.flow.js → lint 修复）

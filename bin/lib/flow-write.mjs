@@ -13,9 +13,11 @@ import {
   getUserPipelinesRoot,
   LEGACY_PIPELINES_DIR,
   PIPELINES_DIR,
+  isFlowDir,
 } from "./paths.mjs";
-import { getFlowYamlAbs } from "./catalog-flows.mjs";
+import { resolveFlowDirAbs } from "./catalog-flows.mjs";
 import { normalizeFlowYamlText } from "./flow-normalize.mjs";
+import { writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
 
 export const FLOW_YAML_FILENAME = "flow.yaml";
 
@@ -83,7 +85,7 @@ function resolveExistingWorkspaceFlowDir(workspaceRoot, flowId) {
   const root = path.resolve(workspaceRoot);
   for (const rel of [PIPELINES_DIR, LEGACY_PIPELINES_DIR]) {
     const d = path.join(root, rel, flowId);
-    if (fs.existsSync(path.join(d, FLOW_YAML_FILENAME))) return d;
+    if (isFlowDir(d)) return d;
   }
   return null;
 }
@@ -187,6 +189,40 @@ export function resolveArchivedFlowDirForWrite(workspaceRoot, flowId, flowSource
 }
 
 /**
+ * 新建一个空流程：目录 + 空的 `workspace.flow.js` + 承载说明的 `workspace.layout.json`。
+ *
+ * 以前新建流程写的是一个空 `flow.yaml`——那个格式的执行栈早就退休了，写它纯粹是因为
+ * 目录识别和列表说明当时只认它。两件事现在都不依赖 yaml 了（见 paths.mjs 的 `isFlowDir`
+ * 和 catalog-flows 的 `readPipelineListDescription`），所以新流程生下来就是代码。
+ *
+ * @param {string} workspaceRoot
+ * @param {string} flowId
+ * @param {FlowWriteSource} flowSource
+ * @param {{ description?: string, userId?: string }} [opts]
+ * @returns {{ success: true, flowDir: string } | { success: false, error: string }}
+ */
+export function createEmptyFlow(workspaceRoot, flowId, flowSource, opts = {}) {
+  const { flowDir, error } = resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
+  if (error) return { success: false, error };
+  const description = String(opts.description || "").trim();
+  try {
+    fs.mkdirSync(flowDir, { recursive: true });
+    const result = writeWorkspaceGraphFiles(flowDir, {
+      version: 1,
+      instances: {},
+      edges: [],
+      ui: { nodePositions: {}, ...(description ? { description } : {}) },
+    });
+    if (result.format !== "dsl") {
+      return { success: false, error: `新建流程没能写成代码：${result.degradedReason || "未知原因"}` };
+    }
+    return { success: true, flowDir };
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) };
+  }
+}
+
+/**
  * @param {string} workspaceRoot
  * @param {string} flowId
  * @param {FlowWriteSource} flowSource
@@ -221,11 +257,11 @@ export function archiveFlowPipeline(workspaceRoot, flowId, flowSource, opts = {}
   if (flowSource !== "user" && flowSource !== "workspace") {
     return { success: false, error: "仅支持用户目录或工作区流水线归档" };
   }
-  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived: false, userId: opts.userId });
-  if (yamlRes.error || !yamlRes.path) {
-    return { success: false, error: yamlRes.error || "找不到流水线" };
+  const dirRes = resolveFlowDirAbs(workspaceRoot, flowId, flowSource, { archived: false, userId: opts.userId });
+  if (dirRes.error || !dirRes.dir) {
+    return { success: false, error: dirRes.error || "找不到流水线" };
   }
-  const fromDir = path.dirname(yamlRes.path);
+  const fromDir = dirRes.dir;
   const sep = path.sep;
   if (fromDir.split(sep).includes(ARCHIVED_PIPELINES_DIR_NAME)) {
     return { success: false, error: "该流水线已在归档目录中" };
@@ -266,7 +302,7 @@ export function restoreArchivedFlowPipeline(workspaceRoot, flowId, flowSource, o
     return { success: false, error: archivedRes.error || "无法解析归档路径" };
   }
   const fromDir = archivedRes.flowDir;
-  if (!fs.existsSync(path.join(fromDir, FLOW_YAML_FILENAME))) {
+  if (!isFlowDir(fromDir)) {
     return { success: false, error: "找不到归档流水线" };
   }
   const activeRes = resolveFlowDirForWrite(workspaceRoot, flowId, flowSource, opts);
@@ -317,7 +353,7 @@ export function moveFlowDirectory(workspaceRoot, flowId, fromSource, toSource, o
   const toRes = resolveFlowDirForWrite(workspaceRoot, flowId, toSource, opts);
   if (toRes.error || !toRes.flowDir) return { success: false, error: toRes.error || "invalid target path" };
   const toDir = toRes.flowDir;
-  if (!fs.existsSync(path.join(fromDir, FLOW_YAML_FILENAME))) {
+  if (!isFlowDir(fromDir)) {
     return { success: false, error: "source flow not found" };
   }
   if (fs.existsSync(toDir)) {
@@ -417,11 +453,11 @@ export function deleteFlowPipeline(workspaceRoot, flowId, flowSource, opts = {})
     return { success: false, error: "invalid flowId" };
   }
   const archived = Boolean(opts.archived);
-  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, { archived, userId: opts.userId });
-  if (yamlRes.error || !yamlRes.path) {
-    return { success: false, error: yamlRes.error || "找不到流水线" };
+  const dirRes = resolveFlowDirAbs(workspaceRoot, flowId, flowSource, { archived, userId: opts.userId });
+  if (dirRes.error || !dirRes.dir) {
+    return { success: false, error: dirRes.error || "找不到流水线" };
   }
-  const flowDir = path.dirname(yamlRes.path);
+  const flowDir = dirRes.dir;
   const guard = assertFlowDirIsSafeToDelete(flowDir, workspaceRoot, flowSource, flowId, opts);
   if (!guard.ok) return { success: false, error: guard.error };
   try {

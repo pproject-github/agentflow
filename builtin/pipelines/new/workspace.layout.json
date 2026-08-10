@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "description": "新建流程（规划 → 人工确认 → 生成 workspace.flow.js → lint 修复）",
   "nodes": {
     "flowId": {
       "x": 80,

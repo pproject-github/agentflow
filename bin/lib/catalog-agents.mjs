@@ -13,6 +13,7 @@ import {
   getUserAgentsDirAbs,
   getUserAgentsJsonAbs,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
 import { Table } from "./table.mjs";
 
@@ -283,7 +284,7 @@ export function copyBuiltinJson(workspaceRoot, flowId, targetFlowId, opts = {}) 
   const srcDir = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId);
   const pipelinesRoot = getUserPipelinesRoot(opts.userId);
   const destDir = path.join(pipelinesRoot, destId);
-  if (!fs.existsSync(srcDir) || !fs.existsSync(path.join(srcDir, "flow.yaml"))) {
+  if (!fs.existsSync(srcDir) || !isFlowDir(srcDir)) {
     return { success: false, error: t("catalog.builtin_flow_not_found") };
   }
   const existing = collectPipelineNamesFromDir(pipelinesRoot);

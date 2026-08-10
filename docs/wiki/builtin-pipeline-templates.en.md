@@ -104,12 +104,12 @@ bool for the same reason. `control.agentToBool` survives only where a model genu
 judge — reading pass/fail out of prose build output — and lint raises two warnings for it.
 Those warnings are the reminder, not an error.
 
-## flow.yaml is still there, with two jobs left
+## No flow.yaml any more
 
-Whether a directory is recognised as a flow still depends on `flow.yaml` existing
-(`catalog-flows.mjs` filters subdirectories by it), and the list description is read from
-its `ui.description`. Both templates therefore keep a hollow `flow.yaml` with empty
-`instances` / `edges`.
+A template directory is now just `workspace.flow.js` + `workspace.layout.json` + `scripts/`.
 
-That is a legacy sentinel, not a design. It can go once directory detection accepts
-`workspace.flow.js`.
+For a while a hollow `flow.yaml` stayed behind, because "is this directory a flow" and "where
+does the list description come from" both hung off it. Those two are now separated: directory
+detection goes through `isFlowDir` in `paths.mjs` (any one of three marker files), and the
+description comes from `description` in `workspace.layout.json` (`ui.description` is passed
+through there by `extractLayout` on every round trip). So the shell could go.

@@ -14,6 +14,44 @@ export const PACKAGE_ROOT = path.resolve(BIN_DIR, "..");
 /** 节点执行区域分割线（开始/结束标识用） */
 export const NODE_SEP = "════════════════════════════════════════════════════════════════";
 
+/**
+ * 「这个目录是不是一个流程」的**唯一**判据。
+ *
+ * 历史上这条规则在十来处各写了一遍 `existsSync(dir + "/flow.yaml")`，于是 `flow.yaml`
+ * 从执行格式悄悄退化成了目录哨兵：内容早就是死的，存在却是承重的——没有它，目录在列表、
+ * 路径解析、复制改名里全都不存在。
+ *
+ * 顺序即权威顺序：代码 > 只读的遗留 JSON > 已退休的 flow.yaml。
+ */
+export const FLOW_MARKER_FILENAMES = ["workspace.flow.js", "workspace.graph.json", "flow.yaml"];
+
+/**
+ * 命中的标记文件绝对路径；都没有则空字符串。
+ * @param {string} dir
+ * @returns {string}
+ */
+export function flowMarkerPath(dir) {
+  const base = dir == null ? "" : String(dir).trim();
+  if (!base) return "";
+  for (const name of FLOW_MARKER_FILENAMES) {
+    const p = path.join(base, name);
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+      /* 不可读的目录当作没有 */
+    }
+  }
+  return "";
+}
+
+/**
+ * @param {string} dir
+ * @returns {boolean}
+ */
+export function isFlowDir(dir) {
+  return flowMarkerPath(dir) !== "";
+}
+
 /** agentflow 包根目录（CLI 所在包的 node_modules 用于解析脚本依赖，如 js-yaml） */
 export const PACKAGE_AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
 /** 包内 agents 元数据 JSON */
@@ -142,7 +180,7 @@ export function resolveUniqueUserPipelineDir(flowName) {
   for (const userId of listAgentflowUserIds()) {
     const dir = path.join(getAgentflowDataRoot(), "users", userId, "pipelines", name);
     try {
-      if (fs.existsSync(path.join(dir, "flow.yaml"))) matches.push(dir);
+      if (isFlowDir(dir)) matches.push(dir);
     } catch {
       /* ignore unreadable user dirs */
     }
@@ -178,11 +216,11 @@ export function getFlowRuntimeRoot(workspaceRoot, flowName, opts = {}) {
       : process.cwd();
   const userRoot = getUserPipelinesRoot(opts.userId);
   const userDir = path.join(userRoot, flowName);
-  if (fs.existsSync(path.join(userDir, "flow.yaml"))) return userDir;
+  if (isFlowDir(userDir)) return userDir;
   const inferredUserDir = resolveUniqueUserPipelineDir(flowName);
   if (inferredUserDir) return inferredUserDir;
   const wsDir = path.join(root, PIPELINES_DIR, flowName);
-  if (fs.existsSync(path.join(wsDir, "flow.yaml"))) return wsDir;
+  if (isFlowDir(wsDir)) return wsDir;
   // builtin / legacy / 尚未落盘 → 默认 user 目录，runBuild 首次写入时创建
   return userDir;
 }

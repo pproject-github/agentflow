@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "description": "模块迁移（定范围 → 人工确认 → 建模块 → 迁移 → 静态检查 → 编译修复 → 出文档）",
   "nodes": {
     "moduleName": {
       "x": 80,

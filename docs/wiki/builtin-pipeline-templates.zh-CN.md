@@ -91,10 +91,11 @@ module-migrate 里 `scripts/gate.mjs` 把脚本判定和 AI 判定合成一个 b
 `control.agentToBool` 决定流程走向。只有「从一段散文里判断编译过没过」这种真需要模型的
 地方才留了 `control.agentToBool`，lint 会为它报两条 warning——那是提醒，不是错误。
 
-## flow.yaml 还在，但只剩两个作用
+## 不再带 flow.yaml
 
-流程目录能不能被 catalog 认出来仍然取决于 `flow.yaml` 是否存在
-（`catalog-flows.mjs` 按它过滤子目录），列表里的说明也读它的 `ui.description`。所以两个
-模板保留了一个空壳 `flow.yaml`，里面 `instances` / `edges` 都是空的。
+模板目录现在只有 `workspace.flow.js` + `workspace.layout.json` + `scripts/`。
 
-这是遗留哨兵，不是设计。等目录识别改成认 `workspace.flow.js` 之后就可以删。
+一度还留着一个空壳 `flow.yaml`——因为「目录能不能被 catalog 认出来」和「列表说明从哪读」
+当时都系在它身上。这两件事已经拆开了：目录识别走 `paths.mjs` 的 `isFlowDir`（三种标记文件
+任一即可），列表说明走 `workspace.layout.json` 的 `description`（`ui.description` 往返时由
+`extractLayout` 透传到那里）。所以空壳可以删了。

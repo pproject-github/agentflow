@@ -10,7 +10,9 @@ import chalk from "chalk";
 import { zipSync } from "fflate";
 import yaml from "js-yaml";
 import { log } from "./log.mjs";
-import { isRuntimeArtifactPath } from "./workspace-flow-store.mjs";
+import { isRuntimeArtifactPath, readWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
+import { readPipelineListDescription } from "./catalog-flows.mjs";
+import { isFlowDir } from "./paths.mjs";
 import {
   getStoredSession,
   getUserProfile,
@@ -98,20 +100,28 @@ export async function hubPublish(workspaceRoot, argv) {
     throw new Error("Flow not found: " + flowName);
   }
 
+  // Hub 的线上格式仍要求包里有 flow.yaml（下载与导入两侧都按它认包），而代码化的流程
+  // 目录里没有这个文件。这里补一个只带说明的空壳，真正的图照旧以 workspace.flow.js 发出去；
+  // 装回来时 isFlowDir 优先认代码，yaml 只是让旧的收包逻辑还能工作。
   const flowYamlPath = path.join(flowDir, "flow.yaml");
-  if (!fs.existsSync(flowYamlPath)) {
-    throw new Error("flow.yaml not found in " + flowDir);
+  const hasYaml = fs.existsSync(flowYamlPath);
+  if (!hasYaml && !isFlowDir(flowDir)) {
+    throw new Error("Not a flow directory: " + flowDir);
   }
 
-  const yamlContent = fs.readFileSync(flowYamlPath, "utf8");
-  const nodeCount = countNodes(yamlContent);
+  const yamlContent = hasYaml ? fs.readFileSync(flowYamlPath, "utf8") : "";
+  const listDescription = readPipelineListDescription(flowDir);
+  const nodeCount = hasYaml
+    ? countNodes(yamlContent)
+    : Object.keys(readWorkspaceGraphFiles(flowDir).graph?.instances || {}).length;
 
-  // Auto-read metadata from flow.yaml
-  let flowDesc = null;
-  try {
-    const doc = yaml.load(yamlContent);
-    if (doc?.ui?.description) flowDesc = doc.ui.description;
-  } catch {}
+  let flowDesc = listDescription || null;
+  if (!flowDesc && hasYaml) {
+    try {
+      const doc = yaml.load(yamlContent);
+      if (doc?.ui?.description) flowDesc = doc.ui.description;
+    } catch {}
+  }
 
   const title = titleOpt || flowName;
   const description = descOpt || flowDesc || null;
@@ -119,6 +129,10 @@ export async function hubPublish(workspaceRoot, argv) {
 
   const packaged = collectPublishableFlowFiles(flowDir);
   const hasExtras = packaged.some((entry) => entry.rel !== "flow.yaml");
+  // 包里必须有 flow.yaml：下载侧和 flow-import 都按它认包。代码化的流程目录没有，补一个。
+  const synthesizedYaml = hasYaml
+    ? ""
+    : yaml.dump({ instances: {}, edges: [], ui: { nodePositions: {}, ...(flowDesc ? { description: flowDesc } : {}) } }, { lineWidth: -1 });
 
   // Check if this author already published a flow with this title — update instead of insert.
   const existing = await findFlowByAuthorAndTitle(session.access_token, user.id, title);
@@ -130,12 +144,14 @@ export async function hubPublish(workspaceRoot, argv) {
 
   if (hasExtras) {
     log.info(`Flow has scripts/extras — creating zip (${packaged.length} files)...`);
-    fileBuffer = Buffer.from(zipSync(Object.fromEntries(
+    const entries = Object.fromEntries(
       packaged.map((entry) => [entry.rel, new Uint8Array(fs.readFileSync(entry.abs))]),
-    ), { level: 6 }));
+    );
+    if (!hasYaml) entries["flow.yaml"] = new Uint8Array(Buffer.from(synthesizedYaml, "utf8"));
+    fileBuffer = Buffer.from(zipSync(entries, { level: 6 }));
     contentType = "application/zip";
   } else {
-    fileBuffer = Buffer.from(yamlContent, "utf8");
+    fileBuffer = Buffer.from(hasYaml ? yamlContent : synthesizedYaml, "utf8");
     contentType = "text/yaml";
   }
 

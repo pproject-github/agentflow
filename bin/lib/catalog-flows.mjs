@@ -14,6 +14,7 @@ import {
   PROJECT_NODES_DIR,
   USER_AGENTFLOW_PIPELINES_LABEL,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
 import {
   readAdminBuiltinPipelineConfig,
@@ -35,28 +36,45 @@ export function collectPipelineNamesFromDir(dirPath) {
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
   return entries
     .filter((e) => e.isDirectory())
-    .filter((e) => fs.existsSync(path.join(dirPath, e.name, "flow.yaml")))
+    .filter((e) => isFlowDir(path.join(dirPath, e.name)))
     .filter((e) => !isWorkspacePreviewDir(path.join(dirPath, e.name)))
     .map((e) => e.name);
 }
 
+const trimmedOrUndefined = (value) => {
+  if (typeof value !== "string") return undefined;
+  const t = value.trim();
+  return t === "" ? undefined : t;
+};
+
 /**
- * 读取 flow.yaml 中流水线级说明（与 Web UI serialize 一致：ui.description）。
- * @param {string} flowDir 含 flow.yaml 的目录
+ * 流水线级说明（列表里那一行）。
+ *
+ * 两个来源，代码化的图优先：`ui.description` 在往返时由 `extractLayout` 透传进
+ * `workspace.layout.json` 的顶层，所以代码化的流程说明在 layout.json 里；只有 flow.yaml
+ * 的老流程还从 yaml 的 `ui.description` 读。
+ *
+ * @param {string} flowDir
  * @returns {string | undefined}
  */
 export function readPipelineListDescription(flowDir) {
+  const layoutPath = path.join(flowDir, "workspace.layout.json");
+  if (fs.existsSync(layoutPath)) {
+    try {
+      const layout = JSON.parse(fs.readFileSync(layoutPath, "utf-8"));
+      const fromLayout = trimmedOrUndefined(layout?.description);
+      if (fromLayout) return fromLayout;
+    } catch {
+      /* layout 读不动就退回 yaml */
+    }
+  }
   const yamlPath = path.join(flowDir, "flow.yaml");
   if (!fs.existsSync(yamlPath)) return undefined;
   try {
-    const raw = fs.readFileSync(yamlPath, "utf-8");
-    const data = yaml.load(raw);
+    const data = yaml.load(fs.readFileSync(yamlPath, "utf-8"));
     if (!data || typeof data !== "object") return undefined;
     const ui = data.ui && typeof data.ui === "object" ? data.ui : {};
-    const d = ui.description;
-    if (typeof d !== "string") return undefined;
-    const t = d.trim();
-    return t === "" ? undefined : t;
+    return trimmedOrUndefined(ui.description);
   } catch {
     return undefined;
   }
@@ -559,63 +577,79 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
 }
 
 /**
- * 解析 flow.yaml 绝对路径（与 readFlowJson 一致；user 含 workspace 回退）。
+ * 按 flowSource 列出候选目录（含 user→workspace→legacy 的历史回退顺序）。
+ * @returns {{ dirs: string[] } | { error: string }}
+ */
+function flowDirCandidates(workspaceRoot, flowId, flowSource, options = {}) {
+  const root = path.resolve(workspaceRoot);
+  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
+  if (Boolean(options.archived)) {
+    if (flowSource === "builtin") return { error: t("catalog.builtin_flow_archive_path_not_supported") };
+    if (flowSource === "user") {
+      return { dirs: [path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId)] };
+    }
+    if (flowSource === "workspace") {
+      return {
+        dirs: [
+          path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId),
+          path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId),
+        ],
+      };
+    }
+    return { error: "Invalid flowSource" };
+  }
+  if (flowSource === "builtin") return { dirs: [path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId)] };
+  if (flowSource === "admin") {
+    const dir = resolveAdminBuiltinPipelineDir(flowId);
+    return { dirs: dir ? [dir] : [] };
+  }
+  if (flowSource === "user") {
+    return {
+      dirs: [
+        path.join(userPipelinesRoot, flowId),
+        path.join(root, PIPELINES_DIR, flowId),
+        path.join(root, LEGACY_PIPELINES_DIR, flowId),
+      ],
+    };
+  }
+  if (flowSource === "workspace") {
+    return {
+      dirs: [path.join(root, PIPELINES_DIR, flowId), path.join(root, LEGACY_PIPELINES_DIR, flowId)],
+    };
+  }
+  return { error: "Invalid flowSource" };
+}
+
+/**
+ * 解析流程目录绝对路径。
+ *
+ * 大多数调用方要的其实是**目录**，以前却只能 `path.dirname(getFlowYamlAbs().path)` —— 于是
+ * 「改个名」这种和 yaml 毫无关系的操作，也被 `flow.yaml` 是否存在卡住。目录存不存在现在由
+ * `isFlowDir` 说了算（见 paths.mjs），三种标记文件任一即可。
+ *
+ * @param {{ archived?: boolean, userId?: string }} [options]
+ * @returns {{ dir: string } | { error: string }}
+ */
+export function resolveFlowDirAbs(workspaceRoot, flowId, flowSource, options = {}) {
+  const candidates = flowDirCandidates(workspaceRoot, flowId, flowSource, options);
+  if (candidates.error) return { error: candidates.error };
+  for (const dir of candidates.dirs) {
+    if (isFlowDir(dir)) return { dir };
+  }
+  return { error: "Flow not found: " + flowId };
+}
+
+/**
+ * 解析 flow.yaml 绝对路径。**只给真的要读 yaml 内容的调用方用**；要目录请用
+ * `resolveFlowDirAbs`。
  * @param {{ archived?: boolean }} [options]
  * @returns {{ path: string } | { error: string }}
  */
 export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) {
-  const root = path.resolve(workspaceRoot);
-  const archived = Boolean(options.archived);
-  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
-  let yamlPath;
-  if (archived) {
-    if (flowSource === "builtin") {
-      return { error: t("catalog.builtin_flow_archive_path_not_supported") };
-    }
-    if (flowSource === "user") {
-      yamlPath = path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-    } else if (flowSource === "workspace") {
-      yamlPath = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-      if (!fs.existsSync(yamlPath)) {
-        const altLeg = path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-        if (fs.existsSync(altLeg)) yamlPath = altLeg;
-      }
-    } else {
-      return { error: "Invalid flowSource" };
-    }
-    if (!fs.existsSync(yamlPath)) {
-      return { error: "Flow not found: " + flowId };
-    }
-    return { path: yamlPath };
-  }
-
-  if (flowSource === "builtin") {
-    yamlPath = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "flow.yaml");
-  } else if (flowSource === "admin") {
-    const flowDir = resolveAdminBuiltinPipelineDir(flowId);
-    yamlPath = flowDir ? path.join(flowDir, "flow.yaml") : "";
-  } else if (flowSource === "user") {
-    yamlPath = path.join(userPipelinesRoot, flowId, "flow.yaml");
-    if (!fs.existsSync(yamlPath)) {
-      const alt = path.join(root, PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(alt)) yamlPath = alt;
-    }
-    if (!fs.existsSync(yamlPath)) {
-      const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(altLeg)) yamlPath = altLeg;
-    }
-  } else if (flowSource === "workspace") {
-    yamlPath = path.join(root, PIPELINES_DIR, flowId, "flow.yaml");
-    if (!fs.existsSync(yamlPath)) {
-      const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(altLeg)) yamlPath = altLeg;
-    }
-  } else {
-    return { error: "Invalid flowSource" };
-  }
-  if (!fs.existsSync(yamlPath)) {
-    return { error: "Flow not found: " + flowId };
-  }
+  const resolved = resolveFlowDirAbs(workspaceRoot, flowId, flowSource, options);
+  if (resolved.error) return { error: resolved.error };
+  const yamlPath = path.join(resolved.dir, "flow.yaml");
+  if (!fs.existsSync(yamlPath)) return { error: "Flow not found: " + flowId };
   return { path: yamlPath };
 }
 

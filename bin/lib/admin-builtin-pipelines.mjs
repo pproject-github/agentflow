@@ -3,6 +3,7 @@ import path from "path";
 import {
   getAgentflowDataRoot,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
 
 const CONFIG_FILENAME = "admin-builtin-pipelines.json";
@@ -57,7 +58,7 @@ export function resolveAdminBuiltinPipelineDir(flowId) {
   const entry = config.promoted.find((item) => item.id === id);
   if (!entry) return "";
   const dir = path.join(getUserPipelinesRoot(entry.ownerUserId), entry.id);
-  return fs.existsSync(path.join(dir, "flow.yaml")) ? dir : "";
+  return isFlowDir(dir) ? dir : "";
 }
 
 export function updateAdminBuiltinPipelineConfig(action, payload = {}, actor = {}) {
@@ -68,7 +69,7 @@ export function updateAdminBuiltinPipelineConfig(action, payload = {}, actor = {
     const ownerUserId = String(payload.ownerUserId || actor.userId || "").trim();
     if (!ownerUserId) return { ok: false, error: "Missing ownerUserId" };
     const dir = path.join(getUserPipelinesRoot(ownerUserId), flowId);
-    if (!fs.existsSync(path.join(dir, "flow.yaml"))) return { ok: false, error: "Pipeline not found" };
+    if (!isFlowDir(dir)) return { ok: false, error: "Pipeline not found" };
     const promoted = config.promoted.filter((item) => item.id !== flowId);
     promoted.unshift({
       id: flowId,

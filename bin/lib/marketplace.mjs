@@ -8,6 +8,7 @@ import {
   MARKETPLACE_PACKAGES_DIR,
   PIPELINES_DIR,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
 import { NODE_PACKAGE_ENTRY, isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
 
@@ -201,7 +202,7 @@ function collectFlowDirs(rootDir, source, archived = false) {
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === ARCHIVED_PIPELINES_DIR_NAME) continue;
     const dir = path.join(rootDir, entry.name);
-    if (!fs.existsSync(path.join(dir, "flow.yaml"))) continue;
+    if (!isFlowDir(dir)) continue;
     out.push({ flowId: entry.name, flowSource: source, archived, flowDir: dir });
   }
   return out;

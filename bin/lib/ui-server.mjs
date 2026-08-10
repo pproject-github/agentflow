@@ -17,6 +17,7 @@ import sharp from "sharp";
 import { log } from "./log.mjs";
 import {
   getFlowYamlAbs,
+  resolveFlowDirAbs,
   listFlowsJson,
   listNodesJson,
   readFlowJson,
@@ -26,7 +27,7 @@ import {
 import {
   FLOW_YAML_FILENAME,
   archiveFlowPipeline,
-  buildEmptyUserFlowYaml,
+  createEmptyFlow,
   deleteFlowPipeline,
   moveFlowDirectory,
   resolveFlowDirForWrite,
@@ -48,6 +49,7 @@ import {
   listAgentflowUserIds,
   getModelListsAbs,
   getRunDir,
+  isFlowDir,
 } from "./paths.mjs";
 import {
   loadResourcesForSkillKeys,
@@ -2404,7 +2406,7 @@ function countFlowYamlDirs(root) {
     return fs.readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .filter((entry) => entry.name !== ARCHIVED_PIPELINES_DIR_NAME)
-      .filter((entry) => fs.existsSync(path.join(root, entry.name, FLOW_YAML_FILENAME)))
+      .filter((entry) => isFlowDir(path.join(root, entry.name)))
       .length;
   } catch {
     return 0;
@@ -16957,8 +16959,7 @@ export function startUiServer({
           json(res, 409, { error: "已存在同名流水线，请换一个名称" });
           return;
         }
-        const flowYaml = buildEmptyUserFlowYaml({ description: desc });
-        const result = writeFlowYaml(root, flowId, targetSpace, flowYaml, userCtx);
+        const result = createEmptyFlow(root, flowId, targetSpace, { ...userCtx, description: desc });
         if (!result.success) {
           json(res, 400, result);
           return;
@@ -17542,7 +17543,6 @@ export function startUiServer({
       };
       try {
         fs.mkdirSync(flowDir, { recursive: true });
-        fs.writeFileSync(path.join(flowDir, "flow.yaml"), "instances: {}\nedges: []\n", "utf8");
         writeWorkspaceGraph(flowDir, graph);
         writeWorkspacePreviewMetadata(flowDir, metadata);
       } catch (e) {
@@ -20237,12 +20237,12 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 200, { success: true, flowId, flowSource });
         return;
       }
-      const yamlRes = getFlowYamlAbs(root, flowId, flowSource, { archived: false, ...userCtx });
-      if (yamlRes.error || !yamlRes.path) {
-        json(res, 404, { error: yamlRes.error || "找不到流水线" });
+      const dirRes = resolveFlowDirAbs(root, flowId, flowSource, { archived: false, ...userCtx });
+      if (dirRes.error || !dirRes.dir) {
+        json(res, 404, { error: dirRes.error || "找不到流水线" });
         return;
       }
-      const fromDir = path.dirname(yamlRes.path);
+      const fromDir = dirRes.dir;
       const toDir = path.join(path.dirname(fromDir), validation.flowId);
       if (fs.existsSync(toDir)) {
         json(res, 409, { error: "目标名称已存在" });

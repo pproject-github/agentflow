@@ -6,6 +6,7 @@ import {
   getAgentflowDataRoot,
   getUserPipelinesRoot,
   sanitizeAgentflowUserId,
+  isFlowDir,
 } from "./paths.mjs";
 
 const SESSION_COOKIE = "af_session";
@@ -229,7 +230,7 @@ function listFlowDirs(root) {
     return fs.readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .filter((entry) => entry.name !== ARCHIVED_PIPELINES_DIR_NAME)
-      .filter((entry) => fs.existsSync(path.join(root, entry.name, "flow.yaml")))
+      .filter((entry) => isFlowDir(path.join(root, entry.name)))
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b));
   } catch {

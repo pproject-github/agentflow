@@ -11,9 +11,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import yaml from "js-yaml";
 
 import { DEFINITIONS, definitionOf } from "../bin/lib/flow-dsl/defs.mjs";
+import { isFlowDir } from "../bin/lib/paths.mjs";
+import { readPipelineListDescription } from "../bin/lib/catalog-flows.mjs";
 import { lintFlowDir } from "../bin/lib/flow-dsl/lint.mjs";
 import { readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "../bin/lib/workspace-flow-store.mjs";
 
@@ -21,7 +22,7 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const PIPELINES = path.join(ROOT, "builtin", "pipelines");
 
 const templates = fs.readdirSync(PIPELINES, { withFileTypes: true })
-  .filter((e) => e.isDirectory() && fs.existsSync(path.join(PIPELINES, e.name, "flow.yaml")))
+  .filter((e) => e.isDirectory() && isFlowDir(path.join(PIPELINES, e.name)))
   .map((e) => e.name);
 
 test("能找到内置模板（找不到说明这套断言在空转）", () => {
@@ -68,13 +69,11 @@ for (const name of templates) {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  test(`${name}: flow.yaml 只当哨兵用，不再带图`, () => {
-    // 目录能不能被 catalog 认出来仍然取决于 flow.yaml，列表说明也从这里读；
-    // 但里面不该再有第二份图，否则两边会各说各话
-    const doc = yaml.load(fs.readFileSync(path.join(dir, "flow.yaml"), "utf-8")) || {};
-    assert.deepEqual(doc.instances || {}, {}, "图在 workspace.flow.js 里，flow.yaml 不该再有 instances");
-    assert.deepEqual(doc.edges || [], []);
-    assert.ok(String(doc.ui?.description || "").trim(), "列表说明读的是 ui.description，不能空");
+  test(`${name}: 不再带 flow.yaml，列表说明来自 layout`, () => {
+    // 目录识别和列表说明都不再经过 yaml（见 flow-dir-marker.test.mjs），
+    // 留着一个空壳只会让人以为那里还有一份图
+    assert.ok(!fs.existsSync(path.join(dir, "flow.yaml")), "退休的格式不该继续躺在模板里");
+    assert.ok(String(readPipelineListDescription(dir) || "").trim(), "列表里那一行说明不能空");
   });
 
   test(`${name}: 节点在画布上不会堆成一坨`, () => {
