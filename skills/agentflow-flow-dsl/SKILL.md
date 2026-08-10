@@ -77,11 +77,24 @@ const gate = control.if("是否通过", { prediction: ok.prediction },  // 分�
 );
 export const run2 = flow("Run", review, ok, gate);
 
-export const run3 = flow("Run", build, flow.fork(flow(testA), flow(testB, report)));  // 并行
+export const run3 = flow("Run", build, flow.fork(flow(testA), flow(testB, report)));  // 控制边扇出
 
 flow.resume(showPlan, stage2);          // 闸门：跑到这停，人点第二个 run 才继续
 flow.detached(draftA, draftB);          // 有控制链但没 run 入口
 ```
+
+**`flow.fork` 不是并行。** 它是「一个 `next` 接多个下游」的写法——`flow(a, b, c)` 是线性的，
+没法在链里写出扇出，所以有了它。编译出来就是两条边，图里不存在 fork 这个东西：
+
+```
+build.next → testA.prev
+build.next → testB.prev
+```
+
+运行时把两条分支的节点都收进计划，然后**按拓扑序串行执行**。两个各睡 3 秒的分支跑完要
+6 秒，不是 3 秒。分支之间也没有隔离：任何一个节点失败，整个 run 就结束，另一支不会跑。
+
+用它的理由是画布结构（两件事都挂在 build 后面、互不依赖），不是省时间。
 
 **分支不能汇合**——fan-in 禁止，`control.anyOne` 运行时没实现。两条分支各自收尾。
 

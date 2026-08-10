@@ -120,6 +120,35 @@ three ways of writing "absent" (`undefined`/`null`/`""`), `role: normal` vs unse
 only, never content. All 21 production flows pass the gate; the largest takes 5.4 ms to
 save + read.
 
+## `flow.fork` is only the syntax for fan-out
+
+There is no fork in the graph. `flow(a, b, c)` is linear and cannot express "one `next` feeding
+several downstream nodes", so this syntax fills the gap:
+
+```js
+flow("Run", build, flow.fork(flow(testA), flow(testB, report)))
+```
+
+It parses into two control edges and nothing else:
+
+```
+build.next → testA.prev
+build.next → testB.prev
+```
+
+Codegen goes the other way — when a node's `next` has two or more downstream targets and it is
+not a `control_if`, it prints `flow.fork(...)`. Purely so the round trip matches.
+
+**It is not a parallelism primitive.** The runtime pulls both branches' nodes into the plan and
+executes them in topological order, **sequentially** (`for (const nodeId of order)`); two
+branches sleeping 3 seconds each take 6 seconds. There is no isolation between branches either:
+any node failing ends the whole run, and the other branch never starts.
+
+A comment in the skill used to say "parallel" — that was the single source of the false promise.
+Real concurrency means changing the scheduler: indegree-driven dispatch with a concurrency cap,
+plus handling in-place graph mutation during the run, per-node conflict detection, the abort
+path, and event ordering. A separate piece of work, unrelated to `flow.fork`.
+
 ## What lint checks
 
 | Layer | Checks |

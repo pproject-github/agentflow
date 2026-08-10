@@ -107,6 +107,33 @@ IR 走一趟，所以 `pullIfExists: true` 存回来还是 `true`，不会退化
 `role: normal` 等价于没写、以及缺省时继承定义表的 `showOnNode` / `required`——只抹平表示
 差异，不抹平内容。21 个线上流程全部通过闸门，最大的一张 save+read 5.4 ms。
 
+## `flow.fork` 只是扇出的写法
+
+图里没有 fork 这个东西。`flow(a, b, c)` 是线性的，写不出「一个 `next` 接多个下游」，所以
+补了这个语法：
+
+```js
+flow("Run", build, flow.fork(flow(testA), flow(testB, report)))
+```
+
+解析出来就是两条控制边，仅此而已：
+
+```
+build.next → testA.prev
+build.next → testB.prev
+```
+
+codegen 反过来——一个节点的 `next` 有 ≥2 个下游、且它不是 `control_if`，就打印成
+`flow.fork(...)`。纯粹为了往返能对上。
+
+**它不是并行原语。** 运行时把两条分支的节点都收进计划，然后按拓扑序**串行**执行
+（`for (const nodeId of order)`）；两个各睡 3 秒的分支跑完是 6 秒。分支之间也没有隔离：
+任何一个节点失败整个 run 就结束，另一支不会跑。
+
+skill 里那句注释一度写着「并行」，是这份文档里唯一的错误承诺来源。要真并发得改调度器
+——入度驱动 + 并发上限，还要连带处理运行中就地改写图、按节点粒度的冲突检测、中断路径
+和事件顺序。那是另一件事，和 `flow.fork` 无关。
+
 ## lint 检查什么
 
 | 层 | 检查 |
