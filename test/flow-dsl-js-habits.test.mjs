@@ -167,6 +167,51 @@ export const run = flow("Run", plan);
   assert.equal(again.instances.plan.input.find((s) => s.name === "pullIfExists").type, "bool");
 });
 
+test("两个节点各有一个同名自定义输出槽，生成的代码不能重复声明", () => {
+  // 两个 tool.nodejs 都吐 ok/report 是完全正常的图。以前 outVar 按槽名发号、不查重，
+  // 会生成两条 `const { ok } = ...`，文件解析不回来，整张图退回 JSON
+  const dir = seed(`import { control, display, flow, tool } from "agentflow/flow";
+const first = tool.nodejs("查一遍", {}, \`node check.mjs \${ok} \${report}\`);
+const { ok, report } = first;
+const second = tool.nodejs("再查一遍", {}, \`node check.mjs \${ok} \${report}\`);
+const { ok: ok2, report: report2 } = second;
+const good = display.markdown("过了", { content: report });
+const bad = display.markdown("没过", { content: report2 });
+const gate = control.if("过了吗", { prediction: ok }, flow(good), flow(bad));
+export const run = flow("Run", first, second, gate);
+`);
+  assert.deepEqual(lintFlowDir(dir).errors, []);
+  const graph = readWorkspaceGraphFiles(dir).graph;
+
+  const { source, graph: again } = saveAndReread(dir, graph);
+  const declared = [...source.matchAll(/const \{([^}]*)\} =/g)]
+    .flatMap((m) => m[1].split(",").map((s) => s.split(":").pop().trim()));
+  assert.equal(new Set(declared).size, declared.length, `解构出来的变量名重了：${declared.join(", ")}`);
+  assert.deepEqual(Object.keys(again.instances).sort(), Object.keys(graph.instances).sort());
+  assert.equal(
+    again.instances.second.output.filter((s) => s.name === "ok").length, 1,
+    "第二个节点自己的 ok 槽要还在",
+  );
+});
+
+test("折叠正文插值不能打乱自定义槽的顺序", () => {
+  // repoRoot 是第一个自定义槽，折进正文后解析回来会被追加到末尾 -> 槽序变了 -> 退回 JSON。
+  // 所以只有末尾那一段能折
+  const dir = seed(`import { flow, provide, tool } from "agentflow/flow";
+const root = provide.str("根目录", { value: "." });
+const src = provide.str("源清单", { value: "a.kt" });
+const job = tool.nodejs("检查", { repoRoot: root.value, before: src.value }, \`node c.mjs \${repoRoot} \${before} \${result}\`);
+export const run = flow("Run", job);
+`);
+  const graph = readWorkspaceGraphFiles(dir).graph;
+  const names = (g) => g.instances.job.input.map((s) => s.name);
+  assert.deepEqual(names(graph).slice(-2), ["repoRoot", "before"]);
+
+  const { source, graph: again } = saveAndReread(dir, graph);
+  assert.deepEqual(names(again), names(graph), `槽序变了：\n${source}`);
+  assert.match(source, /repoRoot: root\.value/, "repoRoot 不在末尾，只能保留显式引脚");
+});
+
 test("没有 prev/next 的节点接进控制链要报错", () => {
   // provide.* 是纯数据源。这条边在图里落不下去，往返时会无声消失
   const dir = seed(`import { agent, flow, provide } from "agentflow/flow";

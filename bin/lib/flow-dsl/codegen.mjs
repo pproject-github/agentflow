@@ -114,25 +114,34 @@ export function generateFlowSource(ir, opts = {}) {
     }),
   );
 
+  // 文件里所有顶层标识符共用一个命名空间：节点 id、解构出来的输出变量、import 绑定名。
+  // 分开发号就会撞——两个节点各有一个叫 ok 的自定义输出槽，是完全正常的图，但会生成两条
+  // `const { ok } = ...`，文件根本解析不回来。
+  const taken = new Set(Object.keys(N));
+  const uniqueName = (base, fallback) => {
+    let name = isIdentifier(base) ? base : fallback;
+    if (taken.has(name)) name = fallback;
+    while (taken.has(name)) name += "_";
+    taken.add(name);
+    return name;
+  };
+
   // 自定义输出槽通过解构暴露成变量：`const { storyId } = node;`
   const outVar = new Map();
   for (const [id, slots] of destructured) {
     for (const slot of slots) {
-      outVar.set(`${id}|${slot}`, isIdentifier(slot) ? slot : `${id}_${slot}`);
+      outVar.set(`${id}|${slot}`, uniqueName(slot, `${id}_${slot}`.replace(/[^\w$]/g, "_")));
     }
   }
 
-  // 代码节点包的 import 绑定名；与任何 nodeId 或其它绑定冲突时加后缀
-  const nodeIds = new Set(Object.keys(N));
+  // 代码节点包的 import 绑定名
   const bindingOf = new Map();
   for (const [id, pkg] of Object.entries(opts.packages || {})) {
     const base = pkg.binding
       || pkg.specifier.split("/").pop().replace(/[-.](\w)/g, (_, c) => c.toUpperCase());
-    let name = base;
-    while (nodeIds.has(name) || [...bindingOf.values()].some((v) => v.name === name && v.spec !== pkg.specifier)) {
-      name += "Node";
-    }
-    bindingOf.set(id, { name, spec: pkg.specifier });
+    // 同一个包在多个节点上共用一个绑定名，别重复发号
+    const shared = [...bindingOf.values()].find((v) => v.spec === pkg.specifier);
+    bindingOf.set(id, shared || { name: uniqueName(base, `${base}Node`), spec: pkg.specifier });
   }
   const callee = (id) => bindingOf.get(id)?.name || apiName(N[id].definitionId);
 
@@ -151,12 +160,28 @@ export function generateFlowSource(ir, opts = {}) {
     const text = bodyTextOf(id);
     // 正文超阈值会被外置成文件，文件里没有 JS 插值这回事
     if (!text || text.length >= EXTERNALIZE_MIN) return new Map();
-    const folds = new Map();
+    const candidates = new Map();
     for (const x of dataIn.get(id) || []) {
       if (!text.includes(`\${${x.slot}}`)) continue;
       const ref = outVar.get(`${x.from}|${x.fromSlot}`) || `${x.from}.${x.fromSlot}`;
       if (ref.split(".")[0] !== x.slot) continue;
-      folds.set(x.slot, ref);
+      candidates.set(x.slot, ref);
+    }
+    if (!candidates.size) return candidates;
+
+    // 定义表里的槽永远按定义顺序重建，折不折都在原位；自定义槽不一样——折进正文之后，
+    // 解析回来是「按正文里出现的先后追加到末尾」。所以自定义槽只能折**末尾那一段**，
+    // 而且那段的正文顺序要和槽序一致。否则往返一次槽序就变了，闸门会把整张图退回 JSON。
+    const extras = N[id].extraIn;
+    const folds = new Map([...candidates].filter(([slot]) => !extras.includes(slot)));
+    const atBody = (slot) => text.indexOf(`\${${slot}}`);
+    for (let k = extras.length; k > 0; k -= 1) {
+      const tail = extras.slice(-k);
+      if (!tail.every((slot) => candidates.has(slot))) continue;
+      const byBody = [...tail].sort((a, b) => atBody(a) - atBody(b));
+      if (JSON.stringify(byBody) !== JSON.stringify(tail)) continue;
+      for (const slot of tail) folds.set(slot, candidates.get(slot));
+      break;
     }
     return folds;
   }
@@ -278,7 +303,8 @@ export function generateFlowSource(ir, opts = {}) {
     if (needsBinding.length) {
       const bindings = needsBinding.map((slot) => {
         const v = outVar.get(`${id}|${slot}`);
-        return v === slot ? slot : `${JSON.stringify(slot)}: ${v}`;
+        if (v === slot) return slot;
+        return `${isIdentifier(slot) ? slot : JSON.stringify(slot)}: ${v}`;
       });
       out.push(`const { ${bindings.join(", ")} } = ${id};\n`);
     }
