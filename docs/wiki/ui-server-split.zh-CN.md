@@ -184,19 +184,53 @@ workspace-server.mjs            6,035
 | `prd-workflow-routes.mjs` | 2,949 |
 | `http-util` / `html-escape` / `exec-buffered` | 100 |
 
-`startUiServer` 还剩 4,251 行——里面是 121 条路由，其中 37 条 Workspace 的还没搬（现在
-可以搬了，实现已经就位）。
+## 第四刀：Workspace 路由
+
+实现就位之后，路由那 45 个「未安置依赖」只剩 1 个（`listConfiguredWorkspaces`）——其余全部
+变成从 `workspace-server.mjs` import。这就是「先搬实现再搬路由」的意义：第一次量出来的
+45 个耦合，有 44 个根本不是耦合，是顺序错了。
+
+37 条路由 / 1,904 行，外加 23 个只被它们用到的 helper / 538 行。派发点落在鉴权闸门之后
+（脚本里的硬约束）。37 个路由块逐字节比对全部原样，ui-server 里 0 处残留。
+
+清掉 64 个死 import——搬走两大块之后 ui-server 的 import 表里近三分之一已经没人用了。
+
+### 结果
+
+```
+ui-server.mjs          6,859 -> 4,338
+workspace-routes.mjs           2,498
+startUiServer          4,251 -> 2,353
+```
+
+四刀合计：**20,609 -> 4,338（-79%）**。
+
+| 文件 | 行数 | 内容 |
+|------|------|------|
+| `ui-server.mjs` | 4,338 | 鉴权、团队、模型配置、终端、静态文件、flow 目录管理 |
+| `workspace-server.mjs` | 6,035 | Workspace 运行时 |
+| `prd-workflow-server.mjs` | 4,884 | PRD workflow 实现 |
+| `prd-workflow-routes.mjs` | 2,949 | PRD workflow 路由 |
+| `workspace-routes.mjs` | 2,498 | Workspace 路由 |
+| 三个共享小工具 | 100 | |
+
+`startUiServer` 2,353 行 / 84 条路由，剩下的是真正跨子系统的东西（鉴权、团队、静态文件），
+没有明显的下一刀。
 
 ## 守住边界
 
-`test/module-boundaries.test.mjs` 五条：
+`test/module-boundaries.test.mjs` 七条：
 
-1. 实现和路由两个模块都不 import ui-server（有环的话 ESM 靠函数提升还能跑，但初始化顺序会
+1. 四个拆出去的模块都不 import ui-server（有环的话 ESM 靠函数提升还能跑，但初始化顺序会
    变成运气）
-2. PRD 的路径字面量在 ui-server 里一个都不剩，派发点只有一处——多一处就说明路由又开始往回长
-3. ui-server 里不再声明 `prd*` / `workflow*` 顶层符号
-4. 三个共享小工具全仓库只有一处声明——拆分最容易犯的错是两边各留一份
-5. 两个文件都不留没人用的 import
+2. 两套路由的路径字面量在 ui-server 里一个都不剩，派发点各只有一处——多一处就说明路由又
+   开始往回长
+3. **Workspace 派发点必须在鉴权闸门之后**。这条是安全约束不是风格：把它提到闸门前面，
+   37 条路由就对未登录请求敞开了。变异测试验证过——真挪过去会被咬住
+4. 两个子系统的实现都不再回流到 ui-server
+5. 三个子系统模块互不依赖（Workspace 和 PRD 是两个产品）
+6. 三个共享小工具全仓库只有一处声明——拆分最容易犯的错是两边各留一份
+7. 五个文件都不留没人用的 import
 
 最后一条写的时候本身踩了坑：抹字符串会把模板串
 `` `href="${htmlEscapeAttribute(x)}"` `` 里的真调用一起吃掉，误报成死 import。改成不抹字符串

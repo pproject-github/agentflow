@@ -29,20 +29,40 @@ function topLevelSymbols(source) {
 
 test("拆出去的子系统都不反向依赖 ui-server", () => {
   // 有环的话 ESM 靠函数提升还能跑，但初始化顺序会变成运气问题
-  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs"]) {
+  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs", "workspace-routes.mjs"]) {
     const imports = localImports(read(file));
     assert.ok(!imports.some((s) => s.includes("ui-server")), `${file} 不该 import ui-server：${imports}`);
   }
 });
 
-test("PRD 路由在 ui-server 里只剩一处派发", () => {
+test("两套路由在 ui-server 里各只剩一处派发", () => {
   const source = read("ui-server.mjs");
-  const paths = source.match(/"\/api\/(prd-workflow|workflows|workflow-)[^"]*"/g) || [];
-  assert.deepEqual(paths, [], "PRD 的路径字面量应当只出现在 prd-workflow-routes.mjs 里");
-  assert.equal(
-    (source.match(/handlePrdWorkflowRoutes\(/g) || []).length, 1,
-    "派发点应当只有一处；多一处就说明路由又开始往回长",
+  assert.deepEqual(
+    source.match(/"\/api\/(prd-workflow|workflows|workflow-)[^"]*"/g) || [],
+    [], "PRD 的路径字面量应当只出现在 prd-workflow-routes.mjs 里",
   );
+  assert.deepEqual(
+    source.match(/"\/api\/(workspace|nodes|node-studio|node-package)[^"]*"/g) || [],
+    [], "Workspace 的路径字面量应当只出现在 workspace-routes.mjs 里",
+  );
+  for (const fn of ["handlePrdWorkflowRoutes", "handleWorkspaceRoutes"]) {
+    assert.equal(
+      (source.match(new RegExp(`${fn}\\(`, "g")) || []).length, 1,
+      `${fn} 的派发点应当只有一处；多一处就说明路由又开始往回长`,
+    );
+  }
+});
+
+test("Workspace 路由的派发点在鉴权闸门之后", () => {
+  // 这条是安全约束，不是风格问题。路由链里那道
+  // `startsWith("/api/") && !authUser -> 401` 是所有 /api/ 的兜底鉴权；
+  // 把集中派发点提到它前面，等于让 37 条 Workspace 路由对未登录请求敞开。
+  // 拆分时差点就这么干了——Workspace 路由原本跨在闸门两侧。
+  const lines = read("ui-server.mjs").split("\n");
+  const gate = lines.findIndex((l) => l.includes('startsWith("/api/") && !authUser'));
+  const dispatch = lines.findIndex((l) => l.includes("handleWorkspaceRoutes(req, res"));
+  assert.ok(gate > 0, "找不到鉴权闸门——它要是被改名了，这条断言就成了空转");
+  assert.ok(dispatch > gate, `派发点 (L${dispatch + 1}) 必须在鉴权闸门 (L${gate + 1}) 之后`);
 });
 
 test("两个子系统的实现都不再回流到 ui-server", () => {
@@ -82,7 +102,7 @@ test("三个共享小工具只有一份实现", () => {
 
 test("ui-server 里不留没人用的 import", () => {
   // 大规模搬运之后最常见的残留。留着不报错，但下一个人无从判断哪些依赖是真的
-  for (const file of ["ui-server.mjs", "prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs"]) {
+  for (const file of ["ui-server.mjs", "prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs", "workspace-routes.mjs"]) {
     const source = read(file);
     const imported = [...source.matchAll(/^import\s+(.+?)\s+from\s+"[^"]+";/gms)]
       .flatMap((m) => {

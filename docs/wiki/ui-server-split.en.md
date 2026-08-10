@@ -204,21 +204,59 @@ Three cuts total: **20,609 -> 6,859 (-67%)**.
 | `prd-workflow-routes.mjs` | 2,949 |
 | `http-util` / `html-escape` / `exec-buffered` | 100 |
 
-`startUiServer` is still 4,251 lines holding 121 routes, 37 of them Workspace's — those can
-move now that the implementation is in place.
+## Fourth cut: the Workspace routes
+
+With the implementation in place, the routes' 45 "unplaced dependencies" dropped to 1
+(`listConfiguredWorkspaces`); everything else became an import from `workspace-server.mjs`.
+That is the point of implementation-before-routes: of the 45 couplings measured the first
+time, 44 were not couplings at all — the order was wrong.
+
+37 routes / 1,904 lines, plus 23 helpers used only by them / 538 lines. The dispatch lands
+after the auth gate (a hard constraint in the script). All 37 route blocks verbatim, 0 left
+in ui-server.
+
+64 dead imports removed — after two large blocks left, nearly a third of ui-server's import
+table had no users.
+
+### Result
+
+```
+ui-server.mjs          6,859 -> 4,338
+workspace-routes.mjs           2,498
+startUiServer          4,251 -> 2,353
+```
+
+Four cuts total: **20,609 -> 4,338 (-79%)**.
+
+| File | Lines | Contents |
+|------|-------|----------|
+| `ui-server.mjs` | 4,338 | auth, teams, model config, terminal, static files, flow directory management |
+| `workspace-server.mjs` | 6,035 | Workspace runtime |
+| `prd-workflow-server.mjs` | 4,884 | PRD workflow implementation |
+| `prd-workflow-routes.mjs` | 2,949 | PRD workflow routes |
+| `workspace-routes.mjs` | 2,498 | Workspace routes |
+| three shared helpers | 100 | |
+
+`startUiServer` is 2,353 lines and 84 routes — what remains is genuinely cross-subsystem
+(auth, teams, static files), with no obvious next cut.
 
 ## Keeping the boundary
 
-`test/module-boundaries.test.mjs`, five assertions:
+`test/module-boundaries.test.mjs`, seven assertions:
 
-1. Neither the implementation nor the routes module imports ui-server (a cycle still runs
-   thanks to function hoisting, but initialization order becomes luck)
-2. No PRD path literal is left in ui-server and there is exactly one dispatch point — a
-   second one means routes are creeping back
-3. ui-server declares no more `prd*` / `workflow*` top-level symbols
-4. The three shared helpers are declared exactly once repo-wide — the classic split mistake
+1. None of the four extracted modules imports ui-server (a cycle still runs thanks to
+   function hoisting, but initialization order becomes luck)
+2. No path literal from either route set is left in ui-server, and each has exactly one
+   dispatch point — a second one means routes are creeping back
+3. **The Workspace dispatch must sit after the auth gate.** A security constraint, not a
+   style one: ahead of the gate, 37 routes open up to unauthenticated requests. Verified by
+   mutation — actually moving it is caught
+4. Neither subsystem's implementation flows back into ui-server
+5. The three subsystem modules do not depend on each other (Workspace and PRD are two
+   products)
+6. The three shared helpers are declared exactly once repo-wide — the classic split mistake
    is leaving a copy on both sides
-5. Neither file keeps an unused import
+7. None of the five files keeps an unused import
 
 Writing the last one hit its own trap: stripping strings also eats the real call inside the template
 `` `href="${htmlEscapeAttribute(x)}"` ``, reporting it as dead. It now does not strip strings
