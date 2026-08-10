@@ -1,0 +1,37 @@
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_5037622958ddfc 187-188,8630-8635
+docs/wiki/ui-server-split.zh-CN.md
+  s_0475a63dba5f18::t_12f3f6ab6deed0 103-105,107-108,129-133,139,141-146,148
+  s_0475a63dba5f18::t_1ef9e08793aca2 75-102,106,109-128,134-135
+  s_0475a63dba5f18::t_705a161cd8955b 136
+bin/lib/http-util.mjs
+  s_0475a63dba5f18::t_afa6aba65a6ec7 1-49
+bin/lib/prd-workflow-routes.mjs
+  s_0475a63dba5f18::t_afa6aba65a6ec7 1-20,22-154,156-2949
+  s_0475a63dba5f18::t_5037622958ddfc 21,155
+test/module-boundaries.test.mjs
+  s_0475a63dba5f18::t_30663faf185416 30,32-45
+docs/wiki/ui-server-split.en.md
+  s_0475a63dba5f18::t_1ef9e08793aca2 82-112,116,120-141,148-150
+  s_0475a63dba5f18::t_12f3f6ab6deed0 113-115,117-119,142-147,154,156-161,163,165
+  s_0475a63dba5f18::t_74804c22d5e522 151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c24e23a614d15a3f751fc5f170497e076a0862bf",
+  "prompts": {},
+  "logical_commit_id": "c24e23a614d15a3f751fc5f170497e076a0862bf",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 25618,
+      "total_deletions": 18573
+    }
+  }
+}
