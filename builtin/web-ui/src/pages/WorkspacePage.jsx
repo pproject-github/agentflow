@@ -560,7 +560,7 @@ function prdWorkflowActionTitle(item, index) {
 
 function prdWorkflowActionDetail(item) {
   if (!item || typeof item !== "object") return "";
-  return String(item.detail || item.description || item.summary || item.message || item.reason || "");
+  return String(item.detail || item.content || item.description || item.summary || item.message || item.reason || "");
 }
 
 function prdWorkflowActionCodeText(item) {
@@ -593,6 +593,10 @@ function prdWorkflowActionIssueLabel(item, fallback = "当前任务") {
 
 function prdWorkflowActionDisplayTitle(item, index) {
   const title = prdWorkflowActionTitle(item, index);
+  const explicitTitle = String(
+    item?.title || item?.label || item?.name || item?.actionLabel || item?.action_label || "",
+  ).trim();
+  if (explicitTitle) return explicitTitle;
   const status = prdWorkflowActionStatus(item?.status);
   const durableDone = prdWorkflowActionCountsAsDone(item);
   const stage = prdWorkflowStageKey(item);
@@ -614,6 +618,8 @@ function prdWorkflowActionDisplayTitle(item, index) {
 
 function prdWorkflowActionDisplayDetail(item) {
   if (!item || typeof item !== "object") return "";
+  const raw = prdWorkflowActionDetail(item);
+  if (raw) return raw;
   const status = prdWorkflowActionStatus(item.status);
   const truth = prdWorkflowActionTruth(item);
   const durableDone = prdWorkflowActionCountsAsDone(item);
@@ -648,10 +654,7 @@ function prdWorkflowActionDisplayDetail(item) {
   if (/implementation_ready/.test(text)) {
     return "方案文档和 GitLab Issue 已就绪，等待开始实现。";
   }
-  const raw = prdWorkflowActionDetail(item);
-  if (!raw) return "";
-  if (raw.length > 180 && links.length) return "相关结果和产物已更新；可从下方链接查看。";
-  return raw;
+  return "";
 }
 
 function prdWorkflowActionTime(item) {
