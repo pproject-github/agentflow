@@ -4283,6 +4283,19 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         </button>
         <button
           type="button"
+          className="af-work-run-card__button af-work-run-card__rerun nodrag"
+          disabled={readOnly || running || optimizing}
+          title="忽略缓存重跑：上游节点即使产出还在、指纹也对得上，照样重新执行"
+          aria-label="忽略缓存重跑"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onRunWorkspaceNode?.(id, { ignoreCache: true });
+          }}
+        >
+          <span className="material-symbols-outlined">restart_alt</span>
+        </button>
+        <button
+          type="button"
           className={"af-work-run-card__button af-work-run-card__optimize nodrag" + (optimizing ? " af-work-run-card__optimize--running" : "")}
           disabled={readOnly || running || optimizing}
           title={optimizing ? "正在优化" : "为下游节点提前生成 implementation"}
@@ -9664,7 +9677,10 @@ function WorkspacePageInner() {
     }
   }, [flowParams, nodesRef, setRunningRunSessionsSynced]);
 
-  const runWorkspaceNode = useCallback(async (runNodeId) => {
+  // ignoreCache：这一趟不吃缓存。缓存靠指纹判定，而指纹只覆盖图里的东西——节点读了仓库、
+  // 读了网络，这些变化它看不见。所以「强制重跑」不是锦上添花，是这套缓存的必要配套。
+  const runWorkspaceNode = useCallback(async (runNodeId, runOptions = {}) => {
+    const ignoreCache = runOptions?.ignoreCache === true;
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
@@ -9717,7 +9733,7 @@ function WorkspacePageInner() {
       const planRes = await fetch("/api/workspace/run/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...flowParams, graph, runNodeId }),
+        body: JSON.stringify({ ...flowParams, graph, runNodeId, ignoreCache }),
       });
       const planJson = await planRes.json().catch(() => ({}));
       if (!planRes.ok || planJson?.ok === false) throw new Error(planJson.error || "Workspace run plan failed");
@@ -9820,6 +9836,7 @@ function WorkspacePageInner() {
           clientId: collaborationClientIdRef.current,
           model: effectiveModel,
           selectedSkills,
+          ignoreCache,
           stream: true,
         }),
       });

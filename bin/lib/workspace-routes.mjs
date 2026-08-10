@@ -1221,7 +1221,10 @@ async function workspaceRoutes(req, res, ctx) {
         }
         const graph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || {}, userCtx);
         const runNodeId = String(payload.runNodeId || "").trim();
-        const plan = workspaceRunPlan(graph, runNodeId, scoped.root);
+        const plan = workspaceRunPlan(graph, runNodeId, scoped.root, {
+          forceNodeIds: Array.isArray(payload.forceNodeIds) ? payload.forceNodeIds : [],
+          ignoreCache: payload.ignoreCache === true,
+        });
         const plannedNodeIds = workspaceRunPlanNodeIds(runNodeId, plan);
         const scopeKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
         const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);
@@ -1363,7 +1366,10 @@ async function workspaceRoutes(req, res, ctx) {
           ? canonicalGraph
           : hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || canonicalGraph, userCtx);
         const runNodeId = String(payload.runNodeId || "").trim();
-        const plan = workspaceRunPlan(runtimeGraph, runNodeId, scoped.root);
+        const plan = workspaceRunPlan(runtimeGraph, runNodeId, scoped.root, {
+          forceNodeIds: Array.isArray(payload.forceNodeIds) ? payload.forceNodeIds : [],
+          ignoreCache: payload.ignoreCache === true,
+        });
         const plannedNodeIds = workspaceRunPlanNodeIds(runNodeId, plan);
         const scopeKey = workspaceRunKey(userCtx, scoped.flowSource || payload.flowSource || "user", flowId);
         const conflict = workspaceFindActiveRunConflict(scopeKey, plannedNodeIds);

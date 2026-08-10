@@ -431,6 +431,25 @@ function readWorkspaceStateFile(dir) {
   return parsed && !Array.isArray(parsed) ? parsed : null;
 }
 
+/**
+ * 只读运行态里的节点指纹，不解析设计态。
+ *
+ * 缓存判据必须以磁盘为准：客户端提交上来的图是可以随手改的，让它自带指纹等于把「这个值
+ * 是不是真跑出来的」交给调用方说了算。
+ *
+ * @returns {Record<string, string>} nodeId -> 上次成功执行时的输入指纹
+ */
+export function readWorkspaceRunFingerprints(flowDir) {
+  const state = readWorkspaceStateFile(path.resolve(flowDir));
+  const raw = state?.fingerprints;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [nodeId, value] of Object.entries(raw)) {
+    if (typeof value === "string" && value) out[nodeId] = value;
+  }
+  return out;
+}
+
 /** 读回合并了运行态的完整图。 */
 export function readWorkspaceGraphFiles(flowDir) {
   const dir = path.resolve(flowDir);

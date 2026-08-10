@@ -27,7 +27,7 @@ import { listTeams } from "./teams.mjs";
 import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "./wecom.mjs";
 import { getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, workspaceCollaborationAccess, workspaceCollaborationSummary } from "./workspace-collaboration.mjs";
-import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
+import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, readWorkspaceRunFingerprints, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
 import { createWorkspaceRunController } from "./workspace-run-controller.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
 import { splitWorkspaceGraph } from "./workspace-state.mjs";
@@ -1320,9 +1320,44 @@ function hydrateWorkspaceMarketplaceToolNodejsRuntime(workspaceRoot, scoped = {}
 }
 
 export function hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped = {}, graph = {}, userCtx = {}) {
-  const withRefs = hydrateWorkspaceNodeRefsFromFiles(scoped.root || scoped.scopedRoot || workspaceRoot, graph);
+  const flowDir = scoped.root || scoped.scopedRoot || workspaceRoot;
+  const withRefs = hydrateWorkspaceNodeRefsFromFiles(flowDir, graph);
   const withMarketplaceRuntime = hydrateWorkspaceMarketplaceToolNodejsRuntime(workspaceRoot, scoped, withRefs, userCtx);
-  return hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withMarketplaceRuntime, userCtx);
+  const hydrated = hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped, withMarketplaceRuntime, userCtx);
+  return hydrateWorkspaceRunFingerprints(flowDir, hydrated);
+}
+
+/**
+ * 用磁盘上记录的指纹覆盖图里的 `runFingerprint`。
+ *
+ * 计划和运行两条路都经过 hydrate，所以这里是唯一的收口。覆盖而不是补齐：客户端提交的那份
+ * 一律不作数，磁盘上没有记录的节点就把字段抹掉——「没跑过」比「跑过但指纹存疑」更安全，
+ * 判定会落到重跑那边。
+ */
+function hydrateWorkspaceRunFingerprints(flowDir, graph) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : null;
+  if (!instances) return graph;
+  let recorded = {};
+  try {
+    recorded = readWorkspaceRunFingerprints(flowDir);
+  } catch {
+    return graph;
+  }
+  const next = {};
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (!instance || typeof instance !== "object") {
+      next[nodeId] = instance;
+      continue;
+    }
+    const fp = recorded[nodeId];
+    if (fp) next[nodeId] = { ...instance, runFingerprint: fp };
+    else if (instance.runFingerprint !== undefined) {
+      const copy = { ...instance };
+      delete copy.runFingerprint;
+      next[nodeId] = copy;
+    } else next[nodeId] = instance;
+  }
+  return { ...graph, instances: next };
 }
 
 export function adminWorkspaceOwnerSummary(ownerId = "") {
@@ -2751,7 +2786,19 @@ function workspaceDownstreamInputRequirements(graph, nodeId) {
   ].join("\n");
 }
 
-export function workspaceRunPlan(graph, runNodeId, scopedRoot = "") {
+/**
+ * @param {object} [opts]
+ * @param {Iterable<string>} [opts.forceNodeIds] 这些节点不吃缓存，一定重跑
+ * @param {boolean} [opts.ignoreCache] 整张图都不吃缓存。不能用「forceNodeIds 填上所有节点」
+ *   代替：能填进去的只有计划里已经有的节点，而被缓存挡掉的那些恰恰不在计划里
+ */
+export function workspaceRunPlan(graph, runNodeId, scopedRoot = "", opts = {}) {
+  // 一次运行计划里同一个节点的指纹会被问很多遍，算一次就够
+  const cacheOpts = {
+    fingerprintMemo: new Map(),
+    ignoreCache: opts.ignoreCache === true,
+    forceNodeIds: new Set(Array.from(opts.forceNodeIds || [], (id) => String(id || "")).filter(Boolean)),
+  };
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const target = String(runNodeId || "").trim();
@@ -2802,7 +2849,7 @@ export function workspaceRunPlan(graph, runNodeId, scopedRoot = "") {
     for (const edge of incoming.get(id) || []) {
       const source = String(edge?.source || "");
       if (!source || source === target || needed.has(source)) continue;
-      if (!workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot)) continue;
+      if (!workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot, cacheOpts)) continue;
       addNeeded(source);
       if (needed.has(source)) dependencyQueue.push(source);
     }
@@ -2857,26 +2904,104 @@ function workspaceControlIfBranchToSourceHandle(branch) {
   return null;
 }
 
-function workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot = "") {
-  if (workspaceIsControlEdge(graph, edge)) return true;
-  return !workspaceEdgeHasCachedOutput(graph, edge, scopedRoot);
+/**
+ * 节点的输入指纹——Merkle 式，传递性自带。
+ *
+ * 只哈希「决定这次该不该重跑」的东西：节点自身的定义（类型、正文、脚本、包版本）+ 每个
+ * 输入槽的来源。来源是上游节点时取**上游的指纹**而不是上游的值：一来省掉读大文件，二来
+ * 上游一变，这里自动跟着变，不必再单独做一遍脏传播。
+ *
+ * 不进指纹的三样东西，各有理由：
+ *
+ * - **输出槽的值**。指纹描述输入，不描述产出。agent 节点同样输入重跑本来就给不同结果，
+ *   把产出算进去等于永远不命中。
+ * - **`marketplaceRef` 推导出来的 `script`**。那串里带着本机绝对路径，算进去就换台机器
+ *   全部失效。改用 `marketplaceRef` 本身，包版本一升照样失效。
+ * - **run 级别的 model**。它是一次运行的旋钮，不是节点的属性；算进去等于换个模型就把
+ *   整张图的缓存全推倒。节点自己写死的 model 覆盖仍然计入。
+ *
+ * 读不到上游（缺节点、成环）时返回空串，调用方按「没有指纹」处理——也就是重跑。
+ *
+ * @returns {string} 24 位十六进制；节点不存在时为空串
+ */
+export function workspaceNodeInputFingerprint(graph, nodeId, memo = new Map(), stack = new Set()) {
+  const id = String(nodeId || "");
+  if (memo.has(id)) return memo.get(id);
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const instance = instances[id];
+  if (!instance || stack.has(id)) return "";
+  stack.add(id);
+
+  const marketplaceRef = String(instance.marketplaceRef || "").trim();
+  const parts = [
+    String(instance.definitionId || ""),
+    String(instance.body || ""),
+    String(instance.scriptRef || ""),
+    marketplaceRef,
+    // 包节点的 script 是推导出来的，含本机路径；只有手写的 script 才算数
+    marketplaceRef ? "" : String(instance.script || ""),
+    String(instance.model || ""),
+  ];
+
+  const incoming = new Map();
+  for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
+    if (String(edge?.target || "") !== id) continue;
+    if (workspaceIsControlEdge(graph, edge)) continue;
+    const slot = workspaceTargetSlotForEdge(graph, edge);
+    const name = String(slot?.name || "").trim();
+    if (name && !incoming.has(name)) incoming.set(name, edge);
+  }
+
+  for (const slot of Array.isArray(instance.input) ? instance.input : []) {
+    const name = String(slot?.name || "").trim();
+    if (!name || workspaceIsControlInputSlot(slot)) continue;
+    const edge = incoming.get(name);
+    if (edge) {
+      const sourceSlot = workspaceSourceSlotForEdge(graph, edge);
+      const upstream = workspaceNodeInputFingerprint(graph, edge.source, memo, stack);
+      parts.push(`${name}<=${edge.source}.${String(sourceSlot?.name || "")}:${upstream}`);
+    } else {
+      parts.push(`${name}=${workspaceSlotValue(slot)}`);
+    }
+  }
+
+  // provide.* 的值挂在输出槽上，没有输入槽可走
+  if (String(instance.definitionId || "").startsWith("provide_")) {
+    parts.push(`value=${workspaceInstanceText(instance)}`);
+  }
+
+  stack.delete(id);
+  const fp = crypto.createHash("sha256").update(parts.join(" ")).digest("hex").slice(0, 24);
+  memo.set(id, fp);
+  return fp;
 }
 
-function workspaceEdgeHasCachedOutput(graph, edge, scopedRoot = "") {
+function workspaceNeedsUpstreamExecutionForEdge(graph, edge, scopedRoot = "", opts = {}) {
+  if (workspaceIsControlEdge(graph, edge)) return true;
+  if (opts.ignoreCache) return true;
+  if (opts.forceNodeIds?.has(String(edge?.source || ""))) return true;
+  return !workspaceEdgeHasCachedOutput(graph, edge, scopedRoot, opts);
+}
+
+function workspaceEdgeHasCachedOutput(graph, edge, scopedRoot = "", opts = {}) {
   const sourceId = String(edge?.source || "");
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const source = instances[sourceId];
   if (!source) return false;
+  const defId = String(source.definitionId || "");
+  // provide.* 不执行，它的值就是作者填的；没有「上次跑出来的」这回事，也就无从失效
+  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file" || defId === "provide_password") {
+    return Boolean(String(workspaceInstanceText(source) || "").trim());
+  }
+  // 有值还不够，得是**这套输入**跑出来的值。指纹对不上说明上游或节点自身改过，重跑
+  const memo = opts.fingerprintMemo || new Map();
+  if (String(source.runFingerprint || "") !== workspaceNodeInputFingerprint(graph, sourceId, memo)) return false;
   const slot = workspaceSourceSlotForEdge(graph, edge);
   if (!isWorkspaceSemanticOutputSlot(slot) && slot && String(slot?.type || "") !== "node") {
     const value = workspaceSlotValue(slot);
     if (workspaceCachedOutputValueExists(value, scopedRoot)) return true;
   }
-  const defId = String(source.definitionId || "");
   if (workspaceDisplayKind(defId) && String(source.body || "").trim()) return true;
-  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file" || defId === "provide_password") {
-    return Boolean(String(workspaceInstanceText(source) || "").trim());
-  }
   return false;
 }
 
@@ -4599,7 +4724,18 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     archived: payload.archived === true || payload.flowArchived === true,
   }, payload.graph || {}, userCtx);
   const runNodeId = String(payload?.runNodeId || "").trim();
-  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot);
+  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot, {
+    forceNodeIds: Array.isArray(payload?.forceNodeIds) ? payload.forceNodeIds : [],
+    ignoreCache: payload?.ignoreCache === true,
+  });
+  // 指纹只由「节点定义 + 上游指纹 + 没接线的槽位值」决定，运行过程中这些都不变，所以
+  // 开跑前算一次就够。跑完盖回去的是这一份，不是执行后重算的——执行会改输出值，重算等于
+  // 把产出算进了输入指纹。
+  const plannedFingerprints = new Map();
+  {
+    const memo = new Map();
+    for (const nodeId of order) plannedFingerprints.set(nodeId, workspaceNodeInputFingerprint(graph, nodeId, memo));
+  }
   const signal = opts.signal || null;
   const throwIfAborted = () => {
     if (signal?.aborted) {
@@ -4642,6 +4778,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const events = [];
   const runStartedAt = Date.now();
   const emit = (event) => {
+    // 一个节点成功跑完，就把它这次的输入指纹盖到实例上——下一次运行靠它判断缓存还算不算数。
+    // 挂在 node-done 上是因为执行路径有 21 个出口，每个都盖一遍迟早会漏掉一个；跳过的节点
+    // 不盖，它压根没产出。
+    if (event?.type === "node-done" && !event.skipped) {
+      const nodeId = String(event.nodeId || "");
+      const instance = graph.instances?.[nodeId];
+      if (instance && plannedFingerprints.has(nodeId)) instance.runFingerprint = plannedFingerprints.get(nodeId);
+    }
     const now = Date.now();
     const enriched = {
       ...event,

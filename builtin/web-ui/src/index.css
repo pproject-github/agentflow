@@ -11891,6 +11891,7 @@ button.af-project-card {
 }
 
 .af-work-run-card__optimize,
+.af-work-run-card__rerun,
 .af-work-run-card__logs {
   min-width: 0;
   padding: 0;
@@ -11900,6 +11901,7 @@ button.af-project-card {
 }
 
 .af-work-run-card__optimize .material-symbols-outlined,
+.af-work-run-card__rerun .material-symbols-outlined,
 .af-work-run-card__logs .material-symbols-outlined {
   font-size: 1.28rem;
 }

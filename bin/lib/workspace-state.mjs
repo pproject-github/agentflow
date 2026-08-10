@@ -20,6 +20,7 @@
  * - 非 provide 节点的 `output[*].value` / `.default`——provide 节点的输出值是用户填的
  * - **接了非语义入边**的 `input[*].value` / `.default`——每次运行都会被上游覆写
  * - `displayReloadKey`
+ * - `runFingerprint`——节点上次成功执行时的输入指纹，缓存命中判据，见 `workspace-server.mjs`
  * - `ui.viewport`
  * - **有内容入边**的展示节点的 `body`
  *
@@ -204,6 +205,7 @@ export function splitWorkspaceGraph(graph) {
   const outputs = {};
   const displayBodies = {};
   const displayReloadKeys = {};
+  const fingerprints = {};
   const designInstances = {};
 
   for (const [nodeId, raw] of Object.entries(instances)) {
@@ -216,6 +218,11 @@ export function splitWorkspaceGraph(graph) {
     if (instance.displayReloadKey !== undefined) {
       displayReloadKeys[nodeId] = instance.displayReloadKey;
       delete instance.displayReloadKey;
+    }
+
+    if (instance.runFingerprint !== undefined) {
+      fingerprints[nodeId] = instance.runFingerprint;
+      delete instance.runFingerprint;
     }
 
     if (isDisplayDefinition(instance.definitionId) && displayDriven.has(nodeId) && instance.body !== undefined) {
@@ -256,6 +263,7 @@ export function splitWorkspaceGraph(graph) {
   if (Object.keys(outputs).length) state.outputs = outputs;
   if (Object.keys(displayBodies).length) state.displayBodies = displayBodies;
   if (Object.keys(displayReloadKeys).length) state.displayReloadKeys = displayReloadKeys;
+  if (Object.keys(fingerprints).length) state.fingerprints = fingerprints;
   if (isPlainObject(source.ui) && source.ui.viewport !== undefined) state.viewport = source.ui.viewport;
 
   return { design, state };
@@ -275,6 +283,7 @@ export function mergeWorkspaceState(design, state) {
   const outputs = isPlainObject(state.outputs) ? state.outputs : {};
   const displayBodies = isPlainObject(state.displayBodies) ? state.displayBodies : {};
   const displayReloadKeys = isPlainObject(state.displayReloadKeys) ? state.displayReloadKeys : {};
+  const fingerprints = isPlainObject(state.fingerprints) ? state.fingerprints : {};
   const instances = isPlainObject(base.instances) ? base.instances : {};
 
   const merged = {};
@@ -290,6 +299,9 @@ export function mergeWorkspaceState(design, state) {
     }
     if (Object.prototype.hasOwnProperty.call(displayReloadKeys, nodeId)) {
       instance.displayReloadKey = displayReloadKeys[nodeId];
+    }
+    if (Object.prototype.hasOwnProperty.call(fingerprints, nodeId)) {
+      instance.runFingerprint = fingerprints[nodeId];
     }
 
     // 只在原来就有这个数组时回填——直接赋值会给没有 input/output 的实例凭空加上
@@ -314,5 +326,6 @@ export function isEmptyWorkspaceState(state) {
     && !state.outputs
     && !state.displayBodies
     && !state.displayReloadKeys
+    && !state.fingerprints
     && state.viewport === undefined;
 }

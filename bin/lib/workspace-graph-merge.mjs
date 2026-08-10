@@ -126,7 +126,7 @@ function isRuntimePath(path, sides) {
   const side = sides.find((s) => s.graph.instances?.[nodeId]);
   if (!side) return false;
 
-  if (path[2] === "displayReloadKey") return true;
+  if (path[2] === "displayReloadKey" || path[2] === "runFingerprint") return true;
   if (path[2] === "body") return side.runtime.displayBodies.has(nodeId);
 
   if (path[2] !== "input" && path[2] !== "output") return false;
