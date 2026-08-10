@@ -1,0 +1,37 @@
+test/workspace-agent-inputs.test.mjs
+  s_0475a63dba5f18::t_b04cb26f05dc53 11
+docs/wiki/ui-server-split.zh-CN.md
+  s_0475a63dba5f18::t_31000d8c904ea9 135-188
+bin/lib/workspace-server.mjs
+  s_0475a63dba5f18::t_8768737f387dda 1-6035
+test/workspace-output-materialization.test.mjs
+  s_0475a63dba5f18::t_b04cb26f05dc53 10
+test/node-definition-single-source.test.mjs
+  s_0475a63dba5f18::t_0afa9d48e4becc 54-55,60,65
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_519a229438b41e 174-252,2201-2209
+  s_0475a63dba5f18::t_ec1ca1fe9601be 13,98
+docs/wiki/ui-server-split.en.md
+  s_0475a63dba5f18::t_31000d8c904ea9 149-208
+test/module-boundaries.test.mjs
+  s_0475a63dba5f18::t_aaef5759bf447d 30,32,48-50,54-66,85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2996d1b359795fa1eb9e2c9562cc1b7825ad6339",
+  "prompts": {},
+  "logical_commit_id": "2996d1b359795fa1eb9e2c9562cc1b7825ad6339",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 31882,
+      "total_deletions": 24598
+    }
+  }
+}
