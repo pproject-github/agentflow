@@ -111,3 +111,19 @@ export function resolveUserEnvValue(key, userId) {
   const fromConfig = getFromConfig(readJsonObject(configPath), keyStr);
   return fromConfig !== undefined ? fromConfig : "";
 }
+
+/**
+ * 子进程环境：进程自身的 env + 该用户配置的 env + 调用方补的 extra。
+ *
+ * `AGENTFLOW_USER_ID` 放最后，防止用户在自己的 env 里把它改成别人。
+ * @param {{ userId?: string }} [userCtx]
+ * @param {Record<string, string>} [extra]
+ */
+export function runtimeEnvForUser(userCtx = {}, extra = {}) {
+  return {
+    ...process.env,
+    ...readMergedEnvObject(userCtx.userId),
+    ...extra,
+    AGENTFLOW_USER_ID: userCtx.userId || "",
+  };
+}

@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   prdWorkflowReviewHtml,
   prdWorkflowReviewMarkdownToHtml,
-} from "../bin/lib/ui-server.mjs";
+} from "../bin/lib/prd-workflow-server.mjs";
 
 test("renders TODO actions as separate navigable cards", () => {
   const html = prdWorkflowReviewMarkdownToHtml([
