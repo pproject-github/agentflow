@@ -72,18 +72,80 @@ html-escape.mjs / exec-buffered.mjs   19 + 32
 顺带清掉 13 个搬完之后没人用的 import（其中 `getFlowYamlAbs`、`FLOW_YAML_FILENAME` 是上一次
 目录哨兵改动留下的）。
 
-`startUiServer` 仍是 7,010 行 142 条路由——那是下一刀的事，这次只搬子系统实现。
+## 第二刀：路由也搬过去
+
+子系统实现搬走之后，`startUiServer` 里还留着它的 31 条路由（2,765 行，占那个七千行请求回调
+的 40%）。这一刀把路由也搬进 `prd-workflow-routes.mjs`。
+
+难点在于路由体是**闭包代码**：直接引用请求回调里的 `url` / `userCtx`，也直接调 `json(res,…)`。
+硬搬要么改写每一行，要么放弃「逐字节可验证」这个性质。两个约定绕开了它：
+
+**命中与否看 `res.headersSent`。** 路由体里的 `return;` 一律不动——它们在原地就是「已经回过
+响应，别再往下走」。外层：
+
+```js
+export async function handlePrdWorkflowRoutes(req, res, ctx) {
+  await prdWorkflowRoutes(req, res, ctx);
+  return res.headersSent;
+}
+```
+
+换成把 `return;` 改写成 `return true` 就得逐个甄别哪些 `return` 在嵌套回调里——那正是这类
+搬运最容易出错的地方。
+
+**闭包变量在函数头解构回同名标识符。**
+
+```js
+async function prdWorkflowRoutes(req, res, ctx) {
+  const { url, authUser, userCtx, root, host, uiPort, resolveWorkspaceScopeRoot, … } = ctx;
+```
+
+于是路由体里的写法完全不变。这一串解构就是路由层对 ui-server 的**真实耦合面**——18 个名字：
+6 个请求上下文（`url` / `authUser` / `userCtx` / `root` / `host` / `uiPort`）+ 12 个两边都在用
+的函数。`json` / `readBody` 不在里面，它们抽成了 `http-util.mjs`，两边 import 同名。
+
+18 个是多了点，但这是当下真实的耦合，写出来比藏在闭包里强——下次谁想减，看这一行就知道减什么。
+
+### 顺序安全性要先证明
+
+搬运把散落在第 5～36 位的 31 条路由集中提到第 5 位。这会改变匹配优先级，除非：
+
+- 中间的非 PRD 路由没有前缀/正则匹配（查了：0 条）
+- 没有 (method, path) 在 PRD 组和非 PRD 组之间重复（查了：140 个路由里 4 处重复，全在组内）
+
+两条都成立，所以提前是安全的。
+
+### 结果
+
+```
+ui-server.mjs          15,789 -> 12,780
+prd-workflow-routes.mjs         2,949
+startUiServer           7,010 ->  4,251
+```
+
+31 个路由块逐字节比对：31/31 原样出现在新文件里，ui-server 里 0 处残留。顺带清掉 95 个
+搬完之后没人用的 import。
+
+7 个只被这些路由用到的 helper 跟着搬了过去（119 行）。另有 4 个本来也能搬，最后留下：
+`serverPublicBaseUrl`、`resolvePrdWorkflowScope`、`workflowBindableWorkspaces`、
+`prepareWorkflowKnowledgeWorktrees` 自己就用到 ctx 传进来的依赖，而搬走的 helper 落在模块
+顶层，看不到路由函数里那句解构。这条规则写进了脚本，不是靠人记——第一次没写，跑出来一个
+`normalizePublicBaseUrl is not defined` 的 500。
+
+`startUiServer` 还剩 4,251 行 / 121 条路由——`/api/workspace` 27 条是下一个候选。
 
 ## 守住边界
 
-`test/module-boundaries.test.mjs` 四条：
+`test/module-boundaries.test.mjs` 五条：
 
-1. PRD 模块不 import ui-server（有环的话 ESM 靠函数提升还能跑，但初始化顺序会变成运气）
-2. ui-server 里不再声明 `prd*` / `workflow*` 顶层符号
-3. 三个共享小工具全仓库只有一处声明——拆分最容易犯的错是两边各留一份
-4. 两个文件都不留没人用的 import
+1. 实现和路由两个模块都不 import ui-server（有环的话 ESM 靠函数提升还能跑，但初始化顺序会
+   变成运气）
+2. PRD 的路径字面量在 ui-server 里一个都不剩，派发点只有一处——多一处就说明路由又开始往回长
+3. ui-server 里不再声明 `prd*` / `workflow*` 顶层符号
+4. 三个共享小工具全仓库只有一处声明——拆分最容易犯的错是两边各留一份
+5. 两个文件都不留没人用的 import
 
-第 4 条写的时候本身踩了坑：抹字符串会把模板串
+最后一条写的时候本身踩了坑：抹字符串会把模板串
 `` `href="${htmlEscapeAttribute(x)}"` `` 里的真调用一起吃掉，误报成死 import。改成不抹字符串
 ——宁可把「只在字符串里出现的名字」也算用过，这条断言要抓的是「哪儿都没出现」的死 import，
 不是精确可达性分析。

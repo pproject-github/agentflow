@@ -27,10 +27,22 @@ function topLevelSymbols(source) {
     .filter(Boolean);
 }
 
-test("PRD workflow 模块不反向依赖 ui-server", () => {
+test("PRD workflow 的实现和路由都不反向依赖 ui-server", () => {
   // 有环的话 ESM 靠函数提升还能跑，但初始化顺序会变成运气问题
-  const imports = localImports(read("prd-workflow-server.mjs"));
-  assert.ok(!imports.some((s) => s.includes("ui-server")), `不该 import ui-server：${imports}`);
+  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs"]) {
+    const imports = localImports(read(file));
+    assert.ok(!imports.some((s) => s.includes("ui-server")), `${file} 不该 import ui-server：${imports}`);
+  }
+});
+
+test("PRD 路由在 ui-server 里只剩一处派发", () => {
+  const source = read("ui-server.mjs");
+  const paths = source.match(/"\/api\/(prd-workflow|workflows|workflow-)[^"]*"/g) || [];
+  assert.deepEqual(paths, [], "PRD 的路径字面量应当只出现在 prd-workflow-routes.mjs 里");
+  assert.equal(
+    (source.match(/handlePrdWorkflowRoutes\(/g) || []).length, 1,
+    "派发点应当只有一处；多一处就说明路由又开始往回长",
+  );
 });
 
 test("PRD workflow 的实现不再回流到 ui-server", () => {
