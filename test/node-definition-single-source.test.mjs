@@ -51,17 +51,18 @@ test("RETIRED_NODE_IDS 里的节点都带 palette: hidden", () => {
 
 test("Workspace 运行时 dispatch 到的每个 definitionId 都有 native/degraded 的定义", () => {
   const defs = readAllNodeDefinitions();
-  const src = fs.readFileSync(path.join(repoRoot, "bin", "lib", "ui-server.mjs"), "utf-8");
+  // 运行时已经从 ui-server 拆到 workspace-server.mjs，dispatch 分支跟着走了
+  const src = fs.readFileSync(path.join(repoRoot, "bin", "lib", "workspace-server.mjs"), "utf-8");
   const dispatched = new Set();
   for (const m of src.matchAll(/\b(?:defId|id)\s*===\s*"([a-z][a-zA-Z_]*)"/g)) {
     if (defs.has(m[1])) dispatched.add(m[1]);
   }
-  assert.ok(dispatched.size >= 25, `只从 ui-server 扫出 ${dispatched.size} 个 dispatch 分支`);
+  assert.ok(dispatched.size >= 25, `只从 workspace-server 扫出 ${dispatched.size} 个 dispatch 分支`);
   for (const id of [...dispatched].sort()) {
     assert.notEqual(
       defs.get(id).runtime,
       "none",
-      `ui-server 里有 ${id} 的 handler，但 builtin/nodes/${id}.md 写着 runtime: none`,
+      `workspace-server 里有 ${id} 的 handler，但 builtin/nodes/${id}.md 写着 runtime: none`,
     );
   }
 });

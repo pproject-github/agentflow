@@ -7,7 +7,7 @@ import {
   workspaceMaterializeAgentResultFile,
   workspacePublishAgentOutputFiles,
   workspaceStructuredAgentOutput,
-} from "../bin/lib/ui-server.mjs";
+} from "../bin/lib/workspace-server.mjs";
 
 function createRunPackage(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-output-test-"));

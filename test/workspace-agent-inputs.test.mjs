@@ -8,7 +8,7 @@ import {
   workspaceAssertRequiredInputs,
   workspaceKnowledgeSourcesFromText,
   workspaceMaterializeNodeInputFiles,
-} from "../bin/lib/ui-server.mjs";
+} from "../bin/lib/workspace-server.mjs";
 
 test("large inline HTML input is materialized and replaced by a mounted path", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-inline-input-"));

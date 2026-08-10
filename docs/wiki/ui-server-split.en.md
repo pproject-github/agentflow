@@ -146,8 +146,66 @@ helper sits at module top level where the destructuring inside the route functio
 visible. That rule lives in the script, not in someone's memory — the first run without it
 produced a `normalizePublicBaseUrl is not defined` 500.
 
-`startUiServer` is down to 4,251 lines and 121 routes — the 27 `/api/workspace` routes are
-the next candidate.
+## Third cut: the Workspace runtime
+
+Measuring first for Workspace gave a different answer than PRD: **the routes cannot go
+first**.
+
+The `/api/workspace` routes depend on 45 ui-server top-level symbols — run planning, graph
+hydration, collaboration broadcast, run-controller state. Those are also used by the
+pre-gate `/api/display/share*` routes and by the scheduler, so they are not "the routes'
+dependencies", they are **the runtime itself**. The order was backwards: implementation
+first, routes second (which is what PRD happened to do — it just was not obvious at the time
+that this is a requirement, not a coincidence).
+
+Measured as a runtime instead: 291 symbols / 5,984 lines, **0** dependencies on the rest of
+ui-server, 75 symbols to export back. As clean as PRD, so the same script ran unchanged.
+
+The closure took three rounds to settle: 252 `workspace*` symbols → pulling in 15 small
+helpers (`sleepMs`, `parseJsonText`, the display-share ones) → 7 more → 1 more. Each round
+admits a symbol only when nothing outside the set still uses it — never by name guessing.
+
+### One thing this nearly shipped
+
+An authentication hole. The route chain contains a hard gate:
+
+```js
+if (url.pathname.startsWith("/api/") && !authUser) { json(res, 401, …); return; }
+```
+
+It sits at position 12. Workspace routes are spread over positions 7–92 — **straddling it**.
+Putting the consolidated dispatch ahead of the gate would have opened the 38 routes behind it
+to unauthenticated requests.
+
+Rechecking the previous cut: PRD's 31 routes were all at positions 5–36 with the gate at 42,
+so all of them were already *before* it (they carry their own token/share auth), and hoisting
+to position 5 crossed nothing. A false alarm — but the constraint now lives in the script:
+the dispatch point must land after the gate, and routes ahead of the gate do not move.
+
+### Result
+
+```
+ui-server.mjs          12,780 -> 6,859
+workspace-server.mjs            6,035
+```
+
+All 291 symbols compared byte for byte: 0 changes, 0 missing, 0 left behind. Another 24 dead
+imports removed — this time the cleaner had to handle both single-line
+`import { a } from "x";` and multi-line clauses; deleting `  name,` lines alone misses the
+former.
+
+Three cuts total: **20,609 -> 6,859 (-67%)**.
+
+| File | Lines |
+|------|-------|
+| `ui-server.mjs` | 6,859 |
+| `workspace-server.mjs` | 6,035 |
+| `prd-workflow-server.mjs` | 4,884 |
+| `prd-workflow-routes.mjs` | 2,949 |
+| `http-util` / `html-escape` / `exec-buffered` | 100 |
+
+`startUiServer` is still 4,251 lines holding 121 routes, 37 of them Workspace's — those can
+move now that the implementation is in place.
 
 ## Keeping the boundary
 

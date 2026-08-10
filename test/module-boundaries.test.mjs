@@ -27,9 +27,9 @@ function topLevelSymbols(source) {
     .filter(Boolean);
 }
 
-test("PRD workflow 的实现和路由都不反向依赖 ui-server", () => {
+test("拆出去的子系统都不反向依赖 ui-server", () => {
   // 有环的话 ESM 靠函数提升还能跑，但初始化顺序会变成运气问题
-  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs"]) {
+  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs"]) {
     const imports = localImports(read(file));
     assert.ok(!imports.some((s) => s.includes("ui-server")), `${file} 不该 import ui-server：${imports}`);
   }
@@ -45,12 +45,25 @@ test("PRD 路由在 ui-server 里只剩一处派发", () => {
   );
 });
 
-test("PRD workflow 的实现不再回流到 ui-server", () => {
-  const strays = topLevelSymbols(read("ui-server.mjs"))
+test("两个子系统的实现都不再回流到 ui-server", () => {
+  const symbols = topLevelSymbols(read("ui-server.mjs"));
+  const prd = symbols
     .filter((name) => /^(prd|workflow)/i.test(name))
     // 这个是 ui-server 自己的状态适配器（读 workspaces 注册表），不属于 PRD 子系统
     .filter((name) => name !== "workflowBindableWorkspaces");
-  assert.deepEqual(strays, [], "新的 PRD workflow 函数请写进 prd-workflow-server.mjs");
+  assert.deepEqual(prd, [], "新的 PRD workflow 函数请写进 prd-workflow-server.mjs");
+  const ws = symbols.filter((name) => /^workspace[A-Z_]/.test(name) || /^(runWorkspace|hydrateWorkspace)/.test(name));
+  assert.deepEqual(ws, [], "新的 Workspace 运行时函数请写进 workspace-server.mjs");
+});
+
+test("三个子系统模块互不依赖", () => {
+  // Workspace 运行时和 PRD workflow 是两个产品，共用的只有 HTTP 路由和鉴权
+  const ws = localImports(read("workspace-server.mjs"));
+  assert.ok(!ws.some((s) => s.includes("prd-workflow")), `workspace-server 不该 import PRD：${ws}`);
+  for (const file of ["prd-workflow-server.mjs", "prd-workflow-routes.mjs"]) {
+    const imports = localImports(read(file));
+    assert.ok(!imports.some((s) => s.includes("workspace-server")), `${file} 不该 import workspace-server`);
+  }
 });
 
 test("三个共享小工具只有一份实现", () => {
@@ -69,7 +82,7 @@ test("三个共享小工具只有一份实现", () => {
 
 test("ui-server 里不留没人用的 import", () => {
   // 大规模搬运之后最常见的残留。留着不报错，但下一个人无从判断哪些依赖是真的
-  for (const file of ["ui-server.mjs", "prd-workflow-server.mjs"]) {
+  for (const file of ["ui-server.mjs", "prd-workflow-server.mjs", "prd-workflow-routes.mjs", "workspace-server.mjs"]) {
     const source = read(file);
     const imported = [...source.matchAll(/^import\s+(.+?)\s+from\s+"[^"]+";/gms)]
       .flatMap((m) => {

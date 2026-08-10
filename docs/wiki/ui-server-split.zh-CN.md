@@ -132,7 +132,60 @@ startUiServer           7,010 ->  4,251
 顶层，看不到路由函数里那句解构。这条规则写进了脚本，不是靠人记——第一次没写，跑出来一个
 `normalizePublicBaseUrl is not defined` 的 500。
 
-`startUiServer` 还剩 4,251 行 / 121 条路由——`/api/workspace` 27 条是下一个候选。
+## 第三刀：Workspace 运行时
+
+轮到 Workspace 时先量了一遍，结论和 PRD 不一样：**路由不能先搬**。
+
+`/api/workspace` 那批路由依赖 45 个 ui-server 顶层符号——运行计划、图 hydrate、协作广播、
+run controller 状态。它们同时被闸门之前的 `/api/display/share*` 路由和调度器用着，所以
+不是「路由的依赖」，是**运行时本身**。顺序反了：得先搬实现，再搬路由（PRD 就是这个顺序，
+只是当时没意识到那是必要条件而不是偶然）。
+
+改成先量运行时：291 个符号 / 5,984 行，对 ui-server 其余部分的依赖 **0 个**，要 export
+回去 75 个。和 PRD 一样干净，同一套脚本直接跑。
+
+闭包要迭代三轮才收敛：`workspace*` 开头的 252 个 → 带出 15 个小工具（`sleepMs`、
+`parseJsonText`、display 分享那几个）→ 又带出 7 个 → 再带出 1 个。每一轮都是「只有这批在用」
+才收，不是按名字猜。
+
+### 途中发现的一件事
+
+差点搬出一个鉴权漏洞。ui-server 的路由链里有一道硬闸门：
+
+```js
+if (url.pathname.startsWith("/api/") && !authUser) { json(res, 401, …); return; }
+```
+
+它在第 12 位。Workspace 路由散在第 7～92 位——**跨着闸门**。集中派发点如果放在闸门前面，
+闸门后面那 38 条路由就等于对未登录请求敞开了。
+
+回头查了上一刀：PRD 的 31 条路由原本全在第 5～36 位，闸门在第 42 位，全在闸门**之前**
+（它们本来就自带 token / share 鉴权），所以提到第 5 位没有跨界。虚惊一场，但这条约束现在
+写进了脚本：派发点必须落在闸门之后，闸门之前的路由不参与搬运。
+
+### 结果
+
+```
+ui-server.mjs          12,780 -> 6,859
+workspace-server.mjs            6,035
+```
+
+291 个符号逐字节比对：0 处改动、0 个遗漏、ui-server 里 0 处残留。又清掉 24 个死 import
+（这次的清理脚本得处理单行 `import { a } from "x";` 和多行两种写法——只按 `  name,` 逐行
+删会漏掉前者）。
+
+三刀合计：**20,609 -> 6,859（-67%）**。
+
+| 文件 | 行数 |
+|------|------|
+| `ui-server.mjs` | 6,859 |
+| `workspace-server.mjs` | 6,035 |
+| `prd-workflow-server.mjs` | 4,884 |
+| `prd-workflow-routes.mjs` | 2,949 |
+| `http-util` / `html-escape` / `exec-buffered` | 100 |
+
+`startUiServer` 还剩 4,251 行——里面是 121 条路由，其中 37 条 Workspace 的还没搬（现在
+可以搬了，实现已经就位）。
 
 ## 守住边界
 
