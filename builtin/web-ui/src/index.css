@@ -3559,6 +3559,22 @@ button.af-project-card {
   font-size: 0.78rem;
 }
 
+.af-node-studio-notice {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(0, 228, 117, 0.24);
+  border-radius: 8px;
+  background: rgba(0, 228, 117, 0.1);
+  color: #8ef0bd;
+  padding: 0.65rem;
+  font-size: 0.78rem;
+}
+
+/* Agent 回复里带着解析失败的那条——不标出来就淹没在正常回复里 */
+.af-node-studio-message--error {
+  border-color: rgba(255, 117, 117, 0.32);
+  color: #ffc9c9;
+}
+
 .af-node-studio-empty {
   border: 1px dashed rgba(178, 170, 200, 0.18);
   border-radius: 8px;

@@ -1,57 +1,148 @@
 ---
 name: agentflow-node-authoring
 description: >-
-  使用任意本地 Agent CLI（Cursor、Codex、Claude Code、OpenCode 等）生成、验证、预览、发布和安装 AgentFlow marketplace 节点。用户要求创建可复用节点、把本地节点发布到平台、或将节点安装进 Flow 时使用。
+  编写 AgentFlow 代码节点包（nodes/<name>/index.mjs），在流程里用起来，并发布到
+  marketplace 供其它流程复用。用户要求「加一个自定义节点」「把这段逻辑做成可复用节点」
+  「把节点发布出去」时使用。
 ---
 
-# AgentFlow Node Authoring
+# AgentFlow 代码节点
 
-这是通用的 Skill，不绑定某一种 Agent。当前 Agent 负责生成文件和调用命令；AgentFlow CLI 负责校验、发布、安装和运行验证。
+**一个目录 = 一个节点 = 一个可发布的包。** `index.mjs` 同时是声明和实现。
 
-## 标准流程
+```
+<flowDir>/nodes/<name>/index.mjs
+```
 
-1. 先读取 `agentflow-node-reference`，确认输入/输出槽位、handle 顺序和运行类型。
-2. 在当前项目创建一个独立节点包目录，至少包含 `node.yaml`。运行脚本节点还应包含 `scripts/run.mjs`，并在 manifest 的 `runtime.entry` 指向它。
-3. 用当前 Agent CLI 编写实现、README、prompt/implementation 文档和最小测试输入。
-4. 做本地检查：
+行为完全由输入决定、不需要 AI 推理的，就该是代码节点。需要理解和判断的用
+`agent.subAgent`。
 
-   ```bash
-   agentflow marketplace publish-node <package-dir> --json
-   agentflow marketplace list --json
-   ```
+## 最小完整例子
 
-   `publish-node` 会把包复制到当前 workspace 的 `.workspace/agentflow/marketplace/packages/nodes/<id>/<version>`；发布前应确保 `id`、`version`、`runtime`、`inputs`、`outputs` 完整。
+```js
+import fs from "node:fs/promises";
 
-5. 将节点安装到 Flow：
+export default {
+  id: "count_lines",              // 必填，构成 marketplace:count_lines@1.0.0
+  version: "1.0.0",               // 必填，完整 semver
+  name: "统计行数",
+  description: "读一个文本文件，统计行数",
+  inputs: {
+    filePath: { type: "text", description: "文件路径", required: true },
+  },
+  outputs: {
+    total: { type: "text" },
+  },
+};
 
-   ```bash
-   agentflow marketplace install-node <FlowName> marketplace:<id>@<version> --json
-   agentflow validate <FlowName> --json
-   ```
+export async function run(inputs, outputs, dirs) {
+  const text = await fs.readFile(inputs.filePath, "utf-8");
+  const total = text.split("\n").length;
+  await fs.writeFile(outputs.total, String(total), "utf-8");
+  console.log(`共 ${total} 行`);   // 进度而已
+}
+```
 
-6. 启动本地 UI，在节点编辑器或 Flow 画布中确认节点卡片、端口和帮助文案；再用 `agentflow run` 或 UI 运行一个最小样例。
+在图里就是一条 import：
 
-## Manifest 约束
+```js
+import countLines from "./nodes/count-lines";
 
-- `id` 只使用小写字母、数字、`_`、`-`；版本使用完整 semver。
-- `runtime.type` 使用已有 builtin definition（例如 `tool_nodejs` 或 `agent_subAgent`），不要伪造运行时类型。
-- `inputs`/`outputs` 的顺序就是画布 handle 的顺序；新增或调整槽位后必须重新验证 Flow 连线。
-- 每个槽位至少提供 `type` 和 `name`；用户需要填写的槽位设置 `required: true` 和 `showOnNode: true`。
-- 脚本必须是可移植的 Node.js 实现，不要把本机绝对路径或密钥写入包。
+const count = countLines("统计行数", { filePath: pick.result });
+const show  = display.markdown("结果", { content: count.total });
+```
 
-## 权限与发布范围
+## 三条硬约束
 
-- `marketplace publish-node` 是本地 workspace 市场发布，不等于 npm 或 Hub 发布。
-- 普通用户只能覆盖自己拥有的同名节点；管理员可以治理所有者节点。
-- 需要分享给团队时，发布到团队约定的 workspace 或由管理员安装；不要直接把测试包放进 `builtin/nodes`。
+**① 声明必须是纯字面量。** `export default` 由 acorn **静态解析**——列节点面板、渲染画布、
+校验槽位、算运行缓存指纹，全程不执行包里的代码。目录扫描期执行第三方代码既慢又不安全。
 
-## Agent CLI 配合
+```js
+const T = "text";
+export default { inputs: { day: { type: T } } };        // ✗ 变量引用
+export default { ...base, id: "x" };                     // ✗ 展开
+export default { version: pkg.version };                 // ✗ 成员访问
+```
 
-Agent 可以使用自己擅长的 CLI 生成和修改节点；不要求调用 MCP。完成文件后统一通过 `agentflow` CLI 做确定性操作：
+违反时带位置报错（`export default.id: 只允许字面量，不允许 Identifier`），不会静默变成空
+清单让节点从面板上消失。
 
-- `marketplace publish-node`：发布本地节点包
-- `marketplace list`：确认节点版本和目录
-- `marketplace install-node`：写入 Flow 的 marketplace 依赖
-- `validate` / `run`：验证和执行
+**② `outputs.<name>` 是要写入的绝对路径，不是值。** 最容易搞错的一点。
 
-若 AgentFlow CLI 不在 PATH，可使用项目入口：`node bin/agentflow.mjs marketplace ...`。
+```js
+await fs.writeFile(outputs.total, String(total));   // ✓
+outputs.total = String(total);                      // ✗ 什么都没发生
+```
+
+每个声明过的输出槽各自一个文件。**第一个非控制输出槽**承载节点的结果正文。stdout 只在你
+**没有**为结果槽写文件时才当结果——所以 `console.log` 打进度不会盖掉你写进去的值。
+
+`file` 类型的输出槽同理，把**文件内容本身**写到 `outputs.<name>` 上：
+
+```js
+await fs.writeFile(outputs.deduped, csvText, "utf-8");            // ✓
+const p = path.join(dirs.outputsDir, "deduped.csv");
+await fs.writeFile(p, csvText); await fs.writeFile(outputs.deduped, p);   // ✗
+```
+
+第二种在测试里看着能过（下游确实拿到一个存在的路径），但槽文件才是被当成产物管理的东西，
+你自选的那个路径在真实运行时位于会被清理的临时目录里。
+
+**③ 槽位顺序 = 画布 handle 顺序。** `inputs` / `outputs` 是有序映射，控制槽 `prev` / `next`
+自动前置。改声明顺序等于改已有流程的接线，加槽位请往后加。
+
+可用类型：`text` `file` `bool` `node` `image` `json`。未知类型直接报错。
+
+## `run(inputs, outputs, dirs)`
+
+| 参数 | 内容 |
+|------|------|
+| `inputs` | 槽位名 → 上游传来的值。`file` 槽拿到的是路径 |
+| `outputs` | 槽位名 → **要写入的绝对路径** |
+| `dirs` | `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir` |
+
+失败 = 抛异常或非零退出。不要用 JSON 包裹 stdout，也不要自己造结果文件。
+
+`index.mjs` 是**普通 Node 模块**，会被真执行：`for` / `if` / `await` / 第三方依赖随便写。
+和 `workspace.flow.js` 那种「禁一切控制流」的结构文件完全两套规则。
+
+## 验证
+
+```bash
+agentflow flow dsl lint <flowDir>     # 声明能不能静态解析、接线对不对
+```
+
+然后在画布上跑一次。节点会以 `marketplace:<id>@<version>` 出现在面板里。
+
+## 发布给别的流程用
+
+流程自带的 `nodes/<name>/` 只有那个流程能用。要复用就发布：
+
+```bash
+agentflow marketplace publish-node <flowDir>/nodes/<name>
+agentflow marketplace list
+```
+
+包会被复制到 `.workspace/agentflow/marketplace/packages/nodes/<id>/<version>`。
+
+解析 `marketplace:<id>@<version>` 的顺序是**流程本地 → 已发布 → 集合**：流程自己的实现永远
+不会被同名的已发布包顶掉。
+
+已发布的包在图里没有本地路径可 import，所以它的形态是「基础类型 + `marketplaceRef`」，引用
+信息落在 `workspace.nodes.json` 里，不写进 `workspace.flow.js`。
+
+## 别做的事
+
+- **不要写 `node.yaml`。** 它只是已发布老包的回退清单，新包一律用 `index.mjs`。
+- **不要写 `runtime.entry` / `scripts/run.mjs`。** 那是老 manifest 的字段，现在实现就在
+  `index.mjs` 的 `run` 里。
+- **不要用 `agentflow marketplace install-node`。** 它往 `flow.yaml` 里写依赖，对代码流程
+  没有任何效果——直接在 `workspace.flow.js` 里写 import 就行。
+- **不要用 `agentflow run` / `apply`。** Start/End Pipeline 执行栈已退休，运行走 Workspace。
+- **不要把本机绝对路径或密钥写进包。**
+
+## 相关
+
+- `agentflow-flow-dsl`：图怎么写，import 代码节点的语法
+- `agentflow-node-reference`：内置节点类型的槽位表
+- `docs/wiki/code-node-packages.zh-CN.md`：更完整的说明

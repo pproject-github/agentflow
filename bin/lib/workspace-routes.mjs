@@ -16,12 +16,14 @@ import { startComposerAgent } from "./composer-agent.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
 import { runGit } from "./git-worktree.mjs";
+import { publishNodePackage } from "./marketplace.mjs";
+import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } from "./node-package-manifest.mjs";
 import { json, readBody } from "./http-util.mjs";
 import { log } from "./log.mjs";
 import { PACKAGE_ROOT, getAgentflowUserDataRoot } from "./paths.mjs";
 import { runLedgerId } from "./run-ledger.mjs";
 import { getTeamById, getTeamForUser } from "./teams.mjs";
-import { readMergedEnvObject } from "./user-env.mjs";
+import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
 import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
@@ -32,6 +34,7 @@ import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import sharp from "sharp";
 import { pathToFileURL } from "url";
@@ -296,6 +299,201 @@ function normalizeNodeStudioDraftId(value) {
 
 function nodeStudioDraftPath(userCtx = {}, draftId = "") {
   return path.join(nodeStudioDraftsRoot(userCtx), normalizeNodeStudioDraftId(draftId), "draft.json");
+}
+
+/**
+ * 草稿里那个**真的包目录**。
+ *
+ * 单独一层 `package/` 而不是和 `draft.json` 同级：`publishNodePackage` 是整目录 `cpSync`，
+ * 同级的话草稿元数据会被一起发布出去。
+ */
+function nodeStudioPackageDir(userCtx = {}, draftId = "") {
+  return path.join(nodeStudioDraftsRoot(userCtx), normalizeNodeStudioDraftId(draftId), "package");
+}
+
+/**
+ * 把包目录静态解析回草稿的 manifest。
+ *
+ * 草稿里的 manifest **不是**另一份真相，而是 `index.mjs` 声明的投影——面板、画布、运行时
+ * 读的都是那份声明，草稿再存一份手写的只会两边对不上。解析不出来就把错误留在草稿里，
+ * 让用户看见，而不是留一个上一次的旧清单假装没事。
+ */
+function nodeStudioReadPackage(userCtx = {}, draftId = "") {
+  const dir = nodeStudioPackageDir(userCtx, draftId);
+  const entry = path.join(dir, NODE_PACKAGE_ENTRY);
+  if (!fs.existsSync(entry)) return { source: "", manifest: null, error: "" };
+  const source = fs.readFileSync(entry, "utf-8");
+  try {
+    const manifest = readNodePackageManifest(dir, () => null);
+    if (!manifest) return { source, manifest: null, error: `${NODE_PACKAGE_ENTRY} 里没有可解析的 export default 声明` };
+    if (!nodePackageExportsRun(entry)) return { source, manifest, error: "缺少 `export function run`，节点无法执行" };
+    return { source, manifest, error: "" };
+  } catch (e) {
+    return { source, manifest: null, error: (e && e.message) || String(e) };
+  }
+}
+
+/** 草稿里由包声明决定的那几个字段。手写的 title/config 不在这里，不会被覆盖。 */
+function nodeStudioDraftFromPackage(pkg, draftId) {
+  const manifest = pkg.manifest;
+  if (!manifest) {
+    return { files: { [NODE_PACKAGE_ENTRY]: pkg.source || "" }, parseError: pkg.error || "" };
+  }
+  return {
+    title: manifest.displayName || manifest.id || draftId,
+    definitionId: manifest.definitionId || `marketplace:${manifest.id}@${manifest.version}`,
+    manifest,
+    files: { [NODE_PACKAGE_ENTRY]: pkg.source || "" },
+    parseError: "",
+  };
+}
+
+/**
+ * 在包目录里跑一次 Agent，让它改写 `index.mjs`。
+ *
+ * `cliWorkspace` 就是包目录：Agent 的工作目录即它要写的地方，不用在提示里报绝对路径，
+ * 也就写不到别的地方去。
+ */
+async function runNodeStudioAgent({ packageDir, userCtx, modelKey, prompt }) {
+  const segments = [];
+  let result = "";
+  const handle = startComposerAgent({
+    uiWorkspaceRoot: packageDir,
+    cliWorkspace: packageDir,
+    writableDirs: [packageDir],
+    prompt,
+    modelKey,
+    agentflowUserId: userCtx.userId || "",
+    onStreamEvent: (ev) => {
+      if (ev?.type !== "natural" || typeof ev.text !== "string") return;
+      const text = ev.text.trim();
+      if (!text) return;
+      if (ev.kind === "assistant") segments.push(text);
+      else if (ev.kind === "result") result = text;
+    },
+  });
+  await handle.finished;
+  return result || segments.at(-1) || "";
+}
+
+/**
+ * 用运行时那套 bootstrap 真跑一次包，而不是另写一个测试执行器。
+ *
+ * 走同一条路才有意义：Node Studio 里跑得过、画布上跑不过，这种测试不如没有。输出槽落在
+ * 临时目录，测完连目录一起删。
+ */
+async function runNodeStudioPackageTest({ packageDir, manifest, inputs, userCtx }) {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-node-test-"));
+  const outputsDir = path.join(runDir, "outputs");
+  fs.mkdirSync(outputsDir, { recursive: true });
+  const outputSlots = (Array.isArray(manifest.output) ? manifest.output : [])
+    .filter((slot) => String(slot?.type || "") !== "node" && slot?.name !== "next");
+  const outputAbs = Object.fromEntries(outputSlots.map((slot) => [slot.name, path.join(outputsDir, `${slot.name}`)]));
+  const startedAt = Date.now();
+  try {
+    const child = await execFileBuffered(
+      process.execPath,
+      [path.join(PACKAGE_ROOT, "bin", "lib", "node-package-bootstrap.mjs"), path.join(packageDir, NODE_PACKAGE_ENTRY)],
+      {
+        cwd: runDir,
+        env: runtimeEnvForUser(userCtx, {
+          AGENTFLOW_WORKSPACE_ROOT: runDir,
+          AGENTFLOW_NODE_RUN_DIR: runDir,
+          AGENTFLOW_NODE_TMP_DIR: runDir,
+          AGENTFLOW_OUTPUTS_DIR: outputsDir,
+          AGENTFLOW_INPUTS_JSON: JSON.stringify(inputs || {}),
+          AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify(outputAbs),
+          AGENTFLOW_OUTPUTS_JSON: JSON.stringify(
+            Object.fromEntries(outputSlots.map((slot) => [slot.name, `outputs/${slot.name}`])),
+          ),
+        }),
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    const log = [];
+    for (const line of String(child.stdout || "").split("\n")) if (line.trim()) log.push(line);
+    for (const line of String(child.stderr || "").split("\n")) if (line.trim()) log.push(`[stderr] ${line}`);
+    const outputs = {};
+    for (const [name, abs] of Object.entries(outputAbs)) {
+      if (!fs.existsSync(abs)) continue;
+      const text = fs.readFileSync(abs, "utf-8");
+      outputs[name] = text.length > 4000 ? `${text.slice(0, 4000)}…` : text;
+      log.push(`[output] ${name} = ${outputs[name].split("\n")[0].slice(0, 120)}`);
+    }
+    const missing = outputSlots.map((s) => s.name).filter((name) => !(name in outputs));
+    if (missing.length) log.push(`[warn] 这些输出槽没有写文件：${missing.join(", ")}`);
+    // 把「文件写到别处、只把路径写进槽」这种写法在测试阶段就点出来。它在这里看着能过——
+    // 路径确实存在——但真实运行时那个位置是会被清理的临时目录，产物就丢了。
+    for (const slot of outputSlots) {
+      const value = String(outputs[slot.name] || "").trim();
+      if (String(slot.type || "") !== "file" || !value || value.includes("\n")) continue;
+      if (!path.isAbsolute(value)) continue;
+      log.push(`[warn] ${slot.name} 是 file 槽，但里面写的是一个路径而不是文件内容——请直接把内容写到 outputs.${slot.name}`);
+    }
+    return { status: "passed", durationMs: Date.now() - startedAt, log, outputs };
+  } catch (e) {
+    const log = [];
+    for (const line of String(e?.stdout || "").split("\n")) if (line.trim()) log.push(line);
+    for (const line of String(e?.stderr || "").split("\n")) if (line.trim()) log.push(`[stderr] ${line}`);
+    log.push(`[error] ${(e && e.message) || String(e)}`);
+    return { status: "failed", durationMs: Date.now() - startedAt, log, outputs: {} };
+  } finally {
+    fs.rmSync(runDir, { recursive: true, force: true });
+  }
+}
+
+function buildNodeStudioPrompt({ requirement, currentSource, parseError, history }) {
+  const historyBlock = (Array.isArray(history) ? history : [])
+    .slice(-8)
+    .map((msg) => {
+      const text = String(msg?.text || "").trim();
+      return text ? `${msg?.role === "user" ? "user" : "assistant"}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  return [
+    "你在为 AgentFlow 编写一个**代码节点包**。工作目录就是这个包的目录。",
+    "",
+    `把完整实现写进 \`${NODE_PACKAGE_ENTRY}\`（覆盖已有内容），然后回复一句话说明这次改了什么。`,
+    "不要创建别的文件，不要写 node.yaml。",
+    "",
+    "## 格式",
+    "",
+    "```js",
+    'import fs from "node:fs/promises";',
+    "",
+    "export default {",
+    '  id: "count_lines",            // 必填，小写字母数字下划线短横',
+    '  version: "1.0.0",             // 必填，完整 semver',
+    '  name: "统计行数",',
+    '  description: "读一个文本文件，统计行数",',
+    '  inputs:  { filePath: { type: "text", description: "文件路径", required: true } },',
+    '  outputs: { total: { type: "text" } },',
+    "};",
+    "",
+    "export async function run(inputs, outputs, dirs) {",
+    '  const text = await fs.readFile(inputs.filePath, "utf-8");',
+    "  await fs.writeFile(outputs.total, String(text.split(\"\\n\").length));",
+    "}",
+    "```",
+    "",
+    "## 三条硬约束",
+    "",
+    "1. `export default` 由 acorn **静态解析，永不执行**，所以它必须是纯字面量——任何变量",
+    "   引用、函数调用、展开运算都会被拒绝。`run` 里则是普通 Node 模块，随便写。",
+    "2. `outputs.<name>` 是**要写入的绝对路径，不是值**。`await fs.writeFile(outputs.x, 值)`。",
+    "   声明了几个输出槽就各写各的文件；第一个非控制输出槽承载结果正文。",
+    "   `file` 类型的槽同理——把**文件内容本身**写到 `outputs.<name>` 上。不要另找一个地方",
+    "   写完文件、再把那个路径当字符串写进槽里：槽文件才是下游拿到的产物，你自选的路径在",
+    "   真实运行时位于会被清理的临时目录里。",
+    "3. 槽位类型只能是 `text` `file` `bool` `node` `image` `json`。声明顺序 = 画布上的引脚顺序。",
+    "",
+    "失败用抛异常或非零退出表示，不要把 stdout 包成 JSON。",
+    currentSource ? `\n## 当前 ${NODE_PACKAGE_ENTRY}\n\n\`\`\`js\n${currentSource}\n\`\`\`` : "",
+    parseError ? `\n## 上一版解析失败，必须修掉\n\n${parseError}` : "",
+    historyBlock ? `\n## 对话历史\n\n${historyBlock}` : "",
+    `\n## 本次需求\n\n${String(requirement || "").trim()}`,
+  ].filter((line) => line !== "").join("\n");
 }
 
 function emptyNodeStudioDraft(userCtx = {}, draftId = "") {
@@ -2472,14 +2670,48 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       try {
-        const current = readNodeStudioDraft(userCtx, payload.id || "") || emptyNodeStudioDraft(userCtx, payload.id || "untitled_node");
+        const draftId = normalizeNodeStudioDraftId(payload.id || "untitled_node");
+        const current = readNodeStudioDraft(userCtx, draftId) || emptyNodeStudioDraft(userCtx, draftId);
         const promptDraft = payload.promptDraft != null ? String(payload.promptDraft) : current.promptDraft || "";
         const agentMessages = Array.isArray(current.agentMessages) ? [...current.agentMessages] : [];
-        if (payload.appendUserMessage === true && promptDraft.trim()) {
+        const generate = payload.appendUserMessage === true && promptDraft.trim();
+
+        if (generate) {
           const at = new Date().toISOString();
           agentMessages.push({ role: "user", text: promptDraft.trim(), at });
-          agentMessages.push({ role: "assistant", text: "已记录需求，下一步会由节点 Agent 更新 manifest、脚本和 UI schema。", at });
+          const packageDir = nodeStudioPackageDir(userCtx, draftId);
+          fs.mkdirSync(packageDir, { recursive: true });
+          const before = nodeStudioReadPackage(userCtx, draftId);
+          const reply = await runNodeStudioAgent({
+            packageDir,
+            userCtx,
+            modelKey: typeof payload.model === "string" ? payload.model.trim() : "",
+            prompt: buildNodeStudioPrompt({
+              requirement: promptDraft,
+              currentSource: before.source,
+              parseError: before.error,
+              history: current.agentMessages,
+            }),
+          });
+          const after = nodeStudioReadPackage(userCtx, draftId);
+          agentMessages.push({
+            role: "assistant",
+            at: new Date().toISOString(),
+            text: after.error
+              ? `${reply || "已改写 index.mjs"}\n\n⚠️ 解析失败：${after.error}`
+              : (reply || `已写出 ${after.manifest?.id}@${after.manifest?.version}`),
+            error: Boolean(after.error),
+          });
+          const draft = writeNodeStudioDraft(userCtx, {
+            ...current,
+            ...nodeStudioDraftFromPackage(after, draftId),
+            promptDraft: "",
+            agentMessages,
+          });
+          json(res, 200, { ok: true, draft });
+          return;
         }
+
         const draft = writeNodeStudioDraft(userCtx, {
           ...current,
           ...(payload.config && typeof payload.config === "object" ? { config: { ...(current.config || {}), ...payload.config } } : {}),
@@ -2487,6 +2719,81 @@ async function workspaceRoutes(req, res, ctx) {
           agentMessages,
         });
         json(res, 200, { ok: true, draft });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/node-studio/publish") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const draftId = normalizeNodeStudioDraftId(payload.id || "");
+        if (!readNodeStudioDraft(userCtx, draftId)) {
+          json(res, 404, { error: "草稿不存在" });
+          return;
+        }
+        // 发布前必须解析得过。发布一个读不出声明的包，等于往 marketplace 里放一个在面板上
+        // 根本不出现的条目——问题会在别人安装它的时候才暴露。
+        const pkg = nodeStudioReadPackage(userCtx, draftId);
+        if (!pkg.source) {
+          json(res, 400, { error: `还没有 ${NODE_PACKAGE_ENTRY}，先让 Agent 生成` });
+          return;
+        }
+        if (pkg.error) {
+          json(res, 400, { error: pkg.error });
+          return;
+        }
+        const result = publishNodePackage(root, nodeStudioPackageDir(userCtx, draftId));
+        if (!result.ok) {
+          json(res, 400, { error: result.error || "发布失败" });
+          return;
+        }
+        json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/node-studio/test") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const draftId = normalizeNodeStudioDraftId(payload.id || "");
+        const current = readNodeStudioDraft(userCtx, draftId);
+        if (!current) {
+          json(res, 404, { error: "草稿不存在" });
+          return;
+        }
+        const pkg = nodeStudioReadPackage(userCtx, draftId);
+        if (pkg.error || !pkg.manifest) {
+          json(res, 400, { error: pkg.error || `还没有 ${NODE_PACKAGE_ENTRY}` });
+          return;
+        }
+        const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
+        const result = await runNodeStudioPackageTest({
+          packageDir: nodeStudioPackageDir(userCtx, draftId),
+          manifest: pkg.manifest,
+          inputs,
+          userCtx,
+        });
+        const draft = writeNodeStudioDraft(userCtx, {
+          ...current,
+          test: { inputs, log: result.log, status: result.status, durationMs: result.durationMs },
+        });
+        json(res, 200, { ok: true, draft, ...result });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
