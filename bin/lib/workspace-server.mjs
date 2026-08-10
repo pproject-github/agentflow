@@ -2924,6 +2924,11 @@ function workspaceControlIfBranchToSourceHandle(branch) {
  *
  * @returns {string} 24 位十六进制；节点不存在时为空串
  */
+// 分隔符必须是正文不可能出现的字符，否则 `a=x` + `b=y` 会和一个正文里带空格的槽撞出同一个
+// 指纹。写成转义而不是直接敲一个 NUL 进源码——裸控制字符会让 grep 把整个文件当二进制，
+// 从此对它的搜索全部静默返回空。
+const FINGERPRINT_SEP = "\u0000";
+
 export function workspaceNodeInputFingerprint(graph, nodeId, memo = new Map(), stack = new Set()) {
   const id = String(nodeId || "");
   if (memo.has(id)) return memo.get(id);
@@ -2971,7 +2976,7 @@ export function workspaceNodeInputFingerprint(graph, nodeId, memo = new Map(), s
   }
 
   stack.delete(id);
-  const fp = crypto.createHash("sha256").update(parts.join(" ")).digest("hex").slice(0, 24);
+  const fp = crypto.createHash("sha256").update(parts.join(FINGERPRINT_SEP)).digest("hex").slice(0, 24);
   memo.set(id, fp);
   return fp;
 }
