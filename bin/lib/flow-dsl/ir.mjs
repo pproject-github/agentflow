@@ -148,6 +148,47 @@ export function graphToIr(graph) {
 }
 
 /**
+ * 自定义输入槽的类型推断：**跟着连它的那个上游输出槽走**。
+ *
+ * 代码里 `{ sample: count.sample }` 只说了「接哪」，没说这个槽是什么类型——而类型决定运行时
+ * 怎么送值：`workspaceLinkedOutputShouldStayPath` 看的是**目标槽**的 type，`file` 才保留路径，
+ * 否则把文件内容读出来内联。自定义槽以前一律建成 `text`，于是一个 `file` 输出接过去，脚本
+ * 拿到的是整个文件的内容（还被 shell 引号包住）：
+ *
+ *     wc -l < '2026-08-10 row-1
+ *     2026-08-10 row-2'          →  No such file or directory
+ *
+ * 唯一能救的是名字启发式（`xxxPath` / `xxxFile` 结尾），也就是说对不对全看作者怎么起名。
+ * 改成随上游走之后，`{ sample: count.sample }` 直接就是 `file` 槽。
+ *
+ * 只有 `bool` 能被代码自己带回来（字面量 `true` 看得出类型）；其余偏离推断的类型由
+ * `layout.json` 的 `pins.<kind>.<name>.type` 记一条——和 `pinOrder` 同一个套路，
+ * 只记偏离，历史数据因此原样往返。
+ *
+ * @param {object} ir
+ * @returns {(nodeId: string, slotName: string) => string}
+ */
+export function customInputTypeResolver(ir) {
+  const wired = new Map();
+  for (const key of ir?.edges || []) {
+    const [source, fromSlot, target, toSlot] = String(key).split("|");
+    if (target && toSlot && !wired.has(`${target}|${toSlot}`)) wired.set(`${target}|${toSlot}`, { source, fromSlot });
+  }
+  const outputTypeOf = (nodeId, slotName) => {
+    const node = ir?.nodes?.[nodeId];
+    if (!node) return "";
+    const defSlots = node.packageDef ? node.packageDef.output : definitionOf(node.definitionId).output;
+    return String((defSlots || []).find((s) => s?.name === slotName)?.type || "");
+  };
+  return (nodeId, slotName) => {
+    const link = wired.get(`${nodeId}|${slotName}`);
+    if (!link) return "text";
+    // 上游是自定义输出槽（解构出来的）时查不到类型，那就还是 text
+    return outputTypeOf(link.source, link.fromSlot) || "text";
+  };
+}
+
+/**
  * IR + layout -> 设计态图。
  *
  * 槽位数组按「定义表顺序 + 代码里出现的自定义槽」重建；layout 里记了 `pinOrder`
@@ -156,6 +197,7 @@ export function graphToIr(graph) {
 export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) {
   const instances = {};
   const slotIndex = {};
+  const inferInputType = customInputTypeResolver(ir);
 
   for (const [id, node] of Object.entries(ir.nodes)) {
     const def = definitionOf(node.definitionId);
@@ -174,7 +216,12 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
       const byName = new Map(defSlots.map((s) => [s.name, s]));
       return names.map((name) => {
         const d = byName.get(name);
-        const custom = kind === "in" ? node.inputTypes?.[name] : undefined;
+        const overrides = layoutEntry.pins?.[kind]?.[name] || {};
+        // 自定义槽的类型：代码里带得回来的（bool 字面量）优先，其次 layout 记的偏离，
+        // 最后随上游输出槽推断
+        const custom = kind === "in"
+          ? (node.inputTypes?.[name] || overrides.type || inferInputType(id, name))
+          : undefined;
         const slot = {
           type: d ? d.type : (custom || (name === "prev" || name === "next" ? "node" : "text")),
           name,
@@ -183,7 +230,6 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
         if (d?.description) slot.description = d.description;
         if (d?.required) slot.required = true;
         if (d?.showOnNode) slot.showOnNode = true;
-        const overrides = layoutEntry.pins?.[kind]?.[name] || {};
         for (const key of ["showOnNode", "required"]) {
           if (key in overrides) slot[key] = overrides[key];
         }

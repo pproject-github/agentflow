@@ -12,7 +12,7 @@
  * 这一条踩过坑：把「没写 showOnNode」当成 `false` 会凭空造出一堆假的覆盖记录。
  */
 import { definitionOf } from "./defs.mjs";
-import { NODE_META_KEYS, bodyMirrorSuppressed } from "./ir.mjs";
+import { NODE_META_KEYS, bodyMirrorSuppressed, customInputTypeResolver } from "./ir.mjs";
 
 function canonicalSlotNames(defSlots, extras) {
   return [...defSlots.map((s) => s.name), ...extras.filter((x) => !defSlots.some((s) => s.name === x))];
@@ -39,6 +39,7 @@ export function extractLayout(designGraph, ir) {
   }
 
   const nodeMeta = { version: 1, nodes: {} };
+  const inferInputType = customInputTypeResolver(ir);
 
   // 按 id 排序而不是按插入顺序：instances 的键序会随一次往返而变（irToGraph 按 IR 顺序
   // 重建），不定序会让「没改任何东西的再保存」也产生 diff。
@@ -59,6 +60,7 @@ export function extractLayout(designGraph, ir) {
     }
 
     const pins = {};
+    const irNode = ir.nodes[id];
     for (const [kind, slots, defSlots] of [
       ["in", instance.input || [], def.input],
       ["out", instance.output || [], def.output],
@@ -73,11 +75,17 @@ export function extractLayout(designGraph, ir) {
             ((pins[kind] ||= {})[slot.name] ||= {})[key] = actual;
           }
         }
+        // 自定义输入槽的类型偏离了「随上游走」的推断时记一条。代码自己带得回来的
+        // bool（字面量）不用记——记了也只是重复，还会让存量流程的 layout 平白多出 diff。
+        if (kind !== "in" || d || !irNode?.extraIn?.includes(slot.name)) continue;
+        const actual = String(slot.type || "text");
+        if (actual === inferInputType(id, slot.name)) continue;
+        if (irNode.inputTypes?.[slot.name] === actual && actual === "bool") continue;
+        ((pins.in ||= {})[slot.name] ||= {}).type = actual;
       }
     }
     if (Object.keys(pins).length) entry.pins = pins;
 
-    const irNode = ir.nodes[id];
     for (const [kind, slots, extras] of [
       ["in", instance.input || [], irNode?.extraIn || []],
       ["out", instance.output || [], irNode?.extraOut || []],
