@@ -100,7 +100,10 @@
       "Bash(perl -0pi -e 's/if \\\\\\(String\\\\\\(source\\\\.runFingerprint \\\\|\\\\| \"\"\\\\\\) !== workspaceNodeInputFingerprint\\\\\\(graph, sourceId, memo\\\\\\)\\\\\\) return false;/if \\(false\\) return false;/' bin/lib/workspace-server.mjs)",
       "Bash(perl -0pi -e 's/\\(\\\\{\\\\n          forceNodeIds: Array\\\\.isArray\\\\\\(payload\\\\.forceNodeIds\\\\\\) \\\\? payload\\\\.forceNodeIds : \\\\[\\\\],\\\\n\\)\\(        \\\\}\\\\\\)\\)/$1          ignoreCache: payload.ignoreCache === true,\\\\n$2/g' bin/lib/workspace-routes.mjs)",
       "Bash(perl -0pi -e 's/\\\\.af-work-run-card__optimize,\\\\n\\\\.af-work-run-card__logs \\\\{/.af-work-run-card__optimize,\\\\n.af-work-run-card__rerun,\\\\n.af-work-run-card__logs {/; s/\\\\.af-work-run-card__optimize \\\\.material-symbols-outlined,\\\\n\\\\.af-work-run-card__logs \\\\.material-symbols-outlined \\\\{/.af-work-run-card__optimize .material-symbols-outlined,\\\\n.af-work-run-card__rerun .material-symbols-outlined,\\\\n.af-work-run-card__logs .material-symbols-outlined {/' builtin/web-ui/src/index.css)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(perl -0pi -e 's/if \\\\\\(selfRunningIds\\\\?\\\\.has\\\\\\(targetId\\\\\\)\\\\\\) continue;/if \\(false\\) continue;/' bin/lib/workspace-server.mjs)",
+      "Bash(perl -0pi -e 's/\\\\\\(\\\\\\(pins\\\\.in \\\\|\\\\|= \\\\{\\\\}\\\\\\)\\\\[slot\\\\.name\\\\] \\\\|\\\\|= \\\\{\\\\}\\\\\\)\\\\.type = actual;/\\\\/* removed *\\\\/;/' bin/lib/flow-dsl/layout.mjs)",
+      "Bash(git branch *)"
     ]
   }
 }
