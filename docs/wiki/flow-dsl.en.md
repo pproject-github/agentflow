@@ -5,14 +5,63 @@ the canvas writes it; opening the canvas reads it. `workspace.graph.json` is dem
 read-only legacy format.
 
 ```bash
-agentflow flow dsl migrate <FlowName|dir>                # graph.json -> flow.js, in place
-agentflow flow dsl lint    <dir>                         # static validation
-agentflow flow dsl export  <FlowName|dir> [--out <dir>]  # write a copy elsewhere
-agentflow flow dsl import  <dir> [--out <flowDir>]       # back to graph.json (for audits)
+agentflow flow dsl migrate <FlowName|dir> [--allow-loss]  # graph.json / flow.yaml -> flow.js, in place
+agentflow flow dsl lint    <dir>                          # static validation
+agentflow flow dsl export  <FlowName|dir> [--out <dir>]   # write a copy elsewhere
+agentflow flow dsl import  <dir> [--out <flowDir>]        # back to graph.json (for audits)
 ```
 
 Existing flows need no manual migration: with no `workspace.flow.js`, `workspace.graph.json`
 is read as before and the next save converts it. `migrate` just makes that happen sooner.
+
+## Migrating in from flow.yaml
+
+`flow.yaml` is a different story. Since the Start/End execution stack was retired it has become
+a **tombstone**: the directory sentinel recognizes it, so the flow still shows up in the list;
+the graph reader does not, so opening it shows an empty canvas — it cannot run and cannot be
+edited, and the body / prompt / script inside are stranded.
+
+The two formats have an identical shape (`instances` / `edges` / `ui`, index-based `output-N`
+handles); what differs is the **node vocabulary**: a set of nodes yaml uses is `runtime: none`
+in the Workspace runtime. So migration is a rewording:
+
+| yaml node | becomes | note |
+|---|---|---|
+| `control_start` | `workspace_run` | the legacy entry point *is* the Workspace run node |
+| `control_end` | dropped | Workspace ends when nothing follows; no end node to express |
+| `tool_print` | `display_markdown` | |
+| `control_toBool` | `control_agent_toBool` | ⚠️ deterministic parsing becomes an agent judgment |
+| `control_anyOne` / `tool_user_check` / `tool_user_ask` / other `runtime: none` | **no equivalent** | dropped |
+
+Edges are rewired **by slot name**, not by index — `tool_print`'s `next` sits at index 0 while
+`display_markdown`'s `next` sits at index 1 (index 0 is the `content` output). Copying indices
+would attach a control edge to a content slot: the graph still looks connected and only breaks
+at run time. Slots the legacy flow renamed (e.g. a content slot called `summary`) are genuinely
+renamed and reported, because the display runtime resolves `content` by name.
+
+**Lossy migration is refused by default**: if any node or edge cannot be carried over, the
+command stops, prints the list, and does not touch a single byte on disk. Review it, then pass
+`--allow-loss`. `control_end` and edges into it are the one exception — dropping them loses
+nothing, so they never block.
+
+The `flow.yaml` original is kept. After migration `workspace.flow.js` is authoritative (the
+reader looks there first) and the yaml stays behind as source material.
+
+Falling short of code form still counts as success: fields like a `tool_nodejs` node carrying
+both `script` and `body`, or a `control_if` with a `body`, have nowhere to live in code, so the
+round-trip gate sends the flow back to `workspace.graph.json`. That is still a successful
+migration — `graph.json` can be read, rendered and run, and yaml can do none of the three.
+
+### Flows on the platform
+
+Deployed flows are not on your local disk; the same exit exists over HTTP:
+
+```bash
+agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
+```
+
+It maps to `POST /api/workspace/migrate` with identical semantics (refuses loss by default,
+returns the same report, keeps the yaml). Builtin and archived flows are read-only and refused.
 
 ## Why code
 

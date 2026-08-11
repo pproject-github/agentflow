@@ -120,6 +120,18 @@ Read one flow graph:
 node skills/agentflow-cli/scripts/agentflow-cli.mjs get-graph --flow-id TestNodes --flow-source user
 ```
 
+Migrate a flow that is still stored as `flow.yaml`. These show up in the list
+but open as an empty canvas — they cannot run or be edited until migrated:
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-flow --flow-id <id> --flow-source user
+```
+
+Lossy migration is refused by default: nodes with no Workspace equivalent
+(`control_anyOne`, the two human-gate nodes, …) come back in a `dropped` list
+and nothing is written. Show the user that list and get explicit confirmation
+before rerunning with `--allow-loss`. The `flow.yaml` original is never deleted.
+
 Upload a Workspace graph to a server-side temporary preview project (the
 server returns a Workspace URL and cleans the project after its TTL):
 

@@ -54,6 +54,7 @@ Commands:
   list-flows
   publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
+  migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
   workspace-preview --file <flowDir|workspace.flow.js|workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
@@ -498,6 +499,24 @@ async function main() {
     const flowId = requireFlowId(args);
     const flowSource = option(args, "flow-source") || "user";
     printJson(await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`));
+    return;
+  }
+
+  // 平台上还停在 flow.yaml 的老流程：列在列表里、点开是空图、跑不了。这条命令是它们的出口。
+  // 默认拒绝有损迁移并把清单打出来，看过之后再加 --allow-loss。
+  if (command === "migrate-flow") {
+    const flowId = requireFlowId(args);
+    const result = await httpJson(args, "/api/workspace/migrate", {
+      method: "POST",
+      body: {
+        flowId,
+        flowSource: option(args, "flow-source") || "user",
+        allowLoss: args["allow-loss"] === true,
+      },
+    });
+    printJson(result);
+    // 只有「因为有损而拒绝」才算失败。已经是代码形态是空操作，不是错。
+    if (result.format === "yaml") process.exitCode = 1;
     return;
   }
 

@@ -25,7 +25,6 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code / Codex CLI 流式输�
   agentflow extract-thinking <flowName> <uuid>  从该次 run 的 logs/log.txt 提取 thinking，写入 logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             列出所有存在 logs/log.txt 的 run（可接 --json）
   agentflow update-model-lists            拉取 Cursor / OpenCode / Claude Code / Codex 模型列表并写入 ~/agentflow/model-lists.json
-  agentflow write-flow <flowId> --json --flow-source <user|workspace>   从 stdin 读入 YAML 写入用户目录或工作区（builtin 已弃用，将视为 workspace）
   agentflow --help
 
 选项：
@@ -87,7 +86,6 @@ Usage:
   agentflow extract-thinking <flowName> <uuid>  Extract thinking from run logs/log.txt, write to logs/thinking_by_session_and_nodes.md
   agentflow extract-thinking -list             List all runs with logs/log.txt (use --json)
   agentflow update-model-lists            Fetch Cursor / OpenCode / Claude Code / Codex model lists to ~/agentflow/model-lists.json
-  agentflow write-flow <flowId> --json --flow-source <user|workspace>   Read YAML from stdin and write to user dir or workspace (builtin deprecated, treated as workspace)
   agentflow --help
 
 Options:

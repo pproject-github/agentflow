@@ -18,7 +18,6 @@ import {
   readFlowJson,
   readNodeJson,
 } from "./catalog-flows.mjs";
-import { writeFlowYaml } from "./flow-write.mjs";
 import { printHelp } from "./help.mjs";
 import { LOG_LEVELS, log, setLogLevel, setMachineReadable } from "./log.mjs";
 import { updateModelLists } from "./model-lists.mjs";
@@ -35,6 +34,31 @@ async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * 把 yaml 迁移的损耗清单打到 stderr。
+ *
+ * 迁移唯一的卖点就是「丢了什么当场说清楚」，所以这段在成功和拒绝两种结局下都要打——
+ * `--allow-loss` 迁过去了不代表没丢东西，只代表用户认了。
+ */
+function writeMigrationLoss(result) {
+  for (const r of result.remapped || []) {
+    process.stderr.write(`${chalk.cyan("换词")}   ${r.id}: ${r.from} -> ${r.to}\n`);
+    for (const rn of r.renamedSlots || []) process.stderr.write(`         槽位 ${rn}\n`);
+    for (const f of r.droppedFields || []) {
+      // 原文照打——新节点装不下，用户得能直接捡走贴到别处
+      process.stderr.write(`         ${chalk.yellow("丢")} ${f.field}: ${JSON.stringify(f.text)}\n`);
+    }
+    if (r.caveat) process.stderr.write(`         ${chalk.yellow("!")} ${r.caveat}\n`);
+  }
+  for (const d of result.dropped || []) {
+    process.stderr.write(`${chalk.red("丢节点")} ${d.id} (${d.definitionId})：${d.reason}\n`);
+  }
+  for (const e of result.droppedEdges || []) {
+    process.stderr.write(`${chalk.red("丢边")}   ${e.source} -> ${e.target}：${e.reason}\n`);
+  }
+  for (const w of result.warnings || []) process.stderr.write(`${chalk.yellow("warn")}   ${w}\n`);
 }
 
 export async function main() {
@@ -94,7 +118,6 @@ export async function main() {
     "list-flows",
     "list-nodes",
     "read-flow",
-    "write-flow",
     "read-node",
     "copy-builtin",
     "list-agents",
@@ -270,40 +293,11 @@ export async function main() {
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(result.success ? 0 : 1);
   }
-  if (sub === "write-flow" && jsonMode) {
-    let flowSource = "user";
-    const flowSourceIdx = argv.indexOf("--flow-source");
-    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
-      flowSource = argv[flowSourceIdx + 1];
-      argv.splice(flowSourceIdx, 2);
-    }
-    if (flowSource === "builtin") {
-      process.stderr.write(
-        "agentflow: --flow-source builtin 已弃用（包内 builtin 不可写）；已按 workspace 写入 .workspace/agentflow/pipelines。\n",
-      );
-      flowSource = "workspace";
-    }
-    if (flowSource !== "user" && flowSource !== "workspace") {
-      process.stdout.write(
-        JSON.stringify({ success: false, error: "Invalid --flow-source (use user or workspace)" }) + "\n",
-      );
-      process.exit(1);
-    }
-    const flowId = argv.find((a) => !a.startsWith("--"));
-    if (!flowId) {
-      process.stdout.write(JSON.stringify({ success: false, error: "Missing flowId" }) + "\n");
-      process.exit(1);
-    }
-    const flowYaml = await readStdin();
-    const result = writeFlowYaml(workspaceRoot, flowId, flowSource, flowYaml);
-    process.stdout.write(JSON.stringify(result.success ? { success: true } : result) + "\n");
-    process.exit(result.success ? 0 : 1);
-  }
   if (sub === "flow" && argv[0] === "dsl") {
     shift();
     const action = shift();
     const target = shift();
-    const usage = "Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]";
+    const usage = "Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>] [--allow-loss]";
     if (!action || !target) throw new Error(usage);
     let outDir = "";
     const outIdx = argv.indexOf("--out");
@@ -311,6 +305,10 @@ export async function main() {
       outDir = path.resolve(workspaceRoot, argv[outIdx + 1]);
       argv.splice(outIdx, 2);
     }
+    // 不叫 --force：那个名字在上面被当成已下线执行栈的遗留开关提前吃掉了
+    const lossIdx = argv.indexOf("--allow-loss");
+    const force = lossIdx >= 0;
+    if (force) argv.splice(lossIdx, 1);
     if (argv.length > 0) throw new Error(`Unknown flow dsl option: ${argv[0]}`);
 
     const direct = path.resolve(workspaceRoot, target);
@@ -322,17 +320,26 @@ export async function main() {
     const { exportFlowDsl, importFlowDsl, lintFlowDir, migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
 
     if (action === "migrate") {
-      const result = migrateFlowDirToDsl(dir);
+      const result = migrateFlowDirToDsl(dir, { force });
       if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
       if (result.format === "empty") process.stderr.write(`${chalk.yellow("skip")}   ${dir}：没有图\n`);
       else if (!result.migrated && result.format === "dsl") process.stderr.write(`${chalk.green("ok")}     ${dir}：已经是代码形态\n`);
       else if (result.migrated) {
-        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.flow.js\n`);
+        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.flow.js（来自 ${result.source}）\n`);
         for (const rel of result.externals) process.stderr.write(`         ${rel}\n`);
+      } else if (result.leftYaml) {
+        // 够不着代码形态，但已经离开 yaml——图从此读得出、画得出、跑得动
+        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.graph.json（来自 flow.yaml）\n`);
+        process.stderr.write(`         ${chalk.dim(`还差一步到代码：${result.degradedReason}`)}\n`);
+      } else if (result.format === "yaml") {
+        process.stderr.write(`${chalk.red("keep")}   ${dir}：${result.degradedReason}\n`);
       } else {
         process.stderr.write(`${chalk.red("keep")}   ${dir}：${result.degradedReason}，保留 workspace.graph.json\n`);
         process.exitCode = 1;
       }
+      // 损耗清单在成功和拒绝两种结局下都要打出来——`--allow-loss` 迁过去了不代表没丢东西
+      writeMigrationLoss(result);
+      if (result.format === "yaml" && !result.migrated) process.exitCode = 1;
       return;
     }
 
@@ -574,7 +581,6 @@ export async function main() {
   } else if (
     sub === "list-flows" ||
     sub === "read-flow" ||
-    sub === "write-flow" ||
     sub === "read-node" ||
     sub === "copy-builtin" ||
     sub === "copy-builtin-agent" ||

@@ -15,10 +15,12 @@ import {
   flowFilesToGraph,
   graphToFlowFiles,
 } from "./index.mjs";
+import { legacyYamlToDesignGraph } from "./legacy-yaml.mjs";
 import { lintFlowDir } from "./lint.mjs";
 import { readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "../workspace-flow-store.mjs";
 
 const GRAPH_FILENAME = "workspace.graph.json";
+const LEGACY_YAML_FILENAME = "flow.yaml";
 
 function readJson(file, fallback) {
   if (!fs.existsSync(file)) return fallback;
@@ -115,23 +117,38 @@ export function importFlowDsl(srcDir, outFlowDir) {
   };
 }
 
+/** 没有节点丢失时的空损耗清单，让返回值形状始终一致。 */
+const NO_LOSS = { remapped: [], dropped: [], droppedEdges: [], warnings: [] };
+
 /**
- * 把一个流程目录就地迁移成代码形态：`workspace.graph.json` -> `workspace.flow.js` + 伴生文件。
+ * 把一个流程目录就地迁移成代码形态。两个来源：
  *
- * 走的是 Web UI 保存时的同一条路径（`writeWorkspaceDesign`），因此同样带往返比对闸门：
+ * - `workspace.graph.json` —— 同一套词汇表，纯换存储格式，无损
+ * - `flow.yaml` —— 老执行栈的词汇表，要换词，**可能有损**
+ *
+ * 都走 Web UI 保存时的同一条路径（`writeWorkspaceDesign`），因此同样带往返比对闸门：
  * 生成的代码解析不回原图就不迁移，原文件原样留着。
  *
- * @returns {{ flowDir: string, format: "dsl"|"json", migrated: boolean, degradedReason: string|null, externals: string[] }}
+ * yaml 那条路默认**拒绝有损迁移**：只要有节点或边接不过去就停下来把清单报出去，磁盘不动。
+ * `allowLoss` 才落盘。理由和存储层那条闸门一样——宁可不迁移，也不能悄悄弄丢。
+ *
+ * yaml 原文不删。迁移完 `workspace.flow.js` 成为权威（读图先看它），`flow.yaml` 退到
+ * 一边当原始材料，出了问题还能对着看。
+ *
+ * @param {string} flowDir
+ * @param {{ force?: boolean }} [opts]
+ * @returns {{ flowDir: string, format: "dsl"|"json"|"yaml"|"empty", migrated: boolean,
+ *   degradedReason: string|null, externals: string[], source?: "graph.json"|"flow.yaml",
+ *   remapped: Array, dropped: Array, droppedEdges: Array, warnings: string[] }}
  */
-export function migrateFlowDirToDsl(flowDir) {
+export function migrateFlowDirToDsl(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
   const current = readWorkspaceGraphFiles(dir);
-  if (current.format === "empty") {
-    return { flowDir: dir, format: "empty", migrated: false, degradedReason: null, externals: [] };
-  }
   if (current.format === "dsl") {
-    return { flowDir: dir, format: "dsl", migrated: false, degradedReason: null, externals: [] };
+    return { flowDir: dir, format: "dsl", migrated: false, degradedReason: null, externals: [], ...NO_LOSS };
   }
+  if (current.format === "empty") return migrateLegacyYamlDir(dir, opts);
+
   // 走完整图这条路：历史 graph.json 里运行产出还是内联的，得先拆出去，否则那些每跑一次
   // 就变一次的值会被当成设计态参与往返比对
   const result = writeWorkspaceGraphFiles(dir, current.graph);
@@ -141,6 +158,49 @@ export function migrateFlowDirToDsl(flowDir) {
     migrated: result.format === "dsl",
     degradedReason: result.degradedReason,
     externals: result.externals,
+    source: "graph.json",
+    ...NO_LOSS,
+  };
+}
+
+/** `flow.yaml` -> 代码。没有 yaml 就是真的没图。 */
+function migrateLegacyYamlDir(dir, { force = false } = {}) {
+  const yamlPath = path.join(dir, LEGACY_YAML_FILENAME);
+  if (!fs.existsSync(yamlPath)) {
+    return { flowDir: dir, format: "empty", migrated: false, degradedReason: null, externals: [], ...NO_LOSS };
+  }
+  const converted = legacyYamlToDesignGraph(fs.readFileSync(yamlPath, "utf-8"));
+  const loss = {
+    remapped: converted.remapped,
+    dropped: converted.dropped,
+    droppedEdges: converted.droppedEdges,
+    warnings: converted.warnings,
+  };
+  // `control_end` 和指向它的边标了 benign——丢了等于没丢，不该拦住迁移。
+  const lossy = [...converted.dropped, ...converted.droppedEdges].some((x) => !x.benign);
+  if (lossy && !force) {
+    return {
+      flowDir: dir,
+      format: "yaml",
+      migrated: false,
+      degradedReason: "有节点或边接不过去（--allow-loss 忽略并继续）",
+      externals: [],
+      source: "flow.yaml",
+      ...loss,
+    };
+  }
+  const result = writeWorkspaceGraphFiles(dir, converted.graph);
+  return {
+    flowDir: dir,
+    format: result.format,
+    migrated: result.format === "dsl",
+    // 从 yaml 出发时，退回 JSON 也是**成功**：`workspace.graph.json` 读得出、画得出、
+    // 跑得动，而 yaml 三样都不行。够不着代码形态只是差最后一步，不是这次迁移失败。
+    leftYaml: true,
+    degradedReason: result.degradedReason,
+    externals: result.externals,
+    source: "flow.yaml",
+    ...loss,
   };
 }
 

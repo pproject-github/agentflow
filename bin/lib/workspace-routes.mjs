@@ -1191,6 +1191,68 @@ async function workspaceRoutes(req, res, ctx) {
       return;
     }
 
+    /**
+     * 把一个还停在 `flow.yaml` 的老流程迁进 Workspace。
+     *
+     * 平台上这类流程处在「列在列表里、点开是空图」的状态：目录哨兵认 yaml，读图那条路
+     * 不认，所以既跑不了也编辑不了，里面的 body / prompt / script 只能干看着。这条路由
+     * 是它们唯一的出口，也是日后能把哨兵摘掉的前提。
+     *
+     * 默认拒绝有损迁移，把清单原样回给调用方；`allowLoss` 才落盘。yaml 原文不删。
+     */
+    if (req.method === "POST" && url.pathname === "/api/workspace/migrate") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          workspaceId: payload.workspaceId || "",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.writable === false
+        ) {
+          json(res, 400, { error: "Cannot migrate a builtin or archived pipeline" });
+          return;
+        }
+        const { migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
+        const result = migrateFlowDirToDsl(scoped.root, { force: payload.allowLoss === true });
+        if (result.format === "empty") {
+          json(res, 404, { error: "这个流程目录里既没有 Workspace 图，也没有 flow.yaml", ...result });
+          return;
+        }
+        // 迁移过的图立刻广播给正在看这张画布的人——否则他们手里还是空图，
+        // 下一次保存会把刚迁好的内容覆盖回去
+        if (result.migrated || result.leftYaml) {
+          const { graph } = readWorkspaceGraph(scoped.root);
+          broadcastWorkspaceCollaborationEvent(
+            userCtx,
+            scoped.flowSource,
+            scoped.flowId,
+            scoped.archived,
+            { type: "graph.committed", revision: workspaceDesignRevision(graph), actorId: userCtx.userId || "" },
+          );
+        }
+        json(res, 200, { ok: true, ...result });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/workspace/graph") {
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {

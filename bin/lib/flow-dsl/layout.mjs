@@ -75,13 +75,18 @@ export function extractLayout(designGraph, ir) {
             ((pins[kind] ||= {})[slot.name] ||= {})[key] = actual;
           }
         }
-        // 自定义输入槽的类型偏离了「随上游走」的推断时记一条。代码自己带得回来的
-        // bool（字面量）不用记——记了也只是重复，还会让存量流程的 layout 平白多出 diff。
-        if (kind !== "in" || d || !irNode?.extraIn?.includes(slot.name)) continue;
+        // 自定义槽的类型偏离了默认时记一条。默认是什么两边不一样：
+        //   输入 —— 随上游输出槽推断，代码自己带得回来的 bool（字面量）不用记
+        //   输出 —— 没有上游可随，`irToGraph` 一律给 text
+        // 记了也只是重复的不记，否则存量流程的 layout 会平白多出 diff。
+        const extras = (kind === "in" ? irNode?.extraIn : irNode?.extraOut) || [];
+        if (d || !extras.includes(slot.name)) continue;
         const actual = String(slot.type || "text");
-        if (actual === inferInputType(id, slot.name)) continue;
-        if (irNode.inputTypes?.[slot.name] === actual && actual === "bool") continue;
-        ((pins.in ||= {})[slot.name] ||= {}).type = actual;
+        if (kind === "in") {
+          if (actual === inferInputType(id, slot.name)) continue;
+          if (irNode.inputTypes?.[slot.name] === actual && actual === "bool") continue;
+        } else if (actual === "text") continue;
+        ((pins[kind] ||= {})[slot.name] ||= {}).type = actual;
       }
     }
     if (Object.keys(pins).length) entry.pins = pins;

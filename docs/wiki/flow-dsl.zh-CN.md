@@ -4,14 +4,59 @@
 打开画布读的也是它；`workspace.graph.json` 降级为只读的历史格式。
 
 ```bash
-agentflow flow dsl migrate <FlowName|dir>                # graph.json -> flow.js，就地迁移
-agentflow flow dsl lint    <dir>                         # 静态校验
-agentflow flow dsl export  <FlowName|dir> [--out <dir>]  # 导出一份到别处
-agentflow flow dsl import  <dir> [--out <flowDir>]       # 反向生成 graph.json（审计用）
+agentflow flow dsl migrate <FlowName|dir> [--allow-loss]  # graph.json / flow.yaml -> flow.js，就地迁移
+agentflow flow dsl lint    <dir>                          # 静态校验
+agentflow flow dsl export  <FlowName|dir> [--out <dir>]   # 导出一份到别处
+agentflow flow dsl import  <dir> [--out <flowDir>]        # 反向生成 graph.json（审计用）
 ```
 
 存量流程不用手动迁移：没有 `workspace.flow.js` 时照常读 `workspace.graph.json`，下一次
 保存自动转成代码。`migrate` 只是让这件事提前发生。
+
+## 从 flow.yaml 迁进来
+
+`flow.yaml` 是另一回事。Start/End 执行栈退休之后它变成了一块**墓碑**：目录哨兵认它，所以
+流程还挂在列表里；读图那条路不认它，所以点开是空图——跑不了、编辑不了，里面的 body /
+prompt / script 只能干看着。
+
+两种格式的结构其实完全相同（`instances` / `edges` / `ui`，`output-N` 索引式 handle），
+差的是**节点词汇表**：yaml 用的一批节点在 Workspace 运行时里 `runtime: none`。所以迁移做的
+是换词：
+
+| yaml 节点 | 迁成 | 说明 |
+|---|---|---|
+| `control_start` | `workspace_run` | 老流程的入口就是 Workspace 的运行节点 |
+| `control_end` | 丢弃 | Workspace 跑到没有后继就结束，终点节点没有对应物 |
+| `tool_print` | `display_markdown` | |
+| `control_toBool` | `control_agent_toBool` | ⚠️ 判定从确定性解析变成 agent 判定 |
+| `control_anyOne` / `tool_user_check` / `tool_user_ask` / 其余 `runtime: none` | **无对等物** | 只能丢 |
+
+边按**槽位名**重接，不按索引——`tool_print` 的 `next` 在 0 号位，`display_markdown` 的
+`next` 在 1 号位（0 号位是 `content` 输出），照索引搬会把控制边接到内容槽上，图仍然连通，
+跑起来才发现错。老流程改过名的槽位（比如内容槽叫 `summary`）会真的改名并报出来，因为展示
+节点的运行时是按名字取 `content` 的。
+
+**默认拒绝有损迁移**：只要有节点或边接不过去，就停下来把清单打出来，磁盘一个字节都不动。
+看过清单认了，再加 `--allow-loss`。`control_end` 和指向它的边是唯一的例外——丢了等于没丢，
+不拦。
+
+`flow.yaml` 原文不删。迁完 `workspace.flow.js` 成为权威（读图先看它），yaml 退到一边当原始
+材料。
+
+够不着代码形态也算成功：`tool_nodejs` 同时带 `script` 和 `body`、`control_if` 带 `body`
+这类字段在代码里没有位置放，往返比对过不去，于是退回 `workspace.graph.json`。那仍然是一次
+成功的迁移——`graph.json` 读得出、画得出、跑得动，而 yaml 三样都不行。
+
+### 平台上的流程
+
+部署出去的流程改不了本机磁盘，走 HTTP 的同款出口：
+
+```bash
+agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
+```
+
+对应 `POST /api/workspace/migrate`，语义和本地命令完全一致（默认拒绝有损、返回同一份清单、
+不删 yaml）。builtin 与已归档的流程只读，拒绝迁移。
 
 ## 为什么要代码
 

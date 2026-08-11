@@ -218,10 +218,10 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
         const d = byName.get(name);
         const overrides = layoutEntry.pins?.[kind]?.[name] || {};
         // 自定义槽的类型：代码里带得回来的（bool 字面量）优先，其次 layout 记的偏离，
-        // 最后随上游输出槽推断
+        // 最后随上游输出槽推断。输出槽没有上游可随，记了什么就是什么，没记就是 text。
         const custom = kind === "in"
           ? (node.inputTypes?.[name] || overrides.type || inferInputType(id, name))
-          : undefined;
+          : overrides.type;
         const slot = {
           type: d ? d.type : (custom || (name === "prev" || name === "next" ? "node" : "text")),
           name,

@@ -42,7 +42,7 @@ all return HTTP 410. `flow.yaml` is now read/migrate/audit material only.
 | `agentflow ui` | Start Web UI (port 8765) |
 | `agentflow validate <FlowName>` | Validate a flow — Workspace graphs go through `flow dsl lint`, legacy `flow.yaml` flows through the old validator |
 | `agentflow flow dsl lint <flowDir>` | Static-check `workspace.flow.js` — run after editing it |
-| `agentflow flow dsl migrate <FlowName\|dir>` | Convert a legacy `workspace.graph.json` to code |
+| `agentflow flow dsl migrate <FlowName\|dir> [--allow-loss]` | Convert a legacy `workspace.graph.json` **or `flow.yaml`** to code. The yaml path rewords `runtime: none` nodes and refuses lossy migration unless `--allow-loss`; `agentflow-cli migrate-flow` does the same over HTTP for platform flows |
 | `agentflow run-status <FlowName> <uuid>` | View node execution status |
 | `agentflow extract-thinking <FlowName> <uuid>` | Extract agent thinking process |
 
