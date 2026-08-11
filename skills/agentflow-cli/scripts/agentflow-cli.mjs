@@ -52,7 +52,7 @@ Commands:
   config
   list-workspace | list-workspaces
   list-flows
-  publish-flow --flow-id <id> --file <flow.yaml> [--target-space personal|workspace|team] [--replace]
+  publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
   workspace-preview --file <flowDir|workspace.flow.js|workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
@@ -327,18 +327,45 @@ function readJsonFile(filePath) {
   }
 }
 
-function readFlowYamlFile(filePath) {
+// 代码化的流程目录里没有 flow.yaml，权威存储是 workspace.flow.js。两种都要能发布。
+const FLOW_MARKERS = ["workspace.flow.js", "workspace.graph.json", "flow.yaml"];
+
+/**
+ * 单文件上传只能带一个文件，所以流程目录里如果还有这些东西，它们发不上去。宁可当场报错，
+ * 也不要把一个残缺的流程静悄悄发布出去——画布上少了坐标还好说，少了 marketplaceRef 或者
+ * nodes/ 里的代码节点包，那流程根本跑不起来。
+ */
+const UNSHIPPABLE = ["workspace.nodes.json", "nodes"];
+
+function readFlowSourceFile(filePath) {
   const requested = String(filePath || "").trim();
-  if (!requested) throw new Error("Missing --file <flow.yaml>.");
-  const resolved = path.resolve(requested);
-  let flowYaml;
+  if (!requested) throw new Error(`Missing --file <flowDir|${FLOW_MARKERS.join("|")}>.`);
+  let resolved = path.resolve(requested);
+
+  if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+    const dir = resolved;
+    const marker = FLOW_MARKERS.find((name) => fs.existsSync(path.join(dir, name)));
+    if (!marker) {
+      throw new Error(`Not a flow directory (no ${FLOW_MARKERS.join(" / ")}): ${dir}`);
+    }
+    const extra = UNSHIPPABLE.filter((name) => fs.existsSync(path.join(dir, name)));
+    if (extra.length) {
+      throw new Error(
+        `Cannot publish ${dir}: it also contains ${extra.join(", ")}, which a single-file upload cannot carry. `
+        + "Publish a flow whose graph is self-contained, or package it by hand for now.",
+      );
+    }
+    resolved = path.join(dir, marker);
+  }
+
+  let flowSource;
   try {
-    flowYaml = fs.readFileSync(resolved, "utf8");
+    flowSource = fs.readFileSync(resolved, "utf8");
   } catch (error) {
     throw new Error(`Cannot read flow file ${resolved}: ${error?.message || String(error)}`);
   }
-  if (!flowYaml.trim()) throw new Error(`Flow file is empty: ${resolved}`);
-  return { resolved, flowYaml };
+  if (!flowSource.trim()) throw new Error(`Flow file is empty: ${resolved}`);
+  return { resolved, flowYaml: flowSource };
 }
 
 function targetDestinationFromArgs(args) {
@@ -353,7 +380,9 @@ async function importFlow(args, { flowId, targetSpace, resolved, flowYaml }) {
   const form = new FormData();
   form.set("flowId", flowId);
   form.set("targetSpace", targetSpace);
-  form.set("file", new Blob([flowYaml], { type: "application/yaml" }), path.basename(resolved));
+  const name = path.basename(resolved);
+  const mime = /\.m?js$/i.test(name) ? "application/javascript" : "application/yaml";
+  form.set("file", new Blob([flowYaml], { type: mime }), name);
   return httpMultipart(args, "/api/flows/import", form);
 }
 
@@ -414,7 +443,7 @@ async function main() {
     const flowId = requireFlowId(args);
     const destination = targetDestinationFromArgs(args);
     const targetSpace = destination.flowSource;
-    const source = readFlowYamlFile(option(args, "file"));
+    const source = readFlowSourceFile(option(args, "file"));
     const replace = args.replace === true;
     const team = await resolvePublishTeam(args, destination.shareWithTeam);
 

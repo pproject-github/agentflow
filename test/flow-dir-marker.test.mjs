@@ -13,7 +13,7 @@ import path from "node:path";
 import test from "node:test";
 import { unzipSync, zipSync } from "fflate";
 
-import { normalizeZipToPipelineFiles } from "../bin/lib/flow-import.mjs";
+import { normalizeZipToPipelineFiles, validateImportedFlowSource } from "../bin/lib/flow-import.mjs";
 import { readPipelineListDescription, resolveFlowDirAbs } from "../bin/lib/catalog-flows.mjs";
 import { FLOW_MARKER_FILENAMES, isFlowDir } from "../bin/lib/paths.mjs";
 import { readWorkspaceGraphFiles } from "../bin/lib/workspace-flow-store.mjs";
@@ -96,23 +96,47 @@ test("只有代码的流程目录，图读得出来", () => {
 });
 
 /**
- * 这条以前测的是「Hub 发布时补一个 flow.yaml 外壳，包就还能被导入认出来」。Hub 已经删了，
- * 那个外壳也随之消失，剩下的是导入端自己的问题——它仍然按 flow.yaml 认包。
+ * 导入端认的是「标记文件」，不是 flow.yaml。
  *
- * 所以这条改成钉住**当前真实行为**：代码化的流程压缩包进不来。它是一条待修的缺口，不是
- * 期望值；等导入端改成认 workspace.flow.js，这条断言会红，那时候就该把它翻过来。
+ * 这条一度反着钉：Hub 删掉之后导入端还只认 yaml，代码化的包进不来，当时把那个行为记下来
+ * 当缺口。现在判据换成了和磁盘一致的 `FLOW_MARKER_FILENAMES`，所以翻过来正着测。
  */
-test("导入端仍按 flow.yaml 认包——代码化流程的 zip 现在进不来", () => {
+test("导入端按标记文件认包：代码化的 zip 收，yaml 包照旧收，都没有才拒", () => {
   const dir = seedCodeOnlyFlow(path.join(tmpdir(), "toImport"));
   const entries = {};
   for (const rel of ["workspace.flow.js", "workspace.layout.json"]) {
-    entries[rel] = new Uint8Array(fs.readFileSync(path.join(dir, rel)));
+    entries[`my-flow/${rel}`] = new Uint8Array(fs.readFileSync(path.join(dir, rel)));
   }
-  const normalized = normalizeZipToPipelineFiles(unzipSync(zipSync(entries, { level: 6 })));
-  assert.match(
-    String(normalized.error || ""),
-    /flow\.yaml/,
-    "导入端一旦改成认 workspace.flow.js，这条就该翻过来",
+  const code = normalizeZipToPipelineFiles(unzipSync(zipSync(entries, { level: 6 })));
+  assert.ok(!code.error, code.error || "");
+  // 外层目录被剥掉，文件回到包根
+  assert.deepEqual([...code.files.keys()].sort(), ["workspace.flow.js", "workspace.layout.json"]);
+
+  const legacy = normalizeZipToPipelineFiles(unzipSync(zipSync({
+    "old/flow.yaml": new Uint8Array(Buffer.from("instances: {}\nedges: []\n", "utf8")),
+  }, { level: 6 })));
+  assert.ok(!legacy.error, legacy.error || "");
+  assert.deepEqual([...legacy.files.keys()], ["flow.yaml"]);
+
+  const neither = normalizeZipToPipelineFiles(unzipSync(zipSync({
+    "x/readme.md": new Uint8Array(Buffer.from("hi", "utf8")),
+  }, { level: 6 })));
+  assert.match(String(neither.error || ""), /workspace\.flow\.js/, "报错要说清认哪几个文件");
+  assert.equal(neither.files, undefined, "报错时不该同时给出半份文件清单");
+});
+
+test("单文件上传：.js 当场解析，解析不出图就拒收", () => {
+  // 写进去一个解析不出图的文件，用户要到下次打开画布才发现，那时已经离现场很远
+  const good = validateImportedFlowSource(SOURCE, "workspace.flow.js");
+  assert.deepEqual(good, { ok: true, entryName: "workspace.flow.js" });
+
+  const bad = validateImportedFlowSource("for (;;) {}\n", "workspace.flow.js");
+  assert.equal(bad.ok, false);
+  assert.match(String(bad.error || ""), /解析失败/);
+
+  // 不是 .js 的照旧按 yaml 走
+  assert.deepEqual(
+    validateImportedFlowSource("instances: {}\nedges: []\n", "flow.yaml"),
+    { ok: true, entryName: "flow.yaml" },
   );
-  assert.equal(normalized.files, undefined, "报错时不该同时给出半份文件清单");
 });

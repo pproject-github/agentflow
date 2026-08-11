@@ -44,7 +44,7 @@ import { clearSkillRegistryCache } from "./skill-registry.mjs";
 import { listRecentRunsFromDisk } from "./recent-runs.mjs";
 import {
   unzipAndNormalizePipelineZip,
-  validateImportedFlowYaml,
+  validateImportedFlowSource,
   writePipelineTree,
 } from "./flow-import.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
@@ -2661,12 +2661,12 @@ export function startUiServer({
         filesMap = norm.files;
       } else {
         const text = buf.toString("utf8");
-        const v = validateImportedFlowYaml(text);
+        const v = validateImportedFlowSource(text, parsed.filename || "");
         if (!v.ok) {
           json(res, 400, { error: v.error });
           return;
         }
-        filesMap = new Map([["flow.yaml", Buffer.from(text, "utf8")]]);
+        filesMap = new Map([[v.entryName, Buffer.from(text, "utf8")]]);
       }
 
       const w = writePipelineTree(root, flowId, targetSpace, filesMap, userCtx);

@@ -1,12 +1,23 @@
 /**
- * 从 flow.yaml 文本或 zip 解压结果导入流水线目录（user / workspace）。
+ * 从上传的流程文件或 zip 解压结果导入流水线目录（user / workspace）。
+ *
+ * 「包的根在哪」这件事以前只认 `flow.yaml`——代码化的流程目录里没有它，于是从平台发布通道
+ * 传上来只会得到「压缩包内未找到 flow.yaml」。判据改成和磁盘上完全一致的那一套
+ * （`FLOW_MARKER_FILENAMES`：`workspace.flow.js` / `workspace.graph.json` / `flow.yaml`），
+ * 两种格式都收。
  */
 import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
 import { unzipSync } from "fflate";
+import { flowFilesToGraph } from "./flow-dsl/index.mjs";
 import { resolveFlowDirForWrite, validateUserPipelineId } from "./flow-write.mjs";
 import { normalizeFlowYamlText } from "./flow-normalize.mjs";
+import { FLOW_MARKER_FILENAMES } from "./paths.mjs";
+
+/** `flow.yml` 是 `flow.yaml` 的历史别名，落盘时统一改名。 */
+const YAML_ALIAS = "flow.yml";
+const MARKERS = new Set([...FLOW_MARKER_FILENAMES, YAML_ALIAS].map((n) => n.toLowerCase()));
 
 export const IMPORT_MAX_UNCOMPRESSED_BYTES = 8 * 1024 * 1024;
 export const IMPORT_MAX_FILE_ENTRIES = 500;
@@ -34,15 +45,19 @@ function shouldIgnoreZipPath(norm) {
   return parts.some((seg) => seg === "__MACOSX" || seg.startsWith("._"));
 }
 
-function flowYamlParentDir(normPath) {
+/**
+ * 这个文件是不是流程目录的标记文件；是的话返回它所在的目录（根目录为 `""`）。
+ *
+ * 只认根目录或一层子目录——再深的层级不是「单个流程的包」。
+ *
+ * @returns {string | null} 不是标记文件时返回 null
+ */
+function flowMarkerParentDir(normPath) {
   const lower = normPath.toLowerCase();
-  if (lower === "flow.yaml" || lower === "flow.yml") return "";
-  const suf = "/flow.yaml";
-  const sufYml = "/flow.yml";
-  let parent = null;
-  if (lower.endsWith(suf)) parent = normPath.slice(0, -suf.length);
-  else if (lower.endsWith(sufYml)) parent = normPath.slice(0, -sufYml.length);
-  else return null;
+  if (MARKERS.has(lower)) return "";
+  const slash = lower.lastIndexOf("/");
+  if (slash < 0 || !MARKERS.has(lower.slice(slash + 1))) return null;
+  const parent = normPath.slice(0, slash);
   if (parent.includes("/")) return null;
   return parent;
 }
@@ -86,6 +101,34 @@ export function validateImportedFlowYaml(content) {
 }
 
 /**
+ * 单文件上传（不是 zip）时，判断这一份是什么、能不能收。
+ *
+ * 代码化的流程只上传 `workspace.flow.js` 时，布局和节点元数据都缺席——那不影响读图，
+ * 缺省会被补齐。但源码必须**当场解析得过**：写进去一个解析不出图的文件，用户下次打开画布
+ * 才发现，而那时已经离现场很远。
+ *
+ * @param {string} content
+ * @param {string} filename 上传时的文件名，用来决定按哪种格式解析
+ * @returns {{ ok: true, entryName: string } | { ok: false, error: string }}
+ */
+export function validateImportedFlowSource(content, filename = "") {
+  const name = String(filename || "").toLowerCase();
+  if (!name.endsWith(".js") && !name.endsWith(".mjs")) {
+    const checked = validateImportedFlowYaml(content);
+    return checked.ok ? { ok: true, entryName: "flow.yaml" } : checked;
+  }
+  if (Buffer.byteLength(String(content || ""), "utf8") > IMPORT_MAX_UNCOMPRESSED_BYTES) {
+    return { ok: false, error: "workspace.flow.js 过大" };
+  }
+  try {
+    flowFilesToGraph({ source: String(content || ""), layout: {}, nodeMeta: {}, files: {} });
+    return { ok: true, entryName: "workspace.flow.js" };
+  } catch (e) {
+    return { ok: false, error: `workspace.flow.js 解析失败：${(e && e.message) || e}` };
+  }
+}
+
+/**
  * @param {Record<string, Uint8Array>} unzipped
  * @returns {{ ok: true, files: Map<string, Buffer> } | { ok: false, error: string }}
  */
@@ -118,15 +161,15 @@ export function normalizeZipToPipelineFiles(unzipped) {
   /** @type {Set<string>} */
   const parents = new Set();
   for (const k of raw.keys()) {
-    const p = flowYamlParentDir(k);
+    const p = flowMarkerParentDir(k);
     if (p !== null) parents.add(p);
   }
 
   if (parents.size === 0) {
-    return { ok: false, error: "压缩包内未找到 flow.yaml" };
+    return { ok: false, error: `压缩包内未找到流程文件（需要 ${FLOW_MARKER_FILENAMES.join(" / ")} 之一）` };
   }
   if (parents.size > 1) {
-    return { ok: false, error: "压缩包内存在多个 pipeline（多个 flow.yaml），请分别打包" };
+    return { ok: false, error: "压缩包内存在多个 pipeline，请分别打包" };
   }
 
   const [prefix] = [...parents];
@@ -136,7 +179,7 @@ export function normalizeZipToPipelineFiles(unzipped) {
     if (!need) {
       return {
         ok: false,
-        error: "ZIP 目录结构无效：存在不属于该流水线目录的文件（请使用单文件夹或根目录 flow.yaml）",
+        error: "ZIP 目录结构无效：存在不属于该流水线目录的文件（请使用单文件夹，或把流程文件放在根目录）",
       };
     }
   }
@@ -155,20 +198,21 @@ export function normalizeZipToPipelineFiles(unzipped) {
   }
 
   const yamlKeys = [...out.keys()].filter(
-    (k) => k.toLowerCase() === "flow.yaml" || k.toLowerCase() === "flow.yml",
+    (k) => k.toLowerCase() === "flow.yaml" || k.toLowerCase() === YAML_ALIAS,
   );
-  if (yamlKeys.length === 0) {
-    return { ok: false, error: "归一化后缺少 flow.yaml" };
-  }
   if (yamlKeys.length > 1) {
     return { ok: false, error: "流水线目录内不能同时存在多个 flow.yaml / flow.yml" };
   }
-
   const yamlKey = yamlKeys[0];
-  if (yamlKey !== "flow.yaml") {
+  if (yamlKey && yamlKey !== "flow.yaml") {
     const body = out.get(yamlKey);
     out.delete(yamlKey);
     out.set("flow.yaml", body);
+  }
+
+  // 归一化会剥掉外层目录，标记文件可能因此换了位置——重新确认一次
+  if (![...out.keys()].some((k) => MARKERS.has(k.toLowerCase()))) {
+    return { ok: false, error: `归一化后缺少流程文件（需要 ${FLOW_MARKER_FILENAMES.join(" / ")} 之一）` };
   }
 
   return { ok: true, files: out };
@@ -214,7 +258,7 @@ export function suggestFlowIdFromZip(zipBuffer) {
     /** @type {Set<string>} */
     const parents = new Set();
     for (const k of raw.keys()) {
-      const p = flowYamlParentDir(k);
+      const p = flowMarkerParentDir(k);
       if (p !== null) parents.add(p);
     }
 
@@ -270,12 +314,17 @@ export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelati
     return { success: false, error: "目标目录已存在" };
   }
 
+  // 有 yaml 就照旧校验并规范化；代码化的包没有 yaml，认标记文件即可
   const yamlBuf = filesRelative.get("flow.yaml");
-  if (!yamlBuf) return { success: false, error: "缺少 flow.yaml" };
-  const text = yamlBuf.toString("utf8");
-  const v = validateImportedFlowYaml(text);
-  if (!v.ok) return { success: false, error: v.error };
-  const normalizedYaml = normalizeFlowYamlText(text).text;
+  let normalizedYaml = "";
+  if (yamlBuf) {
+    const text = yamlBuf.toString("utf8");
+    const v = validateImportedFlowYaml(text);
+    if (!v.ok) return { success: false, error: v.error };
+    normalizedYaml = normalizeFlowYamlText(text).text;
+  } else if (![...filesRelative.keys()].some((k) => MARKERS.has(k.toLowerCase()))) {
+    return { success: false, error: `缺少流程文件（需要 ${FLOW_MARKER_FILENAMES.join(" / ")} 之一）` };
+  }
 
   try {
     fs.mkdirSync(flowDir, { recursive: true });
@@ -290,7 +339,7 @@ export function writePipelineTree(workspaceRoot, flowId, flowSource, filesRelati
       }
       const parent = path.dirname(abs);
       fs.mkdirSync(parent, { recursive: true });
-      const payload = safe === "flow.yaml" ? Buffer.from(normalizedYaml, "utf8") : buf;
+      const payload = safe === "flow.yaml" && normalizedYaml ? Buffer.from(normalizedYaml, "utf8") : buf;
       fs.writeFileSync(abs, payload);
     }
     return { success: true };
