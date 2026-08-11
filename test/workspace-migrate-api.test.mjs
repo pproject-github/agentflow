@@ -168,6 +168,84 @@ test("migrate-flow 把平台上的 yaml 流程就地迁成 Workspace 图", async
       body: JSON.stringify({ flowId: "legacy-flow", flowSource: "builtin" }),
     });
     assert.equal(builtinResp.status, 400);
+
+    // ── migrate-all：无损的全做掉，有损的一个不碰 ─────────────────────────
+    // 平台上的实际分布就是这样：大头是 graph.json（换格式无损），少数 yaml 需要人决定。
+    const graphOnly = path.join(pipelines, "graph-flow");
+    fs.mkdirSync(graphOnly, { recursive: true });
+    fs.writeFileSync(path.join(graphOnly, "workspace.graph.json"), JSON.stringify({
+      version: 1,
+      instances: {
+        run: {
+          definitionId: "workspace_run",
+          label: "Run",
+          input: [{ type: "node", name: "prev", value: "" }],
+          output: [{ type: "node", name: "next", value: "" }],
+        },
+        note: {
+          definitionId: "display_markdown",
+          label: "说明",
+          input: [
+            { type: "node", name: "prev", value: "" },
+            { type: "text", name: "content", value: "hi", required: true, showOnNode: true },
+          ],
+          output: [
+            { type: "text", name: "content", value: "hi", showOnNode: true },
+            { type: "node", name: "next", value: "" },
+          ],
+        },
+      },
+      edges: [{ source: "run", target: "note", sourceHandle: "output-0", targetHandle: "input-0" }],
+      ui: { nodePositions: { run: { x: 80, y: 180 }, note: { x: 380, y: 180 } }, nodeSizes: {} },
+    }, null, 2), "utf-8");
+    seed("still-lossy", LOSSY_YAML);
+
+    const { stdout: allOut } = await cli("migrate-all");
+    const all = JSON.parse(allOut);
+    const rowOf = (id) => all.rows.find((r) => r.flow.startsWith(id));
+
+    assert.equal(rowOf("graph-flow").result, "→ 代码", "graph.json 换格式无损，直接做掉");
+    assert.equal(rowOf("legacy-flow").result, "已是代码，跳过", "重复跑要幂等");
+    assert.match(rowOf("still-lossy").result, /^拒绝：有损/);
+    assert.deepEqual(all.needsDecision, ["still-lossy [workspace]"], "要人决定的只该有这一个");
+    assert.match(all.hint, /migrate-flow --allow-loss/);
+
+    // 被拒绝的那个磁盘没动
+    assert.deepEqual(fs.readdirSync(path.join(pipelines, "still-lossy")), ["flow.yaml"]);
+    assert.equal(store.readWorkspaceGraphFiles(graphOnly).format, "dsl");
+
+    // ── 归档流程要显式豁免才写 ────────────────────────────────────────────
+    // 「归档 + 仅 yaml」恰恰是摘掉哨兵时会凭空消失的那种：没人会再打开保存，所以只会
+    // 一直停在死格式上。默认不写，但必须给得出一条路。
+    const archivedDir = path.join(pipelines, "_archived", "old-flow");
+    fs.mkdirSync(archivedDir, { recursive: true });
+    fs.writeFileSync(path.join(archivedDir, "flow.yaml"), LEGACY_YAML, "utf-8");
+    const post = (body) => fetch(`${baseUrl}/api/workspace/migrate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const refusedArchived = await post({ flowId: "old-flow", flowSource: "workspace", archived: true });
+    assert.equal(refusedArchived.status, 400);
+    assert.match((await refusedArchived.json()).error, /allowArchived/);
+    assert.deepEqual(fs.readdirSync(archivedDir), ["flow.yaml"], "没豁免就一个字节都不写");
+
+    const okArchived = await post({
+      flowId: "old-flow", flowSource: "workspace", archived: true, allowArchived: true,
+    });
+    assert.equal(okArchived.status, 200);
+    assert.equal((await okArchived.json()).migrated, true);
+    assert.equal(store.readWorkspaceGraphFiles(archivedDir).format, "dsl");
+
+    // migrate-all 默认不碰归档，加了开关才连归档一起做
+    const archivedYaml = path.join(pipelines, "_archived", "old-yaml");
+    fs.mkdirSync(archivedYaml, { recursive: true });
+    fs.writeFileSync(path.join(archivedYaml, "flow.yaml"), LEGACY_YAML, "utf-8");
+    await cli("migrate-all");
+    assert.deepEqual(fs.readdirSync(archivedYaml), ["flow.yaml"], "默认跳过归档");
+    await cli("migrate-all", "--include-archived");
+    assert.equal(store.readWorkspaceGraphFiles(archivedYaml).format, "dsl");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

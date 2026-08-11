@@ -132,6 +132,17 @@ Lossy migration is refused by default: nodes with no Workspace equivalent
 and nothing is written. Show the user that list and get explicit confirmation
 before rerunning with `--allow-loss`. The `flow.yaml` original is never deleted.
 
+Migrate everything at once (does the lossless ones, reports the rest):
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-all --dry-run
+node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-all
+```
+
+Read `needsDecision` and `skipped` in the output before telling the user it is
+done — read-only catalogs (`builtin`, `admin`) and archived flows are skipped
+unless `--include-archived` is passed.
+
 Upload a Workspace graph to a server-side temporary preview project (the
 server returns a Workspace URL and cleans the project after its TTL):
 

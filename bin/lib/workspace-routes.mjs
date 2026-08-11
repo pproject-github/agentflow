@@ -1220,12 +1220,16 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
-        if (
-          scoped.archived
-          || isReadonlyBuiltinFlowSource(scoped.flowSource)
-          || scoped.collaborationAccess?.writable === false
-        ) {
-          json(res, 400, { error: "Cannot migrate a builtin or archived pipeline" });
+        // 归档流程默认不写。但它们恰恰是最需要迁的一批——没人会再打开保存，所以只会
+        // 一直停在老格式上；而「归档 + 仅 yaml」的流程正是摘掉 flow.yaml 哨兵时会凭空
+        // 消失的那种。迁移换的是存储格式不是内容（往返比对闸门保证图等价），所以给一个
+        // 显式豁免，而不是把归档流程永远锁死在死格式里。
+        if (scoped.archived && payload.allowArchived !== true) {
+          json(res, 400, { error: "Archived pipeline: pass allowArchived to migrate it anyway" });
+          return;
+        }
+        if (isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 400, { error: "Cannot migrate a builtin or read-only pipeline" });
           return;
         }
         const { migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");

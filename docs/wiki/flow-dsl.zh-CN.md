@@ -52,11 +52,31 @@ prompt / script 只能干看着。
 部署出去的流程改不了本机磁盘，走 HTTP 的同款出口：
 
 ```bash
-agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
+agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
 ```
 
 对应 `POST /api/workspace/migrate`，语义和本地命令完全一致（默认拒绝有损、返回同一份清单、
-不删 yaml）。builtin 与已归档的流程只读，拒绝迁移。
+不删 yaml）。`builtin` 与 `admin` 是只读目录，拒绝迁移。
+
+**归档流程默认也不写**，要显式传 `allowArchived`。这是唯一一处和保存路径不同的策略：保存
+一律拒绝归档流程，迁移给了一条路。理由是归档流程没人会再打开保存，不给路就等于把它们永远
+锁死在老格式上——而「归档 + 仅 yaml」恰恰是日后摘掉哨兵时会凭空消失的那一类。迁移换的是
+存储格式不是内容，往返比对闸门保证图等价。
+
+### 一键升级
+
+```bash
+agentflow-cli migrate-all [--include-archived] [--allow-loss] [--dry-run]
+```
+
+遍历这个账号能看到的所有流程，**无损的全做掉，有损的一个不碰**。两类活儿风险完全不同：
+
+- `graph.json -> 代码`：换存储格式，节点词汇表不变，往返比对闸门保证图等价——无损
+- `flow.yaml -> 代码`：要换词，可能丢东西——默认拒绝，把清单摆出来
+
+跑完看 `needsDecision`：要人做决定的就那几个，对它们单独跑 `migrate-flow --allow-loss`。
+重复跑幂等（已经是代码形态的直接跳过）。报告里的 `skipped` 会如实列出只读目录和被跳过的
+归档流程——「跑完了」不等于「全覆盖了」。
 
 ## 为什么要代码
 

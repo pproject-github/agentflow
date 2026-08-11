@@ -57,11 +57,36 @@ migration — `graph.json` can be read, rendered and run, and yaml can do none o
 Deployed flows are not on your local disk; the same exit exists over HTTP:
 
 ```bash
-agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
+agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
 ```
 
 It maps to `POST /api/workspace/migrate` with identical semantics (refuses loss by default,
-returns the same report, keeps the yaml). Builtin and archived flows are read-only and refused.
+returns the same report, keeps the yaml). `builtin` and `admin` are read-only catalogs and are
+refused.
+
+**Archived flows are also refused by default**; pass `allowArchived` to migrate one. This is the
+one place migration diverges from the save path, which refuses archived flows outright. Nobody
+will ever open an archived flow and save it, so without an escape hatch they stay on the dead
+format forever — and "archived + yaml-only" is exactly the class that would silently vanish once
+the sentinel goes. Migration converts storage format, not content; the round-trip gate keeps the
+graph equivalent.
+
+### One-shot upgrade
+
+```bash
+agentflow-cli migrate-all [--include-archived] [--allow-loss] [--dry-run]
+```
+
+Walks every flow this account can see and **does all the lossless ones, touching none of the
+lossy ones**. The two jobs carry very different risk:
+
+- `graph.json -> code`: storage format only, same node vocabulary, round-trip gated — lossless
+- `flow.yaml -> code`: needs rewording, may drop things — refused by default, with a report
+
+Read `needsDecision` afterwards: those are the only ones needing a human, and each is handled
+with `migrate-flow --allow-loss`. Reruns are idempotent (flows already in code form are skipped).
+The report's `skipped` field lists read-only catalogs and skipped archived flows — "it finished"
+is not the same as "it covered everything".
 
 ## Why code
 

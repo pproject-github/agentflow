@@ -54,7 +54,8 @@ Commands:
   list-flows
   publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--replace]
   get-graph --flow-id <id> [--flow-source user]
-  migrate-flow --flow-id <id> [--flow-source user] [--allow-loss]
+  migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
+  migrate-all [--include-archived] [--allow-loss] [--dry-run]
   workspace-preview --file <flowDir|workspace.flow.js|workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
@@ -502,6 +503,96 @@ async function main() {
     return;
   }
 
+  /**
+   * 一键把这个账号能看到的所有流程迁到当前的权威存储格式。
+   *
+   * 两类活儿，风险完全不同：
+   *   graph.json -> 代码   换存储格式，词汇表不变，往返比对闸门保证图等价——无损，随便跑
+   *   flow.yaml  -> 代码   要换节点词汇表，可能丢东西——默认拒绝，把清单摆出来给人看
+   *
+   * 所以默认行为是「无损的全做掉，有损的一个不碰、列出来」。跑完看报告再决定要不要
+   * 对那几个加 --allow-loss。重复跑是幂等的：已经是代码形态的流程直接跳过。
+   */
+  if (command === "migrate-all") {
+    const dryRun = args["dry-run"] === true;
+    const allowLoss = args["allow-loss"] === true;
+    const includeArchived = args["include-archived"] === true;
+    const flowsRaw = await httpJson(args, "/api/flows");
+    const all = Array.isArray(flowsRaw) ? flowsRaw : flowsRaw.flows || flowsRaw.items || [];
+    // builtin 与 admin 是只读目录（服务端 isReadonlyBuiltinFlowSource），写不回去。
+    // 它们本来也不依赖 flow.yaml 哨兵，留在原格式没有代价——所以是「跳过」，不是「失败」。
+    const readonly = all.filter((f) => f.source === "builtin" || f.source === "admin");
+    const skippedArchived = includeArchived ? [] : all.filter((f) => f.archived && !readonly.includes(f));
+    const flows = all
+      .filter((f) => !readonly.includes(f))
+      .filter((f) => includeArchived || !f.archived);
+
+    const rows = [];
+    for (const flow of flows) {
+      const label = `${flow.id}${flow.archived ? " (归档)" : ""} [${flow.source}]`;
+      const body = {
+        flowId: flow.id,
+        flowSource: flow.source,
+        archived: Boolean(flow.archived),
+        allowArchived: Boolean(flow.archived),
+        allowLoss,
+      };
+      if (dryRun) {
+        // 干跑靠的是服务端「默认拒绝有损」那条闸门本身：不带 allowLoss 发过去，有损的
+        // 会原样退回清单且不落盘。无损的会真的迁——所以干跑只对有损那批有意义，
+        // 这里改成只读探一次格式，一个字节都不写。
+        const graph = await httpJson(args, `/api/workspace/graph${query({
+          flowId: flow.id, flowSource: flow.source, archived: flow.archived ? "1" : "",
+        })}`).catch((e) => ({ error: String(e.message || e) }));
+        const file = String(graph.path || "").split("/").pop() || "";
+        const nodes = Object.keys(graph.graph?.instances || {}).length;
+        rows.push({
+          flow: label,
+          store: graph.error ? `读不到: ${graph.error}`
+            : nodes > 0 ? (file === "workspace.flow.js" ? "代码（已是最新）" : "graph.json（待迁）")
+            : "空图（多半是仅 yaml）",
+          nodes,
+        });
+        continue;
+      }
+      const r = await httpJson(args, "/api/workspace/migrate", { method: "POST", body })
+        .catch((e) => ({ error: String(e.message || e) }));
+      const lost = [...(r.dropped || []), ...(r.droppedEdges || [])].filter((x) => !x.benign);
+      rows.push({
+        flow: label,
+        result: r.error ? `失败: ${r.error}`
+          : r.migrated ? "→ 代码"
+          : r.leftYaml ? "→ graph.json（DSL 装不下部分字段）"
+          : r.format === "dsl" ? "已是代码，跳过"
+          : r.format === "yaml" ? `拒绝：有损（${lost.length} 处）`
+          : `未处理（${r.format}）`,
+        remapped: (r.remapped || []).map((x) => `${x.from}->${x.to}`),
+        lost: lost.map((x) => x.id || `${x.source}->${x.target}`),
+        caveats: (r.remapped || []).filter((x) => x.caveat).map((x) => `${x.id}: ${x.caveat}`),
+      });
+    }
+
+    const refused = rows.filter((r) => String(r.result || "").startsWith("拒绝"));
+    const failed = rows.filter((r) => String(r.result || "").startsWith("失败"));
+    printJson({
+      total: rows.length,
+      dryRun,
+      rows,
+      // 只读目录和归档要交代清楚跳过了什么，否则「跑完了」会被读成「全覆盖了」
+      skipped: {
+        readonly: readonly.map((f) => `${f.id} [${f.source}]`),
+        archived: skippedArchived.map((f) => `${f.id} [${f.source}]`),
+      },
+      // 拒绝的单独拎出来：一键跑完之后要人做决定的就这些
+      needsDecision: refused.map((r) => r.flow),
+      hint: refused.length
+        ? "这些流程有节点/边在 Workspace 里没有对等物。看过 lost 清单后，对单个流程跑 migrate-flow --allow-loss。"
+        : undefined,
+    });
+    if (failed.length) process.exitCode = 1;
+    return;
+  }
+
   // 平台上还停在 flow.yaml 的老流程：列在列表里、点开是空图、跑不了。这条命令是它们的出口。
   // 默认拒绝有损迁移并把清单打出来，看过之后再加 --allow-loss。
   if (command === "migrate-flow") {
@@ -511,6 +602,8 @@ async function main() {
       body: {
         flowId,
         flowSource: option(args, "flow-source") || "user",
+        archived: args.archived === true,
+        allowArchived: args.archived === true,
         allowLoss: args["allow-loss"] === true,
       },
     });
