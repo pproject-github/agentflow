@@ -4204,7 +4204,19 @@ export function workspaceUnwrapOutputEnvelopeForDisplay(content) {
   return structured.structured ? String(structured.result || "") : raw;
 }
 
-function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null, scopedRoot = "") {
+/**
+ * 把刚产出的内容顺手回填到直接下游的展示节点。
+ *
+ * `selfRunningIds` 里的展示节点跳过——它们自己就在执行计划里，轮到自己时会写一遍
+ * （见运行循环里 `workspaceDisplayKind(defId)` 那一段），这里再写一遍是重复的，而且**会写错**：
+ * 上游完成的时刻分支还没判，`control_if` 未选中的那一支上的展示节点也会被灌上新内容，
+ * 然后才被标记跳过。结果是画布和 `workspace.state.json` 里，没走的那条分支显示着新鲜内容，
+ * 和真跑过的分支看不出区别。
+ *
+ * 留着这条回填是因为还有一类展示节点**不在**计划里：只连了数据边、没有 `prev` 控制边的那些
+ * 从来不会轮到自己执行，只能靠上游推过来。
+ */
+function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null, scopedRoot = "", selfRunningIds = null) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const updated = [];
@@ -4214,6 +4226,7 @@ function workspaceUpdateDirectDisplays(graph, sourceId, content, outputs = null,
     const targetId = String(edge?.target || "");
     const target = instances[targetId];
     if (!target || !workspaceDisplayKind(target.definitionId)) continue;
+    if (selfRunningIds?.has(targetId)) continue;
     const value = outputs ? workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot) : String(content || "");
     instances[targetId] = workspaceWriteDisplayContent(target, value || content);
     updated.push(targetId);
@@ -4837,8 +4850,10 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const recordNodeOutput = (nodeId, content) => {
     outputs.set(nodeId, content);
   };
+  // 计划里的展示节点由它们自己那一轮负责写内容；被 control_if 跳过的那一支因此什么都不写
+  const plannedDisplayIds = new Set(order.filter((id) => workspaceDisplayKind(graph.instances?.[id]?.definitionId)));
   const propagateNodeOutputDisplays = (nodeId, content, { emitGraph = false } = {}) => {
-    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, content, outputs, scopedRoot);
+    const updatedDisplays = workspaceUpdateDirectDisplays(graph, nodeId, content, outputs, scopedRoot, plannedDisplayIds);
     if (emitGraph && updatedDisplays.length) emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
     return updatedDisplays;
   };
