@@ -6,10 +6,6 @@ const componentPath = new URL(
   "../builtin/web-ui/src/components/ComposerAssistant.jsx",
   import.meta.url,
 );
-const flowEditorPath = new URL(
-  "../builtin/web-ui/src/pages/FlowEditorPage.jsx",
-  import.meta.url,
-);
 const workspacePath = new URL(
   "../builtin/web-ui/src/pages/WorkspacePage.jsx",
   import.meta.url,
@@ -17,9 +13,8 @@ const workspacePath = new URL(
 const cssPath = new URL("../builtin/web-ui/src/index.css", import.meta.url);
 
 test("AI Composer uses the shared Assistant conversation surface", async () => {
-  const [component, flowEditor, workspace] = await Promise.all([
+  const [component, workspace] = await Promise.all([
     readFile(componentPath, "utf8"),
-    readFile(flowEditorPath, "utf8"),
     readFile(workspacePath, "utf8"),
   ]);
 
@@ -30,10 +25,7 @@ test("AI Composer uses the shared Assistant conversation surface", async () => {
   assert.match(component, /af-composer-assistant-activity/);
   assert.match(component, /Enter 发送 · Shift \+ Enter 换行/);
 
-  // 旧 flow AI Composer 已下线：Flow 编辑器只剩只读静态预览，不再挂 Assistant 会话界面。
-  assert.doesNotMatch(flowEditor, /ComposerAssistantTurn/);
-  assert.doesNotMatch(flowEditor, /ComposerAssistantActivity/);
-
+  // 旧 flow 编辑器整个删掉了（它唯一的入口随静态预览一起消失），所以这里只剩 Workspace 一处。
   assert.match(workspace, /ComposerAssistantTurn/);
   assert.match(workspace, /ComposerAssistantActivity/);
   assert.match(workspace, /ComposerAssistantInput/);
