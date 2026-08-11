@@ -30,7 +30,7 @@ import { startUiServer } from "./ui-server.mjs";
 import { hubLogin, hubLogout } from "./hub-login.mjs";
 import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
-import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
+import { listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 import { startMcpServer } from "./mcp-server.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 
@@ -207,19 +207,7 @@ export async function main() {
       else throw new Error(result.error || "publish-node failed");
       process.exit(result.ok ? 0 : 1);
     }
-    if (action === "install-node") {
-      const flowId = shift();
-      const spec = shift();
-      if (!flowId || !spec) throw new Error("Usage: agentflow marketplace install-node <flow> <nodeSpec> [--json]");
-      const flowDir = getFlowDir(workspaceRoot, flowId);
-      if (!flowDir) throw new Error(`Flow not found: ${flowId}`);
-      const result = installFlowDependency(workspaceRoot, flowDir, spec);
-      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
-      else if (result.ok) process.stdout.write(`Installed ${result.definitionId} into ${flowId}\n`);
-      else throw new Error(result.error || "install-node failed");
-      process.exit(result.ok ? 0 : 1);
-    }
-    throw new Error("Usage: agentflow marketplace <list|publish-node|install-node> [--json]");
+    throw new Error("Usage: agentflow marketplace <list|publish-node> [--json]");
   }
   if (sub === "copy-builtin" && jsonMode) {
     const flowId = shift();

@@ -136,8 +136,9 @@ agentflow marketplace list
 - **不要写 `node.yaml`。** 它只是已发布老包的回退清单，新包一律用 `index.mjs`。
 - **不要写 `runtime.entry` / `scripts/run.mjs`。** 那是老 manifest 的字段，现在实现就在
   `index.mjs` 的 `run` 里。
-- **不要用 `agentflow marketplace install-node`。** 它往 `flow.yaml` 里写依赖，对代码流程
-  没有任何效果——直接在 `workspace.flow.js` 里写 import 就行。
+- **不要找 `agentflow marketplace install-node`。** 它已经删了：写的是 `flow.yaml` 里的依赖
+  钉，而代码化流程不读 flow.yaml。要用一个包，直接在 `workspace.flow.js` 里写 import（流程
+  自带的包）或让节点带上 `marketplace:<id>@<version>`（已发布的包）。
 - **不要用 `agentflow run` / `apply`。** Start/End Pipeline 执行栈已退休，运行走 Workspace。
 - **不要把本机绝对路径或密钥写进包。**
 

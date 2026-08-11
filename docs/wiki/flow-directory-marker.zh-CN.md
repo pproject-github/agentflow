@@ -71,6 +71,6 @@ workspace.layout.json  { version, description }
 | 位置 | 干什么 | 代码化流程下的表现 |
 |------|--------|--------------------|
 | `flow-import.mjs` / `hub-remote.mjs` | Hub 包格式 | 见上，publish 侧补壳 |
-| `marketplace.mjs` install-node | 把节点依赖写进 flow.yaml | 对代码化流程无效，应改成写 import |
+| ~~`marketplace.mjs` install-node~~ | 把节点依赖写进 flow.yaml | **已删除**——它写的钉子 Workspace 运行时从来不读（传进解析器的 flowData 是图，没有 dependencies），版本钉在实例的 marketplaceRef 上 |
 | ~~`main.mjs` `flow preview`~~ | 老版静态预览 | **已删除**——它把 flow.yaml 原文塞进页面，代码流程没有 yaml 可塞；Web 的 `/api/workspace/preview` 接的是图对象，本来就通用 |
 | `catalog-flows.mjs` `readFlowJson` | 读 legacy 图 | 只在没有 Workspace 图时才走到 |

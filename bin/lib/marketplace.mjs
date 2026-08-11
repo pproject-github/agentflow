@@ -332,6 +332,13 @@ function dependencyVersion(flowData, id) {
   return null;
 }
 
+/**
+ * 只读，没有写入方——写 `agentflow.lock.json` 的是已删除的 `install-node`。
+ *
+ * 留着是因为磁盘上仍可能有它当年写下的锁文件，那些流程的版本钉应该继续生效。代码化流程
+ * 不依赖它：版本钉在实例的 `marketplaceRef`（`marketplace:<id>@<version>`）上，解析时
+ * `parsed.version` 先命中，这条兜底根本走不到。
+ */
 function lockVersion(flowDir, id) {
   const lock = readJsonObject(path.join(flowDir, LOCK_FILENAME));
   const entry = lock && lock.nodes && lock.nodes[id];
@@ -574,31 +581,6 @@ export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version, 
   return { ok: true, id, version, packageDir };
 }
 
-export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData, opts = {}) {
-  if (!flowData || !flowData.instances || typeof flowData.instances !== "object") return null;
-  const nodes = {};
-  for (const inst of Object.values(flowData.instances)) {
-    const defId = inst && (inst.marketplaceRef || inst.definitionId);
-    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, defId, flowData, opts);
-    if (!resolved) continue;
-    nodes[resolved.id] = {
-      version: resolved.version,
-      resolved: path.relative(flowDir, resolved.packageDir).replace(/\\/g, "/"),
-      definitionId: resolved.resolvedDefinitionId,
-    };
-  }
-  const lockPath = path.join(flowDir, LOCK_FILENAME);
-  if (Object.keys(nodes).length === 0) return null;
-  const lock = readJsonObject(lockPath) || {};
-  const next = {
-    ...lock,
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    nodes: { ...(lock.nodes && typeof lock.nodes === "object" ? lock.nodes : {}), ...nodes },
-  };
-  fs.writeFileSync(lockPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
-  return next;
-}
 
 export function publishNodePackage(workspaceRoot, sourceDir) {
   const src = path.resolve(sourceDir);
@@ -966,21 +948,3 @@ export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
   return { ok: true, id, version, packageDir: dest, snippet: manifest.snippet };
 }
 
-export function installFlowDependency(workspaceRoot, flowDir, spec, opts = {}) {
-  const parsed = parseMarketplaceDefinitionId(spec.startsWith("marketplace:") ? spec : `marketplace:${spec}`);
-  if (!parsed) return { ok: false, error: `Invalid marketplace node spec: ${spec}` };
-  const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, `marketplace:${parsed.id}${parsed.version ? `@${parsed.version}` : ""}`, { dependencies: {} }, opts);
-  if (!resolved) return { ok: false, error: `Marketplace node not found: ${spec}` };
-
-  const flowYamlPath = path.join(flowDir, "flow.yaml");
-  const data = readYamlObject(flowYamlPath);
-  if (!data) return { ok: false, error: `Invalid flow.yaml: ${flowYamlPath}` };
-  const deps = data.dependencies && typeof data.dependencies === "object" ? data.dependencies : {};
-  const nodes = Array.isArray(deps.nodes) ? deps.nodes : [];
-  const exists = nodes.some((item) => (typeof item === "string" ? item === resolved.id : item && item.id === resolved.id));
-  if (!exists) nodes.push({ id: resolved.id, version: resolved.version });
-  data.dependencies = { ...deps, nodes };
-  fs.writeFileSync(flowYamlPath, yaml.dump(data, { lineWidth: -1 }), "utf-8");
-  writeFlowMarketplaceLock(workspaceRoot, flowDir, data, opts);
-  return { ok: true, id: resolved.id, version: resolved.version, definitionId: `marketplace:${resolved.id}@${resolved.version}` };
-}

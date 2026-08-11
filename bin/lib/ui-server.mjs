@@ -58,7 +58,6 @@ import {
 import {
   deleteMarketplaceFlowSnippetPackage,
   deleteMarketplaceNodePackage,
-  installFlowDependency,
   listMarketplaceFlowSnippets,
   listMarketplacePackages,
   publishFlowSnippet,
@@ -3431,44 +3430,6 @@ export function startUiServer({
       }
       try {
         const result = deleteMarketplaceFlowSnippetPackage(root, id, version, userCtx);
-        json(res, result.ok ? 200 : 400, result);
-      } catch (e) {
-        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
-      }
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/marketplace/install-node") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const flowId = payload?.flowId;
-      const flowSource = payload?.flowSource || "user";
-      const flowArchived = payload?.archived === true;
-      const nodeSpec = payload?.nodeSpec || payload?.definitionId || payload?.id;
-      if (!flowId) {
-        json(res, 400, { error: "Missing flowId" });
-        return;
-      }
-      if (!nodeSpec) {
-        json(res, 400, { error: "Missing nodeSpec" });
-        return;
-      }
-      if (flowArchived || !isValidFlowSourceWrite(flowSource)) {
-        json(res, 400, { error: "Cannot install marketplace nodes into builtin or archived flow" });
-        return;
-      }
-      try {
-        const resolved = resolveFlowDirForWrite(root, flowId, flowSource, userCtx);
-        if (resolved.error || !resolved.flowDir) {
-          json(res, 400, { error: resolved.error || "Could not resolve flow directory" });
-          return;
-        }
-        const result = installFlowDependency(root, resolved.flowDir, nodeSpec, userCtx);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });

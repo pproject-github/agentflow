@@ -96,7 +96,6 @@ node-authoring workflow is documented in `agentflow-node-authoring`):
 ```bash
 agentflow marketplace list --json
 agentflow marketplace publish-node ./my-node --json
-agentflow marketplace install-node MyFlow marketplace:my-node@1.0.0 --json
 agentflow validate MyFlow --json
 ```
 
