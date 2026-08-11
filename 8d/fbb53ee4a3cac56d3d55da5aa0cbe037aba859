@@ -1,0 +1,29 @@
+docs/wiki/flow-directory-marker.zh-CN.md
+  s_0475a63dba5f18::t_60d9f959cc8189 59,61-62,64-71,78
+bin/lib/main.mjs
+  s_0475a63dba5f18::t_e0b19e99fe64cb 589
+docs/wiki/flow-directory-marker.en.md
+  s_0475a63dba5f18::t_2c52ca2086d8c2 65,67-68,70-77,84
+test/flow-dir-marker.test.mjs
+  s_0475a63dba5f18::t_57c9e3262d310c 98-110,112-116
+  s_0475a63dba5f18::t_2a16fa7e6cec40 117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8dfbb53ee4a3cac56d3d55da5aa0cbe037aba859",
+  "prompts": {},
+  "logical_commit_id": "8dfbb53ee4a3cac56d3d55da5aa0cbe037aba859",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 37679,
+      "total_deletions": 27909
+    }
+  }
+}
