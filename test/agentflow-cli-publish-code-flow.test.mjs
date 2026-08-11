@@ -81,6 +81,26 @@ test("publish-flow 能发布代码化的流程目录，落到平台上还是同�
     );
     assert.equal(JSON.parse(single).success, true, single);
 
+    // --replace 走 Workspace 图那条路，而不是把代码退回成 yaml
+    fs.writeFileSync(
+      path.join(flowDir, "workspace.flow.js"),
+      SOURCE.replace('value: "hello"', 'value: "hello again"'),
+      "utf-8",
+    );
+    const { stdout: replaced } = await cli(
+      "publish-flow", "--flow-id", "code-flow", "--file", flowDir,
+      "--target-space", "workspace", "--replace",
+    );
+    assert.equal(JSON.parse(replaced).action, "replaced", replaced);
+    assert.ok(!fs.existsSync(path.join(landed, "flow.yaml")), "更新之后也不该冒出 yaml");
+    const after = store.readWorkspaceGraphFiles(landed);
+    assert.equal(after.format, "dsl", "更新之后仍然是代码化存储");
+    assert.match(
+      fs.readFileSync(path.join(landed, "workspace.flow.js"), "utf-8"),
+      /hello again/,
+      "改动要真的落到平台上",
+    );
+
     // 带不走的东西要当场拒绝，而不是悄悄发一个残缺的流程上去
     fs.mkdirSync(path.join(flowDir, "nodes", "say"), { recursive: true });
     fs.writeFileSync(path.join(flowDir, "nodes", "say", "index.mjs"), "export default {};\n", "utf-8");

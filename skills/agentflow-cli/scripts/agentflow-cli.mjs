@@ -365,7 +365,7 @@ function readFlowSourceFile(filePath) {
     throw new Error(`Cannot read flow file ${resolved}: ${error?.message || String(error)}`);
   }
   if (!flowSource.trim()) throw new Error(`Flow file is empty: ${resolved}`);
-  return { resolved, flowYaml: flowSource };
+  return { resolved, flowYaml: flowSource, isCode: /\.m?js$/i.test(resolved) };
 }
 
 function targetDestinationFromArgs(args) {
@@ -454,9 +454,13 @@ async function main() {
       return;
     }
 
+    // 更新走哪条路取决于存储格式：yaml 流程改 /api/flow，代码化流程改 Workspace 图。
+    // /api/flow 只认 flowYaml 字符串，代码化的流程发过去等于把图退回成 yaml。
     let current = null;
     try {
-      current = await httpJson(args, `/api/flow${query({ flowId, flowSource: targetSpace })}`);
+      current = source.isCode
+        ? await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource: targetSpace })}`)
+        : await httpJson(args, `/api/flow${query({ flowId, flowSource: targetSpace })}`);
     } catch (error) {
       if (error?.status !== 404) throw error;
     }
@@ -464,6 +468,16 @@ async function main() {
       const result = await importFlow(args, { flowId, targetSpace, ...source });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
       printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      return;
+    }
+    if (source.isCode) {
+      const graph = await readWorkspaceGraphArg(option(args, "file"));
+      const updated = await httpJson(args, "/api/workspace/graph", {
+        method: "POST",
+        body: { flowId, flowSource: targetSpace, graph, baseRevision: current.revision },
+      });
+      const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
+      printJson({ ...updated, action: "replaced", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
       return;
     }
     const result = await httpJson(args, "/api/flow", {
