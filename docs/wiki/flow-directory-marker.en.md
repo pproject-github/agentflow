@@ -80,5 +80,5 @@ These genuinely read yaml *content* rather than using it as a sentinel, so they 
 |-------|----------|---------------------------------|
 | `flow-import.mjs` / `hub-remote.mjs` | Hub package format | See above — publish synthesizes a shell |
 | `marketplace.mjs` install-node | Writes node deps into flow.yaml | No effect on code flows; should write an import instead |
-| `main.mjs` `flow preview` | Old static preview | Workspace graphs go through `flow dsl` |
+| ~~`main.mjs` `flow preview`~~ | Old static preview | **Removed** — it injected raw flow.yaml into the page and code flows have no yaml to inject; the web `/api/workspace/preview` takes a graph object and was already format-agnostic |
 | `catalog-flows.mjs` `readFlowJson` | Reads the legacy graph | Only reached when there is no Workspace graph |

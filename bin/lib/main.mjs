@@ -1,7 +1,6 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import chalk from "chalk";
 import {
   addRoleJson,
@@ -33,7 +32,6 @@ import { hubPublish } from "./hub-publish.mjs";
 import { hubListRemote, hubDownload } from "./hub-remote.mjs";
 import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 import { startMcpServer } from "./mcp-server.mjs";
-import { writeStaticFlowPreview } from "./flow-static-preview.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 
 async function readStdin() {
@@ -384,66 +382,10 @@ export async function main() {
     }
     throw new Error(usage);
   }
-  if (sub === "flow" && argv[0] === "preview") {
-    shift();
-    const target = shift();
-    if (!target) throw new Error("Usage: agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]");
-    let outputPath = "";
-    const outputIdx = argv.indexOf("--output");
-    if (outputIdx >= 0 && argv[outputIdx + 1]) {
-      outputPath = path.resolve(workspaceRoot, argv[outputIdx + 1]);
-      argv.splice(outputIdx, 2);
-    }
-    const noOpen = argv.includes("--no-open");
-    if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
-    if (argv.length > 0) throw new Error(`Unknown flow preview option: ${argv[0]}`);
-
-    const targetPath = path.resolve(workspaceRoot, target);
-    let previewFlowPath = "";
-    if (fs.existsSync(targetPath)) {
-      previewFlowPath = fs.statSync(targetPath).isDirectory()
-        ? path.join(targetPath, "flow.yaml")
-        : targetPath;
-    } else {
-      const flowDir = getFlowDir(workspaceRoot, target);
-      if (flowDir) previewFlowPath = path.join(flowDir, "flow.yaml");
-    }
-    if (!previewFlowPath || !fs.existsSync(previewFlowPath) || !fs.statSync(previewFlowPath).isFile()) {
-      throw new Error(`Flow not found: ${target}`);
-    }
-    previewFlowPath = fs.realpathSync(previewFlowPath);
-    const flowId = path.basename(path.dirname(previewFlowPath)) || "local-preview";
-    const safeFlowId = flowId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "flow-preview";
-    if (!outputPath) {
-      outputPath = path.join(workspaceRoot, ".workspace", "agentflow", "previews", `${safeFlowId}.html`);
-    }
-    if (!/\.html?$/i.test(outputPath)) throw new Error("Preview output must be an HTML file");
-    const nodeCatalog = listNodesJson(workspaceRoot, flowId, "", {
-      staticFlowPath: previewFlowPath,
-      marketplaceScope: "all",
-    });
-    const result = writeStaticFlowPreview({
-      flowId,
-      flowPath: previewFlowPath,
-      nodeCatalog,
-      outputPath,
-      distDir: path.join(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))), "builtin", "web-ui", "dist"),
-    });
-    const url = pathToFileURL(result.outputPath).href;
-    process.stderr.write(`AgentFlow static preview: ${result.outputPath}\nSource: ${previewFlowPath}\n`);
-    if (!noOpen) {
-      if (process.platform === "win32") {
-        const child = spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" });
-        child.unref();
-      } else if (process.platform === "darwin") {
-        const child = spawn("open", [url], { detached: true, stdio: "ignore" });
-        child.unref();
-      } else {
-        const child = spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
-        child.unref();
-      }
-    }
-    return;
+  if (sub === "flow") {
+    // `flow preview` 曾经在这儿。它把 flow.yaml 原文塞进页面，代码化流程没有 yaml 可塞；
+    // Web 的 /api/workspace/preview 接的是图对象，本来就通用，所以删掉而不是重写。
+    throw new Error("Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]");
   }
   if (sub === "ui") {
     let port = 8765;

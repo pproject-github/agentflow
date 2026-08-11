@@ -18,7 +18,6 @@ AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code / Codex CLI 流式输�
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
   agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
-  agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]  生成平台同款画布的单文件静态 Flow 预览
   agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]  流程图与 workspace.flow.js 代码互转 / 静态校验 / 就地迁移
   agentflow mcp                              启动 AgentFlow MCP stdio server，供 Cursor/Codex 运行流程并读取 display 输出
   agentflow marketplace list [--json]         查看 workspace 本地节点市场
@@ -87,7 +86,6 @@ Usage:
   agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
   agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
-  agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]  Generate a single-file static Flow preview using the platform canvas
   agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]  Convert a graph to/from workspace.flow.js, lint it, or migrate in place
   agentflow mcp                              Start the AgentFlow MCP stdio server for Cursor/Codex to run flows and read display outputs
   agentflow marketplace list [--json]         Show workspace local marketplace packages

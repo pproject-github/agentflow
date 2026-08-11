@@ -64,9 +64,6 @@ npm install -g @fieldwangai/agentflow
 # 启动 Web UI（端口 8765）
 agentflow ui
 
-# 生成并打开平台同款画布的单文件静态预览（无需本地服务）
-agentflow flow preview ./my-flow/flow.yaml
-
 ```
 
 运行从 Web UI 的 Workspace 图发起；需要定时执行时在图里加 `workspace_scheduled_run` 节点。
@@ -157,7 +154,6 @@ AgentFlow 提供专用技能用于常见操作：
 |------|------|
 | `list` | 列出所有流水线 |
 | `ui` | 启动 Web UI |
-| `flow preview <FlowName\|flow.yaml>` | 生成平台同款画布的单文件静态 Flow 预览；可用 `--output` 指定 HTML |
 | `apply` | 执行流程 |
 | `validate` | 校验流程结构 |
 | `resume` | 断点续跑 |

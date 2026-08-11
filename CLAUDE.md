@@ -43,7 +43,6 @@ all return HTTP 410. `flow.yaml` is now read/migrate/audit material only.
 | `agentflow validate <FlowName>` | Validate a flow — Workspace graphs go through `flow dsl lint`, legacy `flow.yaml` flows through the old validator |
 | `agentflow flow dsl lint <flowDir>` | Static-check `workspace.flow.js` — run after editing it |
 | `agentflow flow dsl migrate <FlowName\|dir>` | Convert a legacy `workspace.graph.json` to code |
-| `agentflow flow preview <FlowName>` | Generate a single-file static canvas preview |
 | `agentflow run-status <FlowName> <uuid>` | View node execution status |
 | `agentflow extract-thinking <FlowName> <uuid>` | Extract agent thinking process |
 
