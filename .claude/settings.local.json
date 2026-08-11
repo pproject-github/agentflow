@@ -103,7 +103,8 @@
       "Bash(git diff *)",
       "Bash(perl -0pi -e 's/if \\\\\\(selfRunningIds\\\\?\\\\.has\\\\\\(targetId\\\\\\)\\\\\\) continue;/if \\(false\\) continue;/' bin/lib/workspace-server.mjs)",
       "Bash(perl -0pi -e 's/\\\\\\(\\\\\\(pins\\\\.in \\\\|\\\\|= \\\\{\\\\}\\\\\\)\\\\[slot\\\\.name\\\\] \\\\|\\\\|= \\\\{\\\\}\\\\\\)\\\\.type = actual;/\\\\/* removed *\\\\/;/' bin/lib/flow-dsl/layout.mjs)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(git ls-remote *)"
     ]
   }
 }
