@@ -11,11 +11,6 @@ export function printHelp() {
 AgentFlow CLI — 使用 Cursor / OpenCode / Claude Code / Codex CLI 流式输出驱动 apply/replay。
 
 用法：
-  agentflow login [--provider github|google]   登录 AgentFlow Hub（默认 GitHub）
-  agentflow logout                             退出 Hub 登录
-  agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  发布流程到 Hub
-  agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  浏览 Hub 上的流程
-  agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  从 Hub 下载流程（默认 --user 安装到 ~/agentflow/pipelines/<id>；--workspace 安装到当前工程 .workspace/agentflow/pipelines/<id>；--raw 仅保留压缩包）
   agentflow list                              列出所有流水线
   agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  本地 HTTP：流水线列表 + React Flow 节点流程图编辑保存（默认 127.0.0.1:8765；可用 AGENTFLOW_UI_HOST）
   agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]  流程图与 workspace.flow.js 代码互转 / 静态校验 / 就地迁移
@@ -78,11 +73,6 @@ Apply/replay 脚本已打包在 agentflow 包中（bin/pipeline/）。
 AgentFlow CLI — drive apply/replay with Cursor / OpenCode / Claude Code / Codex CLI streaming.
 
 Usage:
-  agentflow login [--provider github|google]   Login to AgentFlow Hub (default: GitHub)
-  agentflow logout                             Sign out of Hub
-  agentflow publish <FlowName> [--title <t>] [--description <d>] [--tags <t1,t2>]  Publish flow to Hub
-  agentflow list-remote [--search <q>] [--sort popular|trending] [--json]  Browse flows on Hub
-  agentflow download <slug|title> [--user|--workspace] [--as <id>] [--raw [--output <dir>]]  Download flow (default --user → ~/agentflow/pipelines/<id>; --workspace → current project's .workspace/agentflow/pipelines/<id>; --raw keeps the archive)
   agentflow list                              List all pipelines
   agentflow ui [--host <addr>] [--port <n>] [--no-open] [--hide-community-links]  Local HTTP: pipeline list + React Flow node diagram editor (default 127.0.0.1:8765; AGENTFLOW_UI_HOST supported)
   agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]  Convert a graph to/from workspace.flow.js, lint it, or migrate in place

@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { unzipSync, zipSync } from "fflate";
 
 import { lintWorkspaceFlowDir, migrateFlowDirToDsl } from "../bin/lib/flow-dsl/cli.mjs";
-import { collectPublishableFlowFiles } from "../bin/lib/hub-publish.mjs";
 import { publishNodePackage, resolveMarketplaceNodePackage } from "../bin/lib/marketplace.mjs";
 import { isRuntimeArtifactPath } from "../bin/lib/workspace-flow-store.mjs";
 
@@ -70,34 +68,6 @@ test("运行产物的路径判断只认这两类，不误伤同名的作者文�
   assert.equal(isRuntimeArtifactPath("nodes/say/index.mjs"), false, "代码节点实现不是运行产物");
   assert.equal(isRuntimeArtifactPath("nodes/say/deep/history.md"), false, "* 只吃一层");
   assert.equal(isRuntimeArtifactPath("history.md"), false);
-});
-
-test("发布打包带上流程文件，排掉运行产物和点文件", () => {
-  const flowDir = temp();
-  fs.writeFileSync(path.join(flowDir, "flow.yaml"), "instances: {}\nedges: []\n", "utf-8");
-  fs.writeFileSync(path.join(flowDir, "workspace.flow.js"), 'import { flow } from "agentflow/flow";\n', "utf-8");
-  fs.writeFileSync(path.join(flowDir, "workspace.layout.json"), "{}\n", "utf-8");
-  fs.writeFileSync(path.join(flowDir, "workspace.state.json"), '{"outputs":{"a":{"r":{"value":"内网业务数据"}}}}', "utf-8");
-  fs.mkdirSync(path.join(flowDir, "nodes", "say"), { recursive: true });
-  fs.writeFileSync(path.join(flowDir, "nodes", "say", "history.md"), "上次跑出来的内网内容", "utf-8");
-  fs.writeFileSync(path.join(flowDir, "nodes", "say", "index.mjs"), "export default {};\n", "utf-8");
-  fs.mkdirSync(path.join(flowDir, ".git"), { recursive: true });
-  fs.writeFileSync(path.join(flowDir, ".git", "config"), "secret", "utf-8");
-  fs.writeFileSync(path.join(flowDir, ".DS_Store"), "junk", "utf-8");
-
-  const packed = collectPublishableFlowFiles(flowDir);
-  assert.deepEqual(packed.map((e) => e.rel).sort(), [
-    "flow.yaml",
-    "nodes/say/index.mjs",
-    "workspace.flow.js",
-    "workspace.layout.json",
-  ]);
-
-  // 打出来的包解回去还是同一组文件——发布链路真正上传的就是这个 buffer
-  const zip = zipSync(Object.fromEntries(
-    packed.map((e) => [e.rel, new Uint8Array(fs.readFileSync(e.abs))]),
-  ));
-  assert.deepEqual(Object.keys(unzipSync(zip)).sort(), packed.map((e) => e.rel).sort());
 });
 
 test("validate 对 Workspace 图走 lint，两种存储形态结论一致", () => {

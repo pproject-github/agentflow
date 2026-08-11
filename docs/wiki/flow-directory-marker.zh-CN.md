@@ -56,13 +56,18 @@ workspace.layout.json  { version, description }
 
 没有 `flow.yaml`。两个内置模板也删掉了各自的空壳。
 
-## Hub 那一侧还没动
+## Hub 已经删掉了
 
-线上包格式仍要求包里有 `flow.yaml`——`flow-import.mjs` 找不到它就直接拒收，下载侧也按它
-认包。所以 `agentflow publish` 在打包代码化的流程时会**补一份只带说明的空壳 yaml**，真正的
-图照旧以 `workspace.flow.js` 发出去；装回来时 `isFlowDir` 优先认代码。
+上面那座桥不用修了：`agentflow publish` 打包时补一份空壳 yaml 的做法，随 Hub（login /
+publish / list-remote / download 和整个 Supabase 客户端）一起删除。
 
-这是个桥，不是终点。要让 yaml 彻底消失，得改 Hub 的收发两端。
+留下来的是**导入端**：`POST /api/flows/import` 仍然按 `flow.yaml` 认包，没有它直接回
+「压缩包内未找到 flow.yaml」。而现在已经没有任何东西能产出兼容的包——导出那一侧只有
+Hub 的打包器，跟着一起没了。
+
+所以这里现在是一条单向的死路：能导入、只认 yaml、而 yaml 包无处可来。要么让导入端认
+`workspace.flow.js`，要么把导入也一并删掉。`test/flow-dir-marker.test.mjs` 里钉着当前行为，
+改对了那条断言会红。
 
 ## 还认 flow.yaml 的地方
 
@@ -70,7 +75,7 @@ workspace.layout.json  { version, description }
 
 | 位置 | 干什么 | 代码化流程下的表现 |
 |------|--------|--------------------|
-| `flow-import.mjs` / `hub-remote.mjs` | Hub 包格式 | 见上，publish 侧补壳 |
+| `flow-import.mjs` | 导入端的包格式 | 见上——只认 yaml，而能产出 yaml 包的 Hub 打包器已删除 |
 | ~~`marketplace.mjs` install-node~~ | 把节点依赖写进 flow.yaml | **已删除**——它写的钉子 Workspace 运行时从来不读（传进解析器的 flowData 是图，没有 dependencies），版本钉在实例的 marketplaceRef 上 |
 | ~~`main.mjs` `flow preview`~~ | 老版静态预览 | **已删除**——它把 flow.yaml 原文塞进页面，代码流程没有 yaml 可塞；Web 的 `/api/workspace/preview` 接的是图对象，本来就通用 |
 | `catalog-flows.mjs` `readFlowJson` | 读 legacy 图 | 只在没有 Workspace 图时才走到 |

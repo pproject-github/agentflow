@@ -70,22 +70,6 @@ agentflow ui
 
 从源码开发：`git clone` → `npm install` → `npm link`
 
-## AgentFlow Hub
-
-在 **[agentflow-hub.com](https://agentflow-hub.com)** 浏览、下载和分享社区工作流。
-
-```bash
-# 浏览社区工作流
-agentflow list-remote
-
-# 下载工作流
-agentflow download <slug>
-
-# 发布你的工作流
-agentflow login
-agentflow publish <FlowName> --tags "migration,review"
-```
-
 ## 创建流程
 
 ### 方式一：可视化编辑器

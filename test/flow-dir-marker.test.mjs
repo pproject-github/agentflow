@@ -13,7 +13,6 @@ import path from "node:path";
 import test from "node:test";
 import { unzipSync, zipSync } from "fflate";
 
-import { collectPublishableFlowFiles } from "../bin/lib/hub-publish.mjs";
 import { normalizeZipToPipelineFiles } from "../bin/lib/flow-import.mjs";
 import { readPipelineListDescription, resolveFlowDirAbs } from "../bin/lib/catalog-flows.mjs";
 import { FLOW_MARKER_FILENAMES, isFlowDir } from "../bin/lib/paths.mjs";
@@ -96,21 +95,24 @@ test("只有代码的流程目录，图读得出来", () => {
   assert.equal(read.graph.ui.description, "只有代码的流程", "说明要跟着 layout 回到图里");
 });
 
-test("发布代码化的流程时补一个 flow.yaml，包还能被导入认出来", () => {
-  const dir = seedCodeOnlyFlow(path.join(tmpdir(), "toPublish"));
-  const packaged = collectPublishableFlowFiles(dir);
-  assert.deepEqual(
-    packaged.map((e) => e.rel).sort(),
-    ["workspace.flow.js", "workspace.layout.json"],
-    "目录里本来就没有 flow.yaml",
-  );
-
-  // hubPublish 在打包时补的那一份（这里复刻同样的内容，避免测试去联网）
-  const entries = Object.fromEntries(packaged.map((e) => [e.rel, new Uint8Array(fs.readFileSync(e.abs))]));
-  entries["flow.yaml"] = new Uint8Array(Buffer.from("instances: {}\nedges: []\nui:\n  description: 只有代码的流程\n", "utf8"));
-
+/**
+ * 这条以前测的是「Hub 发布时补一个 flow.yaml 外壳，包就还能被导入认出来」。Hub 已经删了，
+ * 那个外壳也随之消失，剩下的是导入端自己的问题——它仍然按 flow.yaml 认包。
+ *
+ * 所以这条改成钉住**当前真实行为**：代码化的流程压缩包进不来。它是一条待修的缺口，不是
+ * 期望值；等导入端改成认 workspace.flow.js，这条断言会红，那时候就该把它翻过来。
+ */
+test("导入端仍按 flow.yaml 认包——代码化流程的 zip 现在进不来", () => {
+  const dir = seedCodeOnlyFlow(path.join(tmpdir(), "toImport"));
+  const entries = {};
+  for (const rel of ["workspace.flow.js", "workspace.layout.json"]) {
+    entries[rel] = new Uint8Array(fs.readFileSync(path.join(dir, rel)));
+  }
   const normalized = normalizeZipToPipelineFiles(unzipSync(zipSync(entries, { level: 6 })));
-  assert.ok(!normalized.error, normalized.error || "");
-  assert.ok(normalized.files.has("flow.yaml"), "缺 flow.yaml 的包导入端会直接拒收");
-  assert.ok(normalized.files.has("workspace.flow.js"), "真正的图必须还在包里");
+  assert.match(
+    String(normalized.error || ""),
+    /flow\.yaml/,
+    "导入端一旦改成认 workspace.flow.js，这条就该翻过来",
+  );
+  assert.equal(normalized.files, undefined, "报错时不该同时给出半份文件清单");
 });

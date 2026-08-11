@@ -62,15 +62,18 @@ workspace.layout.json  { version, description }
 
 No `flow.yaml`. The two built-in templates dropped their shells too.
 
-## The Hub side is untouched
+## The Hub is gone
 
-The wire format still requires `flow.yaml` in the package — `flow-import.mjs` rejects a
-package without it, and the download side keys on it too. So `agentflow publish`
-**synthesizes a description-only yaml shell** when packaging a code-based flow; the real
-graph still ships as `workspace.flow.js`, and `isFlowDir` prefers the code on the way back in.
+That bridge no longer needs building: the yaml shell `agentflow publish` synthesized went out
+with the Hub itself (login / publish / list-remote / download and the whole Supabase client).
 
-That is a bridge, not a destination. Making yaml disappear entirely means changing both ends
-of the Hub protocol.
+What remains is the **import** side: `POST /api/flows/import` still keys on `flow.yaml` and
+rejects anything without it. And nothing can produce a compatible package any more — the only
+packager lived in Hub publish.
+
+So this is now a one-way dead end: import exists, accepts yaml only, and yaml packages have no
+source. Either teach the importer to accept `workspace.flow.js`, or delete import as well.
+`test/flow-dir-marker.test.mjs` pins the current behaviour; fixing it turns that assertion red.
 
 ## Where flow.yaml is still read
 
@@ -78,7 +81,7 @@ These genuinely read yaml *content* rather than using it as a sentinel, so they 
 
 | Place | What for | Behaviour for a code-based flow |
 |-------|----------|---------------------------------|
-| `flow-import.mjs` / `hub-remote.mjs` | Hub package format | See above — publish synthesizes a shell |
+| `flow-import.mjs` | Import-side package format | See above — yaml only, and the packager that produced yaml packages is gone |
 | ~~`marketplace.mjs` install-node~~ | Wrote node deps into flow.yaml | **Removed** — the Workspace runtime never read that pin (the flowData handed to the resolver is the graph, which has no `dependencies`); versions are pinned on each instance's marketplaceRef |
 | ~~`main.mjs` `flow preview`~~ | Old static preview | **Removed** — it injected raw flow.yaml into the page and code flows have no yaml to inject; the web `/api/workspace/preview` takes a graph object and was already format-agnostic |
 | `catalog-flows.mjs` `readFlowJson` | Reads the legacy graph | Only reached when there is no Workspace graph |
