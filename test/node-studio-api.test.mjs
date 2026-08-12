@@ -121,6 +121,7 @@ export async function run(inputs, outputs) { const fs = await import("node:fs/pr
 `);
     const res = await request("/api/node-studio/test", { method: "POST", body: JSON.stringify({ id: "lazy", inputs: {} }) });
     const json = await res.json();
+    assert.equal(json.status, "failed", "缺输出不能通过发布门禁");
     assert.ok(json.log.some((line) => line.includes("没有写文件") && line.includes("b")), json.log.join("\n"));
   });
 });
@@ -140,6 +141,7 @@ export async function run(inputs, outputs) {
 `);
     const res = await request("/api/node-studio/test", { method: "POST", body: JSON.stringify({ id: "strayfile", inputs: {} }) });
     const json = await res.json();
+    assert.equal(json.status, "failed", "file 槽写路径不能通过发布门禁");
     assert.ok(
       json.log.some((line) => line.includes("是 file 槽") && line.includes("out")),
       json.log.join("\n"),
@@ -174,6 +176,11 @@ test("解析得过的包能发布进 workspace 市场", async () => {
   await withServer(async ({ request, plantPackage, tempRoot }) => {
     await request("/api/node-studio/draft", { method: "POST", body: JSON.stringify({ id: "line_count" }) });
     plantPackage("line_count", GOOD_PACKAGE);
+    const tested = await request("/api/node-studio/test", {
+      method: "POST",
+      body: JSON.stringify({ id: "line_count", inputs: { text: "a\nb" } }),
+    });
+    assert.equal(tested.status, 200);
     const res = await request("/api/node-studio/publish", { method: "POST", body: JSON.stringify({ id: "line_count" }) });
     const json = await res.json();
     assert.equal(res.status, 200, JSON.stringify(json));

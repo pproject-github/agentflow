@@ -16,8 +16,15 @@ import { startComposerAgent } from "./composer-agent.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
 import { runGit } from "./git-worktree.mjs";
-import { publishNodePackage } from "./marketplace.mjs";
+import {
+  listMarketplacePackages,
+  nodePackageArchive,
+  publishNodePackage,
+  publishNodePackageArchive,
+  resolveMarketplaceNodePackage,
+} from "./marketplace.mjs";
 import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } from "./node-package-manifest.mjs";
+import { inspectNodePackageDirectory } from "./node-package-archive.mjs";
 import { json, readBody } from "./http-util.mjs";
 import { log } from "./log.mjs";
 import { PACKAGE_ROOT, getAgentflowUserDataRoot } from "./paths.mjs";
@@ -174,7 +181,7 @@ async function renderHtmlScreenshotWithChrome({ html, workspaceRoot, baseDir, wi
  * @returns {{ graph: object, path: string, revision: string, runtimeRevision: string, result: object }}
  */
 function commitWorkspaceGraph(workspaceRoot, scoped, graph, userCtx) {
-  const result = writeWorkspaceGraph(scoped.root, graph);
+  const result = writeWorkspaceGraph(scoped.root, graph, workspaceRoot);
   const persisted = hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped, result.graph, userCtx);
   return {
     graph: persisted,
@@ -183,6 +190,23 @@ function commitWorkspaceGraph(workspaceRoot, scoped, graph, userCtx) {
     runtimeRevision: workspaceRuntimeRevision(persisted),
     result,
   };
+}
+
+function missingWorkspaceGraphNodePackages(workspaceRoot, scoped, graph, userCtx) {
+  const missing = new Set();
+  for (const instance of Object.values(graph?.instances || {})) {
+    const ref = String(instance?.marketplaceRef || instance?.definitionId || "").trim();
+    if (!ref.startsWith("marketplace:")) continue;
+    const resolved = resolveMarketplaceNodePackage(
+      workspaceRoot,
+      scoped.root,
+      ref,
+      null,
+      { ...userCtx, marketplaceScope: "all" },
+    );
+    if (!resolved) missing.add(ref);
+  }
+  return [...missing].sort();
 }
 
 const NODE_STUDIO_DRAFTS_DIRNAME = "node-studio/drafts";
@@ -321,15 +345,32 @@ function nodeStudioPackageDir(userCtx = {}, draftId = "") {
 function nodeStudioReadPackage(userCtx = {}, draftId = "") {
   const dir = nodeStudioPackageDir(userCtx, draftId);
   const entry = path.join(dir, NODE_PACKAGE_ENTRY);
-  if (!fs.existsSync(entry)) return { source: "", manifest: null, error: "" };
+  const files = {};
+  const collectFiles = (current) => {
+    let entries = [];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const item of entries) {
+      const abs = path.join(current, item.name);
+      if (item.isDirectory()) collectFiles(abs);
+      else if (item.isFile()) {
+        const rel = path.relative(dir, abs).replace(/\\/g, "/");
+        const stat = fs.statSync(abs);
+        files[rel] = stat.size <= 256 * 1024 ? fs.readFileSync(abs, "utf-8") : `[binary ${stat.size} bytes]`;
+      }
+    }
+  };
+  collectFiles(dir);
+  if (!fs.existsSync(entry)) return { source: "", manifest: null, error: "", files, packageDigest: "" };
   const source = fs.readFileSync(entry, "utf-8");
   try {
     const manifest = readNodePackageManifest(dir, () => null);
-    if (!manifest) return { source, manifest: null, error: `${NODE_PACKAGE_ENTRY} 里没有可解析的 export default 声明` };
-    if (!nodePackageExportsRun(entry)) return { source, manifest, error: "缺少 `export function run`，节点无法执行" };
-    return { source, manifest, error: "" };
+    if (!manifest) return { source, manifest: null, error: `${NODE_PACKAGE_ENTRY} 里没有可解析的 export default 声明`, files, packageDigest: "" };
+    if (!nodePackageExportsRun(entry)) return { source, manifest, error: "缺少 `export function run`，节点无法执行", files, packageDigest: "" };
+    const inspected = inspectNodePackageDirectory(dir);
+    if (!inspected.ok) return { source, manifest, error: inspected.error, files, packageDigest: "" };
+    return { source, manifest, error: "", files, packageDigest: inspected.contentSha256 };
   } catch (e) {
-    return { source, manifest: null, error: (e && e.message) || String(e) };
+    return { source, manifest: null, error: (e && e.message) || String(e), files, packageDigest: "" };
   }
 }
 
@@ -337,13 +378,14 @@ function nodeStudioReadPackage(userCtx = {}, draftId = "") {
 function nodeStudioDraftFromPackage(pkg, draftId) {
   const manifest = pkg.manifest;
   if (!manifest) {
-    return { files: { [NODE_PACKAGE_ENTRY]: pkg.source || "" }, parseError: pkg.error || "" };
+    return { files: pkg.files || { [NODE_PACKAGE_ENTRY]: pkg.source || "" }, packageDigest: "", parseError: pkg.error || "" };
   }
   return {
     title: manifest.displayName || manifest.id || draftId,
     definitionId: manifest.definitionId || `marketplace:${manifest.id}@${manifest.version}`,
     manifest,
-    files: { [NODE_PACKAGE_ENTRY]: pkg.source || "" },
+    files: pkg.files || { [NODE_PACKAGE_ENTRY]: pkg.source || "" },
+    packageDigest: pkg.packageDigest || "",
     parseError: "",
   };
 }
@@ -421,16 +463,23 @@ async function runNodeStudioPackageTest({ packageDir, manifest, inputs, userCtx 
       log.push(`[output] ${name} = ${outputs[name].split("\n")[0].slice(0, 120)}`);
     }
     const missing = outputSlots.map((s) => s.name).filter((name) => !(name in outputs));
-    if (missing.length) log.push(`[warn] 这些输出槽没有写文件：${missing.join(", ")}`);
+    if (missing.length) log.push(`[error] 这些输出槽没有写文件：${missing.join(", ")}`);
     // 把「文件写到别处、只把路径写进槽」这种写法在测试阶段就点出来。它在这里看着能过——
     // 路径确实存在——但真实运行时那个位置是会被清理的临时目录，产物就丢了。
+    const invalidFileSlots = [];
     for (const slot of outputSlots) {
       const value = String(outputs[slot.name] || "").trim();
       if (String(slot.type || "") !== "file" || !value || value.includes("\n")) continue;
       if (!path.isAbsolute(value)) continue;
-      log.push(`[warn] ${slot.name} 是 file 槽，但里面写的是一个路径而不是文件内容——请直接把内容写到 outputs.${slot.name}`);
+      invalidFileSlots.push(slot.name);
+      log.push(`[error] ${slot.name} 是 file 槽，但里面写的是一个路径而不是文件内容——请直接把内容写到 outputs.${slot.name}`);
     }
-    return { status: "passed", durationMs: Date.now() - startedAt, log, outputs };
+    return {
+      status: missing.length || invalidFileSlots.length ? "failed" : "passed",
+      durationMs: Date.now() - startedAt,
+      log,
+      outputs,
+    };
   } catch (e) {
     const log = [];
     for (const line of String(e?.stdout || "").split("\n")) if (line.trim()) log.push(line);
@@ -454,8 +503,9 @@ function buildNodeStudioPrompt({ requirement, currentSource, parseError, history
   return [
     "你在为 AgentFlow 编写一个**代码节点包**。工作目录就是这个包的目录。",
     "",
-    `把完整实现写进 \`${NODE_PACKAGE_ENTRY}\`（覆盖已有内容），然后回复一句话说明这次改了什么。`,
-    "不要创建别的文件，不要写 node.yaml。",
+    `把节点声明和统一入口写进 \`${NODE_PACKAGE_ENTRY}\`，然后回复一句话说明这次改了什么。`,
+    "这是一个完整节点包目录：复杂实现可以拆到 scripts/，也可以创建 templates/、assets/ 等包内文件，并由 index.mjs 使用相对路径引用。",
+    "不要写 node.yaml，不要创建 node_modules、.env、密钥、符号链接或引用包外绝对路径。",
     "",
     "## 格式",
     "",
@@ -598,6 +648,7 @@ function buildWorkspaceGeneratePrompt(payload) {
     ? payload.selectedNodeIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
   const skillsBlock = typeof payload?.skillsBlock === "string" ? payload.skillsBlock.trim() : "";
+  const nodeCatalogBlock = typeof payload?.nodeCatalogBlock === "string" ? payload.nodeCatalogBlock.trim() : "";
   const history = Array.isArray(payload?.messages) ? payload.messages : [];
   const historyBlock = history
     .slice(-16)
@@ -668,11 +719,42 @@ function buildWorkspaceGeneratePrompt(payload) {
     workspaceGraphBlock,
     selectedNodeIds.length > 0 ? `\n## 当前用户选中的 workspace 节点\n\n${selectedNodeIds.map((id) => `- ${id}`).join("\n")}` : "",
     skillsBlock ? `\n## Selected Skills\n\n${skillsBlock}` : "",
+    nodeCatalogBlock ? `\n## 当前已安装的节点包\n\n${nodeCatalogBlock}` : "",
     kindInstruction,
     contextBlocks ? `\n## 上下文\n\n${contextBlocks}` : "",
     historyBlock ? `\n## 对话历史\n\n${historyBlock}` : "",
     `\n## 用户 prompt\n\n${userPrompt}`,
   ].filter(Boolean).join("\n");
+}
+
+function workspaceNodePackageCatalogBlock(workspaceRoot, scoped, userCtx = {}) {
+  const catalog = listNodesJson(workspaceRoot, scoped.flowId || "", scoped.flowSource || "user", {
+    archived: scoped.archived,
+    ...userCtx,
+    marketplaceScope: "all",
+  });
+  // flow/project 本地包虽然也有 marketplaceDefinitionId，但另一个端并没有安装它，不能教 AI
+  // 用 marketplace: 引用。这里只暴露已经进入 marketplace/collection 的可移植版本。
+  const rows = (Array.isArray(catalog?.nodes) ? catalog.nodes : []).filter((node) =>
+    ["marketplace", "collection"].includes(String(node?.source || ""))
+    && String(node?.marketplaceDefinitionId || node?.id || "").startsWith("marketplace:"));
+  if (!rows.length) return "";
+  return rows.slice(0, 100).map((node, index) => {
+    const ref = String(node.marketplaceDefinitionId || node.id);
+    const binding = String(node.packageId || `nodePackage${index + 1}`)
+      .replace(/[^A-Za-z0-9_$]+(.)?/g, (_, ch) => ch ? ch.toUpperCase() : "")
+      .replace(/^[^A-Za-z_$]+/, "") || `nodePackage${index + 1}`;
+    const slots = (kind) => (Array.isArray(node[kind]) ? node[kind] : [])
+      .filter((slot) => slot?.name && !["prev", "next"].includes(slot.name))
+      .map((slot) => `${slot.name}:${slot.type || "text"}${slot.required ? "!" : ""}`)
+      .join(", ") || "无";
+    return [
+      `- ${ref} · ${node.displayName || node.label || node.packageId || ref}`,
+      `  用途：${String(node.description || "未提供说明").replace(/\s+/g, " ").slice(0, 300)}`,
+      `  输入：${slots("inputs")}；输出：${slots("outputs")}`,
+      `  DSL：import ${binding} from ${JSON.stringify(ref)};`,
+    ].join("\n");
+  }).join("\n");
 }
 
 function buildWorkspaceNodeChatPrompt(payload) {
@@ -773,6 +855,17 @@ function parseWorkspaceUploadForm(req) {
   });
 }
 
+/** ZIP 本地头：PK\x03\x04 / \x05\x06 / \x07\x08 */
+function workspaceBufferLooksLikeZip(buf) {
+  return (
+    buf.length >= 4
+    && buf[0] === 0x50
+    && buf[1] === 0x4b
+    && (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07)
+    && (buf[3] === 0x04 || buf[3] === 0x06 || buf[3] === 0x08)
+  );
+}
+
 /**
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
@@ -780,6 +873,94 @@ function parseWorkspaceUploadForm(req) {
  */
 async function workspaceRoutes(req, res, ctx) {
   const { url, authUser, userCtx, root, host, MIME, adminWorkspaceRequestedUserContext, broadcastWorkspaceCollaborationEvent, findWorkspaceShareUser, isValidFlowSourceRead, readUserWorkspaces, requestPublicBaseUrl, resolveWorkspaceScopeRoot, teamSummaryWithUsers, listConfiguredWorkspaces } = ctx;
+
+    if (req.method === "GET" && url.pathname === "/api/node-packages") {
+      try {
+        const packages = listMarketplacePackages(root, { ...userCtx, marketplaceScope: "all" });
+        json(res, 200, {
+          nodes: packages.nodes.map((node) => ({
+            id: node.id,
+            version: node.version,
+            definitionId: node.definitionId,
+            displayName: node.displayName,
+            description: node.description,
+            baseDefinitionId: node.baseDefinitionId,
+            inputs: node.inputs,
+            outputs: node.outputs,
+            ownerUserId: node.ownerUserId || node.createdBy || "",
+            fileList: node.fileList || [],
+            fileCount: node.fileCount || 0,
+            totalBytes: node.totalBytes || 0,
+            contentSha256: node.contentSha256 || "",
+            archiveSha256: node.archiveSha256 || "",
+            downloadPath: `/api/node-packages/${encodeURIComponent(node.id)}/${encodeURIComponent(node.version)}/archive`,
+          })),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/node-packages") {
+      const ct = req.headers["content-type"] || "";
+      if (!ct.toLowerCase().startsWith("multipart/form-data")) {
+        json(res, 415, { error: "需要 multipart/form-data" });
+        return;
+      }
+      let parsed;
+      try {
+        parsed = await parseWorkspaceUploadForm(req);
+      } catch (e) {
+        json(res, e?.message === "FILE_TOO_LARGE" ? 413 : 400, {
+          error: e?.message === "FILE_TOO_LARGE" ? "节点包 ZIP 过大（最大 10MB）" : ((e && e.message) || String(e)),
+        });
+        return;
+      }
+      if (!parsed.gotFile || !parsed.file.length || !workspaceBufferLooksLikeZip(parsed.file)) {
+        json(res, 400, { error: "请上传 ZIP 节点包（字段名 file）" });
+        return;
+      }
+      try {
+        const result = publishNodePackageArchive(root, parsed.file, { ownerUserId: userCtx.userId });
+        json(res, result.ok ? (result.alreadyExists ? 200 : 201) : (result.conflict ? 409 : 400), result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    const nodePackageDownload = url.pathname.match(/^\/api\/node-packages\/([^/]+)\/([^/]+)\/archive$/);
+    if (req.method === "GET" && nodePackageDownload) {
+      let id = "";
+      let version = "";
+      try {
+        id = decodeURIComponent(nodePackageDownload[1]);
+        version = decodeURIComponent(nodePackageDownload[2]);
+      } catch {
+        json(res, 400, { error: "Invalid node package id or version" });
+        return;
+      }
+      try {
+        const result = nodePackageArchive(root, id, version, { ...userCtx, marketplaceScope: "all" });
+        if (!result.ok) {
+          json(res, 404, { error: result.error || "Node package not found" });
+          return;
+        }
+        res.writeHead(200, {
+          "Content-Type": "application/zip",
+          "Content-Length": result.archive.length,
+          "Content-Disposition": `attachment; filename="${String(id).replace(/[^A-Za-z0-9_.-]/g, "-")}-${String(version).replace(/[^A-Za-z0-9_.-]/g, "-")}.zip"`,
+          ETag: `"sha256-${result.archiveSha256}"`,
+          "X-AgentFlow-Content-SHA256": result.contentSha256,
+          "X-AgentFlow-Archive-SHA256": result.archiveSha256,
+        });
+        res.end(result.archive);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/api/workspace-tree") {
       try {
@@ -1179,7 +1360,7 @@ async function workspaceRoutes(req, res, ctx) {
       };
       try {
         fs.mkdirSync(flowDir, { recursive: true });
-        writeWorkspaceGraph(flowDir, graph);
+        writeWorkspaceGraph(flowDir, graph, root);
         writeWorkspacePreviewMetadata(flowDir, metadata);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -1233,7 +1414,10 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         const { migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
-        const result = migrateFlowDirToDsl(scoped.root, { force: payload.allowLoss === true });
+        const result = migrateFlowDirToDsl(scoped.root, {
+          force: payload.allowLoss === true,
+          marketplaceRoot: root,
+        });
         if (result.format === "empty") {
           json(res, 404, { error: "这个流程目录里既没有 Workspace 图，也没有 flow.yaml", ...result });
           return;
@@ -1241,7 +1425,7 @@ async function workspaceRoutes(req, res, ctx) {
         // 迁移过的图立刻广播给正在看这张画布的人——否则他们手里还是空图，
         // 下一次保存会把刚迁好的内容覆盖回去
         if (result.migrated || result.leftYaml) {
-          const { graph } = readWorkspaceGraph(scoped.root);
+          const { graph } = readWorkspaceGraph(scoped.root, root);
           broadcastWorkspaceCollaborationEvent(
             userCtx,
             scoped.flowSource,
@@ -1269,7 +1453,7 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
-        const { path: graphPath, graph } = readWorkspaceGraph(scoped.root);
+        const { path: graphPath, graph } = readWorkspaceGraph(scoped.root, root);
         const scopedUserCtx = workspaceScopedUserContext(scoped, userCtx);
         const hydratedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, graph, scopedUserCtx);
         const collaborationAccess = scoped.collaborationAccess || workspaceCollaborationAccess(null, userCtx.userId);
@@ -1335,8 +1519,18 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 400, { error: "Cannot write workspace graph for builtin or archived pipeline" });
           return;
         }
-        const submittedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || payload, userCtx);
-        const currentStoredGraph = readWorkspaceGraph(scoped.root).graph;
+        const submittedDesign = payload.graph || payload;
+        const submittedMissingPackages = missingWorkspaceGraphNodePackages(root, scoped, submittedDesign, userCtx);
+        if (submittedMissingPackages.length) {
+          json(res, 422, {
+            error: `服务端缺少节点包：${submittedMissingPackages.join(", ")}；请先上传这些精确版本`,
+            kind: "node_packages_missing",
+            missingNodePackages: submittedMissingPackages,
+          });
+          return;
+        }
+        const submittedGraph = hydrateWorkspaceGraphForRuntime(root, scoped, submittedDesign, userCtx);
+        const currentStoredGraph = readWorkspaceGraph(scoped.root, root).graph;
         const currentGraph = hydrateWorkspaceGraphForRuntime(root, scoped, currentStoredGraph, userCtx);
         const currentRevision = workspaceDesignRevision(currentGraph);
         const baseRevision = String(payload.baseRevision || "").trim();
@@ -1546,7 +1740,7 @@ async function workspaceRoutes(req, res, ctx) {
         const result = await workspaceOptimizeRunImplementations(root, scoped.root, payload, userCtx, {
           emit: () => {},
         });
-        const currentGraph = readWorkspaceGraph(scoped.root).graph;
+        const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
         const touchedIds = new Set((result.optimized || []).map((item) => item.nodeId).filter(Boolean));
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
         const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
@@ -1608,7 +1802,7 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 400, { error: "Missing flowId" });
           return;
         }
-        const canonicalStoredGraph = readWorkspaceGraph(scoped.root).graph;
+        const canonicalStoredGraph = readWorkspaceGraph(scoped.root, root).graph;
         const canonicalGraph = hydrateWorkspaceGraphForRuntime(
           root,
           scoped,
@@ -1719,7 +1913,7 @@ async function workspaceRoutes(req, res, ctx) {
               signal: controller.signal,
               onActiveChild: setActiveChild,
             });
-            const currentGraph = readWorkspaceGraph(scoped.root).graph;
+            const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
             const touchedIds = workspaceRunTouchedNodeIds(result);
             const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
             const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
@@ -1788,7 +1982,7 @@ async function workspaceRoutes(req, res, ctx) {
             onActiveChild: setActiveChild,
             onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
           });
-          const currentGraph = readWorkspaceGraph(scoped.root).graph;
+          const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
           const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
           const committed = commitWorkspaceGraph(root, scoped, mergedGraph, userCtx);
@@ -2469,7 +2663,8 @@ async function workspaceRoutes(req, res, ctx) {
         let content = "";
         const events = [];
         const maxAttempts = 3;
-        const promptText = buildWorkspaceGeneratePrompt({ ...payload, skillsBlock });
+        const nodeCatalogBlock = workspaceNodePackageCatalogBlock(root, scoped, userCtx);
+        const promptText = buildWorkspaceGeneratePrompt({ ...payload, skillsBlock, nodeCatalogBlock });
         const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           let attemptResult = "";
@@ -2773,6 +2968,7 @@ async function workspaceRoutes(req, res, ctx) {
             ...nodeStudioDraftFromPackage(after, draftId),
             promptDraft: "",
             agentMessages,
+            test: { inputs: current?.test?.inputs || {}, log: [], status: "not run", packageDigest: "" },
           });
           json(res, 200, { ok: true, draft });
           return;
@@ -2816,9 +3012,17 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 400, { error: pkg.error });
           return;
         }
-        const result = publishNodePackage(root, nodeStudioPackageDir(userCtx, draftId));
+        const current = readNodeStudioDraft(userCtx, draftId);
+        if (current?.test?.status !== "passed" || !pkg.packageDigest || current?.test?.packageDigest !== pkg.packageDigest) {
+          json(res, 400, { error: "发布前必须对当前节点包运行并通过 Test" });
+          return;
+        }
+        const result = publishNodePackage(root, nodeStudioPackageDir(userCtx, draftId), {
+          immutable: true,
+          ownerUserId: userCtx.userId,
+        });
         if (!result.ok) {
-          json(res, 400, { error: result.error || "发布失败" });
+          json(res, result.conflict ? 409 : 400, { error: result.error || "发布失败" });
           return;
         }
         json(res, 200, { ok: true, ...result });
@@ -2857,7 +3061,14 @@ async function workspaceRoutes(req, res, ctx) {
         });
         const draft = writeNodeStudioDraft(userCtx, {
           ...current,
-          test: { inputs, log: result.log, status: result.status, durationMs: result.durationMs },
+          ...nodeStudioDraftFromPackage(pkg, draftId),
+          test: {
+            inputs,
+            log: result.log,
+            status: result.status,
+            durationMs: result.durationMs,
+            packageDigest: pkg.packageDigest || "",
+          },
         });
         json(res, 200, { ok: true, draft, ...result });
       } catch (e) {

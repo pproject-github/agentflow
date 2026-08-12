@@ -11,6 +11,7 @@ import path from "path";
 import yaml from "js-yaml";
 import { unzipSync } from "fflate";
 import { flowFilesToGraph } from "./flow-dsl/index.mjs";
+import { marketplaceDependenciesFromSource } from "./flow-dsl/packages.mjs";
 import { resolveFlowDirForWrite, validateUserPipelineId } from "./flow-write.mjs";
 import { normalizeFlowYamlText } from "./flow-normalize.mjs";
 import { FLOW_MARKER_FILENAMES } from "./paths.mjs";
@@ -109,9 +110,10 @@ export function validateImportedFlowYaml(content) {
  *
  * @param {string} content
  * @param {string} filename 上传时的文件名，用来决定按哪种格式解析
+ * @param {{ resolvePackage?: Function }} [opts]
  * @returns {{ ok: true, entryName: string } | { ok: false, error: string }}
  */
-export function validateImportedFlowSource(content, filename = "") {
+export function validateImportedFlowSource(content, filename = "", opts = {}) {
   const name = String(filename || "").toLowerCase();
   if (!name.endsWith(".js") && !name.endsWith(".mjs")) {
     const checked = validateImportedFlowYaml(content);
@@ -120,8 +122,27 @@ export function validateImportedFlowSource(content, filename = "") {
   if (Buffer.byteLength(String(content || ""), "utf8") > IMPORT_MAX_UNCOMPRESSED_BYTES) {
     return { ok: false, error: "workspace.flow.js 过大" };
   }
+  const dependencies = marketplaceDependenciesFromSource(content);
+  if (dependencies.errors.length) {
+    return { ok: false, error: dependencies.errors.join("；") };
+  }
+  if (typeof opts.resolvePackage === "function") {
+    const missing = dependencies.dependencies.filter((dependency) => !opts.resolvePackage(dependency.specifier));
+    if (missing.length) {
+      return {
+        ok: false,
+        error: `服务端缺少节点包：${missing.map((dependency) => dependency.specifier).join(", ")}；请先上传这些精确版本`,
+      };
+    }
+  }
   try {
-    flowFilesToGraph({ source: String(content || ""), layout: {}, nodeMeta: {}, files: {} });
+    flowFilesToGraph({
+      source: String(content || ""),
+      layout: {},
+      nodeMeta: {},
+      files: {},
+      resolvePackage: opts.resolvePackage,
+    });
     return { ok: true, entryName: "workspace.flow.js" };
   } catch (e) {
     return { ok: false, error: `workspace.flow.js 解析失败：${(e && e.message) || e}` };

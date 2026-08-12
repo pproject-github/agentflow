@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentFlow Node DSL"
+  short_description: "Create, test, and distribute reusable AgentFlow nodes"
+  default_prompt: "Use $agentflow-node-dsl to create and validate a reusable AgentFlow code node package."

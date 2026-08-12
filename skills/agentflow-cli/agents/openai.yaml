@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentFlow CLI"
-  short_description: "Operate AgentFlow workspaces, flows, runs, graphs, and logs"
-  default_prompt: "Use $agentflow-cli to inspect or operate AgentFlow with the bundled token-backed CLI."
+  short_description: "Search packages and operate portable AgentFlow workspaces"
+  default_prompt: "Use $agentflow-cli to search node packages and operate a portable AgentFlow workspace."

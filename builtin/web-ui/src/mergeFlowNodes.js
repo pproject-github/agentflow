@@ -242,8 +242,13 @@ export function cloneNodeIoDraftSlots(node) {
  */
 export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations, flowId) {
   const definitionId = n.data?.definitionId || String(n.id).replace(/-\d+$/, "");
-  const def = palette.find((p) => p.id === definitionId);
   const inst = instances[n.id];
+  const explicitMarketplaceRef = inst?.marketplaceRef || n.data?.marketplaceRef || "";
+  // marketplace 节点用自身定义描述引脚，用 baseDefinitionId 选择运行时卡片。
+  // 只按 runtime definitionId（例如 tool_nodejs）查 palette 会把自定义引脚按内置槽位
+  // 的下标错误合并，最终把已经连接的第 2、3 个输入隐藏掉。
+  const def = palette.find((p) => p.id === explicitMarketplaceRef)
+    || palette.find((p) => p.id === definitionId);
   let inputs = [];
   let outputs = [];
   let label = n.data?.label ?? n.id;
@@ -288,7 +293,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     if (outputs.length === 0 && def?.outputs?.length) outputs = def.outputs.map((x) => ({ ...x }));
   }
   const resolvedDefId = runtimeDefinitionIdForPalette(def, def?.id ?? definitionId);
-  const marketplaceRef = inst?.marketplaceRef || n.data?.marketplaceRef || marketplaceRefForDefinition(def);
+  const marketplaceRef = explicitMarketplaceRef || marketplaceRefForDefinition(def);
   if (resolvedDefId === "agent_subAgent" && !outputs.some((slot) => slot?.name === "result")) {
     const resultSlot = def?.outputs?.find((slot) => slot?.name === "result");
     outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
@@ -416,4 +421,11 @@ export function revealConnectedSlots(nodes, connection) {
     return node;
   });
   return changed ? next : nodes;
+}
+
+export function revealConnectedSlotsForEdges(nodes, edges) {
+  return (Array.isArray(edges) ? edges : []).reduce(
+    (current, edge) => revealConnectedSlots(current, edge),
+    Array.isArray(nodes) ? nodes : [],
+  );
 }

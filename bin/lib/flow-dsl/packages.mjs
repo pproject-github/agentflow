@@ -12,8 +12,112 @@
  */
 import fs from "fs";
 import path from "path";
+import { parse as acornParse } from "acorn";
 
 import { isNodePackageDir, readNodePackageManifest, slotMapToList } from "../node-package-manifest.mjs";
+import { listMarketplaceNodes, parseMarketplaceDefinitionId } from "../marketplace.mjs";
+
+/**
+ * 从结构代码里提取远端节点依赖。import 本身就是依赖声明，不能再维护第二份 lock 清单。
+ * 这里只看静态 ImportDeclaration，和 DSL 解析器的边界一致。
+ *
+ * @returns {{ dependencies: Array<{id:string,version:string,specifier:string,line:number}>, errors: string[] }}
+ */
+export function marketplaceDependenciesFromSource(source) {
+  let ast;
+  try {
+    ast = acornParse(String(source || ""), {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      locations: true,
+    });
+  } catch (error) {
+    return { dependencies: [], errors: [`workspace.flow.js 语法错误：${error?.message || String(error)}`] };
+  }
+  const bySpecifier = new Map();
+  const errors = [];
+  for (const statement of ast.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const specifier = String(statement.source?.value || "").trim();
+    if (!specifier.startsWith("marketplace:")) continue;
+    const parsed = parseMarketplaceDefinitionId(specifier);
+    const line = Number(statement.loc?.start?.line) || 0;
+    if (!parsed?.id) {
+      errors.push(`第 ${line} 行：无效的 marketplace 节点引用 ${JSON.stringify(specifier)}`);
+      continue;
+    }
+    if (!parsed.version) {
+      errors.push(`第 ${line} 行：${specifier} 没有固定版本；请使用 marketplace:<id>@<version>`);
+      continue;
+    }
+    bySpecifier.set(specifier, { id: parsed.id, version: parsed.version, specifier, line });
+  }
+  return {
+    dependencies: [...bySpecifier.values()].sort((a, b) => a.specifier.localeCompare(b.specifier)),
+    errors,
+  };
+}
+
+/**
+ * 把流程目录里的相对节点包 import 改成可分发的固定版本 import。
+ *
+ * 只替换 ImportDeclaration 的字符串字面量，不碰用户文件，也不做正则替换；因此注释、
+ * 普通字符串和动态 import 不会被误伤。调用方可以把返回的 source 作为一次性的发布产物。
+ *
+ * @param {string} source
+ * @param {{bySpecifier?: Record<string, object>}} packages scanFlowLocalPackages 的结果
+ * @returns {{source:string, dependencies:object[], rewritten:object[]}}
+ */
+export function rewriteFlowLocalPackageImports(source, packages) {
+  const text = String(source || "");
+  const ast = acornParse(text, {
+    ecmaVersion: 2022,
+    sourceType: "module",
+    locations: true,
+  });
+  const replacements = [];
+  const byRef = new Map();
+  for (const statement of ast.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const specifier = String(statement.source?.value || "");
+    const record = packages?.bySpecifier?.[specifier];
+    if (specifier.startsWith("./nodes/") && !record) {
+      throw new Error(`第 ${Number(statement.loc?.start?.line) || 0} 行：节点包不存在或声明无效 ${specifier}`);
+    }
+    if (!record) continue;
+    const marketplaceRef = String(record.marketplaceRef || "").trim();
+    const parsed = parseMarketplaceDefinitionId(marketplaceRef);
+    if (!parsed?.id || !parsed.version) {
+      throw new Error(`${specifier} 没有可发布的固定版本 marketplaceRef`);
+    }
+    replacements.push({
+      start: statement.source.start,
+      end: statement.source.end,
+      value: JSON.stringify(marketplaceRef),
+      specifier,
+      marketplaceRef,
+      line: Number(statement.loc?.start?.line) || 0,
+    });
+    byRef.set(marketplaceRef, {
+      id: parsed.id,
+      version: parsed.version,
+      specifier: marketplaceRef,
+      line: Number(statement.loc?.start?.line) || 0,
+      packageDir: record.packageDir || "",
+    });
+  }
+  let portable = text;
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    portable = `${portable.slice(0, replacement.start)}${replacement.value}${portable.slice(replacement.end)}`;
+  }
+  return {
+    source: portable,
+    dependencies: [...byRef.values()].sort((a, b) => a.specifier.localeCompare(b.specifier)),
+    rewritten: replacements
+      .sort((a, b) => a.start - b.start)
+      .map(({ specifier, marketplaceRef, line }) => ({ specifier, marketplaceRef, line })),
+  };
+}
 
 /** 包没写 baseDefinitionId 时按什么算——和 catalog 面板那边同一套回落。 */
 function baseDefinitionIdOf(manifest) {
@@ -53,6 +157,7 @@ export function scanFlowLocalPackages(flowDir) {
       id: manifest.id,
       version: String(manifest.version || ""),
       dirName: entry.name,
+      packageDir: dir,
       specifier: `./nodes/${entry.name}`,
       marketplaceRef: manifest.definitionId || `marketplace:${manifest.id}@${manifest.version}`,
       baseDefinitionId: baseDefinitionIdOf(manifest),
@@ -67,6 +172,46 @@ export function scanFlowLocalPackages(flowDir) {
   return { bySpecifier, byRef, list };
 }
 
+/**
+ * Resolve both flow-local packages and packages installed in the workspace
+ * marketplace. The latter use `marketplace:<id>@<version>` as their DSL import
+ * specifier, so package identity is present in workspace.flow.js itself.
+ */
+export function scanAvailableNodePackages(flowDir, workspaceRoot = "") {
+  const local = scanFlowLocalPackages(flowDir);
+  if (!workspaceRoot) return local;
+  const bySpecifier = {};
+  const byRef = {};
+  const list = [];
+  for (const manifest of listMarketplaceNodes(workspaceRoot)) {
+    const marketplaceRef = manifest.definitionId || `marketplace:${manifest.id}@${manifest.version}`;
+    const record = {
+      id: manifest.id,
+      version: String(manifest.version || ""),
+      dirName: manifest.id,
+      specifier: marketplaceRef,
+      marketplaceRef,
+      baseDefinitionId: baseDefinitionIdOf(manifest),
+      input: manifest.input || slotMapToList({}, "input"),
+      output: manifest.output || slotMapToList({}, "output"),
+      source: manifest.source || "marketplace",
+    };
+    bySpecifier[record.specifier] = record;
+    byRef[record.marketplaceRef] = record;
+    list.push(record);
+  }
+  // A flow-local package intentionally wins over an installed package with the
+  // same id/version; runtime resolution follows the same order.
+  Object.assign(bySpecifier, local.bySpecifier);
+  Object.assign(byRef, local.byRef);
+  const localRefs = new Set(local.list.map((item) => item.marketplaceRef));
+  return {
+    bySpecifier,
+    byRef,
+    list: [...list.filter((item) => !localRefs.has(item.marketplaceRef)), ...local.list],
+  };
+}
+
 /** 给 `parseFlowSource` 用的 import 解析器。 */
 export function packageResolverFor(packages) {
   return (specifier) => packages.bySpecifier[String(specifier || "")] || null;
@@ -74,8 +219,7 @@ export function packageResolverFor(packages) {
 
 /**
  * 给 `generateFlowSource` 用的 `opts.packages`：nodeId -> 包。
- * 只有解析得到**流程本地**包的实例才走 import 形式；已发布到 marketplace 的包没有本地
- * 路径可 import，继续按基础类型渲染，引用信息留在 nodes.json 里。
+ * 本地包写相对 import，已安装包写 `marketplace:<id>@<version>` import。
  */
 export function packageBindingsForGraph(graph, packages) {
   const out = {};

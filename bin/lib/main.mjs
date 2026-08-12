@@ -297,7 +297,7 @@ export async function main() {
     shift();
     const action = shift();
     const target = shift();
-    const usage = "Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>] [--allow-loss]";
+    const usage = "Usage: agentflow flow dsl <export|import|lint|layout|migrate> <FlowName|dir> [--out <dir>] [--allow-loss] [--all]";
     if (!action || !target) throw new Error(usage);
     let outDir = "";
     const outIdx = argv.indexOf("--out");
@@ -309,7 +309,11 @@ export async function main() {
     const lossIdx = argv.indexOf("--allow-loss");
     const force = lossIdx >= 0;
     if (force) argv.splice(lossIdx, 1);
+    const allIdx = argv.indexOf("--all");
+    const all = allIdx >= 0;
+    if (all) argv.splice(allIdx, 1);
     if (argv.length > 0) throw new Error(`Unknown flow dsl option: ${argv[0]}`);
+    if (all && action !== "layout") throw new Error("--all 只用于 flow dsl layout");
 
     const direct = path.resolve(workspaceRoot, target);
     const dir = fs.existsSync(direct) && fs.statSync(direct).isDirectory()
@@ -317,10 +321,10 @@ export async function main() {
       : getFlowDir(workspaceRoot, target);
     if (!dir || !fs.existsSync(dir)) throw new Error(`Flow not found: ${target}`);
 
-    const { exportFlowDsl, importFlowDsl, lintFlowDir, migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
+    const { exportFlowDsl, importFlowDsl, layoutWorkspaceFlowDir, lintFlowDir, migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
 
     if (action === "migrate") {
-      const result = migrateFlowDirToDsl(dir, { force });
+      const result = migrateFlowDirToDsl(dir, { force, marketplaceRoot: workspaceRoot });
       if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
       if (result.format === "empty") process.stderr.write(`${chalk.yellow("skip")}   ${dir}：没有图\n`);
       else if (!result.migrated && result.format === "dsl") process.stderr.write(`${chalk.green("ok")}     ${dir}：已经是代码形态\n`);
@@ -362,7 +366,7 @@ export async function main() {
       return;
     }
     if (action === "lint") {
-      const result = lintFlowDir(dir);
+      const result = lintFlowDir(dir, { workspaceRoot });
       if (jsonMode) process.stdout.write(JSON.stringify({ errors: result.errors, warnings: result.warnings }) + "\n");
       else {
         for (const e of result.errors) process.stderr.write(`${chalk.red("error")}  ${e}\n`);
@@ -372,12 +376,18 @@ export async function main() {
       if (result.errors.length) process.exitCode = 1;
       return;
     }
+    if (action === "layout") {
+      const result = layoutWorkspaceFlowDir(dir, { all, workspaceRoot });
+      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
+      else process.stderr.write(`${chalk.green("ok")}     ${result.positioned}/${result.nodeCount} 个节点已${all ? "重新" : "补充"}排版\n  ${result.layoutPath}\n`);
+      return;
+    }
     throw new Error(usage);
   }
   if (sub === "flow") {
     // `flow preview` 曾经在这儿。它把 flow.yaml 原文塞进页面，代码化流程没有 yaml 可塞；
     // Web 的 /api/workspace/preview 接的是图对象，本来就通用，所以删掉而不是重写。
-    throw new Error("Usage: agentflow flow dsl <export|import|lint|migrate> <FlowName|dir> [--out <dir>]");
+    throw new Error("Usage: agentflow flow dsl <export|import|lint|layout|migrate> <FlowName|dir> [--out <dir>] [--all]");
   }
   if (sub === "ui") {
     let port = 8765;

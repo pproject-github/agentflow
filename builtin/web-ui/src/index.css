@@ -10524,7 +10524,8 @@ button.af-project-card {
   --sync-color: #7dcfff;
 }
 
-.af-workspace-sync-light.is-dirty {
+.af-workspace-sync-light.is-dirty,
+.af-workspace-sync-light.is-interacting {
   --sync-color: #e0af68;
 }
 

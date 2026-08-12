@@ -670,8 +670,8 @@ export function workspaceDesignPath(workspaceRoot) {
  * 落成代码还是历史 JSON 由存储层决定——它会把生成的代码解析回来跟原图逐字段比对，
  * 比不上就退回写 workspace.graph.json。这里只负责把降级喊出来。
  */
-export function writeWorkspaceGraph(workspaceRoot, graph) {
-  const result = writeWorkspaceGraphFiles(workspaceRoot, graph);
+export function writeWorkspaceGraph(workspaceRoot, graph, marketplaceRoot = "") {
+  const result = writeWorkspaceGraphFiles(workspaceRoot, graph, { marketplaceRoot });
   if (result.degradedReason) {
     log.warn(`Workspace 图无法表示成代码，已退回 ${WORKSPACE_GRAPH_FILENAME}：${result.degradedReason}`);
   }
@@ -688,8 +688,8 @@ export function writeWorkspaceGraph(workspaceRoot, graph) {
  * `workspace.flow.js` 解析失败会抛 `WorkspaceFlowParseError`——**不能**降级成空图：
  * 那会让下一次保存把整张流程清空。
  */
-export function readWorkspaceGraph(workspaceRoot) {
-  const { path: designPath, graph } = readWorkspaceGraphFiles(workspaceRoot);
+export function readWorkspaceGraph(workspaceRoot, marketplaceRoot = "") {
+  const { path: designPath, graph } = readWorkspaceGraphFiles(workspaceRoot, { marketplaceRoot });
   return { path: designPath, graph };
 }
 
@@ -5310,9 +5310,9 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         "";
 
       try {
-        const currentGraph = readWorkspaceGraph(scopedRoot).graph;
+        const currentGraph = readWorkspaceGraph(scopedRoot, root).graph;
         const mergedGraph = mergeWorkspaceRunGraph(currentGraph, graph, new Set([nodeId, ...nodeIds]));
-        writeWorkspaceGraph(scopedRoot, mergedGraph);
+        writeWorkspaceGraph(scopedRoot, mergedGraph, root);
       } catch (e) {
         emit({ type: "natural", kind: "warning", text: `保存分享展示内容失败：${(e && e.message) || String(e)}` });
       }
@@ -5825,7 +5825,7 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
     if (scoped.error || !scoped.root) continue;
     let graph;
     try {
-      graph = readWorkspaceGraph(scoped.root).graph;
+      graph = readWorkspaceGraph(scoped.root, root).graph;
     } catch {
       continue;
     }
@@ -6039,7 +6039,7 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     });
     return;
   }
-  const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root).graph, userCtx);
+  const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root, root).graph, userCtx);
   const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
   const instance = graph.instances?.[scheduleNodeId];
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
@@ -6152,10 +6152,10 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       onActiveChild: setActiveChild,
       onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
     });
-    const currentGraph = readWorkspaceGraph(scoped.root).graph;
+    const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
     const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
-    writeWorkspaceGraph(scoped.root, mergedGraph);
+    writeWorkspaceGraph(scoped.root, mergedGraph, root);
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {

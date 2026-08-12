@@ -6,6 +6,7 @@
 ```bash
 agentflow flow dsl migrate <FlowName|dir> [--allow-loss]  # graph.json / flow.yaml -> flow.js，就地迁移
 agentflow flow dsl lint    <dir>                          # 静态校验
+agentflow flow dsl layout  <dir> [--all]                  # 自动排版；默认只补缺失坐标
 agentflow flow dsl export  <FlowName|dir> [--out <dir>]   # 导出一份到别处
 agentflow flow dsl import  <dir> [--out <flowDir>]        # 反向生成 graph.json（审计用）
 ```
@@ -49,7 +50,23 @@ prompt / script 只能干看着。
 
 ### 平台上的流程
 
-部署出去的流程改不了本机磁盘，走 HTTP 的同款出口：
+服务端启动时会在监听 HTTP 和启动 scheduler **之前**检查独立的存储结构版本，自动扫描实际
+`AGENTFLOW_HOME`、所有用户 pipelines、当前 `workspaceRoot` 和归档目录。无损的
+`workspace.graph.json` / `flow.yaml` 会就地迁移；需要丢节点或边的 YAML 原样保留，只记入
+`needsDecision`，绝不自动接受损耗。
+
+版本、每个存储根的迁移结果和待决清单写在：
+
+```text
+<AGENTFLOW_HOME>/admin/storage-migrations.json
+```
+
+启动迁移带文件锁，避免多个服务进程同时修改一个数据卷。`flow.yaml` 原文始终保留；无人值守
+转换 `workspace.graph.json` 前还会备份到流程目录的
+`.agentflow-migrations/workspace-flow-dsl-v1/`。同一版本重复启动直接跳过；同一个数据根换了新的
+`workspaceRoot` 时，只补迁新的 Workspace。
+
+下面的 HTTP/CLI 出口用于人工处理 `needsDecision` 或排障，不是正常上线的必做步骤：
 
 ```bash
 agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
@@ -69,7 +86,8 @@ agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--archived] [--a
 agentflow-cli migrate-all [--include-archived] [--allow-loss] [--dry-run]
 ```
 
-遍历这个账号能看到的所有流程，**无损的全做掉，有损的一个不碰**。两类活儿风险完全不同：
+手工遍历这个账号能看到的所有流程，**无损的全做掉，有损的一个不碰**。服务端启动自动迁移后，
+它主要用于补迁和核对。两类活儿风险完全不同：
 
 - `graph.json -> 代码`：换存储格式，节点词汇表不变，往返比对闸门保证图等价——无损
 - `flow.yaml -> 代码`：要换词，可能丢东西——默认拒绝，把清单摆出来

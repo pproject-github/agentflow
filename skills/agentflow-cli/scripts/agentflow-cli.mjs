@@ -2,6 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  configureAgentFlowRuntime,
+  loadAgentFlowRuntime,
+  resolveAgentFlowPackageRoot,
+} from "./agentflow-runtime.mjs";
 import { createWorkflowReportClient } from "./workflow-report-client.mjs";
 
 const DEFAULT_BASE_URL = "http://ai.mengma.bigo.inner/";
@@ -20,19 +25,18 @@ const DISPLAY_DEFINITION_KINDS = new Map([
  * `--file` 可以是流程目录、workspace.flow.js，或历史的 workspace.graph.json。
  * 前两种要静态解析代码才能拿到图，交给 agentflow 自己的存储层——不在这里重实现一遍。
  */
-async function readWorkspaceGraphArg(target) {
+async function readWorkspaceGraphArg(target, marketplaceRoot = process.cwd()) {
   const file = String(target || "");
   if (!file) throw new Error("--file is required");
   const stat = fs.statSync(file);
   const dir = stat.isDirectory() ? file : path.dirname(file);
   if (!stat.isDirectory() && file.endsWith(".json")) return readJsonFile(file);
-  const store = await import(new URL("../../../bin/lib/workspace-flow-store.mjs", import.meta.url));
-  const state = await import(new URL("../../../bin/lib/workspace-state.mjs", import.meta.url));
-  const design = store.readWorkspaceDesign(dir);
+  const runtime = await loadAgentFlowRuntime();
+  const design = runtime.readWorkspaceDesign(dir, { marketplaceRoot });
   if (design.format === "empty") throw new Error(`No workspace graph in ${dir}`);
-  const statePath = path.join(dir, state.WORKSPACE_STATE_FILENAME);
-  const runtime = fs.existsSync(statePath) ? readJsonFile(statePath) : null;
-  return state.mergeWorkspaceState(design.graph, runtime);
+  const statePath = path.join(dir, runtime.WORKSPACE_STATE_FILENAME);
+  const localState = fs.existsSync(statePath) ? readJsonFile(statePath) : null;
+  return runtime.mergeWorkspaceState(design.graph, localState);
 }
 
 function usage() {
@@ -44,6 +48,7 @@ Usage:
 Config:
   --base-url <url>       Override AGENTFLOW_BASE_URL
   --token <token>        Override AGENTFLOW_TOKEN
+  --agentflow-package-root <dir>  Override the local @fieldwangai/agentflow runtime
   AGENTFLOW_BASE_URL     Defaults to ${DEFAULT_BASE_URL}
   AGENTFLOW_TOKEN        Required unless AGENTFLOW_SESSION_TOKEN is set
   AGENTFLOW_ENV_FILE     Optional dotenv file path
@@ -52,7 +57,13 @@ Commands:
   config
   list-workspace | list-workspaces
   list-flows
-  publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--replace]
+  node-package-list
+  node-package-search --query <text> [--limit <n>]
+  node-package-publish --file <nodePackageDir>
+  node-package-install --node <id>@<version> [--workspace-root <dir>]
+  node-package-sync --flow <flowDir|workspace.flow.js> [--workspace-root <dir>]
+  pull-flow --flow-id <id> [--flow-source user] [--output <flowDir>] [--workspace-root <dir>] [--replace]
+  publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--with-dependencies] [--replace]
   get-graph --flow-id <id> [--flow-source user]
   migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
   migrate-all [--include-archived] [--allow-loss] [--dry-run]
@@ -223,6 +234,283 @@ async function httpMultipart(args, pathname, form) {
   return data;
 }
 
+async function httpBuffer(args, pathname) {
+  const token = authToken(args);
+  const url = new URL(pathname, normalizedBaseUrl(args));
+  const headers = { Accept: "application/zip" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers.Cookie = `af_session=${encodeURIComponent(token)}`;
+  }
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    try { message = JSON.parse(text)?.error || text; } catch { /* keep text */ }
+    const error = new Error(`GET ${url.pathname} failed: ${message || `HTTP ${response.status}`}`);
+    error.status = response.status;
+    throw error;
+  }
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    contentSha256: String(response.headers.get("x-agentflow-content-sha256") || "").trim(),
+    archiveSha256: String(response.headers.get("x-agentflow-archive-sha256") || "").trim(),
+  };
+}
+
+function parseNodePackageSpec(raw) {
+  const text = String(raw || "").replace(/^marketplace:/, "").trim();
+  const at = text.lastIndexOf("@");
+  if (at <= 0 || at === text.length - 1) throw new Error("Invalid --node. Expected <id>@<version>.");
+  return { id: text.slice(0, at), version: text.slice(at + 1) };
+}
+
+function readFlowDependencySource(target) {
+  const requested = String(target || "").trim();
+  if (!requested) throw new Error("Missing --flow <flowDir|workspace.flow.js>.");
+  let resolved = path.resolve(requested);
+  if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+    resolved = path.join(resolved, "workspace.flow.js");
+  }
+  if (!/\.m?js$/i.test(resolved)) {
+    throw new Error(`Node package sync only supports workspace.flow.js: ${resolved}`);
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    throw new Error(`Cannot read workspace.flow.js: ${resolved}`);
+  }
+  return { resolved, source: fs.readFileSync(resolved, "utf-8") };
+}
+
+async function flowNodePackageDependencies(source) {
+  const runtime = await loadAgentFlowRuntime();
+  const result = runtime.marketplaceDependenciesFromSource(source);
+  if (result.errors.length) throw new Error(result.errors.join("\n"));
+  return result.dependencies;
+}
+
+async function remoteNodePackageCatalog(args) {
+  const result = await httpJson(args, "/api/node-packages");
+  const nodes = Array.isArray(result?.nodes) ? result.nodes : [];
+  return new Map(nodes.map((node) => [`${node.id}@${node.version}`, node]));
+}
+
+function searchNodePackageCatalog(nodes, queryText, limitValue) {
+  const needle = String(queryText || "").trim().toLowerCase();
+  const requestedLimit = Number.parseInt(String(limitValue || "20"), 10);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 20;
+  const score = (node) => {
+    if (!needle) return 1;
+    const id = String(node?.id || "").toLowerCase();
+    const name = String(node?.displayName || node?.name || "").toLowerCase();
+    const description = String(node?.description || "").toLowerCase();
+    const slots = JSON.stringify({
+      inputs: node?.inputs || node?.input || [],
+      outputs: node?.outputs || node?.output || [],
+    }).toLowerCase();
+    if (id === needle) return 100;
+    if (id.startsWith(needle)) return 80;
+    if (name === needle) return 70;
+    if (name.includes(needle)) return 50;
+    if (id.includes(needle)) return 40;
+    if (description.includes(needle)) return 20;
+    if (slots.includes(needle)) return 10;
+    return 0;
+  };
+  return nodes
+    .map((node) => ({ node, score: score(node) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score
+      || String(a.node.id).localeCompare(String(b.node.id))
+      || String(b.node.version).localeCompare(String(a.node.version)))
+    .slice(0, limit)
+    .map(({ node }) => ({
+      id: node.id,
+      version: node.version,
+      specifier: `marketplace:${node.id}@${node.version}`,
+      displayName: node.displayName || node.name || node.id,
+      description: node.description || "",
+      baseDefinitionId: node.baseDefinitionId || node.runtime?.type || "tool_nodejs",
+      inputs: node.inputs || node.input || [],
+      outputs: node.outputs || node.output || [],
+      contentSha256: node.contentSha256 || "",
+      installCommand: `node-package-install --node ${node.id}@${node.version}`,
+    }));
+}
+
+async function inspectDownloadedNodePackage(args, dependency, remote) {
+  const downloaded = await httpBuffer(
+    args,
+    `/api/node-packages/${encodeURIComponent(dependency.id)}/${encodeURIComponent(dependency.version)}/archive`,
+  );
+  const runtime = await loadAgentFlowRuntime();
+  const inspected = runtime.inspectNodePackageArchive(downloaded.buffer);
+  if (!inspected.ok) throw new Error(`${dependency.specifier}: ${inspected.error || "invalid node package archive"}`);
+  if (inspected.manifest.id !== dependency.id || inspected.manifest.version !== dependency.version) {
+    throw new Error(
+      `${dependency.specifier}: 下载内容声明为 ${inspected.manifest.id}@${inspected.manifest.version}，与请求不一致`,
+    );
+  }
+  for (const [label, expected, actual] of [
+    ["目录内容", remote?.contentSha256, inspected.contentSha256],
+    ["响应内容", downloaded.contentSha256, inspected.contentSha256],
+    ["ZIP", downloaded.archiveSha256, inspected.archiveSha256],
+  ]) {
+    if (expected && expected !== actual) {
+      throw new Error(`${dependency.specifier}: ${label} SHA256 校验失败（expected ${expected}, got ${actual}）`);
+    }
+  }
+  return { dependency, remote, downloaded, inspected };
+}
+
+async function syncNodePackageDependencies(args, dependencies, workspaceRoot, context = {}) {
+  const remoteByKey = await remoteNodePackageCatalog(args);
+  const runtime = await loadAgentFlowRuntime();
+  const localByKey = new Map(
+    runtime.listMarketplacePackages(workspaceRoot).nodes.map((node) => [`${node.id}@${node.version}`, node]),
+  );
+  const result = {
+    ok: true,
+    ...context,
+    workspaceRoot,
+    installed: [],
+    unchanged: [],
+    missing: [],
+    conflicts: [],
+  };
+  const pending = [];
+  for (const dependency of dependencies) {
+    const key = `${dependency.id}@${dependency.version}`;
+    const remote = remoteByKey.get(key);
+    if (!remote) {
+      result.missing.push({ ...dependency, error: "远端不存在该精确版本" });
+      continue;
+    }
+    const local = localByKey.get(key);
+    if (local) {
+      const localInspection = runtime.inspectNodePackageDirectory(local.packageDir, { allowLegacyManifest: true });
+      const localSha = localInspection.ok ? localInspection.contentSha256 : String(local.contentSha256 || "");
+      if (remote.contentSha256 && localSha && remote.contentSha256 !== localSha) {
+        result.conflicts.push({
+          ...dependency,
+          localContentSha256: localSha,
+          remoteContentSha256: remote.contentSha256,
+          error: "本地同版本内容与远端不同",
+        });
+      } else {
+        result.unchanged.push({ ...dependency, contentSha256: localSha || remote.contentSha256 || "" });
+      }
+      continue;
+    }
+    pending.push({ dependency, remote });
+  }
+  if (result.missing.length || result.conflicts.length) {
+    result.ok = false;
+    return result;
+  }
+
+  // 所有 ZIP 先下载并校验，再开始落盘；远端有一个坏包时，本地不会只装上一半。
+  const prepared = [];
+  for (const item of pending) {
+    prepared.push(await inspectDownloadedNodePackage(args, item.dependency, item.remote));
+  }
+  const installedAt = new Date().toISOString();
+  for (const item of prepared) {
+    const installed = runtime.publishNodePackageArchive(workspaceRoot, item.downloaded.buffer, {
+      installedFrom: normalizedBaseUrl(args),
+      installedAt,
+    });
+    if (!installed.ok) throw new Error(`${item.dependency.specifier}: ${installed.error || "install failed"}`);
+    result.installed.push({
+      ...item.dependency,
+      contentSha256: installed.contentSha256,
+      archiveSha256: installed.archiveSha256,
+      installedFrom: normalizedBaseUrl(args),
+    });
+  }
+  return result;
+}
+
+async function syncFlowNodePackages(args, flowTarget, workspaceRoot) {
+  const flow = readFlowDependencySource(flowTarget);
+  const dependencies = await flowNodePackageDependencies(flow.source);
+  return syncNodePackageDependencies(args, dependencies, workspaceRoot, { flow: flow.resolved });
+}
+
+async function graphNodePackageDependencies(graph) {
+  const runtime = await loadAgentFlowRuntime();
+  const bySpecifier = new Map();
+  for (const instance of Object.values(graph?.instances || {})) {
+    const explicit = String(instance?.marketplaceRef || "").trim();
+    const fallback = String(instance?.definitionId || "").trim();
+    const specifier = explicit || (fallback.startsWith("marketplace:") ? fallback : "");
+    if (!specifier) continue;
+    const parsed = runtime.parseMarketplaceDefinitionId(specifier);
+    if (!parsed?.id || !parsed.version) {
+      throw new Error(`Flow contains an invalid or unpinned node package reference: ${specifier}`);
+    }
+    bySpecifier.set(specifier, { id: parsed.id, version: parsed.version, specifier, line: 0 });
+  }
+  return [...bySpecifier.values()].sort((a, b) => a.specifier.localeCompare(b.specifier));
+}
+
+function pullFlowOutputDir(args, flowId, workspaceRoot) {
+  const explicit = option(args, "output") || option(args, "file");
+  if (explicit) return path.resolve(explicit);
+  if (!/^[A-Za-z0-9._-]+$/.test(flowId) || flowId === "." || flowId === "..") {
+    throw new Error("--flow-id contains characters unsafe for a default local directory; pass --output explicitly.");
+  }
+  return path.join(workspaceRoot, ".workspace", "agentflow", "pipelines", flowId);
+}
+
+async function pullFlow(args) {
+  const flowId = requireFlowId(args);
+  const flowSource = option(args, "flow-source") || "user";
+  const workspaceRoot = path.resolve(option(args, "workspace-root") || process.cwd());
+  const outputDir = pullFlowOutputDir(args, flowId, workspaceRoot);
+  if (fs.existsSync(outputDir)) {
+    if (!fs.statSync(outputDir).isDirectory()) throw new Error(`Pull target is not a directory: ${outputDir}`);
+    const entries = fs.readdirSync(outputDir);
+    if (entries.length && args.replace !== true) {
+      throw new Error(`Pull target is not empty: ${outputDir}. Pass --replace to update its managed flow files.`);
+    }
+  }
+  const current = await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`);
+  const graph = current?.graph;
+  if (!graph || typeof graph !== "object") throw new Error(`Server returned no workspace graph for ${flowId}.`);
+  const dependencies = await graphNodePackageDependencies(graph);
+  const nodePackages = await syncNodePackageDependencies(args, dependencies, workspaceRoot, { flowId, flowSource });
+  if (!nodePackages.ok) return { ok: false, flowId, flowSource, outputDir, nodePackages };
+
+  const runtime = await loadAgentFlowRuntime();
+  const { design } = runtime.splitWorkspaceGraph(graph);
+  const written = runtime.writeWorkspaceGraphFiles(outputDir, design, { marketplaceRoot: workspaceRoot });
+  return {
+    ok: true,
+    flowId,
+    flowSource,
+    outputDir,
+    revision: current.revision || "",
+    format: written.format,
+    path: path.join(outputDir, written.format === "dsl" ? "workspace.flow.js" : "workspace.graph.json"),
+    nodePackages,
+  };
+}
+
+async function preflightRemoteFlowDependencies(args, source) {
+  if (!source.isCode) return [];
+  const dependencies = await flowNodePackageDependencies(source.flowYaml);
+  if (!dependencies.length) return [];
+  const remoteByKey = await remoteNodePackageCatalog(args);
+  const missing = dependencies.filter((dependency) => !remoteByKey.has(`${dependency.id}@${dependency.version}`));
+  if (missing.length) {
+    throw new Error(
+      `Cannot publish flow: server is missing node packages ${missing.map((dependency) => dependency.specifier).join(", ")}. `
+      + "Publish those exact versions first with node-package-publish.",
+    );
+  }
+  return dependencies;
+}
+
 function asArray(value) {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
@@ -339,7 +627,7 @@ const FLOW_MARKERS = ["workspace.flow.js", "workspace.graph.json", "flow.yaml"];
  */
 const UNSHIPPABLE = ["workspace.nodes.json", "nodes"];
 
-function readFlowSourceFile(filePath) {
+function readFlowSourceFile(filePath, { allowPackageDependencies = false } = {}) {
   const requested = String(filePath || "").trim();
   if (!requested) throw new Error(`Missing --file <flowDir|${FLOW_MARKERS.join("|")}>.`);
   let resolved = path.resolve(requested);
@@ -350,7 +638,7 @@ function readFlowSourceFile(filePath) {
     if (!marker) {
       throw new Error(`Not a flow directory (no ${FLOW_MARKERS.join(" / ")}): ${dir}`);
     }
-    const extra = UNSHIPPABLE.filter((name) => fs.existsSync(path.join(dir, name)));
+    const extra = allowPackageDependencies ? [] : UNSHIPPABLE.filter((name) => fs.existsSync(path.join(dir, name)));
     if (extra.length) {
       throw new Error(
         `Cannot publish ${dir}: it also contains ${extra.join(", ")}, which a single-file upload cannot carry. `
@@ -367,7 +655,91 @@ function readFlowSourceFile(filePath) {
     throw new Error(`Cannot read flow file ${resolved}: ${error?.message || String(error)}`);
   }
   if (!flowSource.trim()) throw new Error(`Flow file is empty: ${resolved}`);
-  return { resolved, flowYaml: flowSource, isCode: /\.m?js$/i.test(resolved) };
+  return {
+    resolved,
+    flowDir: path.dirname(resolved),
+    flowYaml: flowSource,
+    isCode: /\.m?js$/i.test(resolved),
+  };
+}
+
+async function uploadPreparedNodePackage(args, packed) {
+  const form = new FormData();
+  form.set(
+    "file",
+    new Blob([packed.archive], { type: "application/zip" }),
+    `${packed.manifest.id}-${packed.manifest.version}.zip`,
+  );
+  return httpMultipart(args, "/api/node-packages", form);
+}
+
+function nodePackageDirectories(flowDir) {
+  const root = path.join(flowDir, "nodes");
+  if (!fs.existsSync(root)) return [];
+  if (!fs.statSync(root).isDirectory()) throw new Error(`Flow nodes path is not a directory: ${root}`);
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(root, entry.name))
+    .sort();
+}
+
+async function prepareFlowWithDependencies(args, filePath, existingSource = null) {
+  const source = existingSource || readFlowSourceFile(filePath, { allowPackageDependencies: true });
+  if (!source.isCode) {
+    throw new Error("--with-dependencies only supports code DSL flows (workspace.flow.js).");
+  }
+  const runtime = await loadAgentFlowRuntime();
+  // 全部本地包先验证并打包；任何一个坏包都不会触发远端写入。
+  const packedCandidates = nodePackageDirectories(source.flowDir).map((packageDir) => {
+    const item = runtime.createNodePackageArchive(packageDir);
+    if (!item.ok) throw new Error(`${packageDir}: ${item.error || "Cannot package node."}`);
+    return { ...item, packageDir };
+  });
+
+  const packedByKey = new Map();
+  for (const item of packedCandidates) {
+    const key = `${item.manifest.id}@${item.manifest.version}`;
+    const previous = packedByKey.get(key);
+    if (previous && previous.contentSha256 !== item.contentSha256) {
+      throw new Error(`Flow contains two different local packages with the same version ${key}.`);
+    }
+    if (!previous) packedByKey.set(key, item);
+  }
+  const packed = [...packedByKey.values()];
+
+  const available = runtime.scanFlowLocalPackages(source.flowDir);
+  const portable = runtime.rewriteFlowLocalPackageImports(source.flowYaml, available);
+
+  // 上传之前先比较所有已存在版本，避免发布一半后才发现后面的同版本冲突。
+  const remoteByKey = await remoteNodePackageCatalog(args);
+  for (const item of packed) {
+    const key = `${item.manifest.id}@${item.manifest.version}`;
+    const remote = remoteByKey.get(key);
+    if (remote?.contentSha256 && remote.contentSha256 !== item.contentSha256) {
+      throw new Error(
+        `Cannot publish ${key}: server already has the same version with different content. Bump the node package version.`,
+      );
+    }
+  }
+
+  const packageResults = [];
+  for (const item of packed) {
+    const uploaded = await uploadPreparedNodePackage(args, item);
+    packageResults.push({
+      id: item.manifest.id,
+      version: item.manifest.version,
+      specifier: `marketplace:${item.manifest.id}@${item.manifest.version}`,
+      contentSha256: item.contentSha256,
+      alreadyExists: Boolean(uploaded?.alreadyExists),
+    });
+  }
+
+  return {
+    ...source,
+    flowYaml: portable.source,
+    rewrittenImports: portable.rewritten,
+    publishedNodePackages: packageResults,
+  };
 }
 
 function targetDestinationFromArgs(args) {
@@ -376,6 +748,11 @@ function targetDestinationFromArgs(args) {
   if (requested === "workspace") return { flowSource: "workspace", shareWithTeam: false };
   if (requested === "team") return { flowSource: "workspace", shareWithTeam: true };
   throw new Error("Invalid --target-space. Use personal|workspace|team (alias: user).");
+}
+
+function isMissingPublishedFlowError(error) {
+  if (error?.status === 404) return true;
+  return error?.status === 400 && /Pipeline directory not found/i.test(String(error?.message || ""));
 }
 
 async function importFlow(args, { flowId, targetSpace, resolved, flowYaml }) {
@@ -409,6 +786,7 @@ async function sharePublishedFlowWithTeam(args, { flowId, flowSource, team }) {
 async function main() {
   loadEnvFiles();
   const args = parseArgv(process.argv.slice(2));
+  configureAgentFlowRuntime({ packageRoot: option(args, "agentflow-package-root") });
   const command = args._[0] || "help";
   if (command === "help" || command === "--help" || command === "-h") {
     process.stdout.write(usage());
@@ -416,10 +794,19 @@ async function main() {
   }
 
   if (command === "config") {
+    let localRuntime = { available: false, root: "", version: "" };
+    try {
+      const runtimeRoot = resolveAgentFlowPackageRoot();
+      const manifest = JSON.parse(fs.readFileSync(path.join(runtimeRoot, "package.json"), "utf-8"));
+      localRuntime = { available: true, root: runtimeRoot, version: String(manifest.version || "") };
+    } catch (error) {
+      localRuntime.error = error?.message || String(error);
+    }
     printJson({
       baseUrl: normalizedBaseUrl(args),
       hasToken: Boolean(authToken(args, false)),
       tokenSource: option(args, "token") ? "flag" : process.env.AGENTFLOW_TOKEN ? "AGENTFLOW_TOKEN" : process.env.AGENTFLOW_SESSION_TOKEN ? "AGENTFLOW_SESSION_TOKEN" : "",
+      localRuntime,
     });
     return;
   }
@@ -441,45 +828,118 @@ async function main() {
     return;
   }
 
+  if (command === "node-package-list") {
+    printJson(await httpJson(args, "/api/node-packages"));
+    return;
+  }
+
+  if (command === "node-package-search") {
+    const queryText = option(args, "query") || option(args, "q");
+    if (!queryText) throw new Error("Missing --query <text>.");
+    const catalog = await httpJson(args, "/api/node-packages");
+    const matches = searchNodePackageCatalog(Array.isArray(catalog?.nodes) ? catalog.nodes : [], queryText, option(args, "limit"));
+    printJson({ query: queryText, count: matches.length, nodes: matches });
+    return;
+  }
+
+  if (command === "node-package-publish") {
+    const packageDir = option(args, "file");
+    if (!packageDir) throw new Error("Missing --file <nodePackageDir>.");
+    const runtime = await loadAgentFlowRuntime();
+    const packed = runtime.createNodePackageArchive(packageDir);
+    if (!packed.ok) throw new Error(packed.error || "Cannot package node.");
+    printJson(await uploadPreparedNodePackage(args, packed));
+    return;
+  }
+
+  if (command === "node-package-install") {
+    const spec = parseNodePackageSpec(option(args, "node"));
+    const workspaceRoot = path.resolve(option(args, "workspace-root") || process.cwd());
+    const dependency = { ...spec, specifier: `marketplace:${spec.id}@${spec.version}`, line: 0 };
+    const remote = (await remoteNodePackageCatalog(args)).get(`${spec.id}@${spec.version}`);
+    if (!remote) throw new Error(`Node package not found on server: ${dependency.specifier}`);
+    const prepared = await inspectDownloadedNodePackage(args, dependency, remote);
+    const runtime = await loadAgentFlowRuntime();
+    const installed = runtime.publishNodePackageArchive(workspaceRoot, prepared.downloaded.buffer, {
+      installedFrom: normalizedBaseUrl(args),
+      installedAt: new Date().toISOString(),
+    });
+    if (!installed.ok) throw new Error(installed.error || "Cannot install node package.");
+    printJson({ ...installed, workspaceRoot });
+    return;
+  }
+
+  if (command === "node-package-sync") {
+    const flowTarget = option(args, "flow") || option(args, "file");
+    const workspaceRoot = path.resolve(option(args, "workspace-root") || process.cwd());
+    const result = await syncFlowNodePackages(args, flowTarget, workspaceRoot);
+    printJson(result);
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
+
+  if (command === "pull-flow") {
+    const result = await pullFlow(args);
+    printJson(result);
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
+
   if (command === "publish-flow") {
     const flowId = requireFlowId(args);
     const destination = targetDestinationFromArgs(args);
     const targetSpace = destination.flowSource;
-    const source = readFlowSourceFile(option(args, "file"));
+    const withDependencies = args["with-dependencies"] === true;
+    const requestedFile = option(args, "file");
+    const rawSource = readFlowSourceFile(requestedFile, { allowPackageDependencies: withDependencies });
     const replace = args.replace === true;
     const team = await resolvePublishTeam(args, destination.shareWithTeam);
+
+    // 先读目标是否存在，再上传不可变节点版本。这样 create-only 的 409 不会在服务端留下
+    // 一个 Flow 没发布成功、节点包却已经出现的半次发布。
+    let current = null;
+    try {
+      current = rawSource.isCode
+        ? await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource: targetSpace })}`)
+        : await httpJson(args, `/api/flow${query({ flowId, flowSource: targetSpace })}`);
+    } catch (error) {
+      if (!isMissingPublishedFlowError(error)) throw error;
+    }
+    if (current && !replace) {
+      throw new Error(`已存在同名流水线 ${flowId}；确认更新后请显式传 --replace。`);
+    }
+
+    const source = withDependencies
+      ? await prepareFlowWithDependencies(args, requestedFile, rawSource)
+      : rawSource;
+    const dependencyPreflight = await preflightRemoteFlowDependencies(args, source);
 
     if (!replace) {
       const result = await importFlow(args, { flowId, targetSpace, ...source });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
-      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved, nodeDependencies: dependencyPreflight.map((item) => item.specifier), rewrittenImports: source.rewrittenImports || [], publishedNodePackages: source.publishedNodePackages || [] });
       return;
     }
 
     // 更新走哪条路取决于存储格式：yaml 流程改 /api/flow，代码化流程改 Workspace 图。
     // /api/flow 只认 flowYaml 字符串，代码化的流程发过去等于把图退回成 yaml。
-    let current = null;
-    try {
-      current = source.isCode
-        ? await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource: targetSpace })}`)
-        : await httpJson(args, `/api/flow${query({ flowId, flowSource: targetSpace })}`);
-    } catch (error) {
-      if (error?.status !== 404) throw error;
-    }
     if (!current) {
       const result = await importFlow(args, { flowId, targetSpace, ...source });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
-      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved, nodeDependencies: dependencyPreflight.map((item) => item.specifier), rewrittenImports: source.rewrittenImports || [], publishedNodePackages: source.publishedNodePackages || [] });
       return;
     }
     if (source.isCode) {
-      const graph = await readWorkspaceGraphArg(option(args, "file"));
+      const graph = await readWorkspaceGraphArg(
+        option(args, "file"),
+        path.resolve(option(args, "workspace-root") || process.cwd()),
+      );
       const updated = await httpJson(args, "/api/workspace/graph", {
         method: "POST",
         body: { flowId, flowSource: targetSpace, graph, baseRevision: current.revision },
       });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
-      printJson({ ...updated, action: "replaced", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved });
+      printJson({ ...updated, action: "replaced", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved, nodeDependencies: dependencyPreflight.map((item) => item.specifier), rewrittenImports: source.rewrittenImports || [], publishedNodePackages: source.publishedNodePackages || [] });
       return;
     }
     const result = await httpJson(args, "/api/flow", {

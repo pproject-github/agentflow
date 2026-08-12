@@ -1,7 +1,9 @@
 # 代码节点包
 
-一个代码节点是一个**目录**，`index.mjs` 同时是声明和实现。目录可以直接放在流程里
-（`<flowDir>/nodes/<name>/`），也可以发布到 marketplace。
+一个代码节点是一个**完整目录包**。`index.mjs` 是根入口和声明来源，但实现可以拆到
+`scripts/`，模板和静态资源也可以放在 `templates/`、`assets/`。目录可以直接放在流程里
+（`<flowDir>/nodes/<name>/`），也可以打成 ZIP 发布到 marketplace；ZIP 只是传输形式，包目录
+才是运行单元。
 
 ```js
 // nodes/count-lines/index.mjs
@@ -40,6 +42,76 @@ export default.id: 只允许字面量，不允许 Identifier
 
 发布也走同一条读取路径：`agentflow marketplace publish-node <dir>` 认 `index.mjs`，不需要额外写一份
 `node.yaml`。
+
+## 跨端分发
+
+本地复制和跨端分发是两条明确的命令：
+
+AI 新建包之前先查远端目录；返回值带固定版本 import、槽位和安装提示：
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs node-package-search --query "需要的能力"
+```
+
+```bash
+# 只复制到当前 workspace 的 marketplace
+agentflow marketplace publish-node ./my-node
+
+# ZIP 上传到 AgentFlow 服务，再下载安装到另一个 workspace
+node skills/agentflow-cli/scripts/agentflow-cli.mjs node-package-publish --file ./my-node
+node skills/agentflow-cli/scripts/agentflow-cli.mjs node-package-list
+node skills/agentflow-cli/scripts/agentflow-cli.mjs node-package-install \
+  --node my_node@1.0.0 --workspace-root /path/to/target-workspace
+```
+
+当拿到的是一个 Flow 时，不需要逐个安装。DSL 里的版本化 import 就是依赖清单：
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs node-package-sync \
+  --flow .workspace/agentflow/pipelines/<flow-id> \
+  --workspace-root "$PWD"
+```
+
+命令静态扫描全部 `marketplace:` import，先检查远端版本和本地冲突，再下载并校验全部 ZIP，
+最后安装。输出分为 `installed`、`unchanged`、`missing`、`conflicts`；依赖不完整时退出码为 2。
+安装元数据记录服务地址、内容哈希和安装时间。
+
+Flow 还在平台时，用 `pull-flow` 一次完成“取图 → 同步全部精确版本包 → 去掉远端运行态 →
+生成本地 DSL”：
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs pull-flow \
+  --flow-id <flow-id> --flow-source user --workspace-root "$PWD"
+```
+
+默认写入 `.workspace/agentflow/pipelines/<flow-id>`；非空目录默认拒绝，明确需要更新时才传
+`--replace`。
+
+上传、下载的是整个目录，不只是 `index.mjs`。ZIP 必须以 `index.mjs` 为包根；允许相对脚本、
+模板、资源，拒绝路径穿越、符号链接、`node_modules`、`.env`、私钥等敏感内容。解压后最多
+500 个文件、8MB，ZIP 最大 10MB。
+
+远端仓库的 `id@version` 不可变：相同内容重复上传是幂等成功；内容变了必须提升版本号。安装
+完成后，DSL 直接把包身份写进代码：
+
+```js
+import myNode from "marketplace:my_node@1.0.0";
+const result = myNode("执行", { input: "value" });
+```
+
+`publish-flow` 上传前也会向服务端预检这些精确版本；服务端的单文件导入和图更新接口再检查
+一次。缺包时 Flow 不落盘，并直接返回需要先上传的 `marketplace:id@version`。
+
+本地 DSL 仍使用 `./nodes/<name>` 时，可以一键上传 Flow 和所有完整包：
+
+```bash
+node skills/agentflow-cli/scripts/agentflow-cli.mjs publish-flow \
+  --flow-id <flow-id> --file <flowDir> --target-space personal --with-dependencies
+```
+
+所有本地包会先整体校验、检查远端同版本冲突，再逐包上传；相对 import 只在上传产物里改成
+`marketplace:<id>@<version>`，不会修改本地 `workspace.flow.js`。不带该参数时，含 `nodes/` 的
+目录仍会被拒绝，避免静默发布残缺流程。
 
 ## 槽位
 
@@ -105,4 +177,5 @@ bootstrap 负责把运行时的环境契约（`AGENTFLOW_INPUTS_JSON` /
 
 - 节点定义（builtin 节点）的单一来源见 [node-definitions.zh-CN.md](node-definitions.zh-CN.md)
 - 测试：`test/node-package-runtime.test.mjs`（静态解析 + bootstrap 执行）、
-  `test/node-package-graph-hydration.test.mjs`（HTTP 全链路）
+  `test/node-package-graph-hydration.test.mjs`（HTTP 运行链路）、
+  `test/node-package-distribution.test.mjs`（ZIP 上传、跨 workspace 安装、DSL 和执行全链路）

@@ -143,8 +143,12 @@ test("admin can review another user's Workspace but cannot modify or run it", as
     });
     assert.equal(runAttempt.status, 403);
 
-    const storedGraph = JSON.parse(fs.readFileSync(path.join(flowDir, "workspace.graph.json"), "utf-8"));
-    assert.equal(storedGraph.instances.note_1.label, "Owner note");
+    // 启动迁移可能已经把历史 workspace.graph.json 转成 workspace.flow.js；通过权威读取
+    // 接口验证只读访问没有改图，不再把权限测试绑定到旧存储文件名。
+    const storedResponse = await request(admin.token, `/api/workspace/graph?${reviewQuery}`);
+    const stored = await storedResponse.json();
+    assert.equal(storedResponse.status, 200, JSON.stringify(stored));
+    assert.equal(stored.graph.instances.note_1.label, "Owner note");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

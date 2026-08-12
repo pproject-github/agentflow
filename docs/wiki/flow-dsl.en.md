@@ -7,6 +7,7 @@ read-only legacy format.
 ```bash
 agentflow flow dsl migrate <FlowName|dir> [--allow-loss]  # graph.json / flow.yaml -> flow.js, in place
 agentflow flow dsl lint    <dir>                          # static validation
+agentflow flow dsl layout  <dir> [--all]                  # auto-layout; missing positions by default
 agentflow flow dsl export  <FlowName|dir> [--out <dir>]   # write a copy elsewhere
 agentflow flow dsl import  <dir> [--out <flowDir>]        # back to graph.json (for audits)
 ```
@@ -54,7 +55,26 @@ migration — `graph.json` can be read, rendered and run, and yaml can do none o
 
 ### Flows on the platform
 
-Deployed flows are not on your local disk; the same exit exists over HTTP:
+Before accepting HTTP requests or starting the scheduler, the server checks a dedicated storage
+schema version and scans the effective `AGENTFLOW_HOME`, every user pipeline root, the current
+`workspaceRoot`, and archived pipelines. Lossless `workspace.graph.json` and `flow.yaml` projects are
+migrated in place. A YAML graph that would lose nodes or edges is left untouched and recorded under
+`needsDecision`; startup never opts into data loss.
+
+The version, per-root results, and pending decisions are stored at:
+
+```text
+<AGENTFLOW_HOME>/admin/storage-migrations.json
+```
+
+A filesystem lock prevents two server processes from migrating the same volume concurrently.
+`flow.yaml` is always retained, while unattended `workspace.graph.json` conversion also creates a
+backup under `.agentflow-migrations/workspace-flow-dsl-v1/` in the Flow directory. Repeated startup
+at the same version is a no-op. Reusing the data root with a new `workspaceRoot` migrates only that
+new Workspace.
+
+The HTTP/CLI path below remains available for pending decisions and troubleshooting; it is no longer
+a required deployment step:
 
 ```bash
 agentflow-cli migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
@@ -77,8 +97,9 @@ graph equivalent.
 agentflow-cli migrate-all [--include-archived] [--allow-loss] [--dry-run]
 ```
 
-Walks every flow this account can see and **does all the lossless ones, touching none of the
-lossy ones**. The two jobs carry very different risk:
+Manually walks every flow this account can see and **does all the lossless ones, touching none of the
+lossy ones**. After startup migration it is mainly useful for repair and verification. The two jobs
+carry very different risk:
 
 - `graph.json -> code`: storage format only, same node vocabulary, round-trip gated — lossless
 - `flow.yaml -> code`: needs rewording, may drop things — refused by default, with a report

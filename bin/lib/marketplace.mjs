@@ -11,6 +11,13 @@ import {
   isFlowDir,
 } from "./paths.mjs";
 import { NODE_PACKAGE_ENTRY, isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
+import {
+  NODE_PACKAGE_METADATA_FILENAME,
+  createNodePackageArchive,
+  inspectNodePackageArchive,
+  inspectNodePackageDirectory,
+  writeNodePackageFiles,
+} from "./node-package-archive.mjs";
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
@@ -88,7 +95,9 @@ function normalizeSlotList(value) {
  */
 function readNodeManifestRaw(dir) {
   try {
-    return readNodePackageManifest(dir, readYamlObject);
+    const manifest = readNodePackageManifest(dir, readYamlObject);
+    const metadata = readJsonObject(path.join(dir, NODE_PACKAGE_METADATA_FILENAME));
+    return manifest && metadata ? { ...manifest, ...metadata } : manifest;
   } catch (e) {
     console.warn(`[agentflow] 节点包 ${path.basename(dir)} 清单无效：${(e && e.message) || e}`);
     return null;
@@ -466,6 +475,15 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
     inputs: n.input,
     outputs: n.output,
     packagedFiles: Array.isArray(n.packagedFiles) ? n.packagedFiles : [],
+    fileList: Array.isArray(n.fileList) ? n.fileList : [],
+    fileCount: Number(n.fileCount) || 0,
+    totalBytes: Number(n.totalBytes) || 0,
+    contentSha256: String(n.contentSha256 || ""),
+    archiveSha256: String(n.archiveSha256 || ""),
+    installedFrom: String(n.installedFrom || ""),
+    installedAt: String(n.installedAt || ""),
+    ownerUserId: n.ownerUserId || n.createdBy || "",
+    createdBy: n.createdBy || n.ownerUserId || "",
     packageDir: n.packageDir,
     usage: listMarketplaceNodeUsages(workspaceRoot, n.id, n.version, opts),
   }));
@@ -582,19 +600,125 @@ export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version, 
 }
 
 
-export function publishNodePackage(workspaceRoot, sourceDir) {
+export function publishNodePackage(workspaceRoot, sourceDir, opts = {}) {
   const src = path.resolve(sourceDir);
   // 走和读取同一条路径：`index.mjs` 的静态声明优先，回落 `node.yaml`。只认后者的话，
   // 一个目录扫描、面板、运行时都跑得通的 index.mjs 包偏偏发布不出去。
-  const manifest = normalizeManifest(readNodeManifestRaw(src), src);
-  if (!manifest) {
-    return { ok: false, error: `Invalid node package manifest: ${src} 里既没有可解析的 ${NODE_PACKAGE_ENTRY}，也没有 ${NODE_MANIFEST}` };
+  const inspected = inspectNodePackageDirectory(src, { allowLegacyManifest: true });
+  if (!inspected.ok) return inspected;
+  const manifest = normalizeManifest(inspected.manifest, src);
+  if (!manifest) return { ok: false, error: `Invalid node package manifest: ${src}` };
+  const dest = resolveWorkspaceNodePackageDir(workspaceRoot, manifest.id, manifest.version);
+  if (!dest) return { ok: false, error: "Invalid marketplace node id or version" };
+  const existing = fs.existsSync(dest) ? inspectNodePackageDirectory(dest, { allowLegacyManifest: true }) : null;
+  if (existing?.ok && existing.contentSha256 === inspected.contentSha256) {
+    return {
+      ok: true,
+      alreadyExists: true,
+      id: manifest.id,
+      version: manifest.version,
+      packageDir: dest,
+      definitionId: manifest.definitionId,
+      contentSha256: inspected.contentSha256,
+      fileList: inspected.fileList,
+    };
   }
-  const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", manifest.id, manifest.version);
+  if (existing?.ok && opts.immutable === true) {
+    return { ok: false, conflict: true, error: `${manifest.id}@${manifest.version} 已存在且内容不同，请提升版本号` };
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src, dest, { recursive: true });
-  return { ok: true, id: manifest.id, version: manifest.version, packageDir: dest, definitionId: manifest.definitionId };
+  const ownerUserId = String(opts.ownerUserId || opts.userId || manifest.ownerUserId || manifest.createdBy || "").trim();
+  fs.writeFileSync(path.join(dest, NODE_PACKAGE_METADATA_FILENAME), `${JSON.stringify({
+    ...(ownerUserId ? { ownerUserId, createdBy: ownerUserId } : {}),
+    contentSha256: inspected.contentSha256,
+    fileList: inspected.fileList,
+    fileCount: inspected.fileCount,
+    totalBytes: inspected.totalBytes,
+    publishedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf-8");
+  return {
+    ok: true,
+    id: manifest.id,
+    version: manifest.version,
+    packageDir: dest,
+    definitionId: manifest.definitionId,
+    contentSha256: inspected.contentSha256,
+    fileList: inspected.fileList,
+  };
+}
+
+export function publishNodePackageArchive(workspaceRoot, archiveInput, opts = {}) {
+  const inspected = inspectNodePackageArchive(archiveInput);
+  if (!inspected.ok) return inspected;
+  const manifest = normalizeManifest(inspected.manifest, "");
+  if (!manifest) return { ok: false, error: "Invalid node package manifest" };
+  const dest = resolveWorkspaceNodePackageDir(workspaceRoot, manifest.id, manifest.version);
+  if (!dest) return { ok: false, error: "Invalid marketplace node id or version" };
+  const existing = fs.existsSync(dest) ? inspectNodePackageDirectory(dest) : null;
+  if (existing?.ok) {
+    if (existing.contentSha256 !== inspected.contentSha256) {
+      return { ok: false, conflict: true, error: `${manifest.id}@${manifest.version} 已存在且内容不同，请提升版本号` };
+    }
+    return {
+      ok: true,
+      alreadyExists: true,
+      id: manifest.id,
+      version: manifest.version,
+      definitionId: manifest.definitionId,
+      packageDir: dest,
+      contentSha256: inspected.contentSha256,
+      archiveSha256: inspected.archiveSha256,
+      fileList: inspected.fileList,
+    };
+  }
+  const parent = path.dirname(dest);
+  fs.mkdirSync(parent, { recursive: true });
+  // 先在同一父目录完整写好再 rename。这样进程中断或磁盘异常时不会留下一个被目录扫描到、
+  // 但脚本只写了一半的版本。
+  const staging = fs.mkdtempSync(path.join(parent, `.${manifest.version}.installing-`));
+  const ownerUserId = String(opts.ownerUserId || opts.userId || "").trim();
+  const installedFrom = String(opts.installedFrom || "").trim();
+  const installedAt = String(opts.installedAt || "").trim();
+  try {
+    const written = writeNodePackageFiles(staging, inspected.files);
+    if (!written.ok) return written;
+    fs.writeFileSync(path.join(staging, NODE_PACKAGE_METADATA_FILENAME), `${JSON.stringify({
+      ...(ownerUserId ? { ownerUserId, createdBy: ownerUserId } : {}),
+      contentSha256: inspected.contentSha256,
+      archiveSha256: inspected.archiveSha256,
+      fileList: inspected.fileList,
+      fileCount: inspected.fileCount,
+      totalBytes: inspected.totalBytes,
+      publishedAt: new Date().toISOString(),
+      ...(installedFrom ? { installedFrom } : {}),
+      ...(installedAt ? { installedAt } : {}),
+    }, null, 2)}\n`, "utf-8");
+    fs.renameSync(staging, dest);
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  } finally {
+    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+  }
+  return {
+    ok: true,
+    id: manifest.id,
+    version: manifest.version,
+    definitionId: manifest.definitionId,
+    packageDir: dest,
+    contentSha256: inspected.contentSha256,
+    archiveSha256: inspected.archiveSha256,
+    fileList: inspected.fileList,
+  };
+}
+
+export function nodePackageArchive(workspaceRoot, id, version, opts = {}) {
+  const packageDir = resolveWorkspaceNodePackageDir(workspaceRoot, id, version);
+  if (!packageDir || !fs.existsSync(packageDir)) return { ok: false, error: `Node package not found: ${id}@${version}` };
+  const manifest = normalizeManifest(readNodeManifestRaw(packageDir), packageDir, "marketplace");
+  if (!manifest || !canAccessMarketplaceNode(manifest, opts)) return { ok: false, error: "Node package permission denied" };
+  return createNodePackageArchive(packageDir);
 }
 
 function safePackageId(raw) {
@@ -947,4 +1071,3 @@ export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
   );
   return { ok: true, id, version, packageDir: dest, snippet: manifest.snippet };
 }
-

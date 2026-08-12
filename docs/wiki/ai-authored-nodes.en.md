@@ -4,7 +4,7 @@
 
 Two halves, each broken.
 
-**The reference AI reads was wrong.** `skills/agentflow-node-authoring` had long taught
+**The reference AI reads was wrong.** Older `skills/agentflow-node-dsl` versions had long taught
 `node.yaml` + `runtime.entry` + `scripts/run.mjs`, and told you to run the retired
 `agentflow run` and `marketplace install-node` (which has no effect on code flows). The runtime
 had moved to `index.mjs` — declaration and implementation in one file, parsed statically by
@@ -100,7 +100,7 @@ slot's content is an absolute path.
 
 ## How the skill is kept from drifting again
 
-`test/node-authoring-skill.test.mjs` does not compare strings — it **feeds the skill's own
+`test/node-dsl-skill.test.mjs` does not compare strings — it **feeds the skill's own
 example to the real parser**:
 
 1. The first ```js block is written to a temp directory; `readNodePackageManifest` must yield

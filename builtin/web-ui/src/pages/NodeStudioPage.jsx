@@ -26,11 +26,16 @@ export default function NodeStudioPage() {
   const manifest = draft?.manifest && draft.manifest.id ? draft.manifest : EMPTY_MANIFEST;
   const parseError = String(draft?.parseError || "");
   const source = String(draft?.files?.["index.mjs"] || "");
+  const packageFiles = useMemo(() => Object.entries(draft?.files || {}).sort(([a], [b]) => a.localeCompare(b)), [draft]);
   const inputSlots = useMemo(() => dataSlots(manifest.input), [manifest]);
   const outputSlots = useMemo(() => dataSlots(manifest.output), [manifest]);
   const testLog = Array.isArray(draft?.test?.log) ? draft.test.log : [];
   const definitionId = manifest.id ? `marketplace:${manifest.id}@${manifest.version}` : "";
   const canPublish = Boolean(source) && !parseError && Boolean(manifest.id);
+  const currentPackageTestPassed = canPublish
+    && draft?.test?.status === "passed"
+    && Boolean(draft?.packageDigest)
+    && draft?.test?.packageDigest === draft?.packageDigest;
 
   const applyDraft = useCallback((next) => {
     setDraft(next || null);
@@ -147,6 +152,13 @@ export default function NodeStudioPage() {
       ],
     },
     {
+      id: "files",
+      label: `Files (${packageFiles.length})`,
+      icon: "folder_open",
+      code: packageFiles.map(([name, content]) => `// ${name}\n${content}`).join("\n\n") || "还没有包文件。",
+      rows: packageFiles.map(([name, content]) => [name, `${new Blob([content]).size} bytes`]),
+    },
+    {
       id: "contract",
       label: "Contract",
       icon: "account_tree",
@@ -165,7 +177,7 @@ export default function NodeStudioPage() {
         ["last run", `${draft?.test?.status || "not run"}${draft?.test?.durationMs ? ` · ${draft.test.durationMs}ms` : ""}`],
       ],
     },
-  ], [definitionId, draft, inputSlots, manifest, outputSlots, source, testLog]);
+  ], [definitionId, draft, inputSlots, manifest, outputSlots, packageFiles, source, testLog]);
   const section = sections.find((item) => item.id === internalTab) || sections[0];
 
   return (
@@ -197,8 +209,8 @@ export default function NodeStudioPage() {
             type="button"
             className="af-node-studio-actions__primary"
             onClick={() => void publish()}
-            disabled={!canPublish || Boolean(busy)}
-            title={canPublish ? "发布到本 workspace 的节点市场" : "index.mjs 解析通过之后才能发布"}
+            disabled={!currentPackageTestPassed || Boolean(busy)}
+            title={currentPackageTestPassed ? "发布完整节点包到本 workspace 的节点市场" : "当前节点包必须先通过 Test"}
           >
             <span className="material-symbols-outlined" aria-hidden>{busy === "publishing" ? "sync" : "publish"}</span>
             Publish
@@ -217,7 +229,7 @@ export default function NodeStudioPage() {
           <div className="af-node-studio-thread">
             {!draft ? (
               <div className="af-node-studio-empty">
-                还没有节点草稿。描述你要创建的节点，Agent 会写出 index.mjs。
+                还没有节点草稿。描述你要创建的节点，Agent 会生成完整节点包。
               </div>
             ) : null}
             {(Array.isArray(draft?.agentMessages) ? draft.agentMessages : []).map((message, index) => (
@@ -232,7 +244,7 @@ export default function NodeStudioPage() {
                 {message.text || ""}
               </div>
             ))}
-            {busy === "generating" ? <div className="af-node-studio-message">正在生成 index.mjs...</div> : null}
+            {busy === "generating" ? <div className="af-node-studio-message">正在生成节点包...</div> : null}
           </div>
           <label className="af-node-studio-prompt">
             <span>需求</span>

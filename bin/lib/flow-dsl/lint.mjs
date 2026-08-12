@@ -19,7 +19,7 @@ import path from "path";
 import { parse as acornParse } from "acorn";
 
 import { CTRL_SLOTS, RUN_DEFINITIONS, DEFINITIONS, definitionOf } from "./defs.mjs";
-import { packageResolverFor, scanFlowLocalPackages } from "./packages.mjs";
+import { packageResolverFor, scanAvailableNodePackages } from "./packages.mjs";
 import { FLOW_SOURCE_FILENAME } from "./index.mjs";
 import { parseFlowSource } from "./parser.mjs";
 
@@ -59,7 +59,7 @@ function walk(node, visit) {
  * @param {string} flowDir 含 workspace.flow.js 的目录
  * @returns {{ errors: string[], warnings: string[], ir?: object }}
  */
-export function lintFlowDir(flowDir) {
+export function lintFlowDir(flowDir, opts = {}) {
   const errors = [];
   const warnings = [];
   const sourcePath = path.join(flowDir, FLOW_SOURCE_FILENAME);
@@ -98,7 +98,7 @@ export function lintFlowDir(flowDir) {
 
   // 与存储层同一份扫描。分成两份就会出现「lint 绿灯、画布是错图」——包节点在图里
   // 到底长什么样，两边必须给同一个答案。
-  const packages = scanFlowLocalPackages(flowDir);
+  const packages = scanAvailableNodePackages(flowDir, opts.workspaceRoot || "");
   const lookupDef = (definitionId) => (DEFINITIONS[definitionId] ? definitionOf(definitionId) : null);
 
   for (const stmt of ast.body) {
@@ -107,7 +107,9 @@ export function lintFlowDir(flowDir) {
     if (spec === "agentflow/flow") continue;
     if (spec.startsWith("./nodes/")) {
       if (!packages.bySpecifier[spec]) errors.push(`import ${JSON.stringify(spec)}：节点包不存在或缺 index.mjs / node.yaml`);
-    } else if (!spec.startsWith("marketplace:")) {
+    } else if (spec.startsWith("marketplace:")) {
+      if (!packages.bySpecifier[spec]) errors.push(`import ${JSON.stringify(spec)}：本地未安装该 marketplace 节点包`);
+    } else {
       warnings.push(`import ${JSON.stringify(spec)}：来源不是 ./nodes/ 也不是 marketplace:`);
     }
   }

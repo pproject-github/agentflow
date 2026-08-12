@@ -134,6 +134,52 @@ export function finalizeWorkspaceCanvasChanges(changes = []) {
   });
 }
 
+function normalizedPositiveWorkspaceSize(size) {
+  const width = Number(size?.width || 0);
+  const height = Number(size?.height || 0);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/**
+ * Keep a custom node's visible card aligned with React Flow's live resize box.
+ * Persisted node data intentionally changes only after pointer-up, so using it
+ * during a resize makes the handle move while the card remains frozen.
+ */
+export function workspaceResizePresentationSize({
+  resizing = false,
+  liveSize = null,
+  persistedSize = null,
+} = {}) {
+  const persisted = normalizedPositiveWorkspaceSize(persistedSize);
+  if (!resizing) return persisted;
+  return normalizedPositiveWorkspaceSize(liveSize) || persisted;
+}
+
+export function workspaceSyncIndicatorPresentation({
+  phase = "loading",
+  detail = "",
+  nodeInteracting = false,
+} = {}) {
+  if (nodeInteracting) {
+    return {
+      phase: "interacting",
+      label: "交互保护中",
+      detail: "远端更新暂缓，松手后同步",
+    };
+  }
+  const label = {
+    loading: "载入中",
+    dirty: "有未同步修改",
+    saving: "同步中",
+    synced: "已同步",
+    conflict: "同步冲突",
+    error: "同步失败",
+    readonly: "只读",
+  }[phase] || "同步状态";
+  return { phase, label, detail };
+}
+
 export function coalesceWorkspaceSaveRequest(pending, next) {
   return {
     ...next,

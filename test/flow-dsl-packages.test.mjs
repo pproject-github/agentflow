@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import { lintFlowDir } from "../bin/lib/flow-dsl/lint.mjs";
-import { scanFlowLocalPackages } from "../bin/lib/flow-dsl/packages.mjs";
+import { rewriteFlowLocalPackageImports, scanFlowLocalPackages } from "../bin/lib/flow-dsl/packages.mjs";
 import { readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "../bin/lib/workspace-flow-store.mjs";
+import { publishNodePackage } from "../bin/lib/marketplace.mjs";
 
 const PACKAGE = `export default {
   id: "collect_metrics",
@@ -48,6 +49,28 @@ test("扫描认得流程目录里的代码节点包", () => {
   assert.equal(record.baseDefinitionId, "tool_nodejs", "包节点在图里应当是基础类型");
   assert.equal(packages.byRef["marketplace:collect_metrics@1.0.0"], record, "按引用也要能查回来");
   assert.ok(packages.bySpecifier["./nodes/collect-metrics/index.mjs"], "带 /index.mjs 的写法也要认");
+});
+
+test("发布转换只改静态节点包 import，不改本地 DSL 文件或相似文本", () => {
+  const dir = seedFlowDir({
+    source: `${SOURCE}\n// ./nodes/collect-metrics\nconst note = "./nodes/collect-metrics";\n`,
+  });
+  try {
+    const original = fs.readFileSync(path.join(dir, "workspace.flow.js"), "utf-8");
+    const portable = rewriteFlowLocalPackageImports(original, scanFlowLocalPackages(dir));
+    assert.match(portable.source, /from "marketplace:collect_metrics@1\.0\.0"/);
+    assert.match(portable.source, /\/\/ \.\/nodes\/collect-metrics/);
+    assert.match(portable.source, /const note = "\.\/nodes\/collect-metrics"/);
+    assert.deepEqual(portable.dependencies.map((item) => item.specifier), ["marketplace:collect_metrics@1.0.0"]);
+    assert.deepEqual(portable.rewritten, [{
+      specifier: "./nodes/collect-metrics",
+      marketplaceRef: "marketplace:collect_metrics@1.0.0",
+      line: 2,
+    }]);
+    assert.equal(fs.readFileSync(path.join(dir, "workspace.flow.js"), "utf-8"), original);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("import 写法读出来的图，和画布从面板拖出来的形状一致", () => {
@@ -133,4 +156,33 @@ test("包不存在时 lint 报错，读图也不会假装它是个正常节点",
     /^pkg:/,
     "解析不出包时要留下 pkg: 前缀，让上层看得出这张图不完整",
   );
+});
+
+test("已安装 marketplace 节点能直接 import，lint、读图和保存使用同一份解析", () => {
+  const packageFixture = seedFlowDir();
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-dsl-marketplace-"));
+  const flowDir = path.join(workspaceRoot, ".workspace", "agentflow", "pipelines", "uses-marketplace");
+  fs.mkdirSync(flowDir, { recursive: true });
+  try {
+    const published = publishNodePackage(workspaceRoot, path.join(packageFixture, "nodes", "collect-metrics"));
+    assert.equal(published.ok, true, published.error || "publish failed");
+    fs.writeFileSync(
+      path.join(flowDir, "workspace.flow.js"),
+      SOURCE.replace('"./nodes/collect-metrics"', '"marketplace:collect_metrics@1.0.0"'),
+      "utf-8",
+    );
+
+    const lint = lintFlowDir(flowDir, { workspaceRoot });
+    assert.deepEqual(lint.errors, []);
+    const first = readWorkspaceGraphFiles(flowDir, { marketplaceRoot: workspaceRoot }).graph;
+    assert.equal(first.instances.collect.marketplaceRef, "marketplace:collect_metrics@1.0.0");
+    assert.deepEqual(first.instances.collect.output.map((slot) => slot.name), ["next", "total"]);
+
+    const saved = writeWorkspaceGraphFiles(flowDir, first, { marketplaceRoot: workspaceRoot });
+    assert.equal(saved.format, "dsl", saved.degradedReason || "");
+    assert.match(fs.readFileSync(path.join(flowDir, "workspace.flow.js"), "utf-8"), /from "marketplace:collect_metrics@1\.0\.0"/);
+  } finally {
+    fs.rmSync(packageFixture, { recursive: true, force: true });
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
 });

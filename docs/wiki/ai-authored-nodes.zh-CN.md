@@ -4,7 +4,7 @@
 
 两处各自断了一半。
 
-**给 AI 看的参考是错的。** `skills/agentflow-node-authoring` 长期教的是 `node.yaml` +
+**给 AI 看的参考是错的。** `skills/agentflow-node-dsl` 的旧版本长期教的是 `node.yaml` +
 `runtime.entry` + `scripts/run.mjs`，还让人跑已经退休的 `agentflow run`、以及对代码流程无效的
 `marketplace install-node`。而运行时早就换成了 `index.mjs`——声明和实现同一个文件，acorn 静态
 解析。文档 wiki 改了，skill 没跟上。
@@ -21,7 +21,8 @@
 ## 现在的闭环
 
 ```
-描述需求 → Agent 写 index.mjs → acorn 解析回填清单 → 真跑一次 → 发布进市场
+搜索远端目录 →（无合适节点时）Agent 写完整包目录 → acorn 解析入口清单 → 真跑一次 →
+Flow + ZIP 一键上传 → 另一端 pull 并自动安装 → AI 编排 DSL
 ```
 
 四个环节都落在**运行时同一条路径**上，没有第二套实现：
@@ -31,6 +32,13 @@
 | 解析清单 | `readNodePackageManifest` —— 和节点面板、画布、缓存指纹同一个 |
 | 执行测试 | `node-package-bootstrap.mjs` —— 和 Workspace 跑节点同一个 |
 | 发布 | `publishNodePackage` —— 和 `agentflow marketplace publish-node` 同一个 |
+| 远端分发 | `/api/node-packages` —— 完整 ZIP、内容哈希、同版本不可变 |
+| DSL 引用 | `import x from "marketplace:<id>@<version>"` —— 包身份就在结构代码里 |
+
+AI 通过 `node-package-search --query` 得到结构化远端目录，不必先知道节点 id。发布使用
+`publish-flow --with-dependencies`，把流程本地 `nodes/` 的多文件 ZIP 和 Flow 串成一次操作；
+下发使用 `pull-flow`，从图里的固定版本引用推导并安装所有依赖，再落本地 DSL。上传时的 import
+转换只作用于网络载荷，本地源码仍保留便于开发的 `./nodes/<name>`。
 
 「Node Studio 里跑得过、画布上跑不过」的测试不如没有，所以这三处都不另写。
 
@@ -41,6 +49,9 @@
   draft.json        对话、清单投影、测试记录
   package/          真正的包目录
     index.mjs
+    scripts/        可选，相对 import 的实现脚本
+    templates/      可选，模板等运行资源
+    assets/          可选，静态资源
 ```
 
 包放在 `package/` 子目录而不是和 `draft.json` 同级：`publishNodePackage` 是整目录 `cpSync`，
@@ -84,11 +95,11 @@ await fs.writeFile(outputs.outputFile, outputPath); // 槽里只放了一个路�
 在测试里看着能过——路径确实存在。但槽文件才是被当成产物管理的东西，自选的那个路径在真实
 运行时位于会被清理的临时目录里，产物就丢了。
 
-修了两处：生成提示里明写这一条，测试日志里对 `file` 槽的绝对路径内容发警告。
+修了两处：生成提示里明写这一条，测试把这两种情况都判为失败，不能通过发布门禁。
 
 ## skill 怎么防止再漂
 
-`test/node-authoring-skill.test.mjs` 不比对字符串，而是**把 skill 里的示例真的喂给解析器**：
+`test/node-dsl-skill.test.mjs` 不比对字符串，而是**把 skill 里的示例真的喂给解析器**：
 
 1. 第一个 ```js 代码块写进临时目录，`readNodePackageManifest` 必须读出
    `count_lines@1.0.0`、槽位 `[prev, filePath]` / `[next, total]`，且导出了 `run`
@@ -100,11 +111,11 @@ await fs.writeFile(outputs.outputFile, outputPath); // 槽里只放了一个路�
 第 3 条分两半是有原因的：只扫全文的话，一句「不要用 `agentflow run`」也会被判成违规——等于
 禁止 skill 警告用户别踩坑。
 
-## 还是 mockup 的部分
+## 仍未覆盖的产品能力
 
 Node Studio 里这些没有接，也没有假装接上：
 
 - **UI schema / card variant**：原来那套 `configSchema.fields`、`ui.card.actions`、定时卡片
   预览，代码节点声明里根本没有对应字段。已从页面移除，不留一个填不进东西的空壳
 - **多草稿管理**：只有一个下拉切换，没有新建/删除/重命名
-- **版本**：发布同一个 `id@version` 会直接覆盖，没有版本冲突提示
+- **版本管理 UI**：协议层已禁止覆盖同一个 `id@version`，但 Node Studio 还没有自动升版本、版本列表和回滚界面

@@ -23,7 +23,13 @@ import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
-import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
+import {
+  cloneNodeIoDraftSlots,
+  filterValidEdges,
+  mergeNodeWithPalette,
+  revealConnectedSlots,
+  revealConnectedSlotsForEdges,
+} from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
@@ -72,6 +78,7 @@ import {
   reconcileWorkspaceNodes,
   workspaceValueEqual,
 } from "../workspaceGraphDelta.js";
+import { layoutWorkspaceNodePositions } from "../../../../bin/lib/workspace-auto-layout.mjs";
 import {
   coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
@@ -83,7 +90,9 @@ import {
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
+  workspaceResizePresentationSize,
   workspaceSaveBaselineAfterSuccess,
+  workspaceSyncIndicatorPresentation,
 } from "../workspaceSyncGuard.js";
 import {
   addSkillKeys,
@@ -2121,7 +2130,9 @@ function graphToFlow(graph, palette) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const instances = sanitizeWorkspaceRuntimeOutputs(rawInstances);
   const rawEdges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object" ? graph.ui.nodePositions : {};
+  // 缺坐标通常来自 AI 新写的 DSL。统一走 CLI 同款确定性排版；原有坐标保持不动，避免打开
+  // 页面时覆盖用户手工拖拽结果。
+  const positions = layoutWorkspaceNodePositions(graph, { preserveExisting: true });
   const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
   const nodeIds = new Set(Object.keys(instances));
   for (const edge of rawEdges) {
@@ -2138,7 +2149,7 @@ function graphToFlow(graph, palette) {
     const runtimeScript = scriptFromMarketplaceRuntime(def);
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
-      : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
+      : { x: 120, y: 360 };
     const isDisplay = Boolean(workspaceDisplayKindFromData({ definitionId: runtimeDefinitionId, inputs: inst.input, outputs: inst.output }));
     const rawSize = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
       ? { width: sizes[id].width, height: sizes[id].height }
@@ -2183,7 +2194,10 @@ function graphToFlow(graph, palette) {
       targetHandle: e.targetHandle ?? undefined,
       markerEnd: { type: MarkerType.ArrowClosed },
     }));
-  const nodes = [...groupNodes, ...merged];
+  // 首次加载的边和用户刚拉出的边遵守同一条规则：边存在，端点 handle 就必须可见。
+  // 否则 React Flow 会保留语义边，但因为端点没有渲染而完全画不出来。
+  const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges);
+  const nodes = [...groupNodes, ...edgeAwareNodes];
   return { nodes, edges: filterValidEdges(edges, nodes), instances };
 }
 
@@ -3749,7 +3763,7 @@ async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFil
   });
 }
 
-function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
+function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const outputEntries = outputs
@@ -3826,9 +3840,14 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
   const shareNodeId = String(data?.sourceNodeId || id);
   const sharingDisplay = data?.sharingDisplayNodeId === shareNodeId;
-  const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
+  const persistedDisplaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
+  const displaySize = workspaceResizePresentationSize({
+    resizing: resizingDisplay,
+    liveSize: normalizeWorkspaceDisplaySize({ width, height }),
+    persistedSize: persistedDisplaySize,
+  });
   const saveHtmlImage = useCallback(async () => {
     if (kind !== "html" || savingHtmlImage) return;
     const rawContent = displayContent(data);
@@ -5286,9 +5305,14 @@ function WorkspaceFlowNode(props) {
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
   const readOnly = Boolean(props.data?.readOnly);
   const [resizingFlowNode, setResizingFlowNode] = useState(false);
-  const nodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
+  const persistedNodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
     ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
     : null;
+  const nodeSize = workspaceResizePresentationSize({
+    resizing: resizingFlowNode,
+    liveSize: normalizeWorkspaceNodeSize({ width: props.width, height: props.height }),
+    persistedSize: persistedNodeSize,
+  });
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
     props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
@@ -5300,9 +5324,17 @@ function WorkspaceFlowNode(props) {
   const onSelectNodePointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".react-flow__handle, .af-work-display-resize")) return;
-    setNodes((list) => selectSingleCanvasNodeUnlessDraggingSelection(list, props.id));
-    setEdges((list) => clearSelectedCanvasEdges(list));
-  }, [props.id, setEdges, setNodes]);
+    setNodes((list) => {
+      const next = selectSingleCanvasNodeUnlessDraggingSelection(list, props.id);
+      if (next !== list) props.data?.onSuppressWorkspaceSelectionAutosave?.({ nodes: next });
+      return next;
+    });
+    setEdges((list) => {
+      const next = clearSelectedCanvasEdges(list);
+      if (next !== list) props.data?.onSuppressWorkspaceSelectionAutosave?.({ edges: next });
+      return next;
+    });
+  }, [props.data, props.id, setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
     if (readOnly) return;
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
@@ -8657,6 +8689,7 @@ function WorkspacePageInner() {
   const [status, setStatus] = useState("");
   const [workspaceSyncPhase, setWorkspaceSyncPhase] = useState("loading");
   const [workspaceSyncDetail, setWorkspaceSyncDetail] = useState("正在载入 Project");
+  const [workspaceNodeInteractionUiActive, setWorkspaceNodeInteractionUiActive] = useState(false);
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
   const flowSource = flowParams.flowSource || "user";
@@ -8690,15 +8723,11 @@ function WorkspacePageInner() {
     && workspaceCollaboration?.role
     && workspaceCollaboration.role !== "owner"
   );
-  const workspaceSyncLabel = {
-    loading: "载入中",
-    dirty: "有未同步修改",
-    saving: "同步中",
-    synced: "已同步",
-    conflict: "同步冲突",
-    error: "同步失败",
-    readonly: "只读",
-  }[workspaceSyncPhase] || "同步状态";
+  const workspaceSyncIndicator = workspaceSyncIndicatorPresentation({
+    phase: workspaceSyncPhase,
+    detail: workspaceSyncDetail,
+    nodeInteracting: workspaceNodeInteractionUiActive,
+  });
   const markWorkspaceDirty = useCallback(() => {
     if (!loadedRef.current || !workspaceWritable) return;
     skipNextWorkspaceAutosaveRef.current = false;
@@ -11560,6 +11589,19 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, workspaceWritable]);
 
+  const suppressWorkspaceSelectionAutosave = useCallback((patch = {}) => {
+    const current = workspaceAutosaveSuppressedStateRef.current || {
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      displayPage: displayPageRef.current,
+    };
+    workspaceAutosaveSuppressedStateRef.current = {
+      ...current,
+      ...patch,
+      displayPage: displayPageRef.current,
+    };
+  }, []);
+
   const hydratedNodeCommonData = useMemo(() => ({
     modelLists,
     showBodyPreview: true,
@@ -11600,7 +11642,8 @@ function WorkspacePageInner() {
     onSendNodeChat: sendNodeChat,
     onSyncNodePropDraft: syncNodePropDraft,
     onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
-  }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
+    onSuppressWorkspaceSelectionAutosave: suppressWorkspaceSelectionAutosave,
+  }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, suppressWorkspaceSelectionAutosave, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
 
   const hydratedNodeCacheRef = useRef(new Map());
   const hydratedNodes = useMemo(() => {
@@ -12035,6 +12078,8 @@ function WorkspacePageInner() {
   const canvasEdges = isDisplayMode ? [] : coloredEdges;
   const canvasNodesRef = useRef(canvasNodes);
   const transientCanvasNodesRef = useRef([]);
+  const pendingTransientCanvasNodeChangesRef = useRef([]);
+  const transientCanvasFrameRef = useRef(null);
   if (!workspaceCanvasInteractionActiveRef.current) {
     canvasNodesRef.current = canvasNodes;
   }
@@ -13193,6 +13238,36 @@ function WorkspacePageInner() {
     if (merged.length > 0) applyCanvasNodeChanges(merged);
   }, [applyCanvasNodeChanges]);
 
+  const cancelPendingTransientCanvasFrame = useCallback(() => {
+    if (transientCanvasFrameRef.current != null) {
+      window.cancelAnimationFrame(transientCanvasFrameRef.current);
+      transientCanvasFrameRef.current = null;
+    }
+    pendingTransientCanvasNodeChangesRef.current = [];
+  }, []);
+
+  const flushTransientCanvasNodeChanges = useCallback(() => {
+    transientCanvasFrameRef.current = null;
+    const pending = pendingTransientCanvasNodeChangesRef.current;
+    pendingTransientCanvasNodeChangesRef.current = [];
+    if (pending.length === 0) return;
+    const nextTransientNodes = applyNodeChanges(
+      pending,
+      transientCanvasNodesRef.current,
+    );
+    transientCanvasNodesRef.current = nextTransientNodes;
+    reactFlowStore.getState().setNodes(nextTransientNodes);
+  }, [reactFlowStore]);
+
+  const scheduleTransientCanvasNodeChanges = useCallback((changes) => {
+    pendingTransientCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
+      ...pendingTransientCanvasNodeChangesRef.current,
+      ...changes,
+    ]);
+    if (transientCanvasFrameRef.current != null) return;
+    transientCanvasFrameRef.current = window.requestAnimationFrame(flushTransientCanvasNodeChanges);
+  }, [flushTransientCanvasNodeChanges]);
+
   const handleNodesChange = useCallback((changes) => {
     const {
       transient,
@@ -13200,6 +13275,7 @@ function WorkspacePageInner() {
       finishesInteraction,
     } = partitionWorkspaceCanvasChanges(changes);
     if (transient.length > 0) {
+      setWorkspaceNodeInteractionUiActive(true);
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -13212,20 +13288,17 @@ function WorkspacePageInner() {
         ...lastActiveCanvasNodeChangesRef.current,
         ...transient,
       ]);
-      const nextTransientNodes = applyNodeChanges(
-        transient,
-        transientCanvasNodesRef.current,
-      );
-      transientCanvasNodesRef.current = nextTransientNodes;
-      reactFlowStore.getState().setNodes(nextTransientNodes);
+      scheduleTransientCanvasNodeChanges(transient);
     }
     if (finishesInteraction) {
+      setWorkspaceNodeInteractionUiActive(false);
+      cancelPendingTransientCanvasFrame();
       transientCanvasNodesRef.current = [];
       flushPendingCanvasNodeChanges(committed, { finish: true });
       return;
     }
     if (committed.length > 0) applyCanvasNodeChanges(committed);
-  }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, reactFlowStore]);
+  }, [applyCanvasNodeChanges, cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleTransientCanvasNodeChanges]);
 
   const settleWorkspaceCanvasInteraction = useCallback(() => {
     if (
@@ -13238,13 +13311,15 @@ function WorkspacePageInner() {
       workspaceCanvasInteractionActiveRef.current
       || lastActiveCanvasNodeChangesRef.current.length > 0
     ) {
+      setWorkspaceNodeInteractionUiActive(false);
+      cancelPendingTransientCanvasFrame();
       flushPendingCanvasNodeChanges([], { finish: true });
       transientCanvasNodesRef.current = [];
     }
     if (workspaceRemoteRefreshQueuedRef.current) {
       scheduleWorkspaceRemoteRefresh({ type: "interaction.finished" });
     }
-  }, [flushPendingCanvasNodeChanges, scheduleWorkspaceRemoteRefresh]);
+  }, [cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleWorkspaceRemoteRefresh]);
 
   const trackWorkspaceCanvasPointer = useCallback((event) => {
     if (event?.pointerId == null) return;
@@ -13290,9 +13365,10 @@ function WorkspacePageInner() {
       workspaceCanvasPointerIdsRef.current.clear();
       workspaceViewportInteractionActiveRef.current = false;
       lastActiveCanvasNodeChangesRef.current = [];
+      cancelPendingTransientCanvasFrame();
       transientCanvasNodesRef.current = [];
     };
-  }, [finishWorkspaceCanvasPointer, settleWorkspaceCanvasInteraction]);
+  }, [cancelPendingTransientCanvasFrame, finishWorkspaceCanvasPointer, settleWorkspaceCanvasInteraction]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (workspaceMode === "display") return;
@@ -14108,10 +14184,10 @@ function WorkspacePageInner() {
         <div className="af-pipeline-top-right af-workspace-actions">
           {!isWorkflowMode ? (
             <span
-              className={`af-workspace-sync-light is-${workspaceSyncPhase}`}
-              title={`${workspaceSyncLabel} · ${workspaceSyncDetail}`}
+              className={`af-workspace-sync-light is-${workspaceSyncIndicator.phase}`}
+              title={`${workspaceSyncIndicator.label} · ${workspaceSyncIndicator.detail}`}
               role="status"
-              aria-label={`${workspaceSyncLabel}：${workspaceSyncDetail}`}
+              aria-label={`${workspaceSyncIndicator.label}：${workspaceSyncIndicator.detail}`}
             >
               <span className="af-workspace-sync-light__dot" aria-hidden />
             </span>

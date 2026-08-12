@@ -1,9 +1,9 @@
 ---
 name: agentflow-flow-dsl
 description: >-
-  用 workspace.flow.js（受限 ESM）编写 AgentFlow Workspace 流程图，用
-  nodes/<name>/index.mjs 编写代码节点。适用于新建流程、改流程结构、加节点、
-  改连线，以及把节点实现和图一起生成出来。
+  用 workspace.flow.js（受限 ESM）编写 AgentFlow Workspace 流程图。适用于新建流程、
+  修改流程结构、添加或删除节点、修改连线、控制顺序、分支和定时入口；自定义代码节点包
+  改用 agentflow-node-dsl。
 ---
 
 # AgentFlow Flow DSL
@@ -17,15 +17,35 @@ description: >-
   workspace.flow.js        图结构。受限 JS，永不执行，只被静态解析
   nodes/<name>/index.mjs   代码节点。普通 JS，会被真执行
   prompts/*.md docs/*.html 超过 3000 字符的长文本
-  workspace.layout.json    画布坐标，别碰
+  workspace.layout.json    画布坐标，由 layout 命令生成，不手写
   workspace.nodes.json     图片和机器管理属性，别碰
   workspace.state.json     运行产出，别碰
 ```
 
-**两类文件规则完全不同**：`workspace.flow.js` 里禁一切控制流；`nodes/*/index.mjs`
-是普通 Node 模块，`for` / `if` / `await` 随便写。
+**两类文件规则完全不同**：本 skill 负责 `workspace.flow.js`，并在完成后调用排版命令；需要
+编写 `nodes/*/index.mjs` 时读取 `agentflow-node-dsl`。
 
-写完跑 `agentflow flow dsl lint <flowDir>` 自查。
+写完必须依次执行：
+
+```bash
+agentflow flow dsl lint <flowDir>
+agentflow flow dsl layout <flowDir>
+```
+
+lint 不通过先修结构，不要排版。`layout` 默认只给缺坐标的新节点补位置，保留用户手工布局。
+新建流程，或用户明确要求整理整张图时，使用 `agentflow flow dsl layout <flowDir> --all`。
+不要直接编辑 `workspace.layout.json` 里的 x/y。
+
+## 自动排版是交付步骤
+
+只生成正确连线还不算完成。AI 新建或改完流程后，必须保证节点在 UI 中可读：
+
+1. `lint` 校验节点、引脚和拓扑
+2. `layout` 生成或补齐坐标
+3. 如果本地 UI 已打开，再刷新或按 UI 同步 skill 通知画布加载磁盘结果
+
+自动排版按依赖从左到右放置，控制主链保持同一视觉轴，数据源放在上方，展示节点与同层主链
+错开，分支纵向展开。不要为了“看起来差不多”自行猜坐标。
 
 ## 图结构：workspace.flow.js
 
@@ -124,42 +144,10 @@ const b = agent.subAgent("解读", {}, `分析 ${dateStr.value} 的数据`);
 第 2 种的槽名取**引用表达式的根标识符**（`dateStr.value` -> `dateStr`）。想让槽叫别的名字，
 就用第 1 种写法显式写引脚。插值只在正文里生效，引脚值里的 `${}` 运行时不会替换。
 
-## 代码节点：nodes/&lt;name&gt;/index.mjs
+## 自定义代码节点
 
-行为完全由输入决定、不需要 AI 推理的，建代码节点。**一个文件夹 = 一个节点 = 一个
-可发布的包**。
-
-```js
-import fs from "node:fs/promises";
-
-// ── 定义：必须是纯对象字面量（平台静态解析，不执行）──────────
-export default {
-  id: "collect_metrics",
-  version: "1.0.0",
-  name: "统计流程语料",
-  description: "扫描 corpus 目录，统计每个流程的节点数",
-  inputs:  { date: { type: "text", description: "查询日期 YYYY-MM-DD" } },
-  outputs: { result: { type: "text", description: "明细 JSON" },
-             total:  { type: "text", description: "节点总数" } },
-};
-
-// ── 实现：普通 JS，for / if / await 随便写 ──────────────────
-export async function run({ date }, { result, total }, { workspaceRoot }) {
-  const rows = [];
-  for (const f of await fs.readdir(workspaceRoot)) { /* ... */ }
-  await fs.writeFile(result, JSON.stringify(rows, null, 2), "utf-8");
-  await fs.writeFile(total, String(rows.length), "utf-8");
-  console.log(`扫描 ${rows.length} 个流程`);          // stdout 成为节点 result
-}
-```
-
-- `run(inputs, outputs, dirs)`：**入参 = 输入引脚的值**，
-  **出参 = 输出引脚对应的可写文件路径（是路径，不是值）**，
-  第三个是 `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir`
-- `prev` / `next` 控制引脚平台自动补，定义里不用写
-- 成败看 exit code；抛异常即失败
-- 定义里**不要**用 `defineNode()` / `text()` 之类辅助函数——运行时未定义，会崩
-- 定义里不能有变量引用、函数调用、展开运算，静态解析会直接报错
+行为完全由输入决定、不需要 AI 推理时，创建代码节点。不要在本 skill 中推断节点包协议；
+读取 `agentflow-node-dsl`，由它负责 `nodes/<name>/index.mjs` 的声明、实现、测试和发布规则。
 
 ## 自定义输出槽（agent 节点）
 

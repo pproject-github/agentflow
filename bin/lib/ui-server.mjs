@@ -47,6 +47,8 @@ import {
   validateImportedFlowSource,
   writePipelineTree,
 } from "./flow-import.mjs";
+import { packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packages.mjs";
+import { runStartupStorageMigrations } from "./startup-storage-migrations.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
 import { listExpiredWorkspacePreviews } from "./workspace-preview.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
@@ -1452,7 +1454,7 @@ function publicDisplayPayloadFromShare(root, share) {
     archived: share.archived === true,
   }, { userId: share.userId || "" });
   if (scoped.error) return { error: scoped.error };
-  const { graph } = readWorkspaceGraph(scoped.root);
+  const { graph } = readWorkspaceGraph(scoped.root, root);
   const instances = graph.instances || {};
   const displayPage = graph.ui && typeof graph.ui === "object" && graph.ui.displayPage && typeof graph.ui.displayPage === "object"
     ? graph.ui.displayPage
@@ -1844,7 +1846,7 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
   if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
     return { success: false, error: "Cannot update schedule for builtin or archived workspace" };
   }
-  const { graph } = readWorkspaceGraph(scoped.root);
+  const { graph } = readWorkspaceGraph(scoped.root, root);
   const instance = graph.instances?.[scheduleNodeId];
   if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run") {
     return { success: false, error: "Workspace schedule node not found" };
@@ -1856,7 +1858,7 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
     ...instance,
     body: JSON.stringify(nextConfig),
   };
-  writeWorkspaceGraph(scoped.root, graph);
+  writeWorkspaceGraph(scoped.root, graph, root);
   const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
   return { success: true, workspaceSchedules };
 }
@@ -1994,6 +1996,18 @@ export function startUiServer({
   const root = path.resolve(workspaceRoot);
   const uiPort = port;
   const uiConfig = { hideCommunityLinks: Boolean(hideCommunityLinks) };
+  // 必须在监听请求和启动 scheduler 之前迁移。否则用户打开一个仅有 flow.yaml 的空画布后
+  // 保存，可能反过来覆盖刚迁好的图。服务端直接使用实际数据根，不需要用户 Token。
+  const startupMigration = runStartupStorageMigrations({ workspaceRoot: root });
+  for (const attempted of startupMigration.attempted) {
+    const summary = attempted.summary;
+    log.info(
+      `[storage-migration] ${attempted.kind}: migrated=${summary.migrated}, `
+      + `needsDecision=${summary.needsDecision.length}, failed=${summary.failed.length}`,
+    );
+    for (const item of summary.needsDecision) log.warn(`[storage-migration] needs decision: ${item}`);
+    for (const item of summary.failed) log.warn(`[storage-migration] failed: ${item}`);
+  }
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const reqStart = Date.now();
@@ -2661,7 +2675,9 @@ export function startUiServer({
         filesMap = norm.files;
       } else {
         const text = buf.toString("utf8");
-        const v = validateImportedFlowSource(text, parsed.filename || "");
+        const v = validateImportedFlowSource(text, parsed.filename || "", {
+          resolvePackage: packageResolverFor(scanAvailableNodePackages("", root)),
+        });
         if (!v.ok) {
           json(res, 400, { error: v.error });
           return;
@@ -2802,7 +2818,7 @@ export function startUiServer({
           json(res, 403, { error: "Admin Workspace review is read-only" });
           return;
         }
-        const { graph } = readWorkspaceGraph(scoped.root);
+        const { graph } = readWorkspaceGraph(scoped.root, root);
         const nodeIds = normalizeDisplayShareNodeIds(payload.nodeIds, graph);
         if (nodeIds.length === 0) {
           json(res, 400, { error: "请选择至少一个 display 节点" });

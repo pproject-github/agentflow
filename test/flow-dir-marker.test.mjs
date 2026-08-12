@@ -134,6 +134,14 @@ test("单文件上传：.js 当场解析，解析不出图就拒收", () => {
   assert.equal(bad.ok, false);
   assert.match(String(bad.error || ""), /解析失败/);
 
+  const missingPackage = validateImportedFlowSource(
+    'import x from "marketplace:missing@1.0.0";\n',
+    "workspace.flow.js",
+    { resolvePackage: () => null },
+  );
+  assert.equal(missingPackage.ok, false);
+  assert.match(String(missingPackage.error || ""), /服务端缺少节点包.*marketplace:missing@1\.0\.0/);
+
   // 不是 .js 的照旧按 yaml 走
   assert.deepEqual(
     validateImportedFlowSource("instances: {}\nedges: []\n", "flow.yaml"),

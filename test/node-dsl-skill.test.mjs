@@ -1,7 +1,7 @@
 /**
  * 给 AI 看的那份节点编写参考，必须和运行时真实契约一致。
  *
- * 这条测试是有由来的：`agentflow-node-authoring` 曾经长期教的是 `node.yaml` + `runtime.entry`
+ * 这条测试是有由来的：`agentflow-node-dsl` 的旧版本曾经长期教的是 `node.yaml` + `runtime.entry`
  * + `scripts/run.mjs`，还让人跑已经退休的 `agentflow run`。文档 wiki 早就改成了 `index.mjs`，
  * skill 没跟上。后果不是「文档不准」这么轻——AI 读哪份就写出哪种格式，于是让模型生成一个
  * 自定义节点这条路是断的，而且断得很隐蔽：写出来的包扫描不到，面板上什么都不出现。
@@ -20,7 +20,7 @@ import {
 } from "../bin/lib/node-package-manifest.mjs";
 
 const SKILL = fs.readFileSync(
-  path.resolve(import.meta.dirname, "..", "skills", "agentflow-node-authoring", "SKILL.md"),
+  path.resolve(import.meta.dirname, "..", "skills", "agentflow-node-dsl", "SKILL.md"),
   "utf-8",
 );
 

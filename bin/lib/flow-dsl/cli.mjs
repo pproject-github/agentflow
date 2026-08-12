@@ -18,6 +18,7 @@ import {
 import { legacyYamlToDesignGraph } from "./legacy-yaml.mjs";
 import { lintFlowDir } from "./lint.mjs";
 import { readWorkspaceGraphFiles, writeWorkspaceGraphFiles } from "../workspace-flow-store.mjs";
+import { applyWorkspaceAutoLayout } from "../workspace-auto-layout.mjs";
 
 const GRAPH_FILENAME = "workspace.graph.json";
 const LEGACY_YAML_FILENAME = "flow.yaml";
@@ -117,6 +118,37 @@ export function importFlowDsl(srcDir, outFlowDir) {
   };
 }
 
+/**
+ * 为 Workspace 图生成确定性坐标。默认只补缺失坐标，保护用户已经拖过的节点；`all` 用于
+ * AI 新建流程或用户明确要求整理整张图时的全量重排。
+ */
+export function layoutWorkspaceFlowDir(flowDir, { all = false, workspaceRoot = "" } = {}) {
+  const dir = path.resolve(flowDir);
+  const lint = lintWorkspaceFlowDir(dir, { workspaceRoot });
+  if (lint.errors.length) {
+    throw new Error(`lint 未通过，拒绝排版：\n  ${lint.errors.join("\n  ")}`);
+  }
+  const current = readWorkspaceGraphFiles(dir, { marketplaceRoot: workspaceRoot });
+  if (current.format === "empty") throw new Error("这个流程还没有 Workspace 图");
+
+  const before = current.graph?.ui?.nodePositions || {};
+  const next = applyWorkspaceAutoLayout(current.graph, { preserveExisting: !all });
+  const after = next.ui.nodePositions;
+  let positioned = 0;
+  for (const id of Object.keys(next.instances || {})) {
+    if (before[id]?.x !== after[id]?.x || before[id]?.y !== after[id]?.y) positioned += 1;
+  }
+  const written = writeWorkspaceGraphFiles(dir, next, { marketplaceRoot: workspaceRoot });
+  return {
+    flowDir: dir,
+    format: written.format,
+    mode: all ? "all" : "missing",
+    nodeCount: Object.keys(next.instances || {}).length,
+    positioned,
+    layoutPath: path.join(dir, FLOW_LAYOUT_FILENAME),
+  };
+}
+
 /** 没有节点丢失时的空损耗清单，让返回值形状始终一致。 */
 const NO_LOSS = { remapped: [], dropped: [], droppedEdges: [], warnings: [] };
 
@@ -136,14 +168,15 @@ const NO_LOSS = { remapped: [], dropped: [], droppedEdges: [], warnings: [] };
  * 一边当原始材料，出了问题还能对着看。
  *
  * @param {string} flowDir
- * @param {{ force?: boolean }} [opts]
+ * @param {{ force?: boolean, marketplaceRoot?: string }} [opts]
  * @returns {{ flowDir: string, format: "dsl"|"json"|"yaml"|"empty", migrated: boolean,
  *   degradedReason: string|null, externals: string[], source?: "graph.json"|"flow.yaml",
  *   remapped: Array, dropped: Array, droppedEdges: Array, warnings: string[] }}
  */
 export function migrateFlowDirToDsl(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
-  const current = readWorkspaceGraphFiles(dir);
+  const storeOpts = { marketplaceRoot: opts.marketplaceRoot || "" };
+  const current = readWorkspaceGraphFiles(dir, storeOpts);
   if (current.format === "dsl") {
     return { flowDir: dir, format: "dsl", migrated: false, degradedReason: null, externals: [], ...NO_LOSS };
   }
@@ -151,7 +184,7 @@ export function migrateFlowDirToDsl(flowDir, opts = {}) {
 
   // 走完整图这条路：历史 graph.json 里运行产出还是内联的，得先拆出去，否则那些每跑一次
   // 就变一次的值会被当成设计态参与往返比对
-  const result = writeWorkspaceGraphFiles(dir, current.graph);
+  const result = writeWorkspaceGraphFiles(dir, current.graph, storeOpts);
   return {
     flowDir: dir,
     format: result.format,
@@ -164,7 +197,7 @@ export function migrateFlowDirToDsl(flowDir, opts = {}) {
 }
 
 /** `flow.yaml` -> 代码。没有 yaml 就是真的没图。 */
-function migrateLegacyYamlDir(dir, { force = false } = {}) {
+function migrateLegacyYamlDir(dir, { force = false, marketplaceRoot = "" } = {}) {
   const yamlPath = path.join(dir, LEGACY_YAML_FILENAME);
   if (!fs.existsSync(yamlPath)) {
     return { flowDir: dir, format: "empty", migrated: false, degradedReason: null, externals: [], ...NO_LOSS };
@@ -189,7 +222,7 @@ function migrateLegacyYamlDir(dir, { force = false } = {}) {
       ...loss,
     };
   }
-  const result = writeWorkspaceGraphFiles(dir, converted.graph);
+  const result = writeWorkspaceGraphFiles(dir, converted.graph, { marketplaceRoot });
   return {
     flowDir: dir,
     format: result.format,
@@ -213,10 +246,10 @@ function migrateLegacyYamlDir(dir, { force = false } = {}) {
  *
  * @returns {{ format: "dsl"|"json"|"empty", errors: string[], warnings: string[] }}
  */
-export function lintWorkspaceFlowDir(flowDir) {
+export function lintWorkspaceFlowDir(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
   if (fs.existsSync(path.join(dir, FLOW_SOURCE_FILENAME))) {
-    return { format: "dsl", ...lintFlowDir(dir) };
+    return { format: "dsl", ...lintFlowDir(dir, opts) };
   }
 
   const current = readWorkspaceGraphFiles(dir);
@@ -234,7 +267,7 @@ export function lintWorkspaceFlowDir(flowDir) {
     // 代码节点包在原目录里，不复制过去的话每个 import 都会报「节点包不存在」
     const localNodes = path.join(dir, "nodes");
     if (fs.existsSync(localNodes)) fs.cpSync(localNodes, path.join(staging, "nodes"), { recursive: true });
-    return { format: "json", ...lintFlowDir(staging) };
+    return { format: "json", ...lintFlowDir(staging, opts) };
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }

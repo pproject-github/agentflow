@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow Workspace operation through a bundled token-backed CLI, without MCP. Use when Codex needs to upload temporary Workspace previews, run or inspect Workspace graphs, read graphs and display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env. Default AgentFlow base URL is http://ai.mengma.bigo.inner/.
+description: Direct AgentFlow operation through a bundled token-backed CLI, without MCP. Use when Codex needs to search, publish, install, or synchronize versioned node packages; pull or publish portable Workspace DSL flows; upload previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env.
 ---
 
 # AgentFlow CLI
@@ -24,13 +24,13 @@ change Workflow data. Before any Flow write, show the exact `flowId`, source,
 and destination; before any Workflow write, resolve the canonical `tapd:<id>`
 reference and follow the Workflow skill's read/merge/concurrency rules.
 
-Use this skill when the task is to operate AgentFlow itself from an AI agent. Do not configure or call MCP for this skill. Use the bundled CLI script instead:
+Use this skill when the task is to operate AgentFlow itself from an AI agent. Do not configure or call MCP for this skill. Resolve `<skill-dir>` as the directory containing this `SKILL.md`, then use the bundled CLI script:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs <command> [options]
+node <skill-dir>/scripts/agentflow-cli.mjs <command> [options]
 ```
 
-If the skill is installed outside this repository, resolve the script path relative to this `SKILL.md`.
+Never assume the current project contains `skills/agentflow-cli`.
 
 ## Installation
 
@@ -53,6 +53,20 @@ skillhub install agentflow-cli --global --agent claude-code
 ```
 
 After installation, configure only the direct API token. Do not add an MCP server for this skill.
+
+Install or update the `@fieldwangai/agentflow` CLI as the local runtime and keep `agentflow` on
+`PATH`. The bundled skill intentionally does not copy AgentFlow's parser/runtime modules. It locates
+the runtime from an explicit `--agentflow-package-root`, `AGENTFLOW_PACKAGE_ROOT`, the current
+project's `node_modules`, or the `agentflow` executable on `PATH`.
+
+Verify both token and runtime discovery before local DSL or node-package work:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs config
+```
+
+Require `localRuntime.available: true`. Pure remote reporting commands can still run without a local
+runtime, but package creation, installation, Flow pull/publish, and Workspace graph parsing cannot.
 
 ## Configuration
 
@@ -81,17 +95,17 @@ Prefer JSON output and let the CLI handle auth headers.
 List knowledge/workspace entries:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs list-workspace
+node <skill-dir>/scripts/agentflow-cli.mjs list-workspace
 ```
 
 List flows:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs list-flows
+node <skill-dir>/scripts/agentflow-cli.mjs list-flows
 ```
 
-For local marketplace node authoring, use the packaged AgentFlow CLI (the
-node-authoring workflow is documented in `agentflow-node-authoring`):
+For a package used only in the current local checkout, use the packaged AgentFlow CLI (the
+Node DSL workflow is documented in `agentflow-node-dsl`):
 
 ```bash
 agentflow marketplace list --json
@@ -99,32 +113,111 @@ agentflow marketplace publish-node ./my-node --json
 agentflow validate MyFlow --json
 ```
 
-These commands operate on the local workspace marketplace. They are usable
-after any Agent CLI (Cursor, Codex, Claude Code, or OpenCode) has generated the
-node package; no MCP server is required for publishing.
+These commands copy a package only into the current workspace marketplace.
+
+To distribute a complete package directory (including `scripts/`, `templates/`, or assets) through
+an AgentFlow server, use the token-backed commands. The CLI packs the directory as ZIP; `index.mjs`
+must be at the package root. The server validates all paths/files and keeps each `id@version`
+immutable:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs node-package-publish --file ./my-node
+node <skill-dir>/scripts/agentflow-cli.mjs node-package-list
+node <skill-dir>/scripts/agentflow-cli.mjs node-package-install \
+  --node my_node@1.0.0 \
+  --workspace-root "$PWD"
+```
+
+Before authoring a new code node, search the remote catalog. The result is structured JSON with the
+exact import specifier, input/output slots, content hash, and install hint:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs node-package-search --query "read csv"
+```
+
+Prefer an existing suitable exact version. Install it and import its returned `specifier`; create a
+new local package only when no result meets the requested behavior.
+
+When a Flow already declares its dependencies, do not install packages one by one. Synchronize the
+whole Flow from its versioned imports:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs node-package-sync \
+  --flow .workspace/agentflow/pipelines/<flow-id> \
+  --workspace-root "$PWD"
+```
+
+The command reports `installed`, `unchanged`, `missing`, and `conflicts`. It downloads and verifies
+every required ZIP before writing any package, records the server and hashes in each installed
+package's metadata, and exits with code 2 when dependencies cannot be satisfied.
+
+After installation, local AI can author a portable DSL reference directly in `workspace.flow.js`:
+
+```js
+import myNode from "marketplace:my_node@1.0.0";
+const result = myNode("My node", { input: "value" });
+```
+
+Run `agentflow flow dsl lint <flowDir>` with that workspace as the current project before publishing
+the flow. `publish-flow` also checks that the server contains every exact imported version before it
+writes the Flow. Do not unpack ZIPs by hand or copy only `index.mjs`; relative package files are part
+of the node's versioned content.
 
 Publish a new local Flow after the user has reviewed it:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs publish-flow \
+node <skill-dir>/scripts/agentflow-cli.mjs publish-flow \
   --flow-id release-check \
   --file .workspace/agentflow/pipelines/release-check/flow.yaml \
   --target-space personal
 ```
+
+When the reviewed code Flow contains `nodes/`, publish the Flow and all complete package directories
+in one operation:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs publish-flow \
+  --flow-id release-check \
+  --file .workspace/agentflow/pipelines/release-check \
+  --target-space personal \
+  --with-dependencies
+```
+
+This validates every package before any upload, rejects same-version content conflicts, uploads ZIPs,
+and rewrites relative node imports only in the upload payload. It never edits local
+`workspace.flow.js`. Without `--with-dependencies`, `publish-flow` continues to reject Flow directories
+that contain `nodes/` or `workspace.nodes.json` rather than silently dropping them.
 
 Destinations are `personal`, `workspace`, and `team`. `team` creates a workspace Flow and shares it as editor with the current account's active team. Publishing is create-only by default. If the exact Flow already exists, stop and ask whether to update it; only after explicit confirmation rerun with `--replace`. Replacement first reads the server revision and submits it with the update.
 
 Read one flow graph:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs get-graph --flow-id TestNodes --flow-source user
+node <skill-dir>/scripts/agentflow-cli.mjs get-graph --flow-id TestNodes --flow-source user
 ```
 
-Migrate a flow that is still stored as `flow.yaml`. These show up in the list
-but open as an empty canvas — they cannot run or be edited until migrated:
+To make a server Flow locally editable, pull it instead of copying graph JSON. Pull synchronizes and
+verifies all exact node-package dependencies first, removes remote runtime state, then writes the
+canonical local DSL:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-flow --flow-id <id> --flow-source user
+node <skill-dir>/scripts/agentflow-cli.mjs pull-flow \
+  --flow-id TestNodes \
+  --flow-source user \
+  --workspace-root "$PWD"
+```
+
+The default target is `.workspace/agentflow/pipelines/<flow-id>`. A non-empty target is refused; use
+`--replace` only after the user has explicitly approved updating its managed Flow files.
+
+The AgentFlow server automatically performs all lossless storage migrations before it starts
+listening. Use the following commands only to inspect or repair an older deployment, or to resolve a
+Flow listed in the server's `storage-migrations.json` report.
+
+Migrate one flow that is still stored as `flow.yaml`:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs migrate-flow --flow-id <id> --flow-source user
 ```
 
 Lossy migration is refused by default: nodes with no Workspace equivalent
@@ -132,11 +225,11 @@ Lossy migration is refused by default: nodes with no Workspace equivalent
 and nothing is written. Show the user that list and get explicit confirmation
 before rerunning with `--allow-loss`. The `flow.yaml` original is never deleted.
 
-Migrate everything at once (does the lossless ones, reports the rest):
+Manually rescan everything visible to the current account (does the lossless ones, reports the rest):
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-all --dry-run
-node skills/agentflow-cli/scripts/agentflow-cli.mjs migrate-all
+node <skill-dir>/scripts/agentflow-cli.mjs migrate-all --dry-run
+node <skill-dir>/scripts/agentflow-cli.mjs migrate-all
 ```
 
 Read `needsDecision` and `skipped` in the output before telling the user it is
@@ -147,7 +240,7 @@ Upload a Workspace graph to a server-side temporary preview project (the
 server returns a Workspace URL and cleans the project after its TTL):
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
+node <skill-dir>/scripts/agentflow-cli.mjs workspace-preview \
   --file .workspace/agentflow/pipelines/<flow-id> \
   --ttl-seconds 7200
 ```
@@ -159,7 +252,7 @@ Flow list and must not be treated as a durable source of truth.
 Run a Workspace graph:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs run --flow-id TestNodes --flow-source user
+node <skill-dir>/scripts/agentflow-cli.mjs run --flow-id TestNodes --flow-source user
 ```
 
 The legacy `agentflow apply`, `/api/flow/run`, and Start/End Pipeline execution
@@ -168,7 +261,7 @@ path are retired. Do not use them for new work.
 Run a specific run node with inputs:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs run \
+node <skill-dir>/scripts/agentflow-cli.mjs run \
   --flow-id TestNodes \
   --flow-source user \
   --run-node-id workspace_run_1 \
@@ -179,25 +272,25 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs run \
 List runs for a flow or workspace alias:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs list-run-by-workspace --workspace TestNodes --limit 20
+node <skill-dir>/scripts/agentflow-cli.mjs list-run-by-workspace --workspace TestNodes --limit 20
 ```
 
 Read run logs:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs logs --run-id workspace-123
+node <skill-dir>/scripts/agentflow-cli.mjs logs --run-id workspace-123
 ```
 
 Get active run status:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs status --flow-id TestNodes --flow-source user
+node <skill-dir>/scripts/agentflow-cli.mjs status --flow-id TestNodes --flow-source user
 ```
 
 Extract display outputs from a flow:
 
 ```bash
-node skills/agentflow-cli/scripts/agentflow-cli.mjs display-outputs --flow-id TestNodes --flow-source user
+node <skill-dir>/scripts/agentflow-cli.mjs display-outputs --flow-id TestNodes --flow-source user
 ```
 
 ## Workflow reporting
@@ -214,7 +307,7 @@ The only admin write exception is audited version-membership repair. Read its st
 ## Workflow
 
 1. Check token availability with `config`.
-2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
+2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `node-package-search` before creating a new code node. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
 3. Use `run` to start the flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
 4. Use `status`, `list-run-by-workspace`, and `logs` when a run is active, failed, or needs debugging.
 

@@ -27,7 +27,7 @@ import {
   graphToFlowFiles,
 } from "./flow-dsl/index.mjs";
 import { definitionOf } from "./flow-dsl/defs.mjs";
-import { packageBindingsForGraph, packageResolverFor, scanFlowLocalPackages } from "./flow-dsl/packages.mjs";
+import { packageBindingsForGraph, packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packages.mjs";
 import { NODE_META_KEYS } from "./flow-dsl/ir.mjs";
 import {
   WORKSPACE_STATE_FILENAME,
@@ -238,7 +238,7 @@ export function designFingerprint(graph) {
  * @returns {{ format: "dsl"|"json"|"empty", path: string, graph: object, source: string|null }}
  * @throws {WorkspaceFlowParseError} `workspace.flow.js` 存在但解析不出图
  */
-export function readWorkspaceDesign(flowDir) {
+export function readWorkspaceDesign(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
   const sourcePath = path.join(dir, FLOW_SOURCE_FILENAME);
   const source = readTextOrNull(sourcePath);
@@ -252,7 +252,7 @@ export function readWorkspaceDesign(flowDir) {
         files: collectExternalFiles(dir),
         // 和 lint 用同一份包扫描。不传的话 `import x from "./nodes/x"` 会读成一个
         // 槽位表为空的节点，控制边跟着串位——lint 绿灯、画布是错图。
-        resolvePackage: packageResolverFor(scanFlowLocalPackages(dir)),
+        resolvePackage: packageResolverFor(scanAvailableNodePackages(dir, opts.marketplaceRoot || "")),
       });
     } catch (e) {
       throw new WorkspaceFlowParseError(
@@ -340,7 +340,7 @@ function stripDerivedPackageScripts(design, bindings) {
  * @param {object} designGraph 设计态图（运行态请先用 splitWorkspaceGraph 摘掉）
  * @returns {{ format: "dsl"|"json", changed: boolean, degradedReason: string|null, externals: string[], design: object }}
  */
-export function writeWorkspaceDesign(flowDir, designGraph) {
+export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
   const dir = path.resolve(flowDir);
   fs.mkdirSync(dir, { recursive: true });
   const design = normalizeDesignShape(designGraph);
@@ -350,7 +350,7 @@ export function writeWorkspaceDesign(flowDir, designGraph) {
   const nodesPath = path.join(dir, FLOW_NODES_FILENAME);
   const graphPath = path.join(dir, WORKSPACE_GRAPH_FILENAME);
 
-  const packages = scanFlowLocalPackages(dir);
+  const packages = scanAvailableNodePackages(dir, opts.marketplaceRoot || "");
   const bindings = packageBindingsForGraph(design, packages);
   const written = stripDerivedPackageScripts(design, bindings);
 
@@ -451,9 +451,9 @@ export function readWorkspaceRunFingerprints(flowDir) {
 }
 
 /** 读回合并了运行态的完整图。 */
-export function readWorkspaceGraphFiles(flowDir) {
+export function readWorkspaceGraphFiles(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
-  const design = readWorkspaceDesign(dir);
+  const design = readWorkspaceDesign(dir, opts);
   if (design.format === "empty") return { ...design, graph: emptyDesignGraph() };
   return { ...design, graph: mergeWorkspaceState(design.graph, readWorkspaceStateFile(dir)) };
 }
@@ -464,14 +464,14 @@ export function readWorkspaceGraphFiles(flowDir) {
  * 先落运行态再落设计态——中途失败时设计态仍是上一版，不会出现「新设计 + 空运行态」
  * 这种展示节点内容凭空消失的组合。
  */
-export function writeWorkspaceGraphFiles(flowDir, graph) {
+export function writeWorkspaceGraphFiles(flowDir, graph, opts = {}) {
   const dir = path.resolve(flowDir);
   fs.mkdirSync(dir, { recursive: true });
   const statePath = path.join(dir, WORKSPACE_STATE_FILENAME);
   const { design, state } = splitWorkspaceGraph(graph);
   if (isEmptyWorkspaceState(state)) fs.rmSync(statePath, { force: true });
   else writeTextAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
-  const result = writeWorkspaceDesign(dir, design);
+  const result = writeWorkspaceDesign(dir, design, opts);
   // `graph` 是落盘之后读回来会拿到的那张完整图。调用方用它算 revision，客户端手里的
   // 版本号才和磁盘一致。
   return { ...result, graph: mergeWorkspaceState(result.design, state) };
