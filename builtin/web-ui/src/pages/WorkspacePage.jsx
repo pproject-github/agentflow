@@ -19,7 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -3028,94 +3028,6 @@ function displayIcon(kind) {
   return "article";
 }
 
-function parseMermaidFlowchart(code) {
-  const lines = String(code || "").split(/\r?\n/).map((line) => line.replace(/%%.*$/, "").trim()).filter(Boolean);
-  const nodes = new Map();
-  const edges = [];
-  let direction = "TD";
-  const ensure = (id, label = "") => {
-    const clean = String(id || "").replace(/[^A-Za-z0-9_]/g, "_") || `N${nodes.size + 1}`;
-    if (!nodes.has(clean)) nodes.set(clean, { id: clean, label: label || clean });
-    else if (label) nodes.get(clean).label = label;
-    return clean;
-  };
-  const parseEndpoint = (raw) => {
-    const text = String(raw || "").trim().replace(/[;,]+$/, "");
-    const match = text.match(/^([A-Za-z][A-Za-z0-9_]*)(?:\[(.+?)\]|\((.+?)\)|\{(.+?)\})?$/);
-    if (!match) return ensure(text.replace(/[^A-Za-z0-9_]/g, "_"), text);
-    return ensure(match[1], match[2] || match[3] || match[4] || match[1]);
-  };
-  for (const line of lines) {
-    const dir = line.match(/^(graph|flowchart)\s+(TD|TB|BT|LR|RL)\b/i);
-    if (dir) {
-      direction = dir[2].toUpperCase();
-      continue;
-    }
-    const edge = line.match(/^(.+?)\s*-{1,2}>+\s*(.+)$/);
-    if (edge) {
-      edges.push({ from: parseEndpoint(edge[1]), to: parseEndpoint(edge[2]) });
-      continue;
-    }
-    parseEndpoint(line);
-  }
-  return { nodes: Array.from(nodes.values()), edges, direction };
-}
-
-function MermaidPreview({ code }) {
-  const graph = useMemo(() => parseMermaidFlowchart(code), [code]);
-  if (!String(code || "").trim()) return null;
-  const horizontal = graph.direction === "LR" || graph.direction === "RL";
-  const nodeW = 142;
-  const nodeH = 44;
-  const gapX = horizontal ? 96 : 32;
-  const gapY = horizontal ? 30 : 68;
-  const positions = new Map();
-  graph.nodes.forEach((node, idx) => {
-    positions.set(node.id, {
-      x: 24 + (horizontal ? idx * (nodeW + gapX) : (idx % 3) * (nodeW + gapX)),
-      y: 24 + (horizontal ? (idx % 3) * (nodeH + gapY) : idx * (nodeH + gapY)),
-    });
-  });
-  const maxX = Math.max(360, ...Array.from(positions.values()).map((p) => p.x + nodeW + 24));
-  const maxY = Math.max(180, ...Array.from(positions.values()).map((p) => p.y + nodeH + 24));
-  return (
-      <svg
-        className="af-work-node__mermaid-preview"
-        viewBox={`0 0 ${maxX} ${maxY}`}
-        width={maxX}
-        height={maxY}
-        role="img"
-        aria-label="Mermaid preview"
-      >
-        <defs>
-          <marker id="af-work-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-        </defs>
-        {graph.edges.map((edge, idx) => {
-          const a = positions.get(edge.from);
-          const b = positions.get(edge.to);
-          if (!a || !b) return null;
-          const d = horizontal
-            ? `M ${a.x + nodeW} ${a.y + nodeH / 2} C ${(a.x + b.x + nodeW) / 2} ${a.y + nodeH / 2}, ${(a.x + b.x + nodeW) / 2} ${b.y + nodeH / 2}, ${b.x} ${b.y + nodeH / 2}`
-            : `M ${a.x + nodeW / 2} ${a.y + nodeH} C ${a.x + nodeW / 2} ${a.y + nodeH + 28}, ${b.x + nodeW / 2} ${b.y - 28}, ${b.x + nodeW / 2} ${b.y}`;
-          return <path key={`${edge.from}-${edge.to}-${idx}`} className="af-work-node__mermaid-edge" d={d} markerEnd="url(#af-work-arrow)" />;
-        })}
-        {graph.nodes.map((node) => {
-          const p = positions.get(node.id);
-          return (
-            <g key={node.id}>
-              <rect className="af-work-node__mermaid-box" x={p.x} y={p.y} width={nodeW} height={nodeH} rx="8" />
-              <text className="af-work-node__mermaid-text" x={p.x + nodeW / 2} y={p.y + nodeH / 2 + 5} textAnchor="middle">
-                {node.label.slice(0, 22)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-  );
-}
-
 function VisibleScrollFrame({ className = "", children }) {
   const scrollerRef = useRef(null);
   const scrollbarTrackRef = useRef(null);
@@ -3210,7 +3122,7 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, showMermaidSource = false, readingMode = false }) {
+function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, readingMode = false, interactiveMermaid = false }) {
   const kind = workspaceDisplayKindFromData(data);
   const rawContent = displayContent(data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
@@ -3310,15 +3222,16 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, sho
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--table"><TableDisplayContent content={content} /></VisibleScrollFrame>;
   }
   if (kind === "mermaid") {
+    if (interactiveMermaid) {
+      return (
+        <div className="af-work-display-body af-work-display-body--mermaid af-work-display-body--mermaid-interactive">
+          <MermaidDisplayBlock code={content} interactive />
+        </div>
+      );
+    }
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--mermaid">
-        <MermaidPreview code={content} />
-        {showMermaidSource ? (
-          <details className="af-work-display-mermaid-source">
-            <summary>查看 Mermaid 源码</summary>
-            <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
-          </details>
-        ) : null}
+        <MermaidDisplayBlock code={content} />
       </VisibleScrollFrame>
     );
   }
@@ -3330,53 +3243,55 @@ function DisplayFullscreenPreview({ node, onClose }) {
   const kind = workspaceDisplayKindFromData(node?.data);
   const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : kind === "code" ? "代码展示" : "Display 预览");
   const readOnly = Boolean(node?.data?.readOnly);
-  const [markdownEditing, setMarkdownEditing] = useState(false);
-  const [markdownDraft, setMarkdownDraft] = useState("");
-  const [markdownFileContent, setMarkdownFileContent] = useState("");
-  const [markdownFileLoading, setMarkdownFileLoading] = useState(false);
+  const editableTextKind = kind === "markdown" || kind === "mermaid";
+  const sourceLabel = kind === "mermaid" ? "Mermaid" : "Markdown";
+  const [sourceEditing, setSourceEditing] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState("");
+  const [sourceFileContent, setSourceFileContent] = useState("");
+  const [sourceFileLoading, setSourceFileLoading] = useState(false);
   const currentDisplayContent = displayContent(node?.data);
-  const markdownSourceContent = kind === "markdown" ? displayOutputEnvelopeContent(currentDisplayContent) : "";
-  const markdownFilePath = kind === "markdown" ? displayTextFilePath(markdownSourceContent, "markdown") : "";
-  const markdownContent = kind === "markdown" ? (markdownFilePath ? markdownFileContent : markdownSourceContent) : "";
+  const sourceContent = editableTextKind ? displayOutputEnvelopeContent(currentDisplayContent) : "";
+  const sourceFilePath = editableTextKind ? displayTextFilePath(sourceContent, kind) : "";
+  const editableContent = editableTextKind ? (sourceFilePath ? sourceFileContent : sourceContent) : "";
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
-      if (markdownEditing) {
-        setMarkdownDraft(String(markdownContent || ""));
-        setMarkdownEditing(false);
+      if (sourceEditing) {
+        setSourceDraft(String(editableContent || ""));
+        setSourceEditing(false);
         return;
       }
       onClose?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [markdownContent, markdownEditing, onClose]);
+  }, [editableContent, onClose, sourceEditing]);
   useEffect(() => {
     let cancelled = false;
-    if (kind !== "markdown" || !markdownFilePath) {
-      setMarkdownFileContent("");
-      setMarkdownFileLoading(false);
+    if (!editableTextKind || !sourceFilePath) {
+      setSourceFileContent("");
+      setSourceFileLoading(false);
       return () => { cancelled = true; };
     }
-    setMarkdownFileLoading(true);
-    readWorkspaceTextFile(node?.data?.flowParams || {}, markdownFilePath)
+    setSourceFileLoading(true);
+    readWorkspaceTextFile(node?.data?.flowParams || {}, sourceFilePath)
       .then((text) => {
-        if (!cancelled) setMarkdownFileContent(text);
+        if (!cancelled) setSourceFileContent(text);
       })
       .catch((error) => {
         if (!cancelled) {
-          setMarkdownFileContent("");
+          setSourceFileContent("");
           node?.data?.onStatus?.(String(error.message || error));
         }
       })
       .finally(() => {
-        if (!cancelled) setMarkdownFileLoading(false);
+        if (!cancelled) setSourceFileLoading(false);
       });
     return () => { cancelled = true; };
-  }, [kind, markdownFilePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
+  }, [editableTextKind, sourceFilePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
   useEffect(() => {
-    if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
-  }, [markdownContent, markdownEditing]);
+    if (!sourceEditing) setSourceDraft(String(editableContent || ""));
+  }, [editableContent, sourceEditing]);
   if (!node) return null;
   return createPortal(
     <div className="af-display-preview-overlay" role="dialog" aria-modal="true" aria-label="全屏预览">
@@ -3388,23 +3303,24 @@ function DisplayFullscreenPreview({ node, onClose }) {
             <span>{node.id}</span>
           </div>
           <div className="af-display-preview-actions">
-            {kind === "markdown" ? (
-              markdownEditing ? (
+            {editableTextKind ? (
+              sourceEditing ? (
                 <>
                   <button
                     type="button"
                     className="af-display-preview-action"
-                    disabled={readOnly || markdownFileLoading}
+                    disabled={readOnly || sourceFileLoading}
                     onClick={async () => {
                       try {
-                        await saveMarkdownDisplayEdit({
+                        await saveTextDisplayEdit({
                           nodeId: node.id,
                           data: node.data,
-                          filePath: markdownFilePath,
-                          content: markdownDraft,
-                          setFileContent: setMarkdownFileContent,
+                          filePath: sourceFilePath,
+                          content: sourceDraft,
+                          kind,
+                          setFileContent: setSourceFileContent,
                         });
-                        setMarkdownEditing(false);
+                        setSourceEditing(false);
                       } catch (error) {
                         node?.data?.onStatus?.(String(error.message || error));
                       }
@@ -3418,8 +3334,8 @@ function DisplayFullscreenPreview({ node, onClose }) {
                     type="button"
                     className="af-display-preview-action"
                     onClick={() => {
-                      setMarkdownDraft(String(markdownContent || ""));
-                      setMarkdownEditing(false);
+                      setSourceDraft(String(editableContent || ""));
+                      setSourceEditing(false);
                     }}
                     aria-label="取消编辑"
                     title="取消编辑"
@@ -3431,13 +3347,13 @@ function DisplayFullscreenPreview({ node, onClose }) {
                 <button
                   type="button"
                   className="af-display-preview-action"
-                  disabled={readOnly || markdownFileLoading}
+                  disabled={readOnly || sourceFileLoading}
                   onClick={() => {
-                    setMarkdownDraft(String(markdownContent || ""));
-                    setMarkdownEditing(true);
+                    setSourceDraft(String(editableContent || ""));
+                    setSourceEditing(true);
                   }}
-                  aria-label="编辑 Markdown"
-                  title="编辑 Markdown"
+                  aria-label={`编辑 ${sourceLabel} 源码`}
+                  title={`编辑 ${sourceLabel} 源码`}
                 >
                   <span className="material-symbols-outlined" aria-hidden>edit</span>
                 </button>
@@ -3448,15 +3364,23 @@ function DisplayFullscreenPreview({ node, onClose }) {
             </button>
           </div>
         </div>
-        <div className={`af-display-preview-content${kind === "markdown" && !markdownEditing ? " af-display-preview-content--reading" : ""}`}>
-          {kind === "markdown" && markdownEditing ? (
-            <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={node.data?.onUploadWorkspaceImage} readOnly={readOnly} />
+        <div className={`af-display-preview-content${kind === "markdown" && !sourceEditing ? " af-display-preview-content--reading" : ""}`}>
+          {editableTextKind && sourceEditing ? (
+            <MarkdownDisplayEditor
+              value={sourceDraft}
+              onChange={setSourceDraft}
+              onUploadImage={kind === "markdown" ? node.data?.onUploadWorkspaceImage : undefined}
+              allowImageUpload={kind === "markdown"}
+              placeholder={kind === "mermaid" ? "输入 Mermaid 源码" : "输入 Markdown 内容"}
+              readOnly={readOnly}
+            />
           ) : (
             <DisplayBody
               data={node.data}
               flowParams={node.data?.flowParams}
               htmlFrameRef={htmlFrameRef}
               readingMode={kind === "markdown"}
+              interactiveMermaid={kind === "mermaid"}
             />
           )}
         </div>
@@ -3533,14 +3457,14 @@ function DisplayPickerPreview({ node }) {
   if (kind === "mermaid") {
     return (
       <div className="af-display-picker-preview__diagram">
-        <MermaidPreview code={content} />
+        <MermaidDisplayBlock code={content} />
       </div>
     );
   }
   return <pre className="af-display-picker-preview__pre">{content}</pre>;
 }
 
-function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = false }) {
+function MarkdownDisplayEditor({ value, onChange, onUploadImage, allowImageUpload = true, placeholder = "输入 Markdown 内容", readOnly = false }) {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const scrollbarTrackRef = useRef(null);
@@ -3647,19 +3571,21 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
       className="af-work-display-editor nodrag nopan"
       onClick={(event) => event.stopPropagation()}
       onDragOver={(event) => {
+        if (!allowImageUpload) return;
         const hasImage = Array.from(event.dataTransfer?.items || []).some((item) => String(item?.type || "").startsWith("image/"));
         if (!hasImage) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(event) => {
+        if (!allowImageUpload) return;
         const file = Array.from(event.dataTransfer?.files || []).find(isWorkspaceImageFile);
         if (!file) return;
         event.preventDefault();
         uploadAndInsert(file);
       }}
     >
-      <div className="af-work-display-editor__toolbar">
+      {allowImageUpload ? <div className="af-work-display-editor__toolbar">
         <button
           type="button"
           className="af-work-display-card__action"
@@ -3681,7 +3607,7 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
             if (file) uploadAndInsert(file);
           }}
         />
-      </div>
+      </div> : null}
       <textarea
         ref={textareaRef}
         className="af-work-display-editor__textarea"
@@ -3691,7 +3617,7 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
         onKeyDown={(event) => {
           if (event.key === "Escape") event.stopPropagation();
         }}
-        placeholder="输入 Markdown 内容"
+        placeholder={placeholder}
         spellCheck={false}
         readOnly={readOnly}
       />
@@ -3881,7 +3807,9 @@ function suggestDisplayFilePath(id, data) {
   return `outputs/${stem}.${displayFileExtension(kind)}`;
 }
 
-async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFileContent }) {
+async function saveTextDisplayEdit({ nodeId, data, filePath, content, kind = "markdown", setFileContent }) {
+  const problem = validateDisplayContentForWrite(kind, content);
+  if (problem) throw new Error(problem);
   if (filePath) {
     const savedPath = await writeWorkspaceTextFile(data?.flowParams || {}, filePath, content);
     setFileContent?.(content);
@@ -3894,7 +3822,7 @@ async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFil
   }
   data?.onSetDisplayNodeContent?.(nodeId, content, "replace", {
     logChat: false,
-    statusMessage: "已更新 Markdown 内容",
+    statusMessage: `已更新 ${kind === "mermaid" ? "Mermaid" : "Markdown"} 内容`,
   });
 }
 
@@ -4227,11 +4155,12 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height })
                 disabled={readOnly || markdownFileLoading}
                 onClick={async () => {
                   try {
-                    await saveMarkdownDisplayEdit({
+                    await saveTextDisplayEdit({
                       nodeId: id,
                       data,
                       filePath: markdownFilePath,
                       content: markdownDraft,
+                      kind: "markdown",
                       setFileContent: setMarkdownFileContent,
                     });
                     setMarkdownEditing(false);
@@ -4359,7 +4288,6 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height })
           flowParams={data?.flowParams}
           htmlFrameRef={htmlFrameRef}
           htmlFrameVersion={htmlFrameVersion}
-          showMermaidSource={!presentationMode}
         />
       )}
       <WorkspaceNodeChat nodeId={id} data={data} />

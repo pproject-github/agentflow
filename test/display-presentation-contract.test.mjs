@@ -40,23 +40,33 @@ test("Group 缩放使用实时尺寸，解组动作不会伪装成删除", () =>
   assert.match(workspaceSource, />ungroup<\/span>/);
 });
 
-test("Mermaid 只在 Workspace 编辑卡片保留源码，所有展示面只显示结果", () => {
-  assert.match(workspaceSource, /<details className="af-work-display-mermaid-source">/);
-  assert.match(workspaceSource, /showMermaidSource=\{!presentationMode\}/);
-  assert.match(workspaceSource, /showMermaidSource \? \(/);
+test("Mermaid 卡片和所有展示面只显示渲染结果", () => {
+  assert.doesNotMatch(workspaceSource, /af-work-display-mermaid-source/);
+  assert.doesNotMatch(workspaceSource, /查看 Mermaid 源码/);
+  assert.doesNotMatch(workspaceSource, /showMermaidSource/);
   assert.doesNotMatch(workspaceSource, /<div className="af-display-picker-preview__diagram">[\s\S]*?<pre>\{content\}<\/pre>/);
   assert.match(rendererSource, /export function MermaidDisplayBlock/);
   assert.match(displaySource, /node\.kind === "mermaid" \? <MermaidDisplayBlock code=\{content\} \/>/);
   assert.doesNotMatch(displaySource, /node\.kind === "mermaid" \|\| node\.kind === "ascii"/);
 });
 
+test("Mermaid 全屏预览提供显式源码编辑模式", () => {
+  assert.match(workspaceSource, /const editableTextKind = kind === "markdown" \|\| kind === "mermaid"/);
+  assert.match(workspaceSource, /aria-label=\{`编辑 \$\{sourceLabel\} 源码`\}/);
+  assert.match(workspaceSource, /placeholder=\{kind === "mermaid" \? "输入 Mermaid 源码" : "输入 Markdown 内容"\}/);
+  assert.match(workspaceSource, /await saveTextDisplayEdit\(\{[\s\S]*?kind,[\s\S]*?setFileContent: setSourceFileContent/);
+  assert.match(workspaceSource, /const problem = validateDisplayContentForWrite\(kind, content\)/);
+});
+
 test("Mermaid 使用单层自适应 SVG，不再由内部容器裁切", () => {
-  assert.match(workspaceSource, /className="af-work-node__mermaid-preview"[\s\S]*?width=\{maxX\}[\s\S]*?height=\{maxY\}/);
+  assert.match(workspaceSource, /MermaidDisplayBlock code=\{content\}/);
   assert.match(workspaceSource, /af-work-display-body af-work-display-body--mermaid/);
   assert.match(rendererSource, /className="af-md-mermaid-preview"[\s\S]*?width=\{maxX\}[\s\S]*?height=\{maxY\}/);
-  assert.doesNotMatch(rendererSource, /<div className="af-md-mermaid-preview">/);
-  assert.match(css, /\.af-work-node__mermaid-preview\s*\{[\s\S]*?width: 100%;[\s\S]*?height: auto;[\s\S]*?overflow: visible;/);
-  assert.doesNotMatch(css, /\.af-work-node__mermaid-preview\s*\{[^}]*max-height:/);
+  assert.match(rendererSource, /const isSequence = \/\^sequenceDiagram/);
+  assert.match(rendererSource, /edge\.label \? <text/);
+  assert.match(rendererSource, /const reverse = horizontal \? b\.x <= a\.x : b\.y <= a\.y/);
+  assert.match(rendererSource, /return ensure\(match\[1\], match\[2\] \|\| match\[3\] \|\| match\[4\] \|\| ""\)/);
+  assert.doesNotMatch(workspaceSource, /function MermaidPreview/);
 });
 
 test("Table 展示允许换行并使用固定列布局", () => {
@@ -70,4 +80,20 @@ test("Markdown 放大后切换为居中限宽的阅读模式", () => {
   assert.match(workspaceSource, /<article className="af-markdown-reading-surface">/);
   assert.match(css, /\.af-markdown-reading-surface\s*\{[\s\S]*?width: min\(100%, 72rem\);[\s\S]*?margin: 0 auto;/);
   assert.match(css, /\.af-display-preview-content--reading \.af-visible-scroll-frame__scroller\.af-work-display-body--markdown\s*\{[\s\S]*?line-height: 1\.78;/);
+});
+
+test("Mermaid 放大后支持拖动画布、拖动节点、滚轮缩放和视图复位", () => {
+  assert.match(workspaceSource, /interactiveMermaid=\{kind === "mermaid"\}/);
+  assert.match(workspaceSource, /<MermaidDisplayBlock code=\{content\} interactive \/>/);
+  assert.match(rendererSource, /function MermaidInteractiveViewport/);
+  assert.match(rendererSource, /onPointerMove=/);
+  assert.match(rendererSource, /onWheel=/);
+  assert.match(rendererSource, /fitDiagram/);
+  assert.match(rendererSource, /function MermaidFlowchartPreview\(\{ code, interactive = false \}\)/);
+  assert.match(rendererSource, /const \[positionOverrides, setPositionOverrides\] = useState\(\{\}\)/);
+  assert.match(rendererSource, /af-md-mermaid-node--draggable/);
+  assert.match(rendererSource, /setPointerCapture/);
+  assert.match(rendererSource, /MermaidFlowchartPreview code=\{text\} interactive=\{interactive\}/);
+  assert.match(css, /\.af-mermaid-interactive\s*\{[\s\S]*?cursor: grab;[\s\S]*?touch-action: none;/);
+  assert.match(css, /\.af-md-mermaid-node--draggable\s*\{[\s\S]*?cursor: grab;/);
 });
