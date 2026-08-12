@@ -5,7 +5,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
 import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { useRoute } from "../routeContext.jsx";
 import LoadingState from "../components/LoadingState.jsx";
@@ -278,7 +278,7 @@ function DisplayNode({ node, shareId, style, bare = false }) {
   const bodyClassName = `af-public-display-node__body--${node.kind || "unknown"}`;
   return (
     <section
-      className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}${bare ? " af-public-display-node--bare" : ""}`}
+      className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}${node.hasConnections ? " af-public-display-node--connected" : ""}${bare ? " af-public-display-node--bare" : ""}`}
       style={style}
     >
       {bare ? null : (
@@ -305,7 +305,8 @@ function DisplayNode({ node, shareId, style, bare = false }) {
             ) : null}
             {node.kind === "chart" ? <ChartDisplayContent content={content} /> : null}
             {node.kind === "table" ? <TableDisplayContent content={content} /> : null}
-            {node.kind === "mermaid" || node.kind === "ascii" ? <pre>{content}</pre> : null}
+            {node.kind === "mermaid" ? <MermaidDisplayBlock code={content} /> : null}
+            {node.kind === "ascii" ? <pre>{content}</pre> : null}
           </>
         ) : (
           <div className="af-public-display-empty">No display content</div>
@@ -319,7 +320,18 @@ function PublicDisplayFlowNode({ data }) {
   return <DisplayNode node={data?.node} shareId={data?.shareId} />;
 }
 
-const publicDisplayNodeTypes = { publicDisplay: PublicDisplayFlowNode };
+function PublicDisplayGroupNode({ data }) {
+  return (
+    <section className="af-public-display-group" aria-label={data?.group?.title || "Group"}>
+      <strong>{data?.group?.title || "Group"}</strong>
+    </section>
+  );
+}
+
+const publicDisplayNodeTypes = {
+  publicDisplay: PublicDisplayFlowNode,
+  publicDisplayGroup: PublicDisplayGroupNode,
+};
 
 function displayShareIdFromPath(path) {
   const parts = String(path || "").split("/").filter(Boolean);
@@ -330,13 +342,13 @@ function displayShareIdFromPath(path) {
 export default function DisplayPage() {
   const { path } = useRoute();
   const shareId = useMemo(() => displayShareIdFromPath(path), [path]);
-  const [state, setState] = useState({ loading: true, error: "", share: null, nodes: [] });
+  const [state, setState] = useState({ loading: true, error: "", share: null, nodes: [], groups: [] });
 
   useEffect(() => {
     let disposed = false;
     async function load() {
       if (!shareId) {
-        setState({ loading: false, error: "Missing display share id", share: null, nodes: [] });
+        setState({ loading: false, error: "Missing display share id", share: null, nodes: [], groups: [] });
         return;
       }
       setState((prev) => ({ ...prev, loading: true, error: "" }));
@@ -344,9 +356,15 @@ export default function DisplayPage() {
         const res = await fetch(`/api/display/share?id=${encodeURIComponent(shareId)}`);
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.error || "展示页不存在");
-        if (!disposed) setState({ loading: false, error: "", share: json.share || null, nodes: Array.isArray(json.nodes) ? json.nodes : [] });
+        if (!disposed) setState({
+          loading: false,
+          error: "",
+          share: json.share || null,
+          nodes: Array.isArray(json.nodes) ? json.nodes : [],
+          groups: Array.isArray(json.groups) ? json.groups : [],
+        });
       } catch (err) {
-        if (!disposed) setState({ loading: false, error: String(err?.message || err), share: null, nodes: [] });
+        if (!disposed) setState({ loading: false, error: String(err?.message || err), share: null, nodes: [], groups: [] });
       }
     }
     load();
@@ -357,7 +375,20 @@ export default function DisplayPage() {
 
   const flowNodes = useMemo(() => {
     const nodes = Array.isArray(state.nodes) ? state.nodes : [];
-    return nodes.map((node, index) => {
+    const groups = (Array.isArray(state.groups) ? state.groups : []).map((group) => ({
+      id: `group:${group.id}`,
+      type: "publicDisplayGroup",
+      position: group.position || { x: 0, y: 0 },
+      data: { group },
+      selectable: false,
+      draggable: false,
+      zIndex: 0,
+      style: {
+        width: Math.max(240, Number(group.size?.width) || 240),
+        height: Math.max(160, Number(group.size?.height) || 160),
+      },
+    }));
+    const displayNodes = nodes.map((node, index) => {
       const pos = node.position && typeof node.position.x === "number" && typeof node.position.y === "number"
         ? node.position
         : { x: 120 + index * 40, y: 100 + index * 32 };
@@ -377,7 +408,8 @@ export default function DisplayPage() {
         },
       };
     });
-  }, [shareId, state.nodes]);
+    return [...groups, ...displayNodes];
+  }, [shareId, state.groups, state.nodes]);
   const fixedViewport = useMemo(() => {
     const viewport = state.share?.viewport;
     if (!viewport || typeof viewport !== "object") return null;

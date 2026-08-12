@@ -33,7 +33,6 @@ export const WORKSPACE_UNSUPPORTED_NODE_IDS = new Set([
   "tool_get_env",
   // 其它
   "tool_print",
-  "tool_jenkins_build",
 ]);
 
 /** 节点面板与目录需要隐藏的全部 definitionId */

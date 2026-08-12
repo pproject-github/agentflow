@@ -59,6 +59,26 @@ export function parseFlowSource(source, opts = {}) {
     unresolved.push({ line: node?.loc?.start?.line || 0, message });
   };
 
+  // codegen 在节点 id 与 DSL API 名冲突时会生成
+  // `import { display as displayApi } from "agentflow/flow"`。静态解析时先把 local 名还原成
+  // canonical API 名，后面的节点类型、flow 控制语句和 file() 才仍走同一套规则。
+  const flowApiOf = new Map();
+  for (const stmt of ast.body) {
+    if (stmt.type !== "ImportDeclaration" || String(stmt.source.value) !== "agentflow/flow") continue;
+    for (const specifier of stmt.specifiers || []) {
+      if (specifier.type !== "ImportSpecifier") continue;
+      const imported = specifier.imported?.name ?? specifier.imported?.value;
+      const local = specifier.local?.name;
+      if (imported && local) flowApiOf.set(local, String(imported));
+    }
+  }
+  const apiCalleePath = (node) => {
+    const raw = calleePath(node);
+    if (!raw) return raw;
+    const [root, ...tail] = raw.split(".");
+    return [flowApiOf.get(root) || root, ...tail].join(".");
+  };
+
   function stringOf(node) {
     if (!node) return null;
     if (node.type === "Literal" && typeof node.value === "string") return node.value;
@@ -72,7 +92,7 @@ export function parseFlowSource(source, opts = {}) {
       return String(node.operator === "-" ? -node.argument.value : node.argument.value);
     }
     if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
-    if (node.type === "CallExpression" && calleePath(node.callee) === "file") {
+    if (node.type === "CallExpression" && apiCalleePath(node.callee) === "file") {
       const rel = stringOf(node.arguments[0]);
       if (rel == null) return null;
       if (!(rel in files)) throw new Error(`file(${JSON.stringify(rel)}) 找不到对应文件`);
@@ -229,7 +249,7 @@ export function parseFlowSource(source, opts = {}) {
     const out = [];
     for (const arg of call.arguments) {
       if (arg.type === "Identifier") out.push(arg.name);
-      else if (arg.type === "CallExpression" && calleePath(arg.callee) === "flow.fork") {
+      else if (arg.type === "CallExpression" && apiCalleePath(arg.callee) === "flow.fork") {
         out.push({ fork: arg.arguments.map(itemsOf) });
       } else {
         unresolvedAt(arg, "控制流参数只能是节点变量名或 flow.fork(...)");
@@ -277,7 +297,7 @@ export function parseFlowSource(source, opts = {}) {
         unresolvedAt(d, `${id}: 节点声明右边必须是一次节点调用`);
         continue;
       }
-      const path = calleePath(init.callee);
+      const path = apiCalleePath(init.callee);
       const args = [...init.arguments];
 
       const first = args[0];
@@ -384,7 +404,7 @@ export function parseFlowSource(source, opts = {}) {
     }
 
     if (decl?.type === "ExpressionStatement" && decl.expression.type === "CallExpression") {
-      const path = calleePath(decl.expression.callee);
+      const path = apiCalleePath(decl.expression.callee);
       if (path === "flow.resume") {
         const [a, b] = decl.expression.arguments.map((x) => x.name);
         if (a && b) edges.push(`${a}|next|${b}|prev`);

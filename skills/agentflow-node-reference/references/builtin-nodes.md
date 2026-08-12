@@ -128,6 +128,14 @@
 - Inputs: 0. `prev`:node; 1. `repoPath`:file; 2. `gitContext`:text; 3. `workspaceContext`:text; 4. `sourceBranch`:text; 5. `targetBranch`:text; 6. `title`:text; 7. `description`:text; 8. `draft`:bool = false; 9. `labels`:text; 10. `push`:bool = true; 11. `remote`:text = origin; 12. `tokenEnv`:text; 13. `gitlabApiBase`:text; 14. `removeSourceBranch`:bool = false; 15. `squash`:bool = false
 - Outputs: 0. `next`:node; 1. `mrUrl`:text; 2. `created`:bool; 3. `mrIid`:text; 4. `projectId`:text; 5. `sourceBranch`:text; 6. `targetBranch`:text; 7. `title`:text; 8. `message`:text
 
+### tool_jenkins_build
+
+- Display: Jenkins Build
+- Description: Trigger one Jenkins job and durably monitor it until completion. The node persists queue/build checkpoints and uses server-side deferred polling at `pollInterval`: the Workspace request returns in a waiting state instead of keeping an HTTP request or worker asleep. The AgentFlow server registry wakes the flow again and continues downstream after completion. An existing queueId/buildNumber is reused after a run or AgentFlow server interruption, so a resumed run does not trigger the job again. Jenkins FAILURE/ABORTED/TIMEOUT are business outcomes and continue to downstream notification nodes. Authentication, configuration, and repeated platform request errors fail the AgentFlow node. Credentials are read from environment configuration. `credentialRef: team-ci` selects `JENKINS_TEAM_CI_BASE_URL`, `JENKINS_TEAM_CI_USERNAME`, and `JENKINS_TEAM_CI_TOKEN`, falling back to the standard `JENKINS_BASE_URL`, `JENKINS_USERNAME`, and `JENKINS_TOKEN` variables.
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `job`:text; 2. `parameters`:text = {}; 3. `credentialRef`:text; 4. `pollInterval`:text = 30s; 5. `timeout`:text = 2h
+- Outputs: 0. `next`:node; 1. `status`:text; 2. `url`:text; 3. `qrUrl`:text
+
 ### tool_nodejs
 
 - Display: NodeJs

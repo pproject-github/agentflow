@@ -1,12 +1,13 @@
 ---
 # Built-in node: durable Jenkins build
-runtime: none
-palette: hidden
+runtime: native
 description: |
   Trigger one Jenkins job and durably monitor it until completion.
 
-  The node persists queue/build checkpoints and never keeps a process blocked while waiting.
-  Scheduler re-enters the same node at `pollInterval`; an existing queueId/buildNumber is reused,
+  The node persists queue/build checkpoints and uses server-side deferred polling at `pollInterval`:
+  the Workspace request returns in a waiting state instead of keeping an HTTP request or worker asleep.
+  The AgentFlow server registry wakes the flow again and continues downstream after completion.
+  An existing queueId/buildNumber is reused after a run or AgentFlow server interruption,
   so a resumed run does not trigger the job again. Jenkins FAILURE/ABORTED/TIMEOUT are business
   outcomes and continue to downstream notification nodes. Authentication, configuration, and
   repeated platform request errors fail the AgentFlow node.

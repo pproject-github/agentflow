@@ -58,6 +58,51 @@ test("definitionId 与 DSL 调用名是双射", () => {
   }
 });
 
+test("节点 id 与 DSL API 保留名冲突时给 import 起别名，实例 id 保持不变", () => {
+  const long = "冲突名流程仍要代码化。".repeat(400);
+  const provided = (value) => ({
+    definitionId: "provide_str",
+    input: [],
+    output: [{ type: "text", name: "value", value }],
+  });
+  const graph = {
+    version: 1,
+    instances: {
+      flow: {
+        definitionId: "workspace_run",
+        label: "Run",
+        input: [{ type: "node", name: "prev" }],
+        output: [{ type: "node", name: "next" }],
+      },
+      display: {
+        definitionId: "display_markdown",
+        label: "展示",
+        body: long,
+        input: [{ type: "node", name: "prev" }, { type: "text", name: "content", value: long }],
+        output: [{ type: "text", name: "content" }, { type: "node", name: "next" }],
+      },
+      agent: provided("agent"),
+      control: provided("control"),
+      file: provided("file"),
+      provide: provided("provide"),
+      tool: provided("tool"),
+      workspace: provided("workspace"),
+    },
+    edges: [{ source: "flow", target: "display", sourceHandle: "output-0", targetHandle: "input-0" }],
+    ui: { nodePositions: {} },
+  };
+
+  const { out, back } = assertGraphRoundTrip(graph, "DSL API 保留名");
+  for (const name of ["agent", "control", "display", "file", "flow", "provide", "tool", "workspace"]) {
+    assert.match(out.source, new RegExp(`\\b${name} as ${name}Api\\b`), `${name} import 没有避让同名节点`);
+  }
+  assert.match(out.source, /const display = displayApi\.markdown/);
+  assert.match(out.source, /export const flow = flowApi\("Run", display\)/);
+  assert.match(out.source, /fileApi\("docs\/display\.content\.md"\)/);
+  assert.equal(back.instances.display.body, long);
+  assert.equal(back.instances.display.input.find((slot) => slot.name === "content")?.value, long);
+});
+
 test("线性流程往返：节点、边、幂等", () => {
   const graph = {
     version: 1,

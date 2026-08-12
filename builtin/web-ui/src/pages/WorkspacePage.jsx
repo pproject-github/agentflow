@@ -123,6 +123,7 @@ const WORKSPACE_GROUP_PADDING = 52;
 const MIN_WORKSPACE_GROUP_WIDTH = 240;
 const MIN_WORKSPACE_GROUP_HEIGHT = 160;
 const DISPLAY_REF_PREFIX = "display-ref:";
+const DISPLAY_GROUP_REF_PREFIX = "display-group-ref:";
 const DEFAULT_WORKSPACE_SCHEDULE_CRON = "0 9 * * *";
 const DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE = "Asia/Shanghai";
 
@@ -2021,6 +2022,9 @@ function normalizeWorkspaceGroups(raw) {
         id,
         title: String(group?.title || workspaceGroupTitle(index)).trim() || workspaceGroupTitle(index),
         color: String(group?.color || "purple").trim() || "purple",
+        nodeIds: Array.from(new Set((Array.isArray(group?.nodeIds) ? group.nodeIds : [])
+          .map((nodeId) => String(nodeId || "").trim())
+          .filter(Boolean))),
         x,
         y,
         width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
@@ -2028,6 +2032,21 @@ function normalizeWorkspaceGroups(raw) {
       };
     })
     .filter(Boolean);
+}
+
+function inferredWorkspaceGroupNodeIds(group, graph) {
+  if (Array.isArray(group?.nodeIds) && group.nodeIds.length > 0) return group.nodeIds;
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object" ? graph.ui.nodePositions : {};
+  const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
+  return Object.keys(instances).filter((nodeId) => {
+    const position = positions[nodeId];
+    if (!position || !Number.isFinite(Number(position.x)) || !Number.isFinite(Number(position.y))) return false;
+    const size = sizes[nodeId] || {};
+    const centerX = Number(position.x) + Math.max(1, Number(size.width) || DEFAULT_WORKSPACE_NODE_WIDTH) / 2;
+    const centerY = Number(position.y) + Math.max(1, Number(size.height) || MIN_WORKSPACE_NODE_HEIGHT) / 2;
+    return centerX >= group.x && centerX <= group.x + group.width && centerY >= group.y && centerY <= group.y + group.height;
+  });
 }
 
 function workspaceGroupNodesFromGraph(graph) {
@@ -2047,6 +2066,7 @@ function workspaceGroupNodesFromGraph(graph) {
       label: group.title,
       title: group.title,
       color: group.color,
+      nodeIds: inferredWorkspaceGroupNodeIds(group, graph),
       nodeSize: { width: group.width, height: group.height },
     },
   }));
@@ -2060,6 +2080,36 @@ function normalizeWorkspaceGroupSize(size) {
     width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
     height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height)),
   };
+}
+
+function expandWorkspaceGroupPositionChanges(changes, currentNodes) {
+  const list = Array.isArray(changes) ? changes : [];
+  const nodesById = new Map((Array.isArray(currentNodes) ? currentNodes : []).map((node) => [node.id, node]));
+  const explicitlyChanged = new Set(list.map((change) => String(change?.id || "")).filter(Boolean));
+  const expanded = [...list];
+  for (const change of list) {
+    if (change?.type !== "position" || !change.position) continue;
+    const groupNode = nodesById.get(change.id);
+    if (!isWorkspaceGroupNode(groupNode)) continue;
+    const dx = Number(change.position.x) - Number(groupNode.position?.x || 0);
+    const dy = Number(change.position.y) - Number(groupNode.position?.y || 0);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) continue;
+    for (const memberId of Array.isArray(groupNode.data?.nodeIds) ? groupNode.data.nodeIds : []) {
+      if (explicitlyChanged.has(memberId)) continue;
+      const member = nodesById.get(memberId);
+      if (!member || isWorkspaceGroupNode(member)) continue;
+      expanded.push({
+        type: "position",
+        id: memberId,
+        position: {
+          x: Number(member.position?.x || 0) + dx,
+          y: Number(member.position?.y || 0) + dy,
+        },
+        dragging: change.dragging,
+      });
+    }
+  }
+  return expanded;
 }
 
 function cloneSlots(slots) {
@@ -2114,9 +2164,11 @@ function workspaceNodeLayoutSignature(node) {
 function workspaceHydratedNodeRuntimeEqual(a, b) {
   if (!a || !b) return false;
   return a.selected === b.selected &&
+    a.hasConnections === b.hasConnections &&
     a.isExecuting === b.isExecuting &&
     a.nodeStatus === b.nodeStatus &&
     a.nodeElapsed === b.nodeElapsed &&
+    a.nodeRunDetail === b.nodeRunDetail &&
     a.optimizingRun === b.optimizingRun &&
     a.scheduledRunState === b.scheduledRunState &&
     a.nodeChatActive === b.nodeChatActive &&
@@ -2208,6 +2260,39 @@ function displayRefNodeId(sourceId) {
 function sourceIdFromDisplayRefId(nodeId) {
   const text = String(nodeId || "");
   return text.startsWith(DISPLAY_REF_PREFIX) ? text.slice(DISPLAY_REF_PREFIX.length) : text;
+}
+
+function displayGroupRefNodeId(groupId) {
+  return `${DISPLAY_GROUP_REF_PREFIX}${groupId}`;
+}
+
+function displayGroupBounds(group, displayPage, sourceNodeById) {
+  const memberIds = (Array.isArray(group?.nodeIds) ? group.nodeIds : [])
+    .filter((id) => displayPage.nodeIds.includes(id) && sourceNodeById.has(id));
+  if (memberIds.length === 0) return null;
+  const bounds = memberIds.reduce((acc, id) => {
+    const sourceNode = sourceNodeById.get(id);
+    const fallbackSize = persistedWorkspaceNodeSize(sourceNode) || { width: 520, height: 320 };
+    const size = normalizeWorkspaceNodeSize(displayPage.nodeSizes[id] || fallbackSize, { display: true }) || fallbackSize;
+    const position = displayPage.nodePositions[id] || sourceNode?.position || { x: 0, y: 0 };
+    return {
+      minX: Math.min(acc.minX, Number(position.x) || 0),
+      minY: Math.min(acc.minY, Number(position.y) || 0),
+      maxX: Math.max(acc.maxX, (Number(position.x) || 0) + size.width),
+      maxY: Math.max(acc.maxY, (Number(position.y) || 0) + size.height),
+    };
+  }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  return {
+    memberIds,
+    position: {
+      x: bounds.minX - WORKSPACE_GROUP_PADDING,
+      y: bounds.minY - WORKSPACE_GROUP_PADDING,
+    },
+    size: {
+      width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, bounds.maxX - bounds.minX + WORKSPACE_GROUP_PADDING * 2),
+      height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, bounds.maxY - bounds.minY + WORKSPACE_GROUP_PADDING * 2),
+    },
+  };
 }
 
 function normalizeCanvasViewport(raw) {
@@ -2449,6 +2534,9 @@ function flowToGraph(nodes, edges, instances) {
       id: node.id,
       title: String(node.data?.title || node.data?.label || "Group"),
       color: String(node.data?.color || "purple"),
+      nodeIds: Array.from(new Set((Array.isArray(node.data?.nodeIds) ? node.data.nodeIds : [])
+        .map((nodeId) => String(nodeId || "").trim())
+        .filter((nodeId) => regularNodes.some((regularNode) => regularNode.id === nodeId)))),
       x: Number(node.position?.x || 0),
       y: Number(node.position?.y || 0),
       width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width || MIN_WORKSPACE_GROUP_WIDTH)),
@@ -3195,7 +3283,10 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     return (
       <VisibleScrollFrame className="af-work-display-body">
         <MermaidPreview code={content} />
-        <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
+        <details className="af-work-display-mermaid-source">
+          <summary>查看 Mermaid 源码</summary>
+          <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
+        </details>
       </VisibleScrollFrame>
     );
   }
@@ -3962,6 +4053,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height })
       className={
         "af-work-display-card" +
         (displaySize ? " af-work-display-card--sized" : "") +
+        (data?.hasConnections ? " af-work-display-card--connected" : "") +
         (selected ? " af-work-display-card--selected" : "") +
         (resizingDisplay ? " af-work-display-card--resizing" : "") +
         (imageDragActive ? " af-work-display-card--image-drop" : "") +
@@ -5266,7 +5358,11 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
   }, [id, setNodes]);
   return (
     <div
-      className={"af-work-group-node" + (selected ? " af-work-group-node--selected" : "")}
+      className={
+        "af-work-group-node" +
+        (selected ? " af-work-group-node--selected" : "") +
+        (data?.displayPageMode ? " af-work-group-node--presentation" : "")
+      }
       style={{ width: size.width, height: size.height }}
       onPointerDownCapture={onSelectGroupPointerDown}
     >
@@ -5282,19 +5378,20 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
       ) : null}
       <div className="af-work-group-node__title nodrag">
         <span>{data?.title || data?.label || "Group"}</span>
-        <button
-          type="button"
-          className="af-work-group-node__delete"
-          disabled={readOnly}
-          onClick={(event) => {
-            event.stopPropagation();
-            deleteNode?.(id);
-          }}
-          aria-label="删除分组"
-          title="删除分组"
-        >
-          <span className="material-symbols-outlined">close</span>
-        </button>
+        {!readOnly ? (
+          <button
+            type="button"
+            className="af-work-group-node__delete"
+            onClick={(event) => {
+              event.stopPropagation();
+              deleteNode?.(id);
+            }}
+            aria-label="删除分组"
+            title="删除分组"
+          >
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -9592,7 +9689,7 @@ function WorkspacePageInner() {
         const next = { ...current };
         for (const id of affectedIds) {
           if (!id) continue;
-          if (!next[id] || next[id]?.status === "running") next[id] = { status: "stopped" };
+          if (!next[id] || ["running", "waiting"].includes(next[id]?.status)) next[id] = { ...next[id], status: "stopped" };
         }
         return next;
       });
@@ -9642,7 +9739,24 @@ function WorkspacePageInner() {
       const res = await fetch(`/api/workspace/run/status?${q.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) return;
-      if (!json.running) return;
+      if (!json.running) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          for (const [sessionId, session] of Object.entries(next)) {
+            if (["running", "stopping", "waiting", "polling"].includes(String(session?.status || ""))) delete next[sessionId];
+          }
+          return next;
+        });
+        setWorkspaceExecutingNodes(new Set());
+        setWorkspaceNodeRunStatus((current) => {
+          const next = { ...current };
+          for (const [nodeId, state] of Object.entries(next)) {
+            if (["running", "waiting"].includes(String(state?.status || ""))) delete next[nodeId];
+          }
+          return next;
+        });
+        return;
+      }
       const runs = Array.isArray(json.runs) && json.runs.length
         ? json.runs
         : [{ runId: `run-restored-${json.startedAt || Date.now()}`, runNodeId: json.runNodeId || "", startedAt: json.startedAt || Date.now(), plannedNodeIds: [] }];
@@ -9657,11 +9771,14 @@ function WorkspacePageInner() {
           id: sessionId,
           runNodeId,
           label: alias,
-          status: item?.state === "stopping" ? "stopping" : "running",
+          status: ["waiting", "polling"].includes(String(item?.state || "")) ? "waiting" : item?.state === "stopping" ? "stopping" : "running",
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
+          waitingNodeId: String(item?.waitingNodeId || ""),
           startedAt: item?.startedAt || Date.now(),
         };
         if (runNodeId) restoredNodeIds.push(runNodeId);
+        const waitingNodeId = String(item?.waitingNodeId || "").trim();
+        if (waitingNodeId) restoredNodeIds.push(waitingNodeId);
       }
       if (!Object.keys(restoredSessions).length) return;
       setRunningRunSessionsSynced((current) => ({ ...current, ...restoredSessions }));
@@ -9672,7 +9789,25 @@ function WorkspacePageInner() {
       });
       setWorkspaceNodeRunStatus((current) => {
         const next = { ...current };
-        for (const runNodeId of restoredNodeIds) next[runNodeId] = { status: "running" };
+        for (const item of runs) {
+          const runNodeId = String(item?.runNodeId || "").trim();
+          const waitingNodeId = String(item?.waitingNodeId || "").trim();
+          if (runNodeId) next[runNodeId] = { status: ["waiting", "polling"].includes(String(item?.state || "")) ? "waiting" : "running" };
+          if (waitingNodeId) {
+            next[waitingNodeId] = {
+              status: "waiting",
+              detail: {
+                phase: String(item?.phase || ""),
+                jenkinsStatus: String(item?.jenkinsStatus || ""),
+                message: String(item?.message || ""),
+                buildNumber: String(item?.buildNumber || ""),
+                url: String(item?.url || ""),
+                qrUrl: String(item?.qrUrl || ""),
+                wakeAt: String(item?.wakeAt || ""),
+              },
+            };
+          }
+        }
         return next;
       });
       setStatus(restoredNodeIds.length ? `Workspace run still running: ${restoredNodeIds.join(", ")}` : "Workspace run still running");
@@ -9846,11 +9981,12 @@ function WorkspacePageInner() {
         const next = { ...current };
         for (const id of affectedIds) {
           if (!id) continue;
-          if (!next[id] || next[id]?.status === "running") next[id] = { status: finalStatus };
+          if (!next[id] || ["running", "waiting"].includes(next[id]?.status)) next[id] = { ...next[id], status: finalStatus };
         }
         return next;
       });
     };
+    let finalDeferred = null;
     try {
       await saveGraph(runNodes, runEdges);
       const effectiveModel = workspaceRunNodeModel(runNodes, runInstances, runNodeId, composerModel);
@@ -10068,7 +10204,7 @@ function WorkspacePageInner() {
         [id]: { status: "running" },
       }));
     };
-      const markNodeDone = (nodeId) => {
+      const markNodeDone = (nodeId, event = null) => {
         const id = String(nodeId || "").trim();
         if (!id) return;
         setWorkspaceExecutingNodes((current) => {
@@ -10076,7 +10212,37 @@ function WorkspacePageInner() {
           next.delete(id);
           return next;
         });
-        setWorkspaceNodeRunStatus((current) => ({ ...current, [id]: { status: "success" } }));
+        const jenkinsStatus = String(event?.jenkinsStatus || "").trim().toUpperCase();
+        const status = jenkinsStatus && jenkinsStatus !== "SUCCESS" ? "outcome_failed" : "success";
+        setWorkspaceNodeRunStatus((current) => ({
+          ...current,
+          [id]: {
+            ...current[id],
+            status,
+            ...(jenkinsStatus ? { detail: { ...(current[id]?.detail || {}), jenkinsStatus } } : {}),
+          },
+        }));
+      };
+      const updateNodeRunDetail = (event) => {
+        const id = String(event?.nodeId || "").trim();
+        if (!id || (!event?.phase && !event?.jenkinsStatus)) return;
+        const detail = {
+          phase: String(event.phase || ""),
+          jenkinsStatus: String(event.jenkinsStatus || ""),
+          message: String(event.line || event.message || ""),
+          buildNumber: String(event.buildNumber || ""),
+          url: String(event.url || ""),
+          qrUrl: String(event.qrUrl || ""),
+          wakeAt: String(event.wakeAt || ""),
+        };
+        setWorkspaceNodeRunStatus((current) => ({
+          ...current,
+          [id]: {
+            ...current[id],
+            status: detail.phase === "complete" ? (current[id]?.status || "running") : "waiting",
+            detail,
+          },
+        }));
       };
       const appendNaturalText = (kind, text) => {
         const chunk = String(text || "");
@@ -10226,7 +10392,9 @@ function WorkspacePageInner() {
       };
       const markRunSessionStatus = (sessionStatus) => {
         setComposerRunSessions((list) => list.map((session) => (
-          session.id === runSessionId ? { ...session, status: sessionStatus, endedAt: Date.now() } : session
+          session.id === runSessionId
+            ? { ...session, status: sessionStatus, ...(sessionStatus === "waiting" ? {} : { endedAt: Date.now() }) }
+            : session
         )));
       };
       const eventTouchedNodeIds = (event) => {
@@ -10334,11 +10502,16 @@ function WorkspacePageInner() {
           if (event.type === "node-done") {
             const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
             if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
-            markNodeDone(event.nodeId);
+            markNodeDone(event.nodeId, event);
             updateRunStep(event.nodeId, event.definitionId, "done");
           }
           if (event.type === "status") {
+            updateNodeRunDetail(event);
             updateRunActivity(event.line || event.message || "", event);
+          }
+          if (event.type === "node-waiting") {
+            updateNodeRunDetail(event);
+            updateRunStep(event.nodeId, event.definitionId, "waiting");
           }
           if (event.type === "paused") {
             finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
@@ -10373,6 +10546,26 @@ function WorkspacePageInner() {
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
             updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
           }
+          if (event.type === "waiting") {
+            finalDeferred = event;
+            if (event.revision) workspaceRevisionRef.current = String(event.revision);
+            if (event.graph) {
+              workspaceBaseGraphRef.current = event.graph;
+              const touchedIds = eventTouchedNodeIds(event);
+              applyGraph(event.graph, touchedIds);
+            }
+            updateNodeRunDetail({
+              nodeId: event.nodeId,
+              phase: event.phase,
+              jenkinsStatus: event.jenkinsStatus,
+              line: event.message,
+              buildNumber: event.buildNumber,
+              url: event.url,
+              qrUrl: event.qrUrl,
+              wakeAt: event.wakeAt,
+            });
+            updateRunActivity("已转入后台等待 Jenkins", event);
+          }
         }
       }
       if (buffer.trim()) {
@@ -10390,11 +10583,16 @@ function WorkspacePageInner() {
         if (event.type === "node-done") {
           const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
           if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
-          markNodeDone(event.nodeId);
+          markNodeDone(event.nodeId, event);
           updateRunStep(event.nodeId, event.definitionId, "done");
         }
         if (event.type === "status") {
+          updateNodeRunDetail(event);
           updateRunActivity(event.line || event.message || "", event);
+        }
+        if (event.type === "node-waiting") {
+          updateNodeRunDetail(event);
+          updateRunStep(event.nodeId, event.definitionId, "waiting");
         }
         if (event.type === "paused") {
           finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
@@ -10429,6 +10627,26 @@ function WorkspacePageInner() {
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
           updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
         }
+        if (event.type === "waiting") {
+          finalDeferred = event;
+          if (event.revision) workspaceRevisionRef.current = String(event.revision);
+          if (event.graph) {
+            workspaceBaseGraphRef.current = event.graph;
+            const touchedIds = eventTouchedNodeIds(event);
+            applyGraph(event.graph, touchedIds);
+          }
+          updateNodeRunDetail({
+            nodeId: event.nodeId,
+            phase: event.phase,
+            jenkinsStatus: event.jenkinsStatus,
+            line: event.message,
+            buildNumber: event.buildNumber,
+            url: event.url,
+            qrUrl: event.qrUrl,
+            wakeAt: event.wakeAt,
+          });
+          updateRunActivity("已转入后台等待 Jenkins", event);
+        }
       }
       if (isRunStopped()) {
         removeSessionExecutingNodes(plannedNodeIds);
@@ -10436,15 +10654,32 @@ function WorkspacePageInner() {
       }
       const finalStatusMessage = isRunStopped()
         ? `Workspace run stopped: ${runNodeId}`
+        : finalDeferred
+        ? `Workspace run waiting in background: ${finalDeferred.message || finalDeferred.nodeId || runNodeId}`
         : finalPauseNodeIds.length
         ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
         : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`;
       setStatus(finalStatusMessage);
-      if (!isRunStopped()) {
+      if (!isRunStopped() && !finalDeferred) {
         markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "paused" : "success");
       }
-      markRunSessionStatus(isRunStopped() ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
-      if (!isRunStopped()) {
+      markRunSessionStatus(isRunStopped() ? "stopped" : finalDeferred ? "waiting" : finalPauseNodeIds.length ? "paused" : "done");
+      if (finalDeferred) {
+        setRunningRunSessionsSynced((current) => ({
+          ...current,
+          [runSessionId]: {
+            ...(current[runSessionId] || {}),
+            id: runSessionId,
+            runNodeId,
+            label: runAlias,
+            status: "waiting",
+            plannedNodeIds,
+            waitingNodeId: finalDeferred.nodeId || "",
+            startedAt: current[runSessionId]?.startedAt || Date.now(),
+          },
+        }));
+      }
+      if (!isRunStopped() && !finalDeferred) {
         try {
           await saveGraph(nodesRef.current, edgesRef.current);
           setStatus(finalStatusMessage);
@@ -10481,13 +10716,15 @@ function WorkspacePageInner() {
       )));
     } finally {
       if (workspaceRunAbortRefs.current.get(runSessionId) === abortController) workspaceRunAbortRefs.current.delete(runSessionId);
-      setRunningRunSessionsSynced((current) => {
-        const next = { ...current };
-        delete next[runSessionId];
-        return next;
-      });
+      if (!finalDeferred) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          delete next[runSessionId];
+          return next;
+        });
+      }
       workspaceRunStoppedRef.current.delete(runSessionId);
-      removeSessionExecutingNodes(plannedNodeIds);
+      if (!finalDeferred) removeSessionExecutingNodes(plannedNodeIds);
     }
   }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, saveGraph, selectedSkills, setEdges, setNodes, setRunningRunSessionsSynced, updateNodeInternals, workspaceWritable]);
 
@@ -11645,6 +11882,15 @@ function WorkspacePageInner() {
     onSuppressWorkspaceSelectionAutosave: suppressWorkspaceSelectionAutosave,
   }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, suppressWorkspaceSelectionAutosave, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
 
+  const connectedWorkspaceNodeIds = useMemo(() => {
+    const ids = new Set();
+    for (const edge of edges) {
+      if (edge?.source) ids.add(String(edge.source));
+      if (edge?.target) ids.add(String(edge.target));
+    }
+    return ids;
+  }, [edges]);
+
   const hydratedNodeCacheRef = useRef(new Map());
   const hydratedNodes = useMemo(() => {
     const cache = hydratedNodeCacheRef.current;
@@ -11652,9 +11898,11 @@ function WorkspacePageInner() {
     const nextNodes = nodes.map((node) => {
       const runtime = {
         selected: node.selected === true,
+        hasConnections: connectedWorkspaceNodeIds.has(node.id),
         isExecuting: workspaceExecutingNodes.has(node.id),
         nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
         nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
+        nodeRunDetail: workspaceNodeRunStatus[node.id]?.detail ?? null,
         optimizingRun: optimizingRunNodeId === node.id,
         scheduledRunState: scheduledRunState[node.id] || null,
         nodeChatActive: activeNodeChatId === node.id,
@@ -11694,7 +11942,7 @@ function WorkspacePageInner() {
       if (!seen.has(id)) cache.delete(id);
     }
     return nextNodes;
-  }, [activeNodeChatId, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  }, [activeNodeChatId, connectedWorkspaceNodeIds, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const isDisplayMode = workspaceMode === "display";
   const isWorkflowMode = workspaceMode === "workflow";
@@ -11724,6 +11972,37 @@ function WorkspacePageInner() {
     const selected = new Set(selectedDisplayNodeIds);
     const cache = displayCanvasNodeCacheRef.current;
     const seen = new Set();
+    const groupNodes = Array.from(displaySourceNodeById.values())
+      .filter(isWorkspaceGroupNode)
+      .map((sourceGroup) => {
+        const group = {
+          id: sourceGroup.id,
+          title: sourceGroup.data?.title || sourceGroup.data?.label || "Group",
+          color: sourceGroup.data?.color || "purple",
+          nodeIds: sourceGroup.data?.nodeIds || [],
+        };
+        const bounds = displayGroupBounds(group, displayPage, displaySourceNodeById);
+        if (!bounds) return null;
+        return {
+          ...sourceGroup,
+          id: displayGroupRefNodeId(sourceGroup.id),
+          position: bounds.position,
+          width: bounds.size.width,
+          height: bounds.size.height,
+          selected: false,
+          draggable: false,
+          selectable: false,
+          zIndex: 0,
+          data: {
+            ...sourceGroup.data,
+            nodeIds: bounds.memberIds,
+            nodeSize: bounds.size,
+            readOnly: true,
+            displayPageMode: true,
+          },
+        };
+      })
+      .filter(Boolean);
     const result = displayPage.nodeIds
       .map((sourceId, index) => {
         const sourceNode = displaySourceNodeById.get(sourceId);
@@ -11770,7 +12049,7 @@ function WorkspacePageInner() {
     for (const sourceId of cache.keys()) {
       if (!seen.has(sourceId)) cache.delete(sourceId);
     }
-    return result;
+    return [...groupNodes, ...result];
   }, [displayPage, displaySourceNodeById, isDisplayMode, selectedDisplayNodeIds]);
 
   const availableDisplayNodes = useMemo(
@@ -12085,7 +12364,9 @@ function WorkspacePageInner() {
   }
   const jumpPaletteNodes = useMemo(() => (
     isDisplayMode
-      ? displayCanvasNodes.map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
+      ? displayCanvasNodes
+        .filter((node) => !isWorkspaceGroupNode(node))
+        .map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
       : hydratedNodes
   ), [displayCanvasNodes, hydratedNodes, isDisplayMode]);
 
@@ -12321,6 +12602,7 @@ function WorkspacePageInner() {
         label: workspaceGroupTitle(index - 1),
         title: workspaceGroupTitle(index - 1),
         color: "purple",
+        nodeIds: selectedNodes.map((node) => node.id),
         nodeSize: size,
       },
     };
@@ -13269,11 +13551,17 @@ function WorkspacePageInner() {
   }, [flushTransientCanvasNodeChanges]);
 
   const handleNodesChange = useCallback((changes) => {
+    const expandedChanges = workspaceMode === "display"
+      ? changes
+      : expandWorkspaceGroupPositionChanges(
+          changes,
+          transientCanvasNodesRef.current.length > 0 ? transientCanvasNodesRef.current : canvasNodesRef.current,
+        );
     const {
       transient,
       committed,
       finishesInteraction,
-    } = partitionWorkspaceCanvasChanges(changes);
+    } = partitionWorkspaceCanvasChanges(expandedChanges);
     if (transient.length > 0) {
       setWorkspaceNodeInteractionUiActive(true);
       if (saveTimerRef.current) {
@@ -13298,7 +13586,7 @@ function WorkspacePageInner() {
       return;
     }
     if (committed.length > 0) applyCanvasNodeChanges(committed);
-  }, [applyCanvasNodeChanges, cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleTransientCanvasNodeChanges]);
+  }, [applyCanvasNodeChanges, cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleTransientCanvasNodeChanges, workspaceMode]);
 
   const settleWorkspaceCanvasInteraction = useCallback(() => {
     if (
@@ -14694,6 +14982,7 @@ function WorkspacePageInner() {
             isValidConnection={isDisplayMode ? undefined : isValidConnection}
             onNodeClick={(event, node) => {
               if (isDisplayMode) {
+                if (isWorkspaceGroupNode(node)) return;
                 setSelectedDisplayNodeIds([sourceIdFromDisplayRefId(node.id)]);
                 return;
               }

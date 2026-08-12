@@ -70,6 +70,25 @@ export function generateFlowSource(ir, opts = {}) {
     return rel;
   };
 
+  // 节点 id 就是顶层变量名，可能刚好叫 display / flow / file。节点 id 不能为了代码生成
+  // 偷偷改掉（那会变成另一张图），所以冲突时给 DSL API import 起别名：
+  // `import { display as displayApi } ...; const display = displayApi.markdown(...)`。
+  // 所有顶层标识符共用 taken；先给内置 API 占位，后面的输出解构和包 import 也会避开它们。
+  const taken = new Set(Object.keys(N));
+  const uniqueName = (base, fallback) => {
+    let name = isIdentifier(base) ? base : fallback;
+    if (taken.has(name)) name = fallback;
+    while (taken.has(name)) name += "_";
+    taken.add(name);
+    return name;
+  };
+  const flowApiRoots = ["agent", "control", "display", "file", "flow", "provide", "tool", "workspace"];
+  const flowApiBinding = new Map(flowApiRoots.map((root) => [root, uniqueName(root, `${root}Api`)]));
+  const apiCall = (name) => {
+    const [root, ...tail] = String(name || "").split(".");
+    return [flowApiBinding.get(root) || root, ...tail].join(".");
+  };
+
   // 同一个节点的 body 和某个引脚值可能都超阈值，文件名必须带槽名区分：都叫
   // `prompts/<id>.md` 的话两段不同的文本会写进同一个文件，往返时后写的覆盖先写的。
   const externalize = (id, slot, text) => {
@@ -83,7 +102,7 @@ export function generateFlowSource(ir, opts = {}) {
   };
   const textArg = (id, slot, text) => {
     const rel = externalize(id, slot, text);
-    return rel ? `file(${JSON.stringify(rel)})` : literal(text);
+    return rel ? `${apiCall("file")}(${JSON.stringify(rel)})` : literal(text);
   };
 
   const controlNext = new Map();
@@ -114,18 +133,6 @@ export function generateFlowSource(ir, opts = {}) {
     }),
   );
 
-  // 文件里所有顶层标识符共用一个命名空间：节点 id、解构出来的输出变量、import 绑定名。
-  // 分开发号就会撞——两个节点各有一个叫 ok 的自定义输出槽，是完全正常的图，但会生成两条
-  // `const { ok } = ...`，文件根本解析不回来。
-  const taken = new Set(Object.keys(N));
-  const uniqueName = (base, fallback) => {
-    let name = isIdentifier(base) ? base : fallback;
-    if (taken.has(name)) name = fallback;
-    while (taken.has(name)) name += "_";
-    taken.add(name);
-    return name;
-  };
-
   // 自定义输出槽通过解构暴露成变量：`const { storyId } = node;`
   const outVar = new Map();
   for (const [id, slots] of destructured) {
@@ -143,7 +150,7 @@ export function generateFlowSource(ir, opts = {}) {
     const shared = [...bindingOf.values()].find((v) => v.spec === pkg.specifier);
     bindingOf.set(id, shared || { name: uniqueName(base, `${base}Node`), spec: pkg.specifier });
   }
-  const callee = (id) => bindingOf.get(id)?.name || apiName(N[id].definitionId);
+  const callee = (id) => bindingOf.get(id)?.name || apiCall(apiName(N[id].definitionId));
 
   const bodyTextOf = (id) => String(
     (N[id].definitionId === "tool_nodejs" && N[id].script) ? N[id].script : (N[id].body || ""),
@@ -256,7 +263,7 @@ export function generateFlowSource(ir, opts = {}) {
   };
   const printItem = (item) => (
     Array.isArray(item)
-      ? `flow.fork(${item.map((s) => `flow(${s.map(printItem).join(", ")})`).join(", ")})`
+      ? `${apiCall("flow.fork")}(${item.map((s) => `${apiCall("flow")}(${s.map(printItem).join(", ")})`).join(", ")})`
       : item
   );
 
@@ -286,8 +293,8 @@ export function generateFlowSource(ir, opts = {}) {
     if (isIf(id)) {
       const thenIds = (controlNext.get(id) || []).filter((x) => x.slot === "next1").map((x) => x.to);
       const elseIds = (controlNext.get(id) || []).filter((x) => x.slot === "next2").map((x) => x.to);
-      args.push(`flow(${chainFrom(thenIds).map(printItem).join(", ")})`);
-      args.push(`flow(${chainFrom(elseIds).map(printItem).join(", ")})`);
+      args.push(`${apiCall("flow")}(${chainFrom(thenIds).map(printItem).join(", ")})`);
+      args.push(`${apiCall("flow")}(${chainFrom(elseIds).map(printItem).join(", ")})`);
     } else {
       const usesScript = node.definitionId === "tool_nodejs" && node.script;
       const body = usesScript ? node.script : node.body;
@@ -323,14 +330,14 @@ export function generateFlowSource(ir, opts = {}) {
     if (N[runId].label) head.push(literal(N[runId].label));
     // 排程配置存在 run 节点的 body 里，是 JSON 字符串
     if (definitionId === "workspace_scheduled_run") head.push(N[runId].body ? literal(N[runId].body) : "null");
-    const fn = definitionId === "workspace_scheduled_run" ? "flow.schedule" : "flow";
+    const fn = apiCall(definitionId === "workspace_scheduled_run" ? "flow.schedule" : "flow");
     out.push(`export const ${runId} = ${fn}(${[...head, ...seq].join(", ")});\n`);
   }
 
   // 一个 run 直接连到另一个 run：接力，不是子图
   for (const [src, list] of [...controlNext].sort()) {
     for (const x of list) {
-      if (RUN_DEFINITIONS.has(N[x.to].definitionId)) out.push(`flow.resume(${src}, ${x.to});\n`);
+      if (RUN_DEFINITIONS.has(N[x.to].definitionId)) out.push(`${apiCall("flow.resume")}(${src}, ${x.to});\n`);
     }
   }
 
@@ -339,13 +346,17 @@ export function generateFlowSource(ir, opts = {}) {
   for (const id of ids) {
     if (declared.has(id) || RUN_DEFINITIONS.has(N[id].definitionId) || controlTargets.has(id)) continue;
     if (!(controlNext.get(id) || []).length) continue;
-    out.push(`flow.detached(${chainFrom([id]).map(printItem).join(", ")});\n`);
+    out.push(`${apiCall("flow.detached")}(${chainFrom([id]).map(printItem).join(", ")});\n`);
   }
   for (const id of ids) {
     if (!declared.has(id) && !RUN_DEFINITIONS.has(N[id].definitionId)) declare(id, true);
   }
 
-  const imports = [`import { agent, control, display, file, flow, provide, tool, workspace } from "agentflow/flow";`];
+  const flowImports = flowApiRoots.map((root) => {
+    const local = flowApiBinding.get(root);
+    return local === root ? root : `${root} as ${local}`;
+  });
+  const imports = [`import { ${flowImports.join(", ")} } from "agentflow/flow";`];
   const seenBinding = new Set();
   for (const id of ids) {
     const binding = bindingOf.get(id);

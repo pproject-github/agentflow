@@ -18,6 +18,7 @@ import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normali
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
 import { json } from "./http-util.mjs";
 import { t } from "./i18n.mjs";
+import { advanceJenkinsBuild, createJenkinsHttpInvoker, jenkinsBuildStatePath, normalizeJenkinsBuildConfig, readJenkinsBuildState, writeJenkinsBuildState } from "./jenkins.mjs";
 import { log } from "./log.mjs";
 import { resolveMarketplaceNodePackage } from "./marketplace.mjs";
 import { PACKAGE_ROOT, getAgentflowDataRoot, getAgentflowUserDataRoot, listAgentflowUserIds } from "./paths.mjs";
@@ -1127,9 +1128,13 @@ function normalizeWorkspaceGraphPayload(payload) {
 
 export function workspaceRunTouchedNodeIds(result) {
   const ids = new Set();
-  for (const id of Array.isArray(result?.order) ? result.order : []) {
-    const text = String(id || "").trim();
-    if (text) ids.add(text);
+  // A deferred run has only executed the prefix ending at the waiting node. Merging the
+  // complete plan here would overwrite unrelated edits made while Jenkins is running.
+  if (!result?.deferred) {
+    for (const id of Array.isArray(result?.order) ? result.order : []) {
+      const text = String(id || "").trim();
+      if (text) ids.add(text);
+    }
   }
   for (const event of Array.isArray(result?.events) ? result.events : []) {
     const nodeId = String(event?.nodeId || "").trim();
@@ -4825,6 +4830,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
   const controlBranches = new Map();
   const skippedNodes = new Set();
+  let deferred = null;
   const incomingControlEdgesByTarget = new Map();
   for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
     const target = String(edge?.target || "");
@@ -5069,6 +5075,77 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "tool_jenkins_build") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const config = normalizeJenkinsBuildConfig({
+        job: inputValues.job || workspaceSlotValue(workspaceSlotByName(instance, "job")),
+        parameters: inputValues.parameters || workspaceSlotValue(workspaceSlotByName(instance, "parameters")),
+        credentialRef: inputValues.credentialRef || workspaceSlotValue(workspaceSlotByName(instance, "credentialRef")),
+        pollInterval: inputValues.pollInterval || workspaceSlotValue(workspaceSlotByName(instance, "pollInterval")),
+        timeout: inputValues.timeout || workspaceSlotValue(workspaceSlotByName(instance, "timeout")),
+      });
+      const statePath = jenkinsBuildStatePath(scopedRoot, nodeId);
+      let state = readJenkinsBuildState(statePath);
+      // A completed checkpoint belongs to an earlier execution. An unfinished one is always
+      // resumed, even when the server restarted and the browser created a new run id.
+      if (state?.phase === "complete") state = null;
+      const invoke = createJenkinsHttpInvoker({
+        credentialRef: config.credentialRef,
+        env: runtimeEnv(),
+        fetchImpl: opts.jenkinsFetch || globalThis.fetch,
+        signal,
+      });
+      throwIfAborted();
+      const result = await advanceJenkinsBuild({
+        state,
+        config,
+        invoke,
+        persistState: (checkpoint) => writeJenkinsBuildState(statePath, checkpoint),
+        cancelled: signal?.aborted === true,
+        runId: opts.runId || payload.runId || payload.runSessionId || "",
+      });
+      throwIfAborted();
+      state = result.state;
+      writeJenkinsBuildState(statePath, state);
+      let nextInstance = workspaceSetOutputSlot(graph.instances[nodeId], "status", result.outputs?.status || state.status || "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "url", result.outputs?.url || state.url || state.buildUrl || "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "qrUrl", result.outputs?.qrUrl || state.qrUrl || "");
+      graph.instances[nodeId] = nextInstance;
+      emit({
+        type: "status",
+        nodeId,
+        line: result.message || state.message || "Jenkins Build",
+        phase: state.phase || "",
+        jenkinsStatus: state.status || "",
+        buildNumber: state.buildNumber || "",
+        url: state.url || state.buildUrl || "",
+        qrUrl: state.qrUrl || "",
+        wakeAt: state.wakeAt || "",
+      });
+      emit({ type: "graph", nodeId, graph });
+      if (result.kind === "waiting") {
+        deferred = {
+          kind: "jenkins",
+          nodeId,
+          phase: String(state.phase || ""),
+          status: String(state.status || ""),
+          message: String(result.message || state.message || "Jenkins Build"),
+          buildNumber: String(state.buildNumber || ""),
+          url: String(state.url || state.buildUrl || ""),
+          qrUrl: String(state.qrUrl || ""),
+          wakeAt: String(result.wakeAt || state.wakeAt || new Date(Date.now() + config.pollIntervalMs).toISOString()),
+        };
+        emit({ type: "node-waiting", nodeId, definitionId: defId, ...deferred });
+        break;
+      }
+      if (result.kind === "failed") throw new Error(result.message || "Jenkins build node failed");
+      const finalStatus = result.outputs?.status || state.status || "ERROR";
+      const updatedDisplays = publishNodeOutput(nodeId, finalStatus);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId, jenkinsStatus: finalStatus });
       continue;
     }
 
@@ -5569,11 +5646,11 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
     workspaceCleanupTmpRoot(runTmpRoot, userCtx, emit);
   }
-  if (pauseNodeIds.length > 0) {
+  if (!deferred && pauseNodeIds.length > 0) {
     emit({ type: "paused", nodeIds: pauseNodeIds, message: `Workspace run paused at ${pauseNodeIds.join(", ")}` });
   }
   graph.updatedAt = new Date().toISOString();
-  return { graph, events, order, pauseNodeIds };
+  return { graph, events, order, pauseNodeIds, deferred };
 }
 
 export function isWorkspaceRunAbortError(err) {
@@ -5625,9 +5702,33 @@ export const workspaceCollaborationSubscribers = new Map();
 
 export const workspaceCollaborationSequences = new Map();
 
+function emitWorkspaceCollaborationEvent(userCtx, flowSource, flowId, archived, event = {}) {
+  const key = workspaceCollaborationEventKey(userCtx, flowSource, flowId, archived);
+  const seq = (workspaceCollaborationSequences.get(key) || 0) + 1;
+  workspaceCollaborationSequences.set(key, seq);
+  const payload = JSON.stringify({ seq, at: new Date().toISOString(), ...event });
+  const subscribers = workspaceCollaborationSubscribers.get(key);
+  if (!subscribers?.size) return seq;
+  const chunk = `id: ${seq}\ndata: ${payload}\n\n`;
+  for (const clientRes of subscribers) {
+    try { clientRes.write(chunk); } catch (_) {}
+  }
+  return seq;
+}
+
 const WORKSPACE_SCHEDULES_FILENAME = "workspace-schedules.json";
 
+const WORKSPACE_DEFERRED_RUNS_FILENAME = "workspace-deferred-runs.json";
+
 export const WORKSPACE_SCHEDULE_POLL_MS = 30_000;
+
+export const WORKSPACE_DEFERRED_RUN_POLL_MS = 1_000;
+
+const WORKSPACE_DEFERRED_LEASE_MS = 60_000;
+
+const workspaceDeferredLeaseOwner = `${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+
+const activeWorkspaceDeferredRuns = new Set();
 
 const WORKSPACE_IMPLEMENTATION_REFERENCE_ENABLED = true;
 
@@ -5694,6 +5795,123 @@ export function workspaceActiveRunsForScope(scopeKey) {
     .filter(([, entry]) => String(entry?.scopeKey || "") === key);
 }
 
+function workspaceDeferredRunsPath() {
+  return path.join(getAgentflowDataRoot(), WORKSPACE_DEFERRED_RUNS_FILENAME);
+}
+
+export function readWorkspaceDeferredRunRegistry() {
+  const filePath = workspaceDeferredRunsPath();
+  if (!fs.existsSync(filePath)) return { version: 1, runs: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return {
+      version: 1,
+      runs: parsed?.runs && typeof parsed.runs === "object" && !Array.isArray(parsed.runs)
+        ? parsed.runs
+        : {},
+    };
+  } catch {
+    return { version: 1, runs: {} };
+  }
+}
+
+function writeWorkspaceDeferredRunRegistry(registry) {
+  const filePath = workspaceDeferredRunsPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    runs: registry?.runs && typeof registry.runs === "object" ? registry.runs : {},
+  }, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+}
+
+function workspaceDeferredRunKey(meta = {}, deferred = {}) {
+  return crypto.createHash("sha256").update([
+    String(meta.scopeKey || ""),
+    String(meta.runId || ""),
+    String(deferred.nodeId || meta.nodeId || ""),
+  ].join("\n")).digest("hex").slice(0, 32);
+}
+
+export function upsertWorkspaceDeferredRun(meta = {}, deferred = {}) {
+  const registry = readWorkspaceDeferredRunRegistry();
+  const key = String(meta.deferredKey || "").trim() || workspaceDeferredRunKey(meta, deferred);
+  const previous = registry.runs?.[key] && typeof registry.runs[key] === "object" ? registry.runs[key] : {};
+  const now = Date.now();
+  const next = {
+    ...previous,
+    key,
+    kind: String(deferred.kind || previous.kind || "jenkins"),
+    status: "waiting",
+    scopeKey: String(meta.scopeKey || previous.scopeKey || ""),
+    runId: String(meta.runId || previous.runId || ""),
+    userId: String(meta.userId || previous.userId || ""),
+    username: String(meta.username || previous.username || meta.userId || ""),
+    flowId: String(meta.flowId || previous.flowId || ""),
+    flowSource: String(meta.flowSource || previous.flowSource || "user"),
+    archived: meta.archived === true || previous.archived === true,
+    runNodeId: String(meta.runNodeId || previous.runNodeId || ""),
+    nodeId: String(deferred.nodeId || meta.nodeId || previous.nodeId || ""),
+    label: String(meta.label || previous.label || "Workspace Run"),
+    plannedNodeIds: Array.isArray(meta.plannedNodeIds) ? meta.plannedNodeIds.map(String) : (previous.plannedNodeIds || []),
+    startedAt: Number(meta.startedAt || previous.startedAt || now),
+    scheduled: meta.scheduled === true || previous.scheduled === true,
+    scheduleKey: String(meta.scheduleKey || previous.scheduleKey || ""),
+    scheduleNodeId: String(meta.scheduleNodeId || previous.scheduleNodeId || ""),
+    wakeAt: String(deferred.wakeAt || previous.wakeAt || new Date(now + WORKSPACE_DEFERRED_RUN_POLL_MS).toISOString()),
+    phase: String(deferred.phase || previous.phase || ""),
+    jenkinsStatus: String(deferred.status || previous.jenkinsStatus || ""),
+    message: String(deferred.message || previous.message || ""),
+    buildNumber: String(deferred.buildNumber || previous.buildNumber || ""),
+    url: String(deferred.url || previous.url || ""),
+    qrUrl: String(deferred.qrUrl || previous.qrUrl || ""),
+    createdAt: String(previous.createdAt || new Date(now).toISOString()),
+    updatedAt: new Date(now).toISOString(),
+    leaseOwner: "",
+    leaseUntil: 0,
+  };
+  registry.runs[key] = next;
+  writeWorkspaceDeferredRunRegistry(registry);
+  return next;
+}
+
+export function removeWorkspaceDeferredRun(key) {
+  const id = String(key || "").trim();
+  if (!id) return null;
+  const registry = readWorkspaceDeferredRunRegistry();
+  const current = registry.runs?.[id] || null;
+  if (!current) return null;
+  delete registry.runs[id];
+  writeWorkspaceDeferredRunRegistry(registry);
+  return current;
+}
+
+export function workspaceDeferredRunsForScope(scopeKey) {
+  const key = String(scopeKey || "");
+  return Object.values(readWorkspaceDeferredRunRegistry().runs || {})
+    .filter((entry) => String(entry?.scopeKey || "") === key);
+}
+
+function claimWorkspaceDeferredRun(key, now = Date.now()) {
+  const registry = readWorkspaceDeferredRunRegistry();
+  const entry = registry.runs?.[key];
+  if (!entry) return null;
+  const leaseUntil = Number(entry.leaseUntil || 0);
+  if (leaseUntil > now && String(entry.leaseOwner || "") !== workspaceDeferredLeaseOwner) return null;
+  const claimed = {
+    ...entry,
+    status: "polling",
+    leaseOwner: workspaceDeferredLeaseOwner,
+    leaseUntil: now + WORKSPACE_DEFERRED_LEASE_MS,
+    updatedAt: new Date(now).toISOString(),
+  };
+  registry.runs[key] = claimed;
+  writeWorkspaceDeferredRunRegistry(registry);
+  return claimed;
+}
+
 export function workspaceRunPlanNodeIds(runNodeId, plan) {
   return Array.from(new Set([
     String(runNodeId || "").trim(),
@@ -5713,6 +5931,14 @@ export function workspaceFindActiveRunConflict(scopeKey, plannedNodeIds) {
       .map((id) => String(id || "").trim())
       .filter((id) => id && planned.has(id));
     if (conflictNodeIds.length) return { key, entry, conflictNodeIds };
+  }
+  for (const entry of workspaceDeferredRunsForScope(scopeKey)) {
+    const waitingIds = Array.isArray(entry?.plannedNodeIds) ? entry.plannedNodeIds : [];
+    if (!waitingIds.length) return { key: entry.key, entry, conflictNodeIds: [] };
+    const conflictNodeIds = waitingIds
+      .map((id) => String(id || "").trim())
+      .filter((id) => id && planned.has(id));
+    if (conflictNodeIds.length) return { key: entry.key, entry, conflictNodeIds };
   }
   return null;
 }
@@ -6151,11 +6377,33 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       signal: controller.signal,
       onActiveChild: setActiveChild,
       onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
+      runId,
     });
     const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
     const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
     writeWorkspaceGraph(scoped.root, mergedGraph, root);
+    if (result.deferred) {
+      const waiting = upsertWorkspaceDeferredRun({
+        ...runEntry,
+        scheduleKey: entry.key,
+        scheduleNodeId,
+      }, result.deferred);
+      appendWorkspaceRunLogEvent(runLog.runId, {
+        type: "run-waiting",
+        nodeId: waiting.nodeId,
+        wakeAt: waiting.wakeAt,
+        phase: waiting.phase,
+        jenkinsStatus: waiting.jenkinsStatus,
+        ts: Date.now(),
+      });
+      updateWorkspaceScheduleEntry(entry.key, {
+        nextRunAt: computeNext(config),
+        lastStatus: "waiting",
+        lastError: "",
+      });
+      return;
+    }
     const endedAt = Date.now();
     appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {
@@ -6195,5 +6443,159 @@ export async function runWorkspaceScheduledEntry(root, entry) {
   } finally {
     runControl.finish(controller.signal.aborted ? "stopped" : "finished");
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
+  }
+}
+
+function finishWorkspaceDeferredRun(entry, status, patch = {}) {
+  const endedAt = Number(patch.endedAt || Date.now());
+  appendWorkspaceRunFinished({
+    ...entry,
+    endedAt,
+    durationMs: Math.max(0, endedAt - Number(entry.startedAt || endedAt)),
+  }, status);
+  finishWorkspaceRunLogSession(entry.runId, status, {
+    endedAt,
+    durationMs: Math.max(0, endedAt - Number(entry.startedAt || endedAt)),
+    runNodeId: entry.runNodeId || "",
+    error: String(patch.error || ""),
+  });
+  if (entry.scheduleKey) {
+    updateWorkspaceScheduleEntry(entry.scheduleKey, {
+      lastFinishedAt: endedAt,
+      lastStatus: status,
+      lastError: String(patch.error || ""),
+      ...(patch.error ? { lastErrorAt: endedAt } : {}),
+    });
+  }
+}
+
+async function runWorkspaceDeferredEntry(root, claimed) {
+  const userCtx = { userId: String(claimed.userId || "") };
+  const scoped = resolveWorkspaceScopeRoot(root, {
+    flowId: claimed.flowId || "",
+    flowSource: claimed.flowSource || "user",
+    archived: claimed.archived === true,
+  }, userCtx);
+  if (scoped.error || scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+    const error = scoped.error || "Deferred Workspace target is not writable";
+    removeWorkspaceDeferredRun(claimed.key);
+    appendWorkspaceRunLogEvent(claimed.runId, { type: "error", error, ts: Date.now() });
+    finishWorkspaceDeferredRun(claimed, "failed", { error });
+    return;
+  }
+
+  const controller = new AbortController();
+  const runControl = workspaceRunControl(controller);
+  const runKey = workspaceRunEntryKey(claimed.scopeKey, claimed.runId);
+  const runEntry = {
+    ...claimed,
+    controller,
+    runControl,
+    plannedNodeIds: Array.isArray(claimed.plannedNodeIds) ? claimed.plannedNodeIds : [],
+  };
+  activeWorkspaceRuns.set(runKey, runEntry);
+  let activeReleased = false;
+  const releaseActive = (status = "finished") => {
+    if (activeReleased) return;
+    activeReleased = true;
+    runControl.finish(status);
+    if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
+  };
+  try {
+    const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root, root).graph, userCtx);
+    const result = await runWorkspaceGraph(root, scoped.root, {
+      flowId: claimed.flowId,
+      flowSource: claimed.flowSource || "user",
+      runNodeId: claimed.runNodeId,
+      graph,
+    }, userCtx, {
+      signal: controller.signal,
+      onActiveChild: (child, options = {}) => runControl.setChild(child, options),
+      onEvent: (event) => appendWorkspaceRunLogEvent(claimed.runId, event),
+      runId: claimed.runId,
+    });
+    const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
+    const touchedIds = workspaceRunTouchedNodeIds(result);
+    const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+    writeWorkspaceGraph(scoped.root, mergedGraph, root);
+    if (result.deferred) {
+      const waiting = upsertWorkspaceDeferredRun({ ...claimed, deferredKey: claimed.key }, result.deferred);
+      appendWorkspaceRunLogEvent(claimed.runId, {
+        type: "run-waiting",
+        nodeId: waiting.nodeId,
+        wakeAt: waiting.wakeAt,
+        phase: waiting.phase,
+        jenkinsStatus: waiting.jenkinsStatus,
+        ts: Date.now(),
+      });
+      if (claimed.scheduleKey) updateWorkspaceScheduleEntry(claimed.scheduleKey, { lastStatus: "waiting" });
+      releaseActive("waiting");
+      emitWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+        type: "runtime.committed",
+        runId: claimed.runId,
+        runNodeId: claimed.runNodeId,
+        actorId: userCtx.userId || "",
+        source: "deferred-run",
+      });
+      emitWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+        type: "run.waiting",
+        status: "waiting",
+        runId: claimed.runId,
+        runNodeId: claimed.runNodeId,
+        actorId: userCtx.userId || "",
+      });
+      return;
+    }
+
+    removeWorkspaceDeferredRun(claimed.key);
+    finishWorkspaceDeferredRun(claimed, "success");
+    releaseActive("finished");
+    emitWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+      type: "runtime.committed",
+      runId: claimed.runId,
+      runNodeId: claimed.runNodeId,
+      actorId: userCtx.userId || "",
+      source: "deferred-run",
+    });
+    emitWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+      type: "run.finished",
+      status: "success",
+      runId: claimed.runId,
+      runNodeId: claimed.runNodeId,
+      actorId: userCtx.userId || "",
+    });
+  } catch (e) {
+    const error = (e && e.message) || String(e);
+    const stopped = isWorkspaceRunAbortError(e) || controller.signal.aborted;
+    removeWorkspaceDeferredRun(claimed.key);
+    appendWorkspaceRunLogEvent(claimed.runId, stopped
+      ? { type: "stopped", message: "Workspace run stopped", ts: Date.now() }
+      : { type: "error", error, ts: Date.now() });
+    finishWorkspaceDeferredRun(claimed, stopped ? "stopped" : "failed", { error: stopped ? "" : error });
+    releaseActive(stopped ? "stopped" : "failed");
+    emitWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+      type: "run.finished",
+      status: stopped ? "stopped" : "failed",
+      runId: claimed.runId,
+      runNodeId: claimed.runNodeId,
+      actorId: userCtx.userId || "",
+    });
+    if (!stopped) log.info(`[workspace-deferred] failed ${claimed.flowId}/${claimed.runNodeId}: ${error}`);
+  } finally {
+    releaseActive(controller.signal.aborted ? "stopped" : "finished");
+  }
+}
+
+export function pollWorkspaceDeferredRuns(root, now = Date.now()) {
+  const registry = readWorkspaceDeferredRunRegistry();
+  for (const entry of Object.values(registry.runs || {})) {
+    const key = String(entry?.key || "").trim();
+    if (!key || activeWorkspaceDeferredRuns.has(key)) continue;
+    const wakeAt = Date.parse(String(entry.wakeAt || ""));
+    if (Number.isFinite(wakeAt) && wakeAt > now) continue;
+    const claimed = claimWorkspaceDeferredRun(key, now);
+    if (!claimed) continue;
+    activeWorkspaceDeferredRuns.add(key);
+    void runWorkspaceDeferredEntry(root, claimed).finally(() => activeWorkspaceDeferredRuns.delete(key));
   }
 }

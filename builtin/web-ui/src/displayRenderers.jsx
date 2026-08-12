@@ -242,7 +242,7 @@ function MermaidSequencePreview({ code }) {
   );
 }
 
-function MermaidDisplayBlock({ code }) {
+export function MermaidDisplayBlock({ code }) {
   const text = String(code || "").trim();
   if (!text) return null;
   const isSequence = /^sequenceDiagram\b/i.test(text);

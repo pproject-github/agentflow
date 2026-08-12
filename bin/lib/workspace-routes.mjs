@@ -36,7 +36,7 @@ import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
@@ -1885,11 +1885,12 @@ async function workspaceRoutes(req, res, ctx) {
         const setActiveChild = (child, childOptions = {}) => {
           runControl.setChild(child, childOptions);
         };
+        let runDeferred = false;
         const clearActiveRun = (status = "finished") => {
           runControl.finish(status);
           if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
           broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
-            type: "run.finished",
+            type: status === "waiting" ? "run.waiting" : "run.finished",
             status,
             runId,
             runNodeId,
@@ -1912,6 +1913,7 @@ async function workspaceRoutes(req, res, ctx) {
               onEvent: writeEvent,
               signal: controller.signal,
               onActiveChild: setActiveChild,
+              runId,
             });
             const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
             const touchedIds = workspaceRunTouchedNodeIds(result);
@@ -1921,6 +1923,33 @@ async function workspaceRoutes(req, res, ctx) {
             const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
               ? "runtime.committed"
               : "graph.committed";
+            if (result.deferred) {
+              runDeferred = true;
+              const waiting = upsertWorkspaceDeferredRun(runEntry, result.deferred);
+              broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+                type: collaborationEventType,
+                revision,
+                runtimeRevision,
+                actorId: userCtx.userId || "",
+                source: "run",
+              });
+              writeEvent({
+                type: "waiting",
+                ok: true,
+                deferred: true,
+                path: graphPath,
+                graph: committed.graph,
+                revision,
+                runtimeRevision,
+                runId,
+                runNodeId,
+                plannedNodeIds,
+                touchedNodeIds: Array.from(touchedIds),
+                ...waiting,
+              });
+              res.end();
+              return;
+            }
             const endedAt = Date.now();
             appendWorkspaceRunFinished({
               ...runEntry,
@@ -1972,7 +2001,7 @@ async function workspaceRoutes(req, res, ctx) {
             }
             res.end();
           } finally {
-            clearActiveRun(controller.signal.aborted ? "stopped" : "finished");
+            clearActiveRun(controller.signal.aborted ? "stopped" : runDeferred ? "waiting" : "finished");
           }
           return;
         }
@@ -1981,6 +2010,7 @@ async function workspaceRoutes(req, res, ctx) {
             signal: controller.signal,
             onActiveChild: setActiveChild,
             onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
+            runId,
           });
           const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
           const touchedIds = workspaceRunTouchedNodeIds(result);
@@ -1990,6 +2020,31 @@ async function workspaceRoutes(req, res, ctx) {
           const collaborationEventType = revision === workspaceDesignRevision(currentGraph)
             ? "runtime.committed"
             : "graph.committed";
+          if (result.deferred) {
+            runDeferred = true;
+            const waiting = upsertWorkspaceDeferredRun(runEntry, result.deferred);
+            broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+              type: collaborationEventType,
+              revision,
+              runtimeRevision,
+              actorId: userCtx.userId || "",
+              source: "run",
+            });
+            json(res, 200, {
+              ok: true,
+              path: graphPath,
+              ...result,
+              deferred: true,
+              graph: committed.graph,
+              revision,
+              runtimeRevision,
+              runId,
+              plannedNodeIds,
+              touchedNodeIds: Array.from(touchedIds),
+              waiting,
+            });
+            return;
+          }
           const endedAt = Date.now();
           appendWorkspaceRunFinished({
             ...runEntry,
@@ -2040,7 +2095,7 @@ async function workspaceRoutes(req, res, ctx) {
             throw e;
           }
         } finally {
-          clearActiveRun(controller.signal.aborted ? "stopped" : "finished");
+          clearActiveRun(controller.signal.aborted ? "stopped" : runDeferred ? "waiting" : "finished");
         }
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -2138,11 +2193,15 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       const scopeKey = workspaceRunKey(workspaceScopedUserContext(scoped, userCtx), flowSource, flowId);
-      const entries = workspaceActiveRunsForScope(scopeKey).map(([, entry]) => entry);
+      const activeEntries = workspaceActiveRunsForScope(scopeKey).map(([, entry]) => entry);
+      const activeRunIds = new Set(activeEntries.map((entry) => String(entry?.runId || "")));
+      const deferredEntries = workspaceDeferredRunsForScope(scopeKey)
+        .filter((entry) => !activeRunIds.has(String(entry?.runId || "")));
+      const entries = [...activeEntries, ...deferredEntries];
       const entry = entries[0] || null;
       json(res, 200, {
         running: entries.length > 0,
-        state: entry?.runControl?.state || (entries.length > 0 ? "running" : "idle"),
+        state: entry?.runControl?.state || entry?.status || (entries.length > 0 ? "running" : "idle"),
         flowId,
         flowSource,
         runNodeId: entry?.runNodeId || "",
@@ -2155,7 +2214,15 @@ async function workspaceRoutes(req, res, ctx) {
           startedAt: item?.startedAt || null,
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
           scheduled: item?.scheduled === true,
-          state: item?.runControl?.state || "running",
+          state: item?.runControl?.state || item?.status || "running",
+          waitingNodeId: item?.nodeId || "",
+          phase: item?.phase || "",
+          jenkinsStatus: item?.jenkinsStatus || "",
+          message: item?.message || "",
+          buildNumber: item?.buildNumber || "",
+          url: item?.url || "",
+          qrUrl: item?.qrUrl || "",
+          wakeAt: item?.wakeAt || "",
         })),
       });
       return;
@@ -2189,7 +2256,7 @@ async function workspaceRoutes(req, res, ctx) {
         json(res, 403, { error: "Workspace collaboration run permission denied" });
         return;
       }
-      const scopeKey = workspaceRunKey(userCtx, flowSource, flowId);
+      const scopeKey = workspaceRunKey(workspaceScopedUserContext(scoped, userCtx), flowSource, flowId);
       const runId = String(payload.runId || payload.runSessionId || "").trim();
       const runNodeId = String(payload.runNodeId || "").trim();
       const entries = workspaceActiveRunsForScope(scopeKey);
@@ -2198,7 +2265,44 @@ async function workspaceRoutes(req, res, ctx) {
         || (!runId && !runNodeId && entries.length === 1 ? entries[0] : null);
       const entry = match?.[1] || null;
       if (!entry) {
-        json(res, 404, { error: "该 Workspace 未在运行" });
+        const deferredEntries = workspaceDeferredRunsForScope(scopeKey);
+        const deferred = deferredEntries.find((item) => runId && String(item?.runId || "") === runId)
+          || deferredEntries.find((item) => runNodeId && String(item?.runNodeId || "") === runNodeId)
+          || (!runId && !runNodeId && deferredEntries.length === 1 ? deferredEntries[0] : null);
+        if (!deferred) {
+          json(res, 404, { error: "该 Workspace 未在运行" });
+          return;
+        }
+        removeWorkspaceDeferredRun(deferred.key);
+        const endedAt = Date.now();
+        appendWorkspaceRunLogEvent(deferred.runId, {
+          type: "stop-completed",
+          runNodeId: deferred.runNodeId || "",
+          monitoringOnly: true,
+          ts: endedAt,
+        });
+        appendWorkspaceRunFinished({
+          ...deferred,
+          endedAt,
+          durationMs: Math.max(0, endedAt - Number(deferred.startedAt || endedAt)),
+        }, "stopped");
+        finishWorkspaceRunLogSession(deferred.runId, "stopped", {
+          endedAt,
+          durationMs: Math.max(0, endedAt - Number(deferred.startedAt || endedAt)),
+          runNodeId: deferred.runNodeId || "",
+        });
+        broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
+          type: "run.finished",
+          status: "stopped",
+          runId: deferred.runId,
+          runNodeId: deferred.runNodeId || "",
+          actorId: userCtx.userId || "",
+        });
+        json(res, 200, {
+          ok: true,
+          stopped: true,
+          monitoringOnly: true,
+        });
         return;
       }
       appendWorkspaceRunLogEvent(entry.runId, {

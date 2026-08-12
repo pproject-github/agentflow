@@ -30,6 +30,7 @@
 | `tool.gitlabCreateMr` | repoPath:file, gitContext:text, workspaceContext:text, sourceBranch:text, targetBranch:text, title:text, description:text, draft:bool, labels:text, push:bool, remote:text, tokenEnv:text, gitlabApiBase:text, removeSourceBranch:bool, squash:bool | mrUrl:text, created:bool, mrIid:text, projectId:text, sourceBranch:text, targetBranch:text, title:text, message:text |
 | `tool.gitWorktreeLoad` | repoPath:file, branch:text, worktreePath:file, pruneMissing:bool, force:bool, gitContext:text, workspaceContext:text | worktreePath:file, branch:text, commit:text, workspaceContext:text, gitContext:text |
 | `tool.gitWorktreeUnload` | repoPath:file, worktreePath:file, gitContext:text, workspaceContext:text, force:bool, prune:bool | removed:bool, workspaceContext:text, message:text |
+| `tool.jenkinsBuild` | job:text, parameters:text, credentialRef:text, pollInterval:text, timeout:text | status:text, url:text, qrUrl:text |
 | `tool.nodejs` | workspaceContext:text, skillsContext:text, mcpContext:text | result:text |
 | `tool.setRunEnv` | key:text, value:text, variables:text | keys:text, count:text |
 | `tool.wecomSendAppMarkdown` | markdown:text, toUser:text, corpId:text, corpSecret:text, agentId:text, accessToken:text | sent:bool, message:text, response:text |

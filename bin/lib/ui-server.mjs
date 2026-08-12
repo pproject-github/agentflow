@@ -121,6 +121,7 @@ import { json, readBody } from "./http-util.mjs";
 // 从 ui-server 拆出去的 Workspace 子系统；路由仍在下面的 startUiServer 里
 import {
   USER_WORKSPACES_FILENAME,
+  WORKSPACE_DEFERRED_RUN_POLL_MS,
   WORKSPACE_SCHEDULE_POLL_MS,
   activeWorkspaceRunUsageRecords,
   adminWorkspaceOwnerSummary,
@@ -136,6 +137,7 @@ import {
   normalizeMcpServerConfig,
   normalizeWorkspaceScheduledRunConfig,
   parseJsonText,
+  pollWorkspaceDeferredRuns,
   readCursorMcpConfig,
   readCursorMcpServers,
   readDisplayShares,
@@ -1498,10 +1500,60 @@ function publicDisplayPayloadFromShare(root, share) {
       body,
       inputs: Array.isArray(instance.input) ? instance.input : [],
       outputs: Array.isArray(instance.output) ? instance.output : [],
+      hasConnections: (Array.isArray(graph.edges) ? graph.edges : []).some((edge) => edge?.source === id || edge?.target === id),
       size: displayPageSizes[id] || workspaceSizes[id] || null,
       position: displayPagePositions[id] || workspacePositions[id] || null,
     };
   });
+  const groups = (Array.isArray(graph.ui?.groups) ? graph.ui.groups : [])
+    .map((group, index) => {
+      const declaredMemberIds = Array.from(new Set((Array.isArray(group?.nodeIds) ? group.nodeIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => nodeIds.includes(id))));
+      const groupX = Number(group?.x);
+      const groupY = Number(group?.y);
+      const groupWidth = Number(group?.width);
+      const groupHeight = Number(group?.height);
+      const inferredMemberIds = declaredMemberIds.length > 0 || ![groupX, groupY, groupWidth, groupHeight].every(Number.isFinite)
+        ? []
+        : nodeIds.filter((id) => {
+            const position = workspacePositions[id];
+            if (!position) return false;
+            const size = workspaceSizes[id] || { width: 320, height: 96 };
+            const centerX = Number(position.x || 0) + Math.max(1, Number(size.width) || 320) / 2;
+            const centerY = Number(position.y || 0) + Math.max(1, Number(size.height) || 96) / 2;
+            return centerX >= groupX && centerX <= groupX + groupWidth && centerY >= groupY && centerY <= groupY + groupHeight;
+          });
+      const memberIds = declaredMemberIds.length > 0 ? declaredMemberIds : inferredMemberIds;
+      if (memberIds.length === 0) return null;
+      const bounds = memberIds.reduce((acc, id) => {
+        const position = displayPagePositions[id] || workspacePositions[id] || { x: 0, y: 0 };
+        const size = displayPageSizes[id] || workspaceSizes[id] || { width: 520, height: 320 };
+        const x = Number(position.x) || 0;
+        const y = Number(position.y) || 0;
+        const width = Math.max(1, Number(size.width) || 520);
+        const height = Math.max(1, Number(size.height) || 320);
+        return {
+          minX: Math.min(acc.minX, x),
+          minY: Math.min(acc.minY, y),
+          maxX: Math.max(acc.maxX, x + width),
+          maxY: Math.max(acc.maxY, y + height),
+        };
+      }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+      const padding = 52;
+      return {
+        id: String(group?.id || `group_${index + 1}`),
+        title: String(group?.title || `Group ${index + 1}`),
+        color: String(group?.color || "purple"),
+        nodeIds: memberIds,
+        position: { x: bounds.minX - padding, y: bounds.minY - padding },
+        size: {
+          width: Math.max(240, bounds.maxX - bounds.minX + padding * 2),
+          height: Math.max(160, bounds.maxY - bounds.minY + padding * 2),
+        },
+      };
+    })
+    .filter(Boolean);
   return {
     ok: true,
     share: {
@@ -1525,6 +1577,7 @@ function publicDisplayPayloadFromShare(root, share) {
       expiresInDays: share.expiresInDays == null ? null : Number(share.expiresInDays),
     },
     nodes,
+    groups,
   };
 }
 
@@ -4290,6 +4343,25 @@ finishedAt: "${new Date().toISOString()}"
         log.debug(`[workspace-scheduler] initial poll failed: ${(e && e.message) || String(e)}`);
       }
     }, 1000).unref?.();
+
+    const workspaceDeferredRunTimer = setInterval(() => {
+      try {
+        pollWorkspaceDeferredRuns(root);
+      } catch (e) {
+        log.debug(`[workspace-deferred] poll failed: ${(e && e.message) || String(e)}`);
+      }
+    }, WORKSPACE_DEFERRED_RUN_POLL_MS);
+    try {
+      workspaceDeferredRunTimer.unref?.();
+    } catch (_) {}
+    server.on("close", () => clearInterval(workspaceDeferredRunTimer));
+    setTimeout(() => {
+      try {
+        pollWorkspaceDeferredRuns(root);
+      } catch (e) {
+        log.debug(`[workspace-deferred] initial poll failed: ${(e && e.message) || String(e)}`);
+      }
+    }, 500).unref?.();
   }
 
   const workspacePreviewCleanupTimer = setInterval(() => {
