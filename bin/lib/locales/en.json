@@ -351,6 +351,10 @@
       "displayName": "Markdown Display",
       "description": "Render Markdown content on the Workspace canvas and pass the text downstream"
     },
+    "display_code": {
+      "displayName": "Code Display",
+      "description": "Render highlighted source code with line numbers, copy, wrap, and download controls, then pass the code downstream"
+    },
     "display_mermaid": {
       "displayName": "Mermaid Display",
       "description": "Render Mermaid diagram source on the Workspace canvas and pass the source downstream"

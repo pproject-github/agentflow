@@ -5,7 +5,7 @@ import {
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChartDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
 import { normalizeReactAppDisplayContent, reactAppDisplaySrcDoc } from "../reactAppDisplay.js";
 import { useRoute } from "../routeContext.jsx";
 import LoadingState from "../components/LoadingState.jsx";
@@ -23,6 +23,7 @@ function displayContent(node) {
 }
 
 function displayIcon(kind) {
+  if (kind === "code") return "code";
   if (kind === "mermaid") return "account_tree";
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
@@ -276,6 +277,14 @@ function DisplayNode({ node, shareId, style, bare = false }) {
       : displayOutputEnvelopeContent(raw);
   const contentProblem = node.kind === "html" ? htmlContentProblem(content) : "";
   const bodyClassName = `af-public-display-node__body--${node.kind || "unknown"}`;
+  const inputValue = (name, fallback = "") => {
+    const slot = (Array.isArray(node?.inputs) ? node.inputs : []).find((item) => String(item?.name || "") === name);
+    const value = String(slot?.value ?? slot?.default ?? "").trim();
+    return value || fallback;
+  };
+  const codeLanguage = node.kind === "code" ? inputValue("language") : "";
+  const codeFileName = node.kind === "code" ? inputValue("fileName") : "";
+  const codeWrap = node.kind === "code" && ["true", "1", "yes", "on"].includes(inputValue("wrap", "false").toLowerCase());
   return (
     <section
       className={`af-public-display-node af-public-display-node--${node.kind || "unknown"}${node.hasConnections ? " af-public-display-node--connected" : ""}${bare ? " af-public-display-node--bare" : ""}`}
@@ -303,6 +312,7 @@ function DisplayNode({ node, shareId, style, bare = false }) {
                 <MarkdownDisplayContent content={content} resolveSrc={(src, opts) => markdownImageSrc(src, shareId, opts)} />
               </div>
             ) : null}
+            {node.kind === "code" ? <CodeDisplayContent content={content} language={codeLanguage} fileName={codeFileName} defaultWrap={codeWrap} /> : null}
             {node.kind === "chart" ? <ChartDisplayContent content={content} /> : null}
             {node.kind === "table" ? <TableDisplayContent content={content} /> : null}
             {node.kind === "mermaid" ? <MermaidDisplayBlock code={content} /> : null}

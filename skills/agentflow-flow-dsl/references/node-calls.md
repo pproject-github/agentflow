@@ -15,6 +15,7 @@
 | `control.userWorkspace` | — | workspaceContext:text, cwd:file |
 | `display.ascii` | content:text | content:text |
 | `display.chart` | content:text, filePath:file, workspaceContext:text | content:text |
+| `display.code` | content:text, language:text, fileName:text, wrap:bool | content:text |
 | `display.html` | content:text, filePath:file, workspaceContext:text | content:text |
 | `display.image` | src:text, filePath:file, alt:text, workspaceContext:text | src:text |
 | `display.markdown` | content:text | content:text |

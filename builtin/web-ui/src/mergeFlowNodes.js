@@ -53,6 +53,7 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   provide_text: ["Text"],
   provide_str: ["Text"],
   display_markdown: ["Markdown Display"],
+  display_code: ["Code Display"],
   display_react_app: ["React App"],
   display_mermaid: ["Mermaid Display"],
   display_ascii: ["ASCII Display"],
@@ -79,6 +80,7 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
   control_cd_workspace: new Set(["mode", "label", "workspaceContext", "cwd", "previous"]),
   control_user_workspace: new Set(["cwd"]),
   display_markdown: new Set(["prev", "next"]),
+  display_code: new Set(["prev", "next", "language", "fileName", "wrap"]),
   display_mermaid: new Set(["prev", "next"]),
   display_ascii: new Set(["prev", "next"]),
   display_html: new Set(["prev", "next"]),
@@ -123,6 +125,7 @@ const CANVAS_VISIBLE_SLOT_NAMES = {
 
 const DISPLAY_DEFINITION_IDS = new Set([
   "display_markdown",
+  "display_code",
   "display_mermaid",
   "display_ascii",
   "display_html",
@@ -303,7 +306,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     inputs = [...inputs, knowledgeSlot ? { ...knowledgeSlot } : { type: "text", name: "knowledgeContext", default: "", showOnNode: true }];
   }
   if (
-    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
+    (resolvedDefId === "display_markdown" || resolvedDefId === "display_code" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
     !outputs.some((slot) => slot?.name === "next")
   ) {
     const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");

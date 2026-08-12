@@ -53,7 +53,7 @@ function interpolatedLiteral(text, folds) {
 }
 
 function displayFileExt(kind) {
-  return { html: "html", chart: "json", table: "json", mermaid: "mmd", ascii: "txt", react: "json" }[kind] || "md";
+  return { html: "html", code: "txt", chart: "json", table: "json", mermaid: "mmd", ascii: "txt", react: "json" }[kind] || "md";
 }
 
 /**

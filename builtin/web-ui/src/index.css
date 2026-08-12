@@ -11350,10 +11350,115 @@ button.af-project-card {
 .af-work-display-body--image,
 .af-work-display-body--chart,
 .af-work-display-body--table,
+.af-work-display-body--code,
 .af-work-display-body--ascii {
   padding: 0;
   overflow: hidden;
 }
+
+.af-visible-scroll-frame__scroller.af-work-display-body--code {
+  padding: 0;
+}
+
+.af-code-display {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+  background:
+    linear-gradient(180deg, rgba(151, 209, 255, 0.035), transparent 8rem),
+    rgb(15, 16, 20);
+  color: rgba(231, 235, 244, 0.9);
+  font-family: var(--af-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+}
+
+.af-code-display__actions {
+  position: sticky;
+  top: 0.45rem;
+  z-index: 4;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 0.12rem;
+  margin: 0.45rem 0.5rem 0 auto;
+  padding: 0.16rem;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 0.5rem;
+  background: rgba(24, 25, 31, 0.88);
+  backdrop-filter: blur(10px);
+}
+
+.af-code-display__actions button {
+  width: 1.65rem;
+  height: 1.65rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.48);
+  cursor: pointer;
+}
+
+.af-code-display__actions button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.af-code-display__actions .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-code-display__viewport {
+  min-width: 100%;
+  width: max-content;
+}
+
+.af-code-display__lines {
+  min-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.8rem 1.15rem 1rem 4.2rem;
+  color: rgba(130, 142, 162, 0.72);
+  font-size: 0.78rem;
+  line-height: 1.62;
+}
+
+.af-code-display__lines li {
+  min-height: 1.62em;
+  padding-left: 0.85rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.af-code-display__lines li::marker {
+  color: rgba(130, 142, 162, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+.af-code-display__lines code {
+  display: block;
+  color: rgba(226, 232, 240, 0.88);
+  font: inherit;
+  white-space: pre;
+}
+
+.af-code-display--wrapped .af-code-display__viewport {
+  width: 100%;
+}
+
+.af-code-display--wrapped .af-code-display__lines code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.af-code-token--comment { color: rgba(135, 154, 176, 0.68); font-style: italic; }
+.af-code-token--keyword { color: #c9a7ff; }
+.af-code-token--string { color: #a8dc9b; }
+.af-code-token--number { color: #f3be7a; }
+.af-code-token--literal { color: #ff9fb1; }
+.af-code-token--key { color: #82d2ff; }
+.af-code-token--tag { color: #78d8c6; }
+.af-code-token--identifier { color: inherit; }
 
 .af-work-display-body--html {
   width: 100%;
@@ -11474,22 +11579,11 @@ button.af-project-card {
 }
 
 .af-md-mermaid-preview {
-  margin: 1rem 0;
-  max-width: 100%;
-  max-height: 28rem;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(92, 184, 255, 0.22);
-  border-radius: 0.55rem;
-  background: rgba(7, 17, 26, 0.62);
-}
-
-.af-md-mermaid-preview svg {
   display: block;
-  min-width: 100%;
+  width: 100%;
+  max-width: 100%;
   height: auto;
+  overflow: visible;
 }
 
 .af-md-mermaid-preview marker path {
@@ -13552,21 +13646,19 @@ button.af-project-card {
 }
 
 .af-work-node__mermaid-preview {
-  max-height: 18rem;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(205, 189, 255, 0.42) rgba(255, 255, 255, 0.05);
-  margin-top: 0.7rem;
-  border: 1px solid rgba(92, 184, 255, 0.22);
-  border-radius: 0.5rem;
-  background: rgba(7, 17, 26, 0.62);
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
 }
 
-.af-work-node__mermaid-preview svg {
-  display: block;
-  min-width: 100%;
-  height: auto;
+.af-work-display-body--mermaid {
+  padding: 0;
+}
+
+.af-work-display-body--mermaid .af-work-display-mermaid-source {
+  margin: 0.75rem 1rem 1rem;
 }
 
 .af-work-node__mermaid-preview marker path {
@@ -23517,6 +23609,121 @@ button.af-exec-history-card {
   padding: 0;
 }
 
+.af-display-preview-content--reading {
+  background:
+    radial-gradient(circle at 50% 0, rgba(124, 77, 255, 0.055), transparent 32rem),
+    rgb(20, 20, 23);
+}
+
+.af-display-preview-content--reading .af-visible-scroll-frame__scroller.af-work-display-body--markdown {
+  padding: 0;
+  background: transparent;
+  color: rgba(241, 239, 246, 0.86);
+  font-size: 1.03rem;
+  line-height: 1.78;
+}
+
+.af-markdown-reading-surface {
+  box-sizing: border-box;
+  width: min(100%, 72rem);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: clamp(2.2rem, 5vw, 4.8rem) clamp(1.4rem, 5.5vw, 4.8rem) 6rem;
+}
+
+.af-markdown-reading-surface h1 {
+  margin: 0 0 2.4rem;
+  font-size: clamp(2rem, 2.5vw, 2.65rem);
+  letter-spacing: -0.025em;
+}
+
+.af-markdown-reading-surface h2 {
+  margin: 2.8rem 0 0.9rem;
+  font-size: clamp(1.4rem, 1.7vw, 1.65rem);
+  letter-spacing: -0.015em;
+}
+
+.af-markdown-reading-surface h3 {
+  margin: 2.1rem 0 0.7rem;
+  font-size: 1.16rem;
+}
+
+.af-markdown-reading-surface p {
+  margin: 0.85rem 0 1.15rem;
+}
+
+.af-markdown-reading-surface ul,
+.af-markdown-reading-surface ol {
+  margin: 0.8rem 0 1.35rem;
+  padding-left: 1.7rem;
+}
+
+.af-markdown-reading-surface li {
+  margin: 0.28rem 0;
+}
+
+.af-markdown-reading-surface p,
+.af-markdown-reading-surface li {
+  font-size: inherit;
+}
+
+.af-markdown-reading-surface code {
+  padding: 0.12em 0.32em;
+  border: 1px solid rgba(205, 189, 255, 0.1);
+  border-radius: 0.3rem;
+  background: rgba(205, 189, 255, 0.07);
+  color: rgba(234, 229, 255, 0.94);
+  font-size: 0.88em;
+}
+
+.af-markdown-reading-surface pre {
+  max-width: 100%;
+  margin: 1.35rem 0 1.7rem;
+  padding: 1rem 1.15rem;
+  overflow: auto;
+  border: 1px solid rgba(205, 189, 255, 0.1);
+  border-radius: 0.65rem;
+  background: rgba(8, 8, 11, 0.58);
+  line-height: 1.65;
+}
+
+.af-markdown-reading-surface pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.af-markdown-reading-surface blockquote {
+  margin: 1.4rem 0;
+  padding: 0.25rem 1.1rem;
+  border-left: 3px solid rgba(151, 209, 255, 0.52);
+  color: rgba(221, 218, 230, 0.72);
+}
+
+.af-markdown-reading-surface img,
+.af-markdown-reading-surface svg {
+  max-width: 100%;
+}
+
+@media (max-width: 720px) {
+  .af-display-preview-content--reading .af-visible-scroll-frame__scroller.af-work-display-body--markdown {
+    font-size: 1rem;
+  }
+
+  .af-markdown-reading-surface {
+    padding-top: 1.8rem;
+    padding-bottom: 4rem;
+  }
+
+  .af-markdown-reading-surface h1 {
+    margin-bottom: 1.8rem;
+  }
+
+  .af-markdown-reading-surface h2 {
+    margin-top: 2.25rem;
+  }
+}
+
 .af-display-preview-content .af-work-display-html-frame {
   min-height: 100%;
 }
@@ -25325,6 +25532,7 @@ body:has(.af-public-display-page--canvas) {
 .af-public-display-node--image .af-public-display-node__body,
 .af-public-display-node--chart .af-public-display-node__body,
 .af-public-display-node--table .af-public-display-node__body,
+.af-public-display-node--code .af-public-display-node__body,
 .af-public-display-node--ascii .af-public-display-node__body {
   padding: 0;
 }
@@ -25333,6 +25541,7 @@ body:has(.af-public-display-page--canvas) {
 .af-public-display-node__body--image.af-public-display-node__scroller,
 .af-public-display-node__body--chart.af-public-display-node__scroller,
 .af-public-display-node__body--table.af-public-display-node__scroller,
+.af-public-display-node__body--code.af-public-display-node__scroller,
 .af-public-display-node__body--ascii.af-public-display-node__scroller {
   padding: 0;
 }

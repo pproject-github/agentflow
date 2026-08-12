@@ -204,7 +204,7 @@ const doc  = display.html("使用说明", { content: file("docs/guide.html") });
 | 要 AI 理解 / 判断 / 生成 | `agent.subAgent` |
 | 行为由输入完全决定，逻辑复杂 | **建代码节点** `nodes/<name>/index.mjs` |
 | 一行 shell 就能搞定 | `tool.nodejs("名字", {}, \`node -e "..."\`)` |
-| 给用户看结果 | `display.markdown` / `.html` / `.chart` / `.table` |
+| 给用户看结果 | `display.markdown` / `.code` / `.html` / `.chart` / `.table` |
 | 加载 skills 给下游 agent | `control.loadSkills` → `skillsContext` |
 | 加载知识库 / 代码仓 | `control.cdWorkspace` → `knowledgeContext` |
 | 固定文本 / 密钥 | `provide.str` / `provide.password` |

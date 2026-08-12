@@ -128,7 +128,14 @@ function MermaidFlowchartPreview({ code }) {
   const maxX = Math.max(520, ...Array.from(positions.values()).map((p) => p.x + nodeW + 28));
   const maxY = Math.max(220, ...Array.from(positions.values()).map((p) => p.y + nodeH + 28));
   return (
-    <svg viewBox={`0 0 ${maxX} ${maxY}`} role="img" aria-label="Mermaid flowchart preview">
+    <svg
+      className="af-md-mermaid-preview"
+      viewBox={`0 0 ${maxX} ${maxY}`}
+      width={maxX}
+      height={maxY}
+      role="img"
+      aria-label="Mermaid flowchart preview"
+    >
       <defs>
         <marker id="af-md-mermaid-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -202,7 +209,14 @@ function MermaidSequencePreview({ code }) {
     return left + idx * colW + colW / 2;
   };
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Mermaid sequence diagram preview">
+    <svg
+      className="af-md-mermaid-preview"
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      role="img"
+      aria-label="Mermaid sequence diagram preview"
+    >
       <defs>
         <marker id="af-md-sequence-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -246,10 +260,183 @@ export function MermaidDisplayBlock({ code }) {
   const text = String(code || "").trim();
   if (!text) return null;
   const isSequence = /^sequenceDiagram\b/i.test(text);
+  return isSequence ? <MermaidSequencePreview code={text} /> : <MermaidFlowchartPreview code={text} />;
+}
+
+const CODE_LANGUAGE_ALIASES = {
+  bash: "shell",
+  sh: "shell",
+  zsh: "shell",
+  shell: "shell",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  javascript: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
+  typescript: "typescript",
+  py: "python",
+  python: "python",
+  kt: "kotlin",
+  kts: "kotlin",
+  kotlin: "kotlin",
+  yml: "yaml",
+  yaml: "yaml",
+  md: "markdown",
+  markdown: "markdown",
+  html: "html",
+  htm: "html",
+  xml: "xml",
+  css: "css",
+  scss: "scss",
+  json: "json",
+  java: "java",
+  go: "go",
+  rust: "rust",
+  rs: "rust",
+  sql: "sql",
+};
+
+const CODE_KEYWORDS = new Set([
+  "abstract", "as", "async", "await", "boolean", "break", "case", "catch", "class", "const", "continue",
+  "data", "def", "default", "delete", "do", "double", "elif", "else", "enum", "export", "extends", "false",
+  "final", "finally", "float", "for", "from", "fun", "function", "go", "if", "implements", "import", "in",
+  "instanceof", "int", "interface", "internal", "is", "let", "long", "map", "new", "nil", "none", "null",
+  "object", "package", "private", "protected", "public", "raise", "readonly", "return", "select", "short",
+  "static", "struct", "super", "suspend", "switch", "this", "throw", "throws", "trait", "true", "try", "type",
+  "typeof", "undefined", "val", "var", "void", "when", "where", "while", "with", "yield",
+]);
+
+function normalizeCodeLanguage(language, fileName = "") {
+  const direct = String(language || "").trim().toLowerCase().replace(/^language-/, "");
+  const extension = String(fileName || "").trim().toLowerCase().split(/[?#]/)[0].split(".").pop() || "";
+  const value = direct || extension;
+  return CODE_LANGUAGE_ALIASES[value] || value || "text";
+}
+
+function codeTokenClass(token, language, line, endIndex) {
+  const lower = token.toLowerCase();
+  if (/^\s*(?:\/\/|\/\*|\*|<!--)/.test(token)) return "comment";
+  if ((language === "shell" || language === "python" || language === "yaml") && /^#/.test(token)) return "comment";
+  if (/^['"`]/.test(token)) {
+    if ((language === "json" || language === "yaml") && line.slice(endIndex).trimStart().startsWith(":")) return "key";
+    return "string";
+  }
+  if (/^\d/.test(token)) return "number";
+  if (["true", "false", "null", "undefined", "none", "nil"].includes(lower)) return "literal";
+  if (CODE_KEYWORDS.has(lower)) return "keyword";
+  if (/^<\/?[A-Za-z]/.test(token)) return "tag";
+  return "identifier";
+}
+
+function highlightedCodeLine(line, language, lineIndex) {
+  const commentPattern = language === "shell" || language === "python" || language === "yaml"
+    ? "#.*$"
+    : "\\/\\/.*$|\\/\\*.*?\\*\\/|<!--.*?-->";
+  const tagPattern = language === "html" || language === "xml" ? "<\\/?[A-Za-z][^>]*>" : "(?!)";
+  const tokenPattern = new RegExp(
+    `(${commentPattern}|${tagPattern}|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|\`(?:\\\\.|[^\`\\\\])*\`|\\b\\d+(?:\\.\\d+)?\\b|\\b[A-Za-z_$][A-Za-z0-9_$]*\\b)`,
+    "g",
+  );
+  const out = [];
+  let cursor = 0;
+  let match;
+  while ((match = tokenPattern.exec(line))) {
+    if (match.index > cursor) out.push(line.slice(cursor, match.index));
+    const token = match[0];
+    const className = codeTokenClass(token, language, line, match.index + token.length);
+    out.push(<span className={`af-code-token af-code-token--${className}`} key={`${lineIndex}-${match.index}`}>{token}</span>);
+    cursor = match.index + token.length;
+    if (tokenPattern.lastIndex === match.index) tokenPattern.lastIndex += 1;
+  }
+  if (cursor < line.length) out.push(line.slice(cursor));
+  return out.length ? out : " ";
+}
+
+function downloadCodeFile(content, fileName, language) {
+  const extensionByLanguage = {
+    javascript: "js", typescript: "ts", python: "py", shell: "sh", kotlin: "kt", java: "java", json: "json",
+    yaml: "yaml", html: "html", xml: "xml", css: "css", scss: "scss", go: "go", rust: "rs", sql: "sql",
+  };
+  const safeName = String(fileName || "").trim().replace(/[\\/:*?"<>|]+/g, "-")
+    || `code.${extensionByLanguage[language] || "txt"}`;
+  const url = URL.createObjectURL(new Blob([String(content || "")], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = safeName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function copyCodeText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Intranet HTTP deployments may expose Clipboard API but reject writes.
+      // Continue with the selection-based fallback below.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Copy is unavailable");
+}
+
+export function CodeDisplayContent({ content, language = "", fileName = "", defaultWrap = false }) {
+  const text = String(content || "").replace(/\r\n/g, "\n");
+  const normalizedLanguage = normalizeCodeLanguage(language, fileName);
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const [wrapped, setWrapped] = useState(Boolean(defaultWrap));
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setWrapped(Boolean(defaultWrap));
+  }, [defaultWrap]);
+
+  const copyCode = async () => {
+    try {
+      await copyCodeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <div className="af-md-mermaid-preview">
-      {isSequence ? <MermaidSequencePreview code={text} /> : <MermaidFlowchartPreview code={text} />}
-    </div>
+    <section className={`af-code-display nodrag nowheel${wrapped ? " af-code-display--wrapped" : ""}`} data-language={normalizedLanguage}>
+      <div className="af-code-display__actions">
+        <button type="button" onClick={() => setWrapped((value) => !value)} aria-label={wrapped ? "关闭自动换行" : "开启自动换行"} title={wrapped ? "关闭自动换行" : "开启自动换行"}>
+          <span className="material-symbols-outlined" aria-hidden>{wrapped ? "wrap_text" : "notes"}</span>
+        </button>
+        <button type="button" onClick={copyCode} aria-label="复制代码" title="复制代码">
+          <span className="material-symbols-outlined" aria-hidden>{copied ? "done" : "content_copy"}</span>
+        </button>
+        <button type="button" onClick={() => downloadCodeFile(text, fileName, normalizedLanguage)} aria-label="下载代码" title="下载代码">
+          <span className="material-symbols-outlined" aria-hidden>download</span>
+        </button>
+      </div>
+      <div className="af-code-display__viewport">
+        <ol className="af-code-display__lines">
+          {lines.map((line, index) => (
+            <li key={index}>
+              <code>{highlightedCodeLine(line, normalizedLanguage, index)}</code>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
   );
 }
 

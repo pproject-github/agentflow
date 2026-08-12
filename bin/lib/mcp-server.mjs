@@ -70,6 +70,7 @@ function query(params = {}) {
 function displayKind(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_markdown") return "markdown";
+  if (id === "display_code") return "code";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";

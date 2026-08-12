@@ -8,7 +8,7 @@ function isWorkspaceGroup(node) {
 function displayFallbackSize(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_html" || id === "display_react_app") return { width: 720, height: 520 };
-  if (id === "display_table" || id === "display_chart") return { width: 640, height: 380 };
+  if (id === "display_table" || id === "display_chart" || id === "display_code") return { width: 640, height: 380 };
   if (id === "display_image") return { width: 520, height: 360 };
   if (id.startsWith("display_")) return { width: 520, height: 320 };
   return { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT };

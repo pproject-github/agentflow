@@ -19,7 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -2575,6 +2575,7 @@ function sanitizeWorkspaceRuntimeOutputs(instances) {
 function displayKind(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_markdown") return "markdown";
+  if (id === "display_code") return "code";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
@@ -2622,6 +2623,7 @@ function displayTextFilePath(value, kind = "") {
     html: new Set(["html", "htm"]),
     react: new Set(["json", "jsx", "tsx", "js", "txt"]),
     markdown: new Set(["md", "markdown", "txt"]),
+    code: new Set(["txt", "js", "jsx", "mjs", "cjs", "ts", "tsx", "py", "kt", "kts", "java", "go", "rs", "sh", "bash", "zsh", "json", "yaml", "yml", "xml", "html", "htm", "css", "scss", "sql", "md"]),
     mermaid: new Set(["mmd", "mermaid", "txt"]),
     ascii: new Set(["txt", "log"]),
     chart: new Set(["json"]),
@@ -3015,6 +3017,7 @@ function displayAltText(data) {
 }
 
 function displayIcon(kind) {
+  if (kind === "code") return "code";
   if (kind === "mermaid") return "account_tree";
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
@@ -3076,8 +3079,14 @@ function MermaidPreview({ code }) {
   const maxX = Math.max(360, ...Array.from(positions.values()).map((p) => p.x + nodeW + 24));
   const maxY = Math.max(180, ...Array.from(positions.values()).map((p) => p.y + nodeH + 24));
   return (
-    <div className="af-work-node__mermaid-preview">
-      <svg viewBox={`0 0 ${maxX} ${maxY}`} role="img" aria-label="Mermaid preview">
+      <svg
+        className="af-work-node__mermaid-preview"
+        viewBox={`0 0 ${maxX} ${maxY}`}
+        width={maxX}
+        height={maxY}
+        role="img"
+        aria-label="Mermaid preview"
+      >
         <defs>
           <marker id="af-work-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -3104,7 +3113,6 @@ function MermaidPreview({ code }) {
           );
         })}
       </svg>
-    </div>
   );
 }
 
@@ -3202,7 +3210,7 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, showMermaidSource = false }) {
+function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, showMermaidSource = false, readingMode = false }) {
   const kind = workspaceDisplayKindFromData(data);
   const rawContent = displayContent(data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
@@ -3274,7 +3282,24 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, sho
   if (kind === "markdown") {
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown">
-        <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+        {readingMode ? (
+          <article className="af-markdown-reading-surface">
+            <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+          </article>
+        ) : (
+          <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+        )}
+      </VisibleScrollFrame>
+    );
+  }
+  if (kind === "code") {
+    const inputSlots = data?.inputs || data?.input || [];
+    const language = workspaceSlotConfigValue(inputSlots, "language", "");
+    const fileName = workspaceSlotConfigValue(inputSlots, "fileName", "") || (filePath ? filePath.split("/").pop() : "");
+    const defaultWrap = ["true", "1", "yes", "on"].includes(workspaceSlotConfigValue(inputSlots, "wrap", "false").toLowerCase());
+    return (
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--code">
+        <CodeDisplayContent content={content} language={language} fileName={fileName} defaultWrap={defaultWrap} />
       </VisibleScrollFrame>
     );
   }
@@ -3286,7 +3311,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, sho
   }
   if (kind === "mermaid") {
     return (
-      <VisibleScrollFrame className="af-work-display-body">
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--mermaid">
         <MermaidPreview code={content} />
         {showMermaidSource ? (
           <details className="af-work-display-mermaid-source">
@@ -3303,7 +3328,7 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, sho
 function DisplayFullscreenPreview({ node, onClose }) {
   const htmlFrameRef = useRef(null);
   const kind = workspaceDisplayKindFromData(node?.data);
-  const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : "Display 预览");
+  const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : kind === "code" ? "代码展示" : "Display 预览");
   const readOnly = Boolean(node?.data?.readOnly);
   const [markdownEditing, setMarkdownEditing] = useState(false);
   const [markdownDraft, setMarkdownDraft] = useState("");
@@ -3423,11 +3448,16 @@ function DisplayFullscreenPreview({ node, onClose }) {
             </button>
           </div>
         </div>
-        <div className="af-display-preview-content">
+        <div className={`af-display-preview-content${kind === "markdown" && !markdownEditing ? " af-display-preview-content--reading" : ""}`}>
           {kind === "markdown" && markdownEditing ? (
             <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={node.data?.onUploadWorkspaceImage} readOnly={readOnly} />
           ) : (
-            <DisplayBody data={node.data} flowParams={node.data?.flowParams} htmlFrameRef={htmlFrameRef} />
+            <DisplayBody
+              data={node.data}
+              flowParams={node.data?.flowParams}
+              htmlFrameRef={htmlFrameRef}
+              readingMode={kind === "markdown"}
+            />
           )}
         </div>
       </div>
@@ -3486,6 +3516,13 @@ function DisplayPickerPreview({ node }) {
         <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, node?.data?.flowParams, opts)} />
       </div>
     );
+  }
+  if (kind === "code") {
+    const inputSlots = node?.data?.inputs || node?.data?.input || [];
+    const language = workspaceSlotConfigValue(inputSlots, "language", "");
+    const fileName = workspaceSlotConfigValue(inputSlots, "fileName", "") || (filePath ? filePath.split("/").pop() : "");
+    const defaultWrap = ["true", "1", "yes", "on"].includes(workspaceSlotConfigValue(inputSlots, "wrap", "false").toLowerCase());
+    return <CodeDisplayContent content={content} language={language} fileName={fileName} defaultWrap={defaultWrap} />;
   }
   if (kind === "chart") {
     return <ChartDisplayContent content={content} />;
@@ -3787,6 +3824,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
 }
 
 function displayFileExtension(kind) {
+  if (kind === "code") return "txt";
   if (kind === "mermaid") return "mmd";
   if (kind === "ascii") return "txt";
   if (kind === "html") return "html";
@@ -3934,7 +3972,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height })
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
+  const title = data?.label || (kind === "code" ? "Code" : kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
   const shareNodeId = String(data?.sourceNodeId || id);
   const sharingDisplay = data?.sharingDisplayNodeId === shareNodeId;
   const persistedDisplaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
@@ -5057,6 +5095,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
             onChange={(event) => updateConfig({ displayType: event.target.value })}
           >
             <option value="markdown">Markdown</option>
+            <option value="code">Code</option>
             <option value="html">HTML</option>
             <option value="react">React</option>
             <option value="table">Table</option>
@@ -5985,7 +6024,7 @@ function workspaceSlotConfigJsonValue(slots, name) {
 
 function normalizeContextRunDisplayType(value) {
   const text = String(value || "").trim().toLowerCase();
-  return ["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
+  return ["markdown", "code", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
 }
 
 function workspaceModelEntryId(entry) {
@@ -5996,6 +6035,7 @@ function workspaceModelEntryId(entry) {
 
 function contextRunDisplayDefinitionId(displayType) {
   const kind = normalizeContextRunDisplayType(displayType);
+  if (kind === "code") return "display_code";
   if (kind === "html") return "display_html";
   if (kind === "react") return "display_react_app";
   if (kind === "table") return "display_table";
@@ -9111,6 +9151,7 @@ function WorkspacePageInner() {
       background,
       requestId,
       currentRequestId: workspaceLoadRequestRef.current,
+      interactionActive: workspaceCanvasIsInteracting(),
       dirty: workspaceDirtyRef.current,
       startedEditVersion,
       currentEditVersion: workspaceEditVersionRef.current,
@@ -9118,6 +9159,9 @@ function WorkspacePageInner() {
       currentRevision: workspaceRevisionRef.current,
     });
     if (skipReason === "superseded") {
+      return { skipped: true, reason: skipReason };
+    }
+    if (skipReason === "interaction-active") {
       return { skipped: true, reason: skipReason };
     }
     if (skipReason === "local-edits") {
@@ -9238,7 +9282,7 @@ function WorkspacePageInner() {
     );
     loadedRef.current = true;
     return { skipped: false };
-  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
+  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceCanvasIsInteracting, workspaceViewportStorageKey]);
 
   const scheduleWorkspaceRemoteRefresh = useCallback((event = {}) => {
     if (!loadedRef.current) return;
@@ -9284,8 +9328,12 @@ function WorkspacePageInner() {
       workspaceRemoteRefreshQueuedRef.current = false;
       workspaceRemoteRefreshInFlightRef.current = true;
       try {
-        await loadWorkspace({ background: true });
-        workspaceRemoteRefreshTargetRevisionRef.current = workspaceRevisionRef.current;
+        const result = await loadWorkspace({ background: true });
+        if (result?.reason === "interaction-active") {
+          workspaceRemoteRefreshQueuedRef.current = true;
+        } else {
+          workspaceRemoteRefreshTargetRevisionRef.current = workspaceRevisionRef.current;
+        }
       } catch (error) {
         workspaceRemoteRefreshTargetRevisionRef.current = "";
         setStatus(String(error.message || error));
@@ -13562,16 +13610,13 @@ function WorkspacePageInner() {
       pending,
       transientCanvasNodesRef.current,
     );
-    const nextTransientNodes = workspaceMode === "display"
-      ? appliedTransientNodes
-      : expandWorkspaceGroupsToMembers(appliedTransientNodes, {
-          padding: WORKSPACE_GROUP_PADDING,
-          minWidth: MIN_WORKSPACE_GROUP_WIDTH,
-          minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
-        });
+    // During drag/resize, React Flow owns the live geometry. Group bounds are
+    // reconciled once on pointer-up; doing it on every frame can round or grow
+    // the group and make the pointer feel as if remote state pulled it back.
+    const nextTransientNodes = appliedTransientNodes;
     transientCanvasNodesRef.current = nextTransientNodes;
     reactFlowStore.getState().setNodes(nextTransientNodes);
-  }, [reactFlowStore, workspaceMode]);
+  }, [reactFlowStore]);
 
   const scheduleTransientCanvasNodeChanges = useCallback((changes) => {
     pendingTransientCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
@@ -14118,12 +14163,15 @@ function WorkspacePageInner() {
   const addDisplayFromFile = useCallback(async (item, position) => {
     const fileName = String(item?.name || item?.path || "").toLowerCase();
     const ext = fileName.split(".").pop();
-    const displayDefinitionId = ["jsx", "tsx", "js"].includes(ext)
+    const codeExtensions = new Set(["mjs", "cjs", "ts", "py", "kt", "kts", "java", "go", "rs", "sh", "bash", "zsh", "yaml", "yml", "xml", "css", "scss", "sql"]);
+    const displayDefinitionId = ["js", "jsx", "tsx"].includes(ext)
       ? "display_react_app"
       : ext === "html"
       ? "display_html"
       : ext === "csv" || ext === "tsv" || (ext === "json" && /\b(table|data|rows|report)\b/i.test(fileName))
         ? "display_table"
+      : codeExtensions.has(ext) || (ext === "json" && !/\b(table|data|rows|report)\b/i.test(fileName))
+        ? "display_code"
       : ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
         ? "display_image"
         : "display_markdown";
@@ -14144,7 +14192,13 @@ function WorkspacePageInner() {
     }
     const primaryName = displayDefinitionId === "display_image" ? "src" : "content";
     const inputs = cloneSlots(def.inputs).map((slot) => (
-      slot.name === primaryName ? { ...slot, default: content, value: content } : slot
+      slot.name === primaryName
+        ? { ...slot, default: content, value: content }
+        : displayDefinitionId === "display_code" && slot.name === "language"
+          ? { ...slot, default: ext, value: ext }
+          : displayDefinitionId === "display_code" && slot.name === "fileName"
+            ? { ...slot, default: String(item?.name || ""), value: String(item?.name || "") }
+            : slot
     ));
     const outputs = cloneSlots(def.outputs).map((slot) => (
       slot.name === primaryName ? { ...slot, default: content, value: content } : slot

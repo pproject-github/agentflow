@@ -40,6 +40,13 @@ test("background workspace refresh never overwrites edits made while its request
   assert.equal(workspaceBackgroundLoadSkipReason({ ...cleanLoad, currentRevision: "revision-b" }), "local-edits");
 });
 
+test("background workspace refresh never overwrites an active canvas interaction", () => {
+  assert.equal(
+    workspaceBackgroundLoadSkipReason({ ...cleanLoad, interactionActive: true }),
+    "interaction-active",
+  );
+});
+
 test("an older workspace refresh cannot overwrite a newer refresh", () => {
   assert.equal(
     workspaceBackgroundLoadSkipReason({ ...cleanLoad, requestId: 2 }),

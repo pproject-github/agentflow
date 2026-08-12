@@ -50,8 +50,24 @@ test("Mermaid 只在 Workspace 编辑卡片保留源码，所有展示面只显�
   assert.doesNotMatch(displaySource, /node\.kind === "mermaid" \|\| node\.kind === "ascii"/);
 });
 
+test("Mermaid 使用单层自适应 SVG，不再由内部容器裁切", () => {
+  assert.match(workspaceSource, /className="af-work-node__mermaid-preview"[\s\S]*?width=\{maxX\}[\s\S]*?height=\{maxY\}/);
+  assert.match(workspaceSource, /af-work-display-body af-work-display-body--mermaid/);
+  assert.match(rendererSource, /className="af-md-mermaid-preview"[\s\S]*?width=\{maxX\}[\s\S]*?height=\{maxY\}/);
+  assert.doesNotMatch(rendererSource, /<div className="af-md-mermaid-preview">/);
+  assert.match(css, /\.af-work-node__mermaid-preview\s*\{[\s\S]*?width: 100%;[\s\S]*?height: auto;[\s\S]*?overflow: visible;/);
+  assert.doesNotMatch(css, /\.af-work-node__mermaid-preview\s*\{[^}]*max-height:/);
+});
+
 test("Table 展示允许换行并使用固定列布局", () => {
   assert.match(css, /\.af-work-display-body--table \.af-work-display-table th,[\s\S]*?white-space: normal;[\s\S]*?overflow-wrap: anywhere;/);
   assert.match(css, /\.af-work-display-body--table \.af-work-display-table\s*\{[\s\S]*?table-layout: fixed;/);
   assert.match(css, /\.af-public-display-table\s*\{[\s\S]*?table-layout: fixed;/);
+});
+
+test("Markdown 放大后切换为居中限宽的阅读模式", () => {
+  assert.match(workspaceSource, /readingMode=\{kind === "markdown"\}/);
+  assert.match(workspaceSource, /<article className="af-markdown-reading-surface">/);
+  assert.match(css, /\.af-markdown-reading-surface\s*\{[\s\S]*?width: min\(100%, 72rem\);[\s\S]*?margin: 0 auto;/);
+  assert.match(css, /\.af-display-preview-content--reading \.af-visible-scroll-frame__scroller\.af-work-display-body--markdown\s*\{[\s\S]*?line-height: 1\.78;/);
 });

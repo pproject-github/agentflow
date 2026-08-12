@@ -186,6 +186,14 @@
 - Inputs: 0. `prev`:node; 1. `content`:text; 2. `filePath`:file; 3. `workspaceContext`:text
 - Outputs: 0. `content`:text; 1. `next`:node
 
+### display_code
+
+- Display: Code Display
+- Description: Display source code with language highlighting, line numbers, copy, wrap, and download controls; passes content downstream as text
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `content`:text; 2. `language`:text; 3. `fileName`:text; 4. `wrap`:bool = false
+- Outputs: 0. `content`:text; 1. `next`:node
+
 ### display_html
 
 - Display: HTML Display

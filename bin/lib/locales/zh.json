@@ -351,6 +351,10 @@
       "displayName": "Markdown 展示",
       "description": "在 Workspace 画布中渲染 Markdown 内容，并将文本继续传给下游"
     },
+    "display_code": {
+      "displayName": "代码展示",
+      "description": "在 Workspace 画布中高亮展示代码，支持行号、复制、换行和下载，并将代码继续传给下游"
+    },
     "display_mermaid": {
       "displayName": "Mermaid 展示",
       "description": "在 Workspace 画布中渲染 Mermaid 图，并将源码继续传给下游"

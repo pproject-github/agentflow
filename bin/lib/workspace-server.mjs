@@ -2210,6 +2210,7 @@ function workspaceInstanceText(instance) {
 function workspaceDisplayKind(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_markdown") return "markdown";
+  if (id === "display_code") return "code";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
@@ -2240,6 +2241,7 @@ export function workspaceDisplayTextFilePath(value, kind = "") {
     html: new Set(["html", "htm"]),
     react: new Set(["json", "jsx", "tsx", "js", "txt"]),
     markdown: new Set(["md", "markdown", "txt"]),
+    code: new Set(["txt", "js", "jsx", "mjs", "cjs", "ts", "tsx", "py", "kt", "kts", "java", "go", "rs", "sh", "bash", "zsh", "json", "yaml", "yml", "xml", "html", "htm", "css", "scss", "sql", "md"]),
     mermaid: new Set(["mmd", "mermaid", "txt"]),
     ascii: new Set(["txt", "log"]),
     chart: new Set(["json"]),
@@ -2601,6 +2603,7 @@ function workspaceDownstreamSlotKind(slot) {
   const name = String(slot?.name || "").trim().toLowerCase();
   const type = String(slot?.type || "").trim().toLowerCase();
   if (type === "markdown" || name === "markdown" || name.endsWith("markdown")) return "markdown";
+  if (type === "code" || name === "code" || name.endsWith("code")) return "code";
   if (type === "html" || name === "html" || name.endsWith("html")) return "html";
   if (type === "mermaid" || name === "mermaid" || name.endsWith("mermaid")) return "mermaid";
   if (type === "ascii" || name === "ascii") return "ascii";
@@ -2642,6 +2645,7 @@ function workspaceResultOutputSpec(graph, nodeId) {
     html: "html",
     react: "json",
     markdown: "md",
+    code: "txt",
     mermaid: "mmd",
     ascii: "txt",
     chart: "json",
@@ -2714,6 +2718,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     html: "内容必须是可直接放入 iframe 渲染的 HTML；不要使用 Markdown 代码围栏。",
     react: "内容必须是 React 工程 JSON，包含 title、entry、files；files 至少包含 src/App.jsx，可包含 CSS 文件。",
     markdown: "内容必须是 Markdown 正文；除非正文确实需要代码块，否则不要额外包裹代码围栏。",
+    code: "内容必须是原始代码文本；不要使用 Markdown 代码围栏，也不要附加解释。",
     mermaid: "内容必须是 Mermaid 图表代码，例如 flowchart/sequenceDiagram；不要使用 Markdown 代码围栏。",
     ascii: "内容必须是纯文本/ASCII 图或表格；不要输出 HTML 或 Markdown 装饰。",
     image: "内容必须是可作为 img src 使用的图片地址、data URL 或 base64 data URL；不要输出 Markdown 图片语法。",
@@ -4107,7 +4112,7 @@ function isWorkspaceOneClickTaskDefinitionId(definitionId) {
 
 function workspaceContextRunDisplayKind(instance) {
   const raw = workspaceSlotValue(workspaceSlotByName(instance, "displayType")).trim().toLowerCase();
-  if (["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(raw)) return raw;
+  if (["markdown", "code", "html", "react", "table", "chart", "ascii", "mermaid"].includes(raw)) return raw;
   return "markdown";
 }
 
@@ -4180,7 +4185,7 @@ function buildWorkspaceMcpManifestBlock(results, servers = [], selectedNames = [
   ].join("\n");
 }
 
-function workspaceWriteDisplayContent(instance, content) {
+export function workspaceWriteDisplayContent(instance, content) {
   const next = { ...(instance || {}) };
   const kind = workspaceDisplayKind(next.definitionId);
   const unwrapped = workspaceUnwrapOutputEnvelopeForDisplay(content);
@@ -4189,12 +4194,12 @@ function workspaceWriteDisplayContent(instance, content) {
   next.displayReloadKey = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   next.body = text;
   next.input = (Array.isArray(next.input) ? next.input : []).map((slot) => (
-    String(slot?.name || "") === primaryName || String(slot?.type || "") === "text"
+    String(slot?.name || "") === primaryName
       ? { ...slot, default: text, value: text }
       : slot
   ));
   next.output = (Array.isArray(next.output) ? next.output : []).map((slot) => (
-    String(slot?.name || "") === primaryName || String(slot?.type || "") === "text"
+    String(slot?.name || "") === primaryName
       ? { ...slot, default: text, value: text }
       : slot
   ));

@@ -2,6 +2,7 @@ export function workspaceBackgroundLoadSkipReason({
   background = false,
   requestId = 0,
   currentRequestId = 0,
+  interactionActive = false,
   dirty = false,
   startedEditVersion = 0,
   currentEditVersion = 0,
@@ -10,6 +11,9 @@ export function workspaceBackgroundLoadSkipReason({
 } = {}) {
   if (requestId !== currentRequestId) return "superseded";
   if (!background) return "";
+  // A refresh can start immediately before a pointer interaction. Re-check at
+  // response time so its stale graph cannot replace live drag/resize geometry.
+  if (interactionActive) return "interaction-active";
   if (
     dirty
     || currentEditVersion !== startedEditVersion
