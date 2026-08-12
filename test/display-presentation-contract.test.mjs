@@ -31,8 +31,20 @@ test("Group 保存成员、移动成员，并投影到 Display 与公开 Canvas"
   assert.match(css, /\.af-public-display-group\s*\{/);
 });
 
-test("Mermaid 展示图优先且源码折叠，公开页不再退化成源码", () => {
+test("Group 缩放使用实时尺寸，解组动作不会伪装成删除", () => {
+  assert.match(workspaceSource, /const \[resizingGroup, setResizingGroup\] = useState\(false\)/);
+  assert.match(workspaceSource, /liveSize: normalizeWorkspaceGroupSize\(\{ width, height \}\)/);
+  assert.match(workspaceSource, /onResizeStart=\{\(\) => setResizingGroup\(true\)\}/);
+  assert.match(workspaceSource, /aria-label="解组"/);
+  assert.match(workspaceSource, /title="解组（保留内部节点）"/);
+  assert.match(workspaceSource, />ungroup<\/span>/);
+});
+
+test("Mermaid 只在 Workspace 编辑卡片保留源码，所有展示面只显示结果", () => {
   assert.match(workspaceSource, /<details className="af-work-display-mermaid-source">/);
+  assert.match(workspaceSource, /showMermaidSource=\{!presentationMode\}/);
+  assert.match(workspaceSource, /showMermaidSource \? \(/);
+  assert.doesNotMatch(workspaceSource, /<div className="af-display-picker-preview__diagram">[\s\S]*?<pre>\{content\}<\/pre>/);
   assert.match(rendererSource, /export function MermaidDisplayBlock/);
   assert.match(displaySource, /node\.kind === "mermaid" \? <MermaidDisplayBlock code=\{content\} \/>/);
   assert.doesNotMatch(displaySource, /node\.kind === "mermaid" \|\| node\.kind === "ascii"/);

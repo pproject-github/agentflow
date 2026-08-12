@@ -104,6 +104,7 @@ import {
 } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
+import { expandWorkspaceGroupsToMembers } from "../workspaceGroups.js";
 
 const WorkflowAssistantThread = lazy(() => import("../components/WorkflowAssistantThread.jsx"));
 
@@ -2249,7 +2250,11 @@ function graphToFlow(graph, palette) {
   // 首次加载的边和用户刚拉出的边遵守同一条规则：边存在，端点 handle 就必须可见。
   // 否则 React Flow 会保留语义边，但因为端点没有渲染而完全画不出来。
   const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges);
-  const nodes = [...groupNodes, ...edgeAwareNodes];
+  const nodes = expandWorkspaceGroupsToMembers([...groupNodes, ...edgeAwareNodes], {
+    padding: WORKSPACE_GROUP_PADDING,
+    minWidth: MIN_WORKSPACE_GROUP_WIDTH,
+    minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
+  });
   return { nodes, edges: filterValidEdges(edges, nodes), instances };
 }
 
@@ -3197,7 +3202,7 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
+function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, showMermaidSource = false }) {
   const kind = workspaceDisplayKindFromData(data);
   const rawContent = displayContent(data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
@@ -3283,10 +3288,12 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     return (
       <VisibleScrollFrame className="af-work-display-body">
         <MermaidPreview code={content} />
-        <details className="af-work-display-mermaid-source">
-          <summary>查看 Mermaid 源码</summary>
-          <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
-        </details>
+        {showMermaidSource ? (
+          <details className="af-work-display-mermaid-source">
+            <summary>查看 Mermaid 源码</summary>
+            <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
+          </details>
+        ) : null}
       </VisibleScrollFrame>
     );
   }
@@ -3490,7 +3497,6 @@ function DisplayPickerPreview({ node }) {
     return (
       <div className="af-display-picker-preview__diagram">
         <MermaidPreview code={content} />
-        <pre>{content}</pre>
       </div>
     );
   }
@@ -4310,7 +4316,13 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height })
       {kind === "markdown" && markdownEditing ? (
         <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={data?.onUploadWorkspaceImage} readOnly={readOnly} />
       ) : (
-        <DisplayBody data={data} flowParams={data?.flowParams} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
+        <DisplayBody
+          data={data}
+          flowParams={data?.flowParams}
+          htmlFrameRef={htmlFrameRef}
+          htmlFrameVersion={htmlFrameVersion}
+          showMermaidSource={!presentationMode}
+        />
       )}
       <WorkspaceNodeChat nodeId={id} data={data} />
     </div>
@@ -5344,13 +5356,19 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   );
 }
 
-function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
+function WorkspaceGroupNode({ id, data, selected, deleteNode, width, height }) {
   const { setNodes } = useReactFlow();
   const readOnly = Boolean(data?.readOnly);
-  const size = normalizeWorkspaceGroupSize(data?.nodeSize) || {
+  const [resizingGroup, setResizingGroup] = useState(false);
+  const persistedSize = normalizeWorkspaceGroupSize(data?.nodeSize) || {
     width: MIN_WORKSPACE_GROUP_WIDTH,
     height: MIN_WORKSPACE_GROUP_HEIGHT,
   };
+  const size = workspaceResizePresentationSize({
+    resizing: resizingGroup,
+    liveSize: normalizeWorkspaceGroupSize({ width, height }),
+    persistedSize,
+  });
   const onSelectGroupPointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".af-work-group-node__resize, .af-work-group-node__delete")) return;
@@ -5372,6 +5390,8 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
           minWidth={MIN_WORKSPACE_GROUP_WIDTH}
           minHeight={MIN_WORKSPACE_GROUP_HEIGHT}
           position="bottom-right"
+          onResizeStart={() => setResizingGroup(true)}
+          onResizeEnd={() => setResizingGroup(false)}
         >
           <span className="material-symbols-outlined">open_in_full</span>
         </NodeResizeControl>
@@ -5386,10 +5406,10 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
               event.stopPropagation();
               deleteNode?.(id);
             }}
-            aria-label="删除分组"
-            title="删除分组"
+            aria-label="解组"
+            title="解组（保留内部节点）"
           >
-            <span className="material-symbols-outlined">close</span>
+            <span className="material-symbols-outlined">ungroup</span>
           </button>
         ) : null}
       </div>
@@ -13477,7 +13497,7 @@ function WorkspacePageInner() {
         }
       }
       const applied = applyNodeChanges(changes, current);
-      const next = resized.size === 0
+      const resizedNodes = resized.size === 0
         ? applied
         : applied.map((node) => {
             const size = resized.get(node.id);
@@ -13494,6 +13514,11 @@ function WorkspacePageInner() {
               data: nextData,
             };
           });
+      const next = expandWorkspaceGroupsToMembers(resizedNodes, {
+        padding: WORKSPACE_GROUP_PADDING,
+        minWidth: MIN_WORKSPACE_GROUP_WIDTH,
+        minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
+      });
       if (!interaction.mutated) {
         workspaceAutosaveSuppressedStateRef.current = {
           nodes: next,
@@ -13533,13 +13558,20 @@ function WorkspacePageInner() {
     const pending = pendingTransientCanvasNodeChangesRef.current;
     pendingTransientCanvasNodeChangesRef.current = [];
     if (pending.length === 0) return;
-    const nextTransientNodes = applyNodeChanges(
+    const appliedTransientNodes = applyNodeChanges(
       pending,
       transientCanvasNodesRef.current,
     );
+    const nextTransientNodes = workspaceMode === "display"
+      ? appliedTransientNodes
+      : expandWorkspaceGroupsToMembers(appliedTransientNodes, {
+          padding: WORKSPACE_GROUP_PADDING,
+          minWidth: MIN_WORKSPACE_GROUP_WIDTH,
+          minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
+        });
     transientCanvasNodesRef.current = nextTransientNodes;
     reactFlowStore.getState().setNodes(nextTransientNodes);
-  }, [reactFlowStore]);
+  }, [reactFlowStore, workspaceMode]);
 
   const scheduleTransientCanvasNodeChanges = useCallback((changes) => {
     pendingTransientCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
