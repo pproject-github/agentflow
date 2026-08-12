@@ -1,0 +1,43 @@
+builtin/web-ui/dist/assets/index-CVCS91A8.js
+  s_0662e50ad860f3::t_4ed69633c10399 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91,93,97-100,106-107,110,121-122,125-127,129,208-214,218,220,223,267-268,272,276,278-282,286-287,289-291,295,297,312,314,318,326,328,332,340-346,350,357,371,382-383,386,404,413,449,467,494,530,546,570,614,633,645,660,671,703,716,736,767,782,793,809,823,831,840,844,870
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CpodLelr.js
+  s_0662e50ad860f3::t_4ed69633c10399 1
+builtin/web-ui/dist/index.html
+  s_0662e50ad860f3::t_4ed69633c10399 33
+test/display-presentation-contract.test.mjs
+  s_0662e50ad860f3::t_76d5841501fa5b 34-42
+  s_0662e50ad860f3::t_8a20571b6ee1b4 43,45-47
+builtin/web-ui/src/workspaceGroups.js
+  s_0662e50ad860f3::t_76d5841501fa5b 25-26,65-66
+  s_0662e50ad860f3::t_98838963ee39e3 1-24,27-64,67-98
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_0662e50ad860f3::t_98838963ee39e3 107,2253-2257,13500,13517-13521
+  s_0662e50ad860f3::t_76d5841501fa5b 5359,5362-5363,5367-5371,5393-5394,5409-5410,5412,13561,13565-13571,13574
+  s_0662e50ad860f3::t_8a20571b6ee1b4 3205,3291-3296,4319-4325
+test/workspace-group-bounds.test.mjs
+  s_0662e50ad860f3::t_98838963ee39e3 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4c1b4bce0ad40cfe1d30cf60fc998663cfe9fdd1",
+  "prompts": {},
+  "logical_commit_id": "4c1b4bce0ad40cfe1d30cf60fc998663cfe9fdd1",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0662e50ad860f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff00a-2499-7873-a51d-2567a2b8a2d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 20964,
+      "total_deletions": 744
+    }
+  }
+}
