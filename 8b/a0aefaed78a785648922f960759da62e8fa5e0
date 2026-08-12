@@ -1,0 +1,23 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Co6weR22.js
+  h_76bafdbbff3476 1
+builtin/web-ui/dist/assets/index-HjZbCn99.js
+  h_76bafdbbff3476 210,870
+builtin/web-ui/dist/index.html
+  h_76bafdbbff3476 33
+package-lock.json
+  h_76bafdbbff3476 3,9
+package.json
+  h_76bafdbbff3476 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8ba0aefaed78a785648922f960759da62e8fa5e0",
+  "prompts": {},
+  "logical_commit_id": "8ba0aefaed78a785648922f960759da62e8fa5e0",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}
