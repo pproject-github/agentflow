@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { getUserPipelinesRoot } from "./paths.mjs";
+import { ARCHIVED_PIPELINES_DIR_NAME, PIPELINES_DIR, getUserPipelinesRoot } from "./paths.mjs";
 
 export const WORKSPACE_PREVIEW_METADATA_FILENAME = ".agentflow-workspace-preview.json";
 export const DEFAULT_WORKSPACE_PREVIEW_TTL_MS = 2 * 60 * 60 * 1000;
@@ -42,6 +42,17 @@ export function workspacePreviewFlowDir(flowId, userId = "") {
   return path.join(getUserPipelinesRoot(userId), safeId);
 }
 
+/**
+ * CLI 生成的预览要由另一个 Web 登录用户打开，所以不能放在创建者的 personal 目录。
+ * 放到 Workspace 的 archived 区域同时得到两条性质：随机链接跨账号可读，所有现有写入/
+ * 运行路由又都会按 archived 拒绝操作。
+ */
+export function workspaceSharedPreviewFlowDir(workspaceRoot, flowId) {
+  const safeId = safePreviewId(flowId);
+  if (!safeId) return "";
+  return path.join(path.resolve(workspaceRoot), PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, safeId);
+}
+
 export function createWorkspacePreviewId() {
   return `preview_${crypto.randomBytes(10).toString("hex")}`;
 }
@@ -71,4 +82,3 @@ export function listExpiredWorkspacePreviews(userPipelinesRoot, now = Date.now()
   }
   return expired;
 }
-

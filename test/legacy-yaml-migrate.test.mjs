@@ -156,6 +156,53 @@ ui: {nodePositions: {}}
   assert.equal(graph.instances.gate.script, undefined);
 });
 
+test("旧节点 id 不是 JS 标识符时稳定改名并保持连线与布局", () => {
+  const { graph, renamedIds } = legacyYamlToDesignGraph(`instances:
+  run-node:
+    definitionId: control_start
+    output: [{type: node, name: next}]
+  1-agent:
+    definitionId: agent_subAgent
+    input: [{type: node, name: prev}]
+    output: [{type: node, name: next}, {type: text, name: result}]
+edges:
+  - {source: run-node, target: 1-agent, sourceHandle: output-0, targetHandle: input-0}
+ui:
+  nodePositions:
+    run-node: {x: 10, y: 20}
+    1-agent: {x: 30, y: 40}
+`);
+
+  assert.deepEqual(renamedIds, [
+    { from: "run-node", to: "run_node" },
+    { from: "1-agent", to: "node_1_agent" },
+  ]);
+  assert.deepEqual(Object.keys(graph.instances), ["run_node", "node_1_agent"]);
+  assert.deepEqual(graph.edges, [{
+    source: "run_node",
+    target: "node_1_agent",
+    sourceHandle: "output-0",
+    targetHandle: "input-0",
+  }]);
+  assert.deepEqual(graph.ui.nodePositions.node_1_agent, { x: 30, y: 40 });
+
+  const dir = seedYamlFlow(`instances:
+  run-node:
+    definitionId: control_start
+    output: [{type: node, name: next}]
+  1-agent:
+    definitionId: agent_subAgent
+    input: [{type: node, name: prev}]
+    output: [{type: node, name: next}, {type: text, name: result}]
+edges:
+  - {source: run-node, target: 1-agent, sourceHandle: output-0, targetHandle: input-0}
+ui: {nodePositions: {}}
+`);
+  const migrated = migrateFlowDirToDsl(dir);
+  assert.equal(migrated.format, "dsl", migrated.degradedReason || "");
+  assert.deepEqual(migrated.renamedIds, renamedIds);
+});
+
 test("够不着代码形态但离开了 yaml，也算成功", () => {
   // tool_nodejs 同时带 script 和 body：body 是文档、运行时忽略，但代码里只写得下 script，
   // 往返比对因此过不去 -> 退回 workspace.graph.json。这仍然是一次成功的迁移：

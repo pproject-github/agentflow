@@ -34,7 +34,7 @@ import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
 import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
-import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspacePreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
+import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
@@ -1328,7 +1328,7 @@ async function workspaceRoutes(req, res, ctx) {
       }
       const rawRequestedId = String(payload.previewId || "").trim();
       const flowId = rawRequestedId || createWorkspacePreviewId();
-      const flowDir = workspacePreviewFlowDir(flowId, authUser.userId);
+      const flowDir = workspaceSharedPreviewFlowDir(root, flowId);
       if (!flowDir) {
         json(res, 400, { error: "Invalid previewId" });
         return;
@@ -1367,8 +1367,8 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       const baseUrl = `${url.protocol}//${url.host}`;
-      const workspaceUrl = `${baseUrl}/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`;
-      json(res, 200, { ok: true, flowId, flowSource: "user", preview: true, expiresAt: metadata.expiresAt, url: workspaceUrl });
+      const workspaceUrl = `${baseUrl}/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=workspace&archived=1`;
+      json(res, 200, { ok: true, flowId, flowSource: "workspace", archived: true, preview: true, expiresAt: metadata.expiresAt, url: workspaceUrl });
       return;
     }
 

@@ -67,6 +67,34 @@ function slotsOf(instance, definitionId, kind) {
 
 const isNodeSlot = (slot) => String(slot?.type || "") === "node";
 
+// DSL 里的节点 id 同时也是顶层 `const` 变量名。旧 YAML 允许 `foo-bar`、数字开头，
+// 甚至 JS 关键字；直接交给 codegen 会生成无法解析的 workspace.flow.js，整张图只能退回
+// graph.json。迁移时稳定地改成合法且唯一的绑定名，并把改名清单返回给调用方。
+const JS_RESERVED_WORDS = new Set([
+  "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+  "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function",
+  "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "package", "eval",
+  "private", "protected", "public", "return", "static", "super", "switch", "this", "throw", "true",
+  "try", "typeof", "var", "void", "while", "with", "yield",
+]);
+
+function legacyNodeIdMap(ids) {
+  const used = new Set();
+  const mapping = new Map();
+  for (const raw of ids) {
+    let base = String(raw || "").replace(/[^A-Za-z0-9_$]/g, "_");
+    if (!/^[A-Za-z_$]/.test(base)) base = `node_${base}`;
+    if (!base) base = "node";
+    if (JS_RESERVED_WORDS.has(base)) base = `${base}_node`;
+    let next = base;
+    let suffix = 2;
+    while (used.has(next)) next = `${base}_${suffix++}`;
+    used.add(next);
+    mapping.set(raw, next);
+  }
+  return mapping;
+}
+
 /**
  * 把老实例的槽位搬到新定义的槽位表上：先对名字，对不上的按位置兜底。
  *
@@ -121,6 +149,7 @@ function rebuildSlots(oldSlots, newDefSlots) {
  *   remapped: Array<{ id: string, from: string, to: string, caveat?: string }>,
  *   dropped: Array<{ id: string, definitionId: string, reason: string }>,
  *   droppedEdges: Array<{ source: string, target: string, reason: string }>,
+ *   renamedIds: Array<{ from: string, to: string }>,
  *   warnings: string[],
  * }}
  */
@@ -129,10 +158,14 @@ export function legacyYamlToDesignGraph(yamlText) {
   if (!parsed || typeof parsed !== "object") throw new Error("flow.yaml 解析不出对象");
   const srcInstances = parsed.instances && typeof parsed.instances === "object" ? parsed.instances : {};
   const srcEdges = Array.isArray(parsed.edges) ? parsed.edges : [];
+  const idMap = legacyNodeIdMap(Object.keys(srcInstances));
 
   const remapped = [];
   const dropped = [];
   const droppedEdges = [];
+  const renamedIds = [...idMap]
+    .filter(([from, to]) => from !== to)
+    .map(([from, to]) => ({ from, to }));
   const warnings = [];
 
   /** id -> { input, output, renameIn, renameOut }，用来重接边。 */
@@ -141,7 +174,8 @@ export function legacyYamlToDesignGraph(yamlText) {
   const benignDrops = new Set();
   const instances = {};
 
-  for (const [id, raw] of Object.entries(srcInstances)) {
+  for (const [legacyId, raw] of Object.entries(srcInstances)) {
+    const id = idMap.get(legacyId);
     const instance = raw && typeof raw === "object" ? raw : {};
     const from = String(instance.definitionId || "");
     const oldIn = slotsOf(instance, from, "input");
@@ -154,17 +188,17 @@ export function legacyYamlToDesignGraph(yamlText) {
     // 终点节点本来就没有对应物需要表达。所以标 benign——报出来，但不算有损。
     if (hasRemap && to === null) {
       dropped.push({
-        id,
+        id: legacyId,
         definitionId: from,
         benign: true,
         reason: "Workspace 没有终点节点，跑到没有后继就结束",
       });
-      benignDrops.add(id);
+      benignDrops.add(legacyId);
       continue;
     }
     if (!hasRemap && definitionOf(from).runtime === "none") {
       dropped.push({
-        id,
+        id: legacyId,
         definitionId: from,
         benign: false,
         reason: DEFINITIONS[from]
@@ -180,13 +214,14 @@ export function legacyYamlToDesignGraph(yamlText) {
       const rebuiltOut = rebuildSlots(oldOut, def.output || []);
       const next = { ...instance, definitionId: to, input: rebuiltIn.slots, output: rebuiltOut.slots };
       instances[id] = next;
-      kept.set(id, {
+      kept.set(legacyId, {
+        id,
         input: next.input,
         output: next.output,
         renameIn: rebuiltIn.renames,
         renameOut: rebuiltOut.renames,
       });
-      const entry = { id, from, to };
+      const entry = { id: legacyId, from, to };
       const droppedFields = [];
       for (const field of REMAP_DROPPED_FIELDS[to] || []) {
         const text = String(next[field] ?? "").trim();
@@ -204,7 +239,7 @@ export function legacyYamlToDesignGraph(yamlText) {
       // 拿定义去覆盖会把作者加的输入抹掉。
       const next = { ...instance, input: [...oldIn], output: [...oldOut] };
       instances[id] = next;
-      kept.set(id, { input: next.input, output: next.output, renameIn: new Map(), renameOut: new Map() });
+      kept.set(legacyId, { id, input: next.input, output: next.output, renameIn: new Map(), renameOut: new Map() });
     }
   }
 
@@ -241,28 +276,28 @@ export function legacyYamlToDesignGraph(yamlText) {
     }
     // Workspace 禁止 fan-in：同一个输入槽只能有一条入边。老图里靠 control_anyOne
     // 汇合的分支，删掉汇合点之后会撞在同一个槽上。
-    const key = `${target} input-${tgtIdx}`;
+    const key = `${to.id} input-${tgtIdx}`;
     if (takenTargets.has(key)) {
       droppedEdges.push({ source, target, benign: false, reason: `${target}.${tgtFinal} 已经有入边了，Workspace 不允许 fan-in` });
       continue;
     }
     takenTargets.add(key);
-    edges.push({ source, target, sourceHandle: `output-${srcIdx}`, targetHandle: `input-${tgtIdx}` });
+    edges.push({ source: from.id, target: to.id, sourceHandle: `output-${srcIdx}`, targetHandle: `input-${tgtIdx}` });
   }
 
   // ── ui ────────────────────────────────────────────────────────────────────
   const srcUi = parsed.ui && typeof parsed.ui === "object" ? parsed.ui : {};
   const nodePositions = {};
   for (const [id, pos] of Object.entries(srcUi.nodePositions || {})) {
-    if (kept.has(id)) nodePositions[id] = pos;
+    if (kept.has(id)) nodePositions[kept.get(id).id] = pos;
   }
   const ui = { nodePositions, nodeSizes: {} };
   if (typeof srcUi.description === "string" && srcUi.description.trim()) ui.description = srcUi.description;
 
   if (!Object.keys(instances).length) warnings.push("迁移之后一个节点都不剩");
-  else if (![...kept.keys()].some((id) => instances[id].definitionId === "workspace_run")) {
+  else if (![...kept.values()].some(({ id }) => instances[id].definitionId === "workspace_run")) {
     warnings.push("图里没有运行节点（老流程缺 control_start）；补一个 workspace_run 才能跑");
   }
 
-  return { graph: { version: 1, instances, edges, ui }, remapped, dropped, droppedEdges, warnings };
+  return { graph: { version: 1, instances, edges, ui }, remapped, dropped, droppedEdges, renamedIds, warnings };
 }

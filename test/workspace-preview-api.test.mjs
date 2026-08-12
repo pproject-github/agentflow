@@ -16,6 +16,7 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
       import(`../bin/lib/ui-server.mjs?workspace-preview-api=${nonce}`),
     ]);
     const user = loginOrCreateUser("preview-owner", "preview-password");
+    const reviewer = loginOrCreateUser("preview-reviewer", "preview-password");
     server = await startUiServer({
       workspaceRoot: path.join(tempRoot, "workspace"),
       host: "127.0.0.1",
@@ -46,24 +47,36 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.preview, true);
-    assert.equal(payload.flowSource, "user");
-    assert.match(payload.url, new RegExp(`/workspace\\?flowId=${payload.flowId}\\&flowSource=user`));
+    assert.equal(payload.flowSource, "workspace");
+    assert.equal(payload.archived, true);
+    assert.match(payload.url, new RegExp(`/workspace\\?flowId=${payload.flowId}\\&flowSource=workspace\\&archived=1`));
 
-    const graphResponse = await fetch(`${baseUrl}/api/workspace/graph?flowId=${encodeURIComponent(payload.flowId)}&flowSource=user`, {
-      headers: { Authorization: `Bearer ${user.token}` },
+    // 预览不是 personal Flow：创建者与浏览器当前登录用户可以不同。链接本身随机且带 TTL，
+    // 服务端把它作为 archived Workspace 只读暴露。
+    const graphResponse = await fetch(`${baseUrl}/api/workspace/graph?flowId=${encodeURIComponent(payload.flowId)}&flowSource=workspace&archived=1`, {
+      headers: { Authorization: `Bearer ${reviewer.token}` },
     });
     assert.equal(graphResponse.status, 200);
-    assert.deepEqual((await graphResponse.json()).graph.instances, graph.instances);
+    const graphPayload = await graphResponse.json();
+    assert.deepEqual(graphPayload.graph.instances, graph.instances);
+    assert.equal(graphPayload.writable, false);
 
     const flowsResponse = await fetch(`${baseUrl}/api/flows`, { headers: { Authorization: `Bearer ${user.token}` } });
     assert.equal((await flowsResponse.json()).some((item) => item.id === payload.flowId), false);
 
-    const retiredRunResponse = await fetch(`${baseUrl}/api/flow/run`, {
+    const writeResponse = await fetch(`${baseUrl}/api/workspace/graph`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ flowId: payload.flowId, flowSource: "user" }),
+      headers: { Authorization: `Bearer ${reviewer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: payload.flowId, flowSource: "workspace", archived: true, graph }),
     });
-    assert.equal(retiredRunResponse.status, 410);
+    assert.equal(writeResponse.status, 400);
+
+    const runResponse = await fetch(`${baseUrl}/api/workspace/run`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${reviewer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: payload.flowId, flowSource: "workspace", archived: true }),
+    });
+    assert.equal(runResponse.status, 400);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

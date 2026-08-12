@@ -29,6 +29,7 @@ import { t } from "./i18n.mjs";
 import {
   PACKAGE_ROOT,
   ARCHIVED_PIPELINES_DIR_NAME,
+  PIPELINES_DIR,
   getAgentflowDataRoot,
   getAgentflowSkillsRoot,
   getAgentflowUserConfigAbs,
@@ -1686,9 +1687,12 @@ function isValidFlowSourceWrite(s) {
   return s === "user" || s === "workspace";
 }
 
-function cleanupExpiredWorkspacePreviews() {
+function cleanupExpiredWorkspacePreviews(workspaceRoot = "") {
   const roots = new Set(listAgentflowUserIds().map((id) => getUserPipelinesRoot(id)));
   roots.add(getUserPipelinesRoot(""));
+  if (workspaceRoot) {
+    roots.add(path.join(path.resolve(workspaceRoot), PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME));
+  }
   let removed = 0;
   for (const pipelinesRoot of roots) {
     for (const item of listExpiredWorkspacePreviews(pipelinesRoot)) {
@@ -4290,7 +4294,7 @@ finishedAt: "${new Date().toISOString()}"
 
   const workspacePreviewCleanupTimer = setInterval(() => {
     try {
-      const removed = cleanupExpiredWorkspacePreviews();
+      const removed = cleanupExpiredWorkspacePreviews(root);
       if (removed > 0) log.debug(`[workspace-preview] removed ${removed} expired preview project(s)`);
     } catch (e) {
       log.debug(`[workspace-preview] cleanup poll failed: ${(e && e.message) || String(e)}`);
@@ -4301,7 +4305,7 @@ finishedAt: "${new Date().toISOString()}"
   } catch (_) {}
   server.on("close", () => clearInterval(workspacePreviewCleanupTimer));
   try {
-    cleanupExpiredWorkspacePreviews();
+    cleanupExpiredWorkspacePreviews(root);
   } catch (_) {}
 
   return new Promise((resolve, reject) => {

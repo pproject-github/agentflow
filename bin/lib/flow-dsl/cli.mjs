@@ -150,7 +150,7 @@ export function layoutWorkspaceFlowDir(flowDir, { all = false, workspaceRoot = "
 }
 
 /** 没有节点丢失时的空损耗清单，让返回值形状始终一致。 */
-const NO_LOSS = { remapped: [], dropped: [], droppedEdges: [], warnings: [] };
+const NO_LOSS = { remapped: [], dropped: [], droppedEdges: [], renamedIds: [], warnings: [] };
 
 /**
  * 把一个流程目录就地迁移成代码形态。两个来源：
@@ -207,6 +207,7 @@ function migrateLegacyYamlDir(dir, { force = false, marketplaceRoot = "" } = {})
     remapped: converted.remapped,
     dropped: converted.dropped,
     droppedEdges: converted.droppedEdges,
+    renamedIds: converted.renamedIds,
     warnings: converted.warnings,
   };
   // `control_end` 和指向它的边标了 benign——丢了等于没丢，不该拦住迁移。
