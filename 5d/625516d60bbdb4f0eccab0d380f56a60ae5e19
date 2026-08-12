@@ -1,0 +1,33 @@
+builtin/web-ui/dist/assets/index-BZ5KqLur.js
+  s_0662e50ad860f3::t_477b3694b6ba96 210,870
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CKClwj96.js
+  s_0662e50ad860f3::t_477b3694b6ba96 1
+builtin/web-ui/dist/index.html
+  s_0662e50ad860f3::t_477b3694b6ba96 33
+package.json
+  s_0662e50ad860f3::t_abbf7f615af85f 57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5d625516d60bbdb4f0eccab0d380f56a60ae5e19",
+  "prompts": {},
+  "logical_commit_id": "5d625516d60bbdb4f0eccab0d380f56a60ae5e19",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0662e50ad860f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff00a-2499-7873-a51d-2567a2b8a2d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 10554,
+      "total_deletions": 523
+    }
+  }
+}
