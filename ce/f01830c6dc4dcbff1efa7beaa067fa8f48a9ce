@@ -1,0 +1,41 @@
+bin/lib/flow-dsl/legacy-yaml.mjs
+  s_0662e50ad860f3::t_7ce4f96f15e3b5 74,76,224
+  s_0662e50ad860f3::t_88a7fd2e199b72 70-73,75,77-97,152,161,166-168,177-178,217-218,242,279,285,292,302
+  s_0662e50ad860f3::t_b21b1b0a373d4a 191,196,201,298
+test/legacy-yaml-migrate.test.mjs
+  s_0662e50ad860f3::t_88a7fd2e199b72 159-205
+test/workspace-preview-api.test.mjs
+  s_0662e50ad860f3::t_613c963803d368 19,50-52,54-57,60-62,67,69-77,79
+bin/lib/workspace-routes.mjs
+  s_0662e50ad860f3::t_613c963803d368 37,1331,1370-1371
+bin/lib/ui-server.mjs
+  s_0662e50ad860f3::t_613c963803d368 32,1690,1693-1695,4297,4308
+bin/lib/flow-dsl/cli.mjs
+  s_0662e50ad860f3::t_88a7fd2e199b72 153,210
+bin/lib/workspace-preview.mjs
+  s_0662e50ad860f3::t_613c963803d368 4,45-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cef01830c6dc4dcbff1efa7beaa067fa8f48a9ce",
+  "prompts": {},
+  "logical_commit_id": "cef01830c6dc4dcbff1efa7beaa067fa8f48a9ce",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0662e50ad860f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff00a-2499-7873-a51d-2567a2b8a2d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 9676,
+      "total_deletions": 522
+    }
+  }
+}
