@@ -179,9 +179,13 @@ AgentFlow/
 1. **For complex flows**: Use AI Composer mode in Web UI with natural language descriptions
 2. **Branching**: `control_if` is the branch primitive the Workspace runtime implements —
    the taken branch runs, the other is skipped
-3. **No loops**: the Workspace run planner rejects cyclic graphs
-   (`Workspace run graph contains a cycle`). The old `control_anyOne` + `control_toBool` +
-   `control_if` check-fix-loop only worked under the retired Start/End runtime
+3. **Acyclic graph, explicit iteration**: the Workspace run planner rejects cyclic graphs
+   (`Workspace run graph contains a cycle`). Use native `control_while` to repeat one
+   deterministic step command inside a bounded node state machine; do not add a back edge.
+   Its iteration/timeout limits are cumulative across `wait` resumes, and external writes
+   should consume `AGENTFLOW_WHILE_IDEMPOTENCY_KEY` for deduplication.
+   The old `control_anyOne` + `control_toBool` + `control_if` ring only worked under the
+   retired Start/End runtime
 4. **Node coverage**: every node type declares its own support tier in the `runtime:`
    frontmatter field of `builtin/nodes/<id>.md` — this is the single source of truth:
    - `native` — the Workspace runtime has an explicit handler

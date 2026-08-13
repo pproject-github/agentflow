@@ -34,6 +34,9 @@ function normalizedGraph(graph) {
     version: Number(source.version) || 1,
     instances: isPlainObject(source.instances) ? clone(source.instances) : {},
     edges: Array.isArray(source.edges) ? clone(source.edges) : [],
+    // Subflows are first-class design metadata. Dropping them here makes every
+    // revision-aware canvas save silently erase call contracts and entry roots.
+    subflows: isPlainObject(source.subflows) ? clone(source.subflows) : {},
     ui: isPlainObject(source.ui) ? clone(source.ui) : { nodePositions: {} },
   };
 }

@@ -30,7 +30,7 @@ a `script` field must exist and contain no absolute paths.
 
 ## Four kinds of change the migration required
 
-### 1. Cycles → unroll to fixed rounds, or move the iteration inside a node
+### 1. Cycles → unroll to fixed rounds, or use control.while inside one node
 
 The Workspace run plan is a DAG and rejects cycles outright. The old
 `control_anyOne` + `control_toBool` + `control_if` ring expressed "fix until it passes" on
@@ -41,9 +41,12 @@ Two ways out, chosen by nature of the loop:
 - **When continuing needs a different role** (check finds problems → hand to a fixer agent
   → check again): unroll into two fixed nested gates. If both rounds fail, land on a
   "needs a human" display rather than pretending it will still converge.
-- **When it is the same role repeating** (compile one task, fix the failure, recompile):
-  move it *inside a single node*. An agent can already loop within its own turn — that ring
-  was node-internal logic spread out over the graph.
+- **When one deterministic action repeats**, use `control.while`. Each step returns
+  `continue / wait / done / fail`, bounded by cumulative `maxIterations` and `timeout` across
+  `wait` resumes, without adding a graph back edge. External writes should use the stable
+  per-iteration `AGENTFLOW_WHILE_IDEMPOTENCY_KEY` for deduplication.
+- **When one agent role reasons repeatedly**, it can still iterate within a single agent turn.
+  The old ring was node-internal logic spread out over the graph.
 
 module-migrate's static check takes the first route (two rounds); the build takes the
 second (one `buildA` node that works through the tasks serially). Node count went 29 → 32,

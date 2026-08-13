@@ -13,6 +13,18 @@ import { readAuthUsers } from "./auth.mjs";
 import { listFlowsJson, listNodesJson } from "./catalog-flows.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
 import { loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
+import {
+  MAX_CONTROL_WHILE_STEP_STDERR_BYTES,
+  MAX_CONTROL_WHILE_STEP_STDOUT_BYTES,
+  controlWhileCheckpointFingerprint,
+  controlWhileIdempotencyKey,
+  normalizeControlWhileConfig,
+  normalizeControlWhileInitialState,
+  parseControlWhileStepResult,
+  resolveControlWhileCheckpoint,
+  runControlWhile,
+  serializeControlWhileState,
+} from "./control-while.mjs";
 import { graphToFlowFiles } from "./flow-dsl/index.mjs";
 import { buildGitContext, inferGitRepoRootFromWorktree, loadGitWorktree, normalizeGitContext, runGit, sanitizeWorktreeName, unloadGitWorktree } from "./git-worktree.mjs";
 import { createGitLabMergeRequest } from "./gitlab-mr.mjs";
@@ -29,7 +41,7 @@ import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "./wecom.mjs";
 import { getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, workspaceCollaborationAccess, workspaceCollaborationSummary } from "./workspace-collaboration.mjs";
 import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, readWorkspaceRunFingerprints, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
-import { createWorkspaceRunController } from "./workspace-run-controller.mjs";
+import { createWorkspaceRunController, terminateWorkspaceChild } from "./workspace-run-controller.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
 import { splitWorkspaceGraph } from "./workspace-state.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
@@ -1122,6 +1134,7 @@ function normalizeWorkspaceGraphPayload(payload) {
     instances: graph?.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances) ? graph.instances : {},
     edges: Array.isArray(graph?.edges) ? graph.edges : [],
     ui: graph?.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
+    subflows: graph?.subflows && typeof graph.subflows === "object" && !Array.isArray(graph.subflows) ? graph.subflows : {},
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1130,7 +1143,7 @@ export function workspaceRunTouchedNodeIds(result) {
   const ids = new Set();
   // A deferred run has only executed the prefix ending at the waiting node. Merging the
   // complete plan here would overwrite unrelated edits made while Jenkins is running.
-  if (!result?.deferred) {
+  if (!result?.deferred && !(Array.isArray(result?.pauseNodeIds) && result.pauseNodeIds.length)) {
     for (const id of Array.isArray(result?.order) ? result.order : []) {
       const text = String(id || "").trim();
       if (text) ids.add(text);
@@ -2490,6 +2503,46 @@ export function workspacePublishAgentOutputFiles(structured, runPackage) {
     : base;
 }
 
+/**
+ * Node package outputs use files as a transport contract, not as the semantic
+ * value of every slot. Text/json/bool slots receive the file contents; only
+ * file/image slots intentionally expose a published artifact path.
+ */
+export function workspaceMaterializeNodePackageOutputValues(structured, runPackage, instance) {
+  if (!structured || !runPackage || !instance) return structured;
+  const slots = (Array.isArray(instance.output) ? instance.output : [])
+    .filter((slot) => !isWorkspaceSemanticOutputSlot(slot));
+  if (!slots.length) return structured;
+  const outParams = { ...(structured.outParams || {}) };
+  let result = structured.result;
+  let resultFile = structured.resultFile;
+  let changed = false;
+  for (const slot of slots) {
+    const name = String(slot?.name || "").trim();
+    if (!name) continue;
+    const type = String(slot?.type || "text").trim().toLowerCase();
+    if (type === "file" || type === "image") continue;
+    const primary = workspaceIsPrimaryOutputSlot(slot, instance.output);
+    const fileKey = `${name}File`;
+    const relPath = primary ? resultFile : outParams[fileKey];
+    const clean = workspaceSafeNodeOutputRelPath(relPath);
+    if (!clean) continue;
+    const source = workspaceNodeOutputCandidates(runPackage, clean)
+      .find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    if (!source) continue;
+    const value = fs.readFileSync(source, "utf8");
+    if (primary) {
+      result = value;
+      resultFile = "";
+    } else {
+      outParams[name] = value;
+      delete outParams[fileKey];
+    }
+    changed = true;
+  }
+  return changed ? { ...structured, result, resultFile, outParams } : structured;
+}
+
 function workspaceOutputFieldForSlot(slot, slots = null) {
   const name = String(slot?.name || "").trim();
   if (!name || workspaceIsPrimaryOutputSlot(slot, slots)) return "result";
@@ -2939,6 +2992,50 @@ function workspaceControlIfBranchToSourceHandle(branch) {
 // 从此对它的搜索全部静默返回空。
 const FINGERPRINT_SEP = "\u0000";
 
+function workspaceSubflowFingerprintDescriptor(graph, subflowId, stack = new Set()) {
+  const id = String(subflowId || "").trim();
+  const subflow = graph?.subflows?.[id];
+  if (!id || !subflow) return { id, missing: true };
+  if (stack.has(id)) return { id, recursive: true };
+
+  const nextStack = new Set(stack);
+  nextStack.add(id);
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const memberSet = new Set(Array.isArray(subflow.nodeIds) ? subflow.nodeIds.map(String) : []);
+  const memberShape = [...memberSet].sort().map((memberId) => {
+    const member = instances[memberId] || {};
+    return [
+      memberId,
+      String(member.definitionId || ""),
+      String(member.body || ""),
+      String(member.script || ""),
+      String(member.scriptRef || ""),
+      String(member.subflowId || ""),
+      String(member.conditionSubflowId || ""),
+      String(member.bodySubflowId || ""),
+      (member.input || []).map((slot) => [String(slot?.name || ""), String(slot?.type || ""), workspaceSlotValue(slot)]),
+    ];
+  });
+  const internalEdges = (graph?.edges || []).filter((edge) => (
+    memberSet.has(String(edge?.source || "")) && memberSet.has(String(edge?.target || ""))
+  ));
+  const nestedIds = new Set();
+  for (const memberId of memberSet) {
+    const member = instances[memberId] || {};
+    if (String(member.definitionId || "") === "control_subflow_call" && member.subflowId) {
+      nestedIds.add(String(member.subflowId));
+    }
+    if (String(member.definitionId || "") === "control_while") {
+      if (member.conditionSubflowId) nestedIds.add(String(member.conditionSubflowId));
+      if (member.bodySubflowId) nestedIds.add(String(member.bodySubflowId));
+    }
+  }
+  const nested = [...nestedIds].sort().map((nestedId) => (
+    workspaceSubflowFingerprintDescriptor(graph, nestedId, nextStack)
+  ));
+  return { id, subflow, memberShape, internalEdges, nested };
+}
+
 export function workspaceNodeInputFingerprint(graph, nodeId, memo = new Map(), stack = new Set()) {
   const id = String(nodeId || "");
   if (memo.has(id)) return memo.get(id);
@@ -2957,6 +3054,20 @@ export function workspaceNodeInputFingerprint(graph, nodeId, memo = new Map(), s
     marketplaceRef ? "" : String(instance.script || ""),
     String(instance.model || ""),
   ];
+  if (String(instance.definitionId || "") === "control_subflow_call") {
+    const subflowId = String(instance.subflowId || "");
+    parts.push(`subflow=${JSON.stringify(workspaceSubflowFingerprintDescriptor(graph, subflowId))}`);
+  }
+  if (String(instance.definitionId || "") === "control_while") {
+    const conditionSubflowId = String(instance.conditionSubflowId || "");
+    const bodySubflowId = String(instance.bodySubflowId || "");
+    if (conditionSubflowId || bodySubflowId) {
+      parts.push(`whileSubflows=${JSON.stringify({
+        condition: workspaceSubflowFingerprintDescriptor(graph, conditionSubflowId),
+        body: workspaceSubflowFingerprintDescriptor(graph, bodySubflowId),
+      })}`);
+    }
+  }
 
   const incoming = new Map();
   for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
@@ -3005,7 +3116,7 @@ function workspaceEdgeHasCachedOutput(graph, edge, scopedRoot = "", opts = {}) {
   if (!source) return false;
   const defId = String(source.definitionId || "");
   // provide.* 不执行，它的值就是作者填的；没有「上次跑出来的」这回事，也就无从失效
-  if (defId === "provide_str" || defId === "provide_bool" || defId === "provide_file" || defId === "provide_password") {
+  if (defId === "provide_str" || defId === "provide_json" || defId === "provide_bool" || defId === "provide_file" || defId === "provide_password") {
     return Boolean(String(workspaceInstanceText(source) || "").trim());
   }
   // 有值还不够，得是**这套输入**跑出来的值。指纹对不上说明上游或节点自身改过，重跑
@@ -4634,6 +4745,9 @@ async function workspaceRunToolNodejsScript({
   emit,
   signal,
   onActiveChild,
+  stderrAsStatus = false,
+  maxStdoutBytes = Infinity,
+  maxStderrBytes = Infinity,
 }) {
   const scriptRef = String(instance?.scriptRef || "").trim();
   const scriptAbs = scriptRef ? workspaceResolveFlowFile(scopedRoot, scriptRef, "scriptRef") : "";
@@ -4692,6 +4806,9 @@ async function workspaceRunToolNodejsScript({
     if (typeof onActiveChild === "function") onActiveChild(child, { processGroup });
     let stdout = "";
     let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let outputLimitError = null;
     let settled = false;
     const finish = (callback) => {
       if (settled) return;
@@ -4702,13 +4819,33 @@ async function workspaceRunToolNodejsScript({
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      if (outputLimitError) return;
+      const text = String(chunk);
+      stdoutBytes += Buffer.byteLength(text, "utf-8");
+      if (stdoutBytes > maxStdoutBytes) {
+        outputLimitError = new Error(`script stdout exceeded ${maxStdoutBytes} bytes`);
+        terminateWorkspaceChild(child, { processGroup });
+        return;
+      }
+      stdout += text;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      if (outputLimitError) return;
+      const text = String(chunk);
+      stderrBytes += Buffer.byteLength(text, "utf-8");
+      if (stderrBytes > maxStderrBytes) {
+        outputLimitError = new Error(`script stderr exceeded ${maxStderrBytes} bytes`);
+        terminateWorkspaceChild(child, { processGroup });
+        return;
+      }
+      stderr += text;
     });
     child.on("error", (error) => finish(() => reject(error)));
     child.on("close", (code) => {
+      if (outputLimitError) {
+        finish(() => reject(outputLimitError));
+        return;
+      }
       if (signal?.aborted) {
         finish(() => {
           const error = new Error("Workspace run stopped");
@@ -4718,7 +4855,8 @@ async function workspaceRunToolNodejsScript({
         return;
       }
       if (stderr.trim()) {
-        emit?.({ type: "natural", kind: "warning", text: `[script stderr]\n${stderr.trim().slice(-4000)}` });
+        if (stderrAsStatus) emit?.({ type: "status", line: `[step stderr] ${stderr.trim().slice(-4000)}` });
+        else emit?.({ type: "natural", kind: "warning", text: `[script stderr]\n${stderr.trim().slice(-4000)}` });
       }
       if (code !== 0) {
         finish(() => reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`)));
@@ -4744,6 +4882,140 @@ function workspaceNodeModelKey(instance, fallback = "") {
   return String(fallback || "").trim();
 }
 
+function workspaceAssertWhileSubflowContract(graph, nodeId, conditionSubflowId, bodySubflowId) {
+  const conditionId = String(conditionSubflowId || "").trim();
+  const bodyId = String(bodySubflowId || "").trim();
+  if (!conditionId || !bodyId) {
+    throw new Error(`control.while ${nodeId} requires both conditionSubflowId and bodySubflowId`);
+  }
+  if (conditionId === bodyId) {
+    throw new Error(`control.while ${nodeId} condition and body must be different subflows`);
+  }
+  const condition = graph?.subflows?.[conditionId];
+  const body = graph?.subflows?.[bodyId];
+  if (!condition) throw new Error(`control.while ${nodeId} references missing condition subflow ${conditionId}`);
+  if (!body) throw new Error(`control.while ${nodeId} references missing body subflow ${bodyId}`);
+  for (const name of ["state", "iteration"]) {
+    if (!condition.inputs?.[name]) throw new Error(`control.while ${nodeId} condition subflow ${conditionId} requires input ${name}`);
+  }
+  if (!condition.outputs?.decision) {
+    throw new Error(`control.while ${nodeId} condition subflow ${conditionId} requires output decision`);
+  }
+  for (const name of ["state", "iteration", "idempotencyKey"]) {
+    if (!body.inputs?.[name]) throw new Error(`control.while ${nodeId} body subflow ${bodyId} requires input ${name}`);
+  }
+  if (!body.outputs?.state) {
+    throw new Error(`control.while ${nodeId} body subflow ${bodyId} requires output state`);
+  }
+  return { conditionId, bodyId, condition, body };
+}
+
+async function workspaceRunSubflowFrame({
+  root,
+  scopedRoot,
+  payload,
+  userCtx,
+  opts,
+  graph,
+  parentNodeId,
+  parentDefinitionId,
+  subflowId,
+  inputValues = {},
+  signal = null,
+  emit,
+  eventContext = {},
+}) {
+  const id = String(subflowId || "").trim();
+  const subflow = graph?.subflows?.[id];
+  if (!subflow) throw new Error(`Subflow ${id || "(empty)"} does not exist`);
+  const callStack = Array.isArray(opts?.subflowCallStack) ? opts.subflowCallStack : [];
+  if (callStack.includes(id)) {
+    throw new Error(`Recursive subflow call is not allowed: ${[...callStack, id].join(" -> ")}`);
+  }
+
+  const memberSet = new Set((subflow.nodeIds || []).map(String));
+  if (!memberSet.size) throw new Error(`Subflow ${id} has no member nodes`);
+  const callFrameId = `${parentNodeId}:${String(eventContext?.whileRole || "call")}:${String(eventContext?.iteration || "0")}:${crypto.randomBytes(6).toString("hex")}`;
+  const childGraph = typeof structuredClone === "function"
+    ? structuredClone(graph)
+    : JSON.parse(JSON.stringify(graph));
+  const syntheticRunId = `__subflow_run_${crypto.randomBytes(6).toString("hex")}`;
+  childGraph.instances[syntheticRunId] = {
+    definitionId: "workspace_run",
+    label: `${subflow.label || id} · call frame`,
+    input: [{ type: "node", name: "prev", value: "" }],
+    output: [{ type: "node", name: "next", value: "" }],
+  };
+  childGraph.edges = (childGraph.edges || []).filter((edge) => (
+    memberSet.has(String(edge?.source || "")) && memberSet.has(String(edge?.target || ""))
+  ));
+  for (const rootId of subflow.roots || []) {
+    const rootInstance = childGraph.instances?.[rootId];
+    const prevIndex = (rootInstance?.input || []).findIndex((slot) => String(slot?.name || "") === "prev");
+    if (prevIndex < 0) throw new Error(`Subflow ${id} root ${rootId} has no prev input`);
+    childGraph.edges.push({
+      source: syntheticRunId,
+      target: rootId,
+      sourceHandle: "output-0",
+      targetHandle: `input-${prevIndex}`,
+    });
+  }
+  for (const [name, binding] of Object.entries(subflow.inputs || {})) {
+    const proxy = childGraph.instances?.[binding.nodeId];
+    if (!proxy) throw new Error(`Subflow ${id} input ${name} references missing proxy ${binding.nodeId}`);
+    childGraph.instances[binding.nodeId] = workspaceSetOutputSlot(proxy, binding.slot || "value", inputValues[name] ?? "");
+  }
+
+  const frameContext = {
+    ...eventContext,
+    parentNodeId,
+    subflowId: id,
+    callFrameId,
+  };
+  emit({
+    type: "subflow-start",
+    nodeId: parentNodeId,
+    definitionId: parentDefinitionId,
+    inputs: Object.keys(subflow.inputs || {}),
+    ...frameContext,
+  });
+  const childResult = await runWorkspaceGraph(root, scopedRoot, {
+    ...payload,
+    graph: childGraph,
+    runNodeId: syntheticRunId,
+    ignoreCache: true,
+    forceNodeIds: [],
+  }, userCtx, {
+    ...opts,
+    signal: signal || opts?.signal || null,
+    subflowCallStack: [...callStack, id],
+    onEvent: (event) => {
+      if (event?.type === "graph") return;
+      emit({ ...event, ...frameContext });
+    },
+  });
+  if (childResult.deferred || childResult.pauseNodeIds?.length) {
+    throw new Error(`Subflow ${id} paused or deferred; resumable subflow call frames are not supported yet`);
+  }
+  for (const memberId of memberSet) {
+    if (childResult.graph.instances?.[memberId]) graph.instances[memberId] = childResult.graph.instances[memberId];
+  }
+  const resultValues = {};
+  for (const [name, binding] of Object.entries(subflow.outputs || {})) {
+    const source = childResult.graph.instances?.[binding.nodeId];
+    const slot = (source?.output || []).find((item) => String(item?.name || "") === String(binding.slot || ""));
+    resultValues[name] = workspaceSlotValue(slot);
+  }
+  emit({
+    type: "subflow-done",
+    nodeId: parentNodeId,
+    definitionId: parentDefinitionId,
+    outputs: Object.keys(resultValues),
+    ...frameContext,
+  });
+  return { resultValues, callFrameId };
+}
+
 export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = hydrateWorkspaceGraphForRuntime(root, {
     root: scopedRoot,
@@ -4752,8 +5024,11 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     archived: payload.archived === true || payload.flowArchived === true,
   }, payload.graph || {}, userCtx);
   const runNodeId = String(payload?.runNodeId || "").trim();
+  const forceNodeIds = new Set((Array.isArray(payload?.forceNodeIds) ? payload.forceNodeIds : [])
+    .map((nodeId) => String(nodeId || "").trim())
+    .filter(Boolean));
   const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot, {
-    forceNodeIds: Array.isArray(payload?.forceNodeIds) ? payload.forceNodeIds : [],
+    forceNodeIds,
     ignoreCache: payload?.ignoreCache === true,
   });
   // 指纹只由「节点定义 + 上游指纹 + 没接线的槽位值」决定，运行过程中这些都不变，所以
@@ -4835,6 +5110,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
   const controlBranches = new Map();
   const skippedNodes = new Set();
+  const runtimePauseNodeIds = [];
   let deferred = null;
   const incomingControlEdgesByTarget = new Map();
   for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
@@ -4889,6 +5165,45 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     emit({ type: "node-start", nodeId, definitionId: defId });
 
     if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
+      continue;
+    }
+
+    if (defId === "workspace_subflow_input") {
+      const value = workspaceSlotValue((instance.output || []).find((slot) => String(slot?.name || "") === "value"));
+      publishNodeOutput(nodeId, value, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_subflow_call") {
+      const subflowId = String(instance.subflowId || "").trim();
+      const subflow = graph?.subflows?.[subflowId];
+      if (!subflow) throw new Error(`flow.call ${nodeId} references missing subflow ${subflowId || "(empty)"}`);
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const { resultValues, callFrameId } = await workspaceRunSubflowFrame({
+        root,
+        scopedRoot,
+        payload,
+        userCtx,
+        opts,
+        graph,
+        parentNodeId: nodeId,
+        parentDefinitionId: defId,
+        subflowId,
+        inputValues,
+        signal,
+        emit,
+      });
+      let nextInstance = instance;
+      for (const [name, value] of Object.entries(resultValues)) {
+        nextInstance = workspaceSetOutputSlot(nextInstance, name, value);
+      }
+      graph.instances[nodeId] = nextInstance;
+      const primaryName = Object.keys(subflow.outputs || {})[0] || "";
+      const primaryValue = primaryName ? resultValues[primaryName] : "";
+      const updatedDisplays = publishNodeOutput(nodeId, primaryValue);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+      emit({ type: "node-done", nodeId, definitionId: defId, subflowId, callFrameId });
       continue;
     }
 
@@ -4961,8 +5276,269 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       continue;
     }
 
+    if (defId === "control_parse_json") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const raw = String(inputValues.value ?? "").trim();
+      if (!raw) throw new Error(`control.parseJson ${nodeId} requires a non-empty value`);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`control.parseJson ${nodeId} received invalid JSON: ${error.message}`);
+      }
+      const content = JSON.stringify(parsed);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "result", content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "control_while") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const config = normalizeControlWhileConfig(inputValues);
+      const stepScript = String(instance.script || instance.body || "").trim();
+      const stepScriptRef = String(instance.scriptRef || "").trim();
+      const conditionSubflowId = String(instance.conditionSubflowId || "").trim();
+      const bodySubflowId = String(instance.bodySubflowId || "").trim();
+      const usesSubflows = Boolean(conditionSubflowId || bodySubflowId);
+      const whileSubflows = usesSubflows
+        ? workspaceAssertWhileSubflowContract(graph, nodeId, conditionSubflowId, bodySubflowId)
+        : null;
+      if (!usesSubflows && !stepScript && !stepScriptRef) {
+        throw new Error(`control.while ${nodeId} requires condition/body subflows or a step command/scriptRef`);
+      }
+      const previousDecision = workspaceSlotValue(workspaceSlotByName(instance, "decision")).trim().toLowerCase();
+      const checkpointState = workspaceSlotValue(
+        (Array.isArray(instance.output) ? instance.output : []).find((slot) => String(slot?.name || "") === "state"),
+      );
+      const checkpointFingerprint = workspaceSlotValue(
+        (Array.isArray(instance.output) ? instance.output : []).find((slot) => String(slot?.name || "") === "checkpointFingerprint"),
+      );
+      const inputState = normalizeControlWhileInitialState(inputValues.state);
+      const expectedCheckpointFingerprint = controlWhileCheckpointFingerprint({
+        inputFingerprint: plannedFingerprints.get(nodeId) || "",
+        initialState: inputState,
+      });
+      const checkpoint = resolveControlWhileCheckpoint({
+        previousDecision,
+        state: checkpointState,
+        history: workspaceSlotValue(workspaceSlotByName(instance, "history")),
+        iterations: workspaceSlotValue(workspaceSlotByName(instance, "iterations")),
+        fingerprint: checkpointFingerprint,
+        expectedFingerprint: expectedCheckpointFingerprint,
+        allowResume: payload?.ignoreCache !== true && !forceNodeIds.has(nodeId),
+      });
+      const initialState = checkpoint.resumable ? checkpoint.state : inputState;
+      if (checkpoint.resumable) {
+        emit({ type: "status", nodeId, line: "control.while resume from waiting checkpoint" });
+      } else if (previousDecision === "wait") {
+        emit({ type: "status", nodeId, line: `control.while reset waiting checkpoint: ${checkpoint.reason}` });
+      }
+      const loop = await runControlWhile({
+        initialState,
+        initialHistory: checkpoint.resumable ? checkpoint.history : [],
+        initialElapsedMs: checkpoint.resumable ? checkpoint.elapsedMs : 0,
+        startIteration: checkpoint.resumable ? checkpoint.nextIteration : 1,
+        ...config,
+        signal,
+        idempotencyKeyForIteration: ({ iteration }) => controlWhileIdempotencyKey({
+          checkpointFingerprint: expectedCheckpointFingerprint,
+          nodeId,
+          iteration,
+        }),
+        onIterationStart: ({ iteration, remainingMs, idempotencyKey }) => {
+          emit({
+            type: "while-iteration-start",
+            nodeId,
+            definitionId: defId,
+            iteration,
+            maxIterations: config.maxIterations,
+            remainingMs,
+            idempotencyKey,
+          });
+          emit({ type: "status", nodeId, line: `control.while iteration ${iteration}/${config.maxIterations}` });
+        },
+        onIterationDone: ({ iteration, decision, summary, elapsedMs, idempotencyKey }) => {
+          emit({
+            type: "while-iteration-done",
+            nodeId,
+            definitionId: defId,
+            iteration,
+            decision,
+            summary,
+            elapsedMs,
+            idempotencyKey,
+          });
+          emit({ type: "status", nodeId, line: `control.while iteration ${iteration}: ${decision}${summary ? ` · ${summary}` : ""}` });
+        },
+        executeStep: async ({ iteration, state, signal: stepSignal, idempotencyKey }) => {
+          const stateText = serializeControlWhileState(state);
+          const iterationInputs = {
+            ...inputValues,
+            state: stateText,
+            iteration: String(iteration),
+          };
+          if (whileSubflows) {
+            const conditionFrame = await workspaceRunSubflowFrame({
+              root,
+              scopedRoot,
+              payload,
+              userCtx,
+              opts,
+              graph,
+              parentNodeId: nodeId,
+              parentDefinitionId: defId,
+              subflowId: whileSubflows.conditionId,
+              inputValues: {
+                state: stateText,
+                iteration: String(iteration),
+                idempotencyKey,
+              },
+              signal: stepSignal,
+              emit,
+              eventContext: { iteration, whileRole: "condition" },
+            });
+            const conditionStep = parseControlWhileStepResult(JSON.stringify({
+              decision: String(conditionFrame.resultValues.decision || "").trim().toLowerCase(),
+              summary: String(conditionFrame.resultValues.summary || ""),
+            }), state);
+            if (conditionStep.decision !== "continue") return JSON.stringify(conditionStep);
+
+            const bodyFrame = await workspaceRunSubflowFrame({
+              root,
+              scopedRoot,
+              payload,
+              userCtx,
+              opts,
+              graph,
+              parentNodeId: nodeId,
+              parentDefinitionId: defId,
+              subflowId: whileSubflows.bodyId,
+              inputValues: {
+                state: stateText,
+                iteration: String(iteration),
+                idempotencyKey,
+              },
+              signal: stepSignal,
+              emit,
+              eventContext: { iteration, whileRole: "body" },
+            });
+            const nextStateText = String(bodyFrame.resultValues.state || "").trim();
+            if (!nextStateText) {
+              throw new Error(`control.while ${nodeId} body subflow ${whileSubflows.bodyId} returned an empty state`);
+            }
+            const nextState = normalizeControlWhileInitialState(nextStateText);
+            return JSON.stringify({
+              decision: "continue",
+              state: nextState,
+              summary: String(bodyFrame.resultValues.summary || conditionStep.summary || ""),
+            });
+          }
+          const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, `${nodeId}-iteration-${iteration}`, {
+            scopedRoot,
+            cwd,
+            task: stepScript || stepScriptRef,
+            inputValues: iterationInputs,
+          });
+          const runtimeInputValues = { ...iterationInputs, ...(runPackage.inputValues || {}) };
+          let activeStepChild = null;
+          let activeStepChildOptions = {};
+          const terminateStep = () => terminateWorkspaceChild(activeStepChild, activeStepChildOptions);
+          stepSignal?.addEventListener("abort", terminateStep, { once: true });
+          try {
+            const content = await workspaceRunToolNodejsScript({
+              scopedRoot,
+              cwd,
+              instance: { ...instance, script: stepScript, scriptRef: stepScript ? "" : stepScriptRef },
+              inputValues: runtimeInputValues,
+              runPackage,
+              userCtx,
+              envOverlay: {
+                ...runEnv,
+                AGENTFLOW_WHILE_STATE: stateText,
+                AGENTFLOW_WHILE_ITERATION: String(iteration),
+                AGENTFLOW_WHILE_MAX_ITERATIONS: String(config.maxIterations),
+                AGENTFLOW_WHILE_TIMEOUT_MS: String(config.timeoutMs),
+                AGENTFLOW_WHILE_IDEMPOTENCY_KEY: idempotencyKey,
+              },
+              emit: (event) => emit({ ...event, nodeId, iteration }),
+              signal: stepSignal,
+              stderrAsStatus: true,
+              maxStdoutBytes: MAX_CONTROL_WHILE_STEP_STDOUT_BYTES,
+              maxStderrBytes: MAX_CONTROL_WHILE_STEP_STDERR_BYTES,
+              onActiveChild: (child, childOptions = {}) => {
+                activeStepChild = child || null;
+                activeStepChildOptions = childOptions;
+                if (stepSignal?.aborted && child) terminateStep();
+                if (typeof opts.onActiveChild === "function") opts.onActiveChild(child, childOptions);
+              },
+            });
+            return workspaceStructuredAgentOutput(content).result || content;
+          } finally {
+            stepSignal?.removeEventListener("abort", terminateStep);
+          }
+        },
+      });
+      const resultContent = JSON.stringify({
+        decision: loop.decision,
+        iterations: loop.iterations,
+        state: loop.state,
+        summary: loop.summary,
+        history: loop.history,
+      });
+      let nextInstance = workspaceSetOutputSlot(instance, "result", resultContent);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "state", serializeControlWhileState(loop.state));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "decision", loop.decision);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "iterations", String(loop.iterations));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "summary", loop.summary);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "history", JSON.stringify(loop.history));
+      nextInstance = workspaceSetOutputSlot(nextInstance, "checkpointFingerprint", expectedCheckpointFingerprint);
+      graph.instances[nodeId] = nextInstance;
+      const updatedDisplays = publishNodeOutput(nodeId, resultContent);
+      emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
+      if (loop.decision === "fail") {
+        emit({
+          type: "node-failed",
+          nodeId,
+          definitionId: defId,
+          decision: loop.decision,
+          iterations: loop.iterations,
+          summary: loop.summary,
+        });
+        throw new Error(loop.summary || "control.while step failed");
+      }
+      emit({
+        type: "node-done",
+        nodeId,
+        definitionId: defId,
+        decision: loop.decision,
+        iterations: loop.iterations,
+        summary: loop.summary,
+      });
+      if (loop.decision === "wait") {
+        runtimePauseNodeIds.push(nodeId);
+        break;
+      }
+      continue;
+    }
+
     if (defId === "provide_str" || defId === "provide_password") {
       const content = workspaceInstanceText(instance);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
+    if (defId === "provide_json") {
+      const raw = workspaceSlotValue(Array.isArray(instance.output) ? instance.output[0] : null) || workspaceInstanceText(instance);
+      let parsed;
+      try {
+        parsed = JSON.parse(String(raw || "").trim());
+      } catch (error) {
+        throw new Error(`provide.json ${nodeId} received invalid JSON: ${error.message}`);
+      }
+      const content = JSON.stringify(parsed);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "value", content);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
@@ -5451,7 +6027,11 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         signal,
         onActiveChild: opts.onActiveChild,
       });
-      const normalizedAgentOutput = workspacePublishAgentOutputFiles(workspaceStructuredAgentOutput(content), runPackage);
+      const structuredAgentOutput = workspaceStructuredAgentOutput(content);
+      const nodeOutput = String(instance.marketplaceRef || "").trim()
+        ? workspaceMaterializeNodePackageOutputValues(structuredAgentOutput, runPackage, instance)
+        : structuredAgentOutput;
+      const normalizedAgentOutput = workspacePublishAgentOutputFiles(nodeOutput, runPackage);
       const resultContent = normalizedAgentOutput.result || content;
       recordNodeOutput(nodeId, resultContent);
       const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
@@ -5651,11 +6231,12 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
     workspaceCleanupTmpRoot(runTmpRoot, userCtx, emit);
   }
-  if (!deferred && pauseNodeIds.length > 0) {
-    emit({ type: "paused", nodeIds: pauseNodeIds, message: `Workspace run paused at ${pauseNodeIds.join(", ")}` });
+  const finalPauseNodeIds = Array.from(new Set([...pauseNodeIds, ...runtimePauseNodeIds]));
+  if (!deferred && finalPauseNodeIds.length > 0) {
+    emit({ type: "paused", nodeIds: finalPauseNodeIds, message: `Workspace run paused at ${finalPauseNodeIds.join(", ")}` });
   }
   graph.updatedAt = new Date().toISOString();
-  return { graph, events, order, pauseNodeIds, deferred };
+  return { graph, events, order, pauseNodeIds: finalPauseNodeIds, deferred };
 }
 
 export function isWorkspaceRunAbortError(err) {

@@ -442,7 +442,7 @@ export const run = flow(a1, if1);
   try {
     const { errors } = lintFlowDir(dir);
     assert.ok(
-      errors.some((e) => e.includes("prediction 只能接 bool")),
+      errors.some((e) => /a1\.result\(text\).*if1\.prediction\(bool\)/.test(e)),
       `没报出类型不符：${errors.join(" / ")}`,
     );
   } finally {

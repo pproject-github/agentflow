@@ -107,7 +107,7 @@ test("自定义名字的输出槽也能拿到值，下游读到的是内容", as
     for (const [n, outName] of [[1, "result"], [2, "total"]]) {
       const out = await runPackageFlow(api, `p${n}`, outName, false);
       assert.ok(out.slot, `槽 ${outName} 没拿到值——这正是 index === 0 那条规则漏掉的情况`);
-      assert.match(out.slot, new RegExp(`${outName}\\.txt$`), `槽里应当是自己那个输出文件`);
+      assert.equal(out.slot, "文件里的值", `槽 ${outName} 应当直接拿到文本内容`);
       assert.equal(out.display, "文件里的值", "下游拿到的应当是文件内容，不是路径");
     }
   });
@@ -118,7 +118,7 @@ test("节点打印进度日志，不会盖掉它明确写出来的输出文件",
     for (const [n, outName] of [[3, "result"], [4, "total"]]) {
       const out = await runPackageFlow(api, `p${n}`, outName, true);
       assert.equal(out.display, "文件里的值", `${outName}: console.log 把输出文件吃掉了`);
-      assert.match(out.slot, new RegExp(`${outName}\\.txt$`));
+      assert.equal(out.slot, "文件里的值", `${outName}: 文本槽应当保留文件内容`);
     }
   });
 });
@@ -166,11 +166,11 @@ export async function run(inputs, outputs) {
     const run = await api.post("/api/workspace/run", { flowId, flowSource: "user", runNodeId: "run_1", graph: saved.body.graph });
     assert.equal(run.body.ok, true, JSON.stringify(run.body).slice(0, 300));
     const slots = run.body.graph.instances.p_1.output;
-    // extra 不是主输出槽，不能因为「它是唯一写出来的文件」就被当成结果正文
-    assert.match(
+    // extra 不是主输出槽，仍应按 text 契约拿到自己的文件内容。
+    assert.equal(
       String(slots.find((s) => s.name === "extra")?.value ?? ""),
-      /extra\.txt$/,
-      "extra 应当拿到自己的输出文件",
+      "附带的值",
+      "extra 应当拿到自己的文本内容",
     );
     assert.equal(String(slots.find((s) => s.name === "total")?.value ?? ""), "", "没写的主输出槽应当留空");
   });

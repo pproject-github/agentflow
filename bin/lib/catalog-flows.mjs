@@ -29,6 +29,7 @@ import {
 } from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
 import { RETIRED_NODE_IDS } from "./legacy-flow-execution.mjs";
+import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -219,6 +220,7 @@ export function parseNodeFrontmatter(raw) {
     displayName: undefined,
     description: undefined,
     guide: undefined,
+    ui: undefined,
     runtime: "native",
     type: "",
     paletteHidden: false,
@@ -242,6 +244,7 @@ export function parseNodeFrontmatter(raw) {
       data.paletteHidden = String(parsed.palette ?? "").trim().toLowerCase() === "hidden";
       data.input = normalizeFrontmatterSlots(parsed.input);
       data.output = normalizeFrontmatterSlots(parsed.output);
+      data.ui = normalizeNodeUiForSlots(parsed.ui, data.input, data.output);
       return data;
     }
   } catch {
@@ -320,7 +323,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         // frontmatter 的 type: 优先于按 id 前缀的推断（workspace_run 等不带前缀的节点靠它归类）
         if (data.type) type = data.type;
         // frontmatter 的 palette: hidden 与 RETIRED_NODE_IDS 等价，让节点自带可见性
-        if (data.paletteHidden) continue;
+        if (data.paletteHidden && !opts.includeHidden) continue;
         const strippedId =
           id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
         const label = data.displayName ?? strippedId;
@@ -343,6 +346,8 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
           displayName: translatedDisplayName || data.displayName,
           description: translatedDescription || data.description,
           guide: translatedGuide || data.guide,
+          ui: data.ui,
+          paletteHidden: Boolean(data.paletteHidden),
           inputs: data.input,
           outputs: data.output,
           source: flowIdOpt ? "flow" : "project",
@@ -364,6 +369,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         label: manifest.displayName,
         displayName: manifest.displayName,
         description: manifest.description,
+        ui: manifest.ui,
         inputs: manifest.input,
         outputs: manifest.output,
         source: flowIdOpt ? "flow" : "project",
@@ -392,6 +398,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       label: manifest.displayName,
       displayName: manifest.displayName,
       description: manifest.description,
+      ui: manifest.ui,
       inputs: manifest.input,
       outputs: manifest.output,
       source: manifest.source || "marketplace",
@@ -664,6 +671,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       version: resolved.version,
       packageDir: resolved.packageDir,
       runtime: resolved.runtime,
+      ui: resolved.ui,
     };
   }
   const fileName = nodeId.endsWith(".md") ? nodeId : `${nodeId}.md`;
@@ -724,6 +732,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
         executionLogic: content || undefined,
         description: data.description,
         guide: data.guide,
+        ui: data.ui,
       };
     } catch (_) {}
   }

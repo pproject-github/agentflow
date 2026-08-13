@@ -117,8 +117,9 @@ Splitting assertion 3 in two matters: scanning the whole file would flag the sen
 
 These are not wired, and no longer pretend to be:
 
-- **UI schema / card variant.** The old `configSchema.fields`, `ui.card.actions` and scheduled-card
-  preview have no counterpart in a code node declaration. Removed from the page rather than left
-  as a shell nothing can fill
 - **Multi-draft management.** Only a switcher; no create/delete/rename
 - **Versions.** Publishing the same `id@version` overwrites, with no conflict warning
+
+Node UI Kit is now wired: code nodes can compose `binding`, `code`, `decision`, `metrics`,
+`summary`, and `history` in a literal declaration, and Node Studio and Workspace use the same safe
+renderer.

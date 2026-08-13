@@ -124,6 +124,19 @@ test("读回来与写进去是同一张图", () => {
   assert.equal(designFingerprint(back.graph), designFingerprint(design));
 });
 
+test("子流程 Start 和 Return 的人工布局能随代码化流程往返", () => {
+  const dir = tempDir();
+  const design = splitWorkspaceGraph(sampleGraph()).design;
+  design.ui.subflowBoundaryPositions = {
+    "subflow-start:inspectIssue": { x: 120, y: 460 },
+    "subflow-return:inspectIssue": { x: 1380, y: 620 },
+  };
+
+  writeWorkspaceDesign(dir, design);
+  const back = readWorkspaceDesign(dir).graph;
+  assert.deepEqual(back.ui.subflowBoundaryPositions, design.ui.subflowBoundaryPositions);
+});
+
 test("再写一次不产生任何 diff", () => {
   const dir = tempDir();
   const design = splitWorkspaceGraph(sampleGraph()).design;

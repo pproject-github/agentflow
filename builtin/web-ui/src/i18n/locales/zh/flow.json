@@ -23,7 +23,7 @@
     "userPrompt": "用户提示（USER PROMPT / body）",
     "systemDescription": "系统说明（只读，来自节点定义）",
     "directCommand": "直接执行命令",
-    "scriptHint": "（tool_nodejs：有 script 时跳过 AI，由流水线执行）",
+    "scriptHint": "（tool_nodejs / control_while：由运行时直接执行）",
     "diskRunning": "磁盘记录为执行中",
     "deleteNode": "删除节点",
     "inputTooltip": "输入 {{name}} | 类型: {{type}}",

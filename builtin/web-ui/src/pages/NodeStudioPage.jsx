@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NodeUiKitCard } from "../NodeUiKit.jsx";
 
 // 清单的形状由 `readNodePackageManifest` 决定——`input` / `output` / `displayName`，
 // 不是 `inputs` / `outputs` / `name`。这里曾经按后者读，于是无论生成什么节点，
@@ -283,18 +284,30 @@ export default function NodeStudioPage() {
               ) : (
                 <div className="af-node-preview-card af-node-preview-card--default">
                   <div className="af-node-preview-card__head">
-                    <span className="material-symbols-outlined" aria-hidden>extension</span>
+                    <span className="material-symbols-outlined" aria-hidden>{manifest.ui?.card?.icon || "extension"}</span>
                     <strong>{manifest.displayName || manifest.id}</strong>
                     <code>{definitionId}</code>
                   </div>
-                  <div className="af-node-preview-default-body">
-                    <p>{manifest.description || "这个节点还没有 description。"}</p>
-                    <div>
-                      <span>{inputSlots.length} inputs</span>
-                      <span>{outputSlots.length} outputs</span>
-                      <span>tool_nodejs</span>
+                  {manifest.ui?.card ? (
+                    <div className="af-node-preview-default-body af-node-preview-default-body--kit">
+                      <NodeUiKitCard data={{
+                        nodeUi: manifest.ui,
+                        inputs: inputSlots,
+                        outputs: outputSlots,
+                        script: manifest.runtime?.command || manifest.runtime?.entry || "index.mjs",
+                        scriptRef: manifest.runtime?.entry || "",
+                      }} />
                     </div>
-                  </div>
+                  ) : (
+                    <div className="af-node-preview-default-body">
+                      <p>{manifest.description || "这个节点还没有 description。"}</p>
+                      <div>
+                        <span>{inputSlots.length} inputs</span>
+                        <span>{outputSlots.length} outputs</span>
+                        <span>tool_nodejs</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

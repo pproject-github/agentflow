@@ -11,6 +11,7 @@ import {
   isFlowDir,
 } from "./paths.mjs";
 import { NODE_PACKAGE_ENTRY, isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
+import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 import {
   NODE_PACKAGE_METADATA_FILENAME,
   createNodePackageArchive,
@@ -118,6 +119,9 @@ function normalizeManifest(raw, packageDir, source = "workspace") {
         : runtime.type != null && String(runtime.type).trim() !== ""
           ? String(runtime.type).trim()
           : "";
+  const input = normalizeSlotList(raw.input || raw.inputs);
+  const output = normalizeSlotList(raw.output || raw.outputs);
+  const ui = normalizeNodeUiForSlots(raw.ui, input, output);
   return {
     ...raw,
     id,
@@ -127,9 +131,10 @@ function normalizeManifest(raw, packageDir, source = "workspace") {
     baseDefinitionId,
     displayName: raw.displayName != null ? String(raw.displayName) : raw.name != null ? String(raw.name) : id,
     description: raw.description != null ? String(raw.description) : "",
-    input: normalizeSlotList(raw.input || raw.inputs),
-    output: normalizeSlotList(raw.output || raw.outputs),
+    input,
+    output,
     runtime,
+    ...(ui ? { ui } : {}),
     source,
   };
 }
@@ -474,6 +479,7 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
     description: n.description,
     inputs: n.input,
     outputs: n.output,
+    ui: n.ui,
     packagedFiles: Array.isArray(n.packagedFiles) ? n.packagedFiles : [],
     fileList: Array.isArray(n.fileList) ? n.fileList : [],
     fileCount: Number(n.fileCount) || 0,
@@ -943,6 +949,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   const implementationMode = String(payload.implementationMode || "").trim();
   const body = String(payload.body || "").trim();
   const description = String(payload.description || body || `Published from node ${label}`).trim();
+  const ui = normalizeNodeUiForSlots(payload.ui, inputs, outputs);
   const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", id, version);
   const existingManifest = readYamlObject(path.join(dest, NODE_MANIFEST));
   if (existingManifest) {
@@ -984,6 +991,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     runtime,
     inputs,
     outputs,
+    ...(ui ? { ui } : {}),
     ownerUserId,
     createdBy: ownerUserId,
     createdAt: existingManifest?.createdAt || now,

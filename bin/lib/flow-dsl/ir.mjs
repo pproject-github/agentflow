@@ -46,6 +46,11 @@ export const NODE_META_KEYS = [
   "marketplacePackageId",
   "marketplaceVersion",
   "sourceContextRunNodeId",
+  "subflowId",
+  "subflowInputName",
+  "subflowInputType",
+  "conditionSubflowId",
+  "bodySubflowId",
 ];
 
 function handleIndex(handle) {
@@ -100,6 +105,21 @@ export function graphToIr(graph) {
     node.extraIn = [];
     node.extraOut = [];
 
+    if (definitionId === "control_subflow_call" || definitionId === "workspace_subflow_input") {
+      node.packageDef = {
+        input: (instance.input || []).map((slot) => ({
+          name: String(slot?.name || ""),
+          type: String(slot?.type || "text"),
+          ...(slot?.required ? { required: true } : {}),
+        })).filter((slot) => slot.name),
+        output: (instance.output || []).map((slot) => ({
+          name: String(slot?.name || ""),
+          type: String(slot?.type || "text"),
+          ...(slot?.required ? { required: true } : {}),
+        })).filter((slot) => slot.name),
+      };
+    }
+
     for (const slot of instance.input || []) {
       const name = String(slot?.name || "");
       if (!name) continue;
@@ -144,7 +164,12 @@ export function graphToIr(graph) {
     };
   }
 
-  return { nodes, edges: [...new Set(edges)].sort(), slotOrder };
+  return {
+    nodes,
+    edges: [...new Set(edges)].sort(),
+    slotOrder,
+    subflows: graph?.subflows && typeof graph.subflows === "object" ? graph.subflows : {},
+  };
 }
 
 /**
@@ -299,7 +324,13 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
   }
   if (layout.viewport) ui.viewport = layout.viewport;
 
-  return { version: 1, instances, edges, ui };
+  return {
+    version: 1,
+    instances,
+    edges,
+    ui,
+    subflows: ir?.subflows && typeof ir.subflows === "object" ? ir.subflows : {},
+  };
 }
 
 export { CTRL_SLOTS, STD_SLOTS };

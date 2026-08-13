@@ -2,8 +2,8 @@
 name: agentflow-flow-dsl
 description: >-
   用 workspace.flow.js（受限 ESM）编写 AgentFlow Workspace 流程图。适用于新建流程、
-  修改流程结构、添加或删除节点、修改连线、控制顺序、分支和定时入口；自定义代码节点包
-  改用 agentflow-node-dsl。
+  修改流程结构、添加或删除节点、修改连线、控制顺序、分支、子流程、受控循环和定时入口；
+  自定义代码节点包改用 agentflow-node-dsl。
 ---
 
 # AgentFlow Flow DSL
@@ -78,7 +78,8 @@ export const run = flow("Run", collect, analyse, chart);
 |------|------|
 | 第 1 个参数（字符串） | 节点显示名。可省略 |
 | 第 2 个参数（对象） | **输入引脚**。每个键都是引脚名，没有例外 |
-| 第 3 个参数（字符串） | body：agent 是 prompt，`tool.nodejs` 是 shell 命令 |
+| 第 3 个参数 | 一般是 body；`control.while` 优先传 Condition 子流程，旧模式才传 step 脚本 |
+| 第 4 个参数 | 仅双子流程 `control.while` 使用：Body 子流程 |
 | `const 变量名` | **节点 id**。改名 = 重命名节点 |
 | `x.slotName` | 引用上游输出引脚 = 连一条数据线 |
 
@@ -91,7 +92,7 @@ export const run = flow("Run", collect, analyse, chart);
 3. **结构文件禁一切控制流**：`if` / `for` / `while` / `?:` / `.map()` / `await` /
    箭头函数 / `new` / 动态属性。要写逻辑就建代码节点
 4. 一个输出可接多个输入（fan-out 允许）；**一个输入只能接一条边**（fan-in 禁止）；
-   不能成环，没有循环原语
+   图不能成环；重复执行用 `control.while`，不要画回边
 
 ## 控制流
 
@@ -116,6 +117,38 @@ flow.resume(showPlan, stage2);          // 闸门：跑到这停，人点第二�
 flow.detached(draftA, draftB);          // 有控制链但没 run 入口
 ```
 
+### 同 Workspace 子流程
+
+需要把一段标准节点拓扑复用为可调用单元时，用 `flow.input` + `flow.subflow` 声明契约，
+再由父流程用 `flow.call` 调用。子流程内部仍然是 AgentFlow 节点和连线，不要包装成一个脚本：
+
+创建、修改或验收普通子流程、`control.while` 或其画布投影时，必须读取
+[子流程与 While 编写规范](references/subflow-authoring.md)。该规范同时约束 DSL 契约、状态流、
+Start / Return 边界投影和父子流程引脚映射；不要手工创建边界节点或输入代理连线。
+
+```js
+const stateIn = flow.input("state", "json");
+const inspect = agent.subAgent("检查下一项", { state: stateIn.value }, `只处理一项并返回 JSON`);
+const save = tool.nodejs("规范化状态", { value: inspect.result }, `node ${flowDir}/scripts/normalize.mjs`);
+
+export const advanceOne = flow.subflow(
+  "推进一项",
+  { state: stateIn },
+  flow(inspect, save),
+  { state: save.result },
+);
+
+const advance = flow.call("调用推进子流程", advanceOne, { state: read.result });
+const { state } = advance;
+export const run = flow("Run", read, advance, show);
+```
+
+- `flow.input(name, type)` 只能作为某个子流程的输入代理。
+- `flow.subflow(label, inputs, flow(...), outputs)` 的输入值引用 `flow.input`，输出值引用内部节点输出。
+- `flow.call(label, subflow, pins)` 是父流程里的真实控制节点，动态引脚由契约生成。
+- 禁止父流程和内部节点直接跨边界连线；所有值必须经过 `flow.call`。
+- 禁止递归调用。当前第一版也不允许子流程内部 `wait/deferred`；调用帧恢复能力补齐前会明确失败。
+
 **`flow.fork` 不是并行。** 它是「一个 `next` 接多个下游」的写法——`flow(a, b, c)` 是线性的，
 没法在链里写出扇出，所以有了它。编译出来就是两条边，图里不存在 fork 这个东西：
 
@@ -131,7 +164,25 @@ build.next → testB.prev
 
 **分支不能汇合**——fan-in 禁止，`control.anyOne` 运行时没实现。两条分支各自收尾。
 
-**没有循环**。「改到通过为止」只能展开成固定轮次的嵌套 gate。
+### 受控循环
+
+**图仍然不能成环。** 重复执行时用 `control.while` 把循环收进一个有上限、超时和 checkpoint 的
+状态机节点；不要画回边，也不要用 DSL 的 JavaScript `while`。优先传入显式 Condition/Body 子流程：
+
+```js
+const advance = control.while("推进到人工边界", {
+  state: initial.value,
+  maxIterations: "20",
+  timeout: "30m",
+}, shouldContinue, advanceOne);
+export const run4 = flow("Run", advance, report); // done 才继续；wait 会暂停
+```
+
+- Condition 固定输出 `decision`，Body 固定输出下一版 `state`；两者都可选输出 `summary`。
+- `state` 是用户可见的业务状态载体。`iteration`、`idempotencyKey` 由运行时注入，保留在 DSL
+  契约中，但不要要求普通用户在画布上配置或连接。
+- `maxIterations` 和 `timeout` 必须显式设置。新流程不要使用旧的脚本式 While，除非用户要求兼容。
+- Condition/Body 的完整声明、状态迁移、固定输出和手动画布编辑方式都在专项规范中；不要凭记忆简写。
 
 `control.agentToBool` 是 `runtime: degraded`：它靠通用 agent 路径工作，没有任何东西
 约束模型输出，而 `parse-bool` 只认 `true` / `1` / `yes` / `on`。prompt 里必须写死
@@ -207,8 +258,11 @@ const doc  = display.html("使用说明", { content: file("docs/guide.html") });
 | 给用户看结果 | `display.markdown` / `.code` / `.html` / `.chart` / `.table` |
 | 加载 skills 给下游 agent | `control.loadSkills` → `skillsContext` |
 | 加载知识库 / 代码仓 | `control.cdWorkspace` → `knowledgeContext` |
-| 固定文本 / 密钥 | `provide.str` / `provide.password` |
+| 固定文本 / JSON / 密钥 | `provide.str` / `provide.json` / `provide.password` |
+| 文本显式解析为 JSON | `control.parseJson` |
 | 文本转 bool 做分支 | `control.agentToBool` → `prediction` |
+| 复用一段标准节点拓扑 | `flow.subflow` + `flow.call` |
+| 重复执行显式条件与单轮拓扑 | `control.while(..., conditionFlow, bodyFlow)` |
 
 `display.*` 的内容一般来自连线；写字面量则是手写文档节点（也合法，且不会被运行覆盖）。
 

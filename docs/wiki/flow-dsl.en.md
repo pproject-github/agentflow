@@ -244,6 +244,36 @@ Real concurrency means changing the scheduler: indegree-driven dispatch with a c
 plus handling in-place graph mutation during the run, per-node conflict detection, the abort
 path, and event ordering. A separate piece of work, unrelated to `flow.fork`.
 
+## Inline subflows in the same Workspace
+
+A subflow is a standard node graph with an explicit contract, not a script alias:
+
+```js
+const stateIn = flow.input("state", "json");
+const inspect = agent.subAgent("Inspect next item", { state: stateIn.value }, `Handle one item and return JSON only`);
+const save = tool.nodejs("Normalize state", { value: inspect.result }, `node ${flowDir}/scripts/normalize.mjs`);
+
+export const advanceOne = flow.subflow(
+  "Advance one item",
+  { state: stateIn },
+  flow(inspect, save),
+  { state: save.result },
+);
+
+const advance = flow.call("Call advance", advanceOne, { state: read.result });
+const { state } = advance;
+export const run = flow("Run", read, advance, show);
+```
+
+The parent graph schedules only the `control_subflow_call` boundary. Each invocation gets an isolated
+call frame; its inputs are injected into `flow.input` proxies, its internal DAG uses the normal Workspace
+node executor, and declared outputs are mapped back to the call node. Internal events include
+`parentNodeId`, `subflowId`, and `callFrameId`.
+
+A node may belong to one subflow only. Direct edges across subflow boundaries and recursive calls are
+rejected. The first version also rejects `wait/deferred` inside a subflow until resumable call-frame
+checkpoints are implemented.
+
 ## What lint checks
 
 | Layer | Checks |

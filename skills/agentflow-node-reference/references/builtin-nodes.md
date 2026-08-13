@@ -5,6 +5,7 @@
 ## Rules Of Thumb
 
 - `tool_nodejs` needs an executable `script`; `body` is documentation when `script` exists.
+- `control_while` runs bounded Condition/Body subflows without adding a graph cycle; one-step scripts are legacy compatibility.
 - `agent_subAgent` is for semantic/code/text reasoning tasks.
 - Local-only nodes are executed by AgentFlow runtime and do not call an agent.
 - The Workspace runtime executes a DAG; cyclic graphs are rejected. Express check-then-fix as forward steps.
@@ -62,6 +63,14 @@
 - Inputs: 0. `prev`:node; 1. `skillKeys`:text
 - Outputs: 0. `next`:node; 1. `skillsContext`:text
 
+### control_parse_json
+
+- Display: Parse JSON
+- Description: 显式解析并校验文本 JSON，成功后输出 json 类型；解析失败会终止本次运行。
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `value`:text
+- Outputs: 0. `next`:node; 1. `result`:json = null
+
 ### control_user_workspace
 
 - Display: User Workspace
@@ -69,6 +78,14 @@
 - Runtime: local-only
 - Inputs: 0. `prev`:node
 - Outputs: 0. `next`:node; 1. `workspaceContext`:text; 2. `cwd`:file
+
+### control_while
+
+- Display: While
+- Description: Repeatedly execute either an explicit Condition/Body subflow pair or one legacy deterministic step command (`script` or `scriptRef`) without adding a cycle to the Workspace graph. A Run restarted after `wait` resumes from the saved output state. Preferred DSL form: `control.while("Advance", { state, maxIterations, timeout }, conditionFlow, bodyFlow)`. Condition must accept `state` and `iteration`, and return `decision` plus optional `summary`. Only `continue` invokes Body. Body must accept `state`, `iteration`, and `idempotencyKey`, and return the next `state` plus optional `summary`. `wait`, `done`, and `fail` skip Body. In legacy script mode, the command runs once per iteration and stdout must be exactly one JSON object: `{"decision":"continue|wait|done|fail","state":{},"summary":"..."}`. `continue` starts another iteration, `wait` pauses this Run before downstream nodes, `done` continues downstream, and `fail` fails the node. A missing `state` keeps the previous state. Each step receives `AGENTFLOW_WHILE_STATE` (JSON), the absolute `AGENTFLOW_WHILE_ITERATION`, `AGENTFLOW_WHILE_MAX_ITERATIONS`, `AGENTFLOW_WHILE_TIMEOUT_MS`, and a stable per-iteration `AGENTFLOW_WHILE_IDEMPOTENCY_KEY`. Pass the idempotency key to external write APIs when they support one. Write progress logs to stderr because stdout is reserved for the decision object. The command also supports the same runtime placeholders as `tool.nodejs`, including `${flowDir}` and `${workspaceRoot}`. A waiting checkpoint retains state, history, elapsed active time, and the next absolute iteration. `maxIterations` and `timeout` are cumulative across resumes. A changed input resets the checkpoint; a matching but malformed checkpoint fails closed. Step output is schema-strict and bounded: unknown fields are rejected, state/stdout are limited to 1 MiB, stderr to 256 KiB, and summary to 4000 characters.
+- Runtime: bounded Condition/Body state machine
+- Inputs: 0. `prev`:node; 1. `state`:json = null; 2. `maxIterations`:text = 20; 3. `timeout`:text = 30m
+- Outputs: 0. `next`:node; 1. `result`:json; 2. `state`:json = null; 3. `decision`:text; 4. `iterations`:text = 0; 5. `summary`:text; 6. `history`:json = []; 7. `checkpointFingerprint`:text
 
 ### workspace_run
 
@@ -259,6 +276,14 @@
 - Runtime: local-only
 - Inputs: 无
 - Outputs: 0. `value`:file
+
+### provide_json
+
+- Display: JSON
+- Description: 提供经过校验的 JSON 值，输出可以直接连接 json 类型输入。
+- Runtime: local-only
+- Inputs: 无
+- Outputs: 0. `value`:json = null
 
 ### provide_password
 

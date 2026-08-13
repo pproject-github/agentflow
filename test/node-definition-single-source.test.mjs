@@ -232,3 +232,12 @@ test("面板隐藏的节点不会出现在 /api/nodes 目录里", () => {
     assert.ok(!ids.has(id), `${id} 不该出现在节点面板目录里`);
   }
 });
+
+test("Workspace hydration 可读取隐藏结构节点及其 UI，但仍标记为面板隐藏", () => {
+  const catalog = listNodesJson(repoRoot, "", "", { includeHidden: true });
+  const nodes = Array.isArray(catalog) ? catalog : catalog.nodes || [];
+  const call = nodes.find((node) => node.id === "control_subflow_call");
+  assert.ok(call, "子流程调用节点应可供已有实例做 UI hydration");
+  assert.equal(call.paletteHidden, true);
+  assert.equal(call.ui?.card?.sections?.[0]?.type, "subflow");
+});

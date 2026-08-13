@@ -79,7 +79,7 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
                 disabled={disabled}
                 aria-label={t("flow:nodeProps.pinTypeAriaLabel", { label, index: i })}
               >
-                {["node", "text", "file", "bool"].map((typ) => (
+                {["node", "text", "file", "bool", "json"].map((typ) => (
                   <option key={typ} value={typ}>{typ}</option>
                 ))}
               </select>
@@ -231,7 +231,7 @@ export function NodePropertiesPanel({
 
   const scriptStr = String(draft.script ?? "");
   const showScriptSection =
-    definitionId === "tool_nodejs" || scriptStr.trim() !== "";
+    definitionId === "tool_nodejs" || definitionId === "control_while" || scriptStr.trim() !== "";
   const canPublish = typeof onPublishToMarketplace === "function" && !disabled && draft?.newId;
   const publishCurrentNode = async () => {
     if (!canPublish) return;

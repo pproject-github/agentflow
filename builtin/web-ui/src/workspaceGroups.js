@@ -5,6 +5,65 @@ function isWorkspaceGroup(node) {
   return Boolean(node?.data?.isWorkspaceGroup);
 }
 
+function workspaceGroupDragOrigin(group, nodesById) {
+  return {
+    position: {
+      x: Number(group?.position?.x) || 0,
+      y: Number(group?.position?.y) || 0,
+    },
+    memberPositions: new Map(
+      (Array.isArray(group?.data?.nodeIds) ? group.data.nodeIds : [])
+        .map((memberId) => nodesById.get(String(memberId || "")))
+        .filter((member) => member && !isWorkspaceGroup(member))
+        .map((member) => [member.id, {
+          x: Number(member.position?.x) || 0,
+          y: Number(member.position?.y) || 0,
+        }]),
+    ),
+  };
+}
+
+/**
+ * Move a group and its members from one stable pointer-down snapshot.
+ * React Flow may deliver drag frames before the controlled node list has caught
+ * up; deriving each delta from the latest render makes members drift by
+ * different amounts. `dragOrigins` keeps every frame absolute and deterministic.
+ */
+export function expandWorkspaceGroupPositionChanges(changes, currentNodes, dragOrigins = new Map()) {
+  const list = Array.isArray(changes) ? changes : [];
+  const nodesById = new Map((Array.isArray(currentNodes) ? currentNodes : []).map((node) => [node.id, node]));
+  const explicitlyChanged = new Set(list.map((change) => String(change?.id || "")).filter(Boolean));
+  const expanded = [...list];
+  for (const change of list) {
+    if (change?.type !== "position" || !change.position) continue;
+    const groupNode = nodesById.get(change.id);
+    if (!isWorkspaceGroup(groupNode)) continue;
+    const isDragFrame = change.dragging === true || change.dragging === false;
+    let origin = isDragFrame ? dragOrigins.get(change.id) : null;
+    if (!origin) {
+      origin = workspaceGroupDragOrigin(groupNode, nodesById);
+      if (isDragFrame) dragOrigins.set(change.id, origin);
+    }
+    const dx = Number(change.position.x) - origin.position.x;
+    const dy = Number(change.position.y) - origin.position.y;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+    for (const [memberId, memberPosition] of origin.memberPositions) {
+      if (explicitlyChanged.has(memberId)) continue;
+      expanded.push({
+        type: "position",
+        id: memberId,
+        position: {
+          x: memberPosition.x + dx,
+          y: memberPosition.y + dy,
+        },
+        dragging: change.dragging,
+      });
+    }
+    if (change.dragging === false) dragOrigins.delete(change.id);
+  }
+  return expanded;
+}
+
 function displayFallbackSize(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_html" || id === "display_react_app") return { width: 720, height: 520 };

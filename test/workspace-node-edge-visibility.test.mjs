@@ -130,3 +130,37 @@ test("空边集合不制造新的节点显隐覆盖", () => {
   const nodes = [{ id: "n", data: { inputs: [], outputs: [] } }];
   assert.equal(revealConnectedSlotsForEdges(nodes, []), nodes);
 });
+
+test("Subflow Call 始终展示完整输入输出契约，不因未连线隐藏 raw", () => {
+  const node = mergeNodeWithPalette({
+    id: "callInspect",
+    data: { definitionId: "control_subflow_call" },
+  }, {
+    callInspect: {
+      definitionId: "control_subflow_call",
+      input: [
+        { type: "node", name: "prev", value: "", showOnNode: true },
+        { type: "text", name: "issue", value: "", showOnNode: false },
+      ],
+      output: [
+        { type: "node", name: "next", value: "", showOnNode: true },
+        { type: "text", name: "summary", value: "", showOnNode: true },
+        { type: "text", name: "raw", value: "", showOnNode: false },
+      ],
+    },
+  }, [{
+    id: "control_subflow_call",
+    inputs: [{ type: "node", name: "prev" }],
+    outputs: [{ type: "node", name: "next" }],
+  }]);
+
+  assert.deepEqual(node.data.inputs.map((slot) => [slot.name, slot.showOnNode]), [
+    ["prev", true],
+    ["issue", true],
+  ]);
+  assert.deepEqual(node.data.outputs.map((slot) => [slot.name, slot.showOnNode]), [
+    ["next", true],
+    ["summary", true],
+    ["raw", true],
+  ]);
+});

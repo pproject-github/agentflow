@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   workspaceMaterializeAgentResultFile,
+  workspaceMaterializeNodePackageOutputValues,
   workspacePublishAgentOutputFiles,
   workspaceStructuredAgentOutput,
 } from "../bin/lib/workspace-server.mjs";
@@ -126,6 +127,32 @@ test("materializes inline file outParams", (t) => {
     fs.readFileSync(path.join(runPackage.nodeRunDir, "outputs", "report.md"), "utf-8"),
     "# Report\nok",
   );
+});
+
+test("node package text/json outputs use file contents as slot values", (t) => {
+  const runPackage = createRunPackage(t);
+  fs.writeFileSync(path.join(runPackage.nodeRunDir, "outputs", "decision.txt"), "continue", "utf8");
+  fs.writeFileSync(path.join(runPackage.nodeRunDir, "outputs", "summary.txt"), "第 1 条", "utf8");
+  const structured = workspaceStructuredAgentOutput([
+    "---agentflow",
+    "resultFile: outputs/decision.txt",
+    "outParams:",
+    "  summaryFile: outputs/summary.txt",
+    "---end",
+  ].join("\n"));
+  const instance = {
+    output: [
+      { name: "next", type: "node" },
+      { name: "decision", type: "text" },
+      { name: "summary", type: "text" },
+    ],
+  };
+
+  const materialized = workspaceMaterializeNodePackageOutputValues(structured, runPackage, instance);
+  assert.equal(materialized.result, "continue");
+  assert.equal(materialized.resultFile, "");
+  assert.equal(materialized.outParams.summary, "第 1 条");
+  assert.equal(materialized.outParams.summaryFile, undefined);
 });
 
 test("keeps every file written to the durable downloads directory", (t) => {

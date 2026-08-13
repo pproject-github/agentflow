@@ -24,6 +24,7 @@
 import fs from "fs";
 import path from "path";
 import { parse as acornParse } from "acorn";
+import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 
 export const NODE_PACKAGE_ENTRY = "index.mjs";
 
@@ -135,15 +136,19 @@ export function nodePackageDeclarationToManifest(decl, packageDir) {
   const id = decl.id != null ? String(decl.id).trim() : path.basename(packageDir);
   const version = decl.version != null ? String(decl.version).trim() : "";
   if (!id || !version) return null;
+  const input = slotMapToList(decl.inputs, "input");
+  const output = slotMapToList(decl.outputs, "output");
+  const ui = normalizeNodeUiForSlots(decl.ui, input, output);
   return {
     id,
     version,
     displayName: decl.name != null ? String(decl.name) : id,
     description: decl.description != null ? String(decl.description) : "",
-    input: slotMapToList(decl.inputs, "input"),
-    output: slotMapToList(decl.outputs, "output"),
+    input,
+    output,
     baseDefinitionId: "tool_nodejs",
     runtime: { type: "tool_nodejs", entry: NODE_PACKAGE_ENTRY, mode: "module" },
+    ...(ui ? { ui } : {}),
     ...(decl.ownerUserId != null ? { ownerUserId: String(decl.ownerUserId) } : {}),
     ...(decl.createdBy != null ? { createdBy: String(decl.createdBy) } : {}),
   };

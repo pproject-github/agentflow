@@ -53,6 +53,38 @@ positional handles (`input-0`, `output-1`), so reordering the declaration rewire
 
 Types: `text`, `file`, `bool`, `node`, `image`, `json`. Anything else is an error.
 
+## Node UI Kit
+
+A code-node declaration may include a safe, declarative `ui.card`. It travels with the Marketplace
+package and is interpreted by the Workspace renderer; no package-provided frontend code is run:
+
+```js
+ui: {
+  card: {
+    template: "state-machine",
+    icon: "repeat",
+    tone: "purple",
+    sections: [
+      { type: "binding", label: "State", input: "state" },
+      { type: "code", label: "Step", field: "script" },
+      { type: "decision", label: "Decision", output: "decision", source: "step.stdout.decision",
+        options: [
+          { value: "continue", label: "continue", tone: "purple" },
+          { value: "done", label: "done", tone: "green" },
+        ] },
+      { type: "metrics", label: "Progress", items: [
+        { label: "Iteration", output: "iterations", maxInput: "maxIterations" },
+      ] },
+      { type: "summary", label: "Latest", output: "summary" },
+      { type: "history", label: "History", output: "history", limit: 3 },
+    ],
+  },
+}
+```
+
+The component allowlist is `binding`, `code`, `decision`, `metrics`, `summary`, and `history`.
+Arbitrary HTML, React, and event handlers are not supported; unknown declarations are filtered.
+
 ## `run(inputs, outputs, dirs)`
 
 | Argument | Contents |

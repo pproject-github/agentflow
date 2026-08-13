@@ -18,6 +18,7 @@ import fs from "fs";
 import path from "path";
 import { parse as acornParse } from "acorn";
 
+import { slotTypeCompatibility } from "../../../shared/slot-types.js";
 import { CTRL_SLOTS, RUN_DEFINITIONS, DEFINITIONS, definitionOf } from "./defs.mjs";
 import { packageResolverFor, scanAvailableNodePackages } from "./packages.mjs";
 import { FLOW_SOURCE_FILENAME } from "./index.mjs";
@@ -43,7 +44,21 @@ const BANNED_SYNTAX = {
 };
 
 /** 这两类节点的槽位由实例自己定义，不受定义表约束。 */
-const CUSTOM_SLOTS_ALLOWED = new Set(["agent_subAgent", "tool_nodejs"]);
+const CUSTOM_SLOTS_ALLOWED = new Set(["agent_subAgent", "tool_nodejs", "control_subflow_call"]);
+
+function declaredSlot(node, kind, name) {
+  const slots = node?.packageDef?.[kind]
+    || definitionOf(node?.definitionId)?.[kind === "input" ? "input" : "output"]
+    || [];
+  return slots.find((slot) => String(slot?.name || "") === String(name || "")) || null;
+}
+
+function declaredSlotType(node, kind, name) {
+  const slot = declaredSlot(node, kind, name);
+  if (slot?.type) return String(slot.type);
+  if (kind === "input" && node?.inputTypes?.[name]) return String(node.inputTypes[name]);
+  return "";
+}
 
 function walk(node, visit) {
   if (!node || typeof node !== "object") return;
@@ -131,6 +146,28 @@ export function lintFlowDir(flowDir, opts = {}) {
   }
 
   const N = ir.nodes;
+  const subflows = ir?.subflows && typeof ir.subflows === "object" ? ir.subflows : {};
+
+  const ownerOf = new Map();
+  for (const [subflowId, subflow] of Object.entries(subflows)) {
+    if (!(subflow.roots || []).length) errors.push(`${subflowId}: 子流程没有执行入口`);
+    for (const nodeId of subflow.nodeIds || []) {
+      if (!N[nodeId]) errors.push(`${subflowId}: 成员 ${nodeId} 不存在`);
+      if (ownerOf.has(nodeId) && ownerOf.get(nodeId) !== subflowId) {
+        errors.push(`${nodeId}: 不能同时属于子流程 ${ownerOf.get(nodeId)} 和 ${subflowId}`);
+      } else ownerOf.set(nodeId, subflowId);
+    }
+    for (const [name, binding] of Object.entries(subflow.inputs || {})) {
+      if (N[binding.nodeId]?.definitionId !== "workspace_subflow_input") {
+        errors.push(`${subflowId}.${name}: 输入代理 ${binding.nodeId} 不是 flow.input`);
+      }
+    }
+    for (const [name, binding] of Object.entries(subflow.outputs || {})) {
+      if (!ownerOf.has(binding.nodeId) && !(subflow.nodeIds || []).includes(binding.nodeId)) {
+        errors.push(`${subflowId}.${name}: 输出来源 ${binding.nodeId} 不在子流程内`);
+      }
+    }
+  }
 
   for (const [id, node] of Object.entries(N)) {
     const definitionId = node.definitionId;
@@ -138,6 +175,53 @@ export function lintFlowDir(flowDir, opts = {}) {
     if (!def) {
       errors.push(`${id}: 未知节点类型 ${definitionId}`);
       continue;
+    }
+    if (definitionId === "control_subflow_call" && !subflows[node.attrs?.subflowId]) {
+      errors.push(`${id}: 引用的子流程 ${node.attrs?.subflowId || "(empty)"} 不存在`);
+    }
+    if (definitionId === "control_while") {
+      const conditionId = String(node.attrs?.conditionSubflowId || "");
+      const bodyId = String(node.attrs?.bodySubflowId || "");
+      const hasSubflowRefs = Boolean(conditionId || bodyId);
+      if (hasSubflowRefs && node.script) {
+        errors.push(`${id}: control.while 不能同时声明 step 脚本和 Condition/Body 子流程`);
+      } else if (hasSubflowRefs) {
+        if (!conditionId || !bodyId) {
+          errors.push(`${id}: control.while 必须同时声明 Condition 和 Body 子流程`);
+        } else if (conditionId === bodyId) {
+          errors.push(`${id}: control.while 的 Condition 和 Body 必须是不同子流程`);
+        }
+        const condition = subflows[conditionId];
+        const body = subflows[bodyId];
+        if (!condition) errors.push(`${id}: Condition 子流程 ${conditionId || "(empty)"} 不存在`);
+        if (!body) errors.push(`${id}: Body 子流程 ${bodyId || "(empty)"} 不存在`);
+        for (const name of ["state", "iteration"]) {
+          if (condition && !condition.inputs?.[name]) errors.push(`${id}: Condition 子流程 ${conditionId} 缺少输入 ${name}`);
+        }
+        if (condition && !condition.outputs?.decision) {
+          errors.push(`${id}: Condition 子流程 ${conditionId} 缺少输出 decision`);
+        }
+        for (const name of ["state", "iteration", "idempotencyKey"]) {
+          if (body && !body.inputs?.[name]) errors.push(`${id}: Body 子流程 ${bodyId} 缺少输入 ${name}`);
+        }
+        if (body && !body.outputs?.state) errors.push(`${id}: Body 子流程 ${bodyId} 缺少输出 state`);
+        for (const [contract, name, expected] of [
+          [condition?.inputs, "state", "json"],
+          [condition?.inputs, "iteration", "text"],
+          [condition?.outputs, "decision", "text"],
+          [body?.inputs, "state", "json"],
+          [body?.inputs, "iteration", "text"],
+          [body?.inputs, "idempotencyKey", "text"],
+          [body?.outputs, "state", "json"],
+        ]) {
+          const actual = String(contract?.[name]?.type || "");
+          if (actual && actual !== expected) {
+            errors.push(`${id}: While 契约 ${name} 必须是 ${expected}，当前是 ${actual}`);
+          }
+        }
+      } else if (!node.script) {
+        errors.push(`${id}: control.while 需要 step 脚本，或 Condition/Body 两个子流程`);
+      }
     }
     // 运行时支持程度来自各节点 .md 的 runtime: 字段，不是这里的第二份清单
     if (def.runtime === "degraded") {
@@ -171,6 +255,11 @@ export function lintFlowDir(flowDir, opts = {}) {
       errors.push(`边引用了未声明的节点 ${dst}`);
       continue;
     }
+    const srcOwner = ownerOf.get(src) || "";
+    const dstOwner = ownerOf.get(dst) || "";
+    if (srcOwner !== dstOwner) {
+      errors.push(`子流程边界禁止直接连线: ${src}.${fromSlot} (${srcOwner || "父流程"}) -> ${dst}.${toSlot} (${dstOwner || "父流程"})；请通过 flow.call 契约传值`);
+    }
     const def = lookupDef(N[src].definitionId);
     if (def && !CTRL_SLOTS.has(fromSlot)
       && !def.output.some((s) => s.name === fromSlot)
@@ -185,6 +274,18 @@ export function lintFlowDir(flowDir, opts = {}) {
     }
     if (CTRL_SLOTS.has(fromSlot) && def && !def.output.some((s) => s.name === fromSlot)) {
       errors.push(`${src}[${N[src].definitionId}] 没有 ${fromSlot} 槽，控制流串不下去`);
+    }
+    const sourceType = declaredSlotType(N[src], "output", fromSlot);
+    // 自定义输入槽没有独立声明时会跟随上游类型，因此只对有明确目标类型的边做校验。
+    const targetType = declaredSlotType(N[dst], "input", toSlot);
+    if (sourceType && targetType) {
+      const compatibility = slotTypeCompatibility(sourceType, targetType);
+      if (!compatibility.compatible) {
+        errors.push(
+          `类型不兼容: ${src}.${fromSlot}(${compatibility.source}) -> `
+          + `${dst}.${toSlot}(${compatibility.target})；请改用同类型引脚或显式转换节点`,
+        );
+      }
     }
     const target = `${dst}|${toSlot}`;
     if (inputSeen.has(target)) {
@@ -211,6 +312,32 @@ export function lintFlowDir(flowDir, opts = {}) {
   };
   for (const id of Object.keys(N)) if (!color.has(id)) visit(id);
 
+  // 图本身仍是 DAG，但子流程调用关系也不能递归，否则会形成运行时调用环。
+  const callGraph = new Map(Object.keys(subflows).map((id) => [id, []]));
+  for (const [nodeId, node] of Object.entries(N)) {
+    const owner = ownerOf.get(nodeId);
+    if (!owner) continue;
+    if (node.definitionId === "control_subflow_call") {
+      const target = String(node.attrs?.subflowId || "");
+      if (target) callGraph.get(owner)?.push(target);
+    }
+    if (node.definitionId === "control_while") {
+      for (const target of [node.attrs?.conditionSubflowId, node.attrs?.bodySubflowId]) {
+        if (target) callGraph.get(owner)?.push(String(target));
+      }
+    }
+  }
+  const callColor = new Map();
+  const visitCall = (id) => {
+    callColor.set(id, 1);
+    for (const next of callGraph.get(id) || []) {
+      if (callColor.get(next) === 1) errors.push(`子流程递归调用禁止: ${id} -> ${next}`);
+      else if (!callColor.has(next)) visitCall(next);
+    }
+    callColor.set(id, 2);
+  };
+  for (const id of callGraph.keys()) if (!callColor.has(id)) visitCall(id);
+
   for (const [id, node] of Object.entries(N)) {
     if (node.definitionId !== "control_if") continue;
     const edge = ir.edges.find((e) => e.endsWith(`|${id}|prediction`));
@@ -218,8 +345,6 @@ export function lintFlowDir(flowDir, opts = {}) {
       errors.push(`${id}: control.if 的 prediction 未接线`);
     } else {
       const [src, slot] = edge.split("|");
-      const type = lookupDef(N[src]?.definitionId)?.output.find((s) => s.name === slot)?.type;
-      if (type && type !== "bool") errors.push(`${id}: prediction 只能接 bool，${src}.${slot} 是 ${type}`);
     }
     for (const [slot, label] of [["next1", "then"], ["next2", "else"]]) {
       if (!ir.edges.some((e) => e.startsWith(`${id}|${slot}|`))) warnings.push(`${id}: control.if 缺 ${label} 分支`);

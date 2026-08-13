@@ -121,6 +121,38 @@ node skills/agentflow-cli/scripts/agentflow-cli.mjs publish-flow \
 
 可用类型：`text` `file` `bool` `node` `image` `json`。未知类型直接报错。
 
+## Node UI Kit
+
+代码节点可以在声明中增加安全的、声明式 `ui.card`。该声明随 Marketplace 包传输并由
+Workspace 通用渲染器解释，不执行节点提供的前端代码：
+
+```js
+ui: {
+  card: {
+    template: "state-machine",
+    icon: "repeat",
+    tone: "purple",
+    sections: [
+      { type: "binding", label: "State", input: "state" },
+      { type: "code", label: "Step", field: "script" },
+      { type: "decision", label: "Decision", output: "decision", source: "step.stdout.decision",
+        options: [
+          { value: "continue", label: "continue", tone: "purple" },
+          { value: "done", label: "done", tone: "green" },
+        ] },
+      { type: "metrics", label: "Progress", items: [
+        { label: "Iteration", output: "iterations", maxInput: "maxIterations" },
+      ] },
+      { type: "summary", label: "Latest", output: "summary" },
+      { type: "history", label: "History", output: "history", limit: 3 },
+    ],
+  },
+}
+```
+
+组件白名单为 `binding`、`code`、`decision`、`metrics`、`summary`、`history`。不支持任意
+HTML、React 和事件处理器；未知声明会被过滤。
+
 ## `run(inputs, outputs, dirs)`
 
 | 参数 | 内容 |

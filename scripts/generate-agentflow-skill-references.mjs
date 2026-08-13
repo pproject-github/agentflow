@@ -6,6 +6,8 @@ import { parseNodeFrontmatter } from "../bin/lib/catalog-flows.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+// 这些 definition 只由 flow.input / flow.call 投影生成，不是用户可直接创建的节点 API。
+const INTERNAL_NODE_DEFINITION_IDS = new Set(["control_subflow_call", "workspace_subflow_input"]);
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -65,7 +67,7 @@ function generateNodeReference() {
     .map((name) => parseNodeDefinition(path.join(dir, name)))
     // 只收 Workspace 运行时有专用 handler 的类型：Composer 读到 none/degraded 就会照着
     // 生成拿不到文档承诺语义的图。分级来自各节点 .md 的 `runtime:` 字段。
-    .filter((node) => node.runtime === "native")
+    .filter((node) => node.runtime === "native" && !INTERNAL_NODE_DEFINITION_IDS.has(node.id))
     .sort((a, b) => a.id.localeCompare(b.id));
   // native 里唯一会真正调 agent 的三个；其余都由 runtime 本地执行完。
   const agentBacked = new Set(["agent_subAgent", "tool_nodejs", "workspace_one_click_task"]);
@@ -77,6 +79,7 @@ function generateNodeReference() {
     "## Rules Of Thumb",
     "",
     "- `tool_nodejs` needs an executable `script`; `body` is documentation when `script` exists.",
+    "- `control_while` runs bounded Condition/Body subflows without adding a graph cycle; one-step scripts are legacy compatibility.",
     "- `agent_subAgent` is for semantic/code/text reasoning tasks.",
     "- Local-only nodes are executed by AgentFlow runtime and do not call an agent.",
     "- The Workspace runtime executes a DAG; cyclic graphs are rejected. Express check-then-fix as forward steps.",
@@ -94,6 +97,7 @@ function generateNodeReference() {
       if (node.description) lines.push(`- Description: ${node.description}`);
       lines.push(`- Runtime: ${node.id === "tool_nodejs"
         ? "direct script when script exists, otherwise agent"
+        : node.id === "control_while" ? "bounded Condition/Body state machine"
         : agentBacked.has(node.id) ? "agent/runner" : "local-only"}`);
       lines.push(`- Inputs: ${slotsTable(node.input)}`);
       lines.push(`- Outputs: ${slotsTable(node.output)}`);
@@ -145,7 +149,7 @@ async function generateDslNodeTable() {
   const { DEFINITIONS, apiName } = await import("../bin/lib/flow-dsl/defs.mjs");
   const CTRL = new Set(["prev", "next", "next1", "next2"]);
   const rows = Object.entries(DEFINITIONS)
-    .filter(([, def]) => def.runtime === "native")
+    .filter(([id, def]) => def.runtime === "native" && !INTERNAL_NODE_DEFINITION_IDS.has(id))
     .map(([id, def]) => {
       const fmt = (slots) => slots
         .filter((s) => !CTRL.has(s.name))

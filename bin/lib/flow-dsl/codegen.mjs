@@ -64,6 +64,8 @@ function displayFileExt(kind) {
  */
 export function generateFlowSource(ir, opts = {}) {
   const N = ir.nodes;
+  const subflows = ir?.subflows && typeof ir.subflows === "object" ? ir.subflows : {};
+  const subflowMemberIds = new Set(Object.values(subflows).flatMap((subflow) => subflow?.nodeIds || []));
   const files = [];
   const emitFile = (rel, text) => {
     files.push({ path: rel, text });
@@ -153,7 +155,9 @@ export function generateFlowSource(ir, opts = {}) {
   const callee = (id) => bindingOf.get(id)?.name || apiCall(apiName(N[id].definitionId));
 
   const bodyTextOf = (id) => String(
-    (N[id].definitionId === "tool_nodejs" && N[id].script) ? N[id].script : (N[id].body || ""),
+    ((N[id].definitionId === "tool_nodejs" || N[id].definitionId === "control_while") && N[id].script)
+      ? N[id].script
+      : (N[id].body || ""),
   );
 
   /**
@@ -246,13 +250,14 @@ export function generateFlowSource(ir, opts = {}) {
   }
 
   // 把控制链展开成嵌套序列；分叉处变成数组，由 printItem 打成 flow.fork(...)
-  function expandChain(id) {
+  function expandChain(id, allowed = null) {
     const kids = (controlNext.get(id) || [])
       .filter((x) => !RUN_DEFINITIONS.has(N[x.to].definitionId))
+      .filter((x) => !allowed || allowed.has(x.to))
       .map((x) => x.to);
     if (isIf(id) || !kids.length) return [id];
-    if (kids.length === 1) return [id, ...expandChain(kids[0])];
-    return [id, kids.map(expandChain)];
+    if (kids.length === 1) return [id, ...expandChain(kids[0], allowed)];
+    return [id, kids.map((kid) => expandChain(kid, allowed))];
   }
   const collectIds = (seq, acc = []) => {
     for (const item of seq) {
@@ -268,14 +273,37 @@ export function generateFlowSource(ir, opts = {}) {
   );
 
   const declared = new Set();
+  const declaredSubflows = new Set();
   const out = [];
 
-  function chainFrom(roots) {
+  function chainFrom(roots, allowed = null) {
     const seq = roots.length === 1
-      ? expandChain(roots[0])
-      : (roots.length ? [roots.map(expandChain)] : []);
+      ? expandChain(roots[0], allowed)
+      : (roots.length ? [roots.map((root) => expandChain(root, allowed))] : []);
     for (const id of collectIds(seq)) declare(id, false);
     return seq;
+  }
+
+  const outputRef = (nodeId, slot) => outVar.get(`${nodeId}|${slot}`) || `${nodeId}.${slot}`;
+
+  function declareSubflow(subflowId) {
+    if (declaredSubflows.has(subflowId)) return;
+    const subflow = subflows[subflowId];
+    if (!subflow) return;
+    declaredSubflows.add(subflowId);
+    const allowed = new Set(subflow.nodeIds || []);
+    for (const binding of Object.values(subflow.inputs || {})) declare(binding.nodeId, false);
+    const seq = chainFrom((subflow.roots || []).filter((id) => allowed.has(id)), allowed).map(printItem);
+    for (const binding of Object.values(subflow.outputs || {})) declare(binding.nodeId, false);
+    const inputEntries = Object.entries(subflow.inputs || {}).map(([name, binding]) => (
+      `${isIdentifier(name) ? name : JSON.stringify(name)}: ${binding.nodeId}`
+    ));
+    const outputEntries = Object.entries(subflow.outputs || {}).map(([name, binding]) => (
+      `${isIdentifier(name) ? name : JSON.stringify(name)}: ${outputRef(binding.nodeId, binding.slot)}`
+    ));
+    const inputObject = inputEntries.length ? `{ ${inputEntries.join(", ")} }` : "{}";
+    const outputObject = outputEntries.length ? `{ ${outputEntries.join(", ")} }` : "{}";
+    out.push(`export const ${subflowId} = ${apiCall("flow.subflow")}(${literal(subflow.label || subflowId)}, ${inputObject}, ${apiCall("flow")}(${seq.join(", ")}), ${outputObject});\n`);
   }
 
   function declare(id, exported) {
@@ -285,18 +313,50 @@ export function generateFlowSource(ir, opts = {}) {
     for (const dep of dataIn.get(id) || []) if (!declared.has(dep.from)) declare(dep.from, true);
 
     const node = N[id];
+    if (node.definitionId === "workspace_subflow_input") {
+      const name = String(node.attrs?.subflowInputName || node.label || id);
+      const type = String(node.attrs?.subflowInputType || node.packageDef?.output?.[0]?.type || "text");
+      out.push(`const ${id} = ${apiCall("flow.input")}(${literal(name)}, ${literal(type)});\n`);
+      return;
+    }
+    if (node.definitionId === "control_subflow_call") {
+      const subflowId = String(node.attrs?.subflowId || "");
+      declareSubflow(subflowId);
+      const args = [];
+      if (node.label) args.push(literal(node.label));
+      args.push(subflowId);
+      args.push(pinsObject(id));
+      out.push(`${exported ? "export " : ""}const ${id} = ${apiCall("flow.call")}(${args.join(", ")});\n`);
+      const bindings = (destructured.get(id) || []).map((slot) => {
+        const variable = outVar.get(`${id}|${slot}`);
+        return variable === slot ? slot : `${isIdentifier(slot) ? slot : JSON.stringify(slot)}: ${variable}`;
+      });
+      if (bindings.length) out.push(`const { ${bindings.join(", ")} } = ${id};\n`);
+      return;
+    }
     const folds = isIf(id) ? new Map() : bodyFolds(id);
     const args = [];
     if (node.label) args.push(literal(node.label));
     args.push(pinsObject(id, folds));
 
-    if (isIf(id)) {
+    const conditionSubflowId = node.definitionId === "control_while"
+      ? String(node.attrs?.conditionSubflowId || "")
+      : "";
+    const bodySubflowId = node.definitionId === "control_while"
+      ? String(node.attrs?.bodySubflowId || "")
+      : "";
+    if (conditionSubflowId || bodySubflowId) {
+      declareSubflow(conditionSubflowId);
+      declareSubflow(bodySubflowId);
+      args.push(conditionSubflowId || "undefined");
+      args.push(bodySubflowId || "undefined");
+    } else if (isIf(id)) {
       const thenIds = (controlNext.get(id) || []).filter((x) => x.slot === "next1").map((x) => x.to);
       const elseIds = (controlNext.get(id) || []).filter((x) => x.slot === "next2").map((x) => x.to);
       args.push(`${apiCall("flow")}(${chainFrom(thenIds).map(printItem).join(", ")})`);
       args.push(`${apiCall("flow")}(${chainFrom(elseIds).map(printItem).join(", ")})`);
     } else {
-      const usesScript = node.definitionId === "tool_nodejs" && node.script;
+      const usesScript = (node.definitionId === "tool_nodejs" || node.definitionId === "control_while") && node.script;
       const body = usesScript ? node.script : node.body;
       if (body) {
         args.push(folds.size
@@ -318,6 +378,9 @@ export function generateFlowSource(ir, opts = {}) {
   }
 
   const ids = Object.keys(N).sort();
+
+  // 子流程先于父流程调用声明；内部节点仍是普通 DSL 节点，只是拥有独立作用域。
+  for (const subflowId of Object.keys(subflows).sort()) declareSubflow(subflowId);
 
   for (const runId of ids) {
     const definitionId = N[runId].definitionId;
@@ -344,12 +407,12 @@ export function generateFlowSource(ir, opts = {}) {
   // 没有 run 入口、但自成控制链的孤儿链条——语料里真的有，丢掉就等于删图
   const controlTargets = new Set(ir.edges.map((e) => e.split("|")).filter((p) => p[3] === "prev").map((p) => p[2]));
   for (const id of ids) {
-    if (declared.has(id) || RUN_DEFINITIONS.has(N[id].definitionId) || controlTargets.has(id)) continue;
+    if (declared.has(id) || subflowMemberIds.has(id) || RUN_DEFINITIONS.has(N[id].definitionId) || controlTargets.has(id)) continue;
     if (!(controlNext.get(id) || []).length) continue;
     out.push(`${apiCall("flow.detached")}(${chainFrom([id]).map(printItem).join(", ")});\n`);
   }
   for (const id of ids) {
-    if (!declared.has(id) && !RUN_DEFINITIONS.has(N[id].definitionId)) declare(id, true);
+    if (!declared.has(id) && !subflowMemberIds.has(id) && !RUN_DEFINITIONS.has(N[id].definitionId)) declare(id, true);
   }
 
   const flowImports = flowApiRoots.map((root) => {

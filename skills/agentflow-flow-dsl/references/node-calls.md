@@ -12,7 +12,9 @@
 | `control.if` | prediction:bool | — |
 | `control.loadMcp` | serverNames:text | mcpContext:text |
 | `control.loadSkills` | skillKeys:text | skillsContext:text |
+| `control.parseJson` | value:text | result:json |
 | `control.userWorkspace` | — | workspaceContext:text, cwd:file |
+| `control.while` | state:json, maxIterations:text, timeout:text | result:json, state:json, decision:text, iterations:text, summary:text, history:json, checkpointFingerprint:text |
 | `display.ascii` | content:text | content:text |
 | `display.chart` | content:text, filePath:file, workspaceContext:text | content:text |
 | `display.code` | content:text, language:text, fileName:text, wrap:bool | content:text |
@@ -24,6 +26,7 @@
 | `display.table` | content:text, filePath:file, workspaceContext:text | content:text |
 | `provide.bool` | — | value:bool |
 | `provide.file` | — | value:file |
+| `provide.json` | — | value:json |
 | `provide.password` | — | value:text |
 | `provide.str` | — | value:text |
 | `tool.displayShareLink` | title:text, layout:text, nodeIds:text, baseUrl:text | url:text, shareId:text, expiresAt:text |

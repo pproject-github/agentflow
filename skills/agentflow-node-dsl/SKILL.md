@@ -115,6 +115,45 @@ await fs.writeFile(p, csvText); await fs.writeFile(outputs.deduped, p);   // ✗
 
 可用类型：`text` `file` `bool` `node` `image` `json`。未知类型直接报错。
 
+## Node UI Kit（可选）
+
+节点需要在画布上解释输入绑定、执行步骤或运行状态时，在 `export default` 中声明 `ui.card`。
+UI 与清单一起静态解析和发布；节点包不能注入 React、HTML 或事件处理器，只能组合平台白名单
+组件：`binding`、`code`、`decision`、`metrics`、`summary`、`history`。
+
+```js
+export default {
+  id: "advance_state",
+  version: "1.0.0",
+  name: "推进状态",
+  inputs: { state: { type: "json" }, max: { type: "text", default: "20" } },
+  outputs: { decision: { type: "text" }, iterations: { type: "text" }, history: { type: "json" } },
+  ui: {
+    card: {
+      template: "state-machine", // details | state-machine
+      icon: "repeat",            // Material Symbols 名称
+      tone: "purple",            // neutral | blue | purple | green | amber | red
+      sections: [
+        { type: "binding", label: "State", input: "state" },
+        { type: "code", label: "Step", field: "script" },
+        { type: "decision", label: "Decision", output: "decision", source: "step.result.decision",
+          options: [
+            { value: "continue", label: "continue", tone: "purple" },
+            { value: "done", label: "done", tone: "green" },
+          ] },
+        { type: "metrics", label: "Progress", items: [
+          { label: "Iteration", output: "iterations", maxInput: "max" },
+        ] },
+        { type: "history", label: "History", output: "history", limit: 3 },
+      ],
+    },
+  },
+};
+```
+
+字段里的 `input` / `output` 必须引用本节点已声明的槽位；`code.field` 只能是 `script`、
+`scriptRef`、`body`、`implementationRef`。未知组件或字段会在清单规范化时被丢弃，不会进入 UI。
+
 ## `run(inputs, outputs, dirs)`
 
 | 参数 | 内容 |

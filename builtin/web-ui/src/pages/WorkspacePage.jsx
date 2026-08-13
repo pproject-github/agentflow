@@ -1,5 +1,7 @@
 import {
+  BaseEdge,
   Background,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   NodeResizeControl,
@@ -9,6 +11,7 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  getBezierPath,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -21,14 +24,17 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
-import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
+import { FLOW_NODE_TYPE, FlowNode, FlowNodePortRail } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
 import {
   cloneNodeIoDraftSlots,
+  buildNodeUiInputBindings,
   filterValidEdges,
   mergeNodeWithPalette,
+  persistedNodeUiStatus,
   revealConnectedSlots,
   revealConnectedSlotsForEdges,
+  sanitizeRuntimeOutputsForCanvas,
 } from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
@@ -49,6 +55,7 @@ import {
   getHandleColor,
   getNodeSlotByHandle,
   getSlotConnectionLabel,
+  slotTypeCompatibility,
 } from "../nodeSchema.js";
 import { recordPipelineView } from "../pipelineViewPreference.js";
 import {
@@ -104,7 +111,26 @@ import {
 } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
-import { expandWorkspaceGroupsToMembers } from "../workspaceGroups.js";
+import {
+  expandWorkspaceGroupPositionChanges,
+  expandWorkspaceGroupsToMembers,
+} from "../workspaceGroups.js";
+import {
+  buildWorkspaceSubflowProjection,
+  isRuntimeOnlyWhileInput,
+  workspaceSubflowCallRelations,
+  workspaceSubflowReturnNodeId,
+  workspaceSubflowStartNodeId,
+} from "../workspaceSubflowProjection.js";
+import {
+  activeSubflowCanvas,
+  addNodeToSubflow,
+  applySubflowBoundaryConnection,
+  createWhileSubflowScaffold,
+  reconcileSubflowCallOutputs,
+  removeSubflowOutput,
+  renameSubflowOutput,
+} from "../workspaceSubflowEditing.js";
 
 const WorkflowAssistantThread = lazy(() => import("../components/WorkflowAssistantThread.jsx"));
 
@@ -1716,6 +1742,23 @@ function workspaceConnectionCompatible(connection, nodes) {
   return Boolean(srcSlot && tgtSlot && areSlotsCompatible(srcSlot, tgtSlot));
 }
 
+function workspaceConnectionErrorMessage(connection, nodes) {
+  const source = String(connection?.source || "");
+  const target = String(connection?.target || "");
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const srcSlot = getNodeSlotByHandle(nodeById.get(source), connection?.sourceHandle || "output-0", "source");
+  const tgtSlot = getNodeSlotByHandle(nodeById.get(target), connection?.targetHandle || "input-0", "target");
+  if (!srcSlot || !tgtSlot) return "端口不存在，已取消连线";
+  const compatibility = slotTypeCompatibility(srcSlot.type, tgtSlot.type);
+  if (!compatibility.compatible) {
+    const hint = compatibility.source === "text" && compatibility.target === "json"
+      ? "；请先插入 Parse JSON 节点"
+      : "；请使用同类型引脚或显式转换";
+    return `不能连接 ${compatibility.source} → ${compatibility.target}${hint}`;
+  }
+  return `端口语义不匹配：${getSlotConnectionLabel(srcSlot)} → ${getSlotConnectionLabel(tgtSlot)}`;
+}
+
 function buildWorkspaceConnectionDraft(params, nodes) {
   const nodeId = String(params?.nodeId || "");
   const handleId = String(params?.handleId || "");
@@ -1778,7 +1821,7 @@ function buildWorkspaceExistingConnectionCandidates(nodes, edges, draft) {
   const candidates = [];
   const wantInputs = draft.handleType === "source";
   for (const node of nodes || []) {
-    if (!node || node.id === draft.nodeId) continue;
+    if (!node || node.id === draft.nodeId || node.data?.isSubflowBoundary) continue;
     const slots = Array.isArray(wantInputs ? node.data?.inputs : node.data?.outputs)
       ? (wantInputs ? node.data.inputs : node.data.outputs)
       : [];
@@ -2050,8 +2093,37 @@ function inferredWorkspaceGroupNodeIds(group, graph) {
   });
 }
 
-function workspaceGroupNodesFromGraph(graph) {
+function workspaceGroupNodesFromGraph(graph, resolvedPositions = {}, resolvedSizes = {}, hiddenNodeIds = new Set()) {
   const groups = normalizeWorkspaceGroups(graph?.ui?.groups);
+  const explicitIds = new Set(groups.map((group) => group.id));
+  for (const [subflowId, subflow] of Object.entries(graph?.subflows || {})) {
+    const id = `subflow-group:${subflowId}`;
+    if (explicitIds.has(id)) continue;
+    const nodeIds = (subflow?.nodeIds || []).filter((nodeId) => (
+      resolvedPositions[nodeId] && !hiddenNodeIds.has(String(nodeId))
+    ));
+    if (!nodeIds.length) continue;
+    const bounds = nodeIds.reduce((acc, nodeId) => {
+      const position = resolvedPositions[nodeId] || { x: 0, y: 0 };
+      const size = resolvedSizes[nodeId] || { width: DEFAULT_WORKSPACE_NODE_WIDTH, height: MIN_WORKSPACE_NODE_HEIGHT };
+      return {
+        minX: Math.min(acc.minX, Number(position.x) || 0),
+        minY: Math.min(acc.minY, Number(position.y) || 0),
+        maxX: Math.max(acc.maxX, (Number(position.x) || 0) + (Number(size.width) || DEFAULT_WORKSPACE_NODE_WIDTH)),
+        maxY: Math.max(acc.maxY, (Number(position.y) || 0) + (Number(size.height) || MIN_WORKSPACE_NODE_HEIGHT)),
+      };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    groups.push({
+      id,
+      title: `SUBFLOW · ${subflow.label || subflowId}`,
+      color: "purple",
+      nodeIds,
+      x: bounds.minX - WORKSPACE_GROUP_PADDING,
+      y: bounds.minY - WORKSPACE_GROUP_PADDING,
+      width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, bounds.maxX - bounds.minX + WORKSPACE_GROUP_PADDING * 2),
+      height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, bounds.maxY - bounds.minY + WORKSPACE_GROUP_PADDING * 2),
+    });
+  }
   return groups.map((group) => ({
     id: group.id,
     type: FLOW_NODE_TYPE,
@@ -2060,14 +2132,16 @@ function workspaceGroupNodesFromGraph(graph) {
     height: group.height,
     selected: false,
     draggable: true,
+    dragHandle: ".af-work-group-node__drag-handle",
     selectable: true,
     zIndex: 0,
     data: {
       isWorkspaceGroup: true,
+      isSubflowGroup: group.id.startsWith("subflow-group:"),
       label: group.title,
       title: group.title,
       color: group.color,
-      nodeIds: inferredWorkspaceGroupNodeIds(group, graph),
+      nodeIds: inferredWorkspaceGroupNodeIds(group, graph).filter((nodeId) => !hiddenNodeIds.has(String(nodeId))),
       nodeSize: { width: group.width, height: group.height },
     },
   }));
@@ -2081,36 +2155,6 @@ function normalizeWorkspaceGroupSize(size) {
     width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
     height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height)),
   };
-}
-
-function expandWorkspaceGroupPositionChanges(changes, currentNodes) {
-  const list = Array.isArray(changes) ? changes : [];
-  const nodesById = new Map((Array.isArray(currentNodes) ? currentNodes : []).map((node) => [node.id, node]));
-  const explicitlyChanged = new Set(list.map((change) => String(change?.id || "")).filter(Boolean));
-  const expanded = [...list];
-  for (const change of list) {
-    if (change?.type !== "position" || !change.position) continue;
-    const groupNode = nodesById.get(change.id);
-    if (!isWorkspaceGroupNode(groupNode)) continue;
-    const dx = Number(change.position.x) - Number(groupNode.position?.x || 0);
-    const dy = Number(change.position.y) - Number(groupNode.position?.y || 0);
-    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) continue;
-    for (const memberId of Array.isArray(groupNode.data?.nodeIds) ? groupNode.data.nodeIds : []) {
-      if (explicitlyChanged.has(memberId)) continue;
-      const member = nodesById.get(memberId);
-      if (!member || isWorkspaceGroupNode(member)) continue;
-      expanded.push({
-        type: "position",
-        id: memberId,
-        position: {
-          x: Number(member.position?.x || 0) + dx,
-          y: Number(member.position?.y || 0) + dy,
-        },
-        dragging: change.dragging,
-      });
-    }
-  }
-  return expanded;
 }
 
 function cloneSlots(slots) {
@@ -2173,20 +2217,101 @@ function workspaceHydratedNodeRuntimeEqual(a, b) {
     a.optimizingRun === b.optimizingRun &&
     a.scheduledRunState === b.scheduledRunState &&
     a.nodeChatActive === b.nodeChatActive &&
-    a.nodeChat === b.nodeChat;
+    a.nodeChat === b.nodeChat &&
+    a.callRelationSelected === b.callRelationSelected &&
+    a.nodeUiBindings === b.nodeUiBindings;
 }
 
 const EMPTY_DISPLAY_SOURCE_NODES = new Map();
 const EMPTY_DISPLAY_CANVAS_NODES = [];
 
-function graphToFlow(graph, palette) {
+function workspaceVirtualSubflowCallEdges(instances, subflows, edges = []) {
+  return workspaceSubflowCallRelations(instances, subflows, edges).flatMap((relation) => {
+    const subflow = subflows?.[relation.subflowId];
+    const rootId = (subflow?.roots || [])[0];
+    if (!rootId || !instances?.[rootId]) return [];
+    const condition = relation.kind === "while" && relation.role === "condition";
+    const color = condition ? "#f6bd60" : "#9d83ff";
+    const verb = relation.kind === "call" ? "calls" : condition ? "checks" : "runs";
+    const mappingSignature = JSON.stringify([relation.inputMappings, relation.outputMappings]);
+    return [{
+      id: relation.id,
+      type: "workspaceSubflowCall",
+      source: relation.callerId,
+      target: workspaceSubflowStartNodeId(relation.subflowId),
+      sourceHandle: relation.kind === "call" ? "subflow-call" : `while-${relation.role}`,
+      targetHandle: "input-0",
+      animated: true,
+      interactionWidth: 28,
+      style: { stroke: color, strokeDasharray: "7 6", strokeWidth: 2 },
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      data: {
+        virtualSubflowCall: true,
+        virtualWhileSubflow: relation.kind === "while",
+        whileRole: relation.kind === "while" ? relation.role : "",
+        verb,
+        color,
+        callerLabel: relation.callerLabel,
+        subflowLabel: relation.subflowLabel,
+        inputMappings: relation.inputMappings,
+        outputMappings: relation.outputMappings,
+        returnNodeId: workspaceSubflowReturnNodeId(relation.subflowId),
+        mappingSignature,
+      },
+    }];
+  });
+}
+
+function reconcileWorkspaceVirtualSubflowCallEdges(edges, instances, subflows) {
+  const current = Array.isArray(edges) ? edges : [];
+  const expected = workspaceVirtualSubflowCallEdges(instances, subflows, current);
+  const existingVirtual = current.filter((edge) => edge?.data?.virtualSubflowCall);
+  const alreadyCurrent = existingVirtual.length === expected.length && expected.every((edge) => (
+    existingVirtual.some((item) => item.id === edge.id &&
+      item.source === edge.source &&
+      item.target === edge.target &&
+      item.sourceHandle === edge.sourceHandle &&
+      item.targetHandle === edge.targetHandle &&
+      item.data?.mappingSignature === edge.data?.mappingSignature)
+  ));
+  if (alreadyCurrent) return current;
+  const existingById = new Map(existingVirtual.map((edge) => [edge.id, edge]));
+  return [
+    ...current.filter((edge) => !edge?.data?.virtualSubflowCall),
+    ...expected.map((edge) => ({ ...edge, selected: Boolean(existingById.get(edge.id)?.selected) })),
+  ];
+}
+
+function workspaceSubflowsFromSaveResult(savedSubflows, submittedSubflows) {
+  const saved = savedSubflows && typeof savedSubflows === "object" && !Array.isArray(savedSubflows)
+    ? savedSubflows
+    : null;
+  const submitted = submittedSubflows && typeof submittedSubflows === "object" && !Array.isArray(submittedSubflows)
+    ? submittedSubflows
+    : {};
+  // A response from an older/partial server must not erase contracts that were present
+  // in the graph just submitted. An actually empty submitted graph remains empty.
+  if (saved && (Object.keys(saved).length > 0 || Object.keys(submitted).length === 0)) return saved;
+  return submitted;
+}
+
+function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const instances = sanitizeWorkspaceRuntimeOutputs(rawInstances);
+  const instances = preserveRuntimeOutputs ? rawInstances : sanitizeRuntimeOutputsForCanvas(rawInstances, palette);
   const rawEdges = Array.isArray(graph?.edges) ? graph.edges : [];
   // 缺坐标通常来自 AI 新写的 DSL。统一走 CLI 同款确定性排版；原有坐标保持不动，避免打开
   // 页面时覆盖用户手工拖拽结果。
   const positions = layoutWorkspaceNodePositions(graph, { preserveExisting: true });
   const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
+  const subflowProjection = buildWorkspaceSubflowProjection({
+    instances,
+    subflows: graph?.subflows || {},
+    edges: rawEdges,
+    positions,
+    sizes,
+    boundaryPositions: graph?.ui?.subflowBoundaryPositions || {},
+  });
+  const hiddenSubflowInputNodeIds = new Set(subflowProjection.hiddenNodeIds || []);
   const nodeIds = new Set(Object.keys(instances));
   for (const edge of rawEdges) {
     if (edge?.source) nodeIds.add(String(edge.source));
@@ -2208,13 +2333,17 @@ function graphToFlow(graph, palette) {
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
     const size = normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
-    const useSize = size && !isOneClickTaskDefinitionId(runtimeDefinitionId);
+    const useSize = size &&
+      !isOneClickTaskDefinitionId(runtimeDefinitionId) &&
+      runtimeDefinitionId !== "control_subflow_call";
     return {
       id,
       type: FLOW_NODE_TYPE,
       position: pos,
+      ...(hiddenSubflowInputNodeIds.has(id) ? { hidden: true, selectable: false, draggable: false } : {}),
       ...(useSize ? { width: size.width, height: size.height } : {}),
       data: {
+        ...(hiddenSubflowInputNodeIds.has(id) ? { isSubflowInputProxy: true } : {}),
         label: inst.label || labelForDefinition(def) || labelForDefinition(runtimeDef) || id,
         definitionId: runtimeDefinitionId,
         ...(marketplaceRef ? { marketplaceRef } : {}),
@@ -2228,14 +2357,73 @@ function graphToFlow(graph, palette) {
         scriptRef: inst.scriptRef || "",
         implementationRef: inst.implementationRef || "",
         implementationMode: inst.implementationMode || "",
+        ...(inst.subflowId && graph?.subflows?.[inst.subflowId] ? {
+          subflowInfo: {
+            id: inst.subflowId,
+            label: graph.subflows[inst.subflowId].label || inst.subflowId,
+            nodeCount: (graph.subflows[inst.subflowId].nodeIds || []).length,
+            inputs: Object.keys(graph.subflows[inst.subflowId].inputs || {}),
+            outputs: Object.keys(graph.subflows[inst.subflowId].outputs || {}),
+          },
+        } : {}),
+        ...(runtimeDefinitionId === "control_while" && (inst.conditionSubflowId || inst.bodySubflowId) ? {
+          whileSubflowInfo: {
+            condition: inst.conditionSubflowId && graph?.subflows?.[inst.conditionSubflowId] ? {
+              id: inst.conditionSubflowId,
+              label: graph.subflows[inst.conditionSubflowId].label || inst.conditionSubflowId,
+              nodeCount: (graph.subflows[inst.conditionSubflowId].nodeIds || []).filter((nodeId) => (
+                String(instances?.[nodeId]?.definitionId || "") !== "workspace_subflow_input"
+              )).length,
+              inputs: Object.keys(graph.subflows[inst.conditionSubflowId].inputs || {})
+                .filter((name) => !isRuntimeOnlyWhileInput(name)),
+              outputs: ["decision", "summary"],
+            } : null,
+            body: inst.bodySubflowId && graph?.subflows?.[inst.bodySubflowId] ? {
+              id: inst.bodySubflowId,
+              label: graph.subflows[inst.bodySubflowId].label || inst.bodySubflowId,
+              nodeCount: (graph.subflows[inst.bodySubflowId].nodeIds || []).filter((nodeId) => (
+                String(instances?.[nodeId]?.definitionId || "") !== "workspace_subflow_input"
+              )).length,
+              inputs: Object.keys(graph.subflows[inst.bodySubflowId].inputs || {})
+                .filter((name) => !isRuntimeOnlyWhileInput(name)),
+              outputs: ["state", "summary"],
+            } : null,
+          },
+        } : {}),
         displayReloadKey: inst.displayReloadKey || "",
         ...(useSize ? { nodeSize: size } : {}),
         ...(isDisplay && useSize ? { displaySize: size } : {}),
       },
     };
   });
-  const merged = rawNodes.map((node) => mergeNodeWithPalette(node, instances, palette));
-  const groupNodes = workspaceGroupNodesFromGraph(graph);
+  const runtimeContextHiddenInputs = new Set(subflowProjection.hiddenInputHandles || []);
+  const merged = rawNodes.map((node) => {
+    const mergedNode = mergeNodeWithPalette(node, instances, palette);
+    const inputs = Array.isArray(mergedNode.data?.inputs)
+      ? mergedNode.data.inputs.map((slot, index) => (
+          runtimeContextHiddenInputs.has(`${mergedNode.id}\u0000input-${index}`)
+            ? { ...slot, showOnNode: false }
+            : slot
+        ))
+      : mergedNode.data?.inputs;
+    return inputs === mergedNode.data?.inputs
+      ? mergedNode
+      : { ...mergedNode, data: { ...mergedNode.data, inputs } };
+  });
+  const groupNodes = workspaceGroupNodesFromGraph(graph, positions, sizes, hiddenSubflowInputNodeIds).map((node) => {
+    if (!node.data?.isSubflowGroup) return node;
+    const subflowId = String(node.id).replace(/^subflow-group:/, "");
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        nodeIds: Array.from(new Set([
+          ...(node.data?.nodeIds || []),
+          ...(subflowProjection.groupMemberIds[subflowId] || []),
+        ])),
+      },
+    };
+  });
   const edges = rawEdges
     .filter((e) => e?.source && e?.target)
     .filter((e) => !groupNodes.some((node) => node.id === String(e.source) || node.id === String(e.target)))
@@ -2245,12 +2433,30 @@ function graphToFlow(graph, palette) {
       target: String(e.target),
       sourceHandle: e.sourceHandle ?? undefined,
       targetHandle: e.targetHandle ?? undefined,
+      hidden: hiddenSubflowInputNodeIds.has(String(e.source)) || hiddenSubflowInputNodeIds.has(String(e.target)),
       markerEnd: { type: MarkerType.ArrowClosed },
     }));
+  edges.push(...subflowProjection.edges.map((edge) => ({
+    ...edge,
+    style: edge.data?.boundaryEdgeKind === "control"
+      ? { stroke: "#ffad42", strokeWidth: 2.2 }
+      : { stroke: "#4da6ff", strokeWidth: 2 },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: edge.data?.boundaryEdgeKind === "control" ? "#ffad42" : "#4da6ff",
+    },
+    selectable: false,
+    deletable: false,
+  })));
+  edges.push(...workspaceVirtualSubflowCallEdges(instances, graph?.subflows || {}, rawEdges));
   // 首次加载的边和用户刚拉出的边遵守同一条规则：边存在，端点 handle 就必须可见。
   // 否则 React Flow 会保留语义边，但因为端点没有渲染而完全画不出来。
-  const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges);
-  const nodes = expandWorkspaceGroupsToMembers([...groupNodes, ...edgeAwareNodes], {
+  const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges.filter((edge) => !edge.hidden));
+  const nodes = expandWorkspaceGroupsToMembers([
+    ...groupNodes,
+    ...edgeAwareNodes,
+    ...subflowProjection.nodes,
+  ], {
     padding: WORKSPACE_GROUP_PADDING,
     minWidth: MIN_WORKSPACE_GROUP_WIDTH,
     minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
@@ -2478,6 +2684,45 @@ function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
   };
 }
 
+function workspaceElementVerticalInsets(element) {
+  if (!element || typeof window === "undefined") return 0;
+  const style = window.getComputedStyle(element);
+  return [
+    style.paddingTop,
+    style.paddingBottom,
+    style.borderTopWidth,
+    style.borderBottomWidth,
+  ].reduce((total, value) => total + (Number.parseFloat(value) || 0), 0);
+}
+
+function workspacePortRailIntrinsicHeight(rail) {
+  if (!rail || typeof window === "undefined") return 0;
+  const rows = Array.from(rail.querySelectorAll(":scope > .af-flow-node__port-row"));
+  if (!rows.length) return 0;
+  const style = window.getComputedStyle(rail);
+  const gap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const rowsHeight = rows.reduce((total, row) => total + row.getBoundingClientRect().height, 0);
+  return rowsHeight + (gap * Math.max(0, rows.length - 1)) + workspaceElementVerticalInsets(rail);
+}
+
+function workspaceWhileIntrinsicHeight(card) {
+  if (!card) return 0;
+  const chrome = card.querySelector(":scope > .af-flow-node__chrome");
+  const body = card.querySelector(":scope > .af-flow-node__body");
+  const titleWrap = body?.querySelector(":scope > .af-flow-node__title-wrap");
+  const kit = titleWrap?.querySelector(":scope > .af-node-ui-kit");
+  if (!chrome || !body || !titleWrap || !kit) return 0;
+  const chromeHeight = chrome.getBoundingClientRect().height;
+  const kitHeight = kit.scrollHeight;
+  const titleHeight = kitHeight + workspaceElementVerticalInsets(titleWrap);
+  const railsHeight = Math.max(
+    0,
+    ...Array.from(body.querySelectorAll(":scope > .af-flow-node__ports")).map(workspacePortRailIntrinsicHeight),
+  );
+  const bodyHeight = Math.max(titleHeight, railsHeight) + workspaceElementVerticalInsets(body);
+  return Math.ceil(chromeHeight + bodyHeight + 2);
+}
+
 function normalizeWorkspaceDisplaySize(size) {
   const normalized = normalizeWorkspaceNodeSize(size, { display: true });
   if (!normalized) return null;
@@ -2512,11 +2757,15 @@ function persistedWorkspaceNodeSize(node) {
   return normalizeWorkspaceNodeSize({ width, height }, { display: isDisplay });
 }
 
-function flowToGraph(nodes, edges, instances) {
+function flowToGraph(nodes, edges, instances, subflows = {}) {
   const regularNodes = (nodes || []).filter((node) => !isWorkspaceGroupNode(node));
+  const persistentNodes = regularNodes.filter((node) => !node?.data?.isSubflowBoundary);
+  const subflowBoundaryNodes = regularNodes.filter((node) => node?.data?.isSubflowBoundary);
   const groupNodes = (nodes || []).filter(isWorkspaceGroupNode);
-  const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(regularNodes, instances || {}));
-  const graphEdges = edges.map((edge) => ({
+  const graphInstances = sanitizeWorkspaceRuntimeOutputsForSave(buildInstancesForYaml(persistentNodes, instances || {}));
+  const graphEdges = edges.filter((edge) => (
+    !edge?.data?.virtualSubflowCall && !edge?.data?.virtualSubflowBoundary
+  )).map((edge) => ({
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle ?? null,
@@ -2526,11 +2775,18 @@ function flowToGraph(nodes, edges, instances) {
   ));
   const nodePositions = {};
   const nodeSizes = {};
+  const subflowBoundaryPositions = {};
   const groups = [];
-  for (const node of regularNodes) {
+  for (const node of persistentNodes) {
     nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
     const size = persistedWorkspaceNodeSize(node);
     if (size) nodeSizes[node.id] = size;
+  }
+  for (const node of subflowBoundaryNodes) {
+    subflowBoundaryPositions[node.id] = {
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0),
+    };
   }
   for (const node of groupNodes) {
     const width = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
@@ -2541,32 +2797,41 @@ function flowToGraph(nodes, edges, instances) {
       color: String(node.data?.color || "purple"),
       nodeIds: Array.from(new Set((Array.isArray(node.data?.nodeIds) ? node.data.nodeIds : [])
         .map((nodeId) => String(nodeId || "").trim())
-        .filter((nodeId) => regularNodes.some((regularNode) => regularNode.id === nodeId)))),
+        .filter((nodeId) => persistentNodes.some((regularNode) => regularNode.id === nodeId)))),
       x: Number(node.position?.x || 0),
       y: Number(node.position?.y || 0),
       width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width || MIN_WORKSPACE_GROUP_WIDTH)),
       height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height || MIN_WORKSPACE_GROUP_HEIGHT)),
     });
   }
-  return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes, groups } };
+  return {
+    version: 1,
+    instances: graphInstances,
+    edges: graphEdges,
+    subflows,
+    ui: {
+      nodePositions,
+      nodeSizes,
+      groups,
+      ...(Object.keys(subflowBoundaryPositions).length ? { subflowBoundaryPositions } : {}),
+    },
+  };
 }
 
-function sanitizeWorkspaceRuntimeOutputs(instances) {
+// Design saves must not echo stale runtime outputs back to the server. Runtime state is merged
+// separately there; this is intentionally stricter than the Node UI-aware canvas loader.
+function sanitizeWorkspaceRuntimeOutputsForSave(instances) {
   const next = {};
   for (const [id, instance] of Object.entries(instances || {})) {
     const definitionId = String(instance?.definitionId || id);
-    const shouldKeepOutputValues = Boolean(displayKind(definitionId)) || definitionId.startsWith("provide_");
-    if (shouldKeepOutputValues || !Array.isArray(instance?.output)) {
+    const keepAll = Boolean(displayKind(definitionId)) || definitionId.startsWith("provide_");
+    if (keepAll || !Array.isArray(instance?.output)) {
       next[id] = instance;
       continue;
     }
     next[id] = {
       ...instance,
-      output: instance.output.map((slot) => ({
-        ...slot,
-        value: "",
-        default: "",
-      })),
+      output: instance.output.map((slot) => ({ ...slot, value: "", default: "" })),
     };
   }
   return next;
@@ -5363,12 +5628,15 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode, width, height }) {
           <span className="material-symbols-outlined">open_in_full</span>
         </NodeResizeControl>
       ) : null}
-      <div className="af-work-group-node__title nodrag">
-        <span>{data?.title || data?.label || "Group"}</span>
+      <div className="af-work-group-node__title af-work-group-node__drag-handle">
+        <span className="af-work-group-node__title-label">
+          {data?.isSubflowGroup ? <span className="material-symbols-outlined" aria-hidden>account_tree</span> : null}
+          <span>{data?.title || data?.label || "Group"}</span>
+        </span>
         {!readOnly ? (
           <button
             type="button"
-            className="af-work-group-node__delete"
+            className="af-work-group-node__delete nodrag"
             onClick={(event) => {
               event.stopPropagation();
               deleteNode?.(id);
@@ -5384,10 +5652,256 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode, width, height }) {
   );
 }
 
+function WorkspaceSubflowCallEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  data,
+  selected,
+}) {
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+  const inputMappings = Array.isArray(data?.inputMappings) ? data.inputMappings : [];
+  const outputMappings = Array.isArray(data?.outputMappings) ? data.outputMappings : [];
+  const verb = String(data?.verb || "calls").toUpperCase();
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        interactionWidth={28}
+        style={{ ...style, strokeWidth: selected ? 3.2 : Number(style?.strokeWidth) || 2 }}
+      />
+      <EdgeLabelRenderer>
+        <div
+          className={"af-subflow-call-bus" + (selected ? " af-subflow-call-bus--expanded" : "")}
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+        >
+          <div className="af-subflow-call-bus__summary" style={{ "--af-subflow-call-color": data?.color || "#9d83ff" }}>
+            <strong>{verb}</strong>
+            <span>{inputMappings.length} IN / {outputMappings.length} OUT</span>
+          </div>
+          {selected ? (
+            <div className="af-subflow-call-bus__panel">
+              <div className="af-subflow-call-bus__title">
+                <span>{data?.callerLabel || "Caller"}</span>
+                <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                <span>{data?.subflowLabel || "Subflow"}</span>
+              </div>
+              <div className="af-subflow-call-bus__mappings">
+                {inputMappings.map((mapping) => (
+                  <div key={`in:${mapping.name}`} className="af-subflow-call-bus__mapping">
+                    <span className="af-subflow-call-bus__direction">IN</span>
+                    <span title={mapping.from}>{mapping.from}</span>
+                    <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                    <span title={mapping.to}>{mapping.to}</span>
+                  </div>
+                ))}
+                {outputMappings.map((mapping) => (
+                  <div key={`out:${mapping.name}`} className="af-subflow-call-bus__mapping af-subflow-call-bus__mapping--out">
+                    <span className="af-subflow-call-bus__direction">OUT</span>
+                    <span title={mapping.from}>{mapping.from}</span>
+                    <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                    <span title={mapping.to}>{mapping.to}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+function EditableSubflowOutputName({ data, slot }) {
+  const [draft, setDraft] = useState(String(slot?.name || ""));
+  useEffect(() => setDraft(String(slot?.name || "")), [slot?.name]);
+  const commit = () => {
+    const next = draft.trim();
+    if (next === slot?.name) return;
+    const accepted = data?.onRenameSubflowOutput?.(data?.subflowId, slot?.name, next);
+    if (accepted === false) setDraft(String(slot?.name || ""));
+  };
+  return (
+    <input
+      className="af-subflow-boundary__contract-name-input nodrag"
+      value={draft}
+      disabled={Boolean(data?.readOnly)}
+      aria-label={`重命名输出 ${slot?.name || ""}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(String(slot?.name || ""));
+          event.currentTarget.blur();
+        }
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+    />
+  );
+}
+
+function WorkspaceSubflowBoundaryNode({ data, selected }) {
+  const isStart = data?.boundaryKind === "start";
+  const [stateExpanded, setStateExpanded] = useState(false);
+  const contract = Array.isArray(data?.contract) ? data.contract : [];
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const callRelation = Array.isArray(data?.callRelations) ? data.callRelations[0] : null;
+  const controlInput = inputs.find((slot) => String(slot?.type || "") === "node");
+  const controlOutput = outputs.find((slot) => String(slot?.type || "") === "node");
+  return (
+    <div
+      className={
+        "af-flow-node af-subflow-boundary" +
+        (isStart ? " af-subflow-boundary--start" : " af-subflow-boundary--return") +
+        (selected ? " af-subflow-boundary--selected" : "") +
+        (data?.callRelationSelected ? " af-subflow-boundary--call-selected" : "")
+      }
+      style={{ width: data?.nodeSize?.width, minHeight: data?.nodeSize?.height }}
+    >
+      <div className="af-flow-node__chrome af-subflow-boundary__head">
+        <span className="material-symbols-outlined af-flow-node__kit-icon" aria-hidden>{isStart ? "play_circle" : "keyboard_return"}</span>
+        <span className="af-flow-node__kind-badge">{isStart ? "SUBFLOW START" : "SUBFLOW RETURN"}</span>
+        <span className="af-flow-node__title af-flow-node__title--chrome">{isStart ? "进入调用帧" : "返回父流程"}</span>
+      </div>
+      <div className="af-flow-node__body af-subflow-boundary__body">
+        <FlowNodePortRail slots={inputs} direction="in" connectable={!data?.readOnly && data?.activeSubflowEditorId === data?.subflowId} />
+        <div className="af-subflow-boundary__content">
+          <div className="af-subflow-boundary__control-contract">
+            <span>{controlInput?.name || (isStart ? "calls" : "prev")}</span>
+            <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+            <span>{controlOutput?.name || (isStart ? "next" : "return")}</span>
+          </div>
+          <div className="af-subflow-boundary__contract-head">
+            <strong>{isStart ? "CALL FRAME INPUTS" : data?.subflowRole === "condition" ? "WHILE CONDITION OUTPUTS" : data?.subflowRole === "body" ? "WHILE BODY OUTPUTS" : "RETURN OUTPUTS"}</strong>
+            {data?.fixedContract ? (
+              <span className="af-subflow-boundary__contract-lock" title="While 运行协议的固定契约，不能重命名或删除">
+                <span className="material-symbols-outlined" aria-hidden>lock</span>
+                FIXED
+              </span>
+            ) : <span>{contract.length}</span>}
+          </div>
+          <div className="af-subflow-boundary__contract-list">
+            {contract.length ? contract.map((slot) => (
+              <div key={`${slot.name}:${slot.type}`} className={"af-subflow-boundary__contract-row" + (!isStart && slot.connected === false ? " is-unconnected" : "")}>
+                <span className="af-subflow-boundary__contract-direction">{isStart ? "IN" : slot.required ? "REQ" : "OPT"}</span>
+                {!isStart && !data?.fixedContract ? (
+                  <EditableSubflowOutputName data={data} slot={slot} />
+                ) : (
+                  <span
+                    className="af-subflow-boundary__contract-name"
+                    title={isStart
+                      ? callRelation?.inputMappings?.find((mapping) => mapping.name === slot.name)?.from || slot.name
+                      : callRelation?.outputMappings?.find((mapping) => mapping.name === slot.name)?.to || slot.name}
+                  >
+                    {isStart
+                      ? `${callRelation?.inputMappings?.find((mapping) => mapping.name === slot.name)?.fromShort || "call frame"} → ${slot.name}`
+                      : `${slot.name} → ${callRelation?.outputMappings?.find((mapping) => mapping.name === slot.name)?.toShort || "caller"}`}
+                  </span>
+                )}
+                <span className="af-subflow-boundary__contract-type">{slot.type || "text"}</span>
+                {!isStart && !data?.fixedContract ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__contract-delete nodrag"
+                    disabled={Boolean(data?.readOnly)}
+                    title={`删除输出 ${slot.name}`}
+                    aria-label={`删除输出 ${slot.name}`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      data?.onDeleteSubflowOutput?.(data?.subflowId, slot.name);
+                    }}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>close</span>
+                  </button>
+                ) : null}
+                {!isStart && data?.fixedContract && slot.name === "state" ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__state-toggle nodrag"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setStateExpanded((value) => !value);
+                    }}
+                  >
+                    {stateExpanded ? "收起" : "查看结构"}
+                  </button>
+                ) : null}
+              </div>
+            )) : (
+              <span className="af-subflow-boundary__contract-empty">No data contract</span>
+            )}
+            {!isStart && !data?.fixedContract ? (
+              <div className="af-subflow-boundary__add-output">
+                <span className="material-symbols-outlined" aria-hidden>add_circle</span>
+                <span>把任意数据输出拖到 <b>add output</b> 引脚</span>
+              </div>
+            ) : null}
+          </div>
+          {!isStart && data?.fixedContract && stateExpanded ? (
+            <div className="af-subflow-boundary__state-preview nodrag" onPointerDown={(event) => event.stopPropagation()}>
+              <div>
+                <strong>STATE JSON</strong>
+                <span>结构由连到 state 的 JSON 输出决定</span>
+                {data?.statePreview?.sourceNodeId ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__state-source nodrag"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      data?.onFocusSubflowNode?.(data.statePreview.sourceNodeId);
+                    }}
+                  >
+                    编辑来源
+                  </button>
+                ) : null}
+              </div>
+              {data?.statePreview?.fields?.length ? (
+                <ul>
+                  {data.statePreview.fields.map((field) => (
+                    <li key={field.name}>
+                      <code>{field.name}</code>
+                      <em>{field.type}</em>
+                      <span title={field.preview}>{field.preview}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p>尚无可用的运行时 state；运行后会在这里展示字段。</p>}
+            </div>
+          ) : null}
+        </div>
+        <FlowNodePortRail slots={outputs} direction="out" connectable={!data?.readOnly && data?.activeSubflowEditorId === data?.subflowId} />
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
   const readOnly = Boolean(props.data?.readOnly);
+  const isSubflowCall = props.data?.definitionId === "control_subflow_call";
+  const isWhileNode = props.data?.definitionId === "control_while";
+  const flowNodeShellRef = useRef(null);
   const [resizingFlowNode, setResizingFlowNode] = useState(false);
   const persistedNodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
     ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
@@ -5397,9 +5911,45 @@ function WorkspaceFlowNode(props) {
     liveSize: normalizeWorkspaceNodeSize({ width: props.width, height: props.height }),
     persistedSize: persistedNodeSize,
   });
+  useEffect(() => {
+    if (!isWhileNode || resizingFlowNode) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = flowNodeShellRef.current;
+      const card = shell?.querySelector?.(":scope > .af-flow-node");
+      if (!card) return;
+      const currentHeight = Math.round(Number(nodeSize?.height || card.clientHeight || 0));
+      // The card itself is height:100%, so card.scrollHeight includes the persisted
+      // node height. Measuring it made every render add two pixels until the 900px
+      // cap. Measure the UI kit's intrinsic content instead, and fit in both
+      // directions so stale oversized While cards heal themselves.
+      const intrinsicHeight = workspaceWhileIntrinsicHeight(card);
+      const requiredHeight = clampNumber(
+        intrinsicHeight,
+        MIN_WORKSPACE_NODE_HEIGHT,
+        MAX_WORKSPACE_NODE_HEIGHT,
+      );
+      if (!currentHeight || !requiredHeight || Math.abs(requiredHeight - currentHeight) <= 2) return;
+      setNodes((list) => list.map((node) => {
+        if (node.id !== props.id) return node;
+        const width = Math.round(Number(node.data?.nodeSize?.width || node.width || nodeSize?.width || card.clientWidth));
+        return {
+          ...node,
+          width,
+          height: requiredHeight,
+          data: {
+            ...node.data,
+            nodeSize: { width, height: requiredHeight },
+          },
+        };
+      }));
+      props.data?.onRefreshNodeInternals?.(props.id);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isWhileNode, nodeSize?.height, nodeSize?.width, props.data?.nodeStatus, props.data?.outputs, props.data?.onRefreshNodeInternals, props.id, resizingFlowNode, setNodes]);
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
     props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
+    props.data?.onRemoveNodeFromSubflows?.(nodeId);
     const linkedDisplayId = isOneClickTaskDefinitionId(props.data?.definitionId) ? contextRunLinkedDisplayNodeId(nodeId) : "";
     const deleteIds = new Set([nodeId, linkedDisplayId].filter(Boolean));
     setNodes((list) => list.filter((node) => !deleteIds.has(node.id)));
@@ -5457,6 +6007,9 @@ function WorkspaceFlowNode(props) {
   }, [readOnly, setNodes, syncNodePropDraft]);
   if (props.data?.isWorkspaceGroup) {
     return <WorkspaceGroupNode {...props} deleteNode={deleteNode} />;
+  }
+  if (props.data?.isSubflowBoundary) {
+    return <WorkspaceSubflowBoundaryNode {...props} />;
   }
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
@@ -5516,19 +6069,22 @@ function WorkspaceFlowNode(props) {
   }
   return (
     <div
+      ref={flowNodeShellRef}
       className={
         "af-work-flow-node" +
+        (isSubflowCall ? " af-work-flow-node--subflow-call" : "") +
         (props.selected ? " af-work-flow-node--selected" : "") +
         (resizingFlowNode ? " af-work-flow-node--resizing" : "") +
+        (isWhileNode && Number(nodeSize?.height || 0) >= MAX_WORKSPACE_NODE_HEIGHT ? " af-work-flow-node--height-capped" : "") +
         (props.data?.isExecuting || props.data?.nodeStatus === "running" ? " af-work-flow-node--executing" : "") +
         (props.data?.nodeStatus === "success" ? " af-work-flow-node--done" : "") +
         (props.data?.nodeStatus === "failed" ? " af-work-flow-node--failed" : "") +
         (props.data?.nodeStatus === "stopped" ? " af-work-flow-node--stopped" : "")
       }
-      style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
+      style={!isSubflowCall && nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
       onPointerDownCapture={onSelectNodePointerDown}
     >
-      {!readOnly ? (
+      {!readOnly && !isSubflowCall ? (
         <NodeResizeControl
           className="af-work-display-resize af-work-flow-resize nodrag"
           position="bottom-right"
@@ -5557,6 +6113,7 @@ function WorkspaceFlowNode(props) {
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: memo(WorkspaceFlowNode) };
+const edgeTypes = { workspaceSubflowCall: memo(WorkspaceSubflowCallEdge) };
 
 function flattenFiles(files, out = []) {
   for (const item of files || []) {
@@ -6170,7 +6727,7 @@ function workspaceNodeDataFromPropDraft(selectedNode, draft, nextId) {
       : normalizeWorkspacePropIoSlots(draft?.outputs),
   };
   const scriptTrim = String(draft?.script ?? "").trim();
-  if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
+  if (defId === "tool_nodejs" || defId === "control_while" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
   else delete nextData.script;
   for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
     const value = String(draft?.[key] ?? "").trim();
@@ -8444,6 +9001,9 @@ function WorkspacePageInner() {
   const [connectionMenu, setConnectionMenu] = useState(null);
   const [instances, setInstances] = useState({});
   const instancesRef = useRef({});
+  const subflowsRef = useRef({});
+  const [activeSubflowId, setActiveSubflowId] = useState("");
+  const [activeSubflowRole, setActiveSubflowRole] = useState("");
   const loadedRef = useRef(false);
   const saveTimerRef = useRef(null);
   const workspaceRevisionRef = useRef("");
@@ -8460,6 +9020,7 @@ function WorkspacePageInner() {
   const skipNextWorkspaceAutosaveRef = useRef(false);
   const workspaceAutosaveSuppressedStateRef = useRef(null);
   const workspaceCanvasInteractionActiveRef = useRef(false);
+  const workspaceGroupDragOriginsRef = useRef(new Map());
   const workspaceCanvasPointerIdsRef = useRef(new Set());
   const workspaceViewportInteractionActiveRef = useRef(false);
   const workspaceFlushAfterInteractionRef = useRef(false);
@@ -8879,7 +9440,7 @@ function WorkspacePageInner() {
     }
     setWorkspaceSyncPhase("saving");
     setWorkspaceSyncDetail("正在同步修改");
-    const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current);
+    const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current, subflowsRef.current);
     graph.ui = {
       ...(graph.ui || {}),
       displayPage: displayPageForGraph(displayPageRef.current, nextNodes),
@@ -8930,8 +9491,14 @@ function WorkspacePageInner() {
       throw saveError;
     }
     const hasNewerLocalEdits = workspaceEditVersionRef.current !== saveEditVersion;
+    const savedGraph = json.graph && typeof json.graph === "object"
+      ? {
+          ...json.graph,
+          subflows: workspaceSubflowsFromSaveResult(json.graph.subflows, graph.subflows),
+        }
+      : graph;
     const savedBaseline = workspaceSaveBaselineAfterSuccess({
-      savedGraph: json.graph,
+      savedGraph,
       sentGraph: graph,
       savedRevision: json.revision,
       currentRevision: workspaceRevisionRef.current,
@@ -8939,17 +9506,29 @@ function WorkspacePageInner() {
     workspaceRevisionRef.current = savedBaseline.revision;
     workspaceBaseGraphRef.current = savedBaseline.graph;
     if (!hasNewerLocalEdits) {
-      instancesRef.current = json.graph?.instances || graph.instances;
+      instancesRef.current = savedGraph.instances || graph.instances;
+      subflowsRef.current = savedGraph.subflows || {};
       setInstances(instancesRef.current);
       if (json.merged && json.graph) {
-        const mergedFlow = graphToFlow(json.graph, palette);
-        const mergedDisplayPage = normalizeDisplayPageState(json.graph?.ui?.displayPage, mergedFlow.nodes);
+        const mergedFlow = graphToFlow(savedGraph, palette);
+        subflowsRef.current = savedGraph.subflows || {};
+        const mergedDisplayPage = normalizeDisplayPageState(savedGraph?.ui?.displayPage, mergedFlow.nodes);
         instancesRef.current = mergedFlow.instances;
         setInstances(mergedFlow.instances);
         setNodes(mergedFlow.nodes);
         setEdges(mergedFlow.edges);
         displayPageRef.current = mergedDisplayPage;
         setDisplayPage(mergedDisplayPage);
+      } else {
+        // The call relation is DSL metadata, not a persisted DAG edge. A regular save must
+        // re-materialize it because React Flow may have pruned the cross-group visual edge.
+        const reconciledEdges = reconcileWorkspaceVirtualSubflowCallEdges(
+          nextEdges,
+          instancesRef.current,
+          subflowsRef.current,
+        );
+        edgesRef.current = reconciledEdges;
+        setEdges(reconciledEdges);
       }
       workspaceDirtyRef.current = false;
     }
@@ -9029,7 +9608,13 @@ function WorkspacePageInner() {
     instancesRef.current = nextInstances;
     setInstances(nextInstances);
     setNodes(Array.isArray(snapshot?.nodes) ? snapshot.nodes : []);
-    setEdges(Array.isArray(snapshot?.edges) ? snapshot.edges : []);
+    const nextEdges = reconcileWorkspaceVirtualSubflowCallEdges(
+      Array.isArray(snapshot?.edges) ? snapshot.edges : [],
+      nextInstances,
+      subflowsRef.current,
+    );
+    edgesRef.current = nextEdges;
+    setEdges(nextEdges);
     setSelectedNodeId("");
     setConnectionMenu(null);
   }, [setEdges, setNodes]);
@@ -9064,6 +9649,9 @@ function WorkspacePageInner() {
     } else {
       const nodeQ = flowParamsQuery(flowParams);
       nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
+      // Hidden structural nodes still need their UI schema when already instantiated.
+      // The palette filters them below; this request is for hydration, not authoring.
+      nodeQ.set("includeHidden", "1");
       const [nodesRes, nextGraphRes] = await Promise.all([
         fetch(`/api/nodes?${nodeQ.toString()}`),
         fetch(`/api/workspace/graph?${q.toString()}`),
@@ -9107,6 +9695,7 @@ function WorkspacePageInner() {
       setPalette(paletteList);
     }
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
+    subflowsRef.current = graph?.subflows || {};
     const flow = graphToFlow(graph, paletteList);
     const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
     const shouldInitializeWorkspaceViewport = !workspaceViewportInitializedRef.current;
@@ -9179,6 +9768,18 @@ function WorkspacePageInner() {
       setSelectedDisplayNodeIds([]);
       resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     }
+    // Background refreshes can report no persisted edge delta (correctly, since this
+    // relation is stored as subflowId). Still repair the derived call edge if the canvas
+    // library removed it while reconciling groups or handles.
+    setEdges((current) => {
+      const next = reconcileWorkspaceVirtualSubflowCallEdges(
+        current,
+        instancesRef.current,
+        subflowsRef.current,
+      );
+      edgesRef.current = next;
+      return next;
+    });
     const nextScheduledRunState = scheduledRunStateFromServer(graphJson.workspaceSchedules || []);
     setScheduledRunState((current) => (
       workspaceValueEqual(current, nextScheduledRunState) ? current : nextScheduledRunState
@@ -9592,7 +10193,7 @@ function WorkspacePageInner() {
     setStatus(`Optimizing run: ${runNodeId}`);
     try {
       await saveGraph(nodesRef.current, edgesRef.current);
-      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
       const effectiveModel = workspaceRunNodeModel(nodesRef.current, instancesRef.current, runNodeId, composerModel);
       const res = await fetch("/api/workspace/run/optimize", {
         method: "POST",
@@ -9607,6 +10208,7 @@ function WorkspacePageInner() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.ok === false) throw new Error(json.error || "优化失败");
       const nextGraph = json.graph || graph;
+      subflowsRef.current = nextGraph?.subflows || subflowsRef.current;
       const flow = graphToFlow(nextGraph, palette);
       instancesRef.current = flow.instances;
       setInstances(flow.instances);
@@ -9887,7 +10489,7 @@ function WorkspacePageInner() {
         refreshNodeInternals(applied.nextId || draft.id);
       }
     }
-    const graph = flowToGraph(runNodes, runEdges, runInstances);
+    const graph = flowToGraph(runNodes, runEdges, runInstances, subflowsRef.current);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
     const runAlias = workspaceRunNodeAlias(runNodes, runInstances, runNodeId, "Workspace Run");
     const runSessionLabel = workspaceRunNameWithId(runAlias, runNodeId, "Workspace Run");
@@ -10209,7 +10811,14 @@ function WorkspacePageInner() {
           return next;
         });
         const jenkinsStatus = String(event?.jenkinsStatus || "").trim().toUpperCase();
-        const status = jenkinsStatus && jenkinsStatus !== "SUCCESS" ? "outcome_failed" : "success";
+        const decision = String(event?.decision || "").trim();
+        const status = decision === "wait"
+          ? "waiting"
+          : decision === "fail"
+            ? "outcome_failed"
+            : jenkinsStatus && jenkinsStatus !== "SUCCESS"
+              ? "outcome_failed"
+              : "success";
         setWorkspaceNodeRunStatus((current) => ({
           ...current,
           [id]: {
@@ -10414,7 +11023,12 @@ function WorkspacePageInner() {
         return ids;
       };
       const applyGraph = (nextGraph, touchedNodeIds = null) => {
-        const flow = graphToFlow(nextGraph || graph, palette);
+        // Runtime graph events carry the just-produced output values. Keep them
+        // in the in-memory canvas so declarative Node UI Kit cards can expose
+        // decisions, summaries and progress. flowToGraph still strips these
+        // transient values before ordinary workspace saves.
+        const flow = graphToFlow(nextGraph || graph, palette, { preserveRuntimeOutputs: true });
+        subflowsRef.current = nextGraph?.subflows || graph?.subflows || subflowsRef.current;
         const incomingNodesById = new Map(flow.nodes.map((node) => [node.id, node]));
         const incomingInstances = flow.instances || {};
         const scopedIds = touchedNodeIds instanceof Set ? touchedNodeIds : null;
@@ -10440,7 +11054,7 @@ function WorkspacePageInner() {
         };
         setNodes((currentNodes) => {
           const currentIds = new Set(currentNodes.map((node) => node.id));
-          const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current);
+          const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current, subflowsRef.current);
           const nextInstances = { ...(currentGraph.instances || {}) };
           for (const [instanceId, instance] of Object.entries(incomingInstances)) {
             if (scopedIds && !scopedIds.has(instanceId)) continue;
@@ -10657,7 +11271,7 @@ function WorkspacePageInner() {
         : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`;
       setStatus(finalStatusMessage);
       if (!isRunStopped() && !finalDeferred) {
-        markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "paused" : "success");
+        markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "waiting" : "success");
       }
       markRunSessionStatus(isRunStopped() ? "stopped" : finalDeferred ? "waiting" : finalPauseNodeIds.length ? "paused" : "done");
       if (finalDeferred) {
@@ -11760,6 +12374,107 @@ function WorkspacePageInner() {
     });
   }, []);
 
+  const editWhileSubflow = useCallback((subflowId, role = "") => {
+    const id = String(subflowId || "").trim();
+    if (!id || !subflowsRef.current?.[id]) {
+      setStatus("子流程不存在");
+      return;
+    }
+    setActiveSubflowId(id);
+    setActiveSubflowRole(String(role || ""));
+    setSelectedNodeId("");
+    setConnectionMenu(null);
+    setComposerSidebarOpen(false);
+    window.setTimeout(() => reactFlow.fitView({ padding: 0.16, duration: 320 }), 0);
+  }, [reactFlow]);
+
+  const focusSubflowNode = useCallback((nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    setNodes((list) => list.map((node) => ({ ...node, selected: node.id === id })));
+    setSelectedNodeId(id);
+    window.setTimeout(() => {
+      const node = reactFlow.getNode(id);
+      if (!node) return;
+      void reactFlow.setCenter(
+        Number(node.position?.x || 0) + Number(node.width || 320) / 2,
+        Number(node.position?.y || 0) + Number(node.height || 120) / 2,
+        { zoom: Math.max(0.8, reactFlow.getZoom()), duration: 240 },
+      );
+    }, 0);
+  }, [reactFlow, setNodes]);
+
+  const exitSubflowEditor = useCallback(() => {
+    setActiveSubflowId("");
+    setActiveSubflowRole("");
+    setSelectedNodeId("");
+    setConnectionMenu(null);
+    window.setTimeout(() => reactFlow.fitView({ padding: 0.12, duration: 320 }), 0);
+  }, [reactFlow]);
+
+  const changeNodeInputValue = useCallback((nodeId, inputName, value) => {
+    if (!workspaceWritable) return;
+    const id = String(nodeId || "");
+    const name = String(inputName || "");
+    if (!id || !name) return;
+    markWorkspaceDirty();
+    setNodes((list) => list.map((node) => {
+      if (node.id !== id) return node;
+      const inputs = (node.data?.inputs || []).map((slot) => (
+        String(slot?.name || "") === name ? { ...slot, default: String(value), value: String(value) } : slot
+      ));
+      return { ...node, data: { ...node.data, inputs } };
+    }));
+    syncNodePropDraft(id, (draft) => ({
+      inputs: (draft?.inputs || []).map((slot) => (
+        String(slot?.name || "") === name ? { ...slot, default: String(value), value: String(value) } : slot
+      )),
+    }));
+  }, [markWorkspaceDirty, setNodes, syncNodePropDraft, workspaceWritable]);
+
+  const commitSubflowContractChange = useCallback((result, successMessage, { subflowId = "", renameMap = {} } = {}) => {
+    if (result?.error) {
+      setStatus(result.error);
+      return false;
+    }
+    if (!result?.subflows || result.subflows === subflowsRef.current) return true;
+    markWorkspaceDirty();
+    const currentGraph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
+    const graph = reconcileSubflowCallOutputs(
+      { ...currentGraph, subflows: result.subflows },
+      subflowId,
+      renameMap,
+    );
+    subflowsRef.current = graph.subflows;
+    instancesRef.current = graph.instances;
+    const projected = graphToFlow(graph, palette, { preserveRuntimeOutputs: true });
+    nodesRef.current = projected.nodes;
+    edgesRef.current = projected.edges;
+    setNodes(projected.nodes);
+    setEdges(projected.edges);
+    setInstances(graph.instances);
+    setStatus(successMessage);
+    return true;
+  }, [markWorkspaceDirty, palette, setEdges, setNodes]);
+
+  const changeSubflowOutputName = useCallback((subflowId, oldName, newName) => {
+    if (!workspaceWritable) return false;
+    return commitSubflowContractChange(
+      renameSubflowOutput(subflowsRef.current, subflowId, oldName, newName),
+      `已重命名输出 ${oldName} → ${newName}`,
+      { subflowId, renameMap: { [oldName]: newName } },
+    );
+  }, [commitSubflowContractChange, workspaceWritable]);
+
+  const deleteSubflowOutput = useCallback((subflowId, name) => {
+    if (!workspaceWritable) return;
+    commitSubflowContractChange(
+      removeSubflowOutput(subflowsRef.current, subflowId, name),
+      `已删除输出 ${name}`,
+      { subflowId },
+    );
+  }, [commitSubflowContractChange, workspaceWritable]);
+
   const setProvideNodeValue = useCallback((nodeId, value) => {
     const id = String(nodeId || "");
     if (!id || !workspaceWritable) return;
@@ -11822,6 +12537,24 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, workspaceWritable]);
 
+  const removeNodeFromSubflows = useCallback((nodeId) => {
+    const id = String(nodeId || "");
+    if (!id) return;
+    subflowsRef.current = Object.fromEntries(Object.entries(subflowsRef.current || {}).map(([subflowId, subflow]) => [
+      subflowId,
+      {
+        ...subflow,
+        nodeIds: (subflow.nodeIds || []).filter((memberId) => String(memberId) !== id),
+        roots: (subflow.roots || []).filter((rootId) => String(rootId) !== id),
+        outputs: Object.fromEntries(Object.entries(subflow.outputs || {}).filter(([, binding]) => String(binding?.nodeId || "") !== id)),
+      },
+    ]));
+    const nextInstances = { ...instancesRef.current };
+    delete nextInstances[id];
+    instancesRef.current = nextInstances;
+    setInstances(nextInstances);
+  }, []);
+
   const suppressWorkspaceSelectionAutosave = useCallback((patch = {}) => {
     const current = workspaceAutosaveSuppressedStateRef.current || {
       nodes: nodesRef.current,
@@ -11840,6 +12573,7 @@ function WorkspacePageInner() {
     showBodyPreview: true,
     flowParams,
     readOnly: !workspaceWritable,
+    activeSubflowEditorId: activeSubflowId,
     onRunWorkspaceNode: runWorkspaceNode,
     onStopWorkspaceNode: stopWorkspaceRun,
     onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
@@ -11874,15 +12608,36 @@ function WorkspacePageInner() {
     onUpdateNodeChatDraft: updateNodeChatDraft,
     onSendNodeChat: sendNodeChat,
     onSyncNodePropDraft: syncNodePropDraft,
+    onEditWhileSubflow: editWhileSubflow,
+    onFocusSubflowNode: focusSubflowNode,
+    onNodeInputValueChange: changeNodeInputValue,
+    onRenameSubflowOutput: changeSubflowOutputName,
+    onDeleteSubflowOutput: deleteSubflowOutput,
     onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
+    onRemoveNodeFromSubflows: removeNodeFromSubflows,
     onSuppressWorkspaceSelectionAutosave: suppressWorkspaceSelectionAutosave,
-  }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, suppressWorkspaceSelectionAutosave, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
+  }), [activeSubflowId, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeNodeInputValue, changeScheduledRunConfig, changeSubflowOutputName, cleanupWorkspaceNodeOutputs, closeNodeChat, deleteSubflowOutput, editWhileSubflow, ensureWorkspaceNodeDisplaySize, flowParams, focusSubflowNode, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, removeNodeFromSubflows, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, suppressWorkspaceSelectionAutosave, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
 
   const connectedWorkspaceNodeIds = useMemo(() => {
     const ids = new Set();
     for (const edge of edges) {
       if (edge?.source) ids.add(String(edge.source));
       if (edge?.target) ids.add(String(edge.target));
+    }
+    return ids;
+  }, [edges]);
+
+  const nodeUiInputBindings = useMemo(
+    () => buildNodeUiInputBindings(nodes, edges),
+    [edges, nodes],
+  );
+
+  const selectedSubflowBoundaryIds = useMemo(() => {
+    const ids = new Set();
+    for (const edge of edges) {
+      if (!edge?.selected || !edge?.data?.virtualSubflowCall) continue;
+      if (edge.target) ids.add(String(edge.target));
+      if (edge.data?.returnNodeId) ids.add(String(edge.data.returnNodeId));
     }
     return ids;
   }, [edges]);
@@ -11896,13 +12651,15 @@ function WorkspacePageInner() {
         selected: node.selected === true,
         hasConnections: connectedWorkspaceNodeIds.has(node.id),
         isExecuting: workspaceExecutingNodes.has(node.id),
-        nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
+        nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? persistedNodeUiStatus(node.data),
         nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
         nodeRunDetail: workspaceNodeRunStatus[node.id]?.detail ?? null,
         optimizingRun: optimizingRunNodeId === node.id,
         scheduledRunState: scheduledRunState[node.id] || null,
         nodeChatActive: activeNodeChatId === node.id,
         nodeChat: nodeChatSessions[node.id] || null,
+        callRelationSelected: selectedSubflowBoundaryIds.has(node.id),
+        nodeUiBindings: nodeUiInputBindings.get(node.id) || null,
       };
       const cached = cache.get(node.id);
       if (
@@ -11938,7 +12695,7 @@ function WorkspacePageInner() {
       if (!seen.has(id)) cache.delete(id);
     }
     return nextNodes;
-  }, [activeNodeChatId, connectedWorkspaceNodeIds, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  }, [activeNodeChatId, connectedWorkspaceNodeIds, hydratedNodeCommonData, nodeChatSessions, nodeUiInputBindings, nodes, optimizingRunNodeId, scheduledRunState, selectedSubflowBoundaryIds, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const isDisplayMode = workspaceMode === "display";
   const isWorkflowMode = workspaceMode === "workflow";
@@ -12349,8 +13106,15 @@ function WorkspacePageInner() {
     });
   }, [edgeNodeDataById, edges]);
 
-  const canvasNodes = isDisplayMode ? displayCanvasNodes : hydratedNodes;
-  const canvasEdges = isDisplayMode ? [] : coloredEdges;
+  const activeSubflow = activeSubflowId ? subflowsRef.current?.[activeSubflowId] || null : null;
+  const subflowCanvas = useMemo(() => activeSubflowCanvas({
+    nodes: hydratedNodes,
+    edges: coloredEdges,
+    subflow: activeSubflow,
+    subflowId: activeSubflowId,
+  }), [activeSubflow, activeSubflowId, coloredEdges, hydratedNodes]);
+  const canvasNodes = isDisplayMode ? displayCanvasNodes : activeSubflowId ? subflowCanvas.nodes : hydratedNodes;
+  const canvasEdges = isDisplayMode ? [] : activeSubflowId ? subflowCanvas.edges : coloredEdges;
   const canvasNodesRef = useRef(canvasNodes);
   const transientCanvasNodesRef = useRef([]);
   const pendingTransientCanvasNodeChangesRef = useRef([]);
@@ -12363,8 +13127,8 @@ function WorkspacePageInner() {
       ? displayCanvasNodes
         .filter((node) => !isWorkspaceGroupNode(node))
         .map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
-      : hydratedNodes
-  ), [displayCanvasNodes, hydratedNodes, isDisplayMode]);
+      : canvasNodes
+  ), [canvasNodes, displayCanvasNodes, isDisplayMode]);
 
   const jumpToWorkspaceNodeById = useCallback((nodeId) => {
     const sourceId = String(nodeId || "").trim();
@@ -12434,6 +13198,7 @@ function WorkspacePageInner() {
     const q = paletteSearch.trim().toLowerCase();
     const grouped = { DISPLAY: [], CONTROL: [], TOOL: [], PROVIDE: [], AGENT: [] };
     for (const item of palette) {
+      if (item?.paletteHidden) continue;
       if (q && ![item.id, item.label, item.displayName, item.description].some((x) => String(x || "").toLowerCase().includes(q))) continue;
       grouped[paletteCategory(item)].push(item);
     }
@@ -12444,6 +13209,7 @@ function WorkspacePageInner() {
   const quickAddItems = useMemo(() => {
     const q = quickAddSearch.trim().toLowerCase();
     return palette
+      .filter((item) => !item?.paletteHidden)
       .filter((item) => !q || [item.id, item.label, item.displayName, item.description]
         .some((x) => String(x || "").toLowerCase().includes(q)))
       .sort((a, b) => {
@@ -12659,6 +13425,7 @@ function WorkspacePageInner() {
       return;
     }
     setWorkspaceMode(nextMode);
+    exitSubflowEditor();
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
     setConnectionMenu(null);
@@ -12672,7 +13439,7 @@ function WorkspacePageInner() {
     }
     const url = `/workspace${q.toString() ? `?${q.toString()}` : ""}`;
     window.history.pushState({}, "", url);
-  }, [flowParams, isWorkflowMode, openWorkflowProjectView, workflowProjectBindings, workflowTapdId]);
+  }, [exitSubflowEditor, flowParams, isWorkflowMode, openWorkflowProjectView, workflowProjectBindings, workflowTapdId]);
 
   const addDisplayPageNode = useCallback((sourceId) => {
     const id = String(sourceId || "").trim();
@@ -13049,7 +13816,7 @@ function WorkspacePageInner() {
   }, [flowParams, workspaceCollaboration?.ownerId]);
 
   const backupDraftAndReloadWorkspace = useCallback(async () => {
-    const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+    const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
     graph.ui = {
       ...(graph.ui || {}),
       ...(workspaceViewportRef.current ? { viewport: workspaceViewportRef.current } : {}),
@@ -13448,6 +14215,27 @@ function WorkspacePageInner() {
       }
       return;
     }
+    const removedNodeIds = new Set((changes || [])
+      .filter((change) => change?.type === "remove")
+      .map((change) => String(change.id || ""))
+      .filter((id) => id && !id.startsWith("subflow-start:") && !id.startsWith("subflow-return:")));
+    if (removedNodeIds.size > 0) {
+      subflowsRef.current = Object.fromEntries(Object.entries(subflowsRef.current || {}).map(([subflowId, subflow]) => {
+        const outputs = Object.fromEntries(Object.entries(subflow?.outputs || {}).filter(([, binding]) => (
+          !removedNodeIds.has(String(binding?.nodeId || ""))
+        )));
+        return [subflowId, {
+          ...subflow,
+          nodeIds: (subflow.nodeIds || []).filter((nodeId) => !removedNodeIds.has(String(nodeId))),
+          roots: (subflow.roots || []).filter((nodeId) => !removedNodeIds.has(String(nodeId))),
+          outputs,
+        }];
+      }));
+      const nextInstances = { ...instancesRef.current };
+      removedNodeIds.forEach((id) => delete nextInstances[id]);
+      instancesRef.current = nextInstances;
+      setInstances(nextInstances);
+    }
     // Selection is React Flow UI state, not part of the persisted workspace graph.
     // Without this guard, pressing a node schedules an autosave before its first
     // drag event. That save can rerender the controlled canvas with the old
@@ -13556,11 +14344,21 @@ function WorkspacePageInner() {
   }, [flushTransientCanvasNodeChanges]);
 
   const handleNodesChange = useCallback((changes) => {
+    const canvasSnapshot = transientCanvasNodesRef.current.length > 0
+      ? transientCanvasNodesRef.current
+      : canvasNodesRef.current;
+    const nodeById = new Map(canvasSnapshot.map((node) => [node.id, node]));
+    // Boundary geometry is derived from the subflow contract. React Flow still
+    // reports a first measurement, but accepting it would create a fake design edit.
+    const persistentChanges = (changes || []).filter((change) => !(
+      change?.type === "dimensions" && nodeById.get(change.id)?.data?.isSubflowBoundary
+    ));
     const expandedChanges = workspaceMode === "display"
-      ? changes
+      ? persistentChanges
       : expandWorkspaceGroupPositionChanges(
-          changes,
-          transientCanvasNodesRef.current.length > 0 ? transientCanvasNodesRef.current : canvasNodesRef.current,
+          persistentChanges,
+          canvasSnapshot,
+          workspaceGroupDragOriginsRef.current,
         );
     const {
       transient,
@@ -13608,6 +14406,7 @@ function WorkspacePageInner() {
       cancelPendingTransientCanvasFrame();
       flushPendingCanvasNodeChanges([], { finish: true });
       transientCanvasNodesRef.current = [];
+      workspaceGroupDragOriginsRef.current.clear();
     }
     if (workspaceRemoteRefreshQueuedRef.current) {
       scheduleWorkspaceRemoteRefresh({ type: "interaction.finished" });
@@ -13639,6 +14438,7 @@ function WorkspacePageInner() {
     const finishInterruptedInteraction = () => {
       workspaceCanvasPointerIdsRef.current.clear();
       workspaceViewportInteractionActiveRef.current = false;
+      workspaceGroupDragOriginsRef.current.clear();
       settleWorkspaceCanvasInteraction();
     };
     const finishWhenHidden = () => {
@@ -13657,6 +14457,7 @@ function WorkspacePageInner() {
       document.removeEventListener("visibilitychange", finishWhenHidden);
       workspaceCanvasPointerIdsRef.current.clear();
       workspaceViewportInteractionActiveRef.current = false;
+      workspaceGroupDragOriginsRef.current.clear();
       lastActiveCanvasNodeChangesRef.current = [];
       cancelPendingTransientCanvasFrame();
       transientCanvasNodesRef.current = [];
@@ -13676,9 +14477,22 @@ function WorkspacePageInner() {
       }
       return;
     }
-    if ((changes || []).some((change) => change?.type !== "select")) markWorkspaceDirty();
+    const protectedChanges = (changes || []).filter((change) => !(
+      change?.type === "remove" &&
+      edgesRef.current.some((edge) => (
+        edge.id === change.id && (edge?.data?.virtualSubflowCall || edge?.data?.virtualSubflowBoundary)
+      ))
+    ));
+    if (protectedChanges.some((change) => change?.type !== "select")) markWorkspaceDirty();
     setEdges((current) => {
-      const next = applyEdgeChanges(changes, current);
+      // Subflow call/boundary edges visualize a call frame and are not editable DAG edges.
+      // Ignore incidental remove events; graph reload deterministically projects them again.
+      const changed = applyEdgeChanges(protectedChanges, current);
+      const next = reconcileWorkspaceVirtualSubflowCallEdges(
+        changed,
+        instancesRef.current,
+        subflowsRef.current,
+      );
       edgesRef.current = next;
       return next;
     });
@@ -13719,7 +14533,7 @@ function WorkspacePageInner() {
     const id = overrides.id || nextNodeId(runtimeDefinitionId, nodes);
     const input = cloneSlots(def.inputs);
     const output = cloneSlots(def.outputs);
-    const instance = {
+    let instance = {
       definitionId: runtimeDefinitionId,
       ...(marketplaceRef ? { marketplaceRef } : {}),
       ...(def.packageId ? { marketplacePackageId: def.packageId } : {}),
@@ -13734,6 +14548,23 @@ function WorkspacePageInner() {
       input: overrides.inputs || input,
       output: overrides.outputs || output,
     };
+    let nextSubflows = subflowsRef.current;
+    if (activeSubflowId && nextSubflows?.[activeSubflowId]) {
+      instance = { ...instance, subflowId: activeSubflowId };
+      nextSubflows = addNodeToSubflow(nextSubflows, activeSubflowId, id);
+    }
+    const whileScaffold = runtimeDefinitionId === "control_while" && !instance.conditionSubflowId && !instance.bodySubflowId
+      ? createWhileSubflowScaffold({
+          whileId: id,
+          instance,
+          instances: { ...instancesRef.current, [id]: instance },
+          subflows: nextSubflows,
+        })
+      : null;
+    if (whileScaffold) {
+      instance = whileScaffold.instance;
+      nextSubflows = { ...nextSubflows, ...whileScaffold.subflows };
+    }
     const node = {
       id,
       type: FLOW_NODE_TYPE,
@@ -13757,20 +14588,95 @@ function WorkspacePageInner() {
     };
     const merged = { ...mergeNodeWithPalette(node, { ...instancesRef.current, [id]: instance }, palette), selected: true };
     markWorkspaceDirty();
-    setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
+    const nextInstances = {
+      ...instancesRef.current,
+      [id]: instance,
+      ...(whileScaffold?.instances || {}),
+    };
+    instancesRef.current = nextInstances;
+    subflowsRef.current = nextSubflows;
+    setInstances(nextInstances);
+    if (whileScaffold) {
+      const proxyPosition = overrides.position || defaultWorkspaceNodePosition();
+      const proxyNodes = Object.entries(whileScaffold.instances).map(([proxyId, proxy], index) => ({
+        id: proxyId,
+        type: FLOW_NODE_TYPE,
+        position: { x: proxyPosition.x + 120, y: proxyPosition.y + 180 + index * 90 },
+        hidden: true,
+        selectable: false,
+        draggable: false,
+        data: {
+          label: proxy.label,
+          definitionId: proxy.definitionId,
+          inputs: proxy.input,
+          outputs: proxy.output,
+          isSubflowInputProxy: true,
+        },
+      }));
+      const graph = flowToGraph(
+        [...nodesRef.current, merged, ...proxyNodes],
+        edgesRef.current,
+        nextInstances,
+        nextSubflows,
+      );
+      const projected = graphToFlow(graph, palette, { preserveRuntimeOutputs: true });
+      const selectedNodes = projected.nodes.map((item) => ({ ...item, selected: item.id === id }));
+      nodesRef.current = selectedNodes;
+      edgesRef.current = projected.edges;
+      setNodes(selectedNodes);
+      setEdges(projected.edges);
+    } else {
+      setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
+    }
     if (overrides.openProperties) setSelectedNodeId(id);
     return id;
-  }, [defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setNodes, workspaceWritable]);
+  }, [activeSubflowId, defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setEdges, setNodes, workspaceWritable]);
 
-  const isValidConnection = useCallback((params) => workspaceConnectionCompatible(params, nodesRef.current), []);
+  const isValidConnection = useCallback((params) => {
+    const sourceNode = nodesRef.current.find((node) => node.id === params?.source);
+    const targetNode = nodesRef.current.find((node) => node.id === params?.target);
+    if (sourceNode?.data?.isSubflowBoundary || targetNode?.data?.isSubflowBoundary) {
+      return Boolean(activeSubflowId);
+    }
+    return workspaceConnectionCompatible(params, nodesRef.current);
+  }, [activeSubflowId]);
 
   const handleConnect = useCallback((params) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
     }
+    const sourceNode = nodesRef.current.find((node) => node.id === params.source);
+    const targetNode = nodesRef.current.find((node) => node.id === params.target);
+    if (sourceNode?.data?.isSubflowBoundary || targetNode?.data?.isSubflowBoundary) {
+      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
+      const applied = applySubflowBoundaryConnection({
+        graph,
+        params,
+        sourceNode,
+        targetNode,
+        activeSubflowId,
+      });
+      if (applied.error) {
+        setStatus(applied.error);
+        return;
+      }
+      if (applied.handled) {
+        markWorkspaceDirty();
+        subflowsRef.current = applied.graph.subflows || subflowsRef.current;
+        instancesRef.current = applied.graph.instances || instancesRef.current;
+        const projected = graphToFlow(applied.graph, palette, { preserveRuntimeOutputs: true });
+        nodesRef.current = projected.nodes;
+        edgesRef.current = projected.edges;
+        setInstances(instancesRef.current);
+        setNodes(projected.nodes);
+        setEdges(projected.edges);
+        setStatus(applied.addedOutputName ? `已添加输出 ${applied.addedOutputName}` : "子流程契约已更新");
+        return;
+      }
+    }
     if (!workspaceConnectionCompatible(params, nodesRef.current)) {
-      setStatus("端口类型不匹配，已取消连线");
+      setStatus(workspaceConnectionErrorMessage(params, nodesRef.current));
       return;
     }
     setConnectionMenu(null);
@@ -13784,7 +14690,7 @@ function WorkspacePageInner() {
       edgesRef.current = next;
       return next;
     });
-  }, [markWorkspaceDirty, setEdges, setNodes, workspaceWritable]);
+  }, [activeSubflowId, markWorkspaceDirty, palette, setEdges, setNodes, workspaceWritable]);
 
   const handleConnectStart = useCallback((event, params) => {
     if (!workspaceWritable) return;
@@ -13876,7 +14782,7 @@ function WorkspacePageInner() {
     }
     const nextConnection = candidate?.connection;
     if (!nextConnection || !workspaceConnectionCompatible(nextConnection, nodesRef.current)) {
-      setStatus("端口类型不匹配，已取消连线");
+      setStatus(workspaceConnectionErrorMessage(nextConnection, nodesRef.current));
       setConnectionMenu(null);
       return;
     }
@@ -14304,7 +15210,7 @@ function WorkspacePageInner() {
     const previousMessages = targetRunSession
       ? (Array.isArray(targetRunSession.messages) ? targetRunSession.messages : [])
       : composerMessages;
-    const graph = flowToGraph(nodes, edges, instancesRef.current);
+    const graph = flowToGraph(nodes, edges, instancesRef.current, subflowsRef.current);
     setComposerText("");
     setComposerRunning(true);
     setComposerSidebarOpen(true);
@@ -14977,15 +15883,31 @@ function WorkspacePageInner() {
           }}
           onLostPointerCaptureCapture={finishWorkspaceCanvasPointer}
         >
+          {activeSubflowId ? (
+            <div className="af-subflow-editor-bar nodrag">
+              <button type="button" onClick={exitSubflowEditor}>
+                <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+                父流程
+              </button>
+              <span className="af-subflow-editor-bar__separator">/</span>
+              <span className="af-subflow-editor-bar__kind">WHILE</span>
+              <strong>{activeSubflowRole === "condition" ? "Condition" : activeSubflowRole === "body" ? "Body" : "Subflow"}</strong>
+              <span className="af-subflow-editor-bar__separator">·</span>
+              <span>{activeSubflow?.label || activeSubflowId}</span>
+              <em>拖入节点会自动加入当前子流程；连接 START / RETURN 即定义契约</em>
+            </div>
+          ) : null}
           <ReactFlow
             className={
               "af-flow-canvas af-workspace-flow" +
               (canvasTool === "pan" ? " af-flow-canvas--tool-pan" : " af-flow-canvas--tool-select") +
-              (isDisplayMode ? " af-workspace-flow--display-mode" : "")
+              (isDisplayMode ? " af-workspace-flow--display-mode" : "") +
+              (activeSubflowId ? " af-workspace-flow--subflow-edit" : "")
             }
             nodes={canvasNodes}
             edges={canvasEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onMoveStart={handleWorkspaceViewportMoveStart}

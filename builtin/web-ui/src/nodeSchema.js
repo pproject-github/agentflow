@@ -1,34 +1,15 @@
+import {
+  areSlotTypesCompatible,
+  getSlotTypeColor,
+  normalizeSlotType,
+  slotTypeCompatibility,
+} from "../../../shared/slot-types.js";
+
+export { areSlotTypesCompatible, normalizeSlotType, slotTypeCompatibility };
+
 /** 按类型返回连接点颜色（与桌面 AgentFlow 一致） */
 export function getHandleColor(type) {
-  switch (normalizeSlotType(type)) {
-    case "text":
-      return "#2196f3";
-    case "file":
-      return "#4caf50";
-    case "node":
-      return "#ff9800";
-    case "bool":
-      return "#9c27b0";
-    default:
-      return "#9e9e9e";
-  }
-}
-
-export function normalizeSlotType(type) {
-  const raw = String(type ?? "").trim().toLowerCase();
-  if (raw === "文本" || raw === "str" || raw === "string") return "text";
-  if (raw === "文件" || raw === "path") return "file";
-  if (raw === "节点" || raw === "flow" || raw === "control") return "node";
-  if (raw === "boolean" || raw === "布尔") return "bool";
-  return raw || "node";
-}
-
-export function areSlotTypesCompatible(sourceType, targetType) {
-  const src = normalizeSlotType(sourceType);
-  const tgt = normalizeSlotType(targetType);
-  if (!src || !tgt) return false;
-  if (src === "any" || tgt === "any") return true;
-  return src === tgt;
+  return getSlotTypeColor(type);
 }
 
 const SEMANTIC_TEXT_SLOT_NAMES = new Set(["knowledgeContext", "workspaceContext", "skillsContext", "mcpContext"]);

@@ -122,6 +122,8 @@ export function parseFlowSource(source, opts = {}) {
   const pendingIf = [];
   const runDecls = [];
   const destructures = [];
+  const subflows = {};
+  const subflowOf = new Map();
 
   // 先扫一遍解构声明：`const { storyId } = node;` 让后面引用 storyId 时能还原成边
   for (const stmt of ast.body) {
@@ -151,7 +153,7 @@ export function parseFlowSource(source, opts = {}) {
     if (tpl?.type !== "TemplateLiteral" || !tpl.expressions.length) return null;
     // 本节点自己就有这个名字 -> `${x}` 是运行时占位符，原样留在正文里，不是 JS 插值
     const def = definitionOf(definitionId);
-    const isScript = definitionId === "tool_nodejs";
+    const isScript = definitionId === "tool_nodejs" || definitionId === "control_while";
     const ownSlot = (name) => def.input.some((s) => s.name === name)
       || nodes[id].extraIn.includes(name)
       || nodes[id].inputs[name] !== undefined
@@ -258,6 +260,35 @@ export function parseFlowSource(source, opts = {}) {
     return out;
   };
 
+  const flatItemIds = (items, out = []) => {
+    for (const item of items || []) {
+      if (typeof item === "string") out.push(item);
+      else if (item?.fork) for (const branch of item.fork) flatItemIds(branch, out);
+    }
+    return out;
+  };
+
+  const rootItemIds = (items) => {
+    const first = items?.[0];
+    if (typeof first === "string") return [first];
+    if (!first?.fork) return [];
+    return first.fork.map((branch) => flatItemIds(branch)[0]).filter(Boolean);
+  };
+
+  const objectEntries = (node, context) => {
+    if (!node || node.type !== "ObjectExpression") {
+      unresolvedAt(node, `${context} 必须是对象字面量`);
+      return [];
+    }
+    return node.properties.map((prop) => {
+      if (prop.type !== "Property" || prop.computed || prop.kind !== "init") {
+        unresolvedAt(prop, `${context} 只能包含静态字段`);
+        return null;
+      }
+      return [String(prop.key.name ?? prop.key.value ?? ""), prop.value];
+    }).filter(Boolean);
+  };
+
   function linkChain(head, items) {
     let prev = head;
     let slot = "next";
@@ -300,10 +331,97 @@ export function parseFlowSource(source, opts = {}) {
       const path = apiCalleePath(init.callee);
       const args = [...init.arguments];
 
+      if (path === "flow.input") {
+        const name = stringOf(args[0]);
+        const type = stringOf(args[1]) || "text";
+        if (!name) unresolvedAt(init, `${id}: flow.input 的第一个参数必须是输入名`);
+        nodes[id] = {
+          definitionId: "workspace_subflow_input",
+          inputs: {},
+          inputTypes: {},
+          outputs: {},
+          extraIn: [],
+          extraOut: [],
+          declaredOut: [],
+          attrs: { subflowInputName: name || id, subflowInputType: type },
+          packageDef: { input: [], output: [{ name: "value", type }] },
+          label: name || id,
+        };
+        continue;
+      }
+
       const first = args[0];
       const hasLabel = first
         && ((first.type === "Literal" && typeof first.value === "string") || first.type === "TemplateLiteral");
       const label = hasLabel ? stringOf(args.shift()) : null;
+
+      if (path === "flow.subflow") {
+        const inputObject = args.shift();
+        const sequence = args.shift();
+        const outputObject = args.shift();
+        const items = sequence?.type === "CallExpression" && apiCalleePath(sequence.callee) === "flow"
+          ? itemsOf(sequence)
+          : [];
+        // The visual editor persists an empty flow() while its START/RETURN
+        // contract is still being wired. Keep that draft round-trippable;
+        // lint already reports a missing execution root and runtime refuses it.
+        const inputs = {};
+        for (const [name, value] of objectEntries(inputObject, `${id} inputs`)) {
+          if (value.type !== "Identifier" || nodes[value.name]?.definitionId !== "workspace_subflow_input") {
+            unresolvedAt(value, `${id}.${name}: 子流程输入必须引用 flow.input 变量`);
+            continue;
+          }
+          const proxy = nodes[value.name];
+          inputs[name] = {
+            nodeId: value.name,
+            slot: "value",
+            type: String(proxy.attrs?.subflowInputType || "text"),
+          };
+        }
+        const outputs = {};
+        for (const [name, value] of objectEntries(outputObject, `${id} outputs`)) {
+          const member = memberPath(value);
+          const ref = member || (value.type === "Identifier" ? varOf.get(value.name) : null);
+          if (!ref) {
+            unresolvedAt(value, `${id}.${name}: 子流程输出必须引用内部节点输出`);
+            continue;
+          }
+          const sourceNode = nodes[ref[0]];
+          const declaredSlot = sourceNode?.packageDef?.output?.find((slot) => slot.name === ref[1])
+            || definitionOf(sourceNode?.definitionId).output.find((slot) => slot.name === ref[1]);
+          outputs[name] = { nodeId: ref[0], slot: ref[1], type: String(declaredSlot?.type || "text") };
+        }
+        const roots = rootItemIds(items);
+        subflows[id] = { id, label: label || id, inputs, outputs, roots, nodeIds: [] };
+        subflowOf.set(id, subflows[id]);
+        linkChain(null, items);
+        continue;
+      }
+
+      if (path === "flow.call") {
+        const ref = args.shift();
+        const subflow = ref?.type === "Identifier" ? subflowOf.get(ref.name) : null;
+        if (!subflow) unresolvedAt(ref, `${id}: flow.call 第二个参数必须引用前面声明的 flow.subflow`);
+        const inputSlots = Object.entries(subflow?.inputs || {}).map(([name, binding]) => ({ name, type: binding.type || "text" }));
+        const outputSlots = Object.entries(subflow?.outputs || {}).map(([name, binding]) => ({ name, type: binding.type || "text" }));
+        nodes[id] = {
+          definitionId: "control_subflow_call",
+          inputs: {},
+          inputTypes: {},
+          outputs: {},
+          extraIn: inputSlots.map((slot) => slot.name),
+          extraOut: outputSlots.map((slot) => slot.name),
+          declaredOut: outputSlots.map((slot) => slot.name),
+          attrs: { subflowId: ref?.name || "" },
+          packageDef: {
+            input: [{ name: "prev", type: "node" }, ...inputSlots],
+            output: [{ name: "next", type: "node" }, ...outputSlots],
+          },
+        };
+        if (label) nodes[id].label = label;
+        readPins(id, "control_subflow_call", args[0]);
+        continue;
+      }
 
       if (path === "flow" || path === "flow.schedule") {
         const body = path === "flow.schedule" ? stringOf(args.shift()) : null;
@@ -364,7 +482,22 @@ export function parseFlowSource(source, opts = {}) {
       }
       readPins(id, definitionId, args[0]);
 
-      if (definitionId === "control_if") {
+      if (definitionId === "control_while" && args[1]?.type === "Identifier") {
+        const conditionRef = args[1];
+        const bodyRef = args[2];
+        const conditionSubflow = subflowOf.get(conditionRef.name);
+        const bodySubflow = bodyRef?.type === "Identifier" ? subflowOf.get(bodyRef.name) : null;
+        if (!conditionSubflow) {
+          unresolvedAt(conditionRef, `${id}: control.while 第三个参数必须引用前面声明的 Condition 子流程`);
+        }
+        if (!bodySubflow) {
+          unresolvedAt(bodyRef || args[1], `${id}: control.while 第四个参数必须引用前面声明的 Body 子流程`);
+        }
+        nodes[id].attrs.conditionSubflowId = conditionRef.name || "";
+        nodes[id].attrs.bodySubflowId = bodyRef?.type === "Identifier" ? bodyRef.name : "";
+      } else if (definitionId === "control_while" && args[2]) {
+        unresolvedAt(args[2], `${id}: control.while 只能使用一个 step 脚本，或依次传入 Condition/Body 两个子流程`);
+      } else if (definitionId === "control_if") {
         if (args[1]) pendingIf.push({ id, slot: "next1", call: args[1] });
         if (args[2]) pendingIf.push({ id, slot: "next2", call: args[2] });
       } else if (args[1]) {
@@ -396,7 +529,7 @@ export function parseFlowSource(source, opts = {}) {
           }
         }
         if (body !== null) {
-          if (definitionId === "tool_nodejs") nodes[id].script = body;
+          if (definitionId === "tool_nodejs" || definitionId === "control_while") nodes[id].script = body;
           else nodes[id].body = body;
         }
       }
@@ -460,5 +593,36 @@ export function parseFlowSource(source, opts = {}) {
     node.extraOut = [...new Set(node.extraOut)];
   }
 
-  return { nodes, edges: [...new Set(edges)].sort(), unresolved };
+  // 子流程成员 = 显式控制链 + 输出来源 + 它们的数据依赖。边仍保存在统一 IR 中，
+  // 但成员清单让运行时能为每次 flow.call 建立隔离的调用帧。
+  const upstream = new Map();
+  for (const edge of edges) {
+    const [src, fromSlot, dst, toSlot] = edge.split("|");
+    if (toSlot === "prev") continue;
+    if (!upstream.has(dst)) upstream.set(dst, []);
+    upstream.get(dst).push(src);
+  }
+  for (const subflow of Object.values(subflows)) {
+    const members = new Set([
+      ...Object.values(subflow.inputs).map((binding) => binding.nodeId),
+      ...Object.values(subflow.outputs).map((binding) => binding.nodeId),
+    ]);
+    const queue = [...subflow.roots, ...members];
+    const visited = new Set();
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || visited.has(current)) continue;
+      visited.add(current);
+      members.add(current);
+      for (const dep of upstream.get(current) || []) queue.push(dep);
+      for (const edge of edges) {
+        const [src, fromSlot, dst, toSlot] = edge.split("|");
+        if (src === current && toSlot === "prev") queue.push(dst);
+      }
+    }
+    subflow.nodeIds = [...members].filter((nodeId) => nodes[nodeId]).sort();
+    for (const nodeId of subflow.nodeIds) nodes[nodeId].attrs.subflowId = subflow.id;
+  }
+
+  return { nodes, edges: [...new Set(edges)].sort(), subflows, unresolved };
 }

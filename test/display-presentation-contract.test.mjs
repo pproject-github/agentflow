@@ -4,6 +4,7 @@ import test from "node:test";
 
 const root = new URL("../builtin/web-ui/src/", import.meta.url);
 const workspaceSource = await readFile(new URL("pages/WorkspacePage.jsx", root), "utf8");
+const workspaceGroupsSource = await readFile(new URL("workspaceGroups.js", root), "utf8");
 const displaySource = await readFile(new URL("pages/DisplayPage.jsx", root), "utf8");
 const rendererSource = await readFile(new URL("displayRenderers.jsx", root), "utf8");
 const css = await readFile(new URL("index.css", root), "utf8");
@@ -21,7 +22,8 @@ test("Display 卡片根据真实连线弱化边界，并在展示态隐藏开发
 test("Group 保存成员、移动成员，并投影到 Display 与公开 Canvas", () => {
   assert.match(workspaceSource, /nodeIds: selectedNodes\.map\(\(node\) => node\.id\)/);
   assert.match(workspaceSource, /function inferredWorkspaceGroupNodeIds/);
-  assert.match(workspaceSource, /function expandWorkspaceGroupPositionChanges/);
+  assert.match(workspaceSource, /expandWorkspaceGroupPositionChanges/);
+  assert.match(workspaceGroupsSource, /export function expandWorkspaceGroupPositionChanges/);
   assert.match(workspaceSource, /displayGroupBounds\(group, displayPage, displaySourceNodeById\)/);
   assert.match(workspaceSource, /af-work-group-node--presentation/);
   assert.match(serverSource, /const groups = \(Array\.isArray\(graph\.ui\?\.groups\)/);

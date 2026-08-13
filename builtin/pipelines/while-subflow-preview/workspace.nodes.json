@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "nodes": {
+    "advanceIssue": {
+      "subflowId": "bodyFlow"
+    },
+    "advanceUntilBoundary": {
+      "conditionSubflowId": "conditionFlow",
+      "bodySubflowId": "bodyFlow"
+    },
+    "bodyIdempotencyKey": {
+      "subflowId": "bodyFlow",
+      "subflowInputName": "idempotencyKey",
+      "subflowInputType": "text"
+    },
+    "bodyIteration": {
+      "subflowId": "bodyFlow",
+      "subflowInputName": "iteration",
+      "subflowInputType": "text"
+    },
+    "bodyState": {
+      "subflowId": "bodyFlow",
+      "subflowInputName": "state",
+      "subflowInputType": "json"
+    },
+    "checkBoundary": {
+      "subflowId": "conditionFlow"
+    },
+    "conditionIteration": {
+      "subflowId": "conditionFlow",
+      "subflowInputName": "iteration",
+      "subflowInputType": "text"
+    },
+    "conditionState": {
+      "subflowId": "conditionFlow",
+      "subflowInputName": "state",
+      "subflowInputType": "json"
+    },
+    "saveState": {
+      "subflowId": "bodyFlow"
+    },
+    "selectIssue": {
+      "subflowId": "bodyFlow"
+    },
+    "validateNextState": {
+      "subflowId": "bodyFlow"
+    }
+  }
+}

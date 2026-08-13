@@ -33,21 +33,45 @@
 
 ---
 
-## 3. 图必须是 DAG（无环）
+## 3. 图必须是 DAG（无环），重复执行用 control_while
 
 Workspace 运行计划做拓扑排序，**遇到环直接抛 `Workspace run graph contains a cycle`**，整次运行失败。
 
 因此：
 
 - **禁止**从下游节点连边回到上游节点。
-- 「检查 → 修复 → 复检」要**向前展开**成多个节点，而不是回流成环。
-- 需要「反复重试直到达标」时，把循环放进**单个节点内部**——`agent_subAgent` 的 body 里让 agent 自己迭代，或 `tool_nodejs` 的脚本里自己 while 循环。
+- 「检查 → 修复 → 复检」涉及不同角色时要**向前展开**成多个节点，而不是回流成环。
+- 同一个确定性动作需要反复推进时，用 `control_while`。它在单节点状态机里重复 step 命令，
+  父图仍是 DAG；`continue` 继续、`wait` 暂停且不跑下游、`done` 放行下游、`fail` 失败。
+
+step 的 stdout 必须严格是一个 JSON 对象：
+
+```json
+{"decision":"continue|wait|done|fail","state":{},"summary":"本轮摘要"}
+```
+
+循环上下文通过 `AGENTFLOW_WHILE_STATE`、绝对轮次 `AGENTFLOW_WHILE_ITERATION`、
+`AGENTFLOW_WHILE_MAX_ITERATIONS`、`AGENTFLOW_WHILE_TIMEOUT_MS` 和稳定的逐轮
+`AGENTFLOW_WHILE_IDEMPOTENCY_KEY` 注入。外部写操作应尽量把该幂等键传给目标 API。stdout
+留给决策对象，普通进度写 stderr。`maxIterations` 默认 20，`timeout` 默认 30m，二者在
+`wait` 后恢复时继续累计；checkpoint 同时保留 state、history、已用执行时间和下一轮编号。
+输入变化会重置 checkpoint，指纹匹配但 checkpoint 损坏时会拒绝恢复，避免静默重放副作用。
 
 旧版用于成环的 `control_anyOne` / `control_toBool` / `control_agent_toBool` / `control_interval_loop` 均已下线。
 
 ---
 
-## 4. 展示结果（Display）
+## 4. 子流程（Subflow）
+
+可复用的一段节点拓扑用 `flow.input`、`flow.subflow` 和 `flow.call` 表达。子流程内部继续使用
+标准 AgentFlow 节点与边，父流程只连接调用节点的契约引脚；禁止跨边界直接连内部节点。
+
+每次调用拥有独立 `callFrameId`，内部事件同时带 `parentNodeId` 和 `subflowId`。禁止递归调用。
+当前第一版不支持子流程内部 `wait/deferred`，遇到会明确失败；可恢复调用栈补齐后再开放。
+
+---
+
+## 5. 展示结果（Display）
 
 把产出槽连到 `display_*` 节点的 `content` 输入即可在画布上渲染：
 
@@ -66,7 +90,7 @@ Workspace 运行计划做拓扑排序，**遇到环直接抛 `Workspace run grap
 
 ---
 
-## 5. 工具节点与 Agent 节点选型
+## 6. 工具节点与 Agent 节点选型
 
 **核心原则：能用工具节点确定性执行的，不要用 agent_subAgent。**
 
@@ -76,7 +100,7 @@ Workspace 运行计划做拓扑排序，**遇到环直接抛 `Workspace run grap
 | 向用户展示结果 | **display_\*** | 专用展示节点 |
 | 需要 AI 理解上下文、做判断、生成内容 | **agent_subAgent** | 需要 LLM 推理能力 |
 
-### 5.1 tool_nodejs 直接执行模式（推荐）
+### 6.1 tool_nodejs 直接执行模式（推荐）
 
 在 instance 中设置 `script` 字段，运行时**跳过 AI 直接 spawn 命令**：
 
@@ -99,7 +123,7 @@ write_summary:
 - **成败判定**：以脚本进程 **exit code** 为准（0 = success，非 0 = failed）。
 - **stdout → result**：脚本 stdout 直接作为 result 槽位内容，纯文本即可。**不要用 JSON 封装 stdout。**
 
-### 5.2 判断标准
+### 6.2 判断标准
 
 问自己：**"这个步骤的行为是否完全由输入决定，不需要 AI 推理？"**
 
@@ -108,7 +132,7 @@ write_summary:
 - **否** → 用 `agent_subAgent`
   - 例：根据需求撰写文档、分析代码并提出修改方案、理解上下文后做决策
 
-### 5.3 `script` 与 `body` 的职责（必须遵守）
+### 6.3 `script` 与 `body` 的职责（必须遵守）
 
 | 字段 | 职责 | 有 `script` 时 | 无 `script` 时 |
 |------|------|---------------|---------------|
@@ -137,7 +161,7 @@ bad_example:
     调用 API 获取数据，解析 JSON，提取关键字段保存到文件
 ```
 
-### 5.4 常见误用
+### 6.4 常见误用
 
 | 用户需求 | 错误做法 | 正确做法 |
 |----------|----------|----------|
@@ -146,7 +170,7 @@ bad_example:
 | 注入密钥 | 写死在 flow 里 | `tool_set_run_env` 或运行时环境变量 |
 | 复杂 AI 推理/生成 | tool_nodejs + body 写自然语言 | agent_subAgent（需 LLM 能力时必须用 agent） |
 
-### 5.5 节点单一职责（必须遵守）
+### 6.5 节点单一职责（必须遵守）
 
 **每个节点只做一件事，工作内容保持专注和专一。**
 
@@ -167,17 +191,18 @@ bad_example:
 
 ---
 
-## 6. 常见流程模式
+## 7. 常见流程模式
 
 1. **线性链**：Run → A → B → … → display
 2. **条件分支**：… → provide_bool → **control_if** → next1 连分支A、next2 连分支B（true 走 output-0，false 走 output-1）
-3. **并行**：同一个 output 扇出到多个下游节点，无依赖的分支会并行执行，各自往下走
-4. **检查 → 修复 → 复检**：向前排成 检查节点 → 修复节点 → 复检节点 → control_if（通过走后续，不通过走汇报节点）。**不要连回上游**
-5. **批量任务**：拆解节点产出 `- [ ]` 清单 → 执行节点在内部逐项推进 → control_if 按完成情况分支
+3. **控制扇出**：同一个 output 扇出到多个下游节点；当前 Workspace 运行时按拓扑序串行执行
+4. **单步收敛**：Run → control_while（重复同一 step）→ 下游；wait 时停在 While
+5. **检查 → 修复 → 复检**：不同角色向前排成多个节点。**不要连回上游**
+6. **批量任务**：拆解节点产出清单 → control_while 每轮推进一项 → done 后汇总
 
 ---
 
-## 7. Edge 与 Handle 注意点
+## 8. Edge 与 Handle 注意点
 
 - **Fan-out 允许，Fan-in 禁止**：一个 output handle 可连多个 input（扇出），但**一个 input handle 只允许一条入边**（禁止扇入）。同一 `target + targetHandle` 不得出现在多条 edge 中——运行时仅取首条匹配，其余静默丢失。若需替换连线，先删旧边再加新边。
 - **禁止回流边**：任何从下游连回上游的边都会让运行计划判定成环，整次运行失败。
@@ -188,6 +213,6 @@ bad_example:
 
 ---
 
-## 8. 图与 USER_PROMPT 的读写一致性
+## 9. 图与 USER_PROMPT 的读写一致性
 
 ${USER_PROMPT} 中描述的「读取」「写入」应与图中的 **handler 节点**（input/output 通过 edge 连接的节点）对应：描述的每项「读」应有节点的 input 入边，每项「写」应有节点的 output 出边。详见 [flow-prompt-handler-check.md](./flow-prompt-handler-check.md)。

@@ -217,6 +217,36 @@ skill 里那句注释一度写着「并行」，是这份文档里唯一的错�
 ——入度驱动 + 并发上限，还要连带处理运行中就地改写图、按节点粒度的冲突检测、中断路径
 和事件顺序。那是另一件事，和 `flow.fork` 无关。
 
+## 同 Workspace 子流程
+
+子流程不是脚本别名，而是一段有正式输入/输出契约的标准节点拓扑：
+
+```js
+const stateIn = flow.input("state", "json");
+const inspect = agent.subAgent("检查下一项", { state: stateIn.value }, `只处理一项并返回 JSON`);
+const save = tool.nodejs("规范化状态", { value: inspect.result }, `node ${flowDir}/scripts/normalize.mjs`);
+
+export const advanceOne = flow.subflow(
+  "推进一项",
+  { state: stateIn },
+  flow(inspect, save),
+  { state: save.result },
+);
+
+const advance = flow.call("调用推进子流程", advanceOne, { state: read.result });
+const { state } = advance;
+export const run = flow("Run", read, advance, show);
+```
+
+IR 在顶层保存 `subflows`：成员节点、控制入口、输入代理和输出绑定都显式记录。父图只调度
+`control_subflow_call`；运行时为每次调用构造独立 frame，把输入灌入代理节点，再用同一套
+Workspace 节点执行器运行内部 DAG，最后按输出绑定回填调用节点。内部事件带
+`parentNodeId`、`subflowId` 和 `callFrameId`，因此日志不会变成黑盒。
+
+边界规则：一个节点只能属于一个子流程；父流程不能直接连内部节点；子流程之间也不能直接跨线，
+只能通过 `flow.call` 契约传值；递归调用禁止。当前第一版不接受子流程内部的 `wait/deferred`，
+因为可恢复调用栈还没有持久化，遇到时会明确失败而不是让父流程误继续。
+
 ## lint 检查什么
 
 | 层 | 检查 |

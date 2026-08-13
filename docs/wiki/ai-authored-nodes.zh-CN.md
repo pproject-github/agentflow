@@ -115,7 +115,8 @@ await fs.writeFile(outputs.outputFile, outputPath); // 槽里只放了一个路�
 
 Node Studio 里这些没有接，也没有假装接上：
 
-- **UI schema / card variant**：原来那套 `configSchema.fields`、`ui.card.actions`、定时卡片
-  预览，代码节点声明里根本没有对应字段。已从页面移除，不留一个填不进东西的空壳
 - **多草稿管理**：只有一个下拉切换，没有新建/删除/重命名
 - **版本管理 UI**：协议层已禁止覆盖同一个 `id@version`，但 Node Studio 还没有自动升版本、版本列表和回滚界面
+
+Node UI Kit 已接通：代码节点可在纯字面量声明中组合 `binding`、`code`、`decision`、
+`metrics`、`summary`、`history`，Node Studio 和 Workspace 使用同一套安全渲染器预览。

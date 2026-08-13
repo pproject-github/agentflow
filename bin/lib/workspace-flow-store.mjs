@@ -108,7 +108,7 @@ function readTextOrNull(file) {
 }
 
 export function emptyDesignGraph() {
-  return { version: 1, instances: {}, edges: [], ui: { nodePositions: {} } };
+  return { version: 1, instances: {}, edges: [], subflows: {}, ui: { nodePositions: {} } };
 }
 
 function normalizeDesignShape(raw) {
@@ -120,6 +120,10 @@ function normalizeDesignShape(raw) {
         ? graph.instances
         : {},
     edges: Array.isArray(graph.edges) ? graph.edges : [],
+    subflows:
+      graph.subflows && typeof graph.subflows === "object" && !Array.isArray(graph.subflows)
+        ? graph.subflows
+        : {},
     ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
   };
 }
@@ -226,7 +230,12 @@ export function designFingerprint(graph) {
     .filter((e) => e && design.instances[e.source] && design.instances[e.target])
     .map((e) => `${e.source}|${asText(e.sourceHandle)}|${e.target}|${asText(e.targetHandle)}`)
     .sort();
-  return stableStringify({ instances, edges: [...new Set(edges)], ui: normalizeUi(design.ui) });
+  return stableStringify({
+    instances,
+    edges: [...new Set(edges)],
+    subflows: design.subflows,
+    ui: normalizeUi(design.ui),
+  });
 }
 
 // ── 读 ──────────────────────────────────────────────────────────────────────

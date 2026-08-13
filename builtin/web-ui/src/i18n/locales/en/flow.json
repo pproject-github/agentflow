@@ -23,7 +23,7 @@
     "userPrompt": "User Prompt (USER PROMPT / body)",
     "systemDescription": "System Description (read-only, from node definition)",
     "directCommand": "Direct Command (script)",
-    "scriptHint": "(tool_nodejs: skips AI when script exists, executed by pipeline)",
+    "scriptHint": "(tool_nodejs / control_while: executed directly by the runtime)",
     "diskRunning": "Disk record shows running",
     "deleteNode": "Delete node",
     "inputTooltip": "Input {{name}} | Type: {{type}}",

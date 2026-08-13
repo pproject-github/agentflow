@@ -538,6 +538,13 @@ function buildNodeStudioPrompt({ requirement, currentSource, parseError, history
     "   真实运行时位于会被清理的临时目录里。",
     "3. 槽位类型只能是 `text` `file` `bool` `node` `image` `json`。声明顺序 = 画布上的引脚顺序。",
     "",
+    "## 可选 Node UI Kit",
+    "",
+    "需要让画布直接解释节点时，在 export default 里声明 `ui.card`。只能组合安全组件：",
+    "`binding`、`code`、`decision`、`metrics`、`summary`、`history`、`subflow`；不能写 React、HTML 或事件处理器。",
+    "组件里的 input/output 必须引用已声明槽位。template 可用 details / state-machine，tone 可用",
+    "neutral / blue / purple / green / amber / red。没有可解释内容时可以不声明 UI。",
+    "",
     "失败用抛异常或非零退出表示，不要把 stdout 包成 JSON。",
     currentSource ? `\n## 当前 ${NODE_PACKAGE_ENTRY}\n\n\`\`\`js\n${currentSource}\n\`\`\`` : "",
     parseError ? `\n## 上一版解析失败，必须修掉\n\n${parseError}` : "",
@@ -568,7 +575,7 @@ function emptyNodeStudioDraft(userCtx = {}, draftId = "") {
       inputs: [],
       outputs: [],
       configSchema: { fields: [] },
-      ui: { card: { icon: "extension", variant: "default", actions: [] } },
+      ui: { card: { template: "details", icon: "extension", tone: "neutral", sections: [] } },
     },
     config: {},
     test: { inputs: {}, log: [], status: "not run" },
@@ -2917,6 +2924,7 @@ async function workspaceRoutes(req, res, ctx) {
       const flowSource = url.searchParams.get("flowSource") || "user";
       const lang = url.searchParams.get("lang") || "en";
       const marketplaceScope = url.searchParams.get("scope") === "owned" ? "owned" : "all";
+      const includeHidden = url.searchParams.get("includeHidden") === "1";
       if (flowId && !isValidFlowSourceRead(flowSource)) {
         json(res, 400, { error: "Invalid flowSource" });
         return;
@@ -2934,6 +2942,7 @@ async function workspaceRoutes(req, res, ctx) {
           archived: nodesArchived,
           ...requestedContext.userCtx,
           marketplaceScope,
+          includeHidden,
         }));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
