@@ -1,0 +1,28 @@
+builtin/web-ui/src/index.css
+  s_98d3237c964562::t_6fafd618548013 6663-6668
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_98d3237c964562::t_68f1bcebb15303 2882-2885,2976-2997
+builtin/web-ui/dist/assets/index-BPlxyeDg.css
+  s_98d3237c964562::t_895997ebe23ffc 1
+builtin/web-ui/dist/assets/index-C0o1Mby-.js
+  s_98d3237c964562::t_895997ebe23ffc 1,9,17,25,33,37-38,40,42,44,52,60,65-67,69,71,73,75,78-79,81,85-88,90,94-95,98,102,104,106,109-110,123,126-128,130-136,141,144,148-150,156,159,201,203,205-208,213-214,216,222,234,262,265-267,271,297
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_895997ebe23ffc 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "4d0e4bc67e4f140bcfb1352df9d12419e3b7f7d4",
+  "prompts": {},
+  "logical_commit_id": "ba5e542855e0d13e9ba98aa6d355aebf7ea8c093",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

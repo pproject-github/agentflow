@@ -1,0 +1,44 @@
+builtin/web-ui/index.html
+  s_b8fd1696dd8226::t_1b57f4f7bfbdfa 24,38
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b8fd1696dd8226::t_b5a09bcf8a99c9 7846-7853
+  s_b8fd1696dd8226::t_b91bd62daae2b8 30,7426,8536
+builtin/web-ui/dist/assets/index-DhtCX9K9.js
+  s_b8fd1696dd8226::t_01cbec87e55ded 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,71,73,75,78-79,84,87,91-107,109-110,114,116,118,121-122,135,138-140,221-227,233,236,280-281,285,289,291-295,299-300,302-304,308,310,325,353-359,458,503,539,745,849,851,854-859,863,889
+bin/lib/ui-server.mjs
+  s_b8fd1696dd8226::t_6c52b2077c3bee 166,13724-13727,13741-13742,13745-13747
+test/workflow-dashboard-contract.test.mjs
+  s_b8fd1696dd8226::t_bd9fea9cac9367 71-72
+bin/lib/prd-workflow-collaboration.mjs
+  s_b8fd1696dd8226::t_6c52b2077c3bee 236-242
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_77e973d665c0ba 24,40
+  s_b8fd1696dd8226::t_01cbec87e55ded 33
+test/app-loading-contract.test.mjs
+  s_b8fd1696dd8226::t_1b57f4f7bfbdfa 15-16
+builtin/web-ui/src/pages/WorkflowsPage.jsx
+  s_b8fd1696dd8226::t_bd9fea9cac9367 947,1074-1079
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BKF12gI0.js
+  s_b8fd1696dd8226::t_01cbec87e55ded 1
+test/workspace-workflow-render-contract.test.mjs
+  s_b8fd1696dd8226::t_b5a09bcf8a99c9 111-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9101f05a708bb27faed13f29dfa20d63fd0bf807",
+  "prompts": {},
+  "logical_commit_id": "ea70f61b5f773c3417f3bdebf2efabea79a685f6",
+  "sessions": {
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 44935,
+      "total_deletions": 1769
+    }
+  }
+}

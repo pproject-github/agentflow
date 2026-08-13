@@ -1,0 +1,98 @@
+builtin/nodes/display_code.md
+  s_0662e50ad860f3::t_0fe7c58b2eb390 23
+  s_0662e50ad860f3::t_19bbce917e09d7 2-22,24-39
+  s_0662e50ad860f3::t_91fb0b7258e7e2 1
+builtin/web-ui/src/workspaceGroups.js
+  s_0662e50ad860f3::t_289bb6a13dc103 11
+builtin/web-ui/src/displayRenderers.jsx
+  s_0662e50ad860f3::t_dee106092983b6 264,374-375,383-395,409,418
+  s_0662e50ad860f3::t_0fe7c58b2eb390 376-382
+  s_0662e50ad860f3::t_278abfe3058c91 266-373,396-408,410-416,430-439
+  s_0662e50ad860f3::t_21802842d6621d 419-429
+  s_0662e50ad860f3::t_13638c9184fe3c 131-138,212-219,263
+  s_0662e50ad860f3::t_ecf804a3e9369e 265
+bin/lib/flow-dsl/codegen.mjs
+  s_0662e50ad860f3::t_e07ea1713a2026 56
+test/display-code-node.test.mjs
+  s_0662e50ad860f3::t_46206201eb7e73 1-42,44-88,90-91,93-94
+  s_0662e50ad860f3::t_91fb0b7258e7e2 43
+  s_0662e50ad860f3::t_911408c42cea46 89,92
+builtin/web-ui/dist/assets/index-D9piOUod.css
+  s_0662e50ad860f3::t_b962d5f62f6aca 1
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BFjpYGcZ.js
+  s_0662e50ad860f3::t_6e4c28777c0762 1
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_0662e50ad860f3::t_3b0117d96fc019 191-192,194-195
+  s_0662e50ad860f3::t_acf25c2b9e85d8 189-190,193,196
+bin/lib/locales/en.json
+  s_0662e50ad860f3::t_e4ed5efaf7cf12 354-357
+skills/agentflow-flow-dsl/references/node-calls.md
+  s_0662e50ad860f3::t_3b0117d96fc019 18
+builtin/web-ui/dist/index.html
+  s_0662e50ad860f3::t_b962d5f62f6aca 34
+  s_0662e50ad860f3::t_6e4c28777c0762 33
+builtin/web-ui/src/workspaceSyncGuard.js
+  s_0662e50ad860f3::t_c78104a6832577 5,14-16
+bin/lib/locales/zh.json
+  s_0662e50ad860f3::t_e4ed5efaf7cf12 354-357
+builtin/web-ui/dist/assets/index-5YkCyXX4.js
+  s_0662e50ad860f3::t_6e4c28777c0762 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,100-102,104,108-112,119-124,127-129,131,210-216,220,222,225,269-270,272,274,278,280-281,283-284,288-289,291-293,297,299,314,316,320,328,330,334,342-348,351-352,359,373,384-385,388,406,415,469,496,548,572,616,635,647,662,673,705,718,769,784,795,811,825,833,842,846,872
+skills/agentflow-flow-dsl/SKILL.md
+  s_0662e50ad860f3::t_02ffd09acdce1d 207
+bin/lib/workspace-server.mjs
+  s_0662e50ad860f3::t_aa04a6d589e980 2213,2244,2606,2648,2721,4115,4197,4202
+  s_0662e50ad860f3::t_46206201eb7e73 4188
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_0662e50ad860f3::t_370f6c45afedcc 3213,3285-3291,3451,3455-3460
+  s_0662e50ad860f3::t_367586b89d40ee 13619
+  s_0662e50ad860f3::t_50e0f9f919a8fd 22,2578,2626,3020,3295-3302,3331,3520-3526,3827,3975,5098,6027,6038
+  s_0662e50ad860f3::t_c78104a6832577 9154,9162-9164,9285,9331-9336,13613-13616
+  s_0662e50ad860f3::t_0fe7c58b2eb390 14166-14167
+  s_0662e50ad860f3::t_e07ea1713a2026 14173-14174,14195-14201
+  s_0662e50ad860f3::t_13638c9184fe3c 3082-3089,3314
+  s_0662e50ad860f3::t_b30e16a30efb63 3292-3294
+test/display-presentation-contract.test.mjs
+  s_0662e50ad860f3::t_13638c9184fe3c 53-58,60-61,66
+  s_0662e50ad860f3::t_65d9525298efe1 59
+  s_0662e50ad860f3::t_370f6c45afedcc 67-72
+builtin/web-ui/src/index.css
+  s_0662e50ad860f3::t_a627137f3730d6 11379,11383
+  s_0662e50ad860f3::t_004e21fdb3bb33 11353,11359-11363,11365-11374,11376,11378,11380-11381,11389-11391,11394-11462,25535,25544
+  s_0662e50ad860f3::t_21802842d6621d 11364,11375,11377,11382,11384-11388
+  s_0662e50ad860f3::t_370f6c45afedcc 23609-23610,23612-23690,23692-23724,23726
+  s_0662e50ad860f3::t_13638c9184fe3c 11583-11584,11586,13650-13651,13653-13661
+  s_0662e50ad860f3::t_2161bf0d1302e8 11392-11393
+  s_0662e50ad860f3::t_28ac46e813f6e5 23611
+builtin/web-ui/src/mergeFlowNodes.js
+  s_0662e50ad860f3::t_18093579b4855d 56,83,128,309
+test/workspace-sync-guard.test.mjs
+  s_0662e50ad860f3::t_c78104a6832577 43-49
+builtin/web-ui/src/pages/DisplayPage.jsx
+  s_0662e50ad860f3::t_79918aa1b56eb9 8,26,280-287,315
+bin/lib/mcp-server.mjs
+  s_0662e50ad860f3::t_23521785bc108e 73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7afa157d1039b2a13b7c089fe9cb807ca71c404d",
+  "prompts": {},
+  "logical_commit_id": "8f464c9e398def930c9eea6199f6c121fc545393",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0662e50ad860f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff00a-2499-7873-a51d-2567a2b8a2d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 29007,
+      "total_deletions": 919
+    }
+  }
+}

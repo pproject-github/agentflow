@@ -1,0 +1,22 @@
+builtin/web-ui/dist/assets/index-Chs3PjPX.js
+  s_f532c6a4bbe8de::t_78154ec56a747a 183,350
+builtin/web-ui/dist/index.html
+  s_f532c6a4bbe8de::t_53bfb0d9e62cab 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6ecffcb8554cdf7f4b7fad160589cc95b108659e",
+  "prompts": {},
+  "logical_commit_id": "35c818805d2bb88395e945e9e84861f12d1a03af",
+  "sessions": {
+    "s_f532c6a4bbe8de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb13d-ed3d-71b2-b7ed-f3edf638317d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

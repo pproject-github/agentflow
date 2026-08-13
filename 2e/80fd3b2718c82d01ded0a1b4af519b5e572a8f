@@ -1,0 +1,26 @@
+skills/agentflow-workspace-graph/SKILL.md
+  s_f9aac8d65f926e::t_0584ba3852fa4c 50-53
+skills/agentflow-workspace-html/SKILL.md
+  s_f9aac8d65f926e::t_0584ba3852fa4c 1-65
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_0584ba3852fa4c 141-142,148-158
+skills/agentflow-workspace-image/SKILL.md
+  s_f9aac8d65f926e::t_0584ba3852fa4c 1-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "2e80fd3b2718c82d01ded0a1b4af519b5e572a8f",
+  "prompts": {},
+  "logical_commit_id": "fad4d3f7b47cf9f64ee7493bfb318c12bb06da57",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-97
+.claude/skills/gitnexus/gitnexus-cli/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-83
+.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-121
+.claude/skills/gitnexus/gitnexus-exploring/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-78
+AGENTS.md
+  s_d99100a467f052::t_27159f21946319 1-43
+.claude/skills/gitnexus/gitnexus-guide/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-64
+CLAUDE.md
+  s_d99100a467f052::t_27159f21946319 274-317
+.claude/skills/gitnexus/gitnexus-debugging/SKILL.md
+  s_d99100a467f052::t_27159f21946319 1-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "53ed4cbf81f3f6fb8a6dde2bfd72fce79f8f2288",
+  "prompts": {},
+  "logical_commit_id": "1c23ab1adf438b979835f1e308270d511775d73d",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 29282,
+      "total_deletions": 1427
+    }
+  }
+}

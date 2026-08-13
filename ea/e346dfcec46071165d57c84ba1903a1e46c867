@@ -1,0 +1,65 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-D3OKvzwD.js
+  s_0662e50ad860f3::t_916afce4ab64f0 1
+builtin/web-ui/src/displayRenderers.jsx
+  s_0662e50ad860f3::t_7964482ba8a30f 106,108,127-155,157-162,164,238-243
+  s_0662e50ad860f3::t_8b337a00972636 116,118-123,167-201,204,211-213,248-267,469-471
+  s_0662e50ad860f3::t_bd80d587c4f318 96-98,224,226-237
+  s_0662e50ad860f3::t_edf86f7b961f06 370-461,464-465,472
+  s_f5c1d37899349b::t_41b5fca8145b34 367-369
+test/display-presentation-contract.test.mjs
+  s_0662e50ad860f3::t_afcd1373843a95 53-60,83
+  s_0662e50ad860f3::t_bd80d587c4f318 67-68
+  s_0662e50ad860f3::t_7964482ba8a30f 62,66,69
+  s_0662e50ad860f3::t_cc7620f192279c 65
+  s_0662e50ad860f3::t_8b337a00972636 85,92-96,98
+  s_0662e50ad860f3::t_70ec20f7728c25 43-46
+  s_0662e50ad860f3::t_edf86f7b961f06 84,86-91,97
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_0662e50ad860f3::t_0b65136448900c 3246-3251,3253-3255,3259-3261,3268,3271-3273,3276-3277,3279,3283,3288,3291,3293-3294,3306-3307,3312,3315,3318-3321,3323,3337-3338,3350,3352-3353,3355-3356,3367-3376,3467,3574,3581,3588,3610,3620,3810-3812,3825,4158,4163
+  s_0662e50ad860f3::t_7964482ba8a30f 22,3234,3460
+  s_0662e50ad860f3::t_edf86f7b961f06 3125,3225-3231,3383
+builtin/web-ui/dist/assets/index-B9ppXv7e.css
+  s_0662e50ad860f3::t_6bc5612bc1c429 1
+builtin/web-ui/src/index.css
+  s_0662e50ad860f3::t_7964482ba8a30f 13726-13729
+  s_0662e50ad860f3::t_8b337a00972636 13668-13678
+  s_0662e50ad860f3::t_edf86f7b961f06 13625,13627-13635,13637-13663,13665,13681-13707,13710-13712,13714-13716,13718-13723,13725
+  s_f5c1d37899349b::t_2224c2cbc77c8d 13623-13624,13626
+builtin/web-ui/dist/index.html
+  s_0662e50ad860f3::t_6bc5612bc1c429 34
+  s_0662e50ad860f3::t_916afce4ab64f0 33
+builtin/web-ui/dist/assets/index-BO8FdHJ6.js
+  s_0662e50ad860f3::t_916afce4ab64f0 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,85,89,93-102,104,108-109,111-112,123-124,127-129,210-216,222,225,270,272,274,276,278-282,288-289,291-293,297,299,314,316,320,328,330,334,342-348,351-352,359,373,384-385,388,406,415,469,496,548,572,616,635,647,662,673,705,718,769,784,795,811,825,833,842,846,872
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "eae346dfcec46071165d57c84ba1903a1e46c867",
+  "prompts": {},
+  "logical_commit_id": "39bc256453246e026aeaef3246500fb7189d12a2",
+  "humans": {
+    "h_76bafdbbff3476": {
+      "author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_0662e50ad860f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff00a-2499-7873-a51d-2567a2b8a2d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 34805,
+      "total_deletions": 1166
+    },
+    "s_f5c1d37899349b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0aaac96c-6c6d-4817-a60f-75f61b2d546f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

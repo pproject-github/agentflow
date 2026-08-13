@@ -1,0 +1,22 @@
+package-lock.json
+  s_9abdc979a6e3f3::t_ebeb6f4797798c 3,9
+package.json
+  s_9abdc979a6e3f3::t_65e8046f29cd9f 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f31ba2d69f49c026327be6a7bc318056d520ff25",
+  "prompts": {},
+  "logical_commit_id": "b1ed5e9ddb7d7d339b47a82ab7d69ae9e6f43c92",
+  "sessions": {
+    "s_9abdc979a6e3f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb5ed-4d37-7c93-8292-4c7f23e69ff0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

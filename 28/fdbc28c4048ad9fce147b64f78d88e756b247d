@@ -1,0 +1,154 @@
+README.md
+  s_3c7aa58eee5b09::t_ed778729371c88 78-80,117,119,121-123,125-126,128-130,134-136
+bin/lib/help.mjs
+  s_3c7aa58eee5b09::t_527f4e1ab694c2 20,28-29,88,96-97
+bin/lib/composer-skill-router.mjs
+  s_3c7aa58eee5b09::t_3151437505fe57 2-3,5
+skills/agentflow-runtime-reference/references/runtime.md
+  s_3c7aa58eee5b09::t_50f262a222c6db 64
+scripts/generate-agentflow-skill-references.mjs
+  s_3c7aa58eee5b09::t_0397db4fcb1409 6,62-63,69,72-75,78-79,91
+bin/lib/legacy-flow-execution.mjs
+  s_3c7aa58eee5b09::t_d65ec10ccdb97b 7-43
+builtin/web-ui/dist/index.html
+  s_3c7aa58eee5b09::t_6c8223df9b08a0 33
+bin/lib/ui-server.mjs
+  s_3c7aa58eee5b09::t_5955a4dabe2783 20311-20312,20315
+  s_3c7aa58eee5b09::t_49ebd954a94a27 82
+  s_3c7aa58eee5b09::t_7f65e29c16acd7 13572-13573
+  s_3c7aa58eee5b09::t_85f1fd6623271c 3
+  s_3c7aa58eee5b09::t_950fa059a7bcd7 38
+  s_3c7aa58eee5b09::t_e10b6d5ae0686d 20353
+reference/flow-layout.md
+  s_3c7aa58eee5b09::t_99f2273b63fad0 81
+website/src/i18n.js
+  s_3c7aa58eee5b09::t_ca481e5c47ce06 26,106
+  s_3c7aa58eee5b09::t_1e66360d030bbc 68,148
+website/public/docs/module-migration-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-15
+agents/zh/agentflow-node-executor.md
+  s_3c7aa58eee5b09::t_f33dd73b2760e9 30-33,35-43
+agents/agentflow-node-executor-test.md
+  s_3c7aa58eee5b09::t_d7e911a49f3972 30-33,35-43
+docs/wiki/module-migration-workflow.en.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-17
+builtin/web-ui/dist/assets/index-Cd1LlKyf.js
+  s_3c7aa58eee5b09::t_6c8223df9b08a0 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69-73,75-79,81-84,86-89,91-111,113-118,121-122,135,138-140,142,153-154,184,221-227,231-233,236,280-281,283,285,287,289,291-295,299-300,302-304,308-310,325,327,331,339,341,345,353-359,366,380,391-392,395,413,422,458,476,503,539,555,579,623,642,654,669,680,712,725,745,776,791,802,818,832,840,849-850,854,880
+builtin/web-ui/src/i18n/locales/zh/flow.json
+  s_3c7aa58eee5b09::t_75e0cede63cf49 362-364
+docs/wiki/quickstart-pr-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-15
+agents/agentflow-node-executor-code.md
+  s_3c7aa58eee5b09::t_d7e911a49f3972 30-33,35-43
+reference/flow-prompt-handler-check.md
+  s_3c7aa58eee5b09::t_99f2273b63fad0 9-10
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_3c7aa58eee5b09::t_6a8d1f740ec1b8 10,17-18,20-21,27-28,30-31,44,46,49,51-52,54-55,57,59,61-62,64-65,67,69-73,75,77-81,83-86,88-89,91,93-94,96-97,102,104,107,109-110,112-113,115,117-118,120-121,123,125-129,131,133,135-139,148-156,164-229
+skills/agentflow-node-reference/SKILL.md
+  s_3c7aa58eee5b09::t_50f262a222c6db 12
+agents/agentflow-node-executor-requirement.md
+  s_3c7aa58eee5b09::t_f33dd73b2760e9 30-33,35-43
+README.zh-CN.md
+  s_3c7aa58eee5b09::t_a34b764522b889 72-73,110,112,114-115,117-118,120-122,126-128
+bin/agentflow.mjs
+  s_3c7aa58eee5b09::t_1e66360d030bbc 3-5
+test/composer-assistant-ui.test.mjs
+  s_3c7aa58eee5b09::t_aa373d9a998e3a 33-35
+agents/agentflow-node-executor-ui.md
+  s_3c7aa58eee5b09::t_d7e911a49f3972 30-33,35-43
+docs/wiki/figma-ui-implementation-workflow.en.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-17
+agents/agentflow-node-executor.md
+  s_3c7aa58eee5b09::t_f33dd73b2760e9 30-33,35-43
+test/flow-local-preview.test.mjs
+  s_3c7aa58eee5b09::t_533cf502911c3c 72-73
+  s_3c7aa58eee5b09::t_6f62571fcba843 67-70
+skills/agentflow-flow-recipes/references/recipes.md
+  s_3c7aa58eee5b09::t_9ea8ddf9969250 1-5,8-9,14,19,29-30,41,46-47,49-62,64-75,80,82-86
+bin/lib/hub-remote.mjs
+  s_3c7aa58eee5b09::t_1e66360d030bbc 188
+bin/lib/main.mjs
+  s_3c7aa58eee5b09::t_89ad781259e8b9 62,67-69,114
+  s_3c7aa58eee5b09::t_a7e2c9e95aadcd 26,448-449
+agents/en/agentflow-node-executor.md
+  s_3c7aa58eee5b09::t_d7e911a49f3972 30-33,35-43
+website/src/pages/Home.jsx
+  s_3c7aa58eee5b09::t_18beb73b28141e 169
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_3c7aa58eee5b09::t_d5a0fd0a034c96 1364-1366,2077,2503-2504,2749-2750
+  s_3c7aa58eee5b09::t_b1912aff44207c 227-229,231,233,352-356,359-377,379,382-388,391-392,394-401,403,407-412,415-420,423-424,427-429,432-446,763,794-795,803,808,817,856,868
+  s_3c7aa58eee5b09::t_1e213bfe0691e8 3216-3217
+  s_3c7aa58eee5b09::t_f98c40ced41d1a 904,1490,1493-1494,1690,1716
+  s_3c7aa58eee5b09::t_d872fdbfbe22c6 76-80,225-226
+  s_3c7aa58eee5b09::t_f02d8330407cf4 23
+  s_3c7aa58eee5b09::t_ccd45226eed327 49-52,54-69,72,74-75
+  s_3c7aa58eee5b09::t_d3206c95e33667 657,659-669,672-683,686-691,694-705,709,711-716,719-721,724-762,764-793,798,802,859,865,867
+  s_3c7aa58eee5b09::t_b848d5776f7187 1495,1501
+  s_3c7aa58eee5b09::t_e7aaf06688f681 19
+  s_3c7aa58eee5b09::t_89b705a0561aee 796-797,799-801,804-807,809-816,818-855,857-858,860-864,866,869-877,1029,1057-1058,1060-1064,2076
+website/public/docs/figma-ui-implementation-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-15
+builtin/web-ui/src/i18n/locales/en/flow.json
+  s_3c7aa58eee5b09::t_75e0cede63cf49 362-364
+bin/lib/model-config.mjs
+  s_3c7aa58eee5b09::t_9c42869879e45e 153-162
+docs/wiki/quickstart-pr-workflow.en.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-17
+agents/agentflow-node-executor-planning.md
+  s_3c7aa58eee5b09::t_d7e911a49f3972 30-33,35-43
+reference/flow-control-capabilities.md
+  s_3c7aa58eee5b09::t_76c4e46930ea18 3,11,13-16,18-21,28,31,36,38,40,42-44,46,50,52,54-63,65,69,75-76,79,81,84,86-87,89-90,92-94,97-98,100,102,106-107,111,115-116,119-120,124,128,130,132,140,144-146,149,170,172-176,180,182-185,187,191
+builtin/web-ui/dist/assets/WorkflowAssistantThread-rGIAaDRG.js
+  s_3c7aa58eee5b09::t_6c8223df9b08a0 1
+docs/wiki/figma-ui-implementation-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-15
+docs/wiki/module-migration-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_b79ec40c0c4c6c 3-15
+bin/lib/locales/zh.json
+  s_3c7aa58eee5b09::t_c402786c72eecb 109
+website/public/docs/quickstart-pr-workflow.zh-CN.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-15
+bin/lib/paths.mjs
+  s_3c7aa58eee5b09::t_7f46e7be9beece 263
+website/public/docs/quickstart-pr-workflow.en.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-17
+bin/lib/composer-agent.mjs
+  s_3c7aa58eee5b09::t_38108c3f0a05ad 2-3,5
+CLAUDE.md
+  s_3c7aa58eee5b09::t_b28340b4bf20f4 12-23,31
+  s_3c7aa58eee5b09::t_3262a2755c65c6 123-135
+  s_3c7aa58eee5b09::t_43d5343659a397 71-73,75-76,78-81,83,85-94,96-105
+  s_3c7aa58eee5b09::t_60e8e229ae3ef7 70
+bin/lib/locales/en.json
+  s_3c7aa58eee5b09::t_c402786c72eecb 109
+website/public/docs/module-migration-workflow.en.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-17
+bin/lib/catalog-flows.mjs
+  s_3c7aa58eee5b09::t_6a68f19944a1c7 25,265
+  s_3c7aa58eee5b09::t_c402786c72eecb 877,883
+skills/agentflow-flow-recipes/SKILL.md
+  s_3c7aa58eee5b09::t_50f262a222c6db 3,6,8-10,12-13
+website/public/docs/figma-ui-implementation-workflow.en.md
+  s_3c7aa58eee5b09::t_3982538940ebea 3-17
+builtin/nodes/tool_nodejs.md
+  s_3c7aa58eee5b09::t_8e03b08b1f084c 4-14,17-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "28fdbc28c4048ad9fce147b64f78d88e756b247d",
+  "prompts": {},
+  "logical_commit_id": "c2088d977b7a3b9dc1265f68489865cda281fb21",
+  "sessions": {
+    "s_3c7aa58eee5b09": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a52b061-a88f-4fb5-88c5-9f7a6c164ceb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 11950,
+      "total_deletions": 9781
+    }
+  }
+}

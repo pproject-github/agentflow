@@ -1,0 +1,51 @@
+builtin/web-ui/src/index.css
+  s_9bbdf665e5843f::t_fcd4e81cdc69db 5509-5550,5552-5621
+  s_9bbdf665e5843f::t_14661ac506087c 5551
+builtin/web-ui/dist/assets/index-CNXLvUu6.js
+  s_9bbdf665e5843f::t_2ae61905252096 1,9,17,25,33-34,37-38,40-41,49,57,62-66,68-73,78-79,81-82,86-88,90,93-94,107-109,111-113,115,117,120-129,131,135,143,145,149,157-160,164,190
+bin/lib/ui-server.mjs
+  s_9bbdf665e5843f::t_a978f678c77c0b 316-322,2001-2002,2031
+  s_9bbdf665e5843f::t_13cd225ffd93a0 1732
+  s_9bbdf665e5843f::t_2df386f9bed9e5 304
+  s_9bbdf665e5843f::t_0cdfa396572189 1731,1748,1769,1904
+  s_9bbdf665e5843f::t_06d1685b12a6a2 43-44
+  s_9bbdf665e5843f::t_f2d5abec36eff6 1682-1683
+  s_9bbdf665e5843f::t_0cda798f3703e3 296-302
+  s_9bbdf665e5843f::t_51312362f73b7b 1706-1708,1771-1776,1778-1780,1810
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_9bbdf665e5843f::t_47094304d185ac 981-983
+  s_9bbdf665e5843f::t_675f021895d8ac 978-980
+  s_9bbdf665e5843f::t_fb45f8a94904d0 3538-3539,3543
+  s_9bbdf665e5843f::t_c1948088d0d8d2 5362-5363,5365-5377,5423
+  s_9bbdf665e5843f::t_548670ee51c292 3532-3537,3540-3542,3544-3547,3559-3580
+  s_9bbdf665e5843f::t_9fffc6b24f68cc 3646
+  s_9bbdf665e5843f::t_925195b4a95c74 1670-1694
+  s_9bbdf665e5843f::t_7f8653e5dc3313 3529-3531
+  s_9bbdf665e5843f::t_603c8035a809b5 3831
+  s_9bbdf665e5843f::t_6cd80181248c5b 5364,5378-5422
+builtin/web-ui/dist/assets/index-BzhdjOzb.css
+  s_9bbdf665e5843f::t_de262ca349a9f7 1
+builtin/web-ui/dist/index.html
+  s_9bbdf665e5843f::t_2ae61905252096 18
+  s_9bbdf665e5843f::t_de262ca349a9f7 19
+bin/lib/composer-skill-router.mjs
+  s_9bbdf665e5843f::t_b3558ea3a9776d 417-423
+  s_9bbdf665e5843f::t_ec18eb4fcef827 16,128-231
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "d50afa428835692d8e4b7f898fbe317bcd0564e9",
+  "prompts": {},
+  "logical_commit_id": "d8648a3adf7d2e2891178bf934c3516c145b4c89",
+  "sessions": {
+    "s_9bbdf665e5843f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019eee4b-f39c-71a1-9d91-5d9d346b8d74",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

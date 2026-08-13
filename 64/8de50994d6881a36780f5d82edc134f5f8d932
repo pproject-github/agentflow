@@ -1,0 +1,26 @@
+builtin/web-ui/dist/assets/index-CAzkGdGl.css
+  s_f2dd7a237fc27d::t_e3be9020800a1f 1
+builtin/web-ui/dist/index.html
+  s_f2dd7a237fc27d::t_e3be9020800a1f 18-19
+builtin/web-ui/src/index.css
+  s_f2dd7a237fc27d::t_1c279a69dafec3 8127,8155,8162,8173,8182,8194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "648de50994d6881a36780f5d82edc134f5f8d932",
+  "prompts": {},
+  "logical_commit_id": "50f4e6cc77920c6bcf6fd8d621960ed735c139a1",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 24663,
+      "total_deletions": 1396
+    }
+  }
+}

@@ -1,0 +1,28 @@
+bin/lib/ui-server.mjs
+  s_12672461dab029::t_adf06730248990 7536,7789,7791-7800,7802,7809,7835-7873,7888-7899,7901-7914
+  s_12672461dab029::t_52a3ce4faacef6 9694-9710,9768-9781
+  s_12672461dab029::t_3aef4093e7e21f 7476-7488,8176-8177,8182,8184,8219-8238
+  s_12672461dab029::t_ae879cfe5dbeb0 7538-7548,7550
+  s_12672461dab029::t_fb50e1ee35f55a 7076-7080
+  s_12672461dab029::t_11d7bbc8cbad3a 7537
+  s_12672461dab029::t_75138c6f9660f8 7790
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "658bffd5b6331aee30a32c169b16e9634a7c107a",
+  "prompts": {},
+  "logical_commit_id": "8c6511fa0b2d405cc915cd6abcf496cd260ee148",
+  "sessions": {
+    "s_12672461dab029": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f91f1-ac7e-7383-8c12-7bde31e6d2b4",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 7769,
+      "total_deletions": 657
+    }
+  }
+}

@@ -1,0 +1,58 @@
+docs/wiki/flow-dsl.zh-CN.md
+  s_0475a63dba5f18::t_7d7a59e1784188 1-90
+docs/wiki/flow-dsl.en.md
+  s_0475a63dba5f18::t_80265f9707f12b 1-97
+bin/lib/main.mjs
+  s_0475a63dba5f18::t_4cf0a07913a05f 343,352,361
+  s_0475a63dba5f18::t_1e655f01335c80 319-342,344-351,353-360,362-371
+skills/agentflow-flow-dsl/SKILL.md
+  s_0475a63dba5f18::t_0a7233dd7d74d3 1-183
+bin/lib/flow-dsl/codegen.mjs
+  s_0475a63dba5f18::t_f9582d93d58d65 26-29,32-36
+  s_0475a63dba5f18::t_6927313958a213 1-25,30-31,37-253
+bin/lib/flow-dsl/ir.mjs
+  s_0475a63dba5f18::t_a3c675d8c1acfd 1-226
+bin/lib/flow-dsl/layout.mjs
+  s_0475a63dba5f18::t_fed415326c7611 1-98
+test/flow-dsl.test.mjs
+  s_0475a63dba5f18::t_feac6e56a05c59 1-547
+skills/agentflow-flow-dsl/references/node-calls.md
+  s_0475a63dba5f18::t_78152f1c0ff159 1-39
+bin/lib/flow-dsl/defs.mjs
+  s_0475a63dba5f18::t_126d5ba046ed89 1-103
+bin/lib/help.mjs
+  s_0475a63dba5f18::t_485fb423f13cef 22,91
+bin/lib/flow-dsl/cli.mjs
+  s_0475a63dba5f18::t_92a207901b4987 1-116
+bin/lib/flow-dsl/index.mjs
+  s_0475a63dba5f18::t_be079eef0bf38e 1-68
+bin/lib/flow-dsl/lint.mjs
+  s_0475a63dba5f18::t_7890e83ccb31f2 1-258
+bin/lib/flow-dsl/parser.mjs
+  s_0475a63dba5f18::t_da15df96ae4762 1-183,185-225,227-245,251-259
+  s_0475a63dba5f18::t_c686167d03a222 184,226,246-250
+test/node-definition-single-source.test.mjs
+  s_0475a63dba5f18::t_4d1e90f6d71a87 141-146,151-154
+scripts/generate-agentflow-skill-references.mjs
+  s_0475a63dba5f18::t_024758eae6ff61 140-171
+  s_0475a63dba5f18::t_ea8ff81d2b47aa 180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0a204861a20ac3b91fdd069b187d21976247ce3f",
+  "prompts": {},
+  "logical_commit_id": "d9a734fd3fd298ed6a43866e615e02b7f99cd913",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 2492,
+      "total_deletions": 13
+    }
+  }
+}

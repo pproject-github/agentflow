@@ -1,0 +1,32 @@
+test/prd-workflow-review-api.test.mjs
+  s_60addd0605f23d::t_f8d964985f9a83 32-40,47,51-72
+builtin/web-ui/src/prdWorkflowActionLinks.js
+  s_60addd0605f23d::t_53bacd511b2775 129
+  s_60addd0605f23d::t_adafee520a0453 11-16,40,56,93,101-128,130-133
+bin/lib/ui-server.mjs
+  s_60addd0605f23d::t_f9396271ae149e 12201-12206,12208,12216,12232,12237-12240,12242,12244-12248
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_60addd0605f23d::t_a77783ad810e72 56-60,920-926,1297,1312-1316,1343-1346
+test/prd-workflow-action-links.test.mjs
+  s_60addd0605f23d::t_92a9499e06f0f3 5,7,129-165,167-187
+  s_60addd0605f23d::t_53bacd511b2775 166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1ade4641f3b959b8dbcc17f8c1d458cceea4c915",
+  "prompts": {},
+  "logical_commit_id": "362d25c3835b15ec66329b4af929a02d04382cad",
+  "sessions": {
+    "s_60addd0605f23d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa15a-3bc3-74c1-b7da-85cd0141887f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 185,
+      "total_deletions": 49
+    }
+  }
+}

@@ -1,0 +1,46 @@
+skills/agentflow-cli/SKILL.md
+  s_b8fd1696dd8226::t_6f8cb1cae4a400 127-131
+skills/agentflow-cli/scripts/workflow-report-client.mjs
+  s_b8fd1696dd8226::t_6f8cb1cae4a400 53,59
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BrIRowaZ.js
+  s_b8fd1696dd8226::t_e6fcb18ae3b180 1
+bin/lib/ui-server.mjs
+  s_b8fd1696dd8226::t_74fcc6b500e0fc 11679-11680,11688-11696,11724,14366-14373,14381,14388-14389
+skills/agentflow-workflow-report/references/protocol.md
+  s_b8fd1696dd8226::t_9eeefdb4222c05 243-249,256,364-365,372,720
+  s_b8fd1696dd8226::t_0064ef0fe8e44b 760
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_e6fcb18ae3b180 18
+test/workflow-admin-version-repair.test.mjs
+  s_b8fd1696dd8226::t_26da1070100162 51
+  s_b8fd1696dd8226::t_adc204f5b6bf0b 69-73
+  s_b8fd1696dd8226::t_21d1b42edd3b11 2,7-10,59-67,74-87,107,122,127-152,161,163-166,175
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_b8fd1696dd8226::t_6f8cb1cae4a400 44,46,393,400,417,423
+skills/agentflow-workflow-report/SKILL.md
+  s_b8fd1696dd8226::t_9eeefdb4222c05 94-95
+builtin/web-ui/src/pages/WorkflowReportGuidePage.jsx
+  s_b8fd1696dd8226::t_0064ef0fe8e44b 1385
+  s_b8fd1696dd8226::t_9eeefdb4222c05 46-50,128-129,136,520,1302,1334-1335
+builtin/web-ui/dist/assets/index-voER-60u.js
+  s_b8fd1696dd8226::t_e6fcb18ae3b180 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,71,73,75,78-79,84,87,89,91-95,98-100,181-188,192,194,197,241-242,246,250,252-256,260-261,263-265,269,271,286,314-320,353-356,374,383,419,427-428,435-436,463,499,515,539,583,602,614,629,640,672,685,705,736,751,762,778,792,800,809,813,839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "67a87157cc6a73c3b60c1ff2b4357b4788f9cd5c",
+  "prompts": {},
+  "logical_commit_id": "8c41120f3b239b0899dd1ed48448a10521b93ff5",
+  "sessions": {
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 26108,
+      "total_deletions": 1188
+    }
+  }
+}

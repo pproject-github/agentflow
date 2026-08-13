@@ -1,0 +1,148 @@
+bin/lib/flow-dsl/index.mjs
+  s_0475a63dba5f18::t_365f4040a0ffb9 59-63,71-75
+bin/lib/flow-dsl/layout.mjs
+  s_0475a63dba5f18::t_ad73e6437af497 15
+  s_0475a63dba5f18::t_b7b0ff60a1c2bd 96
+  s_0475a63dba5f18::t_b96a0c3190c402 43-46
+skills/agentflow-flow-recipes/references/recipes.md
+  s_0475a63dba5f18::t_56484eca267d36 3
+skills/agentflow-workspace-graph/SKILL.md
+  s_0475a63dba5f18::t_675e55005e8c7a 5,14-52,55,57,59-64,66,68,70-76,78-79,83-85
+skills/agentflow-workspace-image/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 50,52-56
+skills/agentflow-workspace-mermaid/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 5,14-20
+skills/agentflow-node-reference/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 18
+bin/lib/workspace-state.mjs
+  s_0475a63dba5f18::t_01fee3830bbccb 245
+  s_0475a63dba5f18::t_d6e8f4d5f085e9 266-269
+  s_0475a63dba5f18::t_a42837b40d4d0f 21,26-29
+  s_0475a63dba5f18::t_8e284f3ff021ed 197-202
+  s_0475a63dba5f18::t_0a3bd6077ba3a2 203-206,209-212
+  s_0475a63dba5f18::t_cc644310ae8682 87-104,109-116
+  s_0475a63dba5f18::t_deab31910ccd54 121-123,125-147,149-161
+  s_0475a63dba5f18::t_a5c5bc7469676d 57,60-71
+  s_0475a63dba5f18::t_b5bef952a9c954 284-288
+  s_0475a63dba5f18::t_55ba3fdcf0462c 172,174
+  s_0475a63dba5f18::t_b5a85616be404b 226
+  s_e2149e63a94f85::t_529491754ca93c 72,162
+docs/wiki/workspace-state-split.zh-CN.md
+  s_0475a63dba5f18::t_cfef7e16ae5c38 3,6-8,11-13,39-41,47-48,52-55,62-63,71
+bin/lib/flow-dsl/ir.mjs
+  s_0475a63dba5f18::t_b6e01cfa8e1684 118-120
+  s_0475a63dba5f18::t_9cf1bb0eba6634 22-41
+  s_0475a63dba5f18::t_607d12d694e1e0 211
+  s_0475a63dba5f18::t_926f8f38f5398b 192-193
+  s_0475a63dba5f18::t_1d4f59926384b2 212-214,216
+skills/agentflow-cli/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 14,129
+skills/agentflow-flow-edit-node-fields/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 8
+skills/agentflow-flow-add-instances/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 13
+skills/agentflow-workspace-ascii/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 5,14-21
+skills/agentflow-workspace-markdown/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 5,14-21,24-25,34,36-37
+docs/wiki/workspace-state-split.en.md
+  s_0475a63dba5f18::t_d112f51a3baa7e 3,6-8,11-13,42-44,50-52,56-61,68,80
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_e4a5f48220f116 1795-1796,1799,1817-1818
+  s_0475a63dba5f18::t_891e90c44806e1 17522-17527
+  s_0475a63dba5f18::t_7c6b7d125c2638 1509-1510,1514-1515
+  s_0475a63dba5f18::t_f4d66e1f186168 7862,13089,13358,17471,17669-17670,17824-17825,17995-17996,18066-18067
+  s_0475a63dba5f18::t_e9cf72e03eaaff 94-95
+  s_0475a63dba5f18::t_c9db78e0b67b89 4225-4238
+  s_0475a63dba5f18::t_60ccb36f57fbbd 4244-4246
+  s_0475a63dba5f18::t_25ab69b0fc22f4 1793-1794,1798,1800-1801,1803
+  s_0475a63dba5f18::t_ce7e8234f6b7f1 91-93,96
+  s_0475a63dba5f18::t_3793bcf093fd59 4302,4310-4313,4316,4318
+  s_0475a63dba5f18::t_08b6d7a3f3f95a 88
+  s_0475a63dba5f18::t_cd533ff5fff671 1782-1783,1785-1789
+  s_0475a63dba5f18::t_748e5d40cba19f 89
+  s_0475a63dba5f18::t_c55154779e74d7 1807-1814
+  s_e2149e63a94f85::t_80a2ba33d29087 1792,1797
+bin/lib/help.mjs
+  s_0475a63dba5f18::t_5e8953ccd8cfc9 22,91
+bin/lib/main.mjs
+  s_0475a63dba5f18::t_4874d2ef85ff96 323
+  s_0475a63dba5f18::t_655584d7d82d05 339-354
+skills/agentflow-flow-recipes/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 9
+skills/agentflow-flow-sync-ui/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 8
+docs/wiki/flow-dsl.zh-CN.md
+  s_0475a63dba5f18::t_a7342d72f33f46 3-4,7-10,13-15,38,45-48,67-83,104
+bin/lib/flow-dsl/codegen.mjs
+  s_0475a63dba5f18::t_bf45b5ae6eefae 59-60,64,66,68
+bin/lib/flow-dsl/parser.mjs
+  s_0475a63dba5f18::t_d3db699621684c 178-181,183-191,194-197
+  s_0475a63dba5f18::t_c9c1b7fb309201 8-12
+  s_0475a63dba5f18::t_35d62341260988 103-110
+  s_0475a63dba5f18::t_9d7e032f06b2ee 41-46
+  s_0475a63dba5f18::t_9b1048388e0487 245-246,254-255
+  s_0475a63dba5f18::t_a5916e1e8c521b 297
+  s_0475a63dba5f18::t_768e21c2467c54 132-135
+  s_0475a63dba5f18::t_3f5262d0f117fe 152-153
+test/workspace-state-split.test.mjs
+  s_0475a63dba5f18::t_07ac5f3d0990fc 351-360,362
+  s_0475a63dba5f18::t_a355d135f263e4 378-381
+test/workspace-flow-store.test.mjs
+  s_0475a63dba5f18::t_353f60407f1468 1-215,258-281
+  s_0475a63dba5f18::t_7dddf16523f303 216-232
+  s_0475a63dba5f18::t_358fd1c7aa413c 233-257
+bin/lib/workspace-flow-store.mjs
+  s_0475a63dba5f18::t_b4d60bd630f68b 166-167
+  s_0475a63dba5f18::t_2320e8d369287b 31-36
+  s_0475a63dba5f18::t_569966aa7de8a5 29
+  s_0475a63dba5f18::t_4fbde736cef693 1-28,30,37-130,142-147,150-154,157-165,168-367
+  s_0475a63dba5f18::t_e4979602834a4d 368-399
+  s_0475a63dba5f18::t_918a51a8fbfabd 131-141,148-149,155-156
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_0475a63dba5f18::t_31783c4b9f41d6 19-37,57,462
+CLAUDE.md
+  s_0475a63dba5f18::t_9edc48afd6a897 15-30,44-45
+  s_0475a63dba5f18::t_a091afe43f2ec4 199-202
+  s_0475a63dba5f18::t_50869b5a9d5f63 198
+bin/lib/flow-dsl/cli.mjs
+  s_0475a63dba5f18::t_99a4a0dcbb5a38 18
+  s_0475a63dba5f18::t_66cce20ad88364 117-126,128-133,137-142,145
+  s_0475a63dba5f18::t_fcdf5005301eb4 127,134-136
+  s_0475a63dba5f18::t_bac46809f1efe1 114-116
+skills/agentflow-author-flow/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 12
+skills/agentflow-workspace-html/SKILL.md
+  s_0475a63dba5f18::t_56484eca267d36 63,65-70
+docs/wiki/flow-dsl.en.md
+  s_0475a63dba5f18::t_2b1eaa3cbeef7f 3-5,8-11,14-16,40,48-52,73-93,116
+bin/lib/flow-dsl/lint.mjs
+  s_0475a63dba5f18::t_fa50ae3d9c1c4c 157-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8b8f88e5f733cde9508b091d7c2be263296f146b",
+  "prompts": {},
+  "logical_commit_id": "9c94f42dc548209beb9c07008bdeb77a19b1f14d",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 3985,
+      "total_deletions": 376
+    },
+    "s_e2149e63a94f85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a75e30e3-3cb8-46c2-9048-f2200c7149b1",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+builtin/web-ui/dist/index.html
+  s_b875738d2d60b6::t_78045b3c5b0006 18
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b875738d2d60b6::t_62c8d48e0e52dd 210-212,237-254
+  s_b875738d2d60b6::t_10829b915e701a 3891
+  s_b875738d2d60b6::t_fb88e4f7c24133 3749,3754-3760,3762-3764,3766,3772,3782
+  s_b875738d2d60b6::t_da05473b18981c 3904,3908,3924,3933,3945,3949,3965
+  s_b875738d2d60b6::t_e791d88c37627c 255
+bin/lib/ui-server.mjs
+  s_b875738d2d60b6::t_7e5331b4bfccf9 2857-2858,2861
+  s_b875738d2d60b6::t_8e493f99a2a077 2516,2518
+  s_b875738d2d60b6::t_86f08710f3fff9 2754,2758-2759
+  s_b875738d2d60b6::t_379e19102c826b 2952,2954-2961
+  s_b875738d2d60b6::t_5f255614544883 2210-2221,2223,2225-2260
+  s_b875738d2d60b6::t_9320f97fb9e5a6 2883
+  s_b875738d2d60b6::t_bdec1d0faffa94 3370
+  s_b875738d2d60b6::t_c177cf44d5fdc8 2222,2224
+  s_b875738d2d60b6::t_81da235164fdf9 2069
+  s_b875738d2d60b6::t_12556e5c20f64a 2372-2392,2395,2397-2401,2405,2407-2409
+  s_b875738d2d60b6::t_b6165cf9339881 2854
+builtin/web-ui/dist/assets/index-Dl4yeAjv.js
+  s_b875738d2d60b6::t_78045b3c5b0006 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-82,84-90,94-95,97-98,102-104,106,109-110,123,126-136,139,141,143,147,149,152,164-165,169-174,178-179,181,185,187,199,201,205,213,215,219,227,230-232,236,262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "492f1de979ebf7cbdea4435c219f63132827671a",
+  "prompts": {},
+  "logical_commit_id": "ec28b85dff5f7a2e0ff441c1b6edf2e6675daa14",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

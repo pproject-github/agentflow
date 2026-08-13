@@ -1,0 +1,40 @@
+builtin/web-ui/dist/assets/index-DcPziZRQ.js
+  s_d99100a467f052::t_25a160d5d6e9c0 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91-95,98-100,102,181-187,191,193,196,240-241,243,245,248-255,259-260,262-264,268,270,285,287,291,299,301,305,313-318,322,348
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_d99100a467f052::t_bedea3d779d6b8 7704
+  s_d99100a467f052::t_61443b4e5cebcd 10449,10454
+  s_d99100a467f052::t_353a74f6f03930 7373-7377,7946,7948-7955,7970-7971,7973
+  s_d99100a467f052::t_ef53874ec64b88 11755,11759
+  s_d99100a467f052::t_15885e9855c437 42-45,7818-7825,11549-11553,11594-11601,11660,11675,11681,11773,11783
+  s_d99100a467f052::t_700fb8bf8290fd 7915-7926,7928,7930
+  s_d99100a467f052::t_ed48a6a3d96a05 7397,7945,7947,7969,7972
+  s_d99100a467f052::t_d4e765f2bab49e 7414-7415,7702-7703,7705-7709,7896-7902,7927,7929,7931,7977,7983
+  s_d99100a467f052::t_4ae898239b52fb 9435-9439,9447
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_25a160d5d6e9c0 18
+builtin/web-ui/src/workspaceSyncGuard.js
+  s_d99100a467f052::t_700fb8bf8290fd 1-21
+  s_d99100a467f052::t_15885e9855c437 22-33
+test/workspace-sync-guard.test.mjs
+  s_d99100a467f052::t_15885e9855c437 4-7,35-48
+  s_d99100a467f052::t_700fb8bf8290fd 1-3,8-34,49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0c5474eb64b1b326d92a3b7d51713aff435f2e3b",
+  "prompts": {},
+  "logical_commit_id": "7212f233f7042c2ca39b39c72a4738203a6413a3",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 11748,
+      "total_deletions": 665
+    }
+  }
+}

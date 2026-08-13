@@ -1,0 +1,149 @@
+bin/lib/catalog-flows.mjs
+  s_f9aac8d65f926e::t_301033795cb3bd 553-555
+  s_f9aac8d65f926e::t_9a86b5185d8e40 670-672
+  s_f9aac8d65f926e::t_6b0a5d6181f6aa 833
+  s_f9aac8d65f926e::t_c52f8d21e994e8 409-410,482-484
+  s_f9aac8d65f926e::t_57893799a2395b 324-326
+  s_f9aac8d65f926e::t_672b65534ea433 18-21,60-61,64,69-80,130
+bin/lib/workspace-tree.mjs
+  s_f9aac8d65f926e::t_453145d7fb87ec 14,243-244
+builtin/web-ui/src/i18n/locales/zh/project.json
+  s_f9aac8d65f926e::t_4ad69632e89163 88-92
+builtin/web-ui/src/mergeFlowNodes.js
+  s_f9aac8d65f926e::t_353e111b6796a3 53,225
+builtin/web-ui/src/pages/FeedbackPage.jsx
+  s_f9aac8d65f926e::t_7a8859bc62c3ef 1-109
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_f9aac8d65f926e::t_fc93085f909e41 13
+builtin/web-ui/src/i18n/locales/zh/common.json
+  s_f9aac8d65f926e::t_4e8ac59ba3ceb2 13
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_f9aac8d65f926e::t_1f09dffd3b8f5e 5042,5360,5372,6984,6997,7011,7024,7097,7105
+  s_f9aac8d65f926e::t_d8eb3a50a26e93 935,943
+  s_f9aac8d65f926e::t_ced3a29da79e56 938-941,2721,4658,4670
+  s_f9aac8d65f926e::t_baa889205b807c 933
+  s_f9aac8d65f926e::t_2a9780175f43fb 4009-4010,4042-4044,4053,4060,4116,4119-4120,4143
+  s_f9aac8d65f926e::t_e18bb6b19b9fb4 948-954
+  s_f9aac8d65f926e::t_256d0cdf3e5bd9 936-937
+  s_f9aac8d65f926e::t_82816b0d7dbc03 4011
+builtin/web-ui/src/flowFormat.js
+  s_f9aac8d65f926e::t_a7ac7766f63440 62,78-81,96,105,361,367-369,372
+  s_f9aac8d65f926e::t_f3495278c11d3d 365-366
+builtin/web-ui/src/i18n/locales/en/common.json
+  s_f9aac8d65f926e::t_54f4740ad6188a 13
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f9aac8d65f926e::t_efe288b8d56f02 4353-4354,4357-4358
+  s_f9aac8d65f926e::t_477a3bd3ba901c 343,662,1678-1727
+  s_f9aac8d65f926e::t_840fe2b8959fe8 4659-4664,4688-4697
+  s_f9aac8d65f926e::t_a70e843ded5364 2392-2402,2430-2471
+  s_f9aac8d65f926e::t_21fdf50f037d83 344
+  s_f9aac8d65f926e::t_fb31a3a9e71a73 440-447,460-461
+  s_f9aac8d65f926e::t_5900c10ac7f65b 557,1105-1106,1315
+  s_f9aac8d65f926e::t_fb984ba69a9f22 664-834,837,1104
+  s_f9aac8d65f926e::t_671c53f4a6383a 3505
+  s_f9aac8d65f926e::t_cc52be8a185f2e 495,1256
+  s_f9aac8d65f926e::t_ddc7515bfde847 3871-3873,3898,3906-3909,3922,3960,3963-3964,3987
+  s_f9aac8d65f926e::t_763b64184ba714 835-836
+  s_f9aac8d65f926e::t_69b640b4873ead 1107
+  s_f9aac8d65f926e::t_691f0df7a56468 1728-1729
+  s_f9aac8d65f926e::t_441225f2c8cc85 2472
+  s_f9aac8d65f926e::t_e45000594be10a 4698
+builtin/web-ui/src/i18n/locales/en/project.json
+  s_f9aac8d65f926e::t_0a6f96bf38dd97 88-92
+builtin/web-ui/src/components/SkillHubPanel.jsx
+  s_f9aac8d65f926e::t_6889c50e90d3b3 3-25,38,63,126-169,230-232,292-298,301-333,335-336
+  s_f9aac8d65f926e::t_583fedab584ef7 299-300
+bin/lib/locales/zh.json
+  s_f9aac8d65f926e::t_7b010a16c98691 336-339
+builtin/web-ui/src/App.jsx
+  s_f9aac8d65f926e::t_3a48679d0c0046 52-56
+  s_f9aac8d65f926e::t_00316e0aec662f 8,50,60-61,157
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_82cbbf2471bbd0 2355-2606,2609-2617
+  s_f9aac8d65f926e::t_72935b988bf006 1257-1356,1358-1376,1378,1380
+  s_f9aac8d65f926e::t_6945437d0bc277 707-798
+  s_f9aac8d65f926e::t_823e8b3ff6f5a0 4116-4117,4233-4257,4259-4270
+  s_f9aac8d65f926e::t_816394bce7fc70 2968-2986,2988-3007
+  s_f9aac8d65f926e::t_abd4f1a51011b3 1254-1255,1807,2353,2966,4271,5175,5265-5269,5271,5288-5290,5294-5316
+  s_f9aac8d65f926e::t_958accd1d36ad6 1809-1811,1813-1818
+  s_f9aac8d65f926e::t_ed271819e132a3 1357
+  s_f9aac8d65f926e::t_18062a1fdc3632 1377
+  s_f9aac8d65f926e::t_398085d0b14d43 1379
+  s_f9aac8d65f926e::t_78ded97c77fdf3 1812
+  s_f9aac8d65f926e::t_ca283728105712 2607-2608
+  s_f9aac8d65f926e::t_40cda5ae92e415 2987
+  s_f9aac8d65f926e::t_8987315ff6f17d 4258
+  s_f9aac8d65f926e::t_a05f90efb8bbe5 5270
+  s_f9aac8d65f926e::t_6f3e40e4621fd7 5317-5318
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_d51d2ba93904ef 18
+  s_f9aac8d65f926e::t_91d690ff3cb216 19
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_f9aac8d65f926e::t_9141f7fd551ef0 87,113-115,167-182,229,254
+  s_f9aac8d65f926e::t_f36b7d7f247c52 341-343,345,641-684
+  s_f9aac8d65f926e::t_0807b286c11463 344
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_f9aac8d65f926e::t_98c07d68cac791 1232,1234-1238,1241-1242,1244-1249,1272,1278-1294,1296-1297
+  s_f9aac8d65f926e::t_50d2ec28e0f466 1514-1516,1535,1538,1549-1589,1592-1593
+  s_f9aac8d65f926e::t_9f398dda9bbef0 1104-1105
+  s_f9aac8d65f926e::t_0560ce32aebe66 1669-1671,1675-1676,1692
+  s_f9aac8d65f926e::t_eeb3c00a987da5 170,172-235,237
+  s_f9aac8d65f926e::t_fa283d6fa56eb1 137,147-154,259,399-407,792
+  s_f9aac8d65f926e::t_d9eb1747f43a00 589,591-593,595-600
+  s_f9aac8d65f926e::t_22652e23364c23 274,307-324,326,340
+  s_f9aac8d65f926e::t_ab6cdd60522f72 136,139-146,258,391-398
+  s_f9aac8d65f926e::t_c8bab4e807820a 1273-1277
+  s_f9aac8d65f926e::t_74ebfd1532b836 1205-1229,1233,1357
+  s_f9aac8d65f926e::t_f6b41b1fe961d8 29,38,238,273,327-339,341-351
+  s_f9aac8d65f926e::t_6a7032298c7112 138
+  s_f9aac8d65f926e::t_aef4c35e92735f 236
+  s_f9aac8d65f926e::t_9d127ef8569aa7 408
+  s_f9aac8d65f926e::t_46408ce3b94a23 594
+builtin/web-ui/dist/assets/index-Dzo7k7P-.css
+  s_f9aac8d65f926e::t_91d690ff3cb216 1
+builtin/web-ui/dist/assets/index-CJYi812p.js
+  s_f9aac8d65f926e::t_d51d2ba93904ef 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-95,97-98,102-104,106,109-110,123,126-136,139-148,152-153,155,157,161,169,171,175,183-188,192,218
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_4db6071f84bfe9 166,2282-2285,2369,2371
+  s_f9aac8d65f926e::t_ce966c61f80e9a 2846,2872,2904,3062,3098,3133
+  s_f9aac8d65f926e::t_f460b4f8538ca6 2335-2337
+  s_f9aac8d65f926e::t_f914a5a09d745d 1010-1041
+  s_f9aac8d65f926e::t_39f71da07f59b0 12
+  s_f9aac8d65f926e::t_b8b01119171376 44
+  s_f9aac8d65f926e::t_b8c201ca698e26 100-103,2279
+  s_f9aac8d65f926e::t_3b67074f135b1a 2516,2518-2547
+  s_f9aac8d65f926e::t_7bf0fa716a77ee 168-207,209
+  s_f9aac8d65f926e::t_bb174f6324cdcf 1405,1471-1473
+  s_f9aac8d65f926e::t_2fe9a8e52fac08 2548-2572,2574
+  s_f9aac8d65f926e::t_5171a60789de07 1293
+  s_f9aac8d65f926e::t_e1c2ed183ba950 4787
+  s_f9aac8d65f926e::t_998bbf6b1ee3df 208
+  s_f9aac8d65f926e::t_0204248e74380e 1474
+  s_f9aac8d65f926e::t_c8b23351b82e8a 2280-2281
+  s_f9aac8d65f926e::t_edabca49ac9f87 2573
+bin/lib/locales/en.json
+  s_f9aac8d65f926e::t_8ee8a9aa8755ae 336-339
+builtin/web-ui/src/pipelineRecent.js
+  s_f9aac8d65f926e::t_3019582c7970ac 25,33,51,58
+builtin/nodes/display_table.md
+  s_f9aac8d65f926e::t_b81b447b1a35b0 1-31
+bin/lib/admin-builtin-pipelines.mjs
+  s_f9aac8d65f926e::t_4ce0781e1975c1 1-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "573cdbcdd6a040d587e08973b2c1cb5b72593d26",
+  "prompts": {},
+  "logical_commit_id": "7e863bf30916ed69e84cc61be27542effb6d9379",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

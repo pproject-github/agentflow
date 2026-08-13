@@ -1,0 +1,78 @@
+builtin/web-ui/dist/assets/index-COX1zMwq.css
+  s_8ba1fcd4f7d064::t_6dcd429849bf11 1
+test/prd-workflow-collaboration.test.mjs
+  s_8ba1fcd4f7d064::t_5c7135b2692a7e 217-261,263-273
+  s_8ba1fcd4f7d064::t_2f1a4222f935ca 262
+builtin/web-ui/src/components/WorkflowAssistantThread.jsx
+  s_8ba1fcd4f7d064::t_213ca69df279b1 1-23,25-179
+  s_8ba1fcd4f7d064::t_436f797f0e0901 24
+builtin/web-ui/dist/assets/index-CgTd2uqQ.js
+  s_8ba1fcd4f7d064::t_e3cfe2d07117dd 1,9,17,25,33-34,36-38,40-44,52,60,65-67,69-73,75,78-79,81-84,86-89,91-95,98-100,102,114,144,181-188,192,194,197,241-242,246,250,252-256,260-261,263-265,269,271,286,288,292,300,302,306,314-320,327,341,352-353,371,380,416,443,467,511,560,564,590
+test/workflow-access-api.test.mjs
+  s_8ba1fcd4f7d064::t_aaa79e841ea864 12-13,71-104
+test/workspace-workflow-render-contract.test.mjs
+  s_8ba1fcd4f7d064::t_436f797f0e0901 142-146
+  s_8ba1fcd4f7d064::t_c63f7cedc91929 10-13,125,135-141,151-152
+  s_8ba1fcd4f7d064::t_d49866ed878b39 123-124,126-134,150,155
+  s_8ba1fcd4f7d064::t_26cb1260b753a6 147-149,153
+  s_8ba1fcd4f7d064::t_039a7cd7f466e2 121-122
+test/workflow-report-guide-contract.test.mjs
+  s_8ba1fcd4f7d064::t_d49866ed878b39 84-86
+builtin/web-ui/dist/assets/WorkflowAssistantThread-D5Cka3qd.js
+  s_8ba1fcd4f7d064::t_e3cfe2d07117dd 1-6
+builtin/web-ui/dist/index.html
+  s_8ba1fcd4f7d064::t_6dcd429849bf11 19
+  s_8ba1fcd4f7d064::t_e3cfe2d07117dd 18
+bin/lib/prd-workflow-collaboration.mjs
+  s_8ba1fcd4f7d064::t_e3ac34e3175cf4 7,66-85,130,254-278
+bin/lib/ui-server.mjs
+  s_8ba1fcd4f7d064::t_5cf48d5519f380 13374-13399,13401-13561
+  s_8ba1fcd4f7d064::t_d1a32c1901416b 168,2065-2070,2086-2091,2093-2139,2144-2226,2228-2232
+  s_8ba1fcd4f7d064::t_c339191dda5b1a 2071-2085,2092,2140-2143,2227
+  s_a15419f0ed6cba::t_f7ec40ea2c8696 2233,13373
+builtin/web-ui/src/index.css
+  s_8ba1fcd4f7d064::t_6e9303652d9511 17701,17703-17728,17730
+  s_8ba1fcd4f7d064::t_f223138b4c6377 7449-7514,17069-17124,17185,17192-17193,17230-17231,17239-17240,17244,17321-17322,17326-17327,17382-17383,17442,17466-17467,17476,17478,17480,17517,17606-17607
+  s_8ba1fcd4f7d064::t_8d4dc15d82b91f 17125-17130,17153-17184,17186-17191,17194-17229,17232-17238,17241-17243,17245-17320,17323-17325,17328-17381,17384-17441,17443-17465,17468-17475,17477,17479,17481-17516,17518-17605,17608-17609
+  s_8ba1fcd4f7d064::t_c8c02f2679a95c 17131-17152
+  s_8ba1fcd4f7d064::t_ecf63e4dbf96eb 17702
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_8ba1fcd4f7d064::t_d4bfcd81cc53bd 7363,7392-7401,7431-7442,7495-7496,7502-7543,7545-7567
+  s_8ba1fcd4f7d064::t_f00dbcb1220aed 13919-13929,14000,14011-14034,14046,14059,14061-14062,14064-14068
+  s_8ba1fcd4f7d064::t_213ca69df279b1 7544
+  s_8ba1fcd4f7d064::t_69ee5046ec10fc 8064-8107,8152-8172,8188-8189
+  s_8ba1fcd4f7d064::t_c8c02f2679a95c 19,93-94,8173-8187
+  s_8ba1fcd4f7d064::t_16fa956a8aae6b 8376,14047,14049-14052,14374
+builtin/web-ui/src/pages/WorkflowReportGuidePage.jsx
+  s_8ba1fcd4f7d064::t_c7d890db5b9fe2 865-868
+builtin/web-ui/package.json
+  s_8ba1fcd4f7d064::t_db0c03b531b431 10
+  s_8ba1fcd4f7d064::t_cee9f46fd0edac 26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "eba063f19650826493446627f418956926025c36",
+  "prompts": {},
+  "logical_commit_id": "c3148b37794131439ea8887aa38cca9d9ac107f9",
+  "sessions": {
+    "s_8ba1fcd4f7d064": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcbfc-355d-7f51-81c8-d8db4fefb60b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 48462,
+      "total_deletions": 3808
+    },
+    "s_a15419f0ed6cba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a5bd95f-7da9-4834-82b9-d86a4c71f7ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

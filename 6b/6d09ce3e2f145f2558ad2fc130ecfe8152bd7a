@@ -1,0 +1,36 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f2dd7a237fc27d::t_c6acb753d38350 180-257
+  s_f2dd7a237fc27d::t_b61f992e810de2 6987-7005,7008-7033,7036,7062
+  s_f2dd7a237fc27d::t_1381b6778e8ee7 5728-5729,7164-7175
+  s_f2dd7a237fc27d::t_c0177dd442a70d 6971,6973-6977
+  s_f2dd7a237fc27d::t_70a430c1f8b2d6 5568-5569
+  s_f2dd7a237fc27d::t_e3b6e64df33b41 5727
+  s_f2dd7a237fc27d::t_e5d9055fcbe848 6984-6986
+bin/lib/ui-server.mjs
+  s_f2dd7a237fc27d::t_09b96a0ce3d220 8916,8920-8956,8960
+  s_f2dd7a237fc27d::t_efa9fbc816e3ec 2983-3090
+  s_f2dd7a237fc27d::t_6c38eab96b12d1 8917-8919
+builtin/web-ui/dist/index.html
+  s_f2dd7a237fc27d::t_9b89792d605dba 18
+builtin/web-ui/dist/assets/index-BJiBCjfm.js
+  s_f2dd7a237fc27d::t_9b89792d605dba 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91-95,98-100,102,181-185,189,191,194,238-239,243-247,251-252,254,258,260,275,277,281,289,291,295,303-311,315,341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6b6d09ce3e2f145f2558ad2fc130ecfe8152bd7a",
+  "prompts": {},
+  "logical_commit_id": "18e82df50c8858313be762e5ccdc81663db478ee",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 34927,
+      "total_deletions": 1825
+    }
+  }
+}

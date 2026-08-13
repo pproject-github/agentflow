@@ -1,0 +1,31 @@
+bin/lib/ui-server.mjs
+  s_d99100a467f052::t_0f53fcc80edfd2 7727-7798,7917,7922,7949-7972,7974,8221,8227-8228,8235-8238,8450,8486,11273-11285,11308-11323,11461-11468,11470-11474,12367-12368
+  s_d99100a467f052::t_8b9c1d830a7be1 12177-12183
+test/prd-workflow-review-short-link.test.mjs
+  s_d99100a467f052::t_e94582adcfcfa3 51,67
+test/prd-workflow-review-api.test.mjs
+  s_d99100a467f052::t_0f53fcc80edfd2 1-115
+test/prd-workflow-review-html.test.mjs
+  s_d99100a467f052::t_0f53fcc80edfd2 105-138
+test/prd-workflow-collaboration-api.test.mjs
+  s_d99100a467f052::t_0f53fcc80edfd2 70-106,119-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5d3eb8ad3a7e147a36f2d6e05fffb2ba709aecce",
+  "prompts": {},
+  "logical_commit_id": "c47d0875e4518e7f51de2d348f8f5357c284c0f8",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 1005,
+      "total_deletions": 77
+    }
+  }
+}

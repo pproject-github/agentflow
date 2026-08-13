@@ -1,0 +1,76 @@
+test/app-loading-contract.test.mjs
+  s_b8fd1696dd8226::t_bb19b898651dae 1-20
+builtin/web-ui/dist/assets/WorkflowAssistantThread-B_j9DjNl.js
+  s_b8fd1696dd8226::t_6522ffeadce6c2 1
+builtin/web-ui/src/components/LoadingState.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 1-20
+builtin/web-ui/src/components/LogViewer.jsx
+  s_b8fd1696dd8226::t_2ab44c7d3b3735 357,460
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_6522ffeadce6c2 33
+  s_b8fd1696dd8226::t_e86e8b77b6a036 34
+  s_b8fd1696dd8226::t_ee4692d8c21d93 18-32,37-47
+builtin/web-ui/src/components/WorkspaceRunLogsDrawer.jsx
+  s_b8fd1696dd8226::t_2ab44c7d3b3735 171,203
+builtin/web-ui/dist/assets/index-Bsx7D8Av.css
+  s_b8fd1696dd8226::t_e86e8b77b6a036 1
+builtin/web-ui/index.html
+  s_b8fd1696dd8226::t_bb19b898651dae 18-32,35-45
+test/workflow-dashboard-contract.test.mjs
+  s_b8fd1696dd8226::t_0d034f5d962ad4 29-32,92
+builtin/web-ui/src/App.jsx
+  s_b8fd1696dd8226::t_bb19b898651dae 23,35-48,182
+builtin/web-ui/src/pages/McpPage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 2,270,586
+builtin/web-ui/src/pages/FeedbackPage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 3,27,104,120
+builtin/web-ui/src/index.css
+  s_b8fd1696dd8226::t_0d034f5d962ad4 4547,4549-4633,4635
+  s_b8fd1696dd8226::t_bb19b898651dae 41-126
+  s_b8fd1696dd8226::t_89da93b0a1dd68 127-210
+  s_a15419f0ed6cba::t_5bd6e4ffa985a1 4548
+builtin/web-ui/src/pages/WorkflowChecklistPage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 4,191
+test/loading-state-contract.test.mjs
+  s_b8fd1696dd8226::t_2ab44c7d3b3735 33-47
+  s_b8fd1696dd8226::t_89da93b0a1dd68 1-32
+builtin/web-ui/src/pages/SchedulesPage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 4,32,116,119,174
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b8fd1696dd8226::t_2ab44c7d3b3735 15856
+builtin/web-ui/dist/assets/index-2K3NV5XB.js
+  s_b8fd1696dd8226::t_6522ffeadce6c2 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91,93-94,96-101,106-107,109-110,114-116,118,121-122,135,138-140,142,221-227,231,233,236,280-281,285,289,291-295,299-300,302-304,308,310,325,327,331,339,341,345,353-359,366,380,391-392,395,413,422,458,476,503,539,555,579,623,642,654,669,680,712,725,745,776,791,802,818,832,840,849-859,863,889
+builtin/web-ui/src/pages/WorkflowsPage.jsx
+  s_b8fd1696dd8226::t_0d034f5d962ad4 4,11-25,643,1068,1084,1151
+builtin/web-ui/src/pages/AdminUsagePage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 4,64,367
+builtin/web-ui/src/pages/DisplayPage.jsx
+  s_b8fd1696dd8226::t_89da93b0a1dd68 11,392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9c9cd20305011d3fa9e90add534f193924edc1a9",
+  "prompts": {},
+  "logical_commit_id": "ca06012d14d0b5c2011771d20442e3835d44a68c",
+  "sessions": {
+    "s_a15419f0ed6cba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a5bd95f-7da9-4834-82b9-d86a4c71f7ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 43091,
+      "total_deletions": 1752
+    }
+  }
+}

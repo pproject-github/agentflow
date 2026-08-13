@@ -1,0 +1,24 @@
+builtin/web-ui/dist/index.html
+  s_9abdc979a6e3f3::t_05820c41942979 18
+builtin/web-ui/dist/assets/index-BLmRIy55.js
+  s_9abdc979a6e3f3::t_05820c41942979 183,350
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8350a1096d1feb53636666a1b6fdbfb032a25488",
+  "prompts": {},
+  "logical_commit_id": "b77169ae01f8988099ca0daeb5c66e984145bf8f",
+  "sessions": {
+    "s_9abdc979a6e3f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb5ed-4d37-7c93-8292-4c7f23e69ff0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 3343,
+      "total_deletions": 29
+    }
+  }
+}

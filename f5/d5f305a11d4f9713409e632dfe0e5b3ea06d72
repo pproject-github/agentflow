@@ -1,0 +1,26 @@
+package.json
+  s_b875738d2d60b6::t_65a584fa53c07d 3
+builtin/web-ui/dist/index.html
+  s_b875738d2d60b6::t_ad92d46dbc282e 18
+builtin/web-ui/dist/assets/index-B5VFaSRf.js
+  s_b875738d2d60b6::t_ad92d46dbc282e 128,143
+package-lock.json
+  s_b875738d2d60b6::t_7801789b3ed133 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "f5d5f305a11d4f9713409e632dfe0e5b3ea06d72",
+  "prompts": {},
+  "logical_commit_id": "ff9429d0e5409e6fa0bbe2cbf7b1604d35a8809e",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,160 @@
+test/flow-local-preview.test.mjs
+  s_b8fd1696dd8226::t_503008e5c1e5c8 71
+  s_b8fd1696dd8226::t_e7bd2357085c05 1-5,7-9,49,51-52,54-57,65-67,70
+  s_b8fd1696dd8226::t_2af55e9b1b88db 6,10-48,50,53,58-63,68,72-75
+  s_b8fd1696dd8226::t_733a92f1dfecf2 76
+  s_b8fd1696dd8226::t_2e7ad22a503aa2 64
+  s_b8fd1696dd8226::t_7c199bf95bc5ef 69
+skills/agentflow-author-flow/agents/openai.yaml
+  s_b8fd1696dd8226::t_5c7fcdbabb15aa 1-4
+builtin/web-ui/src/prdWorkflowActionLinks.js
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 121-122,131-132,134-135,137,180-181,189
+  s_b8fd1696dd8226::t_7a6cc7d2ce2be4 165-170
+  s_b8fd1696dd8226::t_98d1c795103042 123-130
+builtin/web-ui/dist/assets/index-DhS19Fen.js
+  s_b8fd1696dd8226::t_df6c1afef3d3f1 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69-73,75-79,81-84,86-89,91-135,138-140,142,153-154,184,221-227,231-233,236,280-281,283,285,287-289,291-295,299-300,302-304,308-310,325,327,331,339,341,345,353-359,366,380,391-392,395,413,422,458,463,476,503,539,555,579,623,642,654,669,680,712,725,745,776,791,802,818,832,840,849-859,863,889
+test/workflow-dashboard-contract.test.mjs
+  s_b8fd1696dd8226::t_374e55442050f7 28
+  s_b8fd1696dd8226::t_4c098e99242dc1 17,70-78,95-97
+  s_b8fd1696dd8226::t_54a4b522815031 55-57
+  s_b8fd1696dd8226::t_dcc096d1949fa2 54
+test/workflow-report-guide-contract.test.mjs
+  s_b8fd1696dd8226::t_f0fb4630ea291e 23-25,28,151-152
+  s_b8fd1696dd8226::t_b2c52e5d403251 114
+builtin/web-ui/src/index.css
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 25330-25339
+  s_b8fd1696dd8226::t_888eb4b58c0edd 5624,5628,5631-5713,5715
+  s_b8fd1696dd8226::t_503008e5c1e5c8 7788-7792,7794
+  s_b8fd1696dd8226::t_290badb99dbb31 4048-4053,4657-4978,4980-4998,5000-5011,5074-5096
+  s_b8fd1696dd8226::t_dd77aa239c3cda 5626,7761,7763-7787
+  s_b8fd1696dd8226::t_c3186172ec8f52 5625
+  s_b8fd1696dd8226::t_6525664de16df1 5627
+  s_b8fd1696dd8226::t_f88db5f407faaf 7762
+README.md
+  s_b8fd1696dd8226::t_8beba52ffc04b8 131-132,139-140
+  s_b8fd1696dd8226::t_140a09cf651e44 61,154
+  s_b8fd1696dd8226::t_733a92f1dfecf2 62-63
+test/workflow-dashboard-timeline.test.mjs
+  s_b8fd1696dd8226::t_a810eda19d1e16 37,75-92
+builtin/web-ui/src/pages/WorkflowReportGuidePage.jsx
+  s_b8fd1696dd8226::t_f0fb4630ea291e 1120-1123
+  s_b8fd1696dd8226::t_b2c52e5d403251 125,546,1339,1390
+bin/lib/ui-server.mjs
+  s_b8fd1696dd8226::t_a810eda19d1e16 3910-3911,3919,3936
+  s_b8fd1696dd8226::t_60ed20455b1aab 112,117,16679-16699,16701-16711,16714-16715
+  s_b8fd1696dd8226::t_4231c37ea2dad8 11730-11737,11740,11752,15638
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 16098
+bin/lib/flow-static-preview.mjs
+  s_b8fd1696dd8226::t_3bc74f3a815f14 1-104
+skills/agentflow-workflow-report/references/protocol.md
+  s_b8fd1696dd8226::t_4231c37ea2dad8 319,362,385
+builtin/web-ui/src/pages/WorkflowChecklistPage.jsx
+  s_b8fd1696dd8226::t_98d1c795103042 255
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 41,97,127,154,166-169,235,237-254,256-268,270
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_b8fd1696dd8226::t_7c199bf95bc5ef 6238,6249,6293,6300,6316
+  s_b8fd1696dd8226::t_a6ab065ca9a446 933-934,938-939,1023-1027,1029-1030,1032-1033,1037-1038,1040,1119,1122,1131,1133,1190
+  s_b8fd1696dd8226::t_8b543085e0d36a 1286-1289,1299,2302-2307,2354
+  s_b8fd1696dd8226::t_b3216f6720d809 1193-1195,1302,1309,1312,1316,2145-2153,2161,2183,2206,2209,2232,2235,2249,2280-2295,2319,2516,2520,4000,4058,5612
+  s_b8fd1696dd8226::t_37c1bbb296fbcf 3039,3050
+  s_b8fd1696dd8226::t_d5af9f7f56ea3a 1875,1901,1909,1941,1944,1955
+  s_b8fd1696dd8226::t_2358ecb2847f43 2608,2610,2619
+  s_b8fd1696dd8226::t_ebfc21463804e0 5579,5586-5588,5596-5597,5602-5603,5605,5609,5878
+  s_b8fd1696dd8226::t_e9203b76aca788 4160-4163,4194
+  s_b8fd1696dd8226::t_48c4a996481d1c 5891-5892,6350,6352
+  s_b8fd1696dd8226::t_f64a011792171c 2467
+  s_b8fd1696dd8226::t_f0cd7e12cc2c8d 2625,2672
+  s_b8fd1696dd8226::t_a3388fcd5374aa 3360,3368,3391,3536
+  s_b8fd1696dd8226::t_b03db35dde9075 6309
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_b8fd1696dd8226::t_654e302fffffd2 36,324,326-329,340-344,346,348-357,395-396,399,403-404,416-417,429-430
+  s_b8fd1696dd8226::t_2f0ea5574ee2f1 170-173,177-203,307-323,325,330-339,390-394,397-398,400-402,405-415,418-428
+builtin/web-ui/src/pages/WorkflowReportGuidePage.css
+  s_b8fd1696dd8226::t_f0fb4630ea291e 23,1870-1875
+bin/lib/help.mjs
+  s_b8fd1696dd8226::t_140a09cf651e44 21,92
+builtin/web-ui/src/i18n/locales/zh/settings.json
+  s_b8fd1696dd8226::t_fba6d65cba675d 95-112
+test/workspace-workflow-render-contract.test.mjs
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 84-86
+skills/agentflow-cli/SKILL.md
+  s_b8fd1696dd8226::t_bd289a3274478f 3,74-84,146,153-154
+builtin/web-ui/dist/assets/index-5wTTj_jN.css
+  s_b8fd1696dd8226::t_df6c1afef3d3f1 1
+builtin/web-ui/src/components/AppVersionNotice.jsx
+  s_b8fd1696dd8226::t_b3216f6720d809 25
+test/workflow-admin-version-repair.test.mjs
+  s_b8fd1696dd8226::t_4231c37ea2dad8 130,157,161
+builtin/web-ui/dist/index.html
+  s_b8fd1696dd8226::t_df6c1afef3d3f1 18-19
+builtin/web-ui/src/App.jsx
+  s_b8fd1696dd8226::t_f0fb4630ea291e 219,221,224-226
+  s_b8fd1696dd8226::t_4231c37ea2dad8 94
+  s_b8fd1696dd8226::t_b3216f6720d809 247
+  s_b8fd1696dd8226::t_085a0bef089567 19,100,220
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_b8fd1696dd8226::t_39b7bf988a1d4b 227-234,348-363,504,534,759-806,1411-1492
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Cxnl63lL.js
+  s_b8fd1696dd8226::t_df6c1afef3d3f1 1
+bin/lib/main.mjs
+  s_b8fd1696dd8226::t_2cc7c637c6482d 4,395
+  s_b8fd1696dd8226::t_8c637aa9e8e9f2 387
+  s_b8fd1696dd8226::t_81a1b713dda027 2,351-354,361-363,365-380,396,399-411
+  s_b8fd1696dd8226::t_3bc74f3a815f14 38,355-360,364,381-386,388-394,397-398
+README.zh-CN.md
+  s_b8fd1696dd8226::t_733a92f1dfecf2 62-63
+  s_b8fd1696dd8226::t_8beba52ffc04b8 131-132,139-140
+  s_b8fd1696dd8226::t_140a09cf651e44 61,154
+test/admin-password-reset.test.mjs
+  s_b8fd1696dd8226::t_7a0acf9e5c0a7e 1-95
+test/prd-workflow-review-short-link.test.mjs
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 82-90
+builtin/web-ui/src/i18n/locales/en/settings.json
+  s_b8fd1696dd8226::t_fba6d65cba675d 95-112
+skills/agentflow-author-flow/SKILL.md
+  s_b8fd1696dd8226::t_5c7fcdbabb15aa 1-2,4-5,7,9,11,13,17,19,21,31,38,42,44
+  s_b8fd1696dd8226::t_bd289a3274478f 3,6,8,10,12,14-16,18,20,22-30,32-37,39-41,43,45-49
+test/agentflow-cli-flow-publish.test.mjs
+  s_b8fd1696dd8226::t_f789f07886750b 1-29,31-41,43-44,46-119,137-143
+  s_b8fd1696dd8226::t_63c712c9220901 30
+  s_b8fd1696dd8226::t_9d90eba2bafd57 42,45,120-122,124-136
+  s_b8fd1696dd8226::t_19dd6ada3510d8 123
+bin/lib/auth.mjs
+  s_b8fd1696dd8226::t_60ed20455b1aab 91-142
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 956
+skills/agentflow-workflow-report/SKILL.md
+  s_b8fd1696dd8226::t_b2c52e5d403251 96
+test/prd-workflow-action-links.test.mjs
+  s_b8fd1696dd8226::t_7e3aaa8b7539df 219-254
+bin/lib/catalog-flows.mjs
+  s_b8fd1696dd8226::t_8c637aa9e8e9f2 232,241-243,245,325-326
+  s_b8fd1696dd8226::t_2d74b1fe638f07 244,246-248,324,327-341
+builtin/web-ui/src/pages/WorkflowsPage.jsx
+  s_b8fd1696dd8226::t_4ede455746bf51 771
+  s_b8fd1696dd8226::t_a810eda19d1e16 404
+  s_b8fd1696dd8226::t_ba6bde9a7b9948 772-784
+  s_b8fd1696dd8226::t_54a4b522815031 102,106-107,112,613-615,651,673,676,690,703,757-758,770,785-786,792
+  s_b8fd1696dd8226::t_3bc7c7c37e1ee4 453,644,913-922,1187-1196
+  s_b8fd1696dd8226::t_374e55442050f7 657
+  s_b8fd1696dd8226::t_4f70d71c9d748d 392-403,405-452,454-607
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e751a7f59b57b05fc0c59f7986cfc58045834354",
+  "prompts": {},
+  "logical_commit_id": "d34e7341a0914f713b696166530e56be7c9b8543",
+  "sessions": {
+    "s_b8fd1696dd8226": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd0ee-59e5-7d22-b3d1-547c366fc176",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 39938,
+      "total_deletions": 1720
+    }
+  }
+}

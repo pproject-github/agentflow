@@ -1,0 +1,24 @@
+builtin/web-ui/dist/assets/index-5s7c_d85.js
+  s_b875738d2d60b6::t_27c5f4d38ae448 132-134,136,169-173,178-179,181
+builtin/web-ui/dist/index.html
+  s_b875738d2d60b6::t_27c5f4d38ae448 18
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_b875738d2d60b6::t_497bd7db21b891 3125,3213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "27cc76dfb3875696b4dff7c6a07ed75bdc31affb",
+  "prompts": {},
+  "logical_commit_id": "bc66e4dc12a8d6e463034d62bc97235e98854a9a",
+  "sessions": {
+    "s_b875738d2d60b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1c9f-9ccb-7753-9af0-a4277793edb6",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

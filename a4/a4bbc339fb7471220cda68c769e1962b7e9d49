@@ -1,0 +1,32 @@
+builtin/web-ui/src/mergeFlowNodes.js
+  s_f2dd7a237fc27d::t_d7ca2fd568f85b 79,290-293
+builtin/nodes/agent_subAgent.md
+  s_f2dd7a237fc27d::t_603834d49da58a 3,18-21
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f2dd7a237fc27d::t_68637375d6ccbb 7354-7355
+builtin/web-ui/dist/assets/index--KlZgQAW.js
+  s_f2dd7a237fc27d::t_c087e22b0b4e6f 1,9,38,40,42,44,60,65-66,69,95,98-99,243-247,251-252,254,305-306,309,311,341
+builtin/web-ui/dist/index.html
+  s_f2dd7a237fc27d::t_c087e22b0b4e6f 18
+builtin/web-ui/src/nodeSchema.js
+  s_f2dd7a237fc27d::t_bbedc41fd38b1a 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "a4a4bbc339fb7471220cda68c769e1962b7e9d49",
+  "prompts": {},
+  "logical_commit_id": "0dd040eced081b8019d4e591f053628e4a242398",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 35632,
+      "total_deletions": 1835
+    }
+  }
+}

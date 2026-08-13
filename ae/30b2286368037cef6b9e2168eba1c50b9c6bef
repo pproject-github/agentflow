@@ -1,0 +1,140 @@
+builtin/web-ui/dist/assets/index-BVWwQpvg.css
+  s_902e25e5da2b02::t_31e08917a69015 1
+bin/lib/composer-agent.mjs
+  s_71cf030762b874::t_b75ab06564878b 10,29
+builtin/web-ui/src/i18n/locales/zh/flow.json
+  s_71cf030762b874::t_4c2bae7c6c50d1 176
+  s_71cf030762b874::t_0bb953bcd6df4b 42-47
+  s_71cf030762b874::t_493023eec3d44e 58
+skills/agentflow-workspace-markdown/SKILL.md
+  s_71cf030762b874::t_d30c4c8c79925b 1-44
+bin/lib/agent-runners.mjs
+  s_71cf030762b874::t_8b3b30344cf2ed 544,621,690
+  s_71cf030762b874::t_8d3eb499b3abdb 13,26-34
+  s_71cf030762b874::t_4b35f6b6f94804 119,204,299
+  s_71cf030762b874::t_6871fbac4a825b 384,411-413,445
+  s_71cf030762b874::t_892f513fb1187a 12,22-23
+bin/lib/auth.mjs
+  s_71cf030762b874::t_97688175f9a948 4-9,85-140,207-215,217,230
+bin/lib/catalog-flows.mjs
+  s_71cf030762b874::t_40e10972db04f3 132-135
+skills/agentflow-workspace-graph/SKILL.md
+  s_71cf030762b874::t_d30c4c8c79925b 1-67
+builtin/nodes/agent_subAgent.md
+  s_71cf030762b874::t_fb9d08c305e7d2 19-20
+  s_71cf030762b874::t_acdfb6035f8bb6 2-4
+bin/pipeline/run-tool-nodejs.mjs
+  s_71cf030762b874::t_79b61a73d16aaf 22,33-36,49,55
+bin/lib/apply.mjs
+  s_71cf030762b874::t_c4735bf48a57a3 26,348-352
+builtin/nodes/tool_git_checkout.md
+  s_71cf030762b874::t_39a0c234c3079e 19-20,24
+skills/agentflow-workspace-ascii/SKILL.md
+  s_71cf030762b874::t_d30c4c8c79925b 1-42
+builtin/web-ui/src/flowFormat.js
+  s_71cf030762b874::t_66a726f1d05f5d 151
+  s_71cf030762b874::t_f8ab4675dba305 152
+  s_71cf030762b874::t_4b3ea70b162f65 145-150,153-154
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_71cf030762b874::t_701d229d4e755a 117,153-155,165,172,176-178,238-239
+  s_71cf030762b874::t_8eec6870fdad1a 107-109,116,144-152,156-160,163-164,166-171,173-175,179-185,209,234,237,240-244
+  s_71cf030762b874::t_0a3eac9cc4f715 37-38,295,297-298
+  s_71cf030762b874::t_9a543dadd37bd2 296,302
+  s_71cf030762b874::t_8b4cf417dd0bb9 342,553,555
+  s_71cf030762b874::t_754c0c23f4e39e 554
+builtin/web-ui/dist/index.html
+  s_902e25e5da2b02::t_31e08917a69015 19
+  s_902e25e5da2b02::t_9f6422c060a11f 18
+bin/pipeline/get-env.mjs
+  s_71cf030762b874::t_45f1557d2ba5d3 25
+  s_71cf030762b874::t_af0cba7e5b3d90 3-4,20,26
+bin/lib/scheduler.mjs
+  s_71cf030762b874::t_a63d94c5094503 15,256,329
+builtin/web-ui/src/KeyboardShortcutsModal.jsx
+  s_71cf030762b874::t_2654b082df6a23 84-87
+builtin/web-ui/src/i18n/locales/en/flow.json
+  s_71cf030762b874::t_27ea681a86b6f0 58
+  s_71cf030762b874::t_0bb953bcd6df4b 42-47
+  s_71cf030762b874::t_7ec572bf312c69 176
+builtin/web-ui/dist/assets/index-BvxunKl1.js
+  s_902e25e5da2b02::t_9f6422c060a11f 1,9,17,25,33-34,36-38,40-44,52,60,65-67,69-75,78-98,102-110,123-132,135-136,138,142,150,152,156,164-167,171,197
+builtin/web-ui/src/i18n/locales/en/settings.json
+  s_71cf030762b874::t_c9b4814a790d6b 60
+  s_71cf030762b874::t_2e3d50284dafba 54-55
+bin/lib/node-execute.mjs
+  s_71cf030762b874::t_716f1bafbb8749 407
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_71cf030762b874::t_d6c4a364123001 394-404,411-413,415,419-426,436
+  s_71cf030762b874::t_b631cb7f55f5e3 405-410
+  s_71cf030762b874::t_12b9760607b8cf 254-288,291-309
+  s_71cf030762b874::t_a22516aa6409a6 289-290
+  s_71cf030762b874::t_b77ba465e688ff 706-747
+  s_71cf030762b874::t_7c9da32fc9ba64 148-150
+  s_71cf030762b874::t_ff7ebf4122da5c 1126-1151
+  s_71cf030762b874::t_ce724768400abb 857-864
+  s_71cf030762b874::t_81a5473ae50740 12
+  s_71cf030762b874::t_6b2282192c355b 705,750-773
+  s_71cf030762b874::t_1f815470447998 211,214,218,221,224,228
+builtin/web-ui/src/i18n/locales/zh/settings.json
+  s_71cf030762b874::t_ca3ff21bda8915 60
+  s_71cf030762b874::t_ab0b07b2048683 54-55
+builtin/nodes/display_mermaid.md
+  s_71cf030762b874::t_9a561723831270 12-13
+  s_71cf030762b874::t_71844021dbf27c 18-19
+skills/agentflow-workspace-mermaid/SKILL.md
+  s_71cf030762b874::t_d30c4c8c79925b 1-43
+builtin/web-ui/src/skillCollections.js
+  s_71cf030762b874::t_cd6bcc50cb032e 1-8,10-45
+  s_71cf030762b874::t_e140eb3f9b3dea 9
+  s_71cf030762b874::t_11f0543d6ac1cf 46-54,57-67,78-85
+  s_71cf030762b874::t_aec02ec15d6fa1 55-56,68-77
+builtin/nodes/control_load_skills.md
+  s_71cf030762b874::t_39a0c234c3079e 25-26
+builtin/nodes/display_ascii.md
+  s_71cf030762b874::t_277ef8da071e1f 18-19
+  s_71cf030762b874::t_9a561723831270 12-13
+builtin/nodes/display_markdown.md
+  s_71cf030762b874::t_f6c560ac023328 18-19
+  s_71cf030762b874::t_39a0c234c3079e 12-13
+builtin/web-ui/src/App.jsx
+  s_71cf030762b874::t_3b35dd66ef6597 2,11-47,159-165
+builtin/web-ui/src/main.jsx
+  s_71cf030762b874::t_0838ea053f8217 9-20
+bin/lib/api-runner.mjs
+  s_71cf030762b874::t_67cc3fc7b269ce 218,234,257,262,275-276,301,335,338-339,376-377,382-383
+  s_71cf030762b874::t_d84d8d4e9a1224 22,28-37
+builtin/web-ui/src/NodePropertiesPanel.jsx
+  s_71cf030762b874::t_a8b5c031e4df06 365,373
+  s_71cf030762b874::t_a77adff1bea34e 22,25
+  s_71cf030762b874::t_98ea6398faced9 104-107
+  s_71cf030762b874::t_dba0587c44c273 265
+  s_71cf030762b874::t_314ea4ce145d2b 19-20,27,60-61,100-103,108-119,148-149
+  s_71cf030762b874::t_90452223c49571 159,174
+bin/lib/user-env.mjs
+  s_71cf030762b874::t_318b0673a36bf3 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.11",
+  "base_commit_sha": "ae30b2286368037cef6b9e2168eba1c50b9c6bef",
+  "prompts": {},
+  "logical_commit_id": "78a165b6e5e13abba0a0cd0fe92533cf826eaa7b",
+  "sessions": {
+    "s_71cf030762b874": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ef31d-58a5-7c41-9956-97cc73f6e2ca",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_902e25e5da2b02": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ef8f0-490e-70c2-8cad-7cf05ff84fee",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

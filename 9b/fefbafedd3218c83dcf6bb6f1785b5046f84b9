@@ -1,0 +1,69 @@
+bin/lib/ui-server.mjs
+  s_98d3237c964562::t_f1b7a4f3d66e67 1139-1154,1167,1169-1170
+  s_98d3237c964562::t_63f1bea7b7b192 1165
+  s_98d3237c964562::t_6f37da3e816245 5643
+  s_98d3237c964562::t_4989c3544d3d44 48,66
+  s_98d3237c964562::t_520fee7263fa69 7201-7204
+  s_98d3237c964562::t_7932e77cef4df4 7082,7084,7090-7094,7139-7142,7161,7173-7176,7194
+builtin/web-ui/dist/assets/index-BFaCm-MI.js
+  s_98d3237c964562::t_4ea8ae8a7f92bf 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-88,90-95,98,103,109-110,123,126-136,140-141,144,146,148,152,154,157,198-199,201,203-208,212-213,215,219,221,233,235,239,247,249,253,261-266,270,296
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_8f4099f0ee2918 19
+  s_98d3237c964562::t_4ea8ae8a7f92bf 18
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_98d3237c964562::t_bc4908436b1658 132,261,277,284,290
+  s_98d3237c964562::t_bf5ee4eb442f0c 442,749-802
+  s_98d3237c964562::t_56e4810dea0a57 924-955
+  s_98d3237c964562::t_95112aae994b9a 956
+builtin/web-ui/src/components/SkillHubPanel.jsx
+  s_98d3237c964562::t_b03a86d7dcbe95 26,35,49,64,108,112,185,222-225,239,242,299,336,339,376
+  s_98d3237c964562::t_6d832aee4398be 94,128,131,172,175,197,200,215
+builtin/web-ui/src/index.css
+  s_98d3237c964562::t_6529359c7077ec 3193-3195
+builtin/web-ui/dist/assets/index-NH_rVAzF.css
+  s_98d3237c964562::t_8f4099f0ee2918 1
+bin/lib/composer-skill-router.mjs
+  s_98d3237c964562::t_d5cc6f586d44be 140-146,153,159
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_98d3237c964562::t_a8d4e1bdca03d0 1108
+bin/lib/paths.mjs
+  s_98d3237c964562::t_38267f3ae5a38f 52-56,65-77,82,91-100
+  s_48fda0dcdc2924::t_6e6dc295f07bc2 78-81,101-102
+bin/lib/admin-storage-config.mjs
+  s_98d3237c964562::t_d0649ecfdaa882 148-156
+  s_98d3237c964562::t_dc2c2635cf7a7f 10-11,13,34-41,57-62,64,74-92,94-96,103-116,118,121,123-125,133-139,157-171,175-176
+  s_98d3237c964562::t_f431d832bddccf 63
+  s_98d3237c964562::t_5773f8e676246e 93
+  s_98d3237c964562::t_c4ce5fac08234f 97-102
+  s_98d3237c964562::t_281426e29e4b74 117
+bin/lib/skill-registry.mjs
+  s_98d3237c964562::t_dc1c3a17e9d8f6 5,13,15-17,33-36,118-123,126-128
+  s_98d3237c964562::t_7e439c8b6eb7fe 198,201
+builtin/web-ui/src/skillCollections.js
+  s_98d3237c964562::t_3bf8e6d9a93dc1 20-39,41-44,87-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "9bfefbafedd3218c83dcf6bb6f1785b5046f84b9",
+  "prompts": {},
+  "logical_commit_id": "ce9f9e06e604ba96cec0ff0a46880c6d7a340f33",
+  "sessions": {
+    "s_48fda0dcdc2924": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7e-a138-7fb2-ab93-086dc8bc8d85",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

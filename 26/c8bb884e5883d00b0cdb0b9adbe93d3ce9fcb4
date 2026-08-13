@@ -1,0 +1,198 @@
+bin/lib/ui-server.mjs
+  s_1a0d5cb0a2900c::t_182328fd34278a 3,1688-1695,1712,1743,2070,2072-2077,2081,2084,2100-2103,2105,2122-2132
+  s_f9aac8d65f926e::t_2142852e74a9fd 1330,1394-1395
+  s_1a0d5cb0a2900c::t_96256e65b2153f 1929-1932
+  s_1a0d5cb0a2900c::t_a404c91c01b5ec 2433-2434,2770-2797,2806,2809-2813,2818-2822,2824-2825,2829-2845,2848-2869,2871-2873
+  s_1a0d5cb0a2900c::t_bf0e7f1a615519 1713-1726
+  s_1f4a653f13be4a::t_1918e6b6971e49 92,95,2377-2386,2400,2431-2432
+  s_1f4a653f13be4a::t_174365ee71f09d 1158-1170,1172,1223
+  s_1a0d5cb0a2900c::t_8454f51661bdaf 1396,1523-1527,1530,1541-1556,1562,1592-1628
+  s_1a0d5cb0a2900c::t_95b3292b0f55ff 1487,1666,1676
+  s_1f4a653f13be4a::t_cb2883a55e8997 1674
+  s_1a0d5cb0a2900c::t_5fe52b232bae95 1774-1793
+  s_1f4a653f13be4a::t_671ffbff37fb4e 420-434,479-481,484-485,497-498,519-528
+  s_1a0d5cb0a2900c::t_10734f4ca51603 2037-2039
+  s_1a0d5cb0a2900c::t_ce76e9aef2c851 1156,1521,2237-2242
+  s_1f4a653f13be4a::t_42a7684b4049ca 1171
+  s_1a0d5cb0a2900c::t_9b00093affc221 1528-1529
+  s_1a0d5cb0a2900c::t_5b04b756b5c7a1 1557-1561
+  s_1a0d5cb0a2900c::t_d98275ddcadd44 1629-1631
+  s_1a0d5cb0a2900c::t_63ec3bd0032eab 1727-1728
+  s_1a0d5cb0a2900c::t_da56b7e1a25d4f 2104
+  s_1a0d5cb0a2900c::t_4e7c4930de04b5 2870
+  s_1a0d5cb0a2900c::t_377b3e749edb3b 2874-2876
+builtin/web-ui/src/mergeFlowNodes.js
+  s_f9aac8d65f926e::t_a09486d82206c8 104-117
+  s_1a0d5cb0a2900c::t_b7fdbd3b50eab7 33,66-67
+  s_f9aac8d65f926e::t_3ad5e156664ffb 52,224
+  s_f9aac8d65f926e::t_c4d7e97c50cd27 217-218,256-262
+bin/lib/git-worktree.mjs
+  s_1a0d5cb0a2900c::t_7d4437a8e37f41 194,196-200,224,233,242-248,250-255,261
+  s_1a0d5cb0a2900c::t_063b8e7cc063f7 195
+  s_1a0d5cb0a2900c::t_a815eafabafc8a 168-169,171-191
+  s_1a0d5cb0a2900c::t_c28e4d1f869321 192,201-205,256-260
+  s_1a0d5cb0a2900c::t_cf6ff4d79c6ff3 170
+  s_1a0d5cb0a2900c::t_4ad4d304c32f9f 193
+builtin/nodes/tool_nodejs.md
+  s_1a0d5cb0a2900c::t_6284d450567102 41-43
+bin/lib/skill-registry.mjs
+  s_1a0d5cb0a2900c::t_ed02d2ca6193e2 41-42,62
+builtin/web-ui/package.json
+  s_f9aac8d65f926e::t_d1a755529bbca2 11
+builtin/web-ui/src/index.css
+  s_1a0d5cb0a2900c::t_93724979bdcded 5207-5208,5213,5215-5220,5224-5229,5231,5275-5281,5283-5284,5289-5300
+  s_f9aac8d65f926e::t_0a3dc61045ae53 4631-4633,4639-4640
+  s_f9aac8d65f926e::t_e3d13a3cb0df04 4599,4622-4630,4634-4638,4641-4665,4667-4671
+  s_f9aac8d65f926e::t_93b64484526618 4600-4601,4672,5211,5785-5803
+  s_1a0d5cb0a2900c::t_6e7def473bcd8c 3986-3992,4958-4967
+  s_f9aac8d65f926e::t_b1bb96400bd31a 4666
+  s_f9aac8d65f926e::t_b863def6039a75 4673
+  s_1a0d5cb0a2900c::t_7c371608a0eb14 4968-4969
+  s_1a0d5cb0a2900c::t_8d30f18cb07dad 5214
+  s_1a0d5cb0a2900c::t_cddcf81876a4e4 5221-5223
+  s_1a0d5cb0a2900c::t_e7b7e26342824a 5230
+  s_1a0d5cb0a2900c::t_0beb0f393c3276 5282
+  s_1a0d5cb0a2900c::t_0ae793db63db02 5301-5302
+  s_f9aac8d65f926e::t_0db856f8db896f 5804-5805
+builtin/nodes/tool_git_worktree_load.md
+  s_1a0d5cb0a2900c::t_a3fa42c542533d 11-12,27-34
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_bffa0e1c53b8c5 18
+  s_f9aac8d65f926e::t_5e363916d4c202 19
+builtin/web-ui/src/App.jsx
+  s_1f4a653f13be4a::t_479748a3658ec7 80
+builtin/web-ui/src/pages/McpPage.jsx
+  s_1f4a653f13be4a::t_1d5a32caae2863 41
+bin/lib/locales/zh.json
+  s_f9aac8d65f926e::t_16b10183f3bbf8 332-335
+bin/lib/auth.mjs
+  s_1f4a653f13be4a::t_290adc7cd924f2 26-29,87-124,126-139,241-243
+  s_1f4a653f13be4a::t_030002dc991504 125
+  s_1f4a653f13be4a::t_ae4754705b23df 244
+builtin/web-ui/dist/assets/index-CPsrRISH.css
+  s_f9aac8d65f926e::t_5e363916d4c202 1
+builtin/web-ui/src/chartSpec.js
+  s_f9aac8d65f926e::t_a0278b7f08a1e8 17-33,98,238,240
+  s_f9aac8d65f926e::t_6a90e19de1c706 34-43,45-67,119-219,239
+  s_f9aac8d65f926e::t_f6f06e76650e53 1-16,44,68-97,99-118,220-237,241-244
+bin/lib/locales/en.json
+  s_f9aac8d65f926e::t_86f62ef712883f 332-335
+builtin/nodes/agent_subAgent.md
+  s_1a0d5cb0a2900c::t_1f8fd1bdf420f4 3,14-16
+  s_1a0d5cb0a2900c::t_57769e1f1353fc 17
+bin/lib/marketplace.mjs
+  s_f9aac8d65f926e::t_234b54cedd7774 364
+  s_f9aac8d65f926e::t_c80edaee5d7483 188-192,456
+  s_f9aac8d65f926e::t_743528d30db0a0 88-95,102,646,684,692,711-712
+bin/pipeline/pre-process-node.mjs
+  s_1a0d5cb0a2900c::t_b09f5a09661c39 366-367,373-374
+builtin/web-ui/src/FlowNode.jsx
+  s_1a0d5cb0a2900c::t_9f56c3cd8e557e 73-84,128-131
+builtin/nodes/display_chart.md
+  s_f9aac8d65f926e::t_ec2b64b6d8951c 1-31
+builtin/web-ui/src/flowFormat.js
+  s_f9aac8d65f926e::t_068e66762c191f 213-222
+builtin/web-ui/src/nodeSchema.js
+  s_1a0d5cb0a2900c::t_e1c41287106dfe 34
+builtin/web-ui/dist/assets/index-CyQMwKDE.js
+  s_f9aac8d65f926e::t_bffa0e1c53b8c5 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-82,84-90,94-95,97-98,102-104,106,109-110,123,126-136,139-144,148-149,151,153,157,165,167,171,179-184,188,214
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f9aac8d65f926e::t_c10f8f814e86aa 21,488,547,826-848,850-875,877-883,887,918-919,1048,1092,2879
+  s_1a0d5cb0a2900c::t_aede8a5d6b65c7 1572-1583
+  s_1a0d5cb0a2900c::t_ad7e7966b92989 2111
+  s_f9aac8d65f926e::t_54c043f3ee2cbd 2171,2174
+  s_1a0d5cb0a2900c::t_334a6a49f1a9fc 3157
+  s_1a0d5cb0a2900c::t_b8feb9db7bca63 2752-2766,2769,2779,2788
+  s_1f4a653f13be4a::t_b84b3265c2bf21 2883-2890
+  s_1a0d5cb0a2900c::t_acc5cde69ec17c 48,73-84,86
+  s_f9aac8d65f926e::t_bb88ab4ff925c6 929
+  s_f9aac8d65f926e::t_fb061e85963c55 204-218,220
+  s_f9aac8d65f926e::t_d2c7cc8fee0d59 438,458-478
+  s_f9aac8d65f926e::t_95a88bb6bf8a7c 849
+  s_1a0d5cb0a2900c::t_9a59a9406cbd6b 2235
+  s_1f4a653f13be4a::t_0629f2e5b29205 3150
+  s_f9aac8d65f926e::t_71cdcac90988fb 393-395,402,409-414
+  s_1a0d5cb0a2900c::t_6734c2717c4144 1277,1286-1287,1336,1339-1340,1343-1344
+  s_1a0d5cb0a2900c::t_5f77746f5391d4 3163-3165,3177
+  s_1a0d5cb0a2900c::t_cf8a7965c7e11e 2679,2869,3410-3422
+  s_1f4a653f13be4a::t_862e81800f98a0 920,1570,1584-1598,1600-1615,1927
+  s_1a0d5cb0a2900c::t_059d4c25f99dad 2861,2868,2876,2894-2897,2924-2931
+  s_1a0d5cb0a2900c::t_e4fd300d240a56 2157-2158
+  s_f9aac8d65f926e::t_17cfa8dc42e0c2 3708-3710,3714-3717,3730-3734
+  s_1a0d5cb0a2900c::t_e31b8edddd067b 1649-1661,1859-1862,1876-1884,1897-1905
+  s_1a0d5cb0a2900c::t_5086f37acb6634 2285-2325,2331-2333,2356,2606-2610,2646-2648,2688-2690,2694-2695,2697-2708,2729,2749
+  s_f9aac8d65f926e::t_253aafcccc4436 2575-2576,2578,2585
+  s_1a0d5cb0a2900c::t_76184bbc0d8585 1406-1415
+  s_1a0d5cb0a2900c::t_6e4b1d5d389e56 1921,1924,1929-2029,2031-2055,2062
+  s_1a0d5cb0a2900c::t_83a996eb988e1c 2680-2685
+  s_1f4a653f13be4a::t_38ca1344c1a7d3 3743
+  s_1f4a653f13be4a::t_723c0cff4a48d0 3183-3187,3191,3196-3202,3205
+  s_f9aac8d65f926e::t_914798b86ac34d 2577
+  s_1f4a653f13be4a::t_7a5be182e1ed2c 951,958-959
+  s_f9aac8d65f926e::t_0f3dba51754ecf 379-380
+  s_1a0d5cb0a2900c::t_4410e77fd7462e 70,85
+  s_1a0d5cb0a2900c::t_0a83e6d95f38cf 2568-2574,2579-2584,2586-2594
+  s_1a0d5cb0a2900c::t_02a0e86e7cab96 71-72
+  s_f9aac8d65f926e::t_af9dff374a4faf 479-480
+  s_f9aac8d65f926e::t_1b65cea1d4ce0d 876
+  s_f9aac8d65f926e::t_b86cc2653ed886 884-886
+  s_1f4a653f13be4a::t_d6b7c587ccc794 960
+  s_1f4a653f13be4a::t_88687e74683332 1599
+  s_1a0d5cb0a2900c::t_99794dff5d127b 2030
+  s_1a0d5cb0a2900c::t_489ddd416b65d0 2056-2061
+  s_1a0d5cb0a2900c::t_bd921011d27ac5 2686
+  s_1a0d5cb0a2900c::t_d0c8f77670523b 2767-2768
+  s_1a0d5cb0a2900c::t_73d4c693f53a32 2898-2900,2921-2923
+bin/lib/runtime-context.mjs
+  s_1a0d5cb0a2900c::t_a423e2723ed935 2,122,206,214-227,233,238
+  s_1a0d5cb0a2900c::t_0a7f1dc3d5f791 234,240,242
+builtin/web-ui/dist/assets/index-DgQRkS4v.js
+  s_f9aac8d65f926e::t_4f6effaa606994 1-61
+bin/lib/composer-agent.mjs
+  s_1f4a653f13be4a::t_74a850c3bd3c2d 272-273
+bin/lib/catalog-flows.mjs
+  s_f9aac8d65f926e::t_34e62dbe207980 260,265-266
+builtin/web-ui/package-lock.json
+  s_1c79a5730c2045::t_6a755f738a3351 10,1734-1743,3077-3082,3326-3334
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "26c8bb884e5883d00b0cdb0b9adbe93d3ce9fcb4",
+  "prompts": {},
+  "logical_commit_id": "4892600fa565b018284362db67483eef39fc0530",
+  "sessions": {
+    "s_1a0d5cb0a2900c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f125c-eb6d-71b1-bd5d-d3205a1014ec",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_1c79a5730c2045": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019efccb-25a1-78d3-a468-e252ef5be7eb",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_1f4a653f13be4a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ef9a3-f9a1-7670-ad2d-22350ca999ed",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    },
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_98d3237c964562::t_d07bf1fbe11e67 5016-5018,5032
+builtin/web-ui/dist/assets/index-DmIUInUu.js
+  s_98d3237c964562::t_5241366c2d49c0 38,40,42,44,60,65-66,128,132-133,136,148,205,214,216,262-265,267,297
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_5241366c2d49c0 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "f8616fbcc0e7ce6bbbfcb4685216af5afd61f599",
+  "prompts": {},
+  "logical_commit_id": "2fc63f3b7a9d3859d550e8abc8c56cf62a2960e0",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

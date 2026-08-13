@@ -1,0 +1,30 @@
+builtin/web-ui/src/App.jsx
+  s_0475a63dba5f18::t_433905d3353386 233
+builtin/web-ui/dist/assets/index-Dm2KZuXt.js
+  s_0475a63dba5f18::t_c1e2ab297ffbed 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91,93,96-111,113-122,125-127,129,208-214,218,220,223,267-268,270,272,275-282,286-287,289-291,295,297,312,314,318,326,328,332,340-347,354,368,379-380,383,401,410,446,464,491,527,543,567,611,630,642,657,668,700,713,733,764,779,790,806,820,828,837,841,867
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Cmg_kYcn.js
+  s_0475a63dba5f18::t_c1e2ab297ffbed 1
+test/composer-assistant-ui.test.mjs
+  s_0475a63dba5f18::t_9cd5c0973a6f00 16,28
+builtin/web-ui/dist/index.html
+  s_0475a63dba5f18::t_c1e2ab297ffbed 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "059c8acc57e9e01f692e4779e3eba084eca31dd0",
+  "prompts": {},
+  "logical_commit_id": "b62df6a4ce082b6ca1075f5addcbced6aaabfb97",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 39583,
+      "total_deletions": 28066
+    }
+  }
+}

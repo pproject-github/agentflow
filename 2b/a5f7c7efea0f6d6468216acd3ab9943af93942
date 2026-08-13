@@ -1,0 +1,22 @@
+skills/agentflow-cli/SKILL.md
+  s_f2dd7a237fc27d::t_339f8483b49a65 16-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2ba5f7c7efea0f6d6468216acd3ab9943af93942",
+  "prompts": {},
+  "logical_commit_id": "ac7c9e996cb44b1fbeeb443daf11a69f1a87b42b",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 39761,
+      "total_deletions": 2206
+    }
+  }
+}

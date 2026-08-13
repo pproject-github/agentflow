@@ -1,0 +1,45 @@
+bin/lib/prd-workflow-collaboration.mjs
+  s_d99100a467f052::t_b294d42cb015a4 47-50,62-63,82-86,135-186
+  s_d99100a467f052::t_ac478df9199d10 87-92
+test/prd-workflow-collaboration-api.test.mjs
+  s_d99100a467f052::t_b917026706638f 70,80-83,87,111-121
+builtin/web-ui/dist/assets/index-CpZ5KUgk.js
+  s_d99100a467f052::t_126d9deef95b74 1,9,17,25,33,37-38,40-44,52,60,65-67,69-73,75,78-79,83-84,86-87,89,91-95,98-100,102,113-114,144,181-187,191-193,196,240-241,245,249,251-255,259-260,262-264,268-270,285,287,291,299,301,305,313-318,322,348
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_d99100a467f052::t_f70ca5b1a4fdf1 197,207,539-542,7192-7193,7232,7235-7236,7239-7252,7258,7263-7264,7267,7269,7272,7275-7279,7284-7289,7292,7294,7297,7300-7304,7367-7368,7623,7626,7635,7637-7640,7643-7646,7648-7650,7652-7667
+  s_d99100a467f052::t_3d369f09a413f9 7126,7132,7136-7137,7144,7148,7151,7154-7164,7508
+  s_d99100a467f052::t_88e95933b142b1 50,919-923,942-953,958
+bin/lib/ui-server.mjs
+  s_d99100a467f052::t_e0234778027dd5 10534-10643,10769,11586-11597,11641
+  s_d99100a467f052::t_f256fee6e7f08c 155,157,161,3233-3251,7278-7283,7286-7289,7293,7320-7321,7328,7330-7331
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_126d9deef95b74 18
+test/prd-workflow-ai-docs.test.mjs
+  s_d99100a467f052::t_4c780cc528d3ee 30-47,95
+  s_d99100a467f052::t_88e95933b142b1 5,28,48-93
+  s_d99100a467f052::t_e754890eb0f117 29
+builtin/web-ui/src/prdWorkflowAiDocs.js
+  s_d99100a467f052::t_88e95933b142b1 63-65,96-115,120
+  s_d99100a467f052::t_4c780cc528d3ee 36-39,59-62,67-68,72-73
+test/prd-workflow-collaboration.test.mjs
+  s_d99100a467f052::t_b917026706638f 85-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "89b1cd23b810ac4f3c7e3838e356ca7492c60b28",
+  "prompts": {},
+  "logical_commit_id": "68364852d54110ca57c5cbd844e4d8b7f10cdfd3",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 22946,
+      "total_deletions": 1178
+    }
+  }
+}

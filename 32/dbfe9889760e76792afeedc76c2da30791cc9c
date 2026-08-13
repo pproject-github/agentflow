@@ -1,0 +1,68 @@
+builtin/web-ui/src/useCanvasHistory.js
+  s_f9aac8d65f926e::t_765ca061930251 12,23
+  s_f9aac8d65f926e::t_9ee06d49928c47 1-11,13-22,24-86,88-95,97-167
+  s_f9aac8d65f926e::t_ef2e9bc801d744 87,96
+builtin/web-ui/src/i18n/locales/zh/flow.json
+  s_f9aac8d65f926e::t_709f73ffe60742 181-183
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_9af5f456815353 11729
+  s_f9aac8d65f926e::t_115eae2cb657ff 4026-4029
+  s_f9aac8d65f926e::t_4952af0a494aa2 3936-3938,3943-3944,11267-11268,11457,11461,11540-11544,11546,11725-11728,11730-11731
+  s_f9aac8d65f926e::t_2c2136dac75417 11545
+  s_f9aac8d65f926e::t_f7142dc33783c3 11732-11733
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_870e439e13820a 1210-1213
+  s_f9aac8d65f926e::t_ae5b384aab6408 3054-3055,3073-3077,3082
+builtin/web-ui/dist/assets/index-xdncUuHG.css
+  s_f9aac8d65f926e::t_ab79c8f4819db7 1
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_ab79c8f4819db7 19
+  s_f9aac8d65f926e::t_a5b6c819f5039c 18
+builtin/web-ui/dist/assets/index-RxaZhsJN.js
+  s_f9aac8d65f926e::t_a5b6c819f5039c 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-95,97-98,102-104,106,109-110,123,126-136,139-144,148-149,151,153,157,165,167,171,179-184,188,214
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f9aac8d65f926e::t_e3aa91594e3359 3216-3221,4149-4154,4172,4175-4176
+  s_f9aac8d65f926e::t_9f3dfeae1516d7 904
+  s_f9aac8d65f926e::t_775fc77d82a7da 957-958,962-966,1018,1021-1034,1036,1039,1046-1047
+  s_f9aac8d65f926e::t_4b850b99e2417d 1482-1493
+  s_f9aac8d65f926e::t_1ff9e20660628d 496-497,499-502,541
+  s_f9aac8d65f926e::t_cf668f0363166b 3960-3971,4024
+  s_f9aac8d65f926e::t_2244cd9c41bdf3 1153-1154
+  s_f9aac8d65f926e::t_a7e6602c4d710d 2201,2226
+  s_f9aac8d65f926e::t_3447d60f1fd46b 2271-2290,2296
+  s_f9aac8d65f926e::t_4b70e9b81fec30 1108,1112-1125,1139
+  s_f9aac8d65f926e::t_168e845142226f 408,450-454,3764-3771,3774-3775
+  s_f9aac8d65f926e::t_47572573c65c91 28
+  s_f9aac8d65f926e::t_44e32bb38cc3cc 3119,3123
+  s_f9aac8d65f926e::t_a36368c385f526 3207-3214
+  s_f9aac8d65f926e::t_1a42dbd2ce0503 2291-2295,2324,2327
+  s_f9aac8d65f926e::t_ee8c9eface6164 4051-4058,4060,4069,4071,4074,4077,4083,4087-4088,4102,4123
+builtin/web-ui/src/FlowNode.jsx
+  s_f9aac8d65f926e::t_4242731edfb053 129-130,132-133,326
+builtin/web-ui/src/i18n/locales/en/flow.json
+  s_f9aac8d65f926e::t_b8c1e03c72add6 181-183
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_f9aac8d65f926e::t_7213f39ed8fbfb 27
+  s_f9aac8d65f926e::t_c700e5532abc0f 2142,2160
+  s_f9aac8d65f926e::t_dad2447ac77e95 1555-1574
+  s_f9aac8d65f926e::t_80df0cbbf2c747 3112-3124,3192-3193
+builtin/web-ui/src/KeyboardShortcutsModal.jsx
+  s_f9aac8d65f926e::t_6cb6d99e6df7cb 110-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "32dbfe9889760e76792afeedc76c2da30791cc9c",
+  "prompts": {},
+  "logical_commit_id": "261aaea6af7c5f9bcaefd450e55fed0be44a56b5",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

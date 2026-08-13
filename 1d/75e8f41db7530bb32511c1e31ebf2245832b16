@@ -1,0 +1,39 @@
+builtin/web-ui/dist/assets/index-CdQmf-d5.js
+  s_9abdc979a6e3f3::t_5af1243fea65d2 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-79,83-84,87,89,91-95,98-100,102,181-188,192,194,197,241-242,246,250,252-256,260-261,263-265,269,271,286,288,292,300,302,306,314-320,324,350
+builtin/web-ui/src/App.jsx
+  s_9abdc979a6e3f3::t_15c1b8d4cab878 23-28,237
+test/prd-workflow-collaboration-api.test.mjs
+  s_9abdc979a6e3f3::t_15c1b8d4cab878 110-128
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_9abdc979a6e3f3::t_15c1b8d4cab878 10040-10046,10100
+  s_9abdc979a6e3f3::t_778c3e24c8153b 7814
+test/workspace-workflow-render-contract.test.mjs
+  s_9abdc979a6e3f3::t_15c1b8d4cab878 9,28,44-58
+builtin/web-ui/dist/index.html
+  s_9abdc979a6e3f3::t_5af1243fea65d2 18
+test/prd-workflow-action-links.test.mjs
+  s_9abdc979a6e3f3::t_72cbc819a713d7 361-377
+  s_9abdc979a6e3f3::t_75784f93ada8de 335-360
+builtin/web-ui/src/prdWorkflowActionLinks.js
+  s_9abdc979a6e3f3::t_75784f93ada8de 136-137,139,142,145-147,155-156,158,166-169,174-175,178
+  s_9abdc979a6e3f3::t_72cbc819a713d7 37-49,144,170-172,176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1d75e8f41db7530bb32511c1e31ebf2245832b16",
+  "prompts": {},
+  "logical_commit_id": "65e3d9367be1914c18e493a6aa52af0eca174fcc",
+  "sessions": {
+    "s_9abdc979a6e3f3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb5ed-4d37-7c93-8292-4c7f23e69ff0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 1184,
+      "total_deletions": 18
+    }
+  }
+}

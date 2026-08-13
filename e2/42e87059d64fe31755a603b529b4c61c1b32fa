@@ -1,0 +1,28 @@
+builtin/web-ui/dist/assets/index-DNmNzhui.js
+  s_98d3237c964562::t_ebdb7776f62919 40,128,148
+bin/lib/ui-server.mjs
+  s_98d3237c964562::t_02347e5ebb81a0 1179-1180
+  s_98d3237c964562::t_7c8895f452a8b4 1095,1103-1111,1132-1136,1141
+builtin/web-ui/src/components/SkillHubPanel.jsx
+  s_98d3237c964562::t_16e6d773a600e3 158-160,341-346
+  s_98d3237c964562::t_6ba15bfd7ebf89 108,156
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_ebdb7776f62919 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "e242e87059d64fe31755a603b529b4c61c1b32fa",
+  "prompts": {},
+  "logical_commit_id": "8cbe92355cc90d5ecddc495023797e48329dce2a",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

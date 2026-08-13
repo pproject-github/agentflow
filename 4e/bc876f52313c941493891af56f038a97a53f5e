@@ -1,0 +1,39 @@
+builtin/web-ui/src/index.css
+  s_f9aac8d65f926e::t_12ed6392bd6fe1 4593
+builtin/web-ui/dist/assets/index-CuOti87V.css
+  s_f9aac8d65f926e::t_4d3b724248481a 1
+skills/agentflow-workspace-chart/SKILL.md
+  s_f9aac8d65f926e::t_1c4192eeec9469 1-102
+skills/agentflow-workspace-table/SKILL.md
+  s_f9aac8d65f926e::t_1c4192eeec9469 1-65
+builtin/web-ui/dist/index.html
+  s_f9aac8d65f926e::t_4d3b724248481a 18-19
+builtin/web-ui/dist/assets/index-C4mRY3lk.js
+  s_f9aac8d65f926e::t_4d3b724248481a 25,37-38,40,42,44,52,60,65-67,69,110,123,126-128,132-134,136,143-147,152-153,155,183,186-188,192,218
+bin/lib/ui-server.mjs
+  s_f9aac8d65f926e::t_1c4192eeec9469 139-140,147-154
+  s_f9aac8d65f926e::t_d93be2ae3f2e0b 1432,1434-1501,1503,1509-1550
+  s_f9aac8d65f926e::t_e8909ee80242bf 146
+  s_f9aac8d65f926e::t_85d4a8e51e9393 1502
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_f9aac8d65f926e::t_72fe99a9f7dd65 396,403-404
+  s_f9aac8d65f926e::t_de56e656317d68 454,475-476,1612-1614,1679,4158-4161,4170
+  s_f9aac8d65f926e::t_aac11fecfe74ef 395,399-402,405-406,4149,4175-4180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "4ebc876f52313c941493891af56f038a97a53f5e",
+  "prompts": {},
+  "logical_commit_id": "78f883c2bb2a0234beb34665c2f5f13f6c3827cb",
+  "sessions": {
+    "s_f9aac8d65f926e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f131b-00fe-78d0-b9da-033b406475e2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

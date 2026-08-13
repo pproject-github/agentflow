@@ -1,0 +1,32 @@
+builtin/web-ui/src/mergeFlowNodes.js
+  s_98d3237c964562::t_d53867742bd724 80-86
+builtin/web-ui/dist/index.html
+  s_98d3237c964562::t_20320f6863ab6b 19
+  s_98d3237c964562::t_4170111c9d0992 18
+builtin/web-ui/src/FlowNode.jsx
+  s_98d3237c964562::t_bcc2c2c4b5696d 104-110,640-644
+  s_98d3237c964562::t_dac32ff026ea8a 645-646
+builtin/web-ui/src/index.css
+  s_98d3237c964562::t_e86dd3d07ff4e5 13587-13599
+builtin/web-ui/dist/assets/index-HCOtIF0J.js
+  s_98d3237c964562::t_4170111c9d0992 1,9,25,33,37-38,40,42,44,60,65-67,69,79-85,87-88,90-95,98,123,126-128,130,132-136,150,201,205-209,213-214,216,262-265,267,271,297
+builtin/web-ui/dist/assets/index-C7Z_ECuU.css
+  s_98d3237c964562::t_20320f6863ab6b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "af1526e1dafe668ada609e82a3ccd7c66a4ac995",
+  "prompts": {},
+  "logical_commit_id": "49591c1fe7de50489cde659fa1e87b41431df135",
+  "sessions": {
+    "s_98d3237c964562": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b7c-f559-79f1-9f83-8253f5acc700",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

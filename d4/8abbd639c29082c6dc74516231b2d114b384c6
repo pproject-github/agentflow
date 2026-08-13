@@ -1,0 +1,39 @@
+test/flow-dir-marker.test.mjs
+  s_0475a63dba5f18::t_1ee57edb652435 16
+  s_0475a63dba5f18::t_8f3b57aebeae26 99,101-102,104,108,110-140
+test/agentflow-cli-publish-code-flow.test.mjs
+  s_0475a63dba5f18::t_156cee51dfc015 30
+  s_0475a63dba5f18::t_4ca1deb4a15d0b 1-29,31-98
+bin/lib/flow-import.mjs
+  s_0475a63dba5f18::t_fbc24ae5f42f76 104-127,130
+  s_0475a63dba5f18::t_93b263a26caa77 164,169,172,182,201,207,213-215
+  s_0475a63dba5f18::t_a002f627ad3e10 100,216,317,319-327,342
+  s_0475a63dba5f18::t_daee484b5492c2 261
+  s_0475a63dba5f18::t_844389c640bfd8 2-7,13,16-20
+  s_0475a63dba5f18::t_a1fa98547e3e77 48-55,57-60,103
+  s_0475a63dba5f18::t_0ae611bfdd1883 21,101-102,217
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_0475a63dba5f18::t_355e7c8485dcdf 55,383-385,446
+  s_0475a63dba5f18::t_2b205fab37afff 330-340,342-361,363,367-368
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_617c1984729300 47,2664,2669
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d48abbd639c29082c6dc74516231b2d114b384c6",
+  "prompts": {},
+  "logical_commit_id": "0daeb5451bf990ecbbfe01f3908b76394e2e9a82",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 39836,
+      "total_deletions": 28119
+    }
+  }
+}

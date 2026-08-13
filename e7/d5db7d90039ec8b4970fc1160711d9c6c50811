@@ -1,0 +1,48 @@
+test/flow-dsl-packages.test.mjs
+  s_0475a63dba5f18::t_19ddc480bddbe7 1-74,77-136
+  s_0475a63dba5f18::t_ab52d3b977b394 75-76
+bin/lib/flow-dsl/parser.mjs
+  s_0475a63dba5f18::t_f707ad4dce83df 70
+  s_0475a63dba5f18::t_c06212aa34dff8 232-236
+  s_0475a63dba5f18::t_76bf36c4fbeb80 249-250
+  s_0475a63dba5f18::t_033136e1bb76ee 219-224,230-231,237-248,251-252
+docs/wiki/flow-dsl.zh-CN.md
+  s_0475a63dba5f18::t_e87479989577a3 97-121
+bin/lib/flow-dsl/codegen.mjs
+  s_0475a63dba5f18::t_1308764ba062b8 216-217
+  s_0475a63dba5f18::t_517294dd99941b 90-102,105-106,215
+bin/lib/flow-dsl/lint.mjs
+  s_0475a63dba5f18::t_76bf36c4fbeb80 141-144,152
+  s_0475a63dba5f18::t_1f2ac171beb688 22,99-100,102,109,119
+docs/wiki/flow-dsl.en.md
+  s_0475a63dba5f18::t_e87479989577a3 107-135
+bin/lib/flow-dsl/packages.mjs
+  s_0475a63dba5f18::t_84d349a713bf26 1-107
+bin/lib/workspace-flow-store.mjs
+  s_0475a63dba5f18::t_650c0b2aebc953 30,253-255
+  s_0475a63dba5f18::t_11cf71b38b144e 308-329,355,361,376
+  s_0475a63dba5f18::t_aec81559e45c1d 353-354,356,374
+  s_0475a63dba5f18::t_ac4e06af49f2f3 352
+bin/lib/flow-dsl/ir.mjs
+  s_0475a63dba5f18::t_10c3ce7fbb08bb 199-201
+  s_0475a63dba5f18::t_c06212aa34dff8 160-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e7d5db7d90039ec8b4970fc1160711d9c6c50811",
+  "prompts": {},
+  "logical_commit_id": "9abc36352b3f3f377921b38ef7605c708d265292",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 6301,
+      "total_deletions": 669
+    }
+  }
+}

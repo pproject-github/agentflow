@@ -1,0 +1,33 @@
+builtin/web-ui/src/index.css
+  s_72ec2a8cd6210d::t_4f59ffde8bb163 12092-12140
+  s_72ec2a8cd6210d::t_5d39cdfdf86431 12562,12611
+builtin/web-ui/dist/assets/index-5FR-_fLQ.js
+  s_72ec2a8cd6210d::t_199743a44da32a 1,9,17,25,33-34,36-38,40-44,52,60,65-67,69-73,75,78-82,84-95,97-98,102-110,123,126-136,139-141,143,147-152,156-157,159,161,165,173,175,179,187-192,196,222
+builtin/web-ui/dist/index.html
+  s_72ec2a8cd6210d::t_b3e8cc5e61db05 19
+  s_72ec2a8cd6210d::t_199743a44da32a 18
+builtin/web-ui/dist/assets/index-aJ0kAFdy.css
+  s_72ec2a8cd6210d::t_b3e8cc5e61db05 1
+builtin/web-ui/src/pages/FlowEditorPage.jsx
+  s_72ec2a8cd6210d::t_bd4d580599ee22 120
+  s_72ec2a8cd6210d::t_b415d8f909fae5 338,340-360,362
+  s_72ec2a8cd6210d::t_f4eba1924b1aaf 87,89-119,121-168,198-224
+  s_72ec2a8cd6210d::t_0a02c66bb056bf 361
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "717492b12d2a1c10adda79ebf2fb884a5fca1645",
+  "prompts": {},
+  "logical_commit_id": "3b4f7098b1f6118016ca476b972eb2f3a7911591",
+  "sessions": {
+    "s_72ec2a8cd6210d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1b87-b6b3-7df1-a0fa-4bc751ba0689",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

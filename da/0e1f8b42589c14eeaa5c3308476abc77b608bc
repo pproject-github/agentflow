@@ -1,0 +1,30 @@
+docs/wiki/flow-directory-marker.zh-CN.md
+  s_0475a63dba5f18::t_6ae7ffdc16265d 74
+bin/lib/main.mjs
+  s_0475a63dba5f18::t_dc3492188b5162 33,210
+bin/lib/marketplace.mjs
+  s_0475a63dba5f18::t_6828970623e63c 335-341
+docs/wiki/flow-directory-marker.en.md
+  s_0475a63dba5f18::t_6ae7ffdc16265d 82
+skills/agentflow-node-authoring/SKILL.md
+  s_0475a63dba5f18::t_6ae7ffdc16265d 139-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "da0e1f8b42589c14eeaa5c3308476abc77b608bc",
+  "prompts": {},
+  "logical_commit_id": "5900a9aefb35d3ad7eeb7148ca693af374916fc7",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 37636,
+      "total_deletions": 27781
+    }
+  }
+}

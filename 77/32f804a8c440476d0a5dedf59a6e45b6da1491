@@ -1,0 +1,24 @@
+builtin/web-ui/src/pipelineViewPreference.js
+  s_f2dd7a237fc27d::t_ab26a38b4b99d8 28,65,70,72
+builtin/web-ui/src/App.jsx
+  s_f2dd7a237fc27d::t_436129fb97e9c4 19-33,79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "7732f804a8c440476d0a5dedf59a6e45b6da1491",
+  "prompts": {},
+  "logical_commit_id": "0c16d065a595c4acf878a579d374aca78a3ffe1e",
+  "sessions": {
+    "s_f2dd7a237fc27d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5946-8bb8-7dd0-8b3f-2c7d14c9b669",
+        "model": "gpt-5.5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 5597,
+      "total_deletions": 218
+    }
+  }
+}

@@ -1,0 +1,24 @@
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_d78892240c0556 18
+builtin/web-ui/dist/assets/index-CG6I1UVv.js
+  s_d99100a467f052::t_d78892240c0556 9,33,37-38,40,42,44,60,65-67,69,73,75,78-79,84,87,91-95,98-100,181-188,192,194,197,241-242,246,250,252-256,260-261,263-265,269,271,286,288,292,300,302,306,314-320,324,350
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9b41610a28f6f45934479470831a00bb1967204c",
+  "prompts": {},
+  "logical_commit_id": "fd5ff448b316d4e68cdfb0226970480d93844f1e",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 351,
+      "total_deletions": 1
+    }
+  }
+}

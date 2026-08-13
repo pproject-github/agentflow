@@ -1,0 +1,45 @@
+bin/lib/ui-server.mjs
+  s_0475a63dba5f18::t_a8766d55d8b541 17690-17692,17708,17843-17845,17855,18013-18014,18082-18083
+  s_0475a63dba5f18::t_c7218fc528b8dc 18036,18105
+  s_0475a63dba5f18::t_084119d6d09389 1807-1827
+bin/lib/workspace-state.mjs
+  s_0475a63dba5f18::t_4d38caae4a1926 164-192
+bin/lib/workspace-graph-merge.mjs
+  s_0475a63dba5f18::t_f540c7b7faaf24 179
+  s_0475a63dba5f18::t_b5adafbc194b43 121,126,137-138
+  s_0475a63dba5f18::t_28fb8b0679bb75 202-208
+  s_0475a63dba5f18::t_49afe1d93c1ac3 41-47,49
+  s_0475a63dba5f18::t_0d9f996cadf7c4 3-4
+  s_0475a63dba5f18::t_f1c3d4dc0f31ef 114-120,124-125,127-128,130-133,135-136,139
+docs/wiki/flow-dsl.zh-CN.md
+  s_0475a63dba5f18::t_e4057be5283e88 97-107
+test/workspace-collaboration-revision.test.mjs
+  s_0475a63dba5f18::t_ca0f2285dba8d9 1-198
+bin/lib/workspace-flow-store.mjs
+  s_0475a63dba5f18::t_d2cf510f233852 288-291,294,307,318,324,337,353,371,403-406
+docs/wiki/workspace-state-split.en.md
+  s_0475a63dba5f18::t_f647cc0bedd481 35-54
+docs/wiki/workspace-state-split.zh-CN.md
+  s_0475a63dba5f18::t_f647cc0bedd481 32-48
+docs/wiki/flow-dsl.en.md
+  s_0475a63dba5f18::t_e4057be5283e88 107-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c123747aa57429cb3709a01e5371ff00f8b23b43",
+  "prompts": {},
+  "logical_commit_id": "5dd5b746aabe149f8c56f2bdebc4fc6dbdde323d",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 4483,
+      "total_deletions": 442
+    }
+  }
+}

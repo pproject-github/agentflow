@@ -1,0 +1,58 @@
+skills/agentflow-flow-dsl/SKILL.md
+  s_0475a63dba5f18::t_fbe28531853da6 41,52
+  s_0475a63dba5f18::t_d446f1fc325c50 94-113
+  s_0475a63dba5f18::t_b0ca3a058562b6 53
+  s_0475a63dba5f18::t_9f932fb926dc7a 93
+test/flow-dsl-js-habits.test.mjs
+  s_0475a63dba5f18::t_55967653bdac75 61-63
+  s_0475a63dba5f18::t_8888c19a6cc736 1-60,64-190
+bin/lib/flow-dsl/lint.mjs
+  s_0475a63dba5f18::t_5be075d70e5696 178-186
+bin/lib/flow-dsl/codegen.mjs
+  s_0475a63dba5f18::t_a654c1dc0e8dc2 256,259
+  s_0475a63dba5f18::t_e8b8133a97c09e 269-273
+  s_0475a63dba5f18::t_2db95656f972d9 139-180,184
+  s_0475a63dba5f18::t_431a073cc41aa6 41-54
+  s_0475a63dba5f18::t_77c0be17732241 190-191,199,206
+  s_0475a63dba5f18::t_4118d0c0e60d3e 138
+bin/lib/flow-dsl/parser.mjs
+  s_0475a63dba5f18::t_4a3d6fffcd79da 353
+  s_0475a63dba5f18::t_87a74fde605eaa 120-129,131,146-149,154-168,170,172
+  s_0475a63dba5f18::t_96c8079dfe8a2a 130,136-137,145,150-153
+  s_0475a63dba5f18::t_b56ed4e5c0f813 65-73,117
+  s_0475a63dba5f18::t_570d3181001a3c 219-223
+  s_0475a63dba5f18::t_ddfe886f33f493 24-38
+  s_0475a63dba5f18::t_b2c7ffa448a115 132-135,138-144
+  s_0475a63dba5f18::t_2ceac3ab0b573a 307-316
+  s_0475a63dba5f18::t_2a59a73139dbd6 350-352,354-377
+  s_0475a63dba5f18::t_9876feb26148a9 407
+  s_0475a63dba5f18::t_29c7db0836c964 118-119
+docs/wiki/flow-dsl.en.md
+  s_0475a63dba5f18::t_84d6a251a4e557 129-133
+  s_0475a63dba5f18::t_1c7fefa5f1fcca 64-92
+docs/wiki/flow-dsl.zh-CN.md
+  s_0475a63dba5f18::t_60096cf4e2f9dc 116-119
+  s_0475a63dba5f18::t_765bff39ed919a 59-84
+bin/lib/flow-dsl/ir.mjs
+  s_0475a63dba5f18::t_d08cc1fb82880a 177,179
+  s_0475a63dba5f18::t_6570a86447e94b 98,107-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "97ec130ab0fac8e0230d39f35c1dbb0cd48a8008",
+  "prompts": {},
+  "logical_commit_id": "1f868075b9cc0cf20f934d5f4868c564eb542681",
+  "sessions": {
+    "s_0475a63dba5f18": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aebf87eb-bb3e-4e11-b9a9-08ee7c97058f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 6854,
+      "total_deletions": 691
+    }
+  }
+}

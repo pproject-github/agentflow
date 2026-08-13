@@ -1,0 +1,22 @@
+package-lock.json
+  s_f532c6a4bbe8de::t_4f1ef0d9219f54 3,9
+package.json
+  s_f532c6a4bbe8de::t_e5f04c4a51f72a 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "df94dfb927c4e050e4dd6b2b189e2d63530a0c14",
+  "prompts": {},
+  "logical_commit_id": "478ffd9d6bd4e4e8e635af8a0b91e43dbc7fd7f1",
+  "sessions": {
+    "s_f532c6a4bbe8de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb13d-ed3d-71b2-b7ed-f3edf638317d",
+        "model": "unknown"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>"
+    }
+  }
+}

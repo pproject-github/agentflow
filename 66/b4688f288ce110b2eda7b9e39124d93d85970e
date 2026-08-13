@@ -1,0 +1,24 @@
+builtin/web-ui/dist/assets/index-CMhJOTqm.js
+  s_d99100a467f052::t_6063a81a2104e5 42,44,65,245,249,251,260-264,313
+builtin/web-ui/dist/index.html
+  s_d99100a467f052::t_6063a81a2104e5 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "66b4688f288ce110b2eda7b9e39124d93d85970e",
+  "prompts": {},
+  "logical_commit_id": "a04f66f93266bd2196dc3f8b86f8cf8ec1f032a1",
+  "sessions": {
+    "s_d99100a467f052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa173-7dbe-7842-aea7-4569334e6e0b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <woyunowuyuda@gmail.com>",
+      "total_additions": 1355,
+      "total_deletions": 78
+    }
+  }
+}
