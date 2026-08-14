@@ -22,7 +22,7 @@ const structure = display.markdown("项目结构分析", {
 ```
 
 超过 3000 字符的正文抽成文件，写 `file("docs/structure.md")`。画布语法见
-**agentflow-workspace-graph** / **agentflow-flow-dsl**。
+**agentflow-flow-dsl**。
 
 ## 内容规范
 

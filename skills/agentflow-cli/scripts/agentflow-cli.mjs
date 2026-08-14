@@ -63,17 +63,27 @@ Commands:
   node-package-install --node <id>@<version> [--workspace-root <dir>]
   node-package-sync --flow <flowDir|workspace.flow.js> [--workspace-root <dir>]
   pull-flow --flow-id <id> [--flow-source user] [--output <flowDir>] [--workspace-root <dir>] [--replace]
-  publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--with-dependencies] [--replace]
+  publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--schedule enabled|disabled|preserve] [--with-dependencies] [--replace]
   get-graph --flow-id <id> [--flow-source user]
   migrate-flow --flow-id <id> [--flow-source user] [--archived] [--allow-loss]
   migrate-all [--include-archived] [--allow-loss] [--dry-run]
   workspace-preview --file <flowDir|workspace.flow.js|workspace.graph.json> [--preview-id <id>] [--ttl-seconds <n>]
+  draft-create --file <flowDir|workspace.flow.js|workspace.graph.json> [--draft-id <id>] [--ttl-seconds <n>] [--with-dependencies]
+  draft-pull --draft-id <id> [--output <flowDir>] [--workspace-root <dir>] [--replace]
+  draft-update --draft-id <id> --base-revision <revision> --file <flowDir|workspace.flow.js|workspace.graph.json> [--ttl-seconds <n>] [--with-dependencies]
+  draft-run --draft-id <id> [--run-node-id <id>] [--input k=v]
+  draft-publish --draft-id <id> --flow-id <id> [--target-space personal|workspace|team] [--schedule enabled|disabled|preserve]
   run --flow-id <id> [--flow-source user] [--run-node-id <id>] [--input k=v]
   status --flow-id <id> [--flow-source user]
   list-run-by-workspace | list-runs-by-workspace --workspace <flowId> [--limit 20]
   list-runs [--flow-id <id>] [--flow-source user] [--limit 20]
   logs --run-id <id>
   display-outputs --flow-id <id> [--flow-source user]
+  schedule-list [--flow-id <id>] [--flow-source user]
+  schedule-set --flow-id <id> --schedule-node-id <id> [--enabled true|false] [--cron <expr>] [--timezone <tz>] [--overlap-policy skip]
+  schedule-enable --flow-id <id> --schedule-node-id <id>
+  schedule-disable --flow-id <id> --schedule-node-id <id>
+  schedule-run-now --flow-id <id> --schedule-node-id <id> [--input k=v]
   sync-workspace --workspace <id>
   workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only] [--admin-operation repair-version-membership]
   workflow-access-sync --workflow tapd:<id> --file <access.json>
@@ -488,6 +498,7 @@ async function pullFlow(args) {
     ok: true,
     flowId,
     flowSource,
+    draft: current.draft === true,
     outputDir,
     revision: current.revision || "",
     format: written.format,
@@ -527,6 +538,60 @@ function parseInputs(args) {
     inputs[text.slice(0, index)] = text.slice(index + 1);
   }
   return inputs;
+}
+
+function parseBooleanOption(value, name) {
+  if (value === true || value === "true" || value === "1") return true;
+  if (value === false || value === "false" || value === "0") return false;
+  throw new Error(`${name} must be true or false.`);
+}
+
+async function runRemoteWorkspace(args, { flowId, flowSource = "user", runNodeId = "" }) {
+  const graphPayload = await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`);
+  const result = await httpJson(args, "/api/workspace/run", {
+    method: "POST",
+    body: {
+      flowId,
+      flowSource,
+      runNodeId,
+      runAlias: option(args, "run-alias") || "",
+      graph: graphPayload.graph,
+      inputs: parseInputs(args),
+    },
+  });
+  return {
+    ...result,
+    displayOutputs: extractDisplayOutputs(result?.graph),
+  };
+}
+
+async function prepareDraftGraph(args) {
+  const requestedFile = option(args, "file");
+  const withDependencies = args["with-dependencies"] === true;
+  let publishedNodePackages = [];
+  let rewrittenImports = [];
+  if (withDependencies) {
+    const rawSource = readFlowSourceFile(requestedFile, { allowPackageDependencies: true });
+    const source = await prepareFlowWithDependencies(args, requestedFile, rawSource);
+    publishedNodePackages = source.publishedNodePackages || [];
+    rewrittenImports = source.rewrittenImports || [];
+  }
+  const graph = await readWorkspaceGraphArg(requestedFile, path.resolve(option(args, "workspace-root") || process.cwd()));
+  const nodeDependencies = await graphNodePackageDependencies(graph);
+  if (nodeDependencies.length) {
+    const remoteByKey = await remoteNodePackageCatalog(args);
+    const missing = nodeDependencies.filter((item) => !remoteByKey.has(`${item.id}@${item.version}`));
+    if (missing.length) {
+      throw new Error(`Cannot create draft: server is missing node packages ${missing.map((item) => item.specifier).join(", ")}.`);
+    }
+  }
+  return {
+    graph,
+    file: path.resolve(String(requestedFile || "")),
+    nodeDependencies: nodeDependencies.map((item) => item.specifier),
+    publishedNodePackages,
+    rewrittenImports,
+  };
 }
 
 function slotText(slots, names = []) {
@@ -755,14 +820,46 @@ function isMissingPublishedFlowError(error) {
   return error?.status === 400 && /Pipeline directory not found/i.test(String(error?.message || ""));
 }
 
-async function importFlow(args, { flowId, targetSpace, resolved, flowYaml }) {
+async function importFlow(args, { flowId, targetSpace, scheduleMode = "disabled", resolved, flowYaml }) {
   const form = new FormData();
   form.set("flowId", flowId);
   form.set("targetSpace", targetSpace);
+  form.set("scheduleMode", scheduleMode);
   const name = path.basename(resolved);
   const mime = /\.m?js$/i.test(name) ? "application/javascript" : "application/yaml";
   form.set("file", new Blob([flowYaml], { type: mime }), name);
   return httpMultipart(args, "/api/flows/import", form);
+}
+
+function normalizeScheduleMode(args, fallback = "disabled") {
+  const scheduleMode = String(option(args, "schedule") || fallback).trim().toLowerCase();
+  if (!["enabled", "disabled", "preserve"].includes(scheduleMode)) {
+    throw new Error("--schedule must be enabled, disabled, or preserve.");
+  }
+  return scheduleMode;
+}
+
+function graphWithScheduleMode(graph, scheduleMode = "disabled") {
+  if (scheduleMode === "preserve") return graph;
+  const instances = { ...(graph?.instances || {}) };
+  let scheduleCount = 0;
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
+    scheduleCount += 1;
+    let config = {};
+    try {
+      const parsed = JSON.parse(String(instance.body || "{}"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) config = parsed;
+    } catch {}
+    instances[nodeId] = {
+      ...instance,
+      body: JSON.stringify({ ...config, enabled: scheduleMode === "enabled" }),
+    };
+  }
+  if (scheduleMode === "enabled" && scheduleCount === 0) {
+    throw new Error("Cannot enable scheduling: the Flow has no Scheduled Run node.");
+  }
+  return { ...graph, instances };
 }
 
 async function resolvePublishTeam(args, shareWithTeam) {
@@ -885,10 +982,23 @@ async function main() {
     return;
   }
 
+  if (command === "draft-pull") {
+    const draftId = option(args, "draft-id");
+    if (!draftId) throw new Error("draft-pull requires --draft-id <id>.");
+    args["flow-id"] = draftId;
+    args["flow-source"] = "user";
+    const result = await pullFlow(args);
+    if (result.ok && result.draft !== true) throw new Error(`${draftId} is not a Workspace Draft.`);
+    printJson({ ...result, draftId });
+    if (!result.ok) process.exitCode = 2;
+    return;
+  }
+
   if (command === "publish-flow") {
     const flowId = requireFlowId(args);
     const destination = targetDestinationFromArgs(args);
     const targetSpace = destination.flowSource;
+    const scheduleMode = normalizeScheduleMode(args);
     const withDependencies = args["with-dependencies"] === true;
     const requestedFile = option(args, "file");
     const rawSource = readFlowSourceFile(requestedFile, { allowPackageDependencies: withDependencies });
@@ -915,7 +1025,7 @@ async function main() {
     const dependencyPreflight = await preflightRemoteFlowDependencies(args, source);
 
     if (!replace) {
-      const result = await importFlow(args, { flowId, targetSpace, ...source });
+      const result = await importFlow(args, { flowId, targetSpace, scheduleMode, ...source });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
       printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved, nodeDependencies: dependencyPreflight.map((item) => item.specifier), rewrittenImports: source.rewrittenImports || [], publishedNodePackages: source.publishedNodePackages || [] });
       return;
@@ -924,16 +1034,16 @@ async function main() {
     // 更新走哪条路取决于存储格式：yaml 流程改 /api/flow，代码化流程改 Workspace 图。
     // /api/flow 只认 flowYaml 字符串，代码化的流程发过去等于把图退回成 yaml。
     if (!current) {
-      const result = await importFlow(args, { flowId, targetSpace, ...source });
+      const result = await importFlow(args, { flowId, targetSpace, scheduleMode, ...source });
       const sharedTeam = await sharePublishedFlowWithTeam(args, { flowId, flowSource: targetSpace, team });
       printJson({ ...result, action: "created", targetSpace: team ? "team" : targetSpace, team: sharedTeam, file: source.resolved, nodeDependencies: dependencyPreflight.map((item) => item.specifier), rewrittenImports: source.rewrittenImports || [], publishedNodePackages: source.publishedNodePackages || [] });
       return;
     }
     if (source.isCode) {
-      const graph = await readWorkspaceGraphArg(
+      const graph = graphWithScheduleMode(await readWorkspaceGraphArg(
         option(args, "file"),
         path.resolve(option(args, "workspace-root") || process.cwd()),
-      );
+      ), scheduleMode);
       const updated = await httpJson(args, "/api/workspace/graph", {
         method: "POST",
         body: { flowId, flowSource: targetSpace, graph, baseRevision: current.revision },
@@ -1088,26 +1198,66 @@ async function main() {
     return;
   }
 
+  if (command === "draft-create" || command === "draft-update" || command === "workspace-draft") {
+    const draftId = option(args, "draft-id") || "";
+    if (command === "draft-update" && !draftId) throw new Error("draft-update requires --draft-id <id>.");
+    const baseRevision = option(args, "base-revision") || "";
+    if (command === "draft-update" && !baseRevision) {
+      throw new Error("draft-update requires --base-revision <revision>. Pull the Draft first if the revision is unknown.");
+    }
+    const prepared = await prepareDraftGraph(args);
+    const result = await httpJson(args, "/api/workspace/draft", {
+      method: "POST",
+      body: {
+        graph: prepared.graph,
+        draftId,
+        baseRevision,
+        title: option(args, "title") || "Workspace Draft",
+        ttlSeconds: option(args, "ttl-seconds") ? Number(option(args, "ttl-seconds")) : undefined,
+        resetRuntime: args["keep-runtime"] !== true,
+      },
+    });
+    printJson({ ...result, ...prepared });
+    return;
+  }
+
+  if (command === "draft-run") {
+    const draftId = option(args, "draft-id");
+    if (!draftId) throw new Error("draft-run requires --draft-id <id>.");
+    printJson(await runRemoteWorkspace(args, {
+      flowId: draftId,
+      flowSource: "user",
+      runNodeId: option(args, "run-node-id") || "",
+    }));
+    return;
+  }
+
+  if (command === "draft-publish" || command === "draft-promote") {
+    const draftId = option(args, "draft-id");
+    if (!draftId) throw new Error("draft-publish requires --draft-id <id>.");
+    const flowId = requireFlowId(args);
+    const destination = targetDestinationFromArgs(args);
+    const targetSpace = destination.shareWithTeam ? "team" : destination.flowSource === "user" ? "personal" : "workspace";
+    const scheduleMode = normalizeScheduleMode(args);
+    const team = await resolvePublishTeam(args, destination.shareWithTeam);
+    const result = await httpJson(args, "/api/workspace/draft/publish", {
+      method: "POST",
+      body: { draftId, flowId, targetSpace, scheduleMode },
+    });
+    const sharedTeam = await sharePublishedFlowWithTeam(args, {
+      flowId,
+      flowSource: destination.flowSource,
+      team,
+    });
+    printJson({ ...result, team: sharedTeam, targetSpace });
+    return;
+  }
+
   if (command === "run") {
     const flowId = requireFlowId(args);
     const flowSource = option(args, "flow-source") || "user";
     const runNodeId = option(args, "run-node-id") || "";
-    const graphPayload = await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`);
-    const result = await httpJson(args, "/api/workspace/run", {
-      method: "POST",
-      body: {
-        flowId,
-        flowSource,
-        runNodeId,
-        runAlias: option(args, "run-alias") || "",
-        graph: graphPayload.graph,
-        inputs: parseInputs(args),
-      },
-    });
-    printJson({
-      ...result,
-      displayOutputs: extractDisplayOutputs(result?.graph),
-    });
+    printJson(await runRemoteWorkspace(args, { flowId, flowSource, runNodeId }));
     return;
   }
 
@@ -1148,6 +1298,44 @@ async function main() {
     const flowSource = option(args, "flow-source") || "user";
     const graphPayload = await httpJson(args, `/api/workspace/graph${query({ flowId, flowSource })}`);
     printJson({ flowId, flowSource, displayOutputs: extractDisplayOutputs(graphPayload.graph) });
+    return;
+  }
+
+  if (command === "schedule-list") {
+    const flowId = option(args, "flow-id") || "";
+    const flowSource = option(args, "flow-source") || "user";
+    if (flowId) {
+      printJson(await httpJson(args, `/api/workspace/schedules${query({ flowId, flowSource })}`));
+    } else {
+      printJson(await httpJson(args, "/api/schedules"));
+    }
+    return;
+  }
+
+  if (["schedule-set", "schedule-enable", "schedule-disable"].includes(command)) {
+    const flowId = requireFlowId(args);
+    const flowSource = option(args, "flow-source") || "user";
+    const scheduleNodeId = option(args, "schedule-node-id");
+    if (!scheduleNodeId) throw new Error(`${command} requires --schedule-node-id <id>.`);
+    const body = { flowId, flowSource, scheduleNodeId };
+    if (command === "schedule-enable") body.enabled = true;
+    if (command === "schedule-disable") body.enabled = false;
+    if (command === "schedule-set" && args.enabled !== undefined) {
+      body.enabled = parseBooleanOption(args.enabled, "--enabled");
+    }
+    if (args.cron !== undefined) body.cron = option(args, "cron");
+    if (args.timezone !== undefined) body.timezone = option(args, "timezone");
+    if (args["overlap-policy"] !== undefined) body.overlapPolicy = option(args, "overlap-policy");
+    printJson(await httpJson(args, "/api/workspace/schedule/config", { method: "POST", body }));
+    return;
+  }
+
+  if (command === "schedule-run-now") {
+    const flowId = requireFlowId(args);
+    const flowSource = option(args, "flow-source") || "user";
+    const scheduleNodeId = option(args, "schedule-node-id");
+    if (!scheduleNodeId) throw new Error("schedule-run-now requires --schedule-node-id <id>.");
+    printJson(await runRemoteWorkspace(args, { flowId, flowSource, runNodeId: scheduleNodeId }));
     return;
   }
 

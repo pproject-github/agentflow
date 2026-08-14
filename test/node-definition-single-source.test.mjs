@@ -205,7 +205,8 @@ test("skills 里的完整流程示例本身能过 lint", async () => {
     }
   };
   walk(path.join(repoRoot, "skills"));
-  assert.ok(examples.length >= 3, `只找到 ${examples.length} 个完整示例，扫描大概坏了`);
+  // workspace-graph 已合并进 flow-dsl，不再为了凑数量维护一份重复完整示例。
+  assert.ok(examples.length >= 2, `只找到 ${examples.length} 个完整示例，扫描大概坏了`);
 
   const failures = [];
   for (const example of examples) {

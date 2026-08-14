@@ -125,22 +125,32 @@ function LoopSection({ section, data }) {
 function DecisionSection({ section, data }) {
   const current = slotText(data?.outputs, section.output, "").toLowerCase();
   const source = data?.whileSubflowInfo?.condition ? "Condition.decision" : section.source;
+  const options = Array.isArray(section.options) ? section.options : [];
+  const currentOption = options.find((option) => option.value === current);
+  const isFinal = current === "done" || current === "fail";
+  const phase = current ? (isFinal ? "FINAL DECISION" : "CURRENT DECISION") : "AWAITING DECISION";
+  const value = currentOption?.label || current || "尚未运行";
+  const description = currentOption?.description || (current
+    ? `Condition 返回了 ${current}`
+    : `等待 ${source || section.output} 返回结果`);
+  const help = options.length
+    ? options.map((option) => `${option.label}: ${option.description || option.value}`).join("\n")
+    : "Condition 的输出决定 While 下一步行为";
   return (
     <section className="af-node-ui-kit__section af-node-ui-kit__decision">
       <div className="af-node-ui-kit__section-title-row">
         <SectionHeading label={section.label} />
         {source ? <code>{source}</code> : null}
       </div>
-      <div className="af-node-ui-kit__decision-options">
-        {(section.options || []).map((option) => (
-          <span
-            key={option.value}
-            className={`af-node-ui-kit__decision-option af-node-ui-kit__tone--${option.tone}${current === option.value ? " is-active" : ""}`}
-            title={option.description || option.label}
-          >
-            {option.label}
-          </span>
-        ))}
+      <div className={`af-node-ui-kit__decision-status af-node-ui-kit__tone--${currentOption?.tone || "neutral"}`}>
+        <span className="af-node-ui-kit__decision-phase">{phase}</span>
+        <strong className={current ? "is-resolved" : ""}>{value}</strong>
+        <em title={description}>{description}</em>
+        <span
+          className="material-symbols-outlined af-node-ui-kit__decision-help nodrag"
+          title={help}
+          aria-label="查看决策语义"
+        >help</span>
       </div>
     </section>
   );

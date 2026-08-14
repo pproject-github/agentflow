@@ -102,8 +102,7 @@ draw an edge from a downstream node back to an upstream one.
 
 ## Edit The Graph
 
-- Structure, nodes, edges: **agentflow-workspace-graph**
-- Full syntax and the node call table: **agentflow-flow-dsl**
+- Structure, nodes, edges, full syntax and node calls: **agentflow-flow-dsl**
 - Node implementations in code: `nodes/<name>/index.mjs`, see **agentflow-flow-dsl**
 
 Saving is handled by the Workspace API; there is no separate canvas-sync step.

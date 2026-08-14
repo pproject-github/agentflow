@@ -205,7 +205,7 @@ AgentFlow/
 
 > The rest of this section is about **`flow.yaml`**, which is legacy read/migrate/audit
 > material. To change a Workspace graph, edit `workspace.flow.js` — see
-> `agentflow-workspace-graph` / `agentflow-flow-dsl`.
+> `agentflow-flow-dsl`.
 
 ### Editing Existing Node Fields (`agentflow-flow-edit-node-fields`)
 

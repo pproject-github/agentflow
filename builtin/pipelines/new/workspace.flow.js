@@ -10,7 +10,7 @@ const flowId = provide.str("新流程 ID", {
 
 // 规划和落地都得照 DSL 语法写，技能直接注入，不再单独跑一个收集节点
 const skills = control.loadSkills("加载 DSL 技能", {
-  skillKeys: "agentflow-flow-dsl,agentflow-node-reference,agentflow-workspace-graph",
+  skillKeys: "agentflow-flow-dsl,agentflow-node-reference",
 });
 
 // ── ① 规划 ──────────────────────────────────────────────────────────

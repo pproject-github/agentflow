@@ -2,8 +2,8 @@
 name: agentflow-flow-dsl
 description: >-
   用 workspace.flow.js（受限 ESM）编写 AgentFlow Workspace 流程图。适用于新建流程、
-  修改流程结构、添加或删除节点、修改连线、控制顺序、分支、子流程、受控循环和定时入口；
-  自定义代码节点包改用 agentflow-node-dsl。
+  在现有 Workspace 画布中添加或删除节点、修改字段和连线，以及编排控制顺序、分支、
+  子流程、受控循环和定时入口；自定义代码节点包改用 agentflow-node-dsl。
 ---
 
 # AgentFlow Flow DSL
@@ -42,10 +42,24 @@ lint 不通过先修结构，不要排版。`layout` 默认只给缺坐标的新
 
 1. `lint` 校验节点、引脚和拓扑
 2. `layout` 生成或补齐坐标
-3. 如果本地 UI 已打开，再刷新或按 UI 同步 skill 通知画布加载磁盘结果
+3. 如果本地 UI 已打开，刷新画布加载磁盘结果；需要远端审图和试运行时交给
+   `agentflow-author-flow` 创建可运行 Draft
 
 自动排版按依赖从左到右放置，控制主链保持同一视觉轴，数据源放在上方，展示节点与同层主链
 错开，分支纵向展开。不要为了“看起来差不多”自行猜坐标。
+
+## 直接修改现有 Workspace
+
+用户明确要求在现有画布中加节点、改字段或连线时，先读当前 `workspace.flow.js`，只修改目标
+节点和相关引用，不要重建整张图。保留未涉及的节点 id、控制顺序、数据边、子流程契约和用户
+已有布局；新增节点再由 `layout` 补坐标。
+
+- 只放展示内容且不需要执行的 `display.*` 节点可以不写进 `flow(...)`。
+- `display.*` 的字面量写在 `content` 输入；连接上游时引用 `source.slot`。它的 `content`
+  输出仍可接给后续 agent 作为上下文。
+- 不直接编辑 `workspace.layout.json`、`workspace.nodes.json` 或 `workspace.state.json`。
+- 本地改完仍必须执行 `lint` 和 `layout`。需要可保存、可试运行的远端画布时，交给
+  `agentflow-author-flow` 创建 Draft；只读分享才使用 `workspace-preview`。
 
 ## 交付状态与用户验收
 
@@ -59,6 +73,9 @@ GitLab 等外部系统时，必须验证真实请求、账号权限、网络、�
 
 用户明确确认实际流程跑通后，才能将状态更新为“生产同构验收通过，可发布/可上线”。如果流程里有
 自定义代码节点，同时遵守 `agentflow-node-dsl` 里更严格的两级验证闸门。
+
+面向用户的新流程不要直接正式发布。完成 lint/layout 后使用 `agentflow-author-flow` 的
+Draft → 试运行 → 动态修改 → 明确确认 → 发布/定时流程；只读 `workspace-preview` 不能代替试运行。
 
 ## 图结构：workspace.flow.js
 

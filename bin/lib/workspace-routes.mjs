@@ -27,16 +27,19 @@ import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } fr
 import { inspectNodePackageDirectory } from "./node-package-archive.mjs";
 import { json, readBody } from "./http-util.mjs";
 import { log } from "./log.mjs";
-import { PACKAGE_ROOT, getAgentflowUserDataRoot } from "./paths.mjs";
+import { PACKAGE_ROOT, PIPELINES_DIR, getAgentflowUserDataRoot, getUserPipelinesRoot } from "./paths.mjs";
+import { validateUserPipelineId } from "./flow-write.mjs";
 import { runLedgerId } from "./run-ledger.mjs";
 import { getTeamById, getTeamForUser } from "./teams.mjs";
 import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
-import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
+import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, deleteWorkspaceCollaborationForFlow, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
 import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
+import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
@@ -190,6 +193,29 @@ function commitWorkspaceGraph(workspaceRoot, scoped, graph, userCtx) {
     runtimeRevision: workspaceRuntimeRevision(persisted),
     result,
   };
+}
+
+export function workspaceGraphWithScheduleMode(graph, mode = "disabled") {
+  const normalizedMode = String(mode || "disabled").trim().toLowerCase();
+  if (!["enabled", "disabled", "preserve"].includes(normalizedMode)) {
+    throw new Error("scheduleMode must be enabled, disabled, or preserve");
+  }
+  if (normalizedMode === "preserve") return graph;
+  const enabled = normalizedMode === "enabled";
+  const instances = { ...(graph?.instances || {}) };
+  let scheduleCount = 0;
+  for (const [nodeId, instance] of Object.entries(instances)) {
+    if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
+    scheduleCount += 1;
+    const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+    const nextConfig = { ...config, enabled };
+    if (enabled) workspaceScheduleNextRunAt(nextConfig, new Date());
+    instances[nodeId] = { ...instance, body: JSON.stringify(nextConfig) };
+  }
+  if (enabled && scheduleCount === 0) {
+    throw new Error("Cannot enable scheduling: the draft has no Scheduled Run node");
+  }
+  return { ...graph, instances };
 }
 
 function missingWorkspaceGraphNodePackages(workspaceRoot, scoped, graph, userCtx) {
@@ -1309,6 +1335,185 @@ async function workspaceRoutes(req, res, ctx) {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/workspace/draft") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req, 4 * 1024 * 1024));
+      } catch {
+        json(res, 400, { error: "Invalid JSON" });
+        return;
+      }
+      const graph = payload?.graph;
+      if (!graph || typeof graph !== "object" || Array.isArray(graph)) {
+        json(res, 400, { error: "graph must be an object" });
+        return;
+      }
+      const rawRequestedId = String(payload.draftId || "").trim();
+      const flowId = rawRequestedId || createWorkspaceDraftId();
+      const flowDir = workspaceDraftFlowDir(flowId, authUser.userId);
+      if (!flowDir) {
+        json(res, 400, { error: "Invalid draftId" });
+        return;
+      }
+      const existing = readWorkspaceDraftMetadata(flowDir);
+      if (existing && existing.ownerId !== authUser.userId) {
+        json(res, 403, { error: "Draft ownership denied" });
+        return;
+      }
+      if (rawRequestedId && !existing && fs.existsSync(flowDir)) {
+        json(res, 409, { error: "Draft project already exists but is not a draft" });
+        return;
+      }
+      if (existing) {
+        const currentGraph = readWorkspaceGraph(flowDir, root).graph;
+        const currentRevision = workspaceDesignRevision(currentGraph);
+        const baseRevision = String(payload.baseRevision || "").trim();
+        if (!baseRevision) {
+          json(res, 428, {
+            error: "Draft update requires baseRevision",
+            conflict: "missing-base-revision",
+            currentRevision,
+          });
+          return;
+        }
+        if (baseRevision !== currentRevision) {
+          json(res, 409, {
+            error: "Draft 已被更新，请先拉取最新版本后再修改",
+            conflict: "revision-mismatch",
+            expectedRevision: baseRevision,
+            currentRevision,
+          });
+          return;
+        }
+      }
+      const now = Date.now();
+      const ttlInput = payload.ttlMs != null
+        ? Number(payload.ttlMs)
+        : payload.ttlSeconds != null
+          ? Number(payload.ttlSeconds) * 1000
+          : DEFAULT_WORKSPACE_DRAFT_TTL_MS;
+      const ttlMs = normalizeWorkspaceDraftTtlMs(ttlInput);
+      const metadata = {
+        version: 1,
+        flowId,
+        ownerId: authUser.userId,
+        title: String(payload.title || "Workspace Draft").trim().slice(0, 200),
+        createdAt: existing?.createdAt || new Date(now).toISOString(),
+        updatedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + ttlMs).toISOString(),
+      };
+      const created = !fs.existsSync(flowDir);
+      try {
+        fs.mkdirSync(flowDir, { recursive: true });
+        if (payload.resetRuntime !== false) {
+          const statePath = path.join(flowDir, WORKSPACE_STATE_FILENAME);
+          if (fs.existsSync(statePath)) fs.rmSync(statePath);
+        }
+        const written = writeWorkspaceGraph(flowDir, graph, root);
+        writeWorkspaceDraftMetadata(flowDir, metadata);
+        const persisted = readWorkspaceGraph(flowDir, root).graph;
+        const baseUrl = `${url.protocol}//${url.host}`;
+        json(res, 200, {
+          ok: true,
+          flowId,
+          draftId: flowId,
+          flowSource: "user",
+          draft: true,
+          writable: true,
+          runnable: true,
+          schedulesSuppressed: true,
+          revision: workspaceDesignRevision(persisted),
+          format: written.format,
+          expiresAt: metadata.expiresAt,
+          url: `${baseUrl}/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`,
+        });
+      } catch (e) {
+        if (created) {
+          try { fs.rmSync(flowDir, { recursive: true, force: true }); } catch (_) {}
+        }
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/draft/publish") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Authentication required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const draftId = String(payload.draftId || "").trim();
+      const draftDir = workspaceDraftFlowDir(draftId, authUser.userId);
+      const draftMetadata = draftDir ? readWorkspaceDraftMetadata(draftDir) : null;
+      if (!draftMetadata || draftMetadata.ownerId !== authUser.userId) {
+        json(res, 404, { error: "Workspace draft not found" });
+        return;
+      }
+      const idCheck = validateUserPipelineId(String(payload.flowId || ""));
+      if (!idCheck.ok) {
+        json(res, 400, { error: idCheck.error });
+        return;
+      }
+      const flowId = idCheck.flowId;
+      const requestedTarget = String(payload.targetSpace || "personal").trim().toLowerCase();
+      const flowSource = requestedTarget === "workspace" || requestedTarget === "team" ? "workspace" : "user";
+      const targetDir = flowSource === "workspace"
+        ? path.join(path.resolve(root), PIPELINES_DIR, flowId)
+        : path.join(getUserPipelinesRoot(authUser.userId), flowId);
+      if (fs.existsSync(targetDir)) {
+        json(res, 409, { error: `已存在同名流水线 ${flowId}` });
+        return;
+      }
+      try {
+        const draftGraph = readWorkspaceGraph(draftDir, root).graph;
+        const graph = workspaceGraphWithScheduleMode(draftGraph, payload.scheduleMode || "disabled");
+        fs.mkdirSync(targetDir, { recursive: true });
+        writeWorkspaceGraph(targetDir, graph, root);
+        let collaborationCreated = false;
+        if (flowSource === "workspace") {
+          ensureWorkspaceCollaboration({ flowId, userId: authUser.userId });
+          collaborationCreated = true;
+        }
+        try {
+          const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
+          if (scoped.error) throw new Error(scoped.error);
+          const persisted = readWorkspaceGraph(scoped.root, root).graph;
+          const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, persisted, authUser, userCtx);
+          const baseUrl = `${url.protocol}//${url.host}`;
+          json(res, 200, {
+            ok: true,
+            success: true,
+            action: "created",
+            draftId,
+            flowId,
+            flowSource,
+            targetSpace: requestedTarget === "team" ? "team" : flowSource === "user" ? "personal" : "workspace",
+            scheduleMode: String(payload.scheduleMode || "disabled").toLowerCase(),
+            workspaceSchedules,
+            revision: workspaceDesignRevision(persisted),
+            url: `${baseUrl}/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=${encodeURIComponent(flowSource)}`,
+          });
+        } catch (e) {
+          if (collaborationCreated) deleteWorkspaceCollaborationForFlow(flowId, false);
+          throw e;
+        }
+      } catch (e) {
+        try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch (_) {}
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/workspace/preview") {
       if (!authUser?.userId) {
         json(res, 401, { error: "Authentication required" });
@@ -1475,6 +1680,7 @@ async function workspaceRoutes(req, res, ctx) {
           flowId: scoped.flowId,
           flowSource: scoped.flowSource,
           archived: scoped.archived,
+          draft: scoped.draft === true,
           writable: !(scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource))
             && scoped.adminReadonly !== true
             && collaborationAccess.writable !== false,
@@ -1596,7 +1802,20 @@ async function workspaceRoutes(req, res, ctx) {
         const graph = mergeWorkspacePersistentNodeRefs(nextGraph, currentGraph);
         const committed = commitWorkspaceGraph(root, scoped, graph, userCtx);
         const { path: graphPath, revision, runtimeRevision } = committed;
-        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
+        let workspaceSchedules;
+        try {
+          workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
+        } catch (scheduleError) {
+          try {
+            const rolledBack = commitWorkspaceGraph(root, scoped, currentStoredGraph, userCtx);
+            syncWorkspaceSchedulesForGraph(root, scoped, rolledBack.graph, authUser, userCtx);
+          } catch (rollbackError) {
+            throw new Error(
+              `Workspace schedule sync failed and graph rollback also failed: ${(scheduleError && scheduleError.message) || String(scheduleError)}; rollback: ${(rollbackError && rollbackError.message) || String(rollbackError)}`,
+            );
+          }
+          throw new Error(`Workspace graph save rolled back: ${(scheduleError && scheduleError.message) || String(scheduleError)}`);
+        }
         broadcastWorkspaceCollaborationEvent(
           userCtx,
           scoped.flowSource,
@@ -1651,6 +1870,80 @@ async function workspaceRoutes(req, res, ctx) {
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/schedule/config") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const flowId = String(payload.flowId || "").trim();
+        const flowSource = String(payload.flowSource || "user").trim() || "user";
+        const scheduleNodeId = String(payload.scheduleNodeId || "").trim();
+        if (!flowId || !scheduleNodeId) {
+          json(res, 400, { error: "flowId and scheduleNodeId are required" });
+          return;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        if (
+          scoped.archived
+          || isReadonlyBuiltinFlowSource(scoped.flowSource)
+          || scoped.collaborationAccess?.writable === false
+        ) {
+          json(res, 403, { error: "Workspace schedule edit permission denied" });
+          return;
+        }
+        const graph = readWorkspaceGraph(scoped.root, root).graph;
+        const instance = graph.instances?.[scheduleNodeId];
+        if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run") {
+          json(res, 404, { error: "Workspace schedule node not found" });
+          return;
+        }
+        const current = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+        const config = {
+          ...current,
+          ...(typeof payload.enabled === "boolean" ? { enabled: payload.enabled } : {}),
+          ...(payload.cron != null ? { cron: String(payload.cron).trim() } : {}),
+          ...(payload.timezone != null ? { timezone: String(payload.timezone).trim() } : {}),
+          ...(payload.overlapPolicy != null ? { overlapPolicy: String(payload.overlapPolicy).trim() } : {}),
+        };
+        if (config.overlapPolicy !== "skip") {
+          json(res, 400, { error: "Only overlapPolicy=skip is supported" });
+          return;
+        }
+        if (config.enabled) workspaceScheduleNextRunAt(config, new Date());
+        graph.instances = { ...(graph.instances || {}) };
+        graph.instances[scheduleNodeId] = { ...instance, body: JSON.stringify(config) };
+        const committed = commitWorkspaceGraph(root, scoped, graph, userCtx);
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
+        const schedule = workspaceSchedules.find((item) => item.scheduleNodeId === scheduleNodeId) || {
+          flowId,
+          flowSource,
+          scheduleNodeId,
+          ...config,
+          suppressed: scoped.draft === true,
+        };
+        json(res, 200, {
+          ok: true,
+          flowId,
+          flowSource,
+          draft: scoped.draft === true,
+          revision: committed.revision,
+          schedule,
+          workspaceSchedules,
+        });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
       }
       return;
     }

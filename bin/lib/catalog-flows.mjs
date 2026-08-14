@@ -28,6 +28,7 @@ import {
   resolveMarketplaceNodePackage,
 } from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
+import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
 import { RETIRED_NODE_IDS } from "./legacy-flow-execution.mjs";
 import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 
@@ -39,6 +40,7 @@ export function collectPipelineNamesFromDir(dirPath) {
     .filter((e) => e.isDirectory())
     .filter((e) => isFlowDir(path.join(dirPath, e.name)))
     .filter((e) => !isWorkspacePreviewDir(path.join(dirPath, e.name)))
+    .filter((e) => !isWorkspaceDraftDir(path.join(dirPath, e.name)))
     .map((e) => e.name);
 }
 

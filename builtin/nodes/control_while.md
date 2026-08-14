@@ -44,24 +44,24 @@ ui:
         label: Loop execution
         field: script
       - type: decision
-        label: Decision from step
+        label: Decision status
         output: decision
         source: step.stdout.decision
         options:
           - value: continue
-            label: continue ↻
+            label: continue
             tone: purple
             description: 保存 state 并立即进入下一轮
           - value: wait
-            label: wait ⏸
+            label: wait
             tone: amber
             description: 保存 checkpoint，暂停当前 Run
           - value: done
-            label: done →
+            label: done
             tone: green
             description: 结束循环并继续下游
           - value: fail
-            label: fail ×
+            label: fail
             tone: red
             description: 终止并标记节点失败
       - type: metrics

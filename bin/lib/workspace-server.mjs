@@ -44,6 +44,7 @@ import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError
 import { createWorkspaceRunController, terminateWorkspaceChild } from "./workspace-run-controller.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
 import { splitWorkspaceGraph } from "./workspace-state.mjs";
+import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
 import { spawn } from "child_process";
 import crypto from "crypto";
@@ -1491,6 +1492,7 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
     requestedFlowSource: flowSource,
     workspaceId: collaboration?.id || workspaceId,
     archived,
+    draft: isWorkspaceDraftDir(result.path),
     collaboration,
     collaborationAccess: workspaceCollaborationAccess(collaboration, opts.userId),
   };
@@ -6725,6 +6727,10 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
       && String(entry?.flowId || "") === flowId
     );
     if (sameSharedFlow || key.startsWith(prefix)) delete schedules[key];
+  }
+  if (isWorkspaceDraftDir(scoped?.root || "")) {
+    writeWorkspaceScheduleRegistry({ version: 1, schedules });
+    return [];
   }
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   for (const [scheduleNodeId, instance] of Object.entries(instances)) {

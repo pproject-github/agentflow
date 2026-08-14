@@ -52,6 +52,7 @@ import { packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packag
 import { runStartupStorageMigrations } from "./startup-storage-migrations.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
 import { listExpiredWorkspacePreviews } from "./workspace-preview.mjs";
+import { listExpiredWorkspaceDrafts } from "./workspace-draft.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 import {
   listRecentComposerSessions,
@@ -167,7 +168,7 @@ import {
   writeDisplayShares,
   writeWorkspaceGraph,
 } from "./workspace-server.mjs";
-import { handleWorkspaceRoutes } from "./workspace-routes.mjs";
+import { handleWorkspaceRoutes, workspaceGraphWithScheduleMode } from "./workspace-routes.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -206,10 +207,8 @@ const BUILTIN_SKILL_COLLECTIONS = [
     id: "pipeline",
     name: "Pipeline",
     defaultKeys: [
-      "agentflow-flow-add-instances",
-      "agentflow-flow-edit-node-fields",
+      "agentflow-flow-dsl",
       "agentflow-flow-recipes",
-      "agentflow-flow-sync-ui",
       "agentflow-node-reference",
       "agentflow-placeholder-reference",
       "agentflow-runtime-reference",
@@ -219,7 +218,7 @@ const BUILTIN_SKILL_COLLECTIONS = [
     id: "workspace",
     name: "Workspace",
     defaultKeys: [
-      "agentflow-workspace-graph",
+      "agentflow-flow-dsl",
       "agentflow-workspace-markdown",
       "agentflow-workspace-mermaid",
       "agentflow-workspace-ascii",
@@ -233,7 +232,18 @@ const BUILTIN_SKILL_COLLECTIONS = [
     ],
     legacyDefaultKeys: [
       [
-        "agentflow-workspace-graph",
+        "agentflow-workspace-markdown",
+        "agentflow-workspace-mermaid",
+        "agentflow-workspace-ascii",
+        "agentflow-workspace-chart",
+        "agentflow-workspace-table",
+        "agentflow-workspace-html",
+        "agentflow-workspace-image",
+        "agentflow-node-reference",
+        "agentflow-placeholder-reference",
+        "agentflow-runtime-reference",
+      ],
+      [
         "agentflow-workspace-markdown",
         "agentflow-workspace-mermaid",
         "agentflow-workspace-ascii",
@@ -244,7 +254,6 @@ const BUILTIN_SKILL_COLLECTIONS = [
         "agentflow-runtime-reference",
       ],
       [
-        "agentflow-workspace-graph",
         "agentflow-workspace-markdown",
         "agentflow-workspace-mermaid",
         "agentflow-workspace-ascii",
@@ -1684,7 +1693,7 @@ function bufferLooksLikeZip(buf) {
 
 /**
  * @param {import('http').IncomingMessage} req
- * @returns {Promise<{ targetSpace: string, flowIdField: string, file: Buffer, filename: string, gotFile: boolean }>}
+ * @returns {Promise<{ targetSpace: string, flowIdField: string, scheduleMode: string, file: Buffer, filename: string, gotFile: boolean }>}
  */
 function parseFlowsImportForm(req) {
   return new Promise((resolve, reject) => {
@@ -1694,6 +1703,7 @@ function parseFlowsImportForm(req) {
     });
     let targetSpace = "user";
     let flowIdField = "";
+    let scheduleMode = "disabled";
     /** @type {Buffer[]} */
     const chunks = [];
     let filename = "";
@@ -1705,6 +1715,9 @@ function parseFlowsImportForm(req) {
       }
       if (name === "flowId" && typeof val === "string") {
         flowIdField = val;
+      }
+      if (name === "scheduleMode" && typeof val === "string") {
+        scheduleMode = val.trim().toLowerCase();
       }
     });
 
@@ -1725,6 +1738,7 @@ function parseFlowsImportForm(req) {
       resolve({
         targetSpace,
         flowIdField: flowIdField.trim(),
+        scheduleMode,
         file: Buffer.concat(chunks),
         filename,
         gotFile,
@@ -1748,12 +1762,16 @@ function cleanupExpiredWorkspacePreviews(workspaceRoot = "") {
   }
   let removed = 0;
   for (const pipelinesRoot of roots) {
-    for (const item of listExpiredWorkspacePreviews(pipelinesRoot)) {
+    const expired = [
+      ...listExpiredWorkspacePreviews(pipelinesRoot),
+      ...listExpiredWorkspaceDrafts(pipelinesRoot),
+    ];
+    for (const item of expired) {
       try {
         fs.rmSync(item.flowDir, { recursive: true, force: true });
         removed += 1;
       } catch (e) {
-        log.debug(`[workspace-preview] cleanup failed: ${(e && e.message) || String(e)}`);
+        log.debug(`[workspace-temporary] cleanup failed: ${(e && e.message) || String(e)}`);
       }
     }
   }
@@ -2013,12 +2031,12 @@ function buildComposerPromptWithFlowContext(p) {
     `- flowSource：${p.flowSource}`,
     ...builtinExtra,
     `- 当前关联的节点实例 ID（顺序：画布选中优先，再输入框 @提及）：${idsLine}`,
-    "- 像普通 agent 请求一样处理用户说明：可能只是问问题，也可能要求编辑文件。不要因为存在 flowId 就默认修改 flow.yaml。",
+    "- 像普通 agent 请求一样处理用户说明：可能只是问问题，也可能要求编辑文件。不要因为存在 flowId 就默认修改流程。",
     "- 按需使用当前环境可用的 skills；如果用户点名某个 skill，遵循该 skill 的 SKILL.md。",
     "- 如果你判断需要编辑 AgentFlow 流程，可按需读取这些本地 skills：",
-    "  - `skills/agentflow-flow-add-instances/SKILL.md`：新增实例、边和布局",
-    "  - `skills/agentflow-flow-edit-node-fields/SKILL.md`：只改已有节点字段",
-    "  - `skills/agentflow-flow-sync-ui/SKILL.md`：保存 flow.yaml 后刷新画布",
+    "  - `skills/agentflow-flow-dsl/SKILL.md`：新建或修改 workspace.flow.js、节点、字段、连线、子流程与受控循环",
+    "  - `skills/agentflow-node-dsl/SKILL.md`：仅在需要确定性自定义代码节点时使用",
+    "  - `skills/agentflow-author-flow/SKILL.md`：需要 Draft、试运行、动态修改、发布或定时时使用完整生命周期",
     "- 如果只是回答问题，不要修改文件。",
     "",
     ...(p.selectedSkillBlock ? [p.selectedSkillBlock, ""] : []),
@@ -2706,6 +2724,10 @@ export function startUiServer({
       }
       const flowId = idCheck.flowId;
       const targetSpace = parsed.targetSpace === "workspace" ? "workspace" : "user";
+      if (!["enabled", "disabled", "preserve"].includes(parsed.scheduleMode)) {
+        json(res, 400, { error: "scheduleMode must be enabled, disabled, or preserve" });
+        return;
+      }
       const existing = listFlowsJson(root, {
         ...userCtx,
         includeWorkspaceFlows: targetSpace === "workspace",
@@ -2747,10 +2769,37 @@ export function startUiServer({
         json(res, 400, { error: w.error });
         return;
       }
-      if (targetSpace === "workspace") {
-        ensureWorkspaceCollaboration({ flowId, userId: userCtx.userId });
+      const targetDir = targetSpace === "workspace"
+        ? path.join(path.resolve(root), PIPELINES_DIR, flowId)
+        : path.join(getUserPipelinesRoot(userCtx.userId), flowId);
+      let collaborationCreated = false;
+      try {
+        if (targetSpace === "workspace") {
+          ensureWorkspaceCollaboration({ flowId, userId: userCtx.userId });
+          collaborationCreated = true;
+        }
+        const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource: targetSpace }, userCtx);
+        if (scoped.error) throw new Error(scoped.error);
+        const importedGraph = readWorkspaceGraph(scoped.root, root).graph;
+        const graph = workspaceGraphWithScheduleMode(importedGraph, parsed.scheduleMode);
+        if (graph !== importedGraph) writeWorkspaceGraph(scoped.root, graph, root);
+        const persisted = readWorkspaceGraph(scoped.root, root).graph;
+        const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, persisted, authUser, userCtx);
+        json(res, 200, {
+          success: true,
+          flowId,
+          flowSource: targetSpace,
+          scheduleMode: parsed.scheduleMode,
+          workspaceSchedules,
+        });
+      } catch (e) {
+        try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch (_) {}
+        if (collaborationCreated) deleteWorkspaceCollaborationForFlow(flowId, false);
+        json(res, 500, {
+          error: `Flow publication rolled back: ${(e && e.message) || String(e)}`,
+          rolledBack: true,
+        });
       }
-      json(res, 200, { success: true, flowId, flowSource: targetSpace });
       return;
     }
 

@@ -66,7 +66,9 @@ test("control.while 的 builtin frontmatter 提供可解释状态机卡片", () 
     "summary",
     "history",
   ]);
+  assert.equal(def.ui.card.sections[2].label, "Decision status");
   assert.deepEqual(def.ui.card.sections[2].options.map((option) => option.value), ["continue", "wait", "done", "fail"]);
+  assert.ok(def.ui.card.sections[2].options.every((option) => option.description));
 });
 
 test("代码节点包的 ui 声明进入 Marketplace manifest", () => {
