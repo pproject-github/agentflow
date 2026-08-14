@@ -1,0 +1,28 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-DX1h8MDN.js
+  s_8f32a855828fb2::t_5f8296623167d9 1
+builtin/web-ui/dist/assets/index-Csq4SaEZ.js
+  s_8f32a855828fb2::t_59df2e13740033 213,873
+builtin/web-ui/dist/index.html
+  s_8f32a855828fb2::t_ca2e301df9a738 33
+package-lock.json
+  s_8f32a855828fb2::t_9a2b813c0a4dbe 3,9
+package.json
+  s_8f32a855828fb2::t_6b5b1b8e49e434 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2ff953ce43d7226f67728a3407fbcddbd775c33e",
+  "prompts": {},
+  "logical_commit_id": "2ff953ce43d7226f67728a3407fbcddbd775c33e",
+  "sessions": {
+    "s_8f32a855828fb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5db-e662-7e30-b917-d05d9d5ab957",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}
