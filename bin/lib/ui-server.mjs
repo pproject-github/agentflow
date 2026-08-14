@@ -72,7 +72,11 @@ import {
   authSetupRequired,
   buildClearSessionCookie,
   buildSessionCookie,
+  createCliAuthorization,
+  decideCliAuthorization,
+  exchangeCliAuthorization,
   getAuthUserFromRequest,
+  getCliAuthorization,
   getSessionTokenFromRequest,
   isAuthUserAllowed,
   listAuthUsers,
@@ -81,8 +85,13 @@ import {
   readAuthUsers,
   readUserAllowlist,
   resetAuthUserPassword,
+  revokeSessionToken,
   writeUserAllowlist,
 } from "./auth.mjs";
+import {
+  renderCliAuthorizationPage,
+  renderCliAuthorizationResult,
+} from "./cli-auth-page.mjs";
 import { readGlobalEnvRows, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
 import {
   readAdminBuiltinPipelineConfig,
@@ -1459,6 +1468,25 @@ function serverPublicBaseUrl(req, host, port, payload = null) {
   return configuredPublicBaseUrl(payload) || requestPublicBaseUrl(req) || normalizePublicBaseUrl(`http://${host}:${port}`);
 }
 
+function html(res, status, content, headers = {}) {
+  const body = String(content || "");
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store, max-age=0",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    ...headers,
+  });
+  res.end(body);
+}
+
+async function readUrlEncodedBody(req) {
+  const body = await readBody(req);
+  return new URLSearchParams(String(body || ""));
+}
+
 function publicDisplayPayloadFromShare(root, share) {
   const scoped = resolveWorkspaceScopeRoot(root, {
     flowId: share.flowId || "",
@@ -2106,6 +2134,132 @@ export function startUiServer({
         forbidden: Boolean(user && !allowed),
         error: user && !allowed ? "用户不在白名单中，请联系管理员开通访问权限" : "",
       });
+      return;
+    }
+
+    if (url.pathname === "/api/auth/cli/device" && req.method === "POST") {
+      let payload = {};
+      try {
+        const raw = await readBody(req);
+        payload = raw ? JSON.parse(raw) : {};
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const authorization = createCliAuthorization({
+        publicBaseUrl: serverPublicBaseUrl(req, host, uiPort),
+        clientName: payload?.clientName,
+      });
+      json(res, 201, {
+        requestId: authorization.requestId,
+        deviceCode: authorization.deviceCode,
+        userCode: authorization.userCode,
+        verificationUrl: authorization.verificationUrl,
+        expiresAt: authorization.expiresAt,
+        pollInterval: authorization.pollInterval,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/auth/cli/token" && req.method === "POST") {
+      let payload = {};
+      try {
+        const raw = await readBody(req);
+        payload = raw ? JSON.parse(raw) : {};
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const result = exchangeCliAuthorization(payload?.deviceCode);
+      if (!result.ok) {
+        json(res, result.status || 400, {
+          error: result.error,
+          code: result.code || "invalid_request",
+          authorization: result.authorization || undefined,
+        });
+        return;
+      }
+      json(res, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/auth/cli/revoke" && req.method === "POST") {
+      const token = getSessionTokenFromRequest(req);
+      if (!token || !getAuthUserFromRequest(req)) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      revokeSessionToken(token);
+      json(res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/cli/authorize" && req.method === "GET") {
+      const requestId = String(url.searchParams.get("request") || "").trim();
+      const user = getAuthUserFromRequest(req);
+      const result = getCliAuthorization(requestId, { includeApprovalNonce: Boolean(user) });
+      if (result.ok && result.authorization.status !== "pending") {
+        html(res, 200, renderCliAuthorizationResult({
+          approved: result.authorization.status === "approved",
+          clientName: result.authorization.clientName,
+        }));
+        return;
+      }
+      html(res, result.ok ? 200 : result.status || 404, renderCliAuthorizationPage({
+        authorization: result.authorization || null,
+        approvalNonce: result.approvalNonce || "",
+        user,
+        error: result.ok ? "" : result.error,
+      }));
+      return;
+    }
+
+    if (url.pathname === "/cli/authorize/login" && req.method === "POST") {
+      const form = await readUrlEncodedBody(req);
+      const requestId = String(form.get("request") || "").trim();
+      const pending = getCliAuthorization(requestId);
+      if (!pending.ok) {
+        html(res, pending.status || 404, renderCliAuthorizationPage({ error: pending.error }));
+        return;
+      }
+      const result = loginOrCreateUser(form.get("username"), form.get("password"));
+      if (!result.ok) {
+        html(res, result.forbidden ? 403 : 401, renderCliAuthorizationPage({
+          authorization: pending.authorization,
+          error: result.error || "Login failed",
+        }));
+        return;
+      }
+      res.writeHead(303, {
+        Location: `/cli/authorize?request=${encodeURIComponent(requestId)}`,
+        "Set-Cookie": buildSessionCookie(result.token),
+        "Cache-Control": "no-store, max-age=0",
+      });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === "/cli/authorize/decision" && req.method === "POST") {
+      const user = getAuthUserFromRequest(req);
+      if (!user) {
+        html(res, 401, renderCliAuthorizationResult({ error: "登录状态已失效，请重新打开授权链接。" }));
+        return;
+      }
+      const form = await readUrlEncodedBody(req);
+      const requestId = String(form.get("request") || "").trim();
+      const current = getCliAuthorization(requestId);
+      const approved = form.get("decision") === "approve";
+      const result = decideCliAuthorization({
+        requestId,
+        approvalNonce: form.get("approvalNonce"),
+        userId: user.userId,
+        approved,
+      });
+      html(res, result.ok ? 200 : result.status || 400, renderCliAuthorizationResult({
+        approved,
+        clientName: current.authorization?.clientName,
+        error: result.ok ? "" : result.error,
+      }));
       return;
     }
 

@@ -50,6 +50,7 @@
     "test": "node --test test/*.test.mjs",
     "postinstall": "node bin/ensure-workspace-reference.mjs",
     "build:web-ui": "cd builtin/web-ui && npm install && npm run build",
+    "build:agentflow-cli-skill-runtime": "node scripts/build-agentflow-cli-skill-runtime.mjs",
     "build:website": "cd website && npm install && npm run build",
     "dev": "AGENTFLOW_DEV=1 node bin/agentflow.mjs ui",
     "dev:web": "cd builtin/web-ui && npm run dev",
@@ -69,5 +70,8 @@
     "ora": "^9.3.0",
     "sharp": "^0.34.5",
     "update-notifier": "^7.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

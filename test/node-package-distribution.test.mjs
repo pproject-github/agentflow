@@ -75,15 +75,13 @@ test("多文件 ZIP 节点包能跨工作区发布、安装、编排并执行", 
       staticDir: path.join(tempRoot, "static"),
     });
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    // 模拟 SkillHub 安装：skill 本身在源码树外，命令从干净 workspace 运行，只能通过 PATH
-    // 里的 agentflow 可执行文件定位 npm/runtime 包，不能再靠 ../../../bin/lib 碰巧命中。
+    // 模拟 SkillHub 安装：skill 本身在源码树外，命令从干净 workspace 运行，直接使用
+    // Skill 自带 Runtime，不依赖 npm 包、源码相对路径或 PATH 中的 agentflow。
     const installedSkillDir = path.join(tempRoot, "installed-skills", "agentflow-cli");
-    const runtimeBinDir = path.join(tempRoot, "runtime-bin");
     fs.cpSync(path.resolve("skills/agentflow-cli"), installedSkillDir, { recursive: true });
-    fs.mkdirSync(runtimeBinDir, { recursive: true });
-    fs.symlinkSync(path.resolve("bin/agentflow.mjs"), path.join(runtimeBinDir, "agentflow"));
     const cliPath = path.join(installedSkillDir, "scripts", "agentflow-cli.mjs");
-    const cliEnv = { ...process.env, PATH: `${runtimeBinDir}${path.delimiter}${process.env.PATH || ""}` };
+    const cliEnv = { ...process.env };
+    delete cliEnv.AGENTFLOW_PACKAGE_ROOT;
     const cli = (...extra) => execFileAsync(process.execPath, [
       cliPath,
       ...extra,
@@ -94,7 +92,7 @@ test("多文件 ZIP 节点包能跨工作区发布、安装、编排并执行", 
     const { stdout: configOut } = await cli("config");
     const config = JSON.parse(configOut);
     assert.equal(config.localRuntime.available, true, configOut);
-    assert.equal(config.localRuntime.root, path.resolve("."));
+    assert.equal(config.localRuntime.root, path.join(installedSkillDir, "runtime"));
 
     const { stdout: publishedOut } = await cli("node-package-publish", "--file", packageDir);
     const published = JSON.parse(publishedOut);

@@ -11,7 +11,11 @@ execution, publication, and schedule operations. Read those selected Skills comp
 
 ## Required lifecycle
 
-1. Check `agentflow-cli config`. Require a token and `localRuntime.available: true`.
+1. Check `agentflow-cli config`. Require authorization and `localRuntime.available: true`. If
+   authorization is missing, run `agentflow-cli auth start`, return the URL to the user, and run
+   `auth complete` after approval; never ask the user to paste a personal Token. The Runtime is
+   bundled with the Skill; if unavailable, update/reinstall the SkillHub package instead of
+   installing an npm CLI.
 2. Translate the user's idea into a local `workspace.flow.js`. Search the remote node catalog before
    creating a custom node package.
 3. Run DSL lint, then layout. Do not upload an invalid or unreadable graph.

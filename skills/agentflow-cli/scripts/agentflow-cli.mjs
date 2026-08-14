@@ -7,6 +7,15 @@ import {
   loadAgentFlowRuntime,
   resolveAgentFlowPackageRoot,
 } from "./agentflow-runtime.mjs";
+import {
+  agentFlowAuthFile,
+  clearAgentFlowPendingAuthorization,
+  clearAgentFlowProfile,
+  saveAgentFlowPendingAuthorization,
+  saveAgentFlowProfile,
+  savedAgentFlowPendingAuthorization,
+  savedAgentFlowProfile,
+} from "./agentflow-auth-store.mjs";
 import { createWorkflowReportClient } from "./workflow-report-client.mjs";
 
 const DEFAULT_BASE_URL = "http://ai.mengma.bigo.inner/";
@@ -48,13 +57,20 @@ Usage:
 Config:
   --base-url <url>       Override AGENTFLOW_BASE_URL
   --token <token>        Override AGENTFLOW_TOKEN
-  --agentflow-package-root <dir>  Override the local @fieldwangai/agentflow runtime
+  --agentflow-package-root <dir>  Development override for the bundled Skill runtime
   AGENTFLOW_BASE_URL     Defaults to ${DEFAULT_BASE_URL}
-  AGENTFLOW_TOKEN        Required unless AGENTFLOW_SESSION_TOKEN is set
+  AGENTFLOW_TOKEN        Overrides saved browser authorization
   AGENTFLOW_ENV_FILE     Optional dotenv file path
+  AGENTFLOW_AUTH_FILE    Optional saved authorization path
 
 Commands:
   config
+  auth start | auth login
+  auth complete
+  auth status
+  auth logout
+  dsl-lint --file <flowDir|workspace.flow.js> [--workspace-root <dir>]
+  dsl-layout --file <flowDir|workspace.flow.js> [--workspace-root <dir>] [--all]
   list-workspace | list-workspaces
   list-flows
   node-package-list
@@ -168,11 +184,23 @@ function normalizedBaseUrl(args) {
   return String(raw).replace(/\/+$/, "");
 }
 
+function resolvedAuth(args) {
+  const fromFlag = option(args, "token");
+  if (fromFlag) return { token: fromFlag, source: "flag", profile: null };
+  const fromTokenEnv = String(process.env.AGENTFLOW_TOKEN || "").trim();
+  if (fromTokenEnv) return { token: fromTokenEnv, source: "AGENTFLOW_TOKEN", profile: null };
+  const fromSessionEnv = String(process.env.AGENTFLOW_SESSION_TOKEN || "").trim();
+  if (fromSessionEnv) return { token: fromSessionEnv, source: "AGENTFLOW_SESSION_TOKEN", profile: null };
+  const profile = savedAgentFlowProfile(normalizedBaseUrl(args));
+  return profile?.token
+    ? { token: profile.token, source: "saved-auth", profile }
+    : { token: "", source: "", profile: null };
+}
+
 function authToken(args, required = true) {
-  const token = option(args, "token") || process.env.AGENTFLOW_TOKEN || process.env.AGENTFLOW_SESSION_TOKEN || "";
-  const trimmed = String(token).trim();
+  const trimmed = String(resolvedAuth(args).token || "").trim();
   if (required && !trimmed) {
-    throw new Error("Missing AGENTFLOW_TOKEN. Set it in env, .env, .agentflow.env, or pass --token.");
+    throw new Error("AgentFlow authorization is missing. Run `auth start`, open the returned URL, then run `auth complete`; or set AGENTFLOW_TOKEN.");
   }
   return trimmed;
 }
@@ -631,6 +659,125 @@ function printJson(data) {
   process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
 }
 
+function authAction(command, args) {
+  if (command === "auth") return String(args._[1] || "status").trim().toLowerCase();
+  if (command.startsWith("auth-")) return command.slice("auth-".length).toLowerCase();
+  return "";
+}
+
+async function runAuthCommand(action, args) {
+  const baseUrl = normalizedBaseUrl(args);
+  if (action === "start" || action === "login") {
+    const authorization = await httpJson(args, "/api/auth/cli/device", {
+      method: "POST",
+      tokenRequired: false,
+      body: {
+        clientName: option(args, "client-name") || "AgentFlow CLI",
+      },
+    });
+    const saved = saveAgentFlowPendingAuthorization(baseUrl, authorization);
+    printJson({
+      status: "authorization_required",
+      baseUrl,
+      requestId: saved.requestId,
+      userCode: saved.userCode,
+      verificationUrl: saved.verificationUrl,
+      expiresAt: saved.expiresAt,
+      next: "Open verificationUrl, approve access, then run `auth complete`.",
+    });
+    return;
+  }
+
+  if (action === "complete") {
+    const pending = savedAgentFlowPendingAuthorization(baseUrl);
+    if (!pending?.deviceCode) {
+      throw new Error("No pending AgentFlow authorization. Run `auth start` first.");
+    }
+    let result;
+    try {
+      result = await httpJson(args, "/api/auth/cli/token", {
+        method: "POST",
+        tokenRequired: false,
+        body: { deviceCode: pending.deviceCode },
+      });
+    } catch (error) {
+      const code = String(error?.response?.code || "");
+      if (["access_denied", "expired_token", "invalid_grant"].includes(code)) {
+        clearAgentFlowPendingAuthorization(baseUrl);
+      }
+      throw error;
+    }
+    if (result?.code === "authorization_pending") {
+      printJson({
+        status: "authorization_pending",
+        baseUrl,
+        requestId: pending.requestId,
+        verificationUrl: pending.verificationUrl,
+        expiresAt: pending.expiresAt,
+      });
+      process.exitCode = 2;
+      return;
+    }
+    if (!result?.token) throw new Error("AgentFlow authorization exchange did not return a token.");
+    const saved = saveAgentFlowProfile(baseUrl, result);
+    printJson({
+      status: "authenticated",
+      baseUrl,
+      user: result.user || null,
+      scopes: Array.isArray(result.scopes) ? result.scopes : [],
+      expiresAt: result.expiresAt || 0,
+      credentialFile: saved.file,
+    });
+    return;
+  }
+
+  if (action === "status") {
+    const auth = resolvedAuth(args);
+    if (!auth.token) {
+      printJson({ authenticated: false, baseUrl, tokenSource: "", credentialFile: agentFlowAuthFile() });
+      return;
+    }
+    const me = await httpJson(args, "/api/auth/me", { tokenRequired: false });
+    printJson({
+      authenticated: Boolean(me?.authenticated),
+      baseUrl,
+      tokenSource: auth.source,
+      user: me?.user || null,
+      expiresAt: auth.profile?.expiresAt || me?.user?.sessionExpiresAt || 0,
+      credentialFile: auth.source === "saved-auth" ? agentFlowAuthFile() : "",
+    });
+    return;
+  }
+
+  if (action === "logout") {
+    const auth = resolvedAuth(args);
+    let revoked = false;
+    let remoteError = "";
+    if (auth.token) {
+      try {
+        const response = await httpJson(args, "/api/auth/cli/revoke", { method: "POST", body: {} });
+        revoked = Boolean(response?.ok);
+      } catch (error) {
+        remoteError = error?.message || String(error);
+      }
+    }
+    const localCleared = clearAgentFlowProfile(baseUrl);
+    printJson({
+      authenticated: false,
+      baseUrl,
+      revoked,
+      localCleared,
+      tokenSource: auth.source,
+      warning: auth.source && auth.source !== "saved-auth"
+        ? `${auth.source} is still configured outside the CLI credential store.`
+        : remoteError || "",
+    });
+    return;
+  }
+
+  throw new Error(`Unknown auth command: ${action}. Use auth start, complete, status, or logout.`);
+}
+
 function requireFlowId(args) {
   const flowId = option(args, "flow-id") || option(args, "flow");
   if (!flowId) throw new Error("Missing --flow-id.");
@@ -890,6 +1037,12 @@ async function main() {
     return;
   }
 
+  const selectedAuthAction = authAction(command, args);
+  if (selectedAuthAction) {
+    await runAuthCommand(selectedAuthAction, args);
+    return;
+  }
+
   if (command === "config") {
     let localRuntime = { available: false, root: "", version: "" };
     try {
@@ -899,12 +1052,36 @@ async function main() {
     } catch (error) {
       localRuntime.error = error?.message || String(error);
     }
+    const auth = resolvedAuth(args);
     printJson({
       baseUrl: normalizedBaseUrl(args),
-      hasToken: Boolean(authToken(args, false)),
-      tokenSource: option(args, "token") ? "flag" : process.env.AGENTFLOW_TOKEN ? "AGENTFLOW_TOKEN" : process.env.AGENTFLOW_SESSION_TOKEN ? "AGENTFLOW_SESSION_TOKEN" : "",
+      hasToken: Boolean(auth.token),
+      tokenSource: auth.source,
+      credentialFile: auth.source === "saved-auth" ? agentFlowAuthFile() : "",
       localRuntime,
     });
+    return;
+  }
+
+  if (command === "dsl-lint" || command === "dsl-layout") {
+    const target = option(args, "file");
+    if (!target) throw new Error(`${command} requires --file <flowDir|workspace.flow.js>.`);
+    const resolved = path.resolve(target);
+    const stat = fs.statSync(resolved);
+    const flowDir = stat.isDirectory() ? resolved : path.dirname(resolved);
+    const workspaceRoot = path.resolve(option(args, "workspace-root") || process.cwd());
+    const runtime = await loadAgentFlowRuntime();
+    if (command === "dsl-lint") {
+      const result = runtime.lintWorkspaceFlowDir(flowDir, { workspaceRoot });
+      printJson(result);
+      if (result.errors.length) process.exitCode = 1;
+      return;
+    }
+    const result = runtime.layoutWorkspaceFlowDir(flowDir, {
+      all: args.all === true,
+      workspaceRoot,
+    });
+    printJson(result);
     return;
   }
 

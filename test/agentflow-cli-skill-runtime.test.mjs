@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-test("独立安装的 agentflow-cli skill 能诊断并显式定位本地 runtime", async () => {
+test("独立安装的 agentflow-cli skill 自带 runtime，并在无 npm/PATH 环境运行 DSL", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-skill-runtime-")));
   const installedSkill = path.join(tempRoot, "skills", "agentflow-cli");
   const cleanWorkspace = path.join(tempRoot, "workspace");
@@ -16,17 +16,57 @@ test("独立安装的 agentflow-cli skill 能诊断并显式定位本地 runtime
   fs.mkdirSync(cleanWorkspace, { recursive: true });
   const cliPath = path.join(installedSkill, "scripts", "agentflow-cli.mjs");
   const packageVersion = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf-8")).version;
-  const cleanEnv = { ...process.env, PATH: "" };
+  const cleanEnv = {
+    ...process.env,
+    PATH: "",
+    HOME: path.join(tempRoot, "home"),
+    AGENTFLOW_AUTH_FILE: path.join(tempRoot, "home", ".agentflow", "auth.json"),
+  };
   delete cleanEnv.AGENTFLOW_PACKAGE_ROOT;
+  delete cleanEnv.AGENTFLOW_TOKEN;
+  delete cleanEnv.AGENTFLOW_SESSION_TOKEN;
 
   try {
-    const missing = await execFileAsync(process.execPath, [cliPath, "config"], {
+    const bundled = await execFileAsync(process.execPath, [cliPath, "config"], {
       cwd: cleanWorkspace,
       env: cleanEnv,
     });
-    const missingConfig = JSON.parse(missing.stdout);
-    assert.equal(missingConfig.localRuntime.available, false);
-    assert.match(missingConfig.localRuntime.error, /Install\/update the agentflow CLI/);
+    const bundledConfig = JSON.parse(bundled.stdout);
+    assert.deepEqual(bundledConfig.localRuntime, {
+      available: true,
+      root: path.join(installedSkill, "runtime"),
+      version: packageVersion,
+    });
+    assert.equal(bundledConfig.hasToken, false);
+
+    const flowDir = path.join(cleanWorkspace, "sample-flow");
+    fs.mkdirSync(flowDir, { recursive: true });
+    fs.writeFileSync(path.join(flowDir, "workspace.flow.js"), `
+import { display, flow, provide } from "agentflow/flow";
+
+const message = provide.str("内容", { value: "SkillHub runtime works" });
+const result = display.markdown("结果", { content: message.value });
+export const run = flow("Run", result);
+`.trimStart(), "utf-8");
+
+    const lint = await execFileAsync(process.execPath, [
+      cliPath, "dsl-lint", "--file", flowDir,
+    ], {
+      cwd: cleanWorkspace,
+      env: cleanEnv,
+    });
+    assert.deepEqual(JSON.parse(lint.stdout).errors, []);
+
+    const layout = await execFileAsync(process.execPath, [
+      cliPath, "dsl-layout", "--file", flowDir, "--all",
+    ], {
+      cwd: cleanWorkspace,
+      env: cleanEnv,
+    });
+    const layoutResult = JSON.parse(layout.stdout);
+    assert.equal(layoutResult.mode, "all");
+    assert.equal(layoutResult.nodeCount, 3);
+    assert.equal(fs.existsSync(path.join(flowDir, "workspace.layout.json")), true);
 
     const located = await execFileAsync(process.execPath, [
       cliPath,

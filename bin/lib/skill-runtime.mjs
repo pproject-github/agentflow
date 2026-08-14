@@ -33,3 +33,9 @@ export {
   inspectNodePackageArchive,
   inspectNodePackageDirectory,
 } from "./node-package-archive.mjs";
+
+export {
+  layoutWorkspaceFlowDir,
+  lintFlowDir,
+  lintWorkspaceFlowDir,
+} from "./flow-dsl/cli.mjs";

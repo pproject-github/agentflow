@@ -28,12 +28,14 @@ description: >-
 写完必须依次执行：
 
 ```bash
-agentflow flow dsl lint <flowDir>
-agentflow flow dsl layout <flowDir>
+node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs dsl-lint --file <flowDir>
+node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs dsl-layout --file <flowDir>
 ```
 
+先安装并读取 `agentflow-cli` Skill，把它的 `SKILL.md` 所在目录记为
+`<agentflow-cli-skill-dir>`。CLI/DSL Runtime 已随该 Skill 分发，不要安装 npm 包。
 lint 不通过先修结构，不要排版。`layout` 默认只给缺坐标的新节点补位置，保留用户手工布局。
-新建流程，或用户明确要求整理整张图时，使用 `agentflow flow dsl layout <flowDir> --all`。
+新建流程，或用户明确要求整理整张图时，在 `dsl-layout` 命令末尾加 `--all`。
 不要直接编辑 `workspace.layout.json` 里的 x/y。
 
 ## 自动排版是交付步骤

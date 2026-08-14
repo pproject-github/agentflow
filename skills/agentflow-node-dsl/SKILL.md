@@ -27,8 +27,8 @@ description: >-
 node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs config
 ```
 
-跨端节点操作要求 `localRuntime.available: true` 和有效 token；缺少 companion skill 或本地
-AgentFlow runtime 时先停止并按 `agentflow-cli` 的安装说明修复。
+跨端节点操作要求 `localRuntime.available: true` 和有效 token。Runtime 已包含在 companion
+Skill 中；缺失时重新安装或更新 `agentflow-cli`，不要另装 npm CLI。
 
 写新包之前，先搜索服务端目录，避免重复造已有节点：
 
@@ -183,7 +183,7 @@ Agent 自行完成且保留可重现证据：
 - 节点包含 `scripts/` / `templates/` / `assets/` 时，用完整 ZIP 安装后再跑一次，不得只测 `index.mjs`
 
 ```bash
-agentflow flow dsl lint <flowDir>
+node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs dsl-lint --file <flowDir>
 ```
 
 这一级通过后只能汇报：**开发验证通过，待生产同构验收**。
@@ -203,16 +203,8 @@ agentflow flow dsl lint <flowDir>
 
 ## 发布给别的流程用
 
-流程自带的 `nodes/<name>/` 只有那个流程能用。要复用就发布：
-
-```bash
-agentflow marketplace publish-node <flowDir>/nodes/<name>
-agentflow marketplace list
-```
-
-包会被复制到 `.workspace/agentflow/marketplace/packages/nodes/<id>/<version>`。
-
-要发给另一台机器或另一个 Agent workspace，上传和安装**整个包目录**：
+流程自带的 `nodes/<name>/` 只有那个流程能用。要让其它流程或其它 Agent workspace 复用，
+通过 token-backed CLI 上传和安装**整个包目录**：
 
 ```bash
 node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs node-package-publish --file <flowDir>/nodes/<name>

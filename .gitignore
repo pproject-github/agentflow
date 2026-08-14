@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # AgentFlow run 目录（intermediate、output、logs）
 .workspace/

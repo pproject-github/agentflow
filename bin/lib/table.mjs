@@ -1,4 +1,3 @@
-import { createRequire } from "module";
+import Table from "cli-table3";
 
-const require = createRequire(import.meta.url);
-export const Table = require("cli-table3");
+export { Table };

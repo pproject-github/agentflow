@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow operation through a bundled token-backed CLI, without MCP. Use when Codex needs to create, update, run, or publish temporary Workspace drafts; search, publish, install, or synchronize versioned node packages; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs using AGENTFLOW_TOKEN from env or .env.
+description: Direct AgentFlow operation through a bundled browser-authorized CLI, without MCP or npm. Use when Codex needs to authorize AgentFlow access, create, update, run, or publish temporary Workspace drafts; search, publish, install, or synchronize versioned node packages; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs.
 ---
 
 # AgentFlow CLI
@@ -52,21 +52,44 @@ For other SkillHub-supported agents, change the agent name:
 skillhub install agentflow-cli --global --agent claude-code
 ```
 
-After installation, configure only the direct API token. Do not add an MCP server for this skill.
+After installation, authorize the CLI through the AgentFlow browser page. Do not add an MCP server for this skill.
+The Skill already includes the version-matched local Runtime used for Workspace DSL parsing,
+lint/layout, and node-package operations. Do not install an npm package or put `agentflow` on
+`PATH`. `AGENTFLOW_PACKAGE_ROOT` and `--agentflow-package-root` are development overrides only.
 
-Install or update the `@fieldwangai/agentflow` CLI as the local runtime and keep `agentflow` on
-`PATH`. The bundled skill intentionally does not copy AgentFlow's parser/runtime modules. It locates
-the runtime from an explicit `--agentflow-package-root`, `AGENTFLOW_PACKAGE_ROOT`, the current
-project's `node_modules`, or the `agentflow` executable on `PATH`.
-
-Verify both token and runtime discovery before local DSL or node-package work:
+Verify both authorization and runtime discovery before local DSL or node-package work:
 
 ```bash
 node <skill-dir>/scripts/agentflow-cli.mjs config
 ```
 
-Require `localRuntime.available: true`. Pure remote reporting commands can still run without a local
-runtime, but package creation, installation, Flow pull/publish, and Workspace graph parsing cannot.
+Require `localRuntime.available: true`. A normal SkillHub installation resolves
+`<skill-dir>/runtime`; if it does not, reinstall or update `agentflow-cli` from SkillHub rather than
+installing a separate CLI package. Pure remote reporting commands can still run without a local
+Runtime, but package creation, installation, Flow pull/publish, and Workspace graph parsing cannot.
+
+## Browser authorization
+
+When `config` reports `hasToken: false`, do not ask the user to paste a token. Start a non-blocking
+authorization and return its `verificationUrl`:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs auth start
+```
+
+The user opens the URL, logs in to AgentFlow if necessary, reviews the requested access, and clicks
+Allow. After the user says authorization is complete, exchange the pending one-time request:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs auth complete
+node <skill-dir>/scripts/agentflow-cli.mjs auth status
+```
+
+`auth start` never prints the secret device code. `auth complete` saves a separate CLI credential in
+`~/.agentflow/auth.json` with owner-only permissions; it never copies the browser cookie. Use
+`AGENTFLOW_AUTH_FILE` only for isolated automation or tests. Revoke the CLI Session and clear its
+local profile with `auth logout`. Do not send the authorization URL to anyone except the requesting
+user; although it contains no access token, it represents an active approval request.
 
 ## Configuration
 
@@ -75,10 +98,12 @@ The CLI reads configuration in this order:
 1. CLI flags: `--base-url`, `--token`
 2. Environment variables: `AGENTFLOW_BASE_URL`, `AGENTFLOW_TOKEN`, `AGENTFLOW_SESSION_TOKEN`
 3. Env files: `AGENTFLOW_ENV_FILE`, then `.env`, `.agentflow.env`, then `~/.agentflow.env`
+4. Browser-authorized profile: `~/.agentflow/auth.json`
 
 Default base URL: `http://ai.mengma.bigo.inner/`.
 
-Required token: `AGENTFLOW_TOKEN` or `AGENTFLOW_SESSION_TOKEN`. Never print the token in the final answer or logs.
+For CI or service accounts, `AGENTFLOW_TOKEN` or `AGENTFLOW_SESSION_TOKEN` overrides the saved
+profile. Never print any token in the final answer or logs.
 
 Example `.env`:
 
@@ -104,16 +129,14 @@ List flows:
 node <skill-dir>/scripts/agentflow-cli.mjs list-flows
 ```
 
-For a package used only in the current local checkout, use the packaged AgentFlow CLI (the
-Node DSL workflow is documented in `agentflow-node-dsl`):
+Validate and lay out Workspace DSL with the same bundled CLI:
 
 ```bash
-agentflow marketplace list --json
-agentflow marketplace publish-node ./my-node --json
-agentflow validate MyFlow --json
+node <skill-dir>/scripts/agentflow-cli.mjs dsl-lint --file <flowDir>
+node <skill-dir>/scripts/agentflow-cli.mjs dsl-layout --file <flowDir>
 ```
 
-These commands copy a package only into the current workspace marketplace.
+Add `--all` to `dsl-layout` only for a new graph or an explicitly requested full rearrangement.
 
 To distribute a complete package directory (including `scripts/`, `templates/`, or assets) through
 an AgentFlow server, use the token-backed commands. The CLI packs the directory as ZIP; `index.mjs`
@@ -158,8 +181,8 @@ import myNode from "marketplace:my_node@1.0.0";
 const result = myNode("My node", { input: "value" });
 ```
 
-Run `agentflow flow dsl lint <flowDir>` with that workspace as the current project before publishing
-the flow. `publish-flow` also checks that the server contains every exact imported version before it
+Run the bundled `dsl-lint` command with that workspace as `--workspace-root` before publishing the
+flow. `publish-flow` also checks that the server contains every exact imported version before it
 writes the Flow. Do not unpack ZIPs by hand or copy only `index.mjs`; relative package files are part
 of the node's versioned content.
 
@@ -384,7 +407,8 @@ The only admin write exception is audited version-membership repair. Read its st
 
 ## Workflow
 
-1. Check token availability with `config`.
+1. Check authorization with `config`. If missing, use `auth start`, give the URL to the user, then
+   run `auth complete` only after the user approves it.
 2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `node-package-search` before creating a new code node. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
 3. For a new user-authored Flow, prefer `draft-create` → `draft-run`/`draft-update` → explicit user confirmation → `draft-publish`. Keep `workspace-preview` for read-only sharing.
 4. Use `run` to start a published flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
@@ -392,7 +416,9 @@ The only admin write exception is audited version-membership repair. Read its st
 
 ## Failure Handling
 
-- If the CLI says the token is missing, ask the user to set `AGENTFLOW_TOKEN` in env or `.env`.
+- If authorization is missing, use `auth start` and return the URL. Do not ask the user to paste a
+  personal Token into the conversation. Use environment Tokens only for non-interactive CI or
+  service accounts.
 - If `publish-flow` returns 409, do not add `--replace` automatically. Ask the user to confirm updating the existing Flow.
 - If team publishing says no active team is assigned, keep the local draft and ask the user to choose personal/workspace or have an admin assign the account to a team.
 - If the API returns 401/403, do not retry with a printed token. Ask the user to refresh the token.
