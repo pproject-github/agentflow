@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow operation through a bundled browser-authorized CLI, without MCP or npm. Use when Codex needs to authorize AgentFlow access, create, update, run, or publish temporary Workspace drafts; search, publish, install, or synchronize versioned node packages; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs.
+description: Direct AgentFlow operation through a bundled browser-authorized CLI, without MCP or npm. Use when Codex needs to authorize AgentFlow access, create, update, run, or publish temporary Workspace drafts; search usage-ranked Marketplace Flow templates and nodes; publish, install, privatize, or synchronize versioned resources; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs.
 ---
 
 # AgentFlow CLI
@@ -152,7 +152,8 @@ node <skill-dir>/scripts/agentflow-cli.mjs node-package-install \
 ```
 
 Before authoring a new code node, search the remote catalog. The result is structured JSON with the
-exact import specifier, input/output slots, content hash, and install hint:
+exact import specifier, input/output slots, content hash, visibility, install hint, and server-owned
+`useCount` / `installCount` / `uniqueUserCount` statistics:
 
 ```bash
 node <skill-dir>/scripts/agentflow-cli.mjs node-package-search --query "read csv"
@@ -160,6 +161,52 @@ node <skill-dir>/scripts/agentflow-cli.mjs node-package-search --query "read csv
 
 Prefer an existing suitable exact version. Install it and import its returned `specifier`; create a
 new local package only when no result meets the requested behavior.
+
+## Marketplace resources
+
+List complete runnable Flow templates or node packages. Results are public resources by default,
+ordered by `useCount DESC`, and always include the usage statistics in their JSON records:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-list --kind flow
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-list --kind node --query "用户校验"
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-list --kind flow --owned
+```
+
+`--owned` includes the current user's private resources. Creating or testing a Draft never exposes
+it. Publishing to the Marketplace is a separate explicit operation; it defaults to public, strips
+runtime state, and disables Scheduled Run entries in the immutable template snapshot:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-flow-publish \
+  --flow-id user-import-validation \
+  --flow-source user \
+  --version 1.0.0 \
+  --visibility public
+```
+
+Install a public or owned private template into the caller's personal space. Installation creates a
+copy, records its Marketplace origin for later successful-run accounting, and keeps scheduling
+disabled until the installer explicitly enables it:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-flow-install \
+  --flow user-import-validation@1.0.0 \
+  --flow-id my-user-import-validation
+```
+
+Owners can stop discovery and new installation without deleting already installed copies:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs marketplace-visibility \
+  --kind flow \
+  --resource user-import-validation@1.0.0 \
+  --visibility private
+```
+
+The same command supports `--kind node`. Never infer Marketplace publication from ordinary
+`publish-flow`: that command writes an editable personal/workspace/team Flow, while
+`marketplace-flow-publish` creates a reusable immutable template.
 
 When a Flow already declares its dependencies, do not install packages one by one. Synchronize the
 whole Flow from its versioned imports:
@@ -409,7 +456,7 @@ The only admin write exception is audited version-membership repair. Read its st
 
 1. Check authorization with `config`. If missing, use `auth start`, give the URL to the user, then
    run `auth complete` only after the user approves it.
-2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `node-package-search` before creating a new code node. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview.
+2. Use `list-workspace` or `list-flows` to discover Flow/Pipeline targets only. Use `marketplace-list` or `node-package-search` before creating a new Flow/node; both expose usage counts for comparison. Use `publish-flow` only after a local Flow has passed validation and the user has confirmed the preview, and use `marketplace-flow-publish` only after the user explicitly wants a reusable Marketplace snapshot.
 3. For a new user-authored Flow, prefer `draft-create` → `draft-run`/`draft-update` → explicit user confirmation → `draft-publish`. Keep `workspace-preview` for read-only sharing.
 4. Use `run` to start a published flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
 5. Use `status`, `list-run-by-workspace`, and `logs` when a run is active, failed, or needs debugging. Use `schedule-list` after every schedule mutation or scheduled publish.

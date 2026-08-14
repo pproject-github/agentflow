@@ -43,14 +43,18 @@ export function createWhileSubflowScaffold({ whileId, instance, instances = {}, 
   const used = new Set([...Object.keys(instances), ...Object.keys(subflows)]);
   const conditionId = uniqueId(`${id}Condition`, used);
   const bodyId = uniqueId(`${id}Body`, used);
+  const conditionContextId = uniqueId(`${id}_condition_context`, used);
   const conditionStateId = uniqueId(`${id}_condition_state`, used);
   const conditionIterationId = uniqueId(`${id}_condition_iteration`, used);
+  const bodyContextId = uniqueId(`${id}_body_context`, used);
   const bodyStateId = uniqueId(`${id}_body_state`, used);
   const bodyIterationId = uniqueId(`${id}_body_iteration`, used);
   const bodyIdempotencyKeyId = uniqueId(`${id}_body_idempotency_key`, used);
   const createdInstances = {
+    [conditionContextId]: inputProxy(conditionContextId, conditionId, "context", "context"),
     [conditionStateId]: inputProxy(conditionStateId, conditionId, "state", "json"),
     [conditionIterationId]: inputProxy(conditionIterationId, conditionId, "iteration", "text"),
+    [bodyContextId]: inputProxy(bodyContextId, bodyId, "context", "context"),
     [bodyStateId]: inputProxy(bodyStateId, bodyId, "state", "json"),
     [bodyIterationId]: inputProxy(bodyIterationId, bodyId, "iteration", "text"),
     [bodyIdempotencyKeyId]: inputProxy(bodyIdempotencyKeyId, bodyId, "idempotencyKey", "text"),
@@ -67,24 +71,26 @@ export function createWhileSubflowScaffold({ whileId, instance, instances = {}, 
         id: conditionId,
         label: "判断是否继续",
         inputs: {
+          context: { nodeId: conditionContextId, slot: "value", type: "context" },
           state: { nodeId: conditionStateId, slot: "value", type: "json" },
           iteration: { nodeId: conditionIterationId, slot: "value", type: "text" },
         },
         outputs: {},
         roots: [],
-        nodeIds: [conditionStateId, conditionIterationId],
+        nodeIds: [conditionContextId, conditionStateId, conditionIterationId],
       },
       [bodyId]: {
         id: bodyId,
         label: "执行一轮",
         inputs: {
+          context: { nodeId: bodyContextId, slot: "value", type: "context" },
           state: { nodeId: bodyStateId, slot: "value", type: "json" },
           iteration: { nodeId: bodyIterationId, slot: "value", type: "text" },
           idempotencyKey: { nodeId: bodyIdempotencyKeyId, slot: "value", type: "text" },
         },
         outputs: {},
         roots: [],
-        nodeIds: [bodyStateId, bodyIterationId, bodyIdempotencyKeyId],
+        nodeIds: [bodyContextId, bodyStateId, bodyIterationId, bodyIdempotencyKeyId],
       },
     },
   };

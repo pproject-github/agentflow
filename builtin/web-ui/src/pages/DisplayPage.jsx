@@ -268,7 +268,7 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayNode({ node, shareId, style, bare = false }) {
+export function DisplayNode({ node, shareId, style, bare = false }) {
   const raw = displayContent(node);
   const content = node.kind === "html"
     ? normalizeHtmlDisplayContent(raw)

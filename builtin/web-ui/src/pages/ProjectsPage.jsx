@@ -721,6 +721,38 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
     }
   }, [loadResources, t]);
 
+  const publishFlowToMarketplace = useCallback(async (flow) => {
+    const version = window.prompt("发布版本（不可覆盖不同内容，建议升级版本号）：", "1.0.0");
+    if (!version) return;
+    const visibilityInput = window.prompt("可见性：public（公开）或 private（仅自己）", "public");
+    if (!visibilityInput) return;
+    const visibility = visibilityInput.trim().toLowerCase();
+    if (visibility !== "public" && visibility !== "private") {
+      window.alert("可见性只能是 public 或 private");
+      return;
+    }
+    try {
+      const response = await fetch("/api/marketplace/flows/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: flow.id,
+          flowSource: flow.source || "user",
+          id: flow.id,
+          version,
+          displayName: flow.id,
+          description: flow.description || "",
+          visibility,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      window.alert(`${flow.id}@${version} 已发布为${visibility === "public" ? "公开" : "私有"}市场模板；定时入口已自动关闭。`);
+    } catch (publishError) {
+      window.alert(`发布失败：${String(publishError?.message || publishError)}`);
+    }
+  }, []);
+
   useEffect(() => {
     if (resourceKind === "nodes" || resourceKind === "my-nodes" || resourceKind === "my-flows" || resourceKind === "skills") {
       setFilter(resourceKind);
@@ -1484,6 +1516,9 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                   const busyAction = adminBuiltinBusy.endsWith(`:${f.source}:${f.id}`);
                   const canRestore = f.archived && (f.source === "user" || f.source === "workspace")
                     && (!f.collaboration?.role || f.collaboration.role === "owner");
+                  const canPublishMarketplace = !f.archived
+                    && (f.source === "user" || f.source === "workspace")
+                    && (!f.collaboration?.role || f.collaboration.role === "owner");
                   const restoreBusy = flowRestoreBusy === `${f.source}:${f.id}`;
                   return (
                   <div
@@ -1529,7 +1564,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                           <HighlightMatch query={pipelineSearch}>{sourcePathHint(f)}</HighlightMatch>
                         </span>
                       </div>
-                      {authUser?.isAdmin || canRestore ? (
+                      {authUser?.isAdmin || canRestore || canPublishMarketplace ? (
                         <div
                           className="af-project-admin-actions"
                           onClick={(event) => event.stopPropagation()}
@@ -1538,6 +1573,11 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                           {canRestore ? (
                             <button type="button" disabled={restoreBusy} onClick={() => restoreFlow(f)}>
                               {restoreBusy ? t("project:restoringActive") : t("project:restoreActive")}
+                            </button>
+                          ) : null}
+                          {canPublishMarketplace ? (
+                            <button type="button" onClick={() => publishFlowToMarketplace(f)}>
+                              发布到市场
                             </button>
                           ) : null}
                           {canPromote ? (

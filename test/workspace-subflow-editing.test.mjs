@@ -11,7 +11,7 @@ import {
 } from "../builtin/web-ui/src/workspaceSubflowEditing.js";
 import { flowFilesToGraph, graphToFlowFiles } from "../bin/lib/flow-dsl/index.mjs";
 
-test("While scaffold creates fixed runtime inputs without exposing output bindings", () => {
+test("While scaffold creates Context plus fixed runtime inputs without exposing output bindings", () => {
   const made = createWhileSubflowScaffold({
     whileId: "loop",
     instance: { definitionId: "control_while" },
@@ -19,8 +19,10 @@ test("While scaffold creates fixed runtime inputs without exposing output bindin
     subflows: {},
   });
   assert.equal(made.instance.conditionSubflowId, "loopCondition");
-  assert.deepEqual(Object.keys(made.subflows.loopCondition.inputs), ["state", "iteration"]);
-  assert.deepEqual(Object.keys(made.subflows.loopBody.inputs), ["state", "iteration", "idempotencyKey"]);
+  assert.deepEqual(Object.keys(made.subflows.loopCondition.inputs), ["context", "state", "iteration"]);
+  assert.deepEqual(Object.keys(made.subflows.loopBody.inputs), ["context", "state", "iteration", "idempotencyKey"]);
+  assert.equal(made.subflows.loopCondition.inputs.context.type, "context");
+  assert.equal(made.subflows.loopBody.inputs.context.type, "context");
   assert.deepEqual(made.subflows.loopCondition.outputs, {});
 });
 

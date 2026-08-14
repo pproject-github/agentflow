@@ -64,6 +64,29 @@ function BindingSection({ section, data }) {
   );
 }
 
+function ContextSection({ section, data }) {
+  const items = Array.isArray(section.inputs) ? section.inputs : [];
+  return (
+    <section className="af-node-ui-kit__section af-node-ui-kit__context">
+      <SectionHeading label={section.label} />
+      <div className="af-node-ui-kit__context-list">
+        {items.map((item) => {
+          const binding = data?.nodeUiBindings?.[item.name];
+          const literal = slotText(data?.inputs, item.name, "");
+          const connected = Boolean(binding || literal);
+          return (
+            <div key={item.name} className={"af-node-ui-kit__context-row" + (connected ? " is-connected" : "")}>
+              <span className="material-symbols-outlined" aria-hidden>{connected ? "cable" : "radio_button_unchecked"}</span>
+              <strong>{item.label || item.name}</strong>
+              <code title={binding?.display || literal || "未绑定"}>{binding?.display || literal || "未绑定"}</code>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function CodeSection({ section, data }) {
   const value = data?.[section.field];
   return (
@@ -264,6 +287,7 @@ export function NodeUiKitCard({ data }) {
       {card.sections.map((section, index) => {
         const key = `${section.type}-${section.label}-${index}`;
         if (section.type === "binding") return <BindingSection key={key} section={section} data={data} />;
+        if (section.type === "context") return <ContextSection key={key} section={section} data={data} />;
         if (section.type === "code") return <CodeSection key={key} section={section} data={data} />;
         if (section.type === "loop") return <LoopSection key={key} section={section} data={data} />;
         if (section.type === "decision") return <DecisionSection key={key} section={section} data={data} />;

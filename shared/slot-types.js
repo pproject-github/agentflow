@@ -28,6 +28,7 @@ export const SLOT_TYPE_COLORS = Object.freeze({
   node: "#ff9800",
   bool: "#9c27b0",
   json: "#00bcd4",
+  context: "#7c5cff",
   image: "#ec407a",
   any: "#9e9e9e",
 });

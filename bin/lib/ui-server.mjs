@@ -130,7 +130,6 @@ import { json, readBody } from "./http-util.mjs";
 
 // 从 ui-server 拆出去的 Workspace 子系统；路由仍在下面的 startUiServer 里
 import {
-  USER_WORKSPACES_FILENAME,
   WORKSPACE_DEFERRED_RUN_POLL_MS,
   WORKSPACE_SCHEDULE_POLL_MS,
   activeWorkspaceRunUsageRecords,
@@ -141,6 +140,7 @@ import {
   displayShareOutputUrl,
   isReadonlyBuiltinFlowSource,
   isValidFlowSourceRead,
+  listConfiguredWorkspaces,
   listWorkspaceScheduleStatuses,
   normalizeDisplayShareExpiry,
   normalizeDisplayShareNodeIds,
@@ -151,11 +151,11 @@ import {
   readCursorMcpConfig,
   readCursorMcpServers,
   readDisplayShares,
+  readUserWorkspaces,
   readUserMcpPrivate,
   readWorkspaceGraph,
   readWorkspaceRunUsageRecords,
   readWorkspaceScheduleRegistry,
-  readWorkspacesFromPath,
   resolveWorkspaceFilePath,
   resolveWorkspaceScopeRoot,
   runStatusBucket,
@@ -173,11 +173,22 @@ import {
   workspaceDownloadContentDisposition,
   workspaceFlowCollaborationGuard,
   workspaceScheduleNextRunAt,
-  workspacesPath,
   writeDisplayShares,
   writeWorkspaceGraph,
 } from "./workspace-server.mjs";
 import { handleWorkspaceRoutes, workspaceGraphWithScheduleMode } from "./workspace-routes.mjs";
+import {
+  createSpace,
+  deleteSpacePage,
+  getSpaceById,
+  getSpaceByRoute,
+  listSpacesForUser,
+  readSpaces,
+  normalizeSpacePagePath,
+  normalizeSpaceVisibility,
+  updateSpace,
+  upsertSpacePage,
+} from "./spaces.mjs";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -935,70 +946,6 @@ function skillhubInstallArgs(payload, { uninstall = false } = {}) {
 }
 
 const DISPLAY_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-function legacyUserWorkspacesPath(userCtx = {}) {
-  return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), USER_WORKSPACES_FILENAME);
-}
-
-function readLegacyAdminWorkspaces(userCtx = {}) {
-  const users = readAuthUsers();
-  const candidates = [];
-  for (const [userId, user] of Object.entries(users || {})) {
-    if (user?.isAdmin) candidates.push(String(userId || ""));
-  }
-  if (userCtx?.isAdmin && userCtx.userId) candidates.unshift(String(userCtx.userId));
-  const seenPaths = new Set();
-  const seenEntries = new Set();
-  const out = [];
-  for (const userId of candidates) {
-    const p = legacyUserWorkspacesPath({ userId });
-    const resolved = path.resolve(p);
-    if (seenPaths.has(resolved) || resolved === path.resolve(workspacesPath())) continue;
-    seenPaths.add(resolved);
-    for (const entry of readWorkspacesFromPath(p, { userId })) {
-      const key = entry.id || entry.path || entry.repoUrl;
-      if (seenEntries.has(key)) continue;
-      seenEntries.add(key);
-      out.push(entry);
-    }
-  }
-  return out;
-}
-
-function readUserWorkspaces(userCtx = {}) {
-  const globalPath = workspacesPath();
-  const globalWorkspaces = fs.existsSync(globalPath) ? readWorkspacesFromPath(globalPath, userCtx) : [];
-  const adminLegacy = readLegacyAdminWorkspaces(userCtx);
-  if (globalWorkspaces.length || adminLegacy.length) {
-    const seen = new Set();
-    const out = [];
-    for (const entry of [...globalWorkspaces, ...adminLegacy]) {
-      const key = entry.id || entry.path || entry.repoUrl;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(entry);
-    }
-    return out;
-  }
-  return readWorkspacesFromPath(legacyUserWorkspacesPath(userCtx), userCtx);
-}
-
-function listConfiguredWorkspaces(root, scopedRoot, userCtx = {}) {
-  const currentRoot = path.resolve(scopedRoot || root);
-  const homeRoot = path.resolve(os.homedir());
-  const builtins = [
-    { id: "current", label: "当前流程工作区", kind: "local", path: currentRoot, builtin: true, exists: fs.existsSync(currentRoot) && fs.statSync(currentRoot).isDirectory(), type: "flow", enabled: true },
-    { id: "home", label: "用户 Home", kind: "local", path: homeRoot, builtin: true, exists: fs.existsSync(homeRoot) && fs.statSync(homeRoot).isDirectory(), type: "local", enabled: true },
-  ];
-  const custom = readUserWorkspaces(userCtx).filter((entry) => entry.enabled !== false).map((entry) => ({ ...entry, builtin: false }));
-  const seen = new Set();
-  return [...builtins, ...custom].filter((entry) => {
-    const key = path.resolve(entry.path);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function workflowBindableWorkspaces(userCtx = {}) {
   return readUserWorkspaces(userCtx)
     .filter((entry) => entry.enabled !== false && entry.exists)
@@ -1351,6 +1298,12 @@ function isDisplayShareExpired(share) {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
+function canReadDisplayShare(share, userCtx = {}) {
+  if (!share) return false;
+  if (String(share.visibility || "public") !== "private") return true;
+  return userCtx?.isAdmin === true || String(share.userId || "") === String(userCtx?.userId || "");
+}
+
 function getDisplayShareOrExpired(id) {
   const shares = readDisplayShares();
   const share = shares[id];
@@ -1376,8 +1329,76 @@ function displayShareSummary(share, baseUrl = "") {
     expiresAt: String(share?.expiresAt || ""),
     expiresMode: String(share?.expiresMode || (share?.expiresAt ? "days" : "permanent")),
     expiresInDays: share?.expiresInDays == null ? null : Number(share.expiresInDays),
+    visibility: String(share?.visibility || "public") === "private" ? "private" : "public",
     url: displayShareOutputUrl(share?.id || "", baseUrl),
   };
+}
+
+function spacePublicSummary(space = {}, baseUrl = "") {
+  const ownerId = String(space.ownerId || "");
+  const slug = String(space.slug || "");
+  const rootPath = `/s/${encodeURIComponent(ownerId)}/${encodeURIComponent(slug)}`;
+  const base = normalizePublicBaseUrl(baseUrl);
+  const absoluteRoot = base ? new URL(rootPath, base.endsWith("/") ? base : `${base}/`).href : rootPath;
+  return {
+    id: String(space.id || ""),
+    ownerId,
+    slug,
+    title: String(space.title || slug),
+    description: String(space.description || ""),
+    visibility: normalizeSpaceVisibility(space.visibility),
+    status: String(space.status || "active"),
+    pages: (Array.isArray(space.pages) ? space.pages : []).map((page) => ({
+      id: String(page.id || ""),
+      title: String(page.title || ""),
+      path: normalizeSpacePagePath(page.path || "/"),
+      shareId: String(page.shareId || ""),
+      hidden: page.hidden === true,
+      order: Number(page.order || 0),
+    })),
+    url: absoluteRoot,
+    createdAt: String(space.createdAt || ""),
+    updatedAt: String(space.updatedAt || ""),
+  };
+}
+
+function canManageSpace(space, userCtx = {}) {
+  return Boolean(space) && (userCtx?.isAdmin === true || String(space.ownerId || "") === String(userCtx?.userId || ""));
+}
+
+function displayShareSpaceReferences(shareId = "") {
+  const wanted = String(shareId || "").trim();
+  if (!wanted) return [];
+  const refs = [];
+  for (const space of readSpaces()) {
+    for (const page of Array.isArray(space.pages) ? space.pages : []) {
+      if (String(page.shareId || "") !== wanted) continue;
+      refs.push({ spaceId: space.id, ownerId: space.ownerId, slug: space.slug, pageId: page.id, path: page.path });
+    }
+  }
+  return refs;
+}
+
+function syncSpaceShareVisibility(space) {
+  if (!space) return;
+  const shares = readDisplayShares();
+  let changed = false;
+  for (const page of Array.isArray(space.pages) ? space.pages : []) {
+    const share = shares[String(page.shareId || "")];
+    if (!share || String(share.userId || "") !== String(space.ownerId || "")) continue;
+    const visibility = normalizeSpaceVisibility(space.visibility);
+    if (share.visibility === visibility && !share.expiresAt) continue;
+    shares[page.shareId] = {
+      ...share,
+      visibility,
+      expiresAt: "",
+      expiresMode: "permanent",
+      expiresInDays: null,
+      updatedAt: new Date().toISOString(),
+    };
+    changed = true;
+  }
+  if (changed) writeDisplayShares(shares);
 }
 
 function listDisplaySharesForUser(userCtx = {}, baseUrl = "") {
@@ -1407,6 +1428,9 @@ function updateDisplayShareExpiryForUser(id, userCtx = {}, patch = {}) {
   const userId = String(userCtx?.userId || "");
   if (userCtx?.isAdmin !== true && String(share.userId || "") !== userId) return { status: 403, error: "Forbidden" };
   const expiry = normalizeDisplayShareExpiry(patch, new Date());
+  if (displayShareSpaceReferences(id).length > 0 && expiry.expiresMode !== "permanent") {
+    return { status: 409, error: "Space 页面使用中的展示内容必须永久有效；请先从空间移除页面" };
+  }
   const updated = {
     ...share,
     expiresAt: expiry.expiresAt,
@@ -1425,6 +1449,9 @@ function deleteDisplayShareForUser(id, userCtx = {}) {
   if (!share) return { status: 404, error: "Display share not found" };
   const userId = String(userCtx?.userId || "");
   if (userCtx?.isAdmin !== true && String(share.userId || "") !== userId) return { status: 403, error: "Forbidden" };
+  if (displayShareSpaceReferences(id).length > 0) {
+    return { status: 409, error: "展示内容仍被 Space 页面引用；请先从空间移除页面" };
+  }
   delete shares[id];
   writeDisplayShares(shares);
   return { status: 200 };
@@ -2339,6 +2366,154 @@ export function startUiServer({
       json(res, 200, { token: getSessionTokenFromRequest(req) || "" });
       return;
     }
+
+    if (req.method === "GET" && url.pathname === "/api/spaces/public") {
+      try {
+        const ownerId = String(url.searchParams.get("owner") || "").trim();
+        const slug = String(url.searchParams.get("slug") || "").trim();
+        const space = getSpaceByRoute(ownerId, slug);
+        if (!space || (!canManageSpace(space, userCtx) && normalizeSpaceVisibility(space.visibility) === "private")) {
+          json(res, 404, { error: "Space not found" });
+          return;
+        }
+        if (space.status === "paused" && !canManageSpace(space, userCtx)) {
+          json(res, 410, { error: "Space is paused" });
+          return;
+        }
+        json(res, 200, {
+          space: spacePublicSummary(space, requestPublicBaseUrl(req)),
+          manageable: canManageSpace(space, userCtx),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/spaces") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      const spaces = listSpacesForUser(userCtx.userId, userCtx.isAdmin)
+        .map((space) => spacePublicSummary(space, requestPublicBaseUrl(req)));
+      json(res, 200, { spaces });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spaces") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const result = createSpace({
+          ownerId: userCtx.userId,
+          slug: payload.slug,
+          title: payload.title,
+          description: payload.description,
+          visibility: payload.visibility,
+        });
+        if (result.error) {
+          json(res, 400, { error: result.error });
+          return;
+        }
+        json(res, 200, { ok: true, space: spacePublicSummary(result.space, requestPublicBaseUrl(req)) });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/spaces") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const current = getSpaceById(payload.id);
+        if (!canManageSpace(current, userCtx)) {
+          json(res, current ? 403 : 404, { error: current ? "Forbidden" : "Space not found" });
+          return;
+        }
+        const result = updateSpace(payload.id, payload);
+        if (result.error) {
+          json(res, 400, { error: result.error });
+          return;
+        }
+        syncSpaceShareVisibility(result.space);
+        json(res, 200, { ok: true, space: spacePublicSummary(result.space, requestPublicBaseUrl(req)) });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spaces/page") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      try {
+        const payload = JSON.parse(await readBody(req));
+        const space = getSpaceById(payload.spaceId);
+        if (!canManageSpace(space, userCtx)) {
+          json(res, space ? 403 : 404, { error: space ? "Forbidden" : "Space not found" });
+          return;
+        }
+        const { share } = getDisplayShareOrExpired(String(payload.shareId || "").trim());
+        if (!share || (userCtx.isAdmin !== true && String(share.userId || "") !== String(userCtx.userId || ""))) {
+          json(res, 400, { error: "Display share not found or not owned by current user" });
+          return;
+        }
+        const foreignSpaceRef = displayShareSpaceReferences(share.id).find((ref) => ref.spaceId !== space.id);
+        if (foreignSpaceRef) {
+          json(res, 409, { error: "同一展示内容不能绑定到多个空间；请从 Workspace 重新生成一次展示" });
+          return;
+        }
+        const result = upsertSpacePage(space.id, {
+          title: payload.title,
+          path: payload.path,
+          shareId: share.id,
+          hidden: payload.hidden === true,
+        });
+        if (result.error) {
+          json(res, 400, { error: result.error });
+          return;
+        }
+        syncSpaceShareVisibility(result.space);
+        json(res, 200, {
+          ok: true,
+          page: result.page,
+          space: spacePublicSummary(result.space, requestPublicBaseUrl(req)),
+        });
+      } catch (e) {
+        json(res, 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/spaces/page") {
+      if (!authUser?.userId) {
+        json(res, 401, { error: "Unauthorized" });
+        return;
+      }
+      const space = getSpaceById(url.searchParams.get("spaceId") || "");
+      if (!canManageSpace(space, userCtx)) {
+        json(res, space ? 403 : 404, { error: space ? "Forbidden" : "Space not found" });
+        return;
+      }
+      const result = deleteSpacePage(space.id, url.searchParams.get("pageId") || "");
+      if (result.error) {
+        json(res, 404, { error: result.error });
+        return;
+      }
+      json(res, 200, { ok: true, space: spacePublicSummary(result.space, requestPublicBaseUrl(req)) });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/display/shares") {
       try {
         if (!authUser?.userId) {
@@ -2364,6 +2539,10 @@ export function startUiServer({
         const { share, expired } = getDisplayShareOrExpired(id);
         if (!share) {
           json(res, expired ? 410 : 404, { error: expired ? "Display share has expired" : "Display share not found" });
+          return;
+        }
+        if (!canReadDisplayShare(share, userCtx)) {
+          json(res, 404, { error: "Display share not found" });
           return;
         }
         const payload = publicDisplayPayloadFromShare(root, share);
@@ -2444,6 +2623,10 @@ export function startUiServer({
         const { share, expired } = getDisplayShareOrExpired(id);
         if (!share) {
           json(res, expired ? 410 : 404, { error: expired ? "Display share has expired" : "Display share not found" });
+          return;
+        }
+        if (!canReadDisplayShare(share, userCtx)) {
+          json(res, 404, { error: "Display share not found" });
           return;
         }
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -3096,6 +3279,7 @@ export function startUiServer({
           expiresInDays: payload.expiresInDays,
           permanent: payload.permanent,
           expiresAt: payload.expiresAt,
+          visibility: payload.visibility,
         });
         json(res, 200, { ok: true, share, url: `/display/${encodeURIComponent(share.id)}` });
       } catch (e) {

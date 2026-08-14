@@ -53,7 +53,7 @@ function isDisplayDefinition(definitionId) {
 function isSemanticInputSlot(slot) {
   const name = String(slot?.name || "");
   const type = String(slot?.type || "");
-  return type === "node"
+  return type === "node" || type === "context"
     || name === "prev" || name === "next"
     || CONTEXT_SLOT_NAMES.has(name);
 }
@@ -64,6 +64,7 @@ function isSemanticInputSlot(slot) {
  * 那显然不是作者手填的默认值。
  */
 const CONTEXT_SLOT_NAMES = new Set([
+  "context",
   "skillsContext",
   "mcpContext",
   "knowledgeContext",

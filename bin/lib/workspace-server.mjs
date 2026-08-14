@@ -33,6 +33,7 @@ import { t } from "./i18n.mjs";
 import { advanceJenkinsBuild, createJenkinsHttpInvoker, jenkinsBuildStatePath, normalizeJenkinsBuildConfig, readJenkinsBuildState, writeJenkinsBuildState } from "./jenkins.mjs";
 import { log } from "./log.mjs";
 import { resolveMarketplaceNodePackage } from "./marketplace.mjs";
+import { marketplaceResourcesForRun, recordMarketplaceRunUsage } from "./marketplace-usage.mjs";
 import { PACKAGE_ROOT, getAgentflowDataRoot, getAgentflowUserDataRoot, listAgentflowUserIds } from "./paths.mjs";
 import { appendRunLedgerEvent, readRunLedgerEvents, runLedgerId } from "./run-ledger.mjs";
 import { computeNextRunAt } from "./schedule-config.mjs";
@@ -796,6 +797,71 @@ export function readWorkspacesFromPath(p, userCtx = {}) {
   }
 }
 
+function legacyUserWorkspacesPath(userCtx = {}) {
+  return path.join(getAgentflowUserDataRoot(userCtx.userId || ""), USER_WORKSPACES_FILENAME);
+}
+
+function readLegacyAdminWorkspaces(userCtx = {}) {
+  const users = readAuthUsers();
+  const candidates = [];
+  for (const [userId, user] of Object.entries(users || {})) {
+    if (user?.isAdmin) candidates.push(String(userId || ""));
+  }
+  if (userCtx?.isAdmin && userCtx.userId) candidates.unshift(String(userCtx.userId));
+  const seenPaths = new Set();
+  const seenEntries = new Set();
+  const out = [];
+  for (const userId of candidates) {
+    const p = legacyUserWorkspacesPath({ userId });
+    const resolved = path.resolve(p);
+    if (seenPaths.has(resolved) || resolved === path.resolve(workspacesPath())) continue;
+    seenPaths.add(resolved);
+    for (const entry of readWorkspacesFromPath(p, { userId })) {
+      const key = entry.id || entry.path || entry.repoUrl;
+      if (seenEntries.has(key)) continue;
+      seenEntries.add(key);
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
+/** The same authenticated Workspace catalog used by GET /api/workspaces. */
+export function readUserWorkspaces(userCtx = {}) {
+  const globalPath = workspacesPath();
+  const globalWorkspaces = fs.existsSync(globalPath) ? readWorkspacesFromPath(globalPath, userCtx) : [];
+  const adminLegacy = readLegacyAdminWorkspaces(userCtx);
+  if (globalWorkspaces.length || adminLegacy.length) {
+    const seen = new Set();
+    const out = [];
+    for (const entry of [...globalWorkspaces, ...adminLegacy]) {
+      const key = entry.id || entry.path || entry.repoUrl;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(entry);
+    }
+    return out;
+  }
+  return readWorkspacesFromPath(legacyUserWorkspacesPath(userCtx), userCtx);
+}
+
+export function listConfiguredWorkspaces(root, scopedRoot, userCtx = {}) {
+  const currentRoot = path.resolve(scopedRoot || root);
+  const homeRoot = path.resolve(os.homedir());
+  const builtins = [
+    { id: "current", label: "当前流程工作区", kind: "local", path: currentRoot, builtin: true, exists: fs.existsSync(currentRoot) && fs.statSync(currentRoot).isDirectory(), type: "flow", enabled: true },
+    { id: "home", label: "用户 Home", kind: "local", path: homeRoot, builtin: true, exists: fs.existsSync(homeRoot) && fs.statSync(homeRoot).isDirectory(), type: "local", enabled: true },
+  ];
+  const custom = readUserWorkspaces(userCtx).filter((entry) => entry.enabled !== false).map((entry) => ({ ...entry, builtin: false }));
+  const seen = new Set();
+  return [...builtins, ...custom].filter((entry) => {
+    const key = path.resolve(entry.path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function workspaceRepoUrlWithCredential(repoUrl = "", credential = "") {
   const token = String(credential || "").trim();
   if (!token) return String(repoUrl || "").trim();
@@ -854,6 +920,10 @@ export function appendWorkspaceRunFinished(record, status) {
     at: Number(record.startedAt || record.at || Date.now()),
     endedAt: Number(record.endedAt || Date.now()),
     durationMs: Math.max(0, Number(record.durationMs || (Number(record.endedAt || Date.now()) - Number(record.startedAt || record.at || Date.now())))),
+    status,
+  });
+  recordMarketplaceRunUsage(record.workspaceRoot || record.root || "", record.marketplaceResources || [], {
+    ...record,
     status,
   });
 }
@@ -1034,7 +1104,7 @@ function normalizeDisplayShareLayout(layout, fallback = "canvas") {
   return ["canvas", "gallery", "slides", "document", "single"].includes(text) ? text : fallback;
 }
 
-export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt }) {
+export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt, visibility = "public" }) {
   const shares = readDisplayShares();
   let id = createDisplayShareId();
   while (shares[id]) id = createDisplayShareId();
@@ -1050,6 +1120,7 @@ export function createDisplayShareRecord({ userId, flowId, flowSource, archived,
     title: String(title || "").trim() || "AgentFlow Display",
     layout: normalizeDisplayShareLayout(layout, "canvas"),
     nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
+    visibility: String(visibility || "").trim().toLowerCase() === "private" ? "private" : "public",
     createdAt: now,
     updatedAt: now,
     expiresAt: expiry.expiresAt,
@@ -3175,7 +3246,7 @@ function workspaceTargetSlotForEdge(graph, edge) {
 function isWorkspaceSemanticInputSlot(slot) {
   const name = String(slot?.name || "");
   const type = String(slot?.type || "");
-  return type === "node" || name === "prev" || name === "next" || name === "skillsContext" || name === "mcpContext" || name === "knowledgeContext" || name === "workspaceContext" || name === "gitContext";
+  return type === "node" || type === "context" || name === "prev" || name === "next" || name === "context" || name === "skillsContext" || name === "mcpContext" || name === "knowledgeContext" || name === "workspaceContext" || name === "gitContext";
 }
 
 function workspaceAgentInputBlock(inputValues = {}, inputMounts = {}) {
@@ -3230,8 +3301,9 @@ function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = 
   return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
 }
 
-function workspaceInputValues(graph, nodeId, outputs, scopedRoot = "") {
+function workspaceInputValues(graph, nodeId, outputs, scopedRoot = "", options = {}) {
   const values = {};
+  const includeContext = options?.includeContext === true;
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const target = instances[String(nodeId || "")] || {};
@@ -3241,13 +3313,13 @@ function workspaceInputValues(graph, nodeId, outputs, scopedRoot = "") {
     const index = workspaceHandleIndex(edge?.targetHandle, "input");
     const slot = inputSlots[index] || null;
     const name = String(slot?.name || "").trim();
-    if (!name || isWorkspaceSemanticInputSlot(slot)) continue;
+    if (!name || (isWorkspaceSemanticInputSlot(slot) && !(includeContext && name === "context"))) continue;
     const value = workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot);
     if (String(value || "").trim()) values[name] = String(value);
   }
   for (const slot of inputSlots) {
     const name = String(slot?.name || "").trim();
-    if (!name || isWorkspaceSemanticInputSlot(slot) || Object.prototype.hasOwnProperty.call(values, name)) continue;
+    if (!name || (isWorkspaceSemanticInputSlot(slot) && !(includeContext && name === "context")) || Object.prototype.hasOwnProperty.call(values, name)) continue;
     const value = workspaceSlotValue(slot);
     if (String(value || "").trim()) values[name] = String(value);
   }
@@ -3944,7 +4016,9 @@ function selectedSkillKeysFromInstance(instance) {
 
 function selectedSkillKeysFromConfigSlots(instance) {
   const slots = [...(Array.isArray(instance?.input) ? instance.input : []), ...(Array.isArray(instance?.output) ? instance.output : [])];
-  const slot = slots.find((item) => item?.name === "skillsContext") || slots.find((item) => item?.name === "skillKeys");
+  const slot = slots.find((item) => item?.name === "skills") ||
+    slots.find((item) => item?.name === "skillsContext") ||
+    slots.find((item) => item?.name === "skillKeys");
   return parseWorkspaceSkillKeys(workspaceSlotValue(slot) || "");
 }
 
@@ -3998,6 +4072,25 @@ function workspaceSemanticInputText(graph, nodeId, outputs, name, scopedRoot = "
   return workspaceSlotValue(workspaceSlotByName(instance, targetName));
 }
 
+function workspaceContextBundleFromText(text) {
+  const parsed = parseJsonText(String(text || "").trim(), null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  if (Number(parsed.version || 1) !== 1) return {};
+  const out = {};
+  for (const name of ["knowledgeContext", "skillsContext", "workspaceContext", "mcpContext"]) {
+    if (parsed[name] !== undefined && parsed[name] !== null) {
+      out[name] = typeof parsed[name] === "string" ? parsed[name] : JSON.stringify(parsed[name]);
+    }
+  }
+  return out;
+}
+
+function workspaceNodeContextBundle(graph, nodeId, outputs, scopedRoot = "") {
+  return workspaceContextBundleFromText(
+    workspaceSemanticInputText(graph, nodeId, outputs, "context", scopedRoot),
+  );
+}
+
 function workspaceContextObjectFromText(text, baseCwd, scopedRoot) {
   const raw = String(text || "").trim();
   if (!raw) return null;
@@ -4024,20 +4117,30 @@ function workspaceLooksLikeKnowledgePath(value) {
 }
 
 function workspaceKnowledgeSourceFromObject(source = {}, baseCwd = "", scopedRoot = "") {
+  if (typeof source === "string") {
+    const ref = source.trim();
+    if (!ref) return null;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(ref)) {
+      return { id: ref, label: ref, kind: "binding", type: "", path: "", repoPath: "", mountPath: "", repoUrl: "", branch: "", ref, readonly: true };
+    }
+    source = { path: ref };
+  }
   if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const ref = String(source.ref || source.binding || "").trim();
   const rawPath = String(source.path || source.repoPath || source.cwd || source.workspaceRoot || "").trim();
-  if (!workspaceLooksLikeKnowledgePath(rawPath)) return null;
-  const resolvedPath = workspaceResolvePath(baseCwd || scopedRoot, rawPath) || rawPath;
+  if (!workspaceLooksLikeKnowledgePath(rawPath) && !ref) return null;
+  const resolvedPath = rawPath ? (workspaceResolvePath(baseCwd || scopedRoot, rawPath) || rawPath) : "";
   return {
-    id: String(source.id || source.mountPath || source.label || path.basename(resolvedPath) || "").trim(),
-    label: String(source.label || source.id || source.mountPath || path.basename(resolvedPath) || "知识库").trim(),
-    kind: String(source.kind || (source.repoUrl ? "git" : "local")).trim() || "local",
+    id: String(source.id || source.mountPath || source.label || path.basename(resolvedPath) || ref || "").trim(),
+    label: String(source.label || source.id || source.mountPath || path.basename(resolvedPath) || ref || "知识库").trim(),
+    kind: String(source.kind || (source.repoUrl ? "git" : (ref ? "binding" : "local"))).trim() || "local",
     type: String(source.type || "").trim(),
     path: resolvedPath,
     repoPath: resolvedPath,
     mountPath: String(source.mountPath || "").trim(),
     repoUrl: String(source.repoUrl || "").trim(),
     branch: String(source.branch || "").trim(),
+    ref,
     readonly: source.readonly !== false,
   };
 }
@@ -4073,7 +4176,7 @@ export function workspaceKnowledgeSourcesFromText(text, baseCwd = "", scopedRoot
 }
 
 function workspaceKnowledgeContextBlockFromSources(sources = []) {
-  const valid = Array.isArray(sources) ? sources.filter((source) => source?.path || source?.repoPath) : [];
+  const valid = Array.isArray(sources) ? sources.filter((source) => source?.path || source?.repoPath || source?.ref) : [];
   if (!valid.length) return "";
   const lines = [
     "## 知识库上下文",
@@ -4087,6 +4190,7 @@ function workspaceKnowledgeContextBlockFromSources(sources = []) {
     lines.push(`${index + 1}. ${label}`);
     if (source.kind) lines.push(`   - 类型：${source.kind}${source.type ? `/${source.type}` : ""}`);
     if (sourcePath) lines.push(`   - 路径：\`${sourcePath}\``);
+    if (source.ref) lines.push(`   - 绑定：\`${source.ref}\``);
     if (source.mountPath) lines.push(`   - 挂载目录：${source.mountPath}`);
     if (source.repoUrl) lines.push(`   - Git URL：${source.repoUrl}`);
     if (source.branch) lines.push(`   - 分支：${source.branch}`);
@@ -4100,10 +4204,11 @@ function workspaceDedupeKnowledgeSources(sources = []) {
   for (const source of Array.isArray(sources) ? sources : []) {
     if (!source || typeof source !== "object") continue;
     const key = [
-      path.resolve(String(source.path || source.repoPath || "")),
+      source.path || source.repoPath ? path.resolve(String(source.path || source.repoPath)) : "",
       String(source.mountPath || ""),
       String(source.repoUrl || ""),
       String(source.branch || ""),
+      String(source.ref || ""),
     ].join("\n");
     if (seen.has(key)) continue;
     seen.add(key);
@@ -4149,16 +4254,18 @@ function workspaceGlobalKnowledgeSources(graph, scopedRoot = "", logicalCwd = ""
   );
 }
 
-function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot = "", logicalCwd = "") {
+function workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot = "", logicalCwd = "", contextBundle = {}) {
   const root = scopedRoot ? path.resolve(scopedRoot) : "";
   const cwd = logicalCwd ? path.resolve(logicalCwd) : root;
-  const knowledgeText = workspaceSemanticInputText(graph, nodeId, outputs, "knowledgeContext", scopedRoot);
+  const knowledgeText = workspaceSemanticInputText(graph, nodeId, outputs, "knowledgeContext", scopedRoot)
+    || String(contextBundle?.knowledgeContext || "");
   let knowledgeSources = workspaceKnowledgeSourcesFromText(knowledgeText, cwd || root, scopedRoot);
   knowledgeSources = workspaceDedupeKnowledgeSources([
     ...workspaceGlobalKnowledgeSources(graph, scopedRoot, logicalCwd, nodeId),
     ...knowledgeSources,
   ]);
-  const workspaceText = workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot);
+  const workspaceText = workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot)
+    || String(contextBundle?.workspaceContext || "");
   let workspaceContext = workspaceContextObjectFromText(workspaceText, cwd || root, scopedRoot);
   if (!knowledgeSources.length && workspaceContext?.cwd) {
     knowledgeSources = workspaceKnowledgeSourcesFromText(JSON.stringify([workspaceContext]), cwd || root, scopedRoot);
@@ -4384,7 +4491,7 @@ function workspaceDefaultGitRepoRoot(scopedRoot, _userCtx = {}) {
   return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "git-repos");
 }
 
-function workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch = "") {
+function workspaceDefaultWorktreePath(scopedRoot, runId, nodeId, repoPath, branch = "") {
   const repoRoot = path.resolve(repoPath);
   const repoName = sanitizeWorktreeName(path.basename(repoRoot));
   const branchName = String(branch || "").trim();
@@ -4402,9 +4509,12 @@ function workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch = "")
       : "HEAD";
   }
   return path.join(
-    path.resolve(runTmpRoot),
-    "worktrees",
+    path.resolve(scopedRoot),
+    ".workspace",
+    "agentflow",
+    "run-workspaces",
     workspaceSanitizeTmpSegment(nodeId, "node"),
+    workspaceSanitizeTmpSegment(runId, "run"),
     repoName,
     sanitizeWorktreeName(refLabel),
   );
@@ -4444,15 +4554,18 @@ function workspaceMarkAutoWorktreeCleaned(graph, entry) {
   return true;
 }
 
-function workspaceCleanupAutoWorktrees(list, graph, emit) {
+function workspaceCleanupAutoWorktrees(list, graph, emit, { force = false } = {}) {
+  const cleaned = [];
+  const preserved = [];
   for (const entry of [...list].reverse()) {
     try {
       const result = unloadGitWorktree({
         repoPath: entry.repoPath,
         worktreePath: entry.worktreePath,
-        force: true,
+        force,
         prune: true,
       });
+      cleaned.push(result.worktreePath);
       emit({
         type: "natural",
         kind: "status",
@@ -4463,15 +4576,74 @@ function workspaceCleanupAutoWorktrees(list, graph, emit) {
         emit({ type: "graph", nodeId: entry.nodeId, graph });
       }
     } catch (e) {
+      preserved.push({ ...entry, reason: e?.message || String(e) });
       emit({
         type: "natural",
         kind: "warning",
         nodeId: entry.nodeId,
-        text: `临时 worktree 未自动清理：${entry.worktreePath}\n原因：${e?.message || String(e)}`,
+        text: `运行 worktree 已保留：${entry.worktreePath}\n原因：${e?.message || String(e)}`,
       });
     }
   }
   list.splice(0, list.length);
+  return { cleaned, preserved };
+}
+
+function workspaceRunManifestPath(scopedRoot, runId) {
+  const id = workspaceSanitizeTmpSegment(runId, "run");
+  return path.join(path.resolve(scopedRoot), ".workspace", "agentflow", "run-manifests", `${id}.json`);
+}
+
+function workspaceWriteRunManifest(scopedRoot, runId, value = {}) {
+  const filePath = workspaceRunManifestPath(scopedRoot, runId);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const previous = (() => {
+    try {
+      return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, "utf-8")) : {};
+    } catch {
+      return {};
+    }
+  })();
+  const next = {
+    version: 1,
+    ...previous,
+    ...value,
+    runId: String(runId || previous.runId || ""),
+    updatedAt: new Date().toISOString(),
+  };
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(next, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+  return next;
+}
+
+export function cleanupWorkspaceRunResources(scopedRoot, runId, { force = false, status = "stopped", emit = () => {} } = {}) {
+  const filePath = workspaceRunManifestPath(scopedRoot, runId);
+  if (!fs.existsSync(filePath)) return { cleaned: [], preserved: [], manifestPath: filePath };
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return { cleaned: [], preserved: [], manifestPath: filePath };
+  }
+  const resources = Array.isArray(manifest.worktrees) ? manifest.worktrees : [];
+  const pending = resources.filter((entry) => entry?.repoPath && entry?.worktreePath && entry.removed !== true);
+  const result = workspaceCleanupAutoWorktrees(pending.map((entry) => ({ ...entry })), null, emit, { force });
+  const cleanedSet = new Set(result.cleaned.map((item) => path.resolve(item)));
+  const preservedByPath = new Map(result.preserved.map((item) => [path.resolve(item.worktreePath), item]));
+  const worktrees = resources.map((entry) => {
+    const target = entry?.worktreePath ? path.resolve(entry.worktreePath) : "";
+    if (target && cleanedSet.has(target)) return { ...entry, removed: true, removedAt: new Date().toISOString(), reason: "" };
+    if (target && preservedByPath.has(target)) return { ...entry, removed: false, reason: preservedByPath.get(target).reason };
+    return entry;
+  });
+  workspaceWriteRunManifest(scopedRoot, runId, {
+    ...manifest,
+    status: result.preserved.length ? `${status}:resources-preserved` : status,
+    worktrees,
+    finishedAt: new Date().toISOString(),
+  });
+  return { ...result, manifestPath: filePath };
 }
 
 function workspaceSanitizeTmpSegment(value, fallback = "node") {
@@ -5110,10 +5282,27 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const runtimeEnv = (extra = {}) => runtimeEnvForUser(userCtx, { ...runEnv, ...(extra || {}) });
   const autoCleanupWorktrees = [];
   const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
+  const runtimeRunId = String(opts.runId || payload?.runId || "").trim() || runLedgerId("workspace-execution");
+  const ownsRunManifest = !(Array.isArray(opts?.subflowCallStack) && opts.subflowCallStack.length);
+  const persistRunManifest = (status, extra = {}) => {
+    if (!ownsRunManifest) return null;
+    return workspaceWriteRunManifest(scopedRoot, runtimeRunId, {
+      flowId: String(payload?.flowId || ""),
+      flowSource: String(payload?.flowSource || "user"),
+      runNodeId,
+      status,
+      runtimeRoot: runTmpRoot,
+      artifactRoot: path.join(path.resolve(scopedRoot), "outputs"),
+      worktrees: autoCleanupWorktrees.map((entry) => ({ ...entry, removed: false })),
+      ...extra,
+    });
+  };
+  persistRunManifest("running", { startedAt: new Date().toISOString() });
   const controlBranches = new Map();
   const skippedNodes = new Set();
   const runtimePauseNodeIds = [];
   let deferred = null;
+  let runFailure = null;
   const incomingControlEdgesByTarget = new Map();
   for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
     const target = String(edge?.target || "");
@@ -5177,11 +5366,87 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       continue;
     }
 
+    if (defId === "context_knowledge") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const workspaceIds = parseWorkspaceSkillKeys(inputValues.workspaceIds || "[]");
+      if (!workspaceIds.length) throw new Error(`context.knowledge ${nodeId} requires at least one Workspace ID`);
+      const catalog = new Map(listConfiguredWorkspaces(root, scopedRoot, userCtx).map((entry) => [String(entry.id || ""), entry]));
+      const missing = workspaceIds.filter((id) => !catalog.has(id));
+      if (missing.length) throw new Error(`context.knowledge ${nodeId} cannot resolve Workspace IDs: ${missing.join(", ")}`);
+      const unavailable = workspaceIds.filter((id) => catalog.get(id)?.exists === false);
+      if (unavailable.length) throw new Error(`context.knowledge ${nodeId} Workspace paths are not ready: ${unavailable.join(", ")}`);
+      const sources = workspaceIds
+        .map((id, index) => workspaceKnowledgeSourceFromObject({ ...catalog.get(id), role: index === 0 ? "primary" : "context" }, cwd || scopedRoot, scopedRoot))
+        .filter(Boolean);
+      const value = JSON.stringify({ version: 1, sources });
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "knowledgeContext", value);
+      publishNodeOutput(nodeId, value, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId, sourceCount: sources.length, workspaceIds });
+      continue;
+    }
+
+    if (defId === "context_skills") {
+      const keys = selectedSkillKeysFromConfigSlots(instance);
+      if (!keys.length) throw new Error(`context.skills ${nodeId} requires at least one skill`);
+      const value = loadSkillsBlockForKeys(keys);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "skillsContext", value);
+      publishNodeOutput(nodeId, value, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId, skillCount: keys.length });
+      continue;
+    }
+
+    if (defId === "context_workspace") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const workspaceId = String(inputValues.workspaceId || "current").trim();
+      const access = String(inputValues.access || "read-write").trim().toLowerCase();
+      if (!["read-only", "read-write"].includes(access)) {
+        throw new Error(`context.workspace ${nodeId} access must be read-only or read-write`);
+      }
+      const catalog = new Map(listConfiguredWorkspaces(root, scopedRoot, userCtx).map((entry) => [String(entry.id || ""), entry]));
+      const selected = catalog.get(workspaceId);
+      if (!selected) throw new Error(`context.workspace ${nodeId} cannot resolve Workspace ID ${workspaceId || "(empty)"}`);
+      if (selected.exists === false) throw new Error(`context.workspace ${nodeId} Workspace path is not ready: ${workspaceId}`);
+      const workspaceRoot = path.resolve(selected.path);
+      const value = JSON.stringify({
+        version: 1,
+        workspaceId,
+        access,
+        label: String(selected.label || selected.id || path.basename(workspaceRoot)),
+        cwd: workspaceRoot,
+        workspaceRoot,
+        pipelineWorkspace: path.resolve(scopedRoot),
+        previous: null,
+      });
+      let nextInstance = workspaceSetOutputSlot(instance, "workspaceContext", value);
+      graph.instances[nodeId] = nextInstance;
+      publishNodeOutput(nodeId, value, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId, workspaceId, access });
+      continue;
+    }
+
+    if (defId === "context_bundle") {
+      const bundle = {
+        version: 1,
+        knowledgeContext: workspaceSemanticInputText(graph, nodeId, outputs, "knowledgeContext", scopedRoot),
+        skillsContext: workspaceSemanticInputText(graph, nodeId, outputs, "skillsContext", scopedRoot),
+        workspaceContext: workspaceSemanticInputText(graph, nodeId, outputs, "workspaceContext", scopedRoot),
+        mcpContext: workspaceSemanticInputText(graph, nodeId, outputs, "mcpContext", scopedRoot),
+      };
+      if (![bundle.knowledgeContext, bundle.skillsContext, bundle.workspaceContext, bundle.mcpContext].some((item) => String(item || "").trim())) {
+        throw new Error(`context.bundle ${nodeId} requires at least one connected Context resource`);
+      }
+      const value = JSON.stringify(bundle);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "context", value);
+      publishNodeOutput(nodeId, value, { emitGraph: true });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      continue;
+    }
+
     if (defId === "control_subflow_call") {
       const subflowId = String(instance.subflowId || "").trim();
       const subflow = graph?.subflows?.[subflowId];
       if (!subflow) throw new Error(`flow.call ${nodeId} references missing subflow ${subflowId || "(empty)"}`);
-      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot, { includeContext: true });
       const { resultValues, callFrameId } = await workspaceRunSubflowFrame({
         root,
         scopedRoot,
@@ -5297,6 +5562,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
 
     if (defId === "control_while") {
       const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const loopContext = workspaceSemanticInputText(graph, nodeId, outputs, "context", scopedRoot);
       const config = normalizeControlWhileConfig(inputValues);
       const stepScript = String(instance.script || instance.body || "").trim();
       const stepScriptRef = String(instance.scriptRef || "").trim();
@@ -5392,6 +5658,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
               parentDefinitionId: defId,
               subflowId: whileSubflows.conditionId,
               inputValues: {
+                ...(loopContext && whileSubflows.condition.inputs?.context ? { context: loopContext } : {}),
                 state: stateText,
                 iteration: String(iteration),
                 idempotencyKey,
@@ -5417,6 +5684,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
               parentDefinitionId: defId,
               subflowId: whileSubflows.bodyId,
               inputValues: {
+                ...(loopContext && whileSubflows.body.inputs?.context ? { context: loopContext } : {}),
                 state: stateText,
                 iteration: String(iteration),
                 idempotencyKey,
@@ -5811,9 +6079,17 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const worktreeInputSlot = (Array.isArray(instance.input) ? instance.input : [])
         .find((slot) => String(slot?.name || "") === "worktreePath") || null;
       const rawWorktreePath = workspaceSlotValue(worktreeInputSlot || workspaceSlotByName(instance, "worktreePath")).trim();
+      const retainedWorktreePath = workspaceSlotValue(
+        (Array.isArray(instance.output) ? instance.output : [])
+          .find((slot) => String(slot?.name || "") === "worktreePath"),
+      ).trim();
       const worktreePath = rawWorktreePath
         ? workspaceResolvePath(cwd, rawWorktreePath)
-        : (gitContext?.worktreePath ? path.resolve(gitContext.worktreePath) : workspaceDefaultWorktreePath(runTmpRoot, nodeId, repoPath, branch));
+        : (gitContext?.worktreePath
+            ? path.resolve(gitContext.worktreePath)
+            : (retainedWorktreePath
+                ? path.resolve(retainedWorktreePath)
+                : workspaceDefaultWorktreePath(scopedRoot, runtimeRunId, nodeId, repoPath, branch)));
       const previousCwd = cwd;
       const force = ["true", "1", "yes", "on"].includes(workspaceSlotValue(workspaceSlotByName(instance, "force")).trim().toLowerCase());
       const pruneMissingRaw = workspaceSlotValue(workspaceSlotByName(instance, "pruneMissing")).trim().toLowerCase();
@@ -5825,6 +6101,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           repoPath: result.repoRoot,
           worktreePath: result.worktreePath,
         });
+        persistRunManifest("running");
       }
       const outGitContext = buildGitContext({
         repoPath: result.repoRoot,
@@ -6067,10 +6344,17 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
     workspaceAssertRequiredInputs(instance.body || "", inputValues, nodeId);
     const upstreamText = workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputs.placeholders, scopedRoot);
-    const upstreamSkillBlocks = workspaceUpstreamSkillBlocks(graph, nodeId, outputs);
+    const contextBundle = workspaceNodeContextBundle(graph, nodeId, outputs, scopedRoot);
+    const upstreamSkillBlocks = mergeWorkspaceSkillBlocks(
+      workspaceUpstreamSkillBlocks(graph, nodeId, outputs),
+      String(contextBundle.skillsContext || ""),
+    );
     const ownSkillBlock = isContextRunNode ? loadSkillsBlockForKeys(selectedSkillKeysFromConfigSlots(instance)) : "";
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(ownSkillBlock, upstreamSkillBlocks);
-    const promptMcpBlock = workspaceUpstreamMcpBlocks(graph, nodeId, outputs);
+    const promptMcpBlock = mergeWorkspaceSkillBlocks(
+      workspaceUpstreamMcpBlocks(graph, nodeId, outputs),
+      String(contextBundle.mcpContext || ""),
+    );
     const resultOutputSpec = workspaceResultOutputSpec(graph, nodeId);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
       scopedRoot,
@@ -6095,7 +6379,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       // Best-effort debug artifact only.
     }
     const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
-    let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd);
+    let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd, contextBundle);
     if (!isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true)) {
       const defaultWorkspaceBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
       if (!workspaceContextBlock) {
@@ -6229,9 +6513,47 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       outputFiles: normalizedAgentOutput.outputFiles || [],
     });
   }
+  } catch (error) {
+    runFailure = error;
+    throw error;
   } finally {
-    workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit);
-    workspaceCleanupTmpRoot(runTmpRoot, userCtx, emit);
+    const retainForResume = Boolean(deferred || runtimePauseNodeIds.length);
+    const trackedWorktrees = autoCleanupWorktrees.map((entry) => ({ ...entry }));
+    let cleanup = { cleaned: [], preserved: [] };
+    if (retainForResume) {
+      emit({
+        type: "status",
+        line: `Run workspace retained for resume${trackedWorktrees.length ? ` (${trackedWorktrees.length} worktree)` : ""}`,
+        runId: runtimeRunId,
+      });
+      persistRunManifest("waiting", {
+        worktrees: trackedWorktrees.map((entry) => ({ ...entry, removed: false })),
+        waitingAt: new Date().toISOString(),
+      });
+      autoCleanupWorktrees.splice(0, autoCleanupWorktrees.length);
+    } else {
+      cleanup = workspaceCleanupAutoWorktrees(autoCleanupWorktrees, graph, emit, { force: false });
+      const cleanedSet = new Set(cleanup.cleaned.map((item) => path.resolve(item)));
+      const preservedByPath = new Map(cleanup.preserved.map((item) => [path.resolve(item.worktreePath), item]));
+      persistRunManifest(runFailure ? "failed" : "completed", {
+        worktrees: trackedWorktrees.map((entry) => {
+          const target = path.resolve(entry.worktreePath);
+          if (cleanedSet.has(target)) return { ...entry, removed: true, removedAt: new Date().toISOString(), reason: "" };
+          if (preservedByPath.has(target)) return { ...entry, removed: false, reason: preservedByPath.get(target).reason };
+          return entry;
+        }),
+        finishedAt: new Date().toISOString(),
+        error: runFailure ? (runFailure?.message || String(runFailure)) : "",
+        resourcesPreserved: cleanup.preserved.length > 0,
+      });
+    }
+    const protectedWorktrees = retainForResume ? trackedWorktrees : cleanup.preserved;
+    const protectsRunTmpRoot = protectedWorktrees.some((entry) => workspacePathInside(runTmpRoot, entry.worktreePath));
+    if (protectsRunTmpRoot) {
+      emit({ type: "status", line: `Workspace tmp kept because it contains a retained worktree: ${runTmpRoot}` });
+    } else {
+      workspaceCleanupTmpRoot(runTmpRoot, userCtx, emit);
+    }
   }
   const finalPauseNodeIds = Array.from(new Set([...pauseNodeIds, ...runtimePauseNodeIds]));
   if (!deferred && finalPauseNodeIds.length > 0) {
@@ -6444,6 +6766,14 @@ export function upsertWorkspaceDeferredRun(meta = {}, deferred = {}) {
     nodeId: String(deferred.nodeId || meta.nodeId || previous.nodeId || ""),
     label: String(meta.label || previous.label || "Workspace Run"),
     plannedNodeIds: Array.isArray(meta.plannedNodeIds) ? meta.plannedNodeIds.map(String) : (previous.plannedNodeIds || []),
+    workspaceRoot: String(meta.workspaceRoot || previous.workspaceRoot || ""),
+    marketplaceResources: Array.isArray(meta.marketplaceResources)
+      ? meta.marketplaceResources.map((item) => ({
+          kind: String(item?.kind || ""),
+          id: String(item?.id || ""),
+          version: String(item?.version || ""),
+        })).filter((item) => item.kind && item.id && item.version)
+      : (previous.marketplaceResources || []),
     startedAt: Number(meta.startedAt || previous.startedAt || now),
     scheduled: meta.scheduled === true || previous.scheduled === true,
     scheduleKey: String(meta.scheduleKey || previous.scheduleKey || ""),
@@ -6943,6 +7273,8 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     plannedNodeIds,
     startedAt: Date.now(),
     scheduled: true,
+    workspaceRoot: root,
+    marketplaceResources: marketplaceResourcesForRun(scoped.root, graph, plannedNodeIds),
   };
   activeWorkspaceRuns.set(runKey, runEntry);
   appendWorkspaceRunStarted(runEntry);
@@ -6997,7 +7329,12 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       return;
     }
     const endedAt = Date.now();
-    appendWorkspaceRunFinished({ ...runEntry, endedAt, durationMs: endedAt - runEntry.startedAt }, "success");
+    appendWorkspaceRunFinished({
+      ...runEntry,
+      endedAt,
+      durationMs: endedAt - runEntry.startedAt,
+      marketplaceResources: marketplaceResourcesForRun(scoped.root, graph, result.order || Array.from(touchedIds)),
+    }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {
       endedAt,
       durationMs: endedAt - runEntry.startedAt,

@@ -78,6 +78,10 @@ Commands:
   node-package-publish --file <nodePackageDir>
   node-package-install --node <id>@<version> [--workspace-root <dir>]
   node-package-sync --flow <flowDir|workspace.flow.js> [--workspace-root <dir>]
+  marketplace-list [--kind flow|node] [--owned] [--query <text>]
+  marketplace-flow-publish --flow-id <id> [--flow-source user] [--version 1.0.0] [--visibility public|private]
+  marketplace-flow-install --flow <id>@<version> [--flow-id <targetId>]
+  marketplace-visibility --kind flow|node --resource <id>@<version> --visibility public|private
   pull-flow --flow-id <id> [--flow-source user] [--output <flowDir>] [--workspace-root <dir>] [--replace]
   publish-flow --flow-id <id> --file <flowDir|workspace.flow.js|flow.yaml> [--target-space personal|workspace|team] [--schedule enabled|disabled|preserve] [--with-dependencies] [--replace]
   get-graph --flow-id <id> [--flow-source user]
@@ -371,6 +375,11 @@ function searchNodePackageCatalog(nodes, queryText, limitValue) {
       inputs: node.inputs || node.input || [],
       outputs: node.outputs || node.output || [],
       contentSha256: node.contentSha256 || "",
+      visibility: node.visibility || "public",
+      useCount: Number(node.useCount || 0),
+      installCount: Number(node.installCount || 0),
+      uniqueUserCount: Number(node.uniqueUserCount || 0),
+      lastUsedAt: node.lastUsedAt || "",
       installCommand: `node-package-install --node ${node.id}@${node.version}`,
     }));
 }
@@ -1149,6 +1158,61 @@ async function main() {
     const result = await syncFlowNodePackages(args, flowTarget, workspaceRoot);
     printJson(result);
     if (!result.ok) process.exitCode = 2;
+    return;
+  }
+
+  if (command === "marketplace-list") {
+    const kind = String(option(args, "kind") || "flow").trim().toLowerCase();
+    if (kind !== "flow" && kind !== "node") throw new Error("--kind must be flow or node.");
+    const result = await httpJson(args, `/api/marketplace/resources${query({
+      kind,
+      scope: args.owned === true ? "owned" : "",
+      q: option(args, "query") || option(args, "q"),
+      sort: "useCount",
+      order: "desc",
+    })}`);
+    printJson(result);
+    return;
+  }
+
+  if (command === "marketplace-flow-publish") {
+    const flowId = requireFlowId(args);
+    const visibility = String(option(args, "visibility") || "public").trim().toLowerCase();
+    if (visibility !== "public" && visibility !== "private") throw new Error("--visibility must be public or private.");
+    printJson(await httpJson(args, "/api/marketplace/flows/publish", {
+      method: "POST",
+      body: {
+        flowId,
+        flowSource: option(args, "flow-source") || "user",
+        id: option(args, "marketplace-id") || flowId,
+        displayName: option(args, "display-name") || flowId,
+        description: option(args, "description") || "",
+        version: option(args, "version") || "1.0.0",
+        visibility,
+      },
+    }));
+    return;
+  }
+
+  if (command === "marketplace-flow-install") {
+    const spec = parseNodePackageSpec(option(args, "flow"));
+    printJson(await httpJson(args, "/api/marketplace/flows/install", {
+      method: "POST",
+      body: { id: spec.id, version: spec.version, flowId: option(args, "flow-id") || spec.id },
+    }));
+    return;
+  }
+
+  if (command === "marketplace-visibility") {
+    const kind = String(option(args, "kind") || "").trim().toLowerCase();
+    if (kind !== "flow" && kind !== "node") throw new Error("--kind must be flow or node.");
+    const spec = parseNodePackageSpec(option(args, "resource"));
+    const visibility = String(option(args, "visibility") || "").trim().toLowerCase();
+    if (visibility !== "public" && visibility !== "private") throw new Error("--visibility must be public or private.");
+    printJson(await httpJson(args, "/api/marketplace/visibility", {
+      method: "PATCH",
+      body: { kind, id: spec.id, version: spec.version, visibility },
+    }));
     return;
   }
 

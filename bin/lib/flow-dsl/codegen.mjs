@@ -84,7 +84,7 @@ export function generateFlowSource(ir, opts = {}) {
     taken.add(name);
     return name;
   };
-  const flowApiRoots = ["agent", "control", "display", "file", "flow", "provide", "tool", "workspace"];
+  const flowApiRoots = ["agent", "context", "control", "display", "file", "flow", "provide", "tool", "workspace"];
   const flowApiBinding = new Map(flowApiRoots.map((root) => [root, uniqueName(root, `${root}Api`)]));
   const apiCall = (name) => {
     const [root, ...tail] = String(name || "").split(".");
@@ -210,6 +210,13 @@ export function generateFlowSource(ir, opts = {}) {
   const pinValue = (id, name, value) => {
     const text = String(value);
     if (slotTypeOf(id, name) === "bool" && (text === "true" || text === "false")) return text;
+    if (slotTypeOf(id, name) === "json") {
+      try {
+        return JSON.stringify(JSON.parse(text), null, 2);
+      } catch {
+        // Keep invalid draft values round-trippable; lint/runtime will report the bad JSON.
+      }
+    }
     return textArg(id, name, text);
   };
 
@@ -228,7 +235,21 @@ export function generateFlowSource(ir, opts = {}) {
       const key = isIdentifier(name) ? name : JSON.stringify(name);
       if (wired.has(name)) {
         const x = wired.get(name);
-        lines.push(`${key}: ${outVar.get(`${x.from}|${x.fromSlot}`) || `${x.from}.${x.fromSlot}`}`);
+        const sourceDefinitionId = N[x.from]?.definitionId;
+        const bundleAlias = node.definitionId === "context_bundle"
+          ? ({ knowledgeContext: "knowledge", skillsContext: "skills", workspaceContext: "workspace", mcpContext: "mcp" }[name] || "")
+          : "";
+        const contextResourceOutput = {
+          context_knowledge: "knowledgeContext",
+          context_skills: "skillsContext",
+          context_workspace: "workspaceContext",
+        }[sourceDefinitionId] || "";
+        const directContextBundle = name === "context" && sourceDefinitionId === "context_bundle" && x.fromSlot === "context";
+        const renderedKey = bundleAlias || key;
+        const renderedValue = directContextBundle || (bundleAlias && contextResourceOutput === name && x.fromSlot === name)
+          ? x.from
+          : (outVar.get(`${x.from}|${x.fromSlot}`) || `${x.from}.${x.fromSlot}`);
+        lines.push(`${renderedKey}: ${renderedValue}`);
         continue;
       }
       if (node.inputs[name] !== undefined) {

@@ -60,6 +60,16 @@ function declaredSlotType(node, kind, name) {
   return "";
 }
 
+function parseJsonInput(node, name) {
+  const raw = String(node?.inputs?.[name] || "").trim();
+  if (!raw) return { value: null, error: "为空" };
+  try {
+    return { value: JSON.parse(raw), error: "" };
+  } catch (error) {
+    return { value: null, error: error.message };
+  }
+}
+
 function walk(node, visit) {
   if (!node || typeof node !== "object") return;
   if (node.type) visit(node);
@@ -179,6 +189,29 @@ export function lintFlowDir(flowDir, opts = {}) {
     if (definitionId === "control_subflow_call" && !subflows[node.attrs?.subflowId]) {
       errors.push(`${id}: 引用的子流程 ${node.attrs?.subflowId || "(empty)"} 不存在`);
     }
+    if (definitionId === "context_knowledge") {
+      const parsed = parseJsonInput(node, "workspaceIds");
+      if (parsed.error) errors.push(`${id}: context.knowledge workspaceIds 必须是 JSON 数组（${parsed.error}）`);
+      else if (!Array.isArray(parsed.value) || parsed.value.length === 0) errors.push(`${id}: context.knowledge 至少选择一个 Workspace ID`);
+      else if (parsed.value.some((value) => typeof value !== "string" || !String(value).trim())) errors.push(`${id}: context.knowledge workspaceIds 只能包含非空字符串 ID`);
+    }
+    if (definitionId === "context_skills") {
+      const parsed = parseJsonInput(node, "skills");
+      if (parsed.error) errors.push(`${id}: context.skills skills 必须是 JSON 数组（${parsed.error}）`);
+      else if (!Array.isArray(parsed.value) || parsed.value.length === 0) errors.push(`${id}: context.skills 至少声明一个 skill`);
+    }
+    if (definitionId === "context_workspace") {
+      const workspaceId = String(node.inputs?.workspaceId || "current").trim();
+      const access = String(node.inputs?.access || "read-write").trim().toLowerCase();
+      if (!workspaceId) errors.push(`${id}: context.workspace workspaceId 不能为空`);
+      if (!["read-only", "read-write"].includes(access)) errors.push(`${id}: context.workspace access 只能是 read-only 或 read-write`);
+    }
+    if (definitionId === "context_bundle") {
+      const incoming = ir.edges.filter((edge) => edge.split("|")[2] === id && edge.split("|")[3] !== "prev");
+      if (!incoming.length) errors.push(`${id}: context.bundle 至少连接一个 Context 资源`);
+      const literal = Object.entries(node.inputs || {}).filter(([, value]) => String(value || "").trim());
+      if (literal.length) errors.push(`${id}: context.bundle 只能连接资源节点，不能内嵌 Context 正文`);
+    }
     if (definitionId === "control_while") {
       const conditionId = String(node.attrs?.conditionSubflowId || "");
       const bodyId = String(node.attrs?.bodySubflowId || "");
@@ -206,9 +239,11 @@ export function lintFlowDir(flowDir, opts = {}) {
         }
         if (body && !body.outputs?.state) errors.push(`${id}: Body 子流程 ${bodyId} 缺少输出 state`);
         for (const [contract, name, expected] of [
+          [condition?.inputs, "context", "context"],
           [condition?.inputs, "state", "json"],
           [condition?.inputs, "iteration", "text"],
           [condition?.outputs, "decision", "text"],
+          [body?.inputs, "context", "context"],
           [body?.inputs, "state", "json"],
           [body?.inputs, "iteration", "text"],
           [body?.inputs, "idempotencyKey", "text"],
@@ -240,6 +275,15 @@ export function lintFlowDir(flowDir, opts = {}) {
       const defOut = new Set(def.output.map((s) => s.name));
       for (const slot of node.extraIn) if (!defIn.has(slot)) errors.push(`${id}[${definitionId}]: 不存在的输入槽 "${slot}"`);
       for (const slot of node.extraOut) if (!defOut.has(slot)) errors.push(`${id}[${definitionId}]: 不存在的输出槽 "${slot}"`);
+    }
+    if (definitionId === "agent_subAgent") {
+      const incomingNames = new Set(ir.edges
+        .map((edge) => edge.split("|"))
+        .filter((parts) => parts[2] === id)
+        .map((parts) => parts[3]));
+      if (incomingNames.has("context") && ["knowledgeContext", "skillsContext", "workspaceContext", "mcpContext"].some((name) => incomingNames.has(name))) {
+        warnings.push(`${id}: 已连接 context Bundle，不要再重复连接旧 Context 文本引脚`);
+      }
     }
   }
 

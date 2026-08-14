@@ -63,6 +63,25 @@ export const run = flow("Run", callInspect, showSummary);
 - 一个内部节点只能属于一个子流程。禁止直接跨边界连线、跨子流程连线和递归调用。
 - 当前子流程内部不接受 `wait/deferred`。需要暂停 While 时，由 Condition 返回 `wait`。
 
+执行上下文跨子流程时使用强类型契约，不要拆回四根文本线，也不要跨边界直连：
+
+```js
+const contextIn = flow.input("context", "context");
+const inspect = agent.subAgent("分析", { context: contextIn.value }, `使用已授权上下文分析。`);
+
+export const inspectWithContext = flow.subflow(
+  "带上下文的分析",
+  { context: contextIn },
+  flow(inspect),
+  { result: inspect.result },
+);
+
+const callInspect = flow.call("调用分析", inspectWithContext, { context: prdContext });
+```
+
+`context` 只承载知识、Skills、Workspace、MCP 等执行资源；业务参数仍逐项声明。运行时传递已解析
+Bundle，但凭证始终由环境持有，不写入 DSL 或子流程输出。
+
 普通子流程的输出契约可以变化。画布编辑器中把某个内部数据输出拖到 Return 的 `add output`，再命名
 输出；重命名或删除后，所有父图 `SUBFLOW CALL` 的同名输出及相关连线必须同步迁移或移除。
 
@@ -103,33 +122,35 @@ export const run = flow("Run", callInspect, showSummary);
 
 ```js
 const conditionState = flow.input("state", "json");
+const conditionContext = flow.input("context", "context");
 const conditionIteration = flow.input("iteration", "text");
 const check = agent.subAgent(
   "判断是否继续",
-  { state: conditionState.value },
+  { context: conditionContext.value, state: conditionState.value },
   `检查 state。只返回 continue、wait、done 或 fail 之一。`,
 );
 
 export const shouldContinue = flow.subflow(
   "是否继续",
-  { state: conditionState, iteration: conditionIteration },
+  { context: conditionContext, state: conditionState, iteration: conditionIteration },
   flow(check),
   { decision: check.result },
 );
 
 const bodyState = flow.input("state", "json");
+const bodyContext = flow.input("context", "context");
 const bodyIteration = flow.input("iteration", "text");
 const bodyKey = flow.input("idempotencyKey", "text");
 const step = tool.nodejs(
   "推进一轮",
-  { state: bodyState.value, idempotencyKey: bodyKey.value },
+  { context: bodyContext.value, state: bodyState.value, idempotencyKey: bodyKey.value },
   `node ${flowDir}/scripts/advance-one.mjs`,
 );
 const nextState = control.parseJson("校验下一版状态", { value: step.result });
 
 export const advanceOne = flow.subflow(
   "执行一轮",
-  { state: bodyState, iteration: bodyIteration, idempotencyKey: bodyKey },
+  { context: bodyContext, state: bodyState, iteration: bodyIteration, idempotencyKey: bodyKey },
   flow(step, nextState),
   { state: nextState.result },
 );
@@ -138,6 +159,7 @@ const initial = provide.json("初始状态", {
   value: "{\"cursor\":0,\"records\":[],\"valid\":[],\"invalid\":[]}",
 });
 const loop = control.while("逐条处理", {
+  context: prdContext,
   state: initial.value,
   maxIterations: "20",
   timeout: "30m",
@@ -152,8 +174,11 @@ export const run = flow("Run", loop, summarize, report);
 
 | 子流程 | DSL 输入 | DSL 输出 | 产品画布中用户需要理解的部分 |
 |--------|----------|----------|--------------------------------|
-| Condition | `state:json`, `iteration:text` | 必需 `decision:text`；可选 `summary:text` | `state → decision` |
-| Body | `state:json`, `iteration:text`, `idempotencyKey:text` | 必需 `state:json`；可选 `summary:text` | `stateₙ → stateₙ₊₁` |
+| Condition | `state:json`, `iteration:text`；可选 `context:context` | 必需 `decision:text`；可选 `summary:text` | `state → decision` |
+| Body | `state:json`, `iteration:text`, `idempotencyKey:text`；可选 `context:context` | 必需 `state:json`；可选 `summary:text` | `stateₙ → stateₙ₊₁` |
+
+`context:context` 是 Condition/Body 的可选显式输入。While 顶层连接 Context 后，运行时在循环开始时
+捕获一次，并只转发给声明了该输入的子流程。它不属于业务状态，不进入 Return、history 或 checkpoint。
 
 While Return 是固定契约：Condition 只能返回 `decision/summary`，Body 只能返回 `state/summary`。
 不要在 While Return 添加任意顶层变量。普通 Subflow Return 才支持动态输出。
@@ -201,7 +226,9 @@ React 组件名、CSS 类名和像素尺寸属于实现细节，不写入 DSL。
 4. 点击 Body 卡片进入编辑器，连接 Start `state` 到单轮处理节点，最后把完整下一版 JSON 状态连到
    Return `state`；文本结果先经过 `control.parseJson`。
 5. 需要摘要时连接可选 `summary`。不要寻找或手工连接 `iteration/idempotencyKey` 产品引脚。
-6. 返回父图，确认 Condition/Body 卡片、状态流说明和两条调用虚线仍存在。
+6. 需要知识库、Skills 或代码仓时，把 Context Bundle 接到 While 的紫色 `context` 引脚；在需要它的
+   Condition/Body 子图 Start 契约中声明 `context`，再接到内部 Agent。不要把 Context 放进 state。
+7. 返回父图，确认 Condition/Body 卡片、状态流说明和两条调用虚线仍存在。
 
 创建普通子流程时，Start/Return 的控制线和数据线方式相同；区别是 Return 输出可以通过 `add output`
 扩展，父图 SUBFLOW CALL 会同步出现同名输出。

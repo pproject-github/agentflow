@@ -1,12 +1,16 @@
 ---
 # 内置节点：子 Agent
 runtime: native
-description: 利用子 Agent 执行任务；可接收 knowledgeContext 读取知识库，可接收 workspaceContext 切换执行工作区，并接收 skillsContext / mcpContext 注入已加载 skills 与 MCP 工具清单。
+description: 利用子 Agent 执行任务；新流程优先接收一个强类型 context Bundle。knowledgeContext、workspaceContext、skillsContext、mcpContext 保留为旧流程兼容引脚。
 displayName: 子 Agent
 input:
   - type: node
     name: prev
     default: ""
+  - type: context
+    name: context
+    default: ""
+    showOnNode: true
   - type: text
     name: workspaceContext
     default: ""

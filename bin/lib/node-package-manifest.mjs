@@ -29,7 +29,7 @@ import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 export const NODE_PACKAGE_ENTRY = "index.mjs";
 
 /** 槽位类型；与 builtin/nodes/*.md 的 `type:` 取值一致。 */
-const SLOT_TYPES = new Set(["text", "file", "bool", "node", "image", "json"]);
+const SLOT_TYPES = new Set(["text", "file", "bool", "node", "image", "json", "context"]);
 
 function staticEval(node, where) {
   if (!node) throw new Error(`${where}: 空表达式`);

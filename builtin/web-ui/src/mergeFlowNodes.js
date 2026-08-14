@@ -364,6 +364,10 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     const knowledgeSlot = def?.inputs?.find((slot) => slot?.name === "knowledgeContext");
     inputs = [...inputs, knowledgeSlot ? { ...knowledgeSlot } : { type: "text", name: "knowledgeContext", default: "", showOnNode: true }];
   }
+  if ((resolvedDefId === "agent_subAgent" || resolvedDefId === "control_while") && !inputs.some((slot) => slot?.name === "context")) {
+    const contextSlot = def?.inputs?.find((slot) => slot?.name === "context");
+    if (contextSlot) inputs = [...inputs, { ...contextSlot }];
+  }
   if (
     (resolvedDefId === "display_markdown" || resolvedDefId === "display_code" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
     !outputs.some((slot) => slot?.name === "next")

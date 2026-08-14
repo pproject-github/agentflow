@@ -15,6 +15,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStore,
   useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
@@ -58,6 +59,7 @@ import {
   slotTypeCompatibility,
 } from "../nodeSchema.js";
 import { recordPipelineView } from "../pipelineViewPreference.js";
+import { placeWorkspaceRelationLabel } from "../workspaceEdgeLabelPlacement.js";
 import {
   sortWorkflowIssueLinks,
   workflowIssueIsLogicalParent,
@@ -5665,6 +5667,17 @@ function WorkspaceSubflowCallEdge({
   data,
   selected,
 }) {
+  const storeApi = useStoreApi();
+  const nodeObstacleSignature = useStore((state) => Array.from(state.nodeLookup?.values?.() || [])
+    .filter((node) => !node?.hidden && !node?.data?.isWorkspaceGroup)
+    .map((node) => [
+      node.id,
+      Number(node?.internals?.positionAbsolute?.x) || 0,
+      Number(node?.internals?.positionAbsolute?.y) || 0,
+      Number(node?.measured?.width ?? node?.width ?? node?.initialWidth) || 0,
+      Number(node?.measured?.height ?? node?.height ?? node?.initialHeight) || 0,
+    ].join(":"))
+    .join("|"));
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -5676,6 +5689,20 @@ function WorkspaceSubflowCallEdge({
   const inputMappings = Array.isArray(data?.inputMappings) ? data.inputMappings : [];
   const outputMappings = Array.isArray(data?.outputMappings) ? data.outputMappings : [];
   const verb = String(data?.verb || "calls").toUpperCase();
+  const nodeRects = useMemo(() => Array.from(storeApi.getState().nodeLookup?.values?.() || [])
+    .filter((node) => !node?.hidden && !node?.data?.isWorkspaceGroup)
+    .map((node) => ({
+      x: Number(node?.internals?.positionAbsolute?.x) || 0,
+      y: Number(node?.internals?.positionAbsolute?.y) || 0,
+      width: Number(node?.measured?.width ?? node?.width ?? node?.initialWidth) || 0,
+      height: Number(node?.measured?.height ?? node?.height ?? node?.initialHeight) || 0,
+    })), [nodeObstacleSignature, storeApi]);
+  const labelPosition = placeWorkspaceRelationLabel({
+    edgePath,
+    fallbackX: labelX,
+    fallbackY: labelY,
+    nodeRects,
+  });
   return (
     <>
       <BaseEdge
@@ -5688,7 +5715,7 @@ function WorkspaceSubflowCallEdge({
       <EdgeLabelRenderer>
         <div
           className={"af-subflow-call-bus" + (selected ? " af-subflow-call-bus--expanded" : "")}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          style={{ transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)` }}
         >
           <div className="af-subflow-call-bus__summary" style={{ "--af-subflow-call-color": data?.color || "#9d83ff" }}>
             <strong>{verb}</strong>
@@ -6032,7 +6059,7 @@ function WorkspaceFlowNode(props) {
       />
     );
   }
-  if (props.data?.definitionId === "control_load_skills") {
+  if (props.data?.definitionId === "control_load_skills" || props.data?.definitionId === "context_skills") {
     return (
       <WorkspaceLoadSkillsNode
         {...props}
@@ -6055,7 +6082,7 @@ function WorkspaceFlowNode(props) {
       />
     );
   }
-  if (props.data?.definitionId === "control_cd_workspace") {
+  if (props.data?.definitionId === "control_cd_workspace" || props.data?.definitionId === "context_knowledge") {
     return (
       <WorkspaceLoadWorkspaceNode
         {...props}
@@ -6463,13 +6490,13 @@ function selectedSkillKeysFromNodeData(data) {
   const bodyKeys = selectedSkillKeysFromValue(data?.body || "");
   if (bodyKeys.length > 0) return bodyKeys;
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
-  const slot = inputs.find((item) => item?.name === "skillsContext" || item?.name === "skillKeys" || item?.type === "text");
+  const slot = inputs.find((item) => item?.name === "skills" || item?.name === "skillsContext" || item?.name === "skillKeys" || item?.type === "text");
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
 function selectedSkillKeysFromConfigSlots(data) {
   const slots = [...(Array.isArray(data?.inputs) ? data.inputs : []), ...(Array.isArray(data?.outputs) ? data.outputs : [])];
-  const slot = slots.find((item) => item?.name === "skillKeys" || item?.name === "skillsContext");
+  const slot = slots.find((item) => item?.name === "skills" || item?.name === "skillKeys" || item?.name === "skillsContext");
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
@@ -6664,6 +6691,12 @@ function workspaceSelectionFromNodeData(data) {
     path: workspaceSlotConfigValue(inputs, "path", ""),
     label: workspaceSlotConfigValue(inputs, "label", ""),
   };
+}
+
+function workspaceIdsFromNodeData(data) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const slot = inputs.find((item) => item?.name === "workspaceIds");
+  return selectedSkillKeysFromValue(slot?.value ?? slot?.default ?? "");
 }
 
 function nodeToPropDraft(node) {
@@ -7339,7 +7372,7 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const selectedKnowledge = workspaceSelectionFromNodeData(data);
+  const catalogBinding = data?.definitionId === "context_knowledge";
   const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
     .map((item) => ({
       id: String(item?.id || ""),
@@ -7353,13 +7386,19 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
       exists: item?.exists !== false,
     }))
     .filter((item) => item.path), [workspaces]);
+  const selectedKnowledge = workspaceSelectionFromNodeData(data);
+  const selectedWorkspaceIds = workspaceIdsFromNodeData(data);
   const filteredWorkspaces = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return workspaceList;
     return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath].join(" ").toLowerCase().includes(q));
   }, [search, workspaceList]);
-  const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
-  const selectedWorkspaceNames = useMemo(() => (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path), [selectedKnowledge.sources]);
+  const selectedKeys = useMemo(() => new Set(catalogBinding
+    ? selectedWorkspaceIds
+    : (selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [catalogBinding, selectedKnowledge.sources, selectedWorkspaceIds]);
+  const selectedWorkspaceNames = useMemo(() => (catalogBinding
+    ? selectedWorkspaceIds.map((workspaceId) => workspaceList.find((item) => item.id === workspaceId)?.label || workspaceId)
+    : (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path)), [catalogBinding, selectedKnowledge.sources, selectedWorkspaceIds, workspaceList]);
   const title = useMemo(() => compactSelectionParts(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
   const workspaceMenuScrollbar = useWorkspaceMenuScrollbar(open, [
     filteredWorkspaces.length,
@@ -11694,29 +11733,36 @@ function WorkspacePageInner() {
       return;
     }
     const serialized = serializeSkillKeys(keys);
+    const currentInstances = instancesRef.current || {};
+    const definitionId = String(currentInstances[nodeId]?.definitionId || nodes.find((node) => node.id === nodeId)?.data?.definitionId || "");
+    const isContextResource = definitionId === "context_skills";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
-      if (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
+      if (isContextResource ? slot?.name !== "skills" : (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text")) return slot;
       return { ...slot, default: serialized, value: serialized };
     }) : []);
+    const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => (
+      isContextResource && slot?.name === "skillsContext" ? { ...slot, default: "", value: "" } : slot
+    )) : []);
     const nextNodes = nodes.map((node) => {
       if (node.id !== nodeId) return node;
       return {
         ...node,
         data: {
           ...node.data,
-          body: serialized,
+          body: isContextResource ? node.data?.body : serialized,
           inputs: patchInputSlots(node.data?.inputs),
+          outputs: patchOutputSlots(node.data?.outputs),
         },
       };
     });
-    const currentInstances = instancesRef.current || {};
     const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
     const nextInstances = {
       ...currentInstances,
       [nodeId]: {
         ...base,
-        body: serialized,
+        body: isContextResource ? base.body : serialized,
         input: patchInputSlots(base.input),
+        output: patchOutputSlots(base.output),
       },
     };
     instancesRef.current = nextInstances;
@@ -11726,8 +11772,9 @@ function WorkspacePageInner() {
       if (!draft || draft.id !== nodeId) return draft;
       return {
         ...draft,
-        body: serialized,
+        body: isContextResource ? draft.body : serialized,
         inputs: patchInputSlots(draft.inputs),
+        outputs: patchOutputSlots(draft.outputs),
       };
     });
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
@@ -11785,12 +11832,16 @@ function WorkspacePageInner() {
     }
     const selected = (Array.isArray(workspaceOrList) ? workspaceOrList : (workspaceOrList ? [workspaceOrList] : []))
       .filter((item) => String(item?.path || "").trim());
+    const currentInstances = instancesRef.current || {};
+    const definitionId = String(currentInstances[nodeId]?.definitionId || nodes.find((node) => node.id === nodeId)?.data?.definitionId || "");
+    const isContextResource = definitionId === "context_knowledge";
     const primary = selected[0] || null;
     const pathValue = String(primary?.path || "").trim();
     const labelValue = selected.length === 1
       ? String(primary?.label || primary?.id || "知识库").trim()
       : (selected.length ? `${selected.length} 个知识库` : "");
     const knowledgeContextValue = selected.length ? JSON.stringify(knowledgeContextFromWorkspaces(selected)) : "";
+    const workspaceIdsValue = JSON.stringify(selected.map((item) => String(item?.id || "").trim()).filter(Boolean));
     const legacyWorkspaceContextValue = primary ? JSON.stringify({
       version: 1,
       id: primary?.id || "",
@@ -11804,6 +11855,8 @@ function WorkspacePageInner() {
       type: primary?.type || "",
     }) : "";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name === "workspaceIds") return { ...slot, default: workspaceIdsValue, value: workspaceIdsValue };
+      if (isContextResource) return slot;
       if (slot?.name === "path") return { ...slot, default: pathValue, value: pathValue };
       if (slot?.name === "label") return { ...slot, default: labelValue, value: labelValue };
       if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
@@ -11812,6 +11865,7 @@ function WorkspacePageInner() {
       return slot;
     }) : []);
     const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (isContextResource && slot?.name === "knowledgeContext") return { ...slot, default: "", value: "" };
       if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
       if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue, showOnNode: false };
       if (slot?.name === "cwd") return { ...slot, default: pathValue, value: pathValue, showOnNode: false };
@@ -11830,7 +11884,6 @@ function WorkspacePageInner() {
           }
         : node
     ));
-    const currentInstances = instancesRef.current || {};
     const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
     const nextInstances = {
       ...currentInstances,
@@ -16892,6 +16945,12 @@ function WorkspacePageInner() {
                     >
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                    >
+                      加入空间
+                    </button>
                   </div>
                 ) : null}
                 {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
@@ -16948,6 +17007,13 @@ function WorkspacePageInner() {
                     <button type="button" onClick={() => void copyDisplayShareUrl()}>
                       <span className="material-symbols-outlined" aria-hidden>{displayLinkCopyState === "copied" ? "check" : "content_copy"}</span>
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                    >
+                      <span className="material-symbols-outlined" aria-hidden>library_add</span>
+                      加入空间
                     </button>
                   </div>
                 ) : (

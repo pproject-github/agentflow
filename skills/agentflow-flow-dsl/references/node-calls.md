@@ -7,14 +7,18 @@
 
 | 调用 | 输入引脚 | 输出引脚 |
 |------|----------|----------|
-| `agent.subAgent` | workspaceContext:text, skillsContext:text, mcpContext:text, knowledgeContext:text | result:text |
+| `agent.subAgent` | context:context, workspaceContext:text, skillsContext:text, mcpContext:text, knowledgeContext:text | result:text |
+| `context.bundle` | knowledgeContext:text, skillsContext:text, workspaceContext:text, mcpContext:text | context:context |
+| `context.knowledge` | workspaceIds:json | knowledgeContext:text |
+| `context.skills` | skills:json | skillsContext:text |
+| `context.workspace` | workspaceId:text, access:text | workspaceContext:text |
 | `control.cdWorkspace` | path:text, label:text, knowledgeContext:text, workspaceContext:text | knowledgeContext:text, workspaceContext:text, cwd:file |
 | `control.if` | prediction:bool | — |
 | `control.loadMcp` | serverNames:text | mcpContext:text |
 | `control.loadSkills` | skillKeys:text | skillsContext:text |
 | `control.parseJson` | value:text | result:json |
 | `control.userWorkspace` | — | workspaceContext:text, cwd:file |
-| `control.while` | state:json, maxIterations:text, timeout:text | result:json, state:json, decision:text, iterations:text, summary:text, history:json, checkpointFingerprint:text |
+| `control.while` | context:context, state:json, maxIterations:text, timeout:text | result:json, state:json, decision:text, iterations:text, summary:text, history:json, checkpointFingerprint:text |
 | `display.ascii` | content:text | content:text |
 | `display.chart` | content:text, filePath:file, workspaceContext:text | content:text |
 | `display.code` | content:text, language:text, fileName:text, wrap:bool | content:text |

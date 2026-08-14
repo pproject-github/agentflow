@@ -8,6 +8,9 @@ description: |
 
   Preferred DSL form:
   `control.while("Advance", { state, maxIterations, timeout }, conditionFlow, bodyFlow)`.
+  An optional typed `context` input is captured once before iteration and forwarded only to
+  Condition/Body subflows that explicitly declare `flow.input("context", "context")`. Context is
+  never copied into business state, history, or checkpoints.
   Condition must accept `state` and `iteration`, and return `decision` plus optional `summary`.
   Only `continue` invokes Body. Body must accept `state`, `iteration`, and `idempotencyKey`, and
   return the next `state` plus optional `summary`. `wait`, `done`, and `fail` skip Body.
@@ -83,6 +86,10 @@ input:
   - type: node
     name: prev
     default: ""
+  - type: context
+    name: context
+    default: ""
+    showOnNode: true
   - type: json
     name: state
     default: "null"

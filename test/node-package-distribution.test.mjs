@@ -241,6 +241,10 @@ test("多文件 ZIP 节点包能跨工作区发布、安装、编排并执行", 
     assert.ok(searchedNode, searchOut);
     assert.deepEqual(searchedNode.inputs.map((slot) => slot.name), ["prev", "name"]);
     assert.deepEqual(searchedNode.outputs.map((slot) => slot.name), ["next", "result"]);
+    assert.equal(searchedNode.visibility, "public");
+    assert.equal(typeof searchedNode.useCount, "number");
+    assert.equal(typeof searchedNode.installCount, "number");
+    assert.equal(typeof searchedNode.uniqueUserCount, "number");
 
     // 拉 Flow 会先同步精确节点版本，再生成本地 DSL；接收端不需要手工逐包下载。
     const pullRoot = path.join(tempRoot, "pulled-project");

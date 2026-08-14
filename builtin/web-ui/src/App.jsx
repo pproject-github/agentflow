@@ -2,6 +2,9 @@ import { RouteProvider, useRoute } from "./routeContext.jsx";
 import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
+import MarketplacePage from "./pages/MarketplacePage.jsx";
+import SpacesPage from "./pages/SpacesPage.jsx";
+import SpacePage from "./pages/SpacePage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -100,6 +103,8 @@ class UiErrorBoundary extends Component {
 function RoutedContent({ authUser }) {
   const { path } = useRoute();
   if (path === "/projects" || path === "/") return <ProjectsPage authUser={authUser} />;
+  if (path === "/marketplace") return <MarketplacePage authUser={authUser} />;
+  if (path === "/spaces") return <SpacesPage authUser={authUser} />;
   if (path === "/nodes") return <ProjectsPage authUser={authUser} resourceKind="nodes" />;
   if (path === "/my-nodes") return <ProjectsPage authUser={authUser} resourceKind="my-nodes" />;
   if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
@@ -114,6 +119,7 @@ function RoutedContent({ authUser }) {
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
+  if (path.startsWith("/s/")) return <SpacePage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
   if (path === "/admin/teams") return <AdminTeamsPage authUser={authUser} />;
@@ -258,6 +264,7 @@ export default function App() {
 function PublicOrAuthedApp() {
   const { path } = useRoute();
   if (path.startsWith("/display")) return <DisplayPage />;
+  if (path.startsWith("/s/")) return <SpacePage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   if (isWorkflowSharePath(path)) return path === "/workflow-checklist" ? <WorkflowChecklistPage /> : <WorkspacePage />;
   return (

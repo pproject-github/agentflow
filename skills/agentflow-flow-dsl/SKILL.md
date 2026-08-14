@@ -82,7 +82,7 @@ Draft → 试运行 → 动态修改 → 明确确认 → 发布/定时流程；
 ## 图结构：workspace.flow.js
 
 ```js
-import { agent, control, display, file, flow, provide, tool } from "agentflow/flow";
+import { agent, context, control, display, file, flow, provide, tool } from "agentflow/flow";
 import collectMetrics from "./nodes/collect-metrics";      // 代码节点
 
 const dateStr = provide.str("查询日期", { value: "2026-08-06" });
@@ -103,6 +103,46 @@ export const run = flow("Run", collect, analyse, chart);
 | `x.slotName` | 引用上游输出引脚 = 连一条数据线 |
 
 `provide.*` 只是数据源，没有 prev/next 槽，**不要放进 `flow(...)` 链**——被谁引用就跟谁跑。
+
+## Context 资源
+
+知识库、Skills 和可写代码仓属于执行上下文，不是业务数据，也不是控制步骤。使用一等
+`context.*` 资源声明它们，再通过一个强类型 Bundle 连接 Agent：
+
+```js
+const productKnowledge = context.knowledge("Likee 产品知识", {
+  workspaceIds: ["current"], // 内置 ID；其它值必须原样取自 GET /api/workspaces
+});
+
+const developmentSkills = context.skills("研发技能", {
+  skills: ["prd-flow", "agentflow-flow-dsl"],
+});
+
+const codeWorkspace = context.workspace("执行代码仓", {
+  workspaceId: "current",
+  access: "read-write",
+});
+
+const prdContext = context.bundle("PRD 研发上下文", {
+  knowledge: productKnowledge,
+  skills: developmentSkills,
+  workspace: codeWorkspace,
+});
+
+const analyse = agent.subAgent("分析需求", { context: prdContext }, `读取 Context 后分析需求。`);
+export const runWithContext = flow("Run", analyse);
+```
+
+- `context.knowledge / skills / workspace / bundle` 都没有 `prev/next`，不要写进 `flow(...)`。
+  它们通过数据依赖在消费者之前加载。
+- `workspaceIds` 和 `workspaceId` 必须来自当前用户 `GET /api/workspaces` 返回的真实 `id`。不要猜测
+  `knowledge://` URI，也不要把 `path/repoUrl/token` 写入 DSL；路径、仓库与凭证由运行环境按用户解析。
+- Skill key 必须来自 `GET /api/skills`。Flow 只保存 Workspace ID 与 Skill key 这些稳定引用。
+- `agent.subAgent` 优先只接一个 `context:context` 引脚。旧的 `knowledgeContext / skillsContext /
+  workspaceContext / mcpContext` 文本引脚继续兼容，但新流程不要重复连接两套。
+- Bundle 组合的是执行上下文；普通业务字段仍使用单独的数据引脚，不能塞进 Context。
+- 画布手动创建时，从 Provide/Context 分类添加资源节点，把 Knowledge、Skills、Workspace 分别接入
+  Context Bundle，再把 Bundle 的紫色 `context` 输出接到 Agent、Subflow Call 或 While。
 
 ## 四条铁律
 
@@ -167,6 +207,8 @@ export const run = flow("Run", read, advance, show);
 - `flow.call(label, subflow, pins)` 是父流程里的真实控制节点，动态引脚由契约生成。
 - 禁止父流程和内部节点直接跨边界连线；所有值必须经过 `flow.call`。
 - 禁止递归调用。当前第一版也不允许子流程内部 `wait/deferred`；调用帧恢复能力补齐前会明确失败。
+- Context 需要跨边界时，显式声明 `const contextIn = flow.input("context", "context")`，加入子流程
+  inputs，并由父图 `flow.call(..., { context: prdContext })` 传入；禁止直接从父图连接内部 Agent。
 
 **`flow.fork` 不是并行。** 它是「一个 `next` 接多个下游」的写法——`flow(a, b, c)` 是线性的，
 没法在链里写出扇出，所以有了它。编译出来就是两条边，图里不存在 fork 这个东西：
@@ -190,6 +232,7 @@ build.next → testB.prev
 
 ```js
 const advance = control.while("推进到人工边界", {
+  context: prdContext,
   state: initial.value,
   maxIterations: "20",
   timeout: "30m",
@@ -200,6 +243,8 @@ export const run4 = flow("Run", advance, report); // done 才继续；wait 会�
 - Condition 固定输出 `decision`，Body 固定输出下一版 `state`；两者都可选输出 `summary`。
 - `state` 是用户可见的业务状态载体。`iteration`、`idempotencyKey` 由运行时注入，保留在 DSL
   契约中，但不要要求普通用户在画布上配置或连接。
+- `context` 与 `state` 分离：While 启动时捕获一次 Context，Condition/Body 只有显式声明
+  `flow.input("context", "context")` 才会收到它；Context 不进入 state、history 或 checkpoint。
 - `maxIterations` 和 `timeout` 必须显式设置。新流程不要使用旧的脚本式 While，除非用户要求兼容。
 - Condition/Body 的完整声明、状态迁移、固定输出和手动画布编辑方式都在专项规范中；不要凭记忆简写。
 
@@ -276,7 +321,8 @@ const doc  = display.html("使用说明", { content: file("docs/guide.html") });
 | 一行 shell 就能搞定 | `tool.nodejs("名字", {}, \`node -e "..."\`)` |
 | 给用户看结果 | `display.markdown` / `.code` / `.html` / `.chart` / `.table` |
 | 加载 skills 给下游 agent | `control.loadSkills` → `skillsContext` |
-| 加载知识库 / 代码仓 | `control.cdWorkspace` → `knowledgeContext` |
+| 新流程声明知识库 | `context.knowledge({ workspaceIds })` → Context Bundle |
+| 兼容旧流程加载知识库 / 代码仓 | `control.cdWorkspace` → `knowledgeContext` |
 | 固定文本 / JSON / 密钥 | `provide.str` / `provide.json` / `provide.password` |
 | 文本显式解析为 JSON | `control.parseJson` |
 | 文本转 bool 做分支 | `control.agentToBool` → `prediction` |

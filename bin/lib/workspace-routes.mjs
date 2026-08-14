@@ -17,12 +17,21 @@ import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./co
 import { execFileBuffered } from "./exec-buffered.mjs";
 import { runGit } from "./git-worktree.mjs";
 import {
+  listMarketplaceFlows,
   listMarketplacePackages,
   nodePackageArchive,
+  publishMarketplaceFlow,
   publishNodePackage,
   publishNodePackageArchive,
+  readMarketplaceFlow,
   resolveMarketplaceNodePackage,
+  setMarketplaceVisibility,
 } from "./marketplace.mjs";
+import {
+  appendMarketplaceUsageEvent,
+  marketplaceResourcesForRun,
+  writeMarketplaceFlowOrigin,
+} from "./marketplace-usage.mjs";
 import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } from "./node-package-manifest.mjs";
 import { inspectNodePackageDirectory } from "./node-package-archive.mjs";
 import { json, readBody } from "./http-util.mjs";
@@ -38,8 +47,8 @@ import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
-import { WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
@@ -921,6 +930,11 @@ async function workspaceRoutes(req, res, ctx) {
             inputs: node.inputs,
             outputs: node.outputs,
             ownerUserId: node.ownerUserId || node.createdBy || "",
+            visibility: node.visibility || "public",
+            useCount: Number(node.useCount || 0),
+            installCount: Number(node.installCount || 0),
+            uniqueUserCount: Number(node.uniqueUserCount || 0),
+            lastUsedAt: node.lastUsedAt || "",
             fileList: node.fileList || [],
             fileCount: node.fileCount || 0,
             totalBytes: node.totalBytes || 0,
@@ -980,6 +994,14 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 404, { error: result.error || "Node package not found" });
           return;
         }
+        appendMarketplaceUsageEvent(root, {
+          kind: "node",
+          id,
+          version,
+          action: "install",
+          actorUserId: userCtx.userId || "",
+          eventId: `install:node:${id}@${version}:${userCtx.userId || "anonymous"}`,
+        });
         res.writeHead(200, {
           "Content-Type": "application/zip",
           "Content-Length": result.archive.length,
@@ -989,6 +1011,158 @@ async function workspaceRoutes(req, res, ctx) {
           "X-AgentFlow-Archive-SHA256": result.archiveSha256,
         });
         res.end(result.archive);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/marketplace/resources") {
+      try {
+        const kind = String(url.searchParams.get("kind") || "flow").trim();
+        const marketplaceScope = url.searchParams.get("scope") === "owned" ? "owned" : "all";
+        const queryText = String(url.searchParams.get("q") || "").trim().toLowerCase();
+        const matches = (item) => !queryText || [
+          item.id,
+          item.displayName,
+          item.description,
+          item.ownerUserId,
+          ...(Array.isArray(item.tags) ? item.tags : []),
+        ].filter(Boolean).join("\n").toLowerCase().includes(queryText);
+        if (kind === "node") {
+          const nodes = listMarketplacePackages(root, { ...userCtx, marketplaceScope }).nodes.filter(matches);
+          json(res, 200, { kind, sort: "useCount", order: "desc", items: nodes });
+          return;
+        }
+        if (kind !== "flow") {
+          json(res, 400, { error: "kind must be flow or node" });
+          return;
+        }
+        const flows = listMarketplaceFlows(root, { ...userCtx, marketplaceScope }).flows.filter(matches);
+        json(res, 200, { kind, sort: "useCount", order: "desc", items: flows });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/flows/publish") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const flowId = String(payload?.flowId || "").trim();
+        const flowSource = String(payload?.flowSource || "user").trim();
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId,
+          flowSource,
+          archived: payload?.archived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, scoped.status || 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource)) {
+          json(res, 400, { error: "Only active editable flows can be published" });
+          return;
+        }
+        const current = readWorkspaceGraph(scoped.root, root).graph;
+        const { design } = splitWorkspaceGraph(current);
+        const graph = workspaceGraphWithScheduleMode(design, "disabled");
+        const result = publishMarketplaceFlow(root, {
+          id: payload?.id || flowId,
+          version: payload?.version || "1.0.0",
+          displayName: payload?.displayName || flowId,
+          description: payload?.description || "",
+          tags: payload?.tags || [],
+          visibility: payload?.visibility || "public",
+          graph,
+        }, userCtx);
+        json(res, result.ok ? (result.alreadyExists ? 200 : 201) : (result.conflict ? 409 : 400), result);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/flows/install") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const id = String(payload?.id || "").trim();
+      const version = String(payload?.version || "").trim();
+      const idCheck = validateUserPipelineId(String(payload?.flowId || id));
+      if (!id || !version || !idCheck.ok) {
+        json(res, 400, { error: idCheck.error || "Missing marketplace flow id or version" });
+        return;
+      }
+      const flowId = idCheck.flowId;
+      const targetDir = path.join(getUserPipelinesRoot(userCtx.userId), flowId);
+      if (fs.existsSync(targetDir)) {
+        json(res, 409, { error: `已存在同名流水线 ${flowId}` });
+        return;
+      }
+      try {
+        const source = readMarketplaceFlow(root, id, version, { ...userCtx, marketplaceScope: "all" });
+        if (!source.ok) {
+          json(res, 404, { error: source.error || "Marketplace flow not found" });
+          return;
+        }
+        fs.mkdirSync(targetDir, { recursive: true });
+        const graph = workspaceGraphWithScheduleMode(source.graph, "disabled");
+        writeWorkspaceGraph(targetDir, graph, root);
+        writeMarketplaceFlowOrigin(targetDir, { id, version });
+        appendMarketplaceUsageEvent(root, {
+          kind: "flow",
+          id,
+          version,
+          action: "install",
+          actorUserId: userCtx.userId || "",
+          eventId: `install:flow:${id}@${version}:${userCtx.userId || "anonymous"}`,
+        });
+        json(res, 201, {
+          ok: true,
+          id,
+          version,
+          flowId,
+          flowSource: "user",
+          url: `/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`,
+        });
+      } catch (e) {
+        try {
+          if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true, force: true });
+        } catch {}
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/marketplace/visibility") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const result = setMarketplaceVisibility(
+          root,
+          String(payload?.kind || ""),
+          String(payload?.id || ""),
+          String(payload?.version || ""),
+          String(payload?.visibility || "public"),
+          userCtx,
+        );
+        json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -2158,6 +2332,8 @@ async function workspaceRoutes(req, res, ctx) {
           flowSource: scoped.flowSource || payload.flowSource || "user",
           plannedNodeIds,
           startedAt: Date.now(),
+          workspaceRoot: root,
+          marketplaceResources: marketplaceResourcesForRun(scoped.root, runtimeGraph, plannedNodeIds),
         };
         const runLog = createWorkspaceRunLogSession({
           runId,
@@ -2255,6 +2431,7 @@ async function workspaceRoutes(req, res, ctx) {
               ...runEntry,
               endedAt,
               durationMs: endedAt - runEntry.startedAt,
+              marketplaceResources: marketplaceResourcesForRun(scoped.root, runtimeGraph, result.order || Array.from(touchedIds)),
             }, "success");
             finishWorkspaceRunLogSession(runLog.runId, "success", {
               endedAt,
@@ -2350,6 +2527,7 @@ async function workspaceRoutes(req, res, ctx) {
             ...runEntry,
             endedAt,
             durationMs: endedAt - runEntry.startedAt,
+            marketplaceResources: marketplaceResourcesForRun(scoped.root, runtimeGraph, result.order || Array.from(touchedIds)),
           }, "success");
           finishWorkspaceRunLogSession(runLog.runId, "success", {
             endedAt,
@@ -2574,6 +2752,11 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         removeWorkspaceDeferredRun(deferred.key);
+        const resourceCleanup = cleanupWorkspaceRunResources(scoped.root, deferred.runId, {
+          force: false,
+          status: "stopped",
+          emit: (event) => appendWorkspaceRunLogEvent(deferred.runId, event),
+        });
         const endedAt = Date.now();
         appendWorkspaceRunLogEvent(deferred.runId, {
           type: "stop-completed",
@@ -2602,6 +2785,10 @@ async function workspaceRoutes(req, res, ctx) {
           ok: true,
           stopped: true,
           monitoringOnly: true,
+          resources: {
+            cleaned: resourceCleanup.cleaned,
+            preserved: resourceCleanup.preserved,
+          },
         });
         return;
       }

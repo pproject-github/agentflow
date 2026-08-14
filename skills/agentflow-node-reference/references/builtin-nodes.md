@@ -16,9 +16,9 @@
 ### agent_subAgent
 
 - Display: 子 Agent
-- Description: 利用子 Agent 执行任务；可接收 knowledgeContext 读取知识库，可接收 workspaceContext 切换执行工作区，并接收 skillsContext / mcpContext 注入已加载 skills 与 MCP 工具清单。
+- Description: 利用子 Agent 执行任务；新流程优先接收一个强类型 context Bundle。knowledgeContext、workspaceContext、skillsContext、mcpContext 保留为旧流程兼容引脚。
 - Runtime: agent/runner
-- Inputs: 0. `prev`:node; 1. `workspaceContext`:text; 2. `skillsContext`:text; 3. `mcpContext`:text; 4. `knowledgeContext`:text
+- Inputs: 0. `prev`:node; 1. `context`:context; 2. `workspaceContext`:text; 3. `skillsContext`:text; 4. `mcpContext`:text; 5. `knowledgeContext`:text
 - Outputs: 0. `next`:node; 1. `result`:text
 
 ### workspace_one_click_task
@@ -82,9 +82,9 @@
 ### control_while
 
 - Display: While
-- Description: Repeatedly execute either an explicit Condition/Body subflow pair or one legacy deterministic step command (`script` or `scriptRef`) without adding a cycle to the Workspace graph. A Run restarted after `wait` resumes from the saved output state. Preferred DSL form: `control.while("Advance", { state, maxIterations, timeout }, conditionFlow, bodyFlow)`. Condition must accept `state` and `iteration`, and return `decision` plus optional `summary`. Only `continue` invokes Body. Body must accept `state`, `iteration`, and `idempotencyKey`, and return the next `state` plus optional `summary`. `wait`, `done`, and `fail` skip Body. In legacy script mode, the command runs once per iteration and stdout must be exactly one JSON object: `{"decision":"continue|wait|done|fail","state":{},"summary":"..."}`. `continue` starts another iteration, `wait` pauses this Run before downstream nodes, `done` continues downstream, and `fail` fails the node. A missing `state` keeps the previous state. Each step receives `AGENTFLOW_WHILE_STATE` (JSON), the absolute `AGENTFLOW_WHILE_ITERATION`, `AGENTFLOW_WHILE_MAX_ITERATIONS`, `AGENTFLOW_WHILE_TIMEOUT_MS`, and a stable per-iteration `AGENTFLOW_WHILE_IDEMPOTENCY_KEY`. Pass the idempotency key to external write APIs when they support one. Write progress logs to stderr because stdout is reserved for the decision object. The command also supports the same runtime placeholders as `tool.nodejs`, including `${flowDir}` and `${workspaceRoot}`. A waiting checkpoint retains state, history, elapsed active time, and the next absolute iteration. `maxIterations` and `timeout` are cumulative across resumes. A changed input resets the checkpoint; a matching but malformed checkpoint fails closed. Step output is schema-strict and bounded: unknown fields are rejected, state/stdout are limited to 1 MiB, stderr to 256 KiB, and summary to 4000 characters.
+- Description: Repeatedly execute either an explicit Condition/Body subflow pair or one legacy deterministic step command (`script` or `scriptRef`) without adding a cycle to the Workspace graph. A Run restarted after `wait` resumes from the saved output state. Preferred DSL form: `control.while("Advance", { state, maxIterations, timeout }, conditionFlow, bodyFlow)`. An optional typed `context` input is captured once before iteration and forwarded only to Condition/Body subflows that explicitly declare `flow.input("context", "context")`. Context is never copied into business state, history, or checkpoints. Condition must accept `state` and `iteration`, and return `decision` plus optional `summary`. Only `continue` invokes Body. Body must accept `state`, `iteration`, and `idempotencyKey`, and return the next `state` plus optional `summary`. `wait`, `done`, and `fail` skip Body. In legacy script mode, the command runs once per iteration and stdout must be exactly one JSON object: `{"decision":"continue|wait|done|fail","state":{},"summary":"..."}`. `continue` starts another iteration, `wait` pauses this Run before downstream nodes, `done` continues downstream, and `fail` fails the node. A missing `state` keeps the previous state. Each step receives `AGENTFLOW_WHILE_STATE` (JSON), the absolute `AGENTFLOW_WHILE_ITERATION`, `AGENTFLOW_WHILE_MAX_ITERATIONS`, `AGENTFLOW_WHILE_TIMEOUT_MS`, and a stable per-iteration `AGENTFLOW_WHILE_IDEMPOTENCY_KEY`. Pass the idempotency key to external write APIs when they support one. Write progress logs to stderr because stdout is reserved for the decision object. The command also supports the same runtime placeholders as `tool.nodejs`, including `${flowDir}` and `${workspaceRoot}`. A waiting checkpoint retains state, history, elapsed active time, and the next absolute iteration. `maxIterations` and `timeout` are cumulative across resumes. A changed input resets the checkpoint; a matching but malformed checkpoint fails closed. Step output is schema-strict and bounded: unknown fields are rejected, state/stdout are limited to 1 MiB, stderr to 256 KiB, and summary to 4000 characters.
 - Runtime: bounded Condition/Body state machine
-- Inputs: 0. `prev`:node; 1. `state`:json = null; 2. `maxIterations`:text = 20; 3. `timeout`:text = 30m
+- Inputs: 0. `prev`:node; 1. `context`:context; 2. `state`:json = null; 3. `maxIterations`:text = 20; 4. `timeout`:text = 30m
 - Outputs: 0. `next`:node; 1. `result`:json; 2. `state`:json = null; 3. `decision`:text; 4. `iterations`:text = 0; 5. `summary`:text; 6. `history`:json = []; 7. `checkpointFingerprint`:text
 
 ### workspace_run
@@ -124,7 +124,7 @@
 ### tool_git_worktree_load
 
 - Display: Load Worktree
-- Description: Create or reuse a Git worktree and expose it as the downstream workspace context. - `repoPath` is required unless `gitContext.repoPath` is connected. - `workspaceContext` is required so the node can preserve the previous execution context. - `branch` is optional. When empty, AgentFlow creates a detached worktree at the current HEAD. - `worktreePath` is optional. When empty, AgentFlow creates a temporary worktree under the current run temp directory. - A worktree created by this node during the current Workspace run is removed when the run finishes or is stopped, even when `worktreePath` is explicitly set. - Existing registered worktrees under the current flow workspace are also removed after the run, covering leftovers from previous interrupted runs. - Existing registered worktrees outside the current flow workspace are reused and not removed automatically unless this run created them. - Existing worktree paths are reused only when they are registered by `git worktree list` for the given repo. - `pruneMissing` defaults to true. When Git has a registered worktree whose directory is missing, AgentFlow runs `git worktree prune` before adding it again. - `force` defaults to false. When true, AgentFlow passes `--force` to `git worktree add`.
+- Description: Create or reuse a Git worktree and expose it as the downstream workspace context. - `repoPath` is required unless `gitContext.repoPath` is connected. - `workspaceContext` is required so the node can preserve the previous execution context. - `branch` is optional. When empty, AgentFlow creates a detached worktree at the current HEAD. - `worktreePath` is optional. When empty, AgentFlow creates a managed execution worktree under `.workspace/agentflow/run-workspaces/`, separate from node temp files and durable `outputs/` artifacts. - A `wait` checkpoint retains the execution worktree. The next run reuses the retained output path so loop state and code changes remain available while resuming. - On terminal completion or stop, AgentFlow removes clean managed worktrees. Dirty worktrees are preserved with a warning instead of being force-deleted. - Existing registered worktrees under the current flow workspace are managed by the same lifecycle policy. - Existing registered worktrees outside the current flow workspace are reused and not removed automatically unless this run created them. - Existing worktree paths are reused only when they are registered by `git worktree list` for the given repo. - `pruneMissing` defaults to true. When Git has a registered worktree whose directory is missing, AgentFlow runs `git worktree prune` before adding it again. - `force` defaults to false. When true, AgentFlow passes `--force` to `git worktree add`.
 - Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `repoPath`:file; 2. `branch`:text; 3. `worktreePath`:file; 4. `pruneMissing`:bool = true; 5. `force`:bool = false; 6. `gitContext`:text; 7. `workspaceContext`:text
 - Outputs: 0. `next`:node; 1. `worktreePath`:file; 2. `branch`:text; 3. `commit`:text; 4. `workspaceContext`:text; 5. `gitContext`:text
@@ -260,6 +260,38 @@
 - Outputs: 0. `content`:text; 1. `next`:node
 
 ## provide
+
+### context_bundle
+
+- Display: Context Bundle
+- Description: Compose knowledge, skills, workspace, and MCP resources into one strongly typed Context value that can cross Agent, Subflow, and While boundaries.
+- Runtime: local-only
+- Inputs: 0. `knowledgeContext`:text; 1. `skillsContext`:text; 2. `workspaceContext`:text; 3. `mcpContext`:text
+- Outputs: 0. `context`:context
+
+### context_knowledge
+
+- Display: Knowledge Context
+- Description: Select one or more read-only knowledge sources by their authenticated Workspace catalog IDs. The runtime resolves IDs from the same catalog as GET /api/workspaces; paths and credentials are not stored in Flow DSL.
+- Runtime: local-only
+- Inputs: 0. `workspaceIds`:json = []
+- Outputs: 0. `knowledgeContext`:text
+
+### context_skills
+
+- Display: Skills Context
+- Description: Declare versioned skills as a reusable Context resource. This is a data resource and does not participate in the prev/next control chain.
+- Runtime: local-only
+- Inputs: 0. `skills`:json = []
+- Outputs: 0. `skillsContext`:text
+
+### context_workspace
+
+- Display: Workspace Context
+- Description: Bind one authenticated Workspace catalog entry as execution context. The Flow stores only workspaceId; paths and credentials remain runtime-owned.
+- Runtime: local-only
+- Inputs: 0. `workspaceId`:text = current; 1. `access`:text = read-write
+- Outputs: 0. `workspaceContext`:text
 
 ### provide_bool
 

@@ -101,6 +101,39 @@ export function parseFlowSource(source, opts = {}) {
     return null;
   }
 
+  /** Read a JSON-compatible literal without evaluating user code. */
+  function staticJsonOf(node) {
+    if (!node) return { ok: false, value: null };
+    if (node.type === "Literal") return { ok: true, value: node.value };
+    if (node.type === "UnaryExpression" && (node.operator === "-" || node.operator === "+")
+      && node.argument.type === "Literal" && typeof node.argument.value === "number") {
+      return { ok: true, value: node.operator === "-" ? -node.argument.value : node.argument.value };
+    }
+    if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
+      return { ok: true, value: node.quasis[0].value.cooked };
+    }
+    if (node.type === "ArrayExpression") {
+      const value = [];
+      for (const item of node.elements) {
+        const parsed = staticJsonOf(item);
+        if (!parsed.ok) return { ok: false, value: null };
+        value.push(parsed.value);
+      }
+      return { ok: true, value };
+    }
+    if (node.type === "ObjectExpression") {
+      const value = {};
+      for (const prop of node.properties) {
+        if (prop.type !== "Property" || prop.computed || prop.kind !== "init") return { ok: false, value: null };
+        const parsed = staticJsonOf(prop.value);
+        if (!parsed.ok) return { ok: false, value: null };
+        value[String(prop.key.name ?? prop.key.value ?? "")] = parsed.value;
+      }
+      return { ok: true, value };
+    }
+    return { ok: false, value: null };
+  }
+
   // import 绑定 -> 代码节点包
   const packageOf = new Map();
   for (const stmt of ast.body) {
@@ -196,6 +229,8 @@ export function parseFlowSource(source, opts = {}) {
     const def = definitionOf(definitionId);
     const defInputs = new Set(def.input.map((s) => s.name));
     const defOutputs = new Set(def.output.map((s) => s.name));
+    const inputType = new Map(def.input.map((s) => [s.name, String(s.type || "text")]));
+    const outputType = new Map(def.output.map((s) => [s.name, String(s.type || "text")]));
     const node = nodes[id];
     if (!obj || obj.type !== "ObjectExpression") return;
     for (const prop of obj.properties) {
@@ -207,8 +242,31 @@ export function parseFlowSource(source, opts = {}) {
         unresolvedAt(prop, `${id}: 引脚名不能是动态表达式`);
         continue;
       }
-      const key = prop.key.name ?? prop.key.value;
+      const rawKey = prop.key.name ?? prop.key.value;
+      const key = definitionId === "context_bundle"
+        ? ({ knowledge: "knowledgeContext", skills: "skillsContext", workspace: "workspaceContext", mcp: "mcpContext" }[rawKey] || rawKey)
+        : rawKey;
       const isCustom = !STD_SLOTS.has(key) && !defInputs.has(key);
+
+      // Context resources are values, not control nodes. A bundle accepts the resource variable
+      // directly (`{ knowledge }`), and consumers accept the bundle directly (`{ context: ctx }`).
+      if (prop.value.type === "Identifier" && nodes[prop.value.name]) {
+        const sourceDefinitionId = nodes[prop.value.name].definitionId;
+        const contextOutput = {
+          context_knowledge: "knowledgeContext",
+          context_skills: "skillsContext",
+          context_workspace: "workspaceContext",
+          context_bundle: "context",
+        }[sourceDefinitionId];
+        if (contextOutput && (
+          (definitionId === "context_bundle" && key === contextOutput)
+          || (key === "context" && sourceDefinitionId === "context_bundle")
+        )) {
+          edges.push(`${prop.value.name}|${contextOutput}|${id}|${key}`);
+          if (isCustom) node.extraIn.push(key);
+          continue;
+        }
+      }
 
       const member = memberPath(prop.value);
       if (member) {
@@ -228,6 +286,15 @@ export function parseFlowSource(source, opts = {}) {
         continue;
       }
       const text = stringOf(prop.value);
+      if (text === null && (inputType.get(key) === "json" || outputType.get(key) === "json")) {
+        const parsed = staticJsonOf(prop.value);
+        if (parsed.ok) {
+          if (defOutputs.has(key) && !defInputs.has(key)) node.outputs[key] = JSON.stringify(parsed.value);
+          else node.inputs[key] = JSON.stringify(parsed.value);
+          if (isCustom) node.extraIn.push(key);
+          continue;
+        }
+      }
       if (text === null) {
         unresolvedAt(prop, `${id}.${key}: 引脚值既不是上游引用也不是字面量`);
         continue;
