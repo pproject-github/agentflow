@@ -42,18 +42,6 @@ function sourceLabel(source) {
   return source || "AgentFlow";
 }
 
-function typeLabel(item) {
-  if (item.resourceType === "flow-snippet") return "流程片段";
-  if (item.resourceType === "flow") return "完整流程";
-  return item.localCatalog ? sourceLabel(item.source) : "节点包";
-}
-
-function typeIcon(item) {
-  if (item.resourceType === "flow-snippet") return "account_tree";
-  if (item.resourceType === "flow") return "schema";
-  return "deployed_code";
-}
-
 export default function MarketplacePage({ authUser }) {
   const { navigate } = useRoute();
   const initialView = useMemo(initialMarketplaceView, []);
@@ -94,7 +82,7 @@ export default function MarketplacePage({ authUser }) {
   }, [load]);
 
   const installFlow = useCallback(async (item) => {
-    const flowId = window.prompt("安装到个人空间，Flow ID：", item.id);
+    const flowId = window.prompt("安装到个人空间，Flow ID：", item.liveFlowId || item.definitionId || item.id);
     if (!flowId) return;
     const key = `install:${item.resourceType}:${item.id}@${item.version}`;
     setBusy(key);
@@ -103,7 +91,14 @@ export default function MarketplacePage({ authUser }) {
       const response = await fetch("/api/marketplace/flows/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: item.id, version: item.version, flowId }),
+        body: JSON.stringify({
+          id: item.id,
+          version: item.version,
+          flowId,
+          projectFlow: item.projectFlow === true,
+          ownerUserId: item.liveOwnerUserId || item.ownerUserId || "",
+          flowSource: item.liveFlowSource || "",
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
@@ -124,7 +119,12 @@ export default function MarketplacePage({ authUser }) {
       const response = await fetch("/api/marketplace/visibility", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: item.resourceType, id: item.id, version: item.version, visibility: nextVisibility }),
+        body: JSON.stringify({
+          kind: item.projectFlow ? "project-flow" : item.resourceType,
+          id: item.id,
+          version: item.version,
+          visibility: nextVisibility,
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
@@ -224,20 +224,22 @@ export default function MarketplacePage({ authUser }) {
                   </span>
                 )}
               </div>
-              <div className="af-marketplace-kind-row">
-                <div className="af-marketplace-kind-icon"><span className="material-symbols-outlined">{typeIcon(item)}</span></div>
-                <span>{typeLabel(item)}</span>
-              </div>
               <h2>{item.displayName || item.id}</h2>
               <p>{item.description || "暂无说明"}</p>
               <div className="af-marketplace-version">
-                {item.definitionId || item.id}{item.version ? ` · v${item.version}` : ""}
+                {item.definitionId || item.id}{item.versionLabel ? ` · ${item.versionLabel}` : item.version ? ` · v${item.version}` : ""}
               </div>
               {item.localCatalog ? (
                 <div className="af-marketplace-stats">
                   <strong><span className="material-symbols-outlined">input</span>{formatCount(portCount(item.inputs))}<small>输入</small></strong>
                   <strong><span className="material-symbols-outlined">output</span>{formatCount(portCount(item.outputs))}<small>输出</small></strong>
                   <strong><span className="material-symbols-outlined">inventory_2</span><em>{sourceLabel(item.source)}</em><small>来源</small></strong>
+                </div>
+              ) : resourceType === "flow-snippet" ? (
+                <div className="af-marketplace-stats">
+                  <strong><span className="material-symbols-outlined">add_circle</span>{formatCount(item.useCount)}<small>添加</small></strong>
+                  <strong><span className="material-symbols-outlined">account_tree</span>{formatCount(item.nodeCount)}<small>节点</small></strong>
+                  <strong><span className="material-symbols-outlined">group</span>{formatCount(item.uniqueUserCount)}<small>用户</small></strong>
                 </div>
               ) : (
                 <div className="af-marketplace-stats">
@@ -260,7 +262,22 @@ export default function MarketplacePage({ authUser }) {
                     </button>
                   ) : null}
                   {resourceType === "flow" ? (
-                    installedFlowId ? (
+                    item.projectFlow && mine ? (
+                      <button
+                        className="is-primary"
+                        type="button"
+                        onClick={() => {
+                          const params = new URLSearchParams({
+                            flowId: item.liveFlowId || item.definitionId,
+                            flowSource: item.liveFlowSource || "user",
+                          });
+                          if (item.liveWorkspaceId) params.set("workspaceId", item.liveWorkspaceId);
+                          navigate(`/workspace?${params}`);
+                        }}
+                      >
+                        打开
+                      </button>
+                    ) : installedFlowId ? (
                       <button className="is-primary" type="button" onClick={() => navigate(`/workspace?flowId=${encodeURIComponent(installedFlowId)}&flowSource=user`)}>打开</button>
                     ) : (
                       <button className="is-primary" type="button" disabled={installBusy} onClick={() => installFlow(item)}>
@@ -268,7 +285,13 @@ export default function MarketplacePage({ authUser }) {
                       </button>
                     )
                   ) : resourceType === "flow-snippet" ? (
-                    <button className="is-primary" type="button" onClick={() => navigate("/projects")}>选择项目使用</button>
+                    <button
+                      className="is-primary"
+                      type="button"
+                      onClick={() => navigate(`/marketplace/preview?id=${encodeURIComponent(item.id)}&version=${encodeURIComponent(item.version || "1.0.0")}`)}
+                    >
+                      预览
+                    </button>
                   ) : (
                     <button className="is-primary" type="button" onClick={() => navigate("/projects")}>在流程中使用</button>
                   )}
@@ -278,6 +301,7 @@ export default function MarketplacePage({ authUser }) {
           );
         })}
       </section>
+
     </main>
   );
 }

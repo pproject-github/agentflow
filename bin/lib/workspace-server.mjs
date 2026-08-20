@@ -1751,30 +1751,45 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
     if (opts.isAdmin !== true) {
       return { root: "", error: "Admin permission required", status: 403 };
     }
-    if (flowSource !== "user") {
-      return { root: "", error: "Admin read-only review only supports user projects", status: 400 };
+    if (!["user", "workspace"].includes(flowSource)) {
+      return { root: "", error: "Admin read-only review only supports user or shared Workspaces", status: 400 };
     }
-    const owner = adminWorkspaceOwnerSummary(adminOwnerId);
+    const collaboration = flowSource === "workspace"
+      ? getWorkspaceCollaborationByFlow(flowId, archived)
+      : null;
+    const owner = adminWorkspaceOwnerSummary(collaboration?.ownerId || adminOwnerId);
     if (!owner) {
       return { root: "", error: "Workspace owner not found", status: 404 };
     }
-    const targetFlow = listFlowsJson(workspaceRoot, { userId: owner.userId })
-      .find((flow) => (
-        flow.id === flowId
-        && (flow.source || "user") === "user"
-        && Boolean(flow.archived) === archived
-      ));
-    if (!targetFlow?.path) {
+    let targetPath = "";
+    let physicalFlowSource = flowSource;
+    if (flowSource === "user") {
+      const targetFlow = listFlowsJson(workspaceRoot, { userId: owner.userId })
+        .find((flow) => (
+          flow.id === flowId
+          && (flow.source || "user") === "user"
+          && Boolean(flow.archived) === archived
+        ));
+      targetPath = targetFlow?.path || "";
+    } else {
+      physicalFlowSource = collaboration?.projectSource || collaboration?.flowSource || "workspace";
+      const result = getPipelineFiles(workspaceRoot, flowId, physicalFlowSource, archived, {
+        ...opts,
+        userId: owner.userId,
+      });
+      targetPath = result?.path || "";
+    }
+    if (!targetPath) {
       return { root: "", error: "Pipeline workspace not found", status: 404 };
     }
     return {
-      root: path.resolve(targetFlow.path),
+      root: path.resolve(targetPath),
       flowId,
-      flowSource: "user",
+      flowSource: physicalFlowSource,
       requestedFlowSource: flowSource,
-      workspaceId: "",
+      workspaceId: collaboration?.id || "",
       archived,
-      collaboration: null,
+      collaboration,
       collaborationAccess: {
         allowed: true,
         writable: false,

@@ -123,14 +123,61 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
   let server;
   try {
     const nonce = `${Date.now()}-${Math.random()}`;
-    const [{ loginOrCreateUser }, { startUiServer }] = await Promise.all([
+    const [
+      { loginOrCreateUser },
+      { getUserPipelinesRoot, PIPELINES_DIR },
+      { ensureWorkspaceCollaboration },
+      { publishWorkspaceRelease },
+      { startUiServer },
+    ] = await Promise.all([
       import(`../bin/lib/auth.mjs?marketplace-api=${nonce}`),
+      import(`../bin/lib/paths.mjs?marketplace-api=${nonce}`),
+      import(`../bin/lib/workspace-collaboration.mjs?marketplace-api=${nonce}`),
+      import(`../bin/lib/workspace-server.mjs?marketplace-api=${nonce}`),
       import(`../bin/lib/ui-server.mjs?marketplace-api=${nonce}`),
     ]);
     const owner = loginOrCreateUser("market-owner", "market-owner-password");
     const consumer = loginOrCreateUser("market-consumer", "market-consumer-password");
     assert.equal(owner.ok, true);
     assert.equal(consumer.ok, true);
+    const runnableProjectDir = path.join(getUserPipelinesRoot(owner.user.userId), "auto-runnable-flow");
+    fs.mkdirSync(runnableProjectDir, { recursive: true });
+    fs.writeFileSync(path.join(runnableProjectDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
+    fs.writeFileSync(path.join(runnableProjectDir, "workspace.graph.json"), `${JSON.stringify({
+      version: 1,
+      instances: {
+        run: { instanceId: "run", definitionId: "workspace_run", label: "Run", input: [], output: [] },
+        work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [], output: [] },
+      },
+      edges: [],
+      ui: { description: "Automatically visible runnable project" },
+    }, null, 2)}\n`, "utf-8");
+    const stableRelease = publishWorkspaceRelease(runnableProjectDir, root, { createdBy: owner.user.userId });
+    assert.equal(stableRelease.ok, true);
+    const nonRunnableProjectDir = path.join(getUserPipelinesRoot(owner.user.userId), "not-runnable-flow");
+    fs.mkdirSync(nonRunnableProjectDir, { recursive: true });
+    fs.writeFileSync(path.join(nonRunnableProjectDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
+    fs.writeFileSync(path.join(nonRunnableProjectDir, "workspace.graph.json"), `${JSON.stringify({
+      version: 1,
+      instances: { work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [], output: [] } },
+      edges: [],
+    }, null, 2)}\n`, "utf-8");
+    const sharedRunnableDir = path.join(root, PIPELINES_DIR, "shared-runnable-flow");
+    fs.mkdirSync(sharedRunnableDir, { recursive: true });
+    fs.writeFileSync(path.join(sharedRunnableDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
+    fs.writeFileSync(path.join(sharedRunnableDir, "workspace.graph.json"), `${JSON.stringify({
+      version: 1,
+      instances: {
+        scheduled: { instanceId: "scheduled", definitionId: "workspace_scheduled_run", label: "Scheduled Run", input: [], output: [] },
+      },
+      edges: [],
+    }, null, 2)}\n`, "utf-8");
+    const sharedCollaboration = ensureWorkspaceCollaboration({
+      flowId: "shared-runnable-flow",
+      flowSource: "workspace",
+      userId: owner.user.userId,
+    });
+    assert.equal(sharedCollaboration.created, true);
     publishMarketplaceFlow(root, {
       id: "less-used",
       version: "1.0.0",
@@ -173,10 +220,68 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const body = await response.json();
     assert.equal(body.sort, "useCount");
     assert.equal(body.order, "desc");
-    assert.deepEqual(body.items.filter((item) => item.resourceType === "flow").map((item) => item.id), ["more-used", "less-used"]);
+    assert.deepEqual(
+      body.items.filter((item) => item.resourceType === "flow" && !item.projectFlow).map((item) => item.id),
+      ["more-used", "less-used"],
+    );
     assert.equal(body.items[0].useCount, 2);
     assert.equal(body.items[0].installCount, 0);
     assert.equal(body.items[0].uniqueUserCount, 1);
+    const automaticFlow = body.items.find((item) => item.displayName === "auto-runnable-flow");
+    assert.equal(automaticFlow.displayName, "auto-runnable-flow");
+    assert.equal(automaticFlow.visibility, "public");
+    assert.equal(automaticFlow.versionLabel, "Stable v1");
+    const sharedAutomaticFlow = body.items.find((item) => item.displayName === "shared-runnable-flow");
+    assert.equal(sharedAutomaticFlow.liveFlowSource, "workspace");
+    assert.equal(sharedAutomaticFlow.liveWorkspaceId, sharedCollaboration.record.id);
+    assert.equal(body.items.some((item) => item.displayName === "not-runnable-flow"), false);
+
+    const privateResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/visibility`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${owner.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "project-flow",
+        id: automaticFlow.id,
+        version: automaticFlow.version,
+        visibility: "private",
+      }),
+    });
+    assert.equal(privateResponse.status, 200, await privateResponse.text());
+    const hiddenResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const hiddenBody = await hiddenResponse.json();
+    assert.equal(hiddenResponse.status, 200, JSON.stringify(hiddenBody));
+    assert.equal(hiddenBody.items.some((item) => item.id === automaticFlow.id), false);
+
+    const publicResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/visibility`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${owner.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "project-flow",
+        id: automaticFlow.id,
+        version: automaticFlow.version,
+        visibility: "public",
+      }),
+    });
+    assert.equal(publicResponse.status, 200, await publicResponse.text());
+
+    for (let index = 0; index < 2; index += 1) {
+      const snippetUseResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flow-snippets/use`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "useful-snippet", version: "1.0.0", eventId: "insert-1" }),
+      });
+      assert.equal(snippetUseResponse.status, 200);
+    }
+    const snippetStatsResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&q=useful-snippet`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    assert.equal(snippetStatsResponse.status, 200);
+    const snippetStats = await snippetStatsResponse.json();
+    assert.equal(snippetStats.items[0].resourceType, "flow-snippet");
+    assert.equal(snippetStats.items[0].useCount, 1, "same insertion event must be counted once");
+    assert.equal(snippetStats.items[0].uniqueUserCount, 1);
 
     const ownedResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&scope=owned&q=snippet`, {
       headers: { Authorization: `Bearer ${owner.token}` },
@@ -199,6 +304,34 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const installedBody = await installedResponse.json();
     assert.deepEqual(installedBody.items.map((item) => item.id), ["more-used"]);
     assert.deepEqual(installedBody.items[0].installedFlowIds, ["installed-market-flow"]);
+
+    const installAutomaticResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/install`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: automaticFlow.id,
+        version: automaticFlow.version,
+        flowId: "installed-runnable-project",
+        projectFlow: true,
+      }),
+    });
+    assert.equal(installAutomaticResponse.status, 201, await installAutomaticResponse.text());
+    assert.deepEqual(
+      marketplaceResourcesForRun(
+        path.join(getUserPipelinesRoot(consumer.user.userId), "installed-runnable-project"),
+        { instances: {}, edges: [] },
+      ),
+      [{ kind: "project-flow", id: automaticFlow.id, version: automaticFlow.version }],
+    );
+    const installedAutomaticResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&scope=installed`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const installedAutomaticBody = await installedAutomaticResponse.json();
+    assert.equal(installedAutomaticResponse.status, 200, JSON.stringify(installedAutomaticBody));
+    assert.equal(
+      installedAutomaticBody.items.find((item) => item.id === automaticFlow.id)?.installedFlowIds?.[0],
+      "installed-runnable-project",
+    );
 
     const installedNodesResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=node&scope=installed`, {
       headers: { Authorization: `Bearer ${consumer.token}` },

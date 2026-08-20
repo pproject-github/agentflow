@@ -11,7 +11,7 @@
  *    是请求回调的闭包，解构之后路由体里的写法完全不变。
  */
 
-import { listNodesJson, readNodeDetailJson, readNodeFilePreview } from "./catalog-flows.mjs";
+import { listFlowsJson, listNodesJson, readNodeDetailJson, readNodeFilePreview } from "./catalog-flows.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
@@ -30,6 +30,8 @@ import {
 } from "./marketplace.mjs";
 import {
   appendMarketplaceUsageEvent,
+  marketplaceStatsFor,
+  marketplaceUsageStats,
   marketplaceResourcesForRun,
   readMarketplaceFlowOrigin,
   writeMarketplaceFlowOrigin,
@@ -38,18 +40,18 @@ import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } fr
 import { inspectNodePackageDirectory } from "./node-package-archive.mjs";
 import { json, readBody } from "./http-util.mjs";
 import { log } from "./log.mjs";
-import { PACKAGE_ROOT, PIPELINES_DIR, getAgentflowUserDataRoot, getUserPipelinesRoot } from "./paths.mjs";
+import { PACKAGE_ROOT, PIPELINES_DIR, getAgentflowUserDataRoot, getUserPipelinesRoot, listAgentflowUserIds } from "./paths.mjs";
 import { validateUserPipelineId } from "./flow-write.mjs";
 import { runLedgerId } from "./run-ledger.mjs";
 import { getTeamById, getTeamForUser } from "./teams.mjs";
 import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
-import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, deleteWorkspaceCollaborationForFlow, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
+import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, deleteWorkspaceCollaborationForFlow, ensureWorkspaceCollaboration, getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
 import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
@@ -926,6 +928,124 @@ function installedMarketplaceFlowCopies(userId) {
   return copies;
 }
 
+const PROJECT_FLOW_MARKETPLACE_FILENAME = path.join(".workspace", "agentflow", "marketplace.json");
+
+function projectFlowMarketplaceId(ownerUserId, flowSource, flowId) {
+  return `project-flow:${String(ownerUserId || "").trim()}:${String(flowSource || "user").trim()}:${String(flowId || "").trim()}`;
+}
+
+function projectFlowMarketplaceMetadataPath(flowRoot) {
+  return path.join(path.resolve(flowRoot), PROJECT_FLOW_MARKETPLACE_FILENAME);
+}
+
+function readProjectFlowMarketplaceMetadata(flowRoot) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(projectFlowMarketplaceMetadataPath(flowRoot), "utf-8"));
+    return {
+      visibility: String(parsed?.visibility || "").trim() === "private" ? "private" : "public",
+      updatedAt: String(parsed?.updatedAt || "").trim(),
+    };
+  } catch {
+    return { visibility: "public", updatedAt: "" };
+  }
+}
+
+function writeProjectFlowMarketplaceMetadata(flowRoot, visibility) {
+  const filePath = projectFlowMarketplaceMetadataPath(flowRoot);
+  const value = {
+    version: 1,
+    visibility: String(visibility || "").trim() === "private" ? "private" : "public",
+    updatedAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  fs.renameSync(tempPath, filePath);
+  return value;
+}
+
+function graphHasRunnableEntry(graph) {
+  return Object.values(graph?.instances || {}).some((instance) => (
+    instance?.definitionId === "workspace_run"
+    || instance?.definitionId === "workspace_scheduled_run"
+  ));
+}
+
+function projectFlowUpdatedAt(flowRoot, metadata = {}) {
+  if (metadata.updatedAt) return metadata.updatedAt;
+  try {
+    return fs.statSync(path.resolve(flowRoot)).mtime.toISOString();
+  } catch {
+    return "";
+  }
+}
+
+function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope = "all") {
+  const requestedUserId = String(userCtx.userId || "").trim();
+  const stats = marketplaceUsageStats(workspaceRoot);
+  const resources = [];
+  const appendFlow = (ownerId, flow, flowSource = "user", workspaceId = "") => {
+    if (!ownerId || (scope === "owned" && ownerId !== requestedUserId)) return;
+    if (flow.archived || !flow.path) return;
+    let stable;
+    let graph;
+    try {
+      stable = readWorkspaceStableRelease(flow.path, workspaceRoot);
+      graph = stable?.graph || readWorkspaceGraph(flow.path, workspaceRoot).graph;
+    } catch {
+      return;
+    }
+    if (!graphHasRunnableEntry(graph)) return;
+    const metadata = readProjectFlowMarketplaceMetadata(flow.path);
+    const owned = ownerId === requestedUserId;
+    if (scope !== "owned" && metadata.visibility === "private" && !owned && userCtx.isAdmin !== true) return;
+    const id = projectFlowMarketplaceId(ownerId, flowSource, flow.id);
+    const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
+    resources.push({
+      resourceType: "flow",
+      projectFlow: true,
+      id,
+      definitionId: flow.id,
+      displayName: flow.id,
+      description: flow.description || "",
+      version,
+      versionLabel: stable?.release?.id ? `Stable ${stable.release.id}` : "当前版本",
+      ownerUserId: ownerId,
+      liveOwnerUserId: ownerId,
+      liveFlowId: flow.id,
+      liveFlowSource: flowSource,
+      liveWorkspaceId: workspaceId,
+      visibility: metadata.visibility,
+      nodeCount: Object.keys(graph?.instances || {}).length,
+      edgeCount: Array.isArray(graph?.edges) ? graph.edges.length : 0,
+      updatedAt: projectFlowUpdatedAt(flow.path, metadata),
+      ...marketplaceStatsFor(stats, "project-flow", id, version, ownerId),
+      _graph: graph,
+      _flowRoot: flow.path,
+    });
+  };
+  for (const ownerUserId of listAgentflowUserIds()) {
+    const ownerId = String(ownerUserId || "").trim();
+    for (const flow of listFlowsJson(workspaceRoot, { userId: ownerId })) {
+      if ((flow.source || "user") !== "user" || flow.archived || !flow.path) continue;
+      appendFlow(ownerId, flow, "user");
+    }
+  }
+  for (const flow of listFlowsJson(workspaceRoot, { userId: "", includeWorkspaceFlows: true })) {
+    if ((flow.source || "") !== "workspace" || flow.archived || !flow.path) continue;
+    const collaboration = getWorkspaceCollaborationByFlow(flow.id, false);
+    const ownerId = String(collaboration?.ownerId || "").trim();
+    if (!ownerId) continue;
+    appendFlow(ownerId, flow, "workspace", collaboration.id);
+  }
+  return resources;
+}
+
+function publicProjectFlowMarketplaceResource(resource) {
+  const { _graph, _flowRoot, ...publicResource } = resource;
+  return publicResource;
+}
+
 function marketplaceResourceMatches(item, queryText) {
   if (!queryText) return true;
   return [
@@ -1114,14 +1234,59 @@ async function workspaceRoutes(req, res, ctx) {
             installedFlowIds,
           };
         });
+        const projectFlows = listRunnableProjectMarketplaceFlows(root, userCtx, scope).map((flow) => {
+          const installedFlowIds = installedCopies.get(`${flow.id}@${flow.version}`) || [];
+          return publicProjectFlowMarketplaceResource({
+            ...flow,
+            installed: installedFlowIds.length > 0,
+            installedFlowIds,
+          });
+        });
         const snippets = scope === "installed" ? [] : listMarketplaceFlowSnippets(root, { ...userCtx, marketplaceScope }).snippets
           .map((snippet) => ({ ...snippet, resourceType: "flow-snippet", installed: false }));
         const items = sortMarketplaceResources(
-          [...flows, ...snippets]
+          [...projectFlows, ...flows, ...snippets]
             .filter((item) => scope !== "installed" || item.installed)
             .filter((item) => marketplaceResourceMatches(item, queryText)),
         );
         json(res, 200, { kind, scope, sort: "useCount", order: "desc", items });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/marketplace/flow-snippets/use") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const id = String(payload?.id || "").trim();
+      const version = String(payload?.version || "").trim();
+      if (!id || !version) {
+        json(res, 400, { error: "Missing flow snippet id or version" });
+        return;
+      }
+      try {
+        const accessible = listMarketplaceFlowSnippets(root, { ...userCtx, marketplaceScope: "all" }).snippets
+          .some((snippet) => String(snippet.id) === id && String(snippet.version) === version);
+        if (!accessible) {
+          json(res, 404, { error: "Flow snippet not found" });
+          return;
+        }
+        const eventToken = String(payload?.eventId || crypto.randomUUID()).trim().slice(0, 180);
+        appendMarketplaceUsageEvent(root, {
+          kind: "flow-snippet",
+          id,
+          version,
+          action: "use",
+          actorUserId: userCtx.userId || "",
+          eventId: `use:flow-snippet:${id}@${version}:${userCtx.userId || "anonymous"}:${eventToken}`,
+        });
+        json(res, 200, { ok: true, id, version });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -1181,7 +1346,8 @@ async function workspaceRoutes(req, res, ctx) {
       }
       const id = String(payload?.id || "").trim();
       const version = String(payload?.version || "").trim();
-      const idCheck = validateUserPipelineId(String(payload?.flowId || id));
+      const requestedProjectFlow = payload?.projectFlow === true;
+      const idCheck = validateUserPipelineId(String(payload?.flowId || (requestedProjectFlow ? "" : id)));
       if (!id || !version || !idCheck.ok) {
         json(res, 400, { error: idCheck.error || "Missing marketplace flow id or version" });
         return;
@@ -1193,22 +1359,40 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       try {
-        const source = readMarketplaceFlow(root, id, version, { ...userCtx, marketplaceScope: "all" });
-        if (!source.ok) {
-          json(res, 404, { error: source.error || "Marketplace flow not found" });
-          return;
+        let sourceGraph;
+        let originKind = "flow";
+        if (requestedProjectFlow) {
+          const source = listRunnableProjectMarketplaceFlows(root, userCtx, "all")
+            .find((flow) => flow.id === id);
+          if (!source) {
+            json(res, 404, { error: "Project flow not found or is private" });
+            return;
+          }
+          if (source.version !== version) {
+            json(res, 409, { error: "该流程已有新版本，请刷新流程仓库后重试" });
+            return;
+          }
+          sourceGraph = source._graph;
+          originKind = "project-flow";
+        } else {
+          const source = readMarketplaceFlow(root, id, version, { ...userCtx, marketplaceScope: "all" });
+          if (!source.ok) {
+            json(res, 404, { error: source.error || "Marketplace flow not found" });
+            return;
+          }
+          sourceGraph = source.graph;
         }
         fs.mkdirSync(targetDir, { recursive: true });
-        const graph = workspaceGraphWithScheduleMode(source.graph, "disabled");
+        const graph = workspaceGraphWithScheduleMode(sourceGraph, "disabled");
         writeWorkspaceGraph(targetDir, graph, root);
-        writeMarketplaceFlowOrigin(targetDir, { id, version });
+        writeMarketplaceFlowOrigin(targetDir, { kind: originKind, id, version });
         appendMarketplaceUsageEvent(root, {
-          kind: "flow",
+          kind: originKind,
           id,
           version,
           action: "install",
           actorUserId: userCtx.userId || "",
-          eventId: `install:flow:${id}@${version}:${userCtx.userId || "anonymous"}`,
+          eventId: `install:${originKind}:${id}@${version}:${userCtx.userId || "anonymous"}`,
         });
         json(res, 201, {
           ok: true,
@@ -1236,6 +1420,18 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       try {
+        if (String(payload?.kind || "") === "project-flow") {
+          const id = String(payload?.id || "").trim();
+          const source = listRunnableProjectMarketplaceFlows(root, { ...userCtx, isAdmin: false }, "owned")
+            .find((flow) => flow.id === id);
+          if (!source) {
+            json(res, 403, { error: "Only the project owner can change its visibility" });
+            return;
+          }
+          const metadata = writeProjectFlowMarketplaceMetadata(source._flowRoot, payload?.visibility);
+          json(res, 200, { ok: true, kind: "project-flow", id, version: source.version, ...metadata });
+          return;
+        }
         const result = setMarketplaceVisibility(
           root,
           String(payload?.kind || ""),

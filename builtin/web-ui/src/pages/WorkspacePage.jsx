@@ -9000,6 +9000,14 @@ function WorkspacePageInner() {
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const isWorkflowShareView = Boolean(flowParams.workflowShare);
   const initialFocusNodeIdRef = useRef(new URLSearchParams(window.location.search).get("focusNodeId") || "");
+  const pendingMarketplaceSnippetRef = useRef((() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      id: String(params.get("marketplaceSnippetId") || "").trim(),
+      version: String(params.get("marketplaceSnippetVersion") || "").trim(),
+      handled: false,
+    };
+  })());
   const workspaceViewportStorageKey = useMemo(
     () => (
       flowParams.workspaceId
@@ -13786,7 +13794,35 @@ function WorkspacePageInner() {
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
     setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}（已选中 ${insertedNodeIds.length} 个节点）`);
+    if (snippetEntry?.id && snippetEntry?.version) {
+      const insertionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      void fetch("/api/marketplace/flow-snippets/use", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: snippetEntry.id, version: snippetEntry.version, eventId: insertionId }),
+      }).catch(() => undefined);
+    }
   }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes, workspaceWritable]);
+
+  useEffect(() => {
+    const pending = pendingMarketplaceSnippetRef.current;
+    if (!pending.id || pending.handled || flowSnippetsLoading || !loadedRef.current || !workspaceWritable) return;
+    pending.handled = true;
+    const snippet = flowSnippets.find((item) => (
+      String(item.id || "") === pending.id
+      && (!pending.version || String(item.version || "") === pending.version)
+    ));
+    const url = new URL(window.location.href);
+    url.searchParams.delete("marketplaceSnippetId");
+    url.searchParams.delete("marketplaceSnippetVersion");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    if (!snippet) {
+      setStatus(`未找到流程片段：${pending.id}${pending.version ? `@${pending.version}` : ""}`);
+      return;
+    }
+    insertFlowSnippet(snippet);
+    showFlowSnippetToast(`已从市场添加：${snippet.displayName || snippet.id}`);
+  }, [flowSnippets, flowSnippetsLoading, insertFlowSnippet, showFlowSnippetToast, workspaceSyncPhase, workspaceWritable]);
 
   const openPublishSnippetDialog = useCallback(() => {
     if (selectedCanvasNodes.length < 2) {

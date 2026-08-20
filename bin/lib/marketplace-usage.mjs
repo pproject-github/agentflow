@@ -155,8 +155,9 @@ export function marketplaceFlowOriginPath(flowDir) {
 }
 
 export function writeMarketplaceFlowOrigin(flowDir, origin = {}) {
+  const kind = safeText(origin.kind, 32) === "project-flow" ? "project-flow" : "flow";
   const value = {
-    kind: "flow",
+    kind,
     id: safeText(origin.id),
     version: safeText(origin.version, 80),
     installedAt: safeText(origin.installedAt || new Date().toISOString(), 80),
@@ -169,8 +170,8 @@ export function writeMarketplaceFlowOrigin(flowDir, origin = {}) {
 export function readMarketplaceFlowOrigin(flowDir) {
   try {
     const parsed = JSON.parse(fs.readFileSync(marketplaceFlowOriginPath(flowDir), "utf-8"));
-    if (parsed?.kind !== "flow" || !parsed.id || !parsed.version) return null;
-    return { kind: "flow", id: String(parsed.id), version: String(parsed.version) };
+    if (!["flow", "project-flow"].includes(parsed?.kind) || !parsed.id || !parsed.version) return null;
+    return { kind: parsed.kind, id: String(parsed.id), version: String(parsed.version) };
   } catch {
     return null;
   }
