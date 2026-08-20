@@ -1272,6 +1272,7 @@ function buildAdminUsageDashboard(workspaceRoot) {
       username: String(run.username || run.userId || ""),
       flowId: String(run.flowId || ""),
       flowSource: String(run.flowSource || "user"),
+      archived: run.archived === true,
       runId: String(run.runId || ""),
       at: Number(run.at || 0),
       endedAt: run.endedAt == null ? null : Number(run.endedAt),
@@ -1991,6 +1992,50 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
   writeWorkspaceGraph(scoped.root, graph, root);
   const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
   return { success: true, workspaceSchedules };
+}
+
+function schedulesForRequest(root, authUser = {}, userCtx = {}) {
+  if (!authUser?.isAdmin) {
+    return {
+      adminView: false,
+      users: [],
+      schedules: listWorkspaceScheduleStatuses(root, userCtx),
+    };
+  }
+  const users = listAuthUsers();
+  const usernames = new Map(users.map((user) => [user.userId, user.username || user.userId]));
+  const byIdentity = new Map();
+  for (const user of users) {
+    const rows = listWorkspaceScheduleStatuses(root, { ...userCtx, userId: user.userId });
+    for (const row of rows) {
+      const ownerUserId = String(row.ownerUserId || row.userId || user.userId);
+      const key = String(row.key || `${ownerUserId}:${row.flowSource || "user"}:${row.flowId || ""}:${row.scheduleNodeId || ""}`);
+      const identity = String(row.flowSource || "user") === "workspace"
+        ? `workspace:${row.workspaceId || row.flowId || ""}:${row.scheduleNodeId || ""}`
+        : key;
+      const existing = byIdentity.get(identity);
+      if (existing && (existing.registered || !row.registered)) continue;
+      byIdentity.set(identity, {
+        ...row,
+        ownerUserId,
+        ownerUsername: usernames.get(ownerUserId) || row.ownerUsername || ownerUserId,
+      });
+    }
+  }
+  const schedules = [...byIdentity.values()].sort((a, b) => {
+    const ea = a.enabled ? 0 : 1;
+    const eb = b.enabled ? 0 : 1;
+    return ea - eb
+      || String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || ""))
+      || String(a.ownerUsername || a.ownerUserId || "").localeCompare(String(b.ownerUsername || b.ownerUserId || ""))
+      || String(a.flowId || "").localeCompare(String(b.flowId || ""));
+  });
+  const ownerIds = new Set(schedules.map((schedule) => String(schedule.ownerUserId || "")).filter(Boolean));
+  return {
+    adminView: true,
+    users: users.filter((user) => ownerIds.has(user.userId)),
+    schedules,
+  };
 }
 
 function pollWorkspaceSchedules(root) {
@@ -4578,14 +4623,7 @@ finishedAt: "${new Date().toISOString()}"
       try {
         // 旧 Pipeline schedule 随 Start/End 执行一并下线：它们只会驱动已废弃的
         // `agentflow apply`，列出来只会给用户永远不会触发的条目。
-        const workspaceSchedules = listWorkspaceScheduleStatuses(root, userCtx);
-        json(res, 200, {
-          schedules: [...workspaceSchedules].sort((a, b) => {
-            const ea = a.enabled ? 0 : 1;
-            const eb = b.enabled ? 0 : 1;
-            return ea - eb || String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")) || String(a.flowId || "").localeCompare(String(b.flowId || ""));
-          }),
-        });
+        json(res, 200, schedulesForRequest(root, authUser, userCtx));
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -4603,7 +4641,23 @@ finishedAt: "${new Date().toISOString()}"
       const kind = String(payload.kind || "").trim();
       if (kind === "workspace") {
         try {
-          const result = setWorkspaceScheduleEnabled(root, payload, authUser, userCtx);
+          const requestedOwnerId = String(payload.ownerUserId || userCtx.userId || "").trim();
+          if (requestedOwnerId !== String(userCtx.userId || "") && !authUser?.isAdmin) {
+            json(res, 403, { error: "Admin permission required to manage another user's schedule" });
+            return;
+          }
+          const targetRecord = readAuthUsers()[requestedOwnerId];
+          if (!targetRecord) {
+            json(res, 404, { error: "Schedule owner not found" });
+            return;
+          }
+          const targetAuthUser = {
+            userId: requestedOwnerId,
+            username: String(targetRecord.username || requestedOwnerId),
+            isAdmin: Boolean(targetRecord.isAdmin),
+          };
+          const targetUserCtx = { ...userCtx, userId: requestedOwnerId };
+          const result = setWorkspaceScheduleEnabled(root, payload, targetAuthUser, targetUserCtx);
           if (!result.success) {
             json(res, 400, { error: result.error || "Could not update workspace schedule" });
             return;

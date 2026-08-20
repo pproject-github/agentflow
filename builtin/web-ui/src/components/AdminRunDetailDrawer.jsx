@@ -30,7 +30,7 @@ function statusText(status) {
   return value;
 }
 
-export default function AdminRunDetailDrawer({ run, onClose }) {
+export default function AdminRunDetailDrawer({ run, onClose, onOpenFlow }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -99,6 +99,17 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
             <p>{run.username || run.userId} · <code>{run.runId}</code></p>
           </div>
           <div className="af-admin-run-detail__actions">
+            {onOpenFlow ? (
+              <button
+                type="button"
+                className="af-admin-run-detail__open-flow"
+                onClick={onOpenFlow}
+                title="以管理员只读模式查看 Flow"
+              >
+                <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+                <span>查看 Flow</span>
+              </button>
+            ) : null}
             <button type="button" onClick={() => void loadDetail()} disabled={loading} title="刷新详情">
               <span className="material-symbols-outlined" aria-hidden>refresh</span>
             </button>

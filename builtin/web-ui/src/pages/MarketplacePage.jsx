@@ -2,6 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useRoute } from "../routeContext.jsx";
 
+const MARKETPLACE_SCOPES = [
+  { id: "all", label: "全部" },
+  { id: "owned", label: "我的发布" },
+  { id: "installed", label: "已安装 / 可用" },
+];
+
+function initialMarketplaceView() {
+  const params = new URLSearchParams(window.location.search);
+  const kind = params.get("kind") === "node" ? "node" : "flow";
+  const requestedScope = params.get("scope") || "all";
+  const scope = MARKETPLACE_SCOPES.some((item) => item.id === requestedScope) ? requestedScope : "all";
+  return { kind, scope };
+}
+
 function ownedBy(item, authUser) {
   const owner = String(item?.ownerUserId || "").trim();
   return new Set([
@@ -14,22 +28,53 @@ function formatCount(value) {
   return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 }
 
+function portCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  return 0;
+}
+
+function sourceLabel(source) {
+  if (source === "marketplace") return "Marketplace";
+  if (source === "flow") return "流程内节点";
+  if (source === "project") return "项目节点";
+  if (source === "builtin") return "内置节点";
+  return source || "AgentFlow";
+}
+
+function typeLabel(item) {
+  if (item.resourceType === "flow-snippet") return "流程片段";
+  if (item.resourceType === "flow") return "完整流程";
+  return item.localCatalog ? sourceLabel(item.source) : "节点包";
+}
+
+function typeIcon(item) {
+  if (item.resourceType === "flow-snippet") return "account_tree";
+  if (item.resourceType === "flow") return "schema";
+  return "deployed_code";
+}
+
 export default function MarketplacePage({ authUser }) {
   const { navigate } = useRoute();
-  const [kind, setKind] = useState("flow");
-  const [owned, setOwned] = useState(false);
+  const initialView = useMemo(initialMarketplaceView, []);
+  const [kind, setKind] = useState(initialView.kind);
+  const [scope, setScope] = useState(initialView.scope);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
 
+  useEffect(() => {
+    const params = new URLSearchParams({ kind, scope });
+    window.history.replaceState({}, "", `/marketplace?${params}`);
+  }, [kind, scope]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ kind, sort: "useCount", order: "desc" });
-      if (owned) params.set("scope", "owned");
+      const params = new URLSearchParams({ kind, scope, sort: "useCount", order: "desc" });
       if (query.trim()) params.set("q", query.trim());
       const response = await fetch(`/api/marketplace/resources?${params}`);
       const body = await response.json().catch(() => ({}));
@@ -41,19 +86,17 @@ export default function MarketplacePage({ authUser }) {
     } finally {
       setLoading(false);
     }
-  }, [kind, owned, query]);
+  }, [kind, query, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(load, 180);
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const visibleItems = useMemo(() => items, [items]);
-
   const installFlow = useCallback(async (item) => {
     const flowId = window.prompt("安装到个人空间，Flow ID：", item.id);
     if (!flowId) return;
-    const key = `install:${item.id}@${item.version}`;
+    const key = `install:${item.resourceType}:${item.id}@${item.version}`;
     setBusy(key);
     setError("");
     try {
@@ -74,14 +117,14 @@ export default function MarketplacePage({ authUser }) {
 
   const toggleVisibility = useCallback(async (item) => {
     const nextVisibility = item.visibility === "private" ? "public" : "private";
-    const key = `visibility:${item.id}@${item.version}`;
+    const key = `visibility:${item.resourceType}:${item.id}@${item.version}`;
     setBusy(key);
     setError("");
     try {
       const response = await fetch("/api/marketplace/visibility", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, id: item.id, version: item.version, visibility: nextVisibility }),
+        body: JSON.stringify({ kind: item.resourceType, id: item.id, version: item.version, visibility: nextVisibility }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
@@ -91,15 +134,38 @@ export default function MarketplacePage({ authUser }) {
     } finally {
       setBusy("");
     }
-  }, [kind, load]);
+  }, [load]);
+
+  const deletePublishedResource = useCallback(async (item) => {
+    const endpoint = item.resourceType === "node"
+      ? "/api/marketplace/node"
+      : item.resourceType === "flow-snippet"
+        ? "/api/marketplace/flow-snippet"
+        : "";
+    if (!endpoint || !window.confirm(`确认删除 ${item.displayName || item.id}@${item.version}？`)) return;
+    const key = `delete:${item.resourceType}:${item.id}@${item.version}`;
+    setBusy(key);
+    setError("");
+    try {
+      const params = new URLSearchParams({ id: item.id, version: item.version });
+      const response = await fetch(`${endpoint}?${params}`, { method: "DELETE" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) throw new Error(body.error || `HTTP ${response.status}`);
+      await load();
+    } catch (deleteError) {
+      setError(String(deleteError?.message || deleteError));
+    } finally {
+      setBusy("");
+    }
+  }, [load]);
 
   return (
     <main className="af-marketplace-page">
       <header className="af-marketplace-hero">
         <div>
-          <span className="af-marketplace-eyebrow">AGENTFLOW MARKETPLACE</span>
+          <span className="af-marketplace-eyebrow">AGENTFLOW RESOURCE CENTER</span>
           <h1>市场</h1>
-          <p>发现可运行的 Flow 模板与可复用节点，默认按真实使用次数排序。</p>
+          <p>发现、安装并管理完整 Flow、流程片段与可复用节点。</p>
         </div>
         <label className="af-marketplace-search">
           <span className="material-symbols-outlined">search</span>
@@ -108,57 +174,103 @@ export default function MarketplacePage({ authUser }) {
       </header>
 
       <div className="af-marketplace-toolbar">
-        <div className="af-marketplace-tabs">
+        <div className="af-marketplace-tabs" aria-label="资源类型">
           <button type="button" className={kind === "flow" ? "is-active" : ""} onClick={() => setKind("flow")}>流程</button>
           <button type="button" className={kind === "node" ? "is-active" : ""} onClick={() => setKind("node")}>节点</button>
         </div>
-        <label className="af-marketplace-owned">
-          <input type="checkbox" checked={owned} onChange={(event) => setOwned(event.target.checked)} />
-          只看我的发布（含私有）
-        </label>
-        <span className="af-marketplace-sort"><span className="material-symbols-outlined">trending_down</span>使用次数从高到低</span>
+        <div className="af-marketplace-scopes" aria-label="资源范围">
+          {MARKETPLACE_SCOPES.map((item) => (
+            <button key={item.id} type="button" className={scope === item.id ? "is-active" : ""} onClick={() => setScope(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <span className="af-marketplace-sort">
+          <span className="material-symbols-outlined">{scope === "installed" ? "inventory_2" : "trending_down"}</span>
+          {scope === "installed" ? "当前可用资源" : "使用次数从高到低"}
+        </span>
       </div>
 
       {error ? <div className="af-marketplace-error">{error}</div> : null}
       {loading ? <div className="af-marketplace-empty">正在加载市场…</div> : null}
-      {!loading && visibleItems.length === 0 ? <div className="af-marketplace-empty">没有匹配的{kind === "flow" ? "流程" : "节点"}</div> : null}
+      {!loading && items.length === 0 ? (
+        <div className="af-marketplace-empty">
+          {scope === "owned" ? "你还没有发布匹配的资源" : scope === "installed" ? "没有匹配的已安装或可用资源" : `没有匹配的${kind === "flow" ? "流程" : "节点"}`}
+        </div>
+      ) : null}
 
       <section className="af-marketplace-grid">
-        {visibleItems.map((item, index) => {
-          const key = `${kind}:${item.id}@${item.version}`;
+        {items.map((item, index) => {
+          const resourceType = item.resourceType || kind;
+          const key = `${resourceType}:${item.id}@${item.version || item.definitionId || index}`;
           const mine = ownedBy(item, authUser);
+          const visibilityBusy = busy === `visibility:${resourceType}:${item.id}@${item.version}`;
+          const deleteBusy = busy === `delete:${resourceType}:${item.id}@${item.version}`;
+          const installBusy = busy === `install:${resourceType}:${item.id}@${item.version}`;
+          const installedFlowId = Array.isArray(item.installedFlowIds) ? item.installedFlowIds[0] : "";
           return (
             <article className="af-marketplace-card" key={key}>
               <div className="af-marketplace-card__top">
                 <span className="af-marketplace-rank">#{index + 1}</span>
-                <span className={`af-marketplace-visibility is-${item.visibility || "public"}`}>
-                  <span className="material-symbols-outlined">{item.visibility === "private" ? "lock" : "public"}</span>
-                  {item.visibility === "private" ? "私有" : "公开"}
-                </span>
+                {item.localCatalog ? (
+                  <span className="af-marketplace-visibility is-local">
+                    <span className="material-symbols-outlined">inventory_2</span>
+                    可用
+                  </span>
+                ) : (
+                  <span className={`af-marketplace-visibility is-${item.visibility || "public"}`}>
+                    <span className="material-symbols-outlined">{item.visibility === "private" ? "lock" : "public"}</span>
+                    {item.visibility === "private" ? "私有" : "公开"}
+                  </span>
+                )}
               </div>
-              <div className="af-marketplace-kind-icon"><span className="material-symbols-outlined">{kind === "flow" ? "schema" : "deployed_code"}</span></div>
+              <div className="af-marketplace-kind-row">
+                <div className="af-marketplace-kind-icon"><span className="material-symbols-outlined">{typeIcon(item)}</span></div>
+                <span>{typeLabel(item)}</span>
+              </div>
               <h2>{item.displayName || item.id}</h2>
               <p>{item.description || "暂无说明"}</p>
-              <div className="af-marketplace-version">{item.id} · v{item.version}</div>
-              <div className="af-marketplace-stats">
-                <strong><span className="material-symbols-outlined">play_circle</span>{formatCount(item.useCount)}<small>使用</small></strong>
-                <strong><span className="material-symbols-outlined">download</span>{formatCount(item.installCount)}<small>安装</small></strong>
-                <strong><span className="material-symbols-outlined">group</span>{formatCount(item.uniqueUserCount)}<small>用户</small></strong>
+              <div className="af-marketplace-version">
+                {item.definitionId || item.id}{item.version ? ` · v${item.version}` : ""}
               </div>
+              {item.localCatalog ? (
+                <div className="af-marketplace-stats">
+                  <strong><span className="material-symbols-outlined">input</span>{formatCount(portCount(item.inputs))}<small>输入</small></strong>
+                  <strong><span className="material-symbols-outlined">output</span>{formatCount(portCount(item.outputs))}<small>输出</small></strong>
+                  <strong><span className="material-symbols-outlined">inventory_2</span><em>{sourceLabel(item.source)}</em><small>来源</small></strong>
+                </div>
+              ) : (
+                <div className="af-marketplace-stats">
+                  <strong><span className="material-symbols-outlined">play_circle</span>{formatCount(item.useCount)}<small>使用</small></strong>
+                  <strong><span className="material-symbols-outlined">download</span>{formatCount(item.installCount)}<small>安装</small></strong>
+                  <strong><span className="material-symbols-outlined">group</span>{formatCount(item.uniqueUserCount)}<small>用户</small></strong>
+                </div>
+              )}
               <footer>
-                <span>by {item.ownerUserId || "AgentFlow"}</span>
+                <span>{item.localCatalog ? sourceLabel(item.source) : `by ${item.ownerUserId || "AgentFlow"}`}</span>
                 <div>
-                  {mine ? (
-                    <button type="button" disabled={busy === `visibility:${item.id}@${item.version}`} onClick={() => toggleVisibility(item)}>
+                  {mine && !item.localCatalog ? (
+                    <button type="button" disabled={visibilityBusy} onClick={() => toggleVisibility(item)}>
                       {item.visibility === "private" ? "设为公开" : "设为私有"}
                     </button>
                   ) : null}
-                  {kind === "flow" ? (
-                    <button className="is-primary" type="button" disabled={busy === `install:${item.id}@${item.version}`} onClick={() => installFlow(item)}>
-                      {busy === `install:${item.id}@${item.version}` ? "安装中…" : "安装到个人空间"}
+                  {mine && (resourceType === "node" || resourceType === "flow-snippet") && !item.localCatalog ? (
+                    <button className="is-danger" type="button" disabled={deleteBusy} onClick={() => deletePublishedResource(item)}>
+                      {deleteBusy ? "删除中…" : "删除"}
                     </button>
+                  ) : null}
+                  {resourceType === "flow" ? (
+                    installedFlowId ? (
+                      <button className="is-primary" type="button" onClick={() => navigate(`/workspace?flowId=${encodeURIComponent(installedFlowId)}&flowSource=user`)}>打开</button>
+                    ) : (
+                      <button className="is-primary" type="button" disabled={installBusy} onClick={() => installFlow(item)}>
+                        {installBusy ? "安装中…" : "安装到个人空间"}
+                      </button>
+                    )
+                  ) : resourceType === "flow-snippet" ? (
+                    <button className="is-primary" type="button" onClick={() => navigate("/projects")}>选择项目使用</button>
                   ) : (
-                    <button className="is-primary" type="button" onClick={() => navigate("/nodes")}>在流程中使用</button>
+                    <button className="is-primary" type="button" onClick={() => navigate("/projects")}>在流程中使用</button>
                   )}
                 </div>
               </footer>

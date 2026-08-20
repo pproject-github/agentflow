@@ -42,9 +42,10 @@ import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "./wecom.mjs";
 import { getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, workspaceCollaborationAccess, workspaceCollaborationSummary } from "./workspace-collaboration.mjs";
 import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, readWorkspaceRunFingerprints, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
+import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
 import { createWorkspaceRunController, terminateWorkspaceChild } from "./workspace-run-controller.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
-import { splitWorkspaceGraph } from "./workspace-state.mjs";
+import { mergeWorkspaceState, splitWorkspaceGraph } from "./workspace-state.mjs";
 import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
 import { spawn } from "child_process";
@@ -708,6 +709,249 @@ export function readWorkspaceGraph(workspaceRoot, marketplaceRoot = "") {
   return { path: designPath, graph };
 }
 
+const WORKSPACE_RELEASES_REL = path.join(".workspace", "agentflow", "releases");
+const WORKSPACE_RELEASE_REGISTRY = "registry.json";
+const WORKSPACE_RELEASE_MANIFEST = "release.json";
+const WORKSPACE_RELEASE_SKIP_ROOTS = new Set([
+  ".git",
+  "node_modules",
+  "outputs",
+  "runBuild",
+  "workspace.state.json",
+]);
+
+function workspaceReleasesRoot(workspaceRoot) {
+  return path.join(path.resolve(workspaceRoot), WORKSPACE_RELEASES_REL);
+}
+
+function workspaceReleaseRegistryPath(workspaceRoot) {
+  return path.join(workspaceReleasesRoot(workspaceRoot), WORKSPACE_RELEASE_REGISTRY);
+}
+
+function normalizeWorkspaceReleaseRegistry(value = {}) {
+  const releases = Array.isArray(value?.releases)
+    ? value.releases
+      .filter((release) => release && /^v[1-9][0-9]*$/.test(String(release.id || "")))
+      .map((release) => ({
+        id: String(release.id),
+        number: Math.max(1, Number(release.number || String(release.id).slice(1)) || 1),
+        designRevision: String(release.designRevision || ""),
+        createdAt: String(release.createdAt || ""),
+        createdBy: String(release.createdBy || ""),
+        notes: String(release.notes || ""),
+        baseReleaseId: String(release.baseReleaseId || ""),
+      }))
+      .sort((a, b) => b.number - a.number)
+    : [];
+  const stableReleaseId = releases.some((release) => release.id === value?.stableReleaseId)
+    ? String(value.stableReleaseId)
+    : "";
+  return {
+    version: 1,
+    stableReleaseId,
+    nextNumber: Math.max(
+      Number(value?.nextNumber || 1) || 1,
+      releases.reduce((max, release) => Math.max(max, release.number + 1), 1),
+    ),
+    releases,
+    updatedAt: String(value?.updatedAt || ""),
+  };
+}
+
+function readWorkspaceReleaseRegistry(workspaceRoot) {
+  const filePath = workspaceReleaseRegistryPath(workspaceRoot);
+  try {
+    if (!fs.existsSync(filePath)) return normalizeWorkspaceReleaseRegistry();
+    return normalizeWorkspaceReleaseRegistry(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+  } catch {
+    return normalizeWorkspaceReleaseRegistry();
+  }
+}
+
+function writeWorkspaceReleaseRegistry(workspaceRoot, registry) {
+  const releasesRoot = workspaceReleasesRoot(workspaceRoot);
+  fs.mkdirSync(releasesRoot, { recursive: true });
+  const filePath = workspaceReleaseRegistryPath(workspaceRoot);
+  const tempPath = path.join(releasesRoot, `.registry-${crypto.randomUUID()}.tmp`);
+  const normalized = normalizeWorkspaceReleaseRegistry({
+    ...registry,
+    updatedAt: new Date().toISOString(),
+  });
+  fs.writeFileSync(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+  fs.renameSync(tempPath, filePath);
+  return normalized;
+}
+
+function workspaceReleaseSnapshotRoot(workspaceRoot, releaseId) {
+  const id = String(releaseId || "").trim();
+  if (!/^v[1-9][0-9]*$/.test(id)) return "";
+  return path.join(workspaceReleasesRoot(workspaceRoot), id, "snapshot");
+}
+
+function workspaceReleaseRuntimeStatePath(workspaceRoot, releaseId) {
+  const id = String(releaseId || "").trim();
+  if (!/^v[1-9][0-9]*$/.test(id)) return "";
+  return path.join(workspaceReleasesRoot(workspaceRoot), id, "runtime", "workspace.state.json");
+}
+
+function readWorkspaceReleaseRuntimeState(workspaceRoot, releaseId) {
+  const filePath = workspaceReleaseRuntimeStatePath(workspaceRoot, releaseId);
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeWorkspaceReleaseRuntimeState(workspaceRoot, releaseId, graph) {
+  const filePath = workspaceReleaseRuntimeStatePath(workspaceRoot, releaseId);
+  if (!filePath) return;
+  const { state } = splitWorkspaceGraph(graph || {});
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(state || { version: 1 }, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+}
+
+function workspaceCopyReleaseSnapshot(sourceRoot, targetRoot, relative = "") {
+  const source = relative ? path.join(sourceRoot, relative) : sourceRoot;
+  const entries = fs.readdirSync(source, { withFileTypes: true });
+  fs.mkdirSync(relative ? path.join(targetRoot, relative) : targetRoot, { recursive: true });
+  for (const entry of entries) {
+    const nextRelative = relative ? path.join(relative, entry.name) : entry.name;
+    const normalized = nextRelative.replace(/\\/g, "/");
+    if (!relative && WORKSPACE_RELEASE_SKIP_ROOTS.has(entry.name)) continue;
+    if (normalized === ".workspace/agentflow" || normalized.startsWith(".workspace/agentflow/")) continue;
+    const sourcePath = path.join(sourceRoot, nextRelative);
+    const targetPath = path.join(targetRoot, nextRelative);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      workspaceCopyReleaseSnapshot(sourceRoot, targetRoot, nextRelative);
+    } else if (entry.isFile()) {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      try {
+        fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_FICLONE);
+      } catch {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+    }
+  }
+}
+
+function workspaceReleaseSummary(workspaceRoot, marketplaceRoot = "", graph = null) {
+  const registry = readWorkspaceReleaseRegistry(workspaceRoot);
+  const currentGraph = graph || readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
+  const draftRevision = workspaceDesignRevision(currentGraph);
+  const stable = registry.releases.find((release) => release.id === registry.stableReleaseId) || null;
+  return {
+    enabled: Boolean(stable),
+    stableReleaseId: stable?.id || "",
+    stableRevision: stable?.designRevision || "",
+    draftRevision,
+    hasDraftChanges: Boolean(stable && stable.designRevision !== draftRevision),
+    releases: registry.releases,
+  };
+}
+
+export function readWorkspaceReleaseStatus(workspaceRoot, marketplaceRoot = "", graph = null) {
+  return workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph);
+}
+
+export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "") {
+  const registry = readWorkspaceReleaseRegistry(workspaceRoot);
+  const release = registry.releases.find((item) => item.id === registry.stableReleaseId) || null;
+  if (!release) return null;
+  const root = workspaceReleaseSnapshotRoot(workspaceRoot, release.id);
+  if (!root || !fs.existsSync(root)) return null;
+  const designGraph = readWorkspaceGraph(root, marketplaceRoot).graph;
+  const graph = mergeWorkspaceState(
+    designGraph,
+    readWorkspaceReleaseRuntimeState(workspaceRoot, release.id),
+  );
+  return { release, root, graph };
+}
+
+export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", options = {}) {
+  const graph = readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
+  const designRevision = workspaceDesignRevision(graph);
+  const expectedRevision = String(options.expectedRevision || "").trim();
+  if (expectedRevision && expectedRevision !== designRevision) {
+    return {
+      error: "Workspace 已更新，请保存并刷新后再发布",
+      conflict: "revision-mismatch",
+      expectedRevision,
+      currentRevision: designRevision,
+    };
+  }
+  const registry = readWorkspaceReleaseRegistry(workspaceRoot);
+  const number = registry.nextNumber;
+  const releaseId = `v${number}`;
+  const releasesRoot = workspaceReleasesRoot(workspaceRoot);
+  const releaseRoot = path.join(releasesRoot, releaseId);
+  const snapshotRoot = path.join(releaseRoot, "snapshot");
+  const tempRoot = path.join(releasesRoot, `.publish-${releaseId}-${crypto.randomUUID()}`);
+  const tempSnapshotRoot = path.join(tempRoot, "snapshot");
+  const now = new Date().toISOString();
+  const release = {
+    id: releaseId,
+    number,
+    designRevision,
+    createdAt: now,
+    createdBy: String(options.createdBy || ""),
+    notes: String(options.notes || "").trim().slice(0, 2000),
+    baseReleaseId: registry.stableReleaseId || "",
+  };
+  let releaseInstalled = false;
+  let registryCommitted = false;
+  fs.mkdirSync(releasesRoot, { recursive: true });
+  try {
+    workspaceCopyReleaseSnapshot(path.resolve(workspaceRoot), tempSnapshotRoot);
+    const { design } = splitWorkspaceGraph(graph);
+    writeWorkspaceGraph(tempSnapshotRoot, design, marketplaceRoot);
+    fs.writeFileSync(path.join(tempRoot, WORKSPACE_RELEASE_MANIFEST), `${JSON.stringify(release, null, 2)}\n`, "utf-8");
+    if (fs.existsSync(releaseRoot)) throw new Error(`Release already exists: ${releaseId}`);
+    fs.renameSync(tempRoot, releaseRoot);
+    releaseInstalled = true;
+    const nextRegistry = writeWorkspaceReleaseRegistry(workspaceRoot, {
+      ...registry,
+      stableReleaseId: releaseId,
+      nextNumber: number + 1,
+      releases: [release, ...registry.releases],
+    });
+    registryCommitted = true;
+    return {
+      ok: true,
+      release,
+      status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph),
+      registry: nextRegistry,
+      snapshotRoot,
+    };
+  } catch (error) {
+    try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
+    if (releaseInstalled && !registryCommitted) {
+      try { fs.rmSync(releaseRoot, { recursive: true, force: true }); } catch {}
+    }
+    throw error;
+  }
+}
+
+export function rollbackWorkspaceRelease(workspaceRoot, releaseId, marketplaceRoot = "") {
+  const registry = readWorkspaceReleaseRegistry(workspaceRoot);
+  const release = registry.releases.find((item) => item.id === String(releaseId || "").trim()) || null;
+  const snapshotRoot = release ? workspaceReleaseSnapshotRoot(workspaceRoot, release.id) : "";
+  if (!release || !snapshotRoot || !fs.existsSync(snapshotRoot)) {
+    return { error: "Release not found" };
+  }
+  writeWorkspaceReleaseRegistry(workspaceRoot, { ...registry, stableReleaseId: release.id });
+  return {
+    ok: true,
+    release,
+    status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot),
+  };
+}
+
 const DISPLAY_SHARE_FILENAME = "display-shares.json";
 
 const DISPLAY_SHARE_ALLOWED_EXPIRY_DAYS = new Set([1, 7, 30, 90, 365]);
@@ -1250,6 +1494,24 @@ export function mergeWorkspaceRunGraph(currentGraph, runGraph, touchedIds) {
     ui: current.ui && typeof current.ui === "object" ? current.ui : { nodePositions: {} },
     updatedAt: new Date().toISOString(),
   };
+}
+
+function mergeWorkspaceRunState(currentGraph, runGraph, touchedIds) {
+  const currentSplit = splitWorkspaceGraph(currentGraph || {});
+  const runSplit = splitWorkspaceGraph(runGraph || {});
+  const ids = touchedIds instanceof Set ? touchedIds : new Set(touchedIds || []);
+  const state = JSON.parse(JSON.stringify(currentSplit.state || { version: 1 }));
+  for (const key of ["inputs", "outputs", "displayBodies", "displayReloadKeys", "fingerprints"]) {
+    const currentBucket = state[key] && typeof state[key] === "object" ? state[key] : {};
+    const runBucket = runSplit.state?.[key] && typeof runSplit.state[key] === "object" ? runSplit.state[key] : {};
+    for (const nodeId of ids) {
+      if (Object.prototype.hasOwnProperty.call(runBucket, nodeId)) currentBucket[nodeId] = runBucket[nodeId];
+      else delete currentBucket[nodeId];
+    }
+    if (Object.keys(currentBucket).length) state[key] = currentBucket;
+    else delete state[key];
+  }
+  return mergeWorkspaceState(currentSplit.design, state);
 }
 
 export function mergeWorkspacePersistentNodeRefs(incomingGraph, currentGraph) {
@@ -4668,12 +4930,13 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {}, durableOutputs = false } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, sourceRoot = "", cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {}, durableOutputs = false } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
   const legacyOutputsDir = path.join(nodeRunDir, "outputs");
-  const workspaceRoot = path.resolve(scopedRoot);
-  const workspaceOutputsDir = path.join(workspaceRoot, "outputs");
+  const workspaceRoot = path.resolve(sourceRoot || scopedRoot);
+  const outputWorkspaceRoot = path.resolve(scopedRoot);
+  const workspaceOutputsDir = path.join(outputWorkspaceRoot, "outputs");
   const nodePart = workspaceSanitizeTmpSegment(nodeId || "node", "node");
   const outputsRel = durableOutputs ? path.posix.join("outputs", nodePart) : "outputs";
   const outputsDir = durableOutputs ? path.join(workspaceOutputsDir, nodePart) : legacyOutputsDir;
@@ -4703,6 +4966,7 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, cwd = "
     outputsRel,
     directWorkspaceOutputs: durableOutputs,
     workspaceRoot,
+    outputWorkspaceRoot,
     workspaceOutputsDir,
     executionCwd: cwd ? path.resolve(cwd) : workspaceRoot,
     resultFileRel,
@@ -5277,22 +5541,23 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     emit({ type: "status", nodeId, line: `Timing ${label}: ${elapsedMs}ms`, timing: { label, elapsedMs, ...extra } });
   };
   let cwd = scopedRoot;
+  const runtimeStorageRoot = path.resolve(opts.runtimeRoot || scopedRoot);
   const modelKey = typeof payload?.model === "string" ? payload.model.trim() : "";
   const runEnv = {};
   const runtimeEnv = (extra = {}) => runtimeEnvForUser(userCtx, { ...runEnv, ...(extra || {}) });
   const autoCleanupWorktrees = [];
-  const runTmpRoot = workspaceCreateRunTmpRoot(scopedRoot, runNodeId);
+  const runTmpRoot = workspaceCreateRunTmpRoot(runtimeStorageRoot, runNodeId);
   const runtimeRunId = String(opts.runId || payload?.runId || "").trim() || runLedgerId("workspace-execution");
   const ownsRunManifest = !(Array.isArray(opts?.subflowCallStack) && opts.subflowCallStack.length);
   const persistRunManifest = (status, extra = {}) => {
     if (!ownsRunManifest) return null;
-    return workspaceWriteRunManifest(scopedRoot, runtimeRunId, {
+    return workspaceWriteRunManifest(runtimeStorageRoot, runtimeRunId, {
       flowId: String(payload?.flowId || ""),
       flowSource: String(payload?.flowSource || "user"),
       runNodeId,
       status,
       runtimeRoot: runTmpRoot,
-      artifactRoot: path.join(path.resolve(scopedRoot), "outputs"),
+      artifactRoot: path.join(runtimeStorageRoot, "outputs"),
       worktrees: autoCleanupWorktrees.map((entry) => ({ ...entry, removed: false })),
       ...extra,
     });
@@ -5705,7 +5970,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
             });
           }
           const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, `${nodeId}-iteration-${iteration}`, {
-            scopedRoot,
+            scopedRoot: runtimeStorageRoot,
+            sourceRoot: scopedRoot,
             cwd,
             task: stepScript || stepScriptRef,
             inputValues: iterationInputs,
@@ -6283,7 +6549,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const prepareStartedAt = Date.now();
       const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
       const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
-        scopedRoot,
+        scopedRoot: runtimeStorageRoot,
+        sourceRoot: scopedRoot,
         cwd,
         task: String(instance.script || instance.scriptRef || instance.body || "").trim(),
         inputValues,
@@ -6357,7 +6624,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     );
     const resultOutputSpec = workspaceResultOutputSpec(graph, nodeId);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
-      scopedRoot,
+      scopedRoot: runtimeStorageRoot,
+      sourceRoot: scopedRoot,
       cwd,
       task: workspaceResolveBodyPlaceholders(instance.body || "", inputValues).trim() || upstreamText,
       inputValues: relevantInputs.values,
@@ -6767,6 +7035,9 @@ export function upsertWorkspaceDeferredRun(meta = {}, deferred = {}) {
     label: String(meta.label || previous.label || "Workspace Run"),
     plannedNodeIds: Array.isArray(meta.plannedNodeIds) ? meta.plannedNodeIds.map(String) : (previous.plannedNodeIds || []),
     workspaceRoot: String(meta.workspaceRoot || previous.workspaceRoot || ""),
+    executionRoot: String(meta.executionRoot || previous.executionRoot || ""),
+    releaseId: String(meta.releaseId || previous.releaseId || ""),
+    designRevision: String(meta.designRevision || previous.designRevision || ""),
     marketplaceResources: Array.isArray(meta.marketplaceResources)
       ? meta.marketplaceResources.map((item) => ({
           kind: String(item?.kind || ""),
@@ -6969,7 +7240,8 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
     if (scoped.error || !scoped.root) continue;
     let graph;
     try {
-      graph = readWorkspaceGraph(scoped.root, root).graph;
+      graph = readWorkspaceStableRelease(scoped.root, root)?.graph
+        || readWorkspaceGraph(scoped.root, root).graph;
     } catch {
       continue;
     }
@@ -6999,6 +7271,9 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
       rows.push({
         kind: "workspace",
         key,
+        registered: Boolean(registry.schedules?.[key]),
+        ownerUserId: scheduleUserId,
+        ownerUsername: String(current.username || scheduleUserId),
         flowId,
         flowSource,
         workspaceId: String(flow.collaboration?.id || scoped.workspaceId || ""),
@@ -7062,11 +7337,12 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
     writeWorkspaceScheduleRegistry({ version: 1, schedules });
     return [];
   }
-  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const effectiveGraph = readWorkspaceStableRelease(scoped?.root || "", root)?.graph || graph;
+  const instances = effectiveGraph?.instances && typeof effectiveGraph.instances === "object" ? effectiveGraph.instances : {};
   for (const [scheduleNodeId, instance] of Object.entries(instances)) {
     if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
     const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
-    const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
+    const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(effectiveGraph, scheduleNodeId, config);
     const key = workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId);
     const previous = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
     const previousNext = Number(previous.nextRunAt || 0);
@@ -7187,7 +7463,15 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     });
     return;
   }
-  const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root, root).graph, userCtx);
+  const stableRelease = readWorkspaceStableRelease(scoped.root, root);
+  const executionRoot = stableRelease?.root || scoped.root;
+  const executionScoped = stableRelease ? { ...scoped, root: executionRoot } : scoped;
+  const graph = hydrateWorkspaceGraphForRuntime(
+    root,
+    executionScoped,
+    stableRelease?.graph || readWorkspaceGraph(scoped.root, root).graph,
+    userCtx,
+  );
   const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
   const instance = graph.instances?.[scheduleNodeId];
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
@@ -7221,7 +7505,7 @@ export async function runWorkspaceScheduledEntry(root, entry) {
   appendWorkspaceRunLogEvent(runLog.runId, { type: "scheduler-triggered", scheduleNodeId, runNodeId: targetRunNodeId, cron: config.cron, timezone: config.timezone });
   let plan;
   try {
-    plan = workspaceRunPlan(graph, targetRunNodeId, scoped.root);
+    plan = workspaceRunPlan(graph, targetRunNodeId, executionRoot);
   } catch (e) {
     const error = (e && e.message) || String(e);
     appendWorkspaceRunLogEvent(runLog.runId, { type: "error", error });
@@ -7274,8 +7558,17 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     startedAt: Date.now(),
     scheduled: true,
     workspaceRoot: root,
-    marketplaceResources: marketplaceResourcesForRun(scoped.root, graph, plannedNodeIds),
+    executionRoot,
+    releaseId: stableRelease?.release?.id || "",
+    designRevision: stableRelease?.release?.designRevision || workspaceDesignRevision(graph),
+    marketplaceResources: marketplaceResourcesForRun(executionRoot, graph, plannedNodeIds),
   };
+  appendWorkspaceRunLogEvent(runLog.runId, {
+    type: "release-resolved",
+    releaseId: runEntry.releaseId || "legacy-current",
+    revision: runEntry.designRevision,
+    source: stableRelease ? "stable" : "legacy-current",
+  });
   activeWorkspaceRuns.set(runKey, runEntry);
   appendWorkspaceRunStarted(runEntry);
   updateWorkspaceScheduleEntry(entry.key, {
@@ -7292,12 +7585,13 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     runControl.setChild(child, childOptions);
   };
   try {
-    const result = await runWorkspaceGraph(root, scoped.root, {
+    const result = await runWorkspaceGraph(root, executionRoot, {
       flowId: entry.flowId,
       flowSource: entry.flowSource || "user",
       runNodeId: targetRunNodeId,
       graph,
     }, userCtx, {
+      runtimeRoot: scoped.root,
       signal: controller.signal,
       onActiveChild: setActiveChild,
       onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
@@ -7305,7 +7599,12 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     });
     const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
-    const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+    if (stableRelease?.release?.id) {
+      writeWorkspaceReleaseRuntimeState(scoped.root, stableRelease.release.id, result.graph);
+    }
+    const mergedGraph = stableRelease
+      ? mergeWorkspaceRunState(currentGraph, result.graph, touchedIds)
+      : mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
     writeWorkspaceGraph(scoped.root, mergedGraph, root);
     if (result.deferred) {
       const waiting = upsertWorkspaceDeferredRun({
@@ -7333,12 +7632,14 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       ...runEntry,
       endedAt,
       durationMs: endedAt - runEntry.startedAt,
-      marketplaceResources: marketplaceResourcesForRun(scoped.root, graph, result.order || Array.from(touchedIds)),
+      marketplaceResources: marketplaceResourcesForRun(executionRoot, graph, result.order || Array.from(touchedIds)),
     }, "success");
     finishWorkspaceRunLogSession(runLog.runId, "success", {
       endedAt,
       durationMs: endedAt - runEntry.startedAt,
       runNodeId: targetRunNodeId,
+      releaseId: runEntry.releaseId,
+      designRevision: runEntry.designRevision,
     });
     updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
@@ -7359,6 +7660,8 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       endedAt,
       durationMs: endedAt - runEntry.startedAt,
       runNodeId: targetRunNodeId,
+      releaseId: runEntry.releaseId,
+      designRevision: runEntry.designRevision,
       error: stopped ? "" : error,
     });
     updateWorkspaceScheduleEntry(entry.key, {
@@ -7386,6 +7689,8 @@ function finishWorkspaceDeferredRun(entry, status, patch = {}) {
     endedAt,
     durationMs: Math.max(0, endedAt - Number(entry.startedAt || endedAt)),
     runNodeId: entry.runNodeId || "",
+    releaseId: entry.releaseId || "",
+    designRevision: entry.designRevision || "",
     error: String(patch.error || ""),
   });
   if (entry.scheduleKey) {
@@ -7431,13 +7736,16 @@ async function runWorkspaceDeferredEntry(root, claimed) {
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
   };
   try {
-    const graph = hydrateWorkspaceGraphForRuntime(root, scoped, readWorkspaceGraph(scoped.root, root).graph, userCtx);
-    const result = await runWorkspaceGraph(root, scoped.root, {
+    const executionRoot = String(claimed.executionRoot || "").trim() || scoped.root;
+    const executionScoped = executionRoot === scoped.root ? scoped : { ...scoped, root: executionRoot };
+    const graph = hydrateWorkspaceGraphForRuntime(root, executionScoped, readWorkspaceGraph(executionRoot, root).graph, userCtx);
+    const result = await runWorkspaceGraph(root, executionRoot, {
       flowId: claimed.flowId,
       flowSource: claimed.flowSource || "user",
       runNodeId: claimed.runNodeId,
       graph,
     }, userCtx, {
+      runtimeRoot: scoped.root,
       signal: controller.signal,
       onActiveChild: (child, options = {}) => runControl.setChild(child, options),
       onEvent: (event) => appendWorkspaceRunLogEvent(claimed.runId, event),
@@ -7445,7 +7753,12 @@ async function runWorkspaceDeferredEntry(root, claimed) {
     });
     const currentGraph = readWorkspaceGraph(scoped.root, root).graph;
     const touchedIds = workspaceRunTouchedNodeIds(result);
-    const mergedGraph = mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
+    if (claimed.releaseId) {
+      writeWorkspaceReleaseRuntimeState(scoped.root, claimed.releaseId, result.graph);
+    }
+    const mergedGraph = claimed.releaseId
+      ? mergeWorkspaceRunState(currentGraph, result.graph, touchedIds)
+      : mergeWorkspaceRunGraph(currentGraph, result.graph, touchedIds);
     writeWorkspaceGraph(scoped.root, mergedGraph, root);
     if (result.deferred) {
       const waiting = upsertWorkspaceDeferredRun({ ...claimed, deferredKey: claimed.key }, result.deferred);

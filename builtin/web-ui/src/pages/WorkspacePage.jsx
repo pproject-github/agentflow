@@ -24,6 +24,7 @@ import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
+import { SPACES_UI_ENABLED } from "../featureFlags.js";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
 import { FLOW_NODE_TYPE, FlowNode, FlowNodePortRail } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
@@ -9119,6 +9120,12 @@ function WorkspacePageInner() {
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaceWritable, setWorkspaceWritable] = useState(!flowParams.adminOwnerId);
+  const [workspaceIsTransientDraft, setWorkspaceIsTransientDraft] = useState(false);
+  const [workspaceRelease, setWorkspaceRelease] = useState(null);
+  const [workspaceReleaseOpen, setWorkspaceReleaseOpen] = useState(false);
+  const [workspaceReleaseBusy, setWorkspaceReleaseBusy] = useState(false);
+  const [workspaceReleaseError, setWorkspaceReleaseError] = useState("");
+  const [workspaceReleaseNotes, setWorkspaceReleaseNotes] = useState("");
   const [adminReview, setAdminReview] = useState(() => (
     flowParams.adminOwnerId
       ? { readonly: true, ownerUserId: flowParams.adminOwnerId, ownerUsername: flowParams.adminOwnerId }
@@ -9418,6 +9425,9 @@ function WorkspacePageInner() {
     skipNextWorkspaceAutosaveRef.current = false;
     workspaceEditVersionRef.current += 1;
     workspaceDirtyRef.current = true;
+    setWorkspaceRelease((current) => (
+      current?.enabled ? { ...current, hasDraftChanges: true } : current
+    ));
     setWorkspaceSyncPhase("dirty");
     setWorkspaceSyncDetail("本地修改等待同步");
   }, [workspaceWritable]);
@@ -9572,6 +9582,7 @@ function WorkspacePageInner() {
       workspaceDirtyRef.current = false;
     }
     setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+    setWorkspaceRelease(json.release || null);
     setWorkspaceConflict(null);
     setWorkspaceConflictOpen(false);
     setWorkspaceSyncPhase(hasNewerLocalEdits ? "dirty" : "synced");
@@ -9639,6 +9650,68 @@ function WorkspacePageInner() {
     workspaceSaveChainRef.current = queuedSave;
     return resultPromise;
   }, [edges, nodes, performSaveGraph]);
+
+  const publishStableRelease = useCallback(async () => {
+    if (!workspaceWritable || workspaceIsTransientDraft || !flowParams.flowId) return;
+    setWorkspaceReleaseBusy(true);
+    setWorkspaceReleaseError("");
+    try {
+      const saved = await saveGraph();
+      const response = await fetch("/api/workspace/releases/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: flowParams.flowId,
+          flowSource: flowParams.flowSource || "user",
+          workspaceId: flowParams.workspaceId || "",
+          archived: Boolean(flowParams.archived),
+          expectedRevision: saved?.revision || workspaceRevisionRef.current || "",
+          notes: workspaceReleaseNotes.trim(),
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error || "发布稳定版本失败");
+      setWorkspaceRelease(json.status || null);
+      setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+      setWorkspaceReleaseNotes("");
+      setWorkspaceReleaseOpen(false);
+      showFlowSnippetToast(`已发布稳定版本 ${json.release?.id || ""}`.trim());
+    } catch (error) {
+      setWorkspaceReleaseError(String(error?.message || error));
+    } finally {
+      setWorkspaceReleaseBusy(false);
+    }
+  }, [flowParams, saveGraph, showFlowSnippetToast, workspaceIsTransientDraft, workspaceReleaseNotes, workspaceWritable]);
+
+  const rollbackStableRelease = useCallback(async (releaseId) => {
+    const target = String(releaseId || "").trim();
+    if (!target || !workspaceWritable || workspaceIsTransientDraft) return;
+    if (!window.confirm(`将生产稳定版本回退到 ${target}？调整态内容不会被覆盖。`)) return;
+    setWorkspaceReleaseBusy(true);
+    setWorkspaceReleaseError("");
+    try {
+      const response = await fetch("/api/workspace/releases/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: flowParams.flowId,
+          flowSource: flowParams.flowSource || "user",
+          workspaceId: flowParams.workspaceId || "",
+          archived: Boolean(flowParams.archived),
+          releaseId: target,
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error || "回退稳定版本失败");
+      setWorkspaceRelease(json.status || null);
+      setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+      showFlowSnippetToast(`Stable 已回退到 ${target}`);
+    } catch (error) {
+      setWorkspaceReleaseError(String(error?.message || error));
+    } finally {
+      setWorkspaceReleaseBusy(false);
+    }
+  }, [flowParams, showFlowSnippetToast, workspaceIsTransientDraft, workspaceWritable]);
 
   const restoreCanvasSnapshot = useCallback((snapshot) => {
     const nextInstances = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
@@ -9831,6 +9904,8 @@ function WorkspacePageInner() {
       workspaceValueEqual(current, nextCollaboration) ? current : nextCollaboration
     ));
     setAdminReview(graphJson.adminReview || null);
+    setWorkspaceIsTransientDraft(graphJson.draft === true);
+    setWorkspaceRelease(graphJson.release || null);
     setWorkspaceConflict(null);
     if (shouldInitializeWorkspaceViewport) {
       setWorkspaceViewport(nextWorkspaceViewport);
@@ -15412,6 +15487,30 @@ function WorkspacePageInner() {
             <span className="af-pipeline-brand-name">{workspaceProjectTitle}</span>
             <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
           </div>
+          {!isWorkflowMode && !workspaceIsTransientDraft && workspaceRelease ? (
+            <button
+              type="button"
+              className={`af-workspace-release-badge ${workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "is-draft" : "is-stable") : "is-unreleased"}`}
+              onClick={() => {
+                setWorkspaceReleaseError("");
+                setWorkspaceReleaseOpen(true);
+              }}
+              title={workspaceRelease.enabled
+                ? workspaceRelease.hasDraftChanges
+                  ? `调整态基于 ${workspaceRelease.stableReleaseId}，生产仍运行 Stable`
+                  : `生产稳定版本 ${workspaceRelease.stableReleaseId}`
+                : "尚未创建不可变稳定版本"}
+            >
+              <span className="material-symbols-outlined" aria-hidden>
+                {workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "edit_note" : "verified") : "new_releases"}
+              </span>
+              {workspaceRelease.enabled
+                ? workspaceRelease.hasDraftChanges
+                  ? `调整中 · Stable ${workspaceRelease.stableReleaseId}`
+                  : `Stable ${workspaceRelease.stableReleaseId}`
+                : "未发布"}
+            </button>
+          ) : null}
           {adminReview ? (
             <span className="af-workspace-admin-review-badge" title="管理员审阅模式不会修改、运行或加入该 Workspace">
               <span className="material-symbols-outlined" aria-hidden>visibility</span>
@@ -15452,6 +15551,39 @@ function WorkspacePageInner() {
             >
               <span className="af-workspace-sync-light__dot" aria-hidden />
             </span>
+          ) : null}
+          {!isWorkflowMode && !workspaceIsTransientDraft && workspaceRelease ? (
+            <>
+              <button
+                type="button"
+                className="af-workspace-display-share-btn"
+                onClick={() => {
+                  setWorkspaceReleaseError("");
+                  setWorkspaceReleaseOpen(true);
+                }}
+                title="查看 Stable 与版本历史"
+              >
+                <span className="material-symbols-outlined" aria-hidden>history</span>
+                版本
+              </button>
+              {canManageCurrentFlow ? (
+                <button
+                  type="button"
+                  className="af-workspace-display-share-btn af-workspace-release-publish-btn"
+                  disabled={workspaceReleaseBusy || (workspaceRelease.enabled && !workspaceRelease.hasDraftChanges)}
+                  onClick={() => {
+                    setWorkspaceReleaseError("");
+                    setWorkspaceReleaseOpen(true);
+                  }}
+                  title={workspaceRelease.enabled && !workspaceRelease.hasDraftChanges
+                    ? "当前调整态与 Stable 一致"
+                    : "保存调整态并发布为新的不可变 Stable"}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>publish</span>
+                  {workspaceReleaseBusy ? "发布中" : "发布 Stable"}
+                </button>
+              ) : null}
+            </>
           ) : null}
           {!isWorkflowMode && workspaceConflict ? (
             <button
@@ -16639,6 +16771,126 @@ function WorkspacePageInner() {
           </div>,
           document.body,
         ) : null}
+        {workspaceReleaseOpen && workspaceRelease ? createPortal(
+          <div className="af-flow-snippet-modal-overlay" onMouseDown={() => !workspaceReleaseBusy && setWorkspaceReleaseOpen(false)}>
+            <div
+              className="af-flow-snippet-modal af-workspace-release-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Workspace 版本"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>deployed_code_history</span>
+                  Stable 与版本历史
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  disabled={workspaceReleaseBusy}
+                  onClick={() => setWorkspaceReleaseOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <div className={`af-workspace-release-summary ${workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "is-draft" : "is-stable") : "is-unreleased"}`}>
+                  <span className="material-symbols-outlined" aria-hidden>
+                    {workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "edit_note" : "verified") : "new_releases"}
+                  </span>
+                  <div>
+                    <strong>
+                      {workspaceRelease.enabled
+                        ? workspaceRelease.hasDraftChanges
+                          ? `调整态 · 生产仍运行 ${workspaceRelease.stableReleaseId}`
+                          : `生产稳定版本 ${workspaceRelease.stableReleaseId}`
+                        : "尚未发布 Stable"}
+                    </strong>
+                    <small>
+                      {workspaceRelease.enabled
+                        ? workspaceRelease.hasDraftChanges
+                          ? "当前 Workspace 的修改不会影响定时任务，发布后才切换生产版本。"
+                          : "当前 Workspace 与生产稳定版本一致。后续修改会自动进入调整态。"
+                        : "首次发布前保持兼容模式：定时任务仍读取当前 Workspace。"}
+                    </small>
+                  </div>
+                </div>
+
+                {canManageCurrentFlow && (!workspaceRelease.enabled || workspaceRelease.hasDraftChanges) ? (
+                  <label className="af-flow-snippet-field">
+                    <span>发布说明</span>
+                    <textarea
+                      value={workspaceReleaseNotes}
+                      onChange={(event) => setWorkspaceReleaseNotes(event.target.value)}
+                      placeholder="本次调整了什么、试运行结果如何（可选）"
+                      rows={3}
+                    />
+                  </label>
+                ) : null}
+
+                {workspaceReleaseError ? <div className="af-flow-snippet-error">{workspaceReleaseError}</div> : null}
+
+                <div className="af-workspace-release-list">
+                  <div className="af-workspace-release-list__head">
+                    <strong>不可变 Release</strong>
+                    <span>{workspaceRelease.releases?.length || 0} 个版本</span>
+                  </div>
+                  {(workspaceRelease.releases || []).length === 0 ? (
+                    <div className="af-workspace-release-empty">发布后，版本会保存在这里并支持一键回退。</div>
+                  ) : (workspaceRelease.releases || []).map((release) => {
+                    const stable = release.id === workspaceRelease.stableReleaseId;
+                    return (
+                      <article key={release.id} className={`af-workspace-release-item ${stable ? "is-stable" : ""}`}>
+                        <div className="af-workspace-release-item__version">
+                          <span className="material-symbols-outlined" aria-hidden>{stable ? "verified" : "deployed_code"}</span>
+                          <strong>{release.id}</strong>
+                          {stable ? <em>Stable</em> : null}
+                        </div>
+                        <div className="af-workspace-release-item__meta">
+                          <span>{release.createdBy || "unknown"} · {release.createdAt ? new Date(release.createdAt).toLocaleString() : "-"}</span>
+                          <code>{release.designRevision || "-"}</code>
+                          {release.notes ? <p>{release.notes}</p> : null}
+                        </div>
+                        {canManageCurrentFlow && !stable ? (
+                          <button
+                            type="button"
+                            disabled={workspaceReleaseBusy}
+                            onClick={() => void rollbackStableRelease(release.id)}
+                          >
+                            回退到此版本
+                          </button>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  disabled={workspaceReleaseBusy}
+                  onClick={() => setWorkspaceReleaseOpen(false)}
+                >
+                  关闭
+                </button>
+                {canManageCurrentFlow && (!workspaceRelease.enabled || workspaceRelease.hasDraftChanges) ? (
+                  <button
+                    type="button"
+                    className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                    disabled={workspaceReleaseBusy}
+                    onClick={() => void publishStableRelease()}
+                  >
+                    {workspaceReleaseBusy ? "正在发布…" : workspaceRelease.enabled ? "发布为新 Stable" : "发布首个 Stable"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
         {workspaceConflictOpen && workspaceConflict ? createPortal(
           <div className="af-flow-snippet-modal-overlay">
             <div className="af-flow-snippet-modal af-workspace-conflict-modal" role="dialog" aria-modal="true" aria-label="解决 Workspace 冲突">
@@ -16945,12 +17197,14 @@ function WorkspacePageInner() {
                     >
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
-                    >
-                      加入空间
-                    </button>
+                    {SPACES_UI_ENABLED ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                      >
+                        加入空间
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
@@ -17008,13 +17262,15 @@ function WorkspacePageInner() {
                       <span className="material-symbols-outlined" aria-hidden>{displayLinkCopyState === "copied" ? "check" : "content_copy"}</span>
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden>library_add</span>
-                      加入空间
-                    </button>
+                    {SPACES_UI_ENABLED ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>library_add</span>
+                        加入空间
+                      </button>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="af-display-link-modal__empty">还没有生成展示链接</div>

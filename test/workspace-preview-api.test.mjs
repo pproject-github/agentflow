@@ -41,7 +41,12 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
     };
     const response = await fetch(`${baseUrl}/api/workspace/preview`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        "Content-Type": "application/json",
+        "X-Forwarded-Host": "ai.mengma.bigo.inner",
+        "X-Forwarded-Proto": "https",
+      },
       body: JSON.stringify({ graph, title: "Hello World Preview", ttlSeconds: 60 }),
     });
     assert.equal(response.status, 200);
@@ -49,7 +54,10 @@ test("workspace-preview uploads a hidden TTL-bound graph and returns a Workspace
     assert.equal(payload.preview, true);
     assert.equal(payload.flowSource, "workspace");
     assert.equal(payload.archived, true);
-    assert.match(payload.url, new RegExp(`/workspace\\?flowId=${payload.flowId}\\&flowSource=workspace\\&archived=1`));
+    assert.equal(
+      payload.url,
+      `https://ai.mengma.bigo.inner/workspace?flowId=${payload.flowId}&flowSource=workspace&archived=1`,
+    );
 
     // 预览不是 personal Flow：创建者与浏览器当前登录用户可以不同。链接本身随机且带 TTL，
     // 服务端把它作为 archived Workspace 只读暴露。

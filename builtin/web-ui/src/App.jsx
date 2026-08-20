@@ -63,6 +63,14 @@ function RedirectFlowToWorkspace() {
   return null;
 }
 
+function RedirectLegacyResourceToMarketplace({ kind, scope }) {
+  const { navigate } = useRoute();
+  useEffect(() => {
+    navigate(`/marketplace?kind=${encodeURIComponent(kind)}&scope=${encodeURIComponent(scope)}`);
+  }, [kind, navigate, scope]);
+  return null;
+}
+
 class UiErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -105,9 +113,9 @@ function RoutedContent({ authUser }) {
   if (path === "/projects" || path === "/") return <ProjectsPage authUser={authUser} />;
   if (path === "/marketplace") return <MarketplacePage authUser={authUser} />;
   if (path === "/spaces") return <SpacesPage authUser={authUser} />;
-  if (path === "/nodes") return <ProjectsPage authUser={authUser} resourceKind="nodes" />;
-  if (path === "/my-nodes") return <ProjectsPage authUser={authUser} resourceKind="my-nodes" />;
-  if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
+  if (path === "/nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="installed" />;
+  if (path === "/my-nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="owned" />;
+  if (path === "/my-flows") return <RedirectLegacyResourceToMarketplace kind="flow" scope="owned" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage authUser={authUser} />;

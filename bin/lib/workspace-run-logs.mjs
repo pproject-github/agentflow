@@ -90,6 +90,8 @@ function indexRecord(meta = {}, patch = {}) {
     flowSource: String(meta.flowSource || "user"),
     scheduleNodeId: String(meta.scheduleNodeId || ""),
     runNodeId: String(meta.runNodeId || ""),
+    releaseId: String(meta.releaseId || ""),
+    designRevision: String(meta.designRevision || ""),
     scheduled: meta.scheduled === true,
     trigger: String(meta.trigger || (meta.scheduled === true ? "scheduled" : "manual")),
     label: String(meta.label || ""),

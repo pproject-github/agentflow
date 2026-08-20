@@ -8,6 +8,7 @@ import {
   listMarketplaceFlows,
   listMarketplacePackages,
   publishMarketplaceFlow,
+  publishFlowSnippet,
   publishNodePackage,
   readMarketplaceFlow,
   setMarketplaceVisibility,
@@ -140,6 +141,15 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
       version: "1.0.0",
       graph: { instances: {}, edges: [] },
     }, { userId: owner.user.userId });
+    publishFlowSnippet(root, {
+      id: "useful-snippet",
+      version: "1.0.0",
+      displayName: "Useful Snippet",
+      snippet: {
+        instances: { first: { definitionId: "a" }, second: { definitionId: "b" } },
+        edges: [{ source: "first", target: "second" }],
+      },
+    }, { userId: owner.user.userId });
     recordMarketplaceRunUsage(root, [{ kind: "flow", id: "more-used", version: "1.0.0" }], {
       status: "success",
       runId: "market-run-1",
@@ -163,10 +173,39 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const body = await response.json();
     assert.equal(body.sort, "useCount");
     assert.equal(body.order, "desc");
-    assert.deepEqual(body.items.map((item) => item.id), ["more-used", "less-used"]);
+    assert.deepEqual(body.items.filter((item) => item.resourceType === "flow").map((item) => item.id), ["more-used", "less-used"]);
     assert.equal(body.items[0].useCount, 2);
     assert.equal(body.items[0].installCount, 0);
     assert.equal(body.items[0].uniqueUserCount, 1);
+
+    const ownedResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&scope=owned&q=snippet`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(ownedResponse.status, 200);
+    const ownedBody = await ownedResponse.json();
+    assert.equal(ownedBody.items.length, 1);
+    assert.equal(ownedBody.items[0].resourceType, "flow-snippet");
+
+    const installResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/install`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "more-used", version: "1.0.0", flowId: "installed-market-flow" }),
+    });
+    assert.equal(installResponse.status, 201);
+    const installedResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&scope=installed`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    assert.equal(installedResponse.status, 200);
+    const installedBody = await installedResponse.json();
+    assert.deepEqual(installedBody.items.map((item) => item.id), ["more-used"]);
+    assert.deepEqual(installedBody.items[0].installedFlowIds, ["installed-market-flow"]);
+
+    const installedNodesResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=node&scope=installed`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    assert.equal(installedNodesResponse.status, 200);
+    const installedNodesBody = await installedNodesResponse.json();
+    assert.ok(installedNodesBody.items.some((item) => item.localCatalog === true));
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

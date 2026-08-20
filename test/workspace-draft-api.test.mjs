@@ -80,10 +80,10 @@ test("draft is hidden, editable, runnable, schedule-suppressed, and promotable",
     });
     const base = `http://127.0.0.1:${server.address().port}`;
     const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
-    const request = async (method, pathname, body) => {
+    const request = async (method, pathname, body, additionalHeaders = {}) => {
       const response = await fetch(base + pathname, {
         method,
-        headers,
+        headers: { ...headers, ...additionalHeaders },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const text = await response.text();
@@ -92,10 +92,23 @@ test("draft is hidden, editable, runnable, schedule-suppressed, and promotable",
       return { status: response.status, body: payload, text };
     };
 
-    const created = await request("POST", "/api/workspace/draft", { graph, title: "Runnable draft", ttlSeconds: 600 });
+    const proxyHeaders = {
+      "X-Forwarded-Host": "ai.mengma.bigo.inner",
+      "X-Forwarded-Proto": "https",
+    };
+    const created = await request(
+      "POST",
+      "/api/workspace/draft",
+      { graph, title: "Runnable draft", ttlSeconds: 600 },
+      proxyHeaders,
+    );
     assert.equal(created.status, 200, created.text);
     assert.equal(created.body.draft, true);
     assert.equal(created.body.schedulesSuppressed, true);
+    assert.equal(
+      created.body.url,
+      `https://ai.mengma.bigo.inner/workspace?flowId=${encodeURIComponent(created.body.draftId)}&flowSource=user`,
+    );
     const draftId = created.body.draftId;
 
     const missingRevision = await request("POST", "/api/workspace/draft", { draftId, graph });
@@ -147,13 +160,22 @@ test("draft is hidden, editable, runnable, schedule-suppressed, and promotable",
     const draftSchedules = await request("GET", `/api/workspace/schedules?flowId=${encodeURIComponent(draftId)}&flowSource=user`);
     assert.deepEqual(draftSchedules.body.schedules, []);
 
-    const promoted = await request("POST", "/api/workspace/draft/publish", {
-      draftId,
-      flowId: "publishedDraft",
-      targetSpace: "personal",
-      scheduleMode: "enabled",
-    });
+    const promoted = await request(
+      "POST",
+      "/api/workspace/draft/publish",
+      {
+        draftId,
+        flowId: "publishedDraft",
+        targetSpace: "personal",
+        scheduleMode: "enabled",
+      },
+      proxyHeaders,
+    );
     assert.equal(promoted.status, 200, promoted.text);
+    assert.equal(
+      promoted.body.url,
+      "https://ai.mengma.bigo.inner/workspace?flowId=publishedDraft&flowSource=user",
+    );
     assert.equal(promoted.body.workspaceSchedules.length, 1);
     assert.equal(promoted.body.workspaceSchedules[0].enabled, true);
     assert.ok(promoted.body.workspaceSchedules[0].nextRunAt);

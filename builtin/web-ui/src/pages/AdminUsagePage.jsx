@@ -120,6 +120,26 @@ export default function AdminUsagePage({ authUser }) {
     navigate(`/workspace?${query.toString()}`);
   }, [navigate, workspaceOwner?.userId]);
 
+  const canOpenRunFlow = useCallback((run) => {
+    const flowSource = String(run?.flowSource || "user").trim();
+    return Boolean(
+      String(run?.userId || "").trim()
+      && String(run?.flowId || "").trim()
+      && (flowSource === "user" || flowSource === "workspace"),
+    );
+  }, []);
+
+  const openRunFlow = useCallback((run) => {
+    if (!canOpenRunFlow(run)) return;
+    const query = new URLSearchParams({
+      flowId: String(run.flowId).trim(),
+      flowSource: String(run.flowSource || "user").trim() || "user",
+      adminOwnerId: String(run.userId).trim(),
+    });
+    if (run?.archived) query.set("archived", "1");
+    navigate(`/workspace?${query.toString()}`);
+  }, [canOpenRunFlow, navigate]);
+
   useEffect(() => {
     void loadUsage();
   }, [loadUsage]);
@@ -301,24 +321,36 @@ export default function AdminUsagePage({ authUser }) {
                 <tr
                   key={`${run.userId}:${run.flowSource}:${run.flowId}:${run.runId}:${run.at}`}
                   className="af-admin-usage-run-row"
-                  role="button"
-                  tabIndex={0}
                   title="查看 Run 过程与 Thinking"
                   onClick={() => setSelectedRun(run)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setSelectedRun(run);
-                    }
-                  }}
                 >
                   <td>
                     <strong>{run.username || run.userId || "-"}</strong>
                     <span>{run.userId || "-"}</span>
                   </td>
                   <td>
-                    <strong>{run.flowId || "-"}</strong>
-                    <span>{run.runType === "workspace" ? "Workspace Run" : "Pipeline"} · {run.flowSource || "user"}</span>
+                    {canOpenRunFlow(run) ? (
+                      <button
+                        type="button"
+                        className="af-admin-usage-flow-link"
+                        title={`只读查看 ${run.flowId}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openRunFlow(run);
+                        }}
+                      >
+                        <strong>{run.flowId || "-"}</strong>
+                        <span>
+                          {run.runType === "workspace" ? "Workspace Run" : "Pipeline"} · {run.flowSource || "user"}
+                          <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        <strong>{run.flowId || "-"}</strong>
+                        <span>{run.runType === "workspace" ? "Workspace Run" : "Pipeline"} · {run.flowSource || "user"}</span>
+                      </>
+                    )}
                   </td>
                   <td>
                     <strong>{formatTime(run.at)}</strong>
@@ -331,10 +363,18 @@ export default function AdminUsagePage({ authUser }) {
                   </td>
                   <td>{formatDurationShort(run.durationMs)}</td>
                   <td>
-                    <span className="af-admin-usage-run-link">
+                    <button
+                      type="button"
+                      className="af-admin-usage-run-link"
+                      title={`查看 Run ${run.runId}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedRun(run);
+                      }}
+                    >
                       <code className="af-admin-usage-run-id" title={run.runId}>{formatRunId(run.runId)}</code>
-                      <span className="material-symbols-outlined" aria-hidden>open_in_new</span>
-                    </span>
+                      <span className="material-symbols-outlined" aria-hidden>receipt_long</span>
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -468,7 +508,11 @@ export default function AdminUsagePage({ authUser }) {
       ) : null}
 
       {selectedRun ? (
-        <AdminRunDetailDrawer run={selectedRun} onClose={() => setSelectedRun(null)} />
+        <AdminRunDetailDrawer
+          run={selectedRun}
+          onClose={() => setSelectedRun(null)}
+          onOpenFlow={canOpenRunFlow(selectedRun) ? () => openRunFlow(selectedRun) : null}
+        />
       ) : null}
     </main>
   );
