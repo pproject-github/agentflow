@@ -11,7 +11,7 @@
  *    是请求回调的闭包，解构之后路由体里的写法完全不变。
  */
 
-import { listFlowsJson, listNodesJson, readNodeDetailJson, readNodeFilePreview } from "./catalog-flows.mjs";
+import { listNodesJson, readNodeDetailJson, readNodeFilePreview } from "./catalog-flows.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
@@ -30,28 +30,36 @@ import {
 } from "./marketplace.mjs";
 import {
   appendMarketplaceUsageEvent,
-  marketplaceStatsFor,
-  marketplaceUsageStats,
   marketplaceResourcesForRun,
-  readMarketplaceFlowOrigin,
   writeMarketplaceFlowOrigin,
 } from "./marketplace-usage.mjs";
+import {
+  indexedProjectFlowPreview,
+  getRepositoryIndex,
+  indexedMarketplaceFlowCopies,
+  listIndexedNodes,
+  listIndexedProjectFlows,
+  markRepositoryIndexDirty,
+  updateIndexedProjectFlowVisibility,
+  updateIndexedNodeVisibility,
+  writeProjectFlowMarketplaceMetadata,
+} from "./repository-index.mjs";
 import { NODE_PACKAGE_ENTRY, nodePackageExportsRun, readNodePackageManifest } from "./node-package-manifest.mjs";
 import { inspectNodePackageDirectory } from "./node-package-archive.mjs";
 import { json, readBody } from "./http-util.mjs";
 import { log } from "./log.mjs";
-import { PACKAGE_ROOT, PIPELINES_DIR, getAgentflowUserDataRoot, getUserPipelinesRoot, listAgentflowUserIds } from "./paths.mjs";
+import { PACKAGE_ROOT, PIPELINES_DIR, getAgentflowUserDataRoot, getUserPipelinesRoot } from "./paths.mjs";
 import { validateUserPipelineId } from "./flow-write.mjs";
 import { runLedgerId } from "./run-ledger.mjs";
 import { getTeamById, getTeamForUser } from "./teams.mjs";
 import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
-import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, deleteWorkspaceCollaborationForFlow, ensureWorkspaceCollaboration, getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
+import { acceptWorkspaceCollaborationInvite, addWorkspaceCollaborationMember, deleteWorkspaceCollaborationForFlow, ensureWorkspaceCollaboration, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, removeWorkspaceCollaborationMember, removeWorkspaceCollaborationTeamShare, setWorkspaceCollaborationTeamShare, workspaceCollaborationAccess } from "./workspace-collaboration.mjs";
 import { WorkspaceFlowParseError } from "./workspace-flow-store.mjs";
 import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision } from "./workspace-graph-merge.mjs";
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceRunUsageRecords, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
@@ -1076,196 +1084,8 @@ function workspaceBufferLooksLikeZip(buf) {
   );
 }
 
-function installedMarketplaceFlowCopies(userId) {
-  const copies = new Map();
-  const pipelinesRoot = getUserPipelinesRoot(userId);
-  if (!fs.existsSync(pipelinesRoot)) return copies;
-  for (const entry of fs.readdirSync(pipelinesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const origin = readMarketplaceFlowOrigin(path.join(pipelinesRoot, entry.name));
-    if (!origin) continue;
-    const key = `${origin.id}@${origin.version}`;
-    const flowIds = copies.get(key) || [];
-    flowIds.push(entry.name);
-    copies.set(key, flowIds);
-  }
-  return copies;
-}
-
-const PROJECT_FLOW_MARKETPLACE_FILENAME = path.join(".workspace", "agentflow", "marketplace.json");
-
-function projectFlowMarketplaceId(ownerUserId, flowSource, flowId) {
-  return `project-flow:${String(ownerUserId || "").trim()}:${String(flowSource || "user").trim()}:${String(flowId || "").trim()}`;
-}
-
-function projectFlowMarketplaceMetadataPath(flowRoot) {
-  return path.join(path.resolve(flowRoot), PROJECT_FLOW_MARKETPLACE_FILENAME);
-}
-
-function readProjectFlowMarketplaceMetadata(flowRoot) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(projectFlowMarketplaceMetadataPath(flowRoot), "utf-8"));
-    return {
-      visibility: String(parsed?.visibility || "").trim() === "private" ? "private" : "public",
-      updatedAt: String(parsed?.updatedAt || "").trim(),
-    };
-  } catch {
-    return { visibility: "public", updatedAt: "" };
-  }
-}
-
-function writeProjectFlowMarketplaceMetadata(flowRoot, visibility) {
-  const filePath = projectFlowMarketplaceMetadataPath(flowRoot);
-  const value = {
-    version: 1,
-    visibility: String(visibility || "").trim() === "private" ? "private" : "public",
-    updatedAt: new Date().toISOString(),
-  };
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-  fs.renameSync(tempPath, filePath);
-  return value;
-}
-
-function runnableProjectFlowEntries(graph, scopedRoot = "") {
-  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const entries = Object.entries(instances).filter(([, instance]) => (
-    instance?.definitionId === "workspace_run"
-    || instance?.definitionId === "workspace_scheduled_run"
-  ));
-  return entries.flatMap(([entryId, entry]) => {
-    let plan;
-    try {
-      plan = workspaceRunPlan(graph, entryId, scopedRoot, { ignoreCache: true });
-    } catch {
-      return [];
-    }
-    const executedNodeIds = Array.from(new Set((plan.order || []).map((id) => String(id || "").trim()).filter(Boolean)));
-    if (executedNodeIds.length === 0) return [];
-    const includedNodeIds = new Set([entryId, ...executedNodeIds]);
-    const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object"
-      ? Object.fromEntries(Object.entries(graph.ui.nodePositions).filter(([id]) => includedNodeIds.has(id)))
-      : {};
-    const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object"
-      ? Object.fromEntries(Object.entries(graph.ui.nodeSizes).filter(([id]) => includedNodeIds.has(id)))
-      : {};
-    return [{
-      entryId,
-      entry,
-      runMode: entry.definitionId === "workspace_scheduled_run" ? "scheduled" : "manual",
-      graph: {
-        ...graph,
-        instances: Object.fromEntries(Object.entries(instances).filter(([id]) => includedNodeIds.has(id))),
-        edges: (Array.isArray(graph?.edges) ? graph.edges : []).filter((edge) => (
-          includedNodeIds.has(String(edge?.source || ""))
-          && includedNodeIds.has(String(edge?.target || ""))
-        )),
-        ui: {
-          ...(graph?.ui || {}),
-          nodePositions: positions,
-          nodeSizes: sizes,
-        },
-      },
-    }];
-  });
-}
-
-function projectFlowUpdatedAt(flowRoot, metadata = {}) {
-  if (metadata.updatedAt) return metadata.updatedAt;
-  try {
-    return fs.statSync(path.resolve(flowRoot)).mtime.toISOString();
-  } catch {
-    return "";
-  }
-}
-
 function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope = "all") {
-  const requestedUserId = String(userCtx.userId || "").trim();
-  const stats = marketplaceUsageStats(workspaceRoot);
-  const runUsage = readWorkspaceRunUsageRecords();
-  const resources = [];
-  const appendFlow = (ownerId, flow, flowSource = "user", workspaceId = "") => {
-    if (!ownerId || (scope === "owned" && ownerId !== requestedUserId)) return;
-    if (flow.archived || !flow.path) return;
-    let stable;
-    let graph;
-    try {
-      stable = readWorkspaceStableRelease(flow.path, workspaceRoot);
-      graph = stable?.graph || readWorkspaceGraph(flow.path, workspaceRoot).graph;
-    } catch {
-      return;
-    }
-    const runnableEntries = runnableProjectFlowEntries(graph, flow.path);
-    if (runnableEntries.length === 0) return;
-    const metadata = readProjectFlowMarketplaceMetadata(flow.path);
-    const owned = ownerId === requestedUserId;
-    if (scope !== "owned" && metadata.visibility === "private" && !owned && userCtx.isAdmin !== true) return;
-    for (const runnable of runnableEntries) {
-      const baseId = projectFlowMarketplaceId(ownerId, flowSource, flow.id);
-      const id = runnableEntries.length === 1 ? baseId : `${baseId}:${runnable.entryId}`;
-      const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
-      const rawEntryLabel = String(runnable.entry?.label || "").trim();
-      const genericLabel = ["", "Run", "Scheduled Run", "运行", "定时运行"].includes(rawEntryLabel);
-      const directRuns = runUsage.filter((run) => (
-        run.status === "success"
-        && run.flowId === flow.id
-        && (run.flowSource || "user") === flowSource
-        && (flowSource !== "user" || run.userId === ownerId)
-        && (run.runNodeId ? run.runNodeId === runnable.entryId : runnableEntries.length === 1)
-      ));
-      const telemetry = marketplaceStatsFor(stats, "project-flow", id, version);
-      const directLastUsedAt = directRuns.reduce((latest, run) => {
-        const value = new Date(Number(run.endedAt || run.at || 0)).toISOString();
-        return !latest || value > latest ? value : latest;
-      }, "");
-      resources.push({
-        resourceType: "flow",
-        projectFlow: true,
-        id,
-        definitionId: `${flow.id}/${runnable.entryId}`,
-        displayName: runnableEntries.length === 1
-          ? flow.id
-          : `${flow.id} · ${genericLabel ? runnable.entryId : rawEntryLabel}`,
-        description: flow.description || "",
-        version,
-        versionLabel: stable?.release?.id ? `Stable ${stable.release.id}` : "当前版本",
-        runMode: runnable.runMode,
-        runModeLabel: runnable.runMode === "scheduled" ? "定时运行" : "手动运行",
-        ownerUserId: ownerId,
-        liveOwnerUserId: ownerId,
-        liveFlowId: flow.id,
-        liveFlowSource: flowSource,
-        liveWorkspaceId: workspaceId,
-        liveEntryId: runnable.entryId,
-        installFlowId: runnableEntries.length === 1 ? flow.id : `${flow.id}-${runnable.entryId}`,
-        visibility: metadata.visibility,
-        nodeCount: Object.keys(runnable.graph?.instances || {}).length,
-        edgeCount: Array.isArray(runnable.graph?.edges) ? runnable.graph.edges.length : 0,
-        updatedAt: projectFlowUpdatedAt(flow.path, metadata),
-        ...telemetry,
-        useCount: telemetry.useCount + directRuns.length,
-        lastUsedAt: [telemetry.lastUsedAt, directLastUsedAt].filter(Boolean).sort().at(-1) || "",
-        _graph: runnable.graph,
-        _flowRoot: flow.path,
-      });
-    }
-  };
-  for (const ownerUserId of listAgentflowUserIds()) {
-    const ownerId = String(ownerUserId || "").trim();
-    for (const flow of listFlowsJson(workspaceRoot, { userId: ownerId })) {
-      if ((flow.source || "user") !== "user" || flow.archived || !flow.path) continue;
-      appendFlow(ownerId, flow, "user");
-    }
-  }
-  for (const flow of listFlowsJson(workspaceRoot, { userId: "", includeWorkspaceFlows: true })) {
-    if ((flow.source || "") !== "workspace" || flow.archived || !flow.path) continue;
-    const collaboration = getWorkspaceCollaborationByFlow(flow.id, false);
-    const ownerId = String(collaboration?.ownerId || "").trim();
-    if (!ownerId) continue;
-    appendFlow(ownerId, flow, "workspace", collaboration.id);
-  }
-  return resources;
+  return listIndexedProjectFlows(workspaceRoot, userCtx, scope);
 }
 
 function publicProjectFlowMarketplaceResource(resource) {
@@ -1293,6 +1113,20 @@ function sortMarketplaceResources(items) {
     || String(a.displayName || a.id).localeCompare(String(b.displayName || b.id))
     || String(b.version || "").localeCompare(String(a.version || ""), undefined, { numeric: true, sensitivity: "base" })
   ));
+}
+
+function paginateMarketplaceResources(items, url, defaultLimit = 24) {
+  const requestedLimit = Number(url.searchParams.get("limit") || defaultLimit);
+  const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : defaultLimit));
+  const requestedCursor = Number(url.searchParams.get("cursor") || 0);
+  const offset = Math.max(0, Number.isFinite(requestedCursor) ? Math.floor(requestedCursor) : 0);
+  const pageItems = items.slice(offset, offset + limit);
+  const nextOffset = offset + pageItems.length;
+  return {
+    items: pageItems,
+    total: items.length,
+    nextCursor: nextOffset < items.length ? String(nextOffset) : "",
+  };
 }
 
 /**
@@ -1357,6 +1191,7 @@ async function workspaceRoutes(req, res, ctx) {
       }
       try {
         const result = publishNodePackageArchive(root, parsed.file, { ownerUserId: userCtx.userId });
+        if (result.ok) markRepositoryIndexDirty(root);
         json(res, result.ok ? (result.alreadyExists ? 200 : 201) : (result.conflict ? 409 : 400), result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -1389,6 +1224,7 @@ async function workspaceRoutes(req, res, ctx) {
           actorUserId: userCtx.userId || "",
           eventId: `install:node:${id}@${version}:${userCtx.userId || "anonymous"}`,
         });
+        markRepositoryIndexDirty(root);
         res.writeHead(200, {
           "Content-Type": "application/zip",
           "Content-Length": result.archive.length,
@@ -1412,7 +1248,7 @@ async function workspaceRoutes(req, res, ctx) {
         const marketplaceScope = scope === "owned" ? "owned" : "all";
         const queryText = String(url.searchParams.get("q") || "").trim().toLowerCase();
         if (kind === "node") {
-          const marketplaceNodes = listMarketplacePackages(root, { ...userCtx, marketplaceScope }).nodes
+          const marketplaceNodes = listIndexedNodes(root, userCtx, marketplaceScope)
             .map((node) => ({ ...node, resourceType: "node", installed: true }));
           let nodes = marketplaceNodes;
           if (scope === "installed") {
@@ -1443,14 +1279,23 @@ async function workspaceRoutes(req, res, ctx) {
             });
           }
           nodes = sortMarketplaceResources(nodes.filter((item) => marketplaceResourceMatches(item, queryText)));
-          json(res, 200, { kind, scope, sort: "useCount", order: "desc", items: nodes });
+          const page = paginateMarketplaceResources(nodes, url);
+          const index = getRepositoryIndex(root);
+          json(res, 200, {
+            kind,
+            scope,
+            sort: "useCount",
+            order: "desc",
+            ...page,
+            index: { status: "ready", generatedAt: index.generatedAt },
+          });
           return;
         }
         if (kind !== "flow") {
           json(res, 400, { error: "kind must be flow or node" });
           return;
         }
-        const installedCopies = installedMarketplaceFlowCopies(userCtx.userId);
+        const installedCopies = indexedMarketplaceFlowCopies(root, userCtx.userId);
         const projectFlows = listRunnableProjectMarketplaceFlows(root, userCtx, scope).map((flow) => {
           const installedFlowIds = installedCopies.get(`${flow.id}@${flow.version}`) || [];
           return publicProjectFlowMarketplaceResource({
@@ -1464,7 +1309,16 @@ async function workspaceRoutes(req, res, ctx) {
             .filter((item) => scope !== "installed" || item.installed)
             .filter((item) => marketplaceResourceMatches(item, queryText)),
         );
-        json(res, 200, { kind, scope, sort: "useCount", order: "desc", items });
+        const page = paginateMarketplaceResources(items, url);
+        const index = getRepositoryIndex(root);
+        json(res, 200, {
+          kind,
+          scope,
+          sort: "useCount",
+          order: "desc",
+          ...page,
+          index: { status: "ready", generatedAt: index.generatedAt },
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -1517,7 +1371,7 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       try {
-        const installedCopies = installedMarketplaceFlowCopies(userCtx.userId);
+        const installedCopies = indexedMarketplaceFlowCopies(root, userCtx.userId);
         if (projectFlow) {
           const source = listRunnableProjectMarketplaceFlows(root, userCtx, "all")
             .find((flow) => flow.id === id);
@@ -1529,13 +1383,19 @@ async function workspaceRoutes(req, res, ctx) {
             json(res, 409, { error: "该流程已有新版本，请刷新流程仓库后重试" });
             return;
           }
+          const preview = indexedProjectFlowPreview(root, source);
+          if (!preview || preview.stale) {
+            markRepositoryIndexDirty(root);
+            json(res, preview?.stale ? 409 : 404, { error: preview?.stale ? "该流程已有新版本，请刷新流程仓库后重试" : "Project flow preview is unavailable" });
+            return;
+          }
           json(res, 200, {
             flow: {
               ...publicProjectFlowMarketplaceResource(source),
               owned: source.ownerUserId === userCtx.userId,
               installedFlowIds: installedCopies.get(`${id}@${version}`) || [],
             },
-            graph: source._graph,
+            graph: preview.graph,
           });
           return;
         }
@@ -1580,11 +1440,11 @@ async function workspaceRoutes(req, res, ctx) {
         return;
       }
       try {
-        const installedCopies = installedMarketplaceFlowCopies(userCtx.userId);
+        const installedCopies = indexedMarketplaceFlowCopies(root, userCtx.userId);
         let graph;
         let resource;
         if (previewKind === "node") {
-          const node = listMarketplacePackages(root, { ...userCtx, marketplaceScope: "all" }).nodes
+          const node = listIndexedNodes(root, userCtx, "all")
             .find((item) => item.id === id && item.version === version);
           if (!node) {
             json(res, 404, { error: "Node package not found or is private" });
@@ -1629,7 +1489,13 @@ async function workspaceRoutes(req, res, ctx) {
             json(res, 409, { error: "该流程已有新版本，请刷新流程仓库后重试" });
             return;
           }
-          graph = source._graph;
+          const preview = indexedProjectFlowPreview(root, source);
+          if (!preview || preview.stale) {
+            markRepositoryIndexDirty(root);
+            json(res, preview?.stale ? 409 : 404, { error: preview?.stale ? "该流程已有新版本，请刷新流程仓库后重试" : "Project flow preview is unavailable" });
+            return;
+          }
+          graph = preview.graph;
           resource = {
             ...publicProjectFlowMarketplaceResource(source),
             owned: source.ownerUserId === userCtx.userId,
@@ -1746,6 +1612,7 @@ async function workspaceRoutes(req, res, ctx) {
           visibility: payload?.visibility || "public",
           graph,
         }, userCtx);
+        if (result.ok) markRepositoryIndexDirty(root);
         json(res, result.ok ? (result.alreadyExists ? 200 : 201) : (result.conflict ? 409 : 400), result);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -1789,7 +1656,13 @@ async function workspaceRoutes(req, res, ctx) {
             json(res, 409, { error: "该流程已有新版本，请刷新流程仓库后重试" });
             return;
           }
-          sourceGraph = source._graph;
+          const preview = indexedProjectFlowPreview(root, source);
+          if (!preview || preview.stale) {
+            markRepositoryIndexDirty(root);
+            json(res, preview?.stale ? 409 : 404, { error: preview?.stale ? "该流程已有新版本，请刷新流程仓库后重试" : "Project flow preview is unavailable" });
+            return;
+          }
+          sourceGraph = preview.graph;
           originKind = "project-flow";
         } else {
           const source = readMarketplaceFlow(root, id, version, { ...userCtx, marketplaceScope: "all" });
@@ -1811,6 +1684,7 @@ async function workspaceRoutes(req, res, ctx) {
           actorUserId: userCtx.userId || "",
           eventId: `install:${originKind}:${id}@${version}:${userCtx.userId || "anonymous"}`,
         });
+        markRepositoryIndexDirty(root);
         json(res, 201, {
           ok: true,
           id,
@@ -1846,17 +1720,27 @@ async function workspaceRoutes(req, res, ctx) {
             return;
           }
           const metadata = writeProjectFlowMarketplaceMetadata(source._flowRoot, payload?.visibility);
+          updateIndexedProjectFlowVisibility(root, id, metadata.visibility, metadata.updatedAt);
           json(res, 200, { ok: true, kind: "project-flow", id, version: source.version, ...metadata });
           return;
         }
+        const resourceKind = String(payload?.kind || "");
+        const resourceId = String(payload?.id || "");
+        const resourceVersion = String(payload?.version || "");
+        const resourceVisibility = String(payload?.visibility || "public");
         const result = setMarketplaceVisibility(
           root,
-          String(payload?.kind || ""),
-          String(payload?.id || ""),
-          String(payload?.version || ""),
-          String(payload?.visibility || "public"),
+          resourceKind,
+          resourceId,
+          resourceVersion,
+          resourceVisibility,
           userCtx,
         );
+        if (result.ok && resourceKind === "node") {
+          updateIndexedNodeVisibility(root, resourceId, resourceVersion, resourceVisibility);
+        } else if (result.ok) {
+          markRepositoryIndexDirty(root);
+        }
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -2391,6 +2275,7 @@ async function workspaceRoutes(req, res, ctx) {
         const graph = workspaceGraphWithScheduleMode(draftGraph, payload.scheduleMode || "disabled");
         fs.mkdirSync(targetDir, { recursive: true });
         writeWorkspaceGraph(targetDir, graph, root);
+        markRepositoryIndexDirty(root);
         let collaborationCreated = false;
         if (flowSource === "workspace") {
           ensureWorkspaceCollaboration({ flowId, userId: authUser.userId });
@@ -2674,6 +2559,7 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, result.conflict ? 409 : 400, result);
           return;
         }
+        markRepositoryIndexDirty(root);
         const graph = readWorkspaceGraph(scoped.root, root).graph;
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
         broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
@@ -2722,6 +2608,7 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 404, result);
           return;
         }
+        markRepositoryIndexDirty(root);
         const graph = readWorkspaceGraph(scoped.root, root).graph;
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx);
         broadcastWorkspaceCollaborationEvent(userCtx, scoped.flowSource, scoped.flowId, scoped.archived, {
@@ -2849,6 +2736,7 @@ async function workspaceRoutes(req, res, ctx) {
           }
           throw new Error(`Workspace graph save rolled back: ${(scheduleError && scheduleError.message) || String(scheduleError)}`);
         }
+        markRepositoryIndexDirty(root);
         broadcastWorkspaceCollaborationEvent(
           userCtx,
           scoped.flowSource,
@@ -2960,6 +2848,7 @@ async function workspaceRoutes(req, res, ctx) {
         graph.instances[scheduleNodeId] = { ...instance, body: JSON.stringify(config) };
         const committed = commitWorkspaceGraph(root, scoped, graph, userCtx);
         const workspaceSchedules = syncWorkspaceSchedulesForGraph(root, scoped, committed.graph, authUser, userCtx);
+        markRepositoryIndexDirty(root);
         const schedule = workspaceSchedules.find((item) => item.scheduleNodeId === scheduleNodeId) || {
           flowId,
           flowSource,
@@ -4478,6 +4367,7 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, result.conflict ? 409 : 400, { error: result.error || "发布失败" });
           return;
         }
+        markRepositoryIndexDirty(root);
         json(res, 200, { ok: true, ...result });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

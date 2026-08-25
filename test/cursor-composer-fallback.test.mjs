@@ -7,8 +7,11 @@ import test from "node:test";
 import { runCursorAgentWithPrompt } from "../bin/lib/agent-runners.mjs";
 import {
   classifyCursorApiKeyLimitError,
+  clearCursorApiKeyCooldown,
   createCursorApiKeyAttempts,
+  cursorApiKeyCooldownMinutes,
   getCursorApiKeyModelSelection,
+  getCursorApiKeyPoolStatuses,
   isCursorAutoFallbackEligible,
   markCursorApiKeyLaneBlocked,
   recordCursorApiKeyFallbackModel,
@@ -69,6 +72,48 @@ test("only explicit Auto usage exhaustion enables the Composer lane", () => {
     modelId: "Composer Next",
     modelName: "Composer Next",
   });
+});
+
+test("Cursor key statuses expose Auto, degraded and cooling lanes without secrets", () => {
+  resetCursorApiKeyPoolForTests();
+  const records = [{ id: "status-key", name: "Status Key", key: "secret-status-key" }];
+  const now = Date.now();
+
+  assert.deepEqual(getCursorApiKeyPoolStatuses(records, now), [{
+    id: "status-key",
+    status: "available",
+    activeLane: "auto",
+    activeModelId: "auto",
+    activeModelName: "Auto",
+    degraded: false,
+    laneCooldowns: [],
+  }]);
+
+  markCursorApiKeyLaneBlocked(records[0], "auto", 30, "You're out of usage", now);
+  recordCursorApiKeyFallbackModel(records[0], {
+    id: "Composer 2.5",
+    displayName: "Composer 2.5",
+    discoveredAt: new Date(now).toISOString(),
+  });
+  const degraded = getCursorApiKeyPoolStatuses(records, now + 1)[0];
+  assert.equal(degraded.status, "available");
+  assert.equal(degraded.degraded, true);
+  assert.equal(degraded.activeLane, "fallback");
+  assert.equal(degraded.laneCooldowns[0].modelName, "Auto");
+  assert.equal(JSON.stringify(degraded).includes("secret-status-key"), false);
+
+  markCursorApiKeyLaneBlocked(records[0], "fallback", 3, "resource_exhausted", now + 2);
+  const cooling = getCursorApiKeyPoolStatuses(records, now + 3)[0];
+  assert.equal(cooling.status, "cooling_down");
+  assert.equal(cooling.laneCooldowns.length, 2);
+  assert.equal(clearCursorApiKeyCooldown(records[0]), true);
+  assert.equal(getCursorApiKeyPoolStatuses(records, now + 4)[0].status, "available");
+});
+
+test("resource_exhausted uses the short Cursor key cooldown", () => {
+  assert.equal(cursorApiKeyCooldownMinutes({}, "resource_exhausted"), 3);
+  assert.equal(cursorApiKeyCooldownMinutes({ AGENTFLOW_CURSOR_API_KEY_RESOURCE_EXHAUSTED_COOLDOWN_MINUTES: "7" }, "resource_exhausted"), 7);
+  assert.equal(cursorApiKeyCooldownMinutes({ AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES: "60" }, "429 Too Many Requests"), 60);
 });
 
 test("Cursor Auto retries the same key with the dynamically discovered Composer model", async () => {

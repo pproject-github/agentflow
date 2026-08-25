@@ -35,6 +35,7 @@ import { log } from "./log.mjs";
 import { resolveMarketplaceNodePackage } from "./marketplace.mjs";
 import { marketplaceResourcesForRun, recordMarketplaceRunUsage } from "./marketplace-usage.mjs";
 import { PACKAGE_ROOT, getAgentflowDataRoot, getAgentflowUserDataRoot, listAgentflowUserIds } from "./paths.mjs";
+import { emitRepositoryRunFinished } from "./repository-index-events.mjs";
 import { appendRunLedgerEvent, readRunLedgerEvents, runLedgerId } from "./run-ledger.mjs";
 import { computeNextRunAt } from "./schedule-config.mjs";
 import { listTeams } from "./teams.mjs";
@@ -1170,6 +1171,7 @@ export function appendWorkspaceRunFinished(record, status) {
     ...record,
     status,
   });
+  emitRepositoryRunFinished(record.workspaceRoot || record.root || "", record, status);
 }
 
 function normalizeWorkspaceUsageRecord(parsed, source = "workspace-run") {

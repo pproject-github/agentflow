@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useRoute } from "../routeContext.jsx";
 
@@ -43,36 +43,53 @@ export default function MarketplacePage({ authUser }) {
   const [scope, setScope] = useState(initialView.scope);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState([]);
+  const [nextCursor, setNextCursor] = useState("");
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const requestRef = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams({ kind, scope });
     window.history.replaceState({}, "", `/marketplace?${params}`);
   }, [kind, scope]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ cursor = "", append = false } = {}) => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ kind, scope, sort: "useCount", order: "desc" });
+      const params = new URLSearchParams({ kind, scope, sort: "useCount", order: "desc", limit: "24" });
+      if (cursor) params.set("cursor", cursor);
       if (query.trim()) params.set("q", query.trim());
-      const response = await fetch(`/api/marketplace/resources?${params}`);
+      const response = await fetch(`/api/marketplace/resources?${params}`, { signal: controller.signal });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setItems(Array.isArray(body.items) ? body.items : []);
+      const nextItems = Array.isArray(body.items) ? body.items : [];
+      setItems((current) => append ? [...current, ...nextItems] : nextItems);
+      setNextCursor(String(body.nextCursor || ""));
+      setTotal(Number(body.total || nextItems.length));
     } catch (loadError) {
-      setItems([]);
+      if (loadError?.name === "AbortError") return;
+      if (!append) setItems([]);
       setError(String(loadError?.message || loadError));
     } finally {
-      setLoading(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setLoading(false);
+      }
     }
   }, [kind, query, scope]);
 
   useEffect(() => {
-    const timer = window.setTimeout(load, 180);
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(() => void load(), 180);
+    return () => {
+      window.clearTimeout(timer);
+      requestRef.current?.abort();
+    };
   }, [load]);
 
   const openFlowPreview = useCallback(async (item) => {
@@ -182,7 +199,7 @@ export default function MarketplacePage({ authUser }) {
       </div>
 
       {error ? <div className="af-marketplace-error">{error}</div> : null}
-      {loading ? <div className="af-marketplace-empty">正在加载流程仓库…</div> : null}
+      {loading && items.length === 0 ? <div className="af-marketplace-empty">正在加载流程仓库…</div> : null}
       {!loading && items.length === 0 ? (
         <div className="af-marketplace-empty">
           {scope === "owned" ? "你还没有发布匹配的资源" : scope === "installed" ? "没有匹配的已安装或可用资源" : `没有匹配的${kind === "flow" ? "流程" : "节点"}`}
@@ -259,6 +276,14 @@ export default function MarketplacePage({ authUser }) {
           );
         })}
       </section>
+
+      {nextCursor ? (
+        <div className="af-marketplace-pagination">
+          <button type="button" disabled={loading} onClick={() => void load({ cursor: nextCursor, append: true })}>
+            {loading ? "正在加载…" : `加载更多（已显示 ${items.length} / ${total}）`}
+          </button>
+        </div>
+      ) : null}
 
     </main>
   );

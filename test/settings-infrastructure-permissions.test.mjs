@@ -11,13 +11,15 @@ test("runtime infrastructure settings are admin-only", async () => {
   fs.mkdirSync(workspaceRoot, { recursive: true });
 
   const previousHome = process.env.AGENTFLOW_HOME;
+  const previousCursorAgentCommand = process.env.CURSOR_AGENT_CMD;
   process.env.AGENTFLOW_HOME = dataRoot;
   let server;
   try {
     const nonce = Date.now();
-    const [{ loginOrCreateUser }, { readUserEnvRows, writeUserEnvRows }, { startUiServer }] = await Promise.all([
+    const [{ loginOrCreateUser }, { readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows }, cursorPool, { startUiServer }] = await Promise.all([
       import(`../bin/lib/auth.mjs?settings-permissions=${nonce}`),
       import(`../bin/lib/user-env.mjs?settings-permissions=${nonce}`),
+      import("../bin/lib/cursor-api-key-pool.mjs"),
       import(`../bin/lib/ui-server.mjs?settings-permissions=${nonce}`),
     ]);
     const admin = loginOrCreateUser("settings-admin", "admin-password");
@@ -26,6 +28,14 @@ test("runtime infrastructure settings are admin-only", async () => {
       { key: "CURSOR_API_KEYS", value: "[{\"key\":\"legacy-secret\"}]" },
       { key: "SAFE_USER_SETTING", value: "kept" },
     ]);
+    writeGlobalEnvRows([
+      {
+        key: "CURSOR_API_KEYS",
+        value: JSON.stringify([{ id: "global-key", name: "Global Key", key: "global-secret", createdAt: "2026-08-25T00:00:00.000Z" }]),
+      },
+    ]);
+    cursorPool.resetCursorApiKeyPoolForTests();
+    cursorPool.markCursorApiKeyLaneBlocked({ id: "global-key" }, "auto", 30, "429 Too Many Requests");
 
     server = await startUiServer({
       workspaceRoot,
@@ -97,10 +107,51 @@ test("runtime infrastructure settings are admin-only", async () => {
     assert.equal(adminConfig.status, 200);
     const adminEnv = await request(admin.token, "/api/user-env");
     assert.equal(adminEnv.status, 200);
+
+    const forbiddenCursorStatus = await request(ordinary.token, "/api/admin/cursor-api-keys/status?scope=global");
+    assert.equal(forbiddenCursorStatus.status, 403);
+
+    const cursorStatus = await request(admin.token, "/api/admin/cursor-api-keys/status?scope=global");
+    const cursorStatusBody = await cursorStatus.json();
+    assert.equal(cursorStatus.status, 200);
+    assert.equal(cursorStatusBody.keys[0].status, "cooling_down");
+    assert.equal(cursorStatusBody.keys[0].maskedKey.endsWith("cret"), true);
+    assert.equal(JSON.stringify(cursorStatusBody).includes("global-secret"), false);
+
+    const released = await request(admin.token, "/api/admin/cursor-api-keys/cooldown", {
+      method: "PATCH",
+      body: JSON.stringify({ id: "global-key", scope: "global" }),
+    });
+    const releasedBody = await released.json();
+    assert.equal(released.status, 200);
+    assert.equal(releasedBody.keys[0].status, "available");
+
+    const mockCursorAgent = path.join(tempRoot, "mock-cursor-agent.mjs");
+    fs.writeFileSync(mockCursorAgent, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (!args.includes("--mode") || args[args.indexOf("--mode") + 1] !== "ask" || args.includes("--force") || args.includes("--sandbox") || args.includes("--approve-mcps")) {
+  console.error("probe must use ask mode without force, sandbox override, or MCP approval");
+  process.exit(2);
+}
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "你好" }));
+`, "utf8");
+    fs.chmodSync(mockCursorAgent, 0o755);
+    process.env.CURSOR_AGENT_CMD = mockCursorAgent;
+    const tested = await request(admin.token, "/api/admin/cursor-api-keys/test", {
+      method: "POST",
+      body: JSON.stringify({ id: "global-key", scope: "global" }),
+    });
+    const testedBody = await tested.json();
+    assert.equal(tested.status, 200, JSON.stringify(testedBody));
+    assert.equal(testedBody.result.success, true);
+    assert.equal(testedBody.result.replyPreview, "你好");
+    assert.equal(typeof testedBody.keys[0].lastUsedAt, "string");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;
     else process.env.AGENTFLOW_HOME = previousHome;
+    if (previousCursorAgentCommand === undefined) delete process.env.CURSOR_AGENT_CMD;
+    else process.env.CURSOR_AGENT_CMD = previousCursorAgentCommand;
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

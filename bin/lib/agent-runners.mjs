@@ -17,6 +17,7 @@ import {
   isCursorQuotaError,
   markCursorApiKeyLaneBlocked,
   recordCursorApiKeyFallbackModel,
+  recordCursorApiKeyUsage,
 } from "./cursor-api-key-pool.mjs";
 import { discoverCursorModels } from "./cursor-model-catalog.mjs";
 import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
@@ -432,11 +433,16 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       || cursorSelection?.modelSelection
       || { lane: "auto", modelId: "auto", modelName: "Auto" };
   const model = hasExplicitModel ? requestedModel : cursorModelSelection.modelId;
+  if (cursorSelection) recordCursorApiKeyUsage(cursorSelection, cursorModelSelection);
   // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
-  const args = ["--print", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--workspace", ws];
-  const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
+  const args = ["--print", "--output-format", "stream-json"];
+  if (options.mode) args.push("--mode", String(options.mode));
+  args.push("--trust");
+  if (options.sandboxDisabled !== false) args.push("--sandbox", "disabled");
+  args.push("--workspace", ws);
+  const approveMcps = options.approveMcps ?? (process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false");
   if (approveMcps) args.push("--approve-mcps");
-  args.push("--force");
+  if (options.force !== false) args.push("--force");
   if (shouldPassCursorModelArg(model)) args.push("--model", model);
   args.push(promptText);
 
@@ -619,12 +625,17 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         if (hadToolActivity) return false;
         if (!isCursorQuotaError(errorText)) return false;
         const errorCategory = classifyCursorApiKeyLimitError(errorText);
-        const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv);
+        const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv, errorText);
         markCursorApiKeyLaneBlocked(
           cursorSelection,
           cursorModelSelection.lane,
           cooldownMinutes,
           errorText,
+          Date.now(),
+          {
+            modelId: cursorModelSelection.modelId,
+            modelName: cursorModelSelection.modelName,
+          },
         );
         const canTryComposer = !hasExplicitModel
           && cursorModelSelection.lane === "auto"

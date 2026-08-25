@@ -276,6 +276,16 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
     assert.deepEqual(multiFlows.map((item) => item.nodeCount).sort(), [2, 2]);
     assert.deepEqual(new Set(multiFlows.map((item) => item.runModeLabel)), new Set(["手动运行", "定时运行"]));
 
+    const firstPageResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&limit=1`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const firstPage = await firstPageResponse.json();
+    assert.equal(firstPageResponse.status, 200);
+    assert.equal(firstPage.items.length, 1);
+    assert.equal(firstPage.total, body.items.length);
+    assert.equal(firstPage.nextCursor, "1");
+    assert.equal(firstPage.index.status, "ready");
+
     const previewParams = new URLSearchParams({
       id: automaticFlow.id,
       version: automaticFlow.version,

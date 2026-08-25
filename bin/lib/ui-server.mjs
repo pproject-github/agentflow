@@ -67,6 +67,7 @@ import {
   publishFlowSnippet,
   publishNodeFromInstance,
 } from "./marketplace.mjs";
+import { markRepositoryIndexDirty } from "./repository-index.mjs";
 import { runGit } from "./git-worktree.mjs";
 import {
   authSetupRequired,
@@ -93,6 +94,13 @@ import {
   renderCliAuthorizationResult,
 } from "./cli-auth-page.mjs";
 import { readGlobalEnvRows, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
+import { runCursorAgentWithPrompt } from "./agent-runners.mjs";
+import {
+  clearCursorApiKeyCooldown,
+  getCursorApiKeyModelSelection,
+  getCursorApiKeyPoolStatuses,
+  parseCursorApiKeyRecords,
+} from "./cursor-api-key-pool.mjs";
 import {
   readAdminBuiltinPipelineConfig,
   updateAdminBuiltinPipelineConfig,
@@ -208,8 +216,84 @@ const MIME = {
 const ADMIN_ONLY_USER_ENV_KEYS = new Set([
   "CURSOR_API_KEYS",
   "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES",
+  "AGENTFLOW_CURSOR_API_KEY_RESOURCE_EXHAUSTED_COOLDOWN_MINUTES",
   "CURSOR_API_KEY_COOLDOWN_MINUTES",
 ]);
+const activeCursorApiKeyTests = new Set();
+
+function cursorApiKeyRowsForScope(userCtx = {}, scope = "global") {
+  const rows = scope === "user" ? readUserEnvRows(userCtx.userId) : readGlobalEnvRows();
+  const poolRow = rows.find((row) => String(row?.key || "").trim() === "CURSOR_API_KEYS");
+  return parseCursorApiKeyRecords(poolRow?.value || "");
+}
+
+function maskCursorApiKeyForAdmin(key) {
+  const value = String(key || "").trim();
+  if (!value) return "";
+  if (value.length <= 10) return `${"•".repeat(Math.max(0, value.length - 4))}${value.slice(-4)}`;
+  return `${value.slice(0, 4)}${"•".repeat(Math.min(18, value.length - 8))}${value.slice(-4)}`;
+}
+
+function cursorApiKeyAdminMetadata(userCtx = {}, scope = "global") {
+  const records = cursorApiKeyRowsForScope(userCtx, scope);
+  const statuses = new Map(getCursorApiKeyPoolStatuses(records).map((item) => [item.id, item]));
+  return records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    maskedKey: maskCursorApiKeyForAdmin(record.key),
+    createdAt: record.createdAt || "",
+    ...(statuses.get(record.id) || {}),
+  }));
+}
+
+async function probeCursorApiKey(root, record) {
+  const startedAt = Date.now();
+  const modelSelection = getCursorApiKeyModelSelection(record.id) || { lane: "auto", modelId: "auto", modelName: "Auto" };
+  const selection = { ...record, index: 0, total: 1, modelSelection };
+  let replyPreview = "";
+  let timedOut = false;
+  const handle = runCursorAgentWithPrompt(root, "你好。这是连通性测试，请不要调用任何工具，只回复“你好”。", {
+    env: { CURSOR_API_KEYS: JSON.stringify([record]), AGENTFLOW_USER_ID: "" },
+    _agentflowCursorApiKeyAttempts: [selection],
+    mode: "ask",
+    force: false,
+    sandboxDisabled: false,
+    approveMcps: false,
+    onStreamEvent(event) {
+      if (event?.type !== "natural" || !event?.text) return;
+      if (event.kind === "result" || !replyPreview) replyPreview = String(event.text).trim().slice(0, 500);
+    },
+  });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    try { handle.child.kill("SIGTERM"); } catch (_) {}
+  }, 30_000);
+  try {
+    await handle.finished;
+    if (timedOut) throw new Error("Cursor API Key 测试超时（30 秒）");
+    return {
+      success: true,
+      testedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      replyPreview,
+      modelId: modelSelection.modelId,
+      modelName: modelSelection.modelName,
+      modelLane: modelSelection.lane,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      testedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      errorPreview: timedOut ? "Cursor API Key 测试超时（30 秒）" : String(error?.message || error).slice(0, 500),
+      modelId: modelSelection.modelId,
+      modelName: modelSelection.modelName,
+      modelLane: modelSelection.lane,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const UI_SERVER_STARTED_AT = new Date().toISOString();
 const UI_SERVER_APP_VERSION = (() => {
@@ -2183,6 +2267,9 @@ export function startUiServer({
     for (const item of summary.needsDecision) log.warn(`[storage-migration] needs decision: ${item}`);
     for (const item of summary.failed) log.warn(`[storage-migration] failed: ${item}`);
   }
+  // Repository discovery is derived data. Reconcile it off the request path so a missing or stale
+  // index delays startup work, not the first person opening the repository page.
+  markRepositoryIndexDirty(root);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const reqStart = Date.now();
@@ -3680,6 +3767,84 @@ export function startUiServer({
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/admin/cursor-api-keys/status") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        const scope = url.searchParams.get("scope") === "user" ? "user" : "global";
+        json(res, 200, { scope, keys: cursorApiKeyAdminMetadata(userCtx, scope) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/admin/cursor-api-keys/cooldown") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const scope = payload?.scope === "user" ? "user" : "global";
+      const id = String(payload?.id || "").trim();
+      const record = cursorApiKeyRowsForScope(userCtx, scope).find((item) => item.id === id);
+      if (!record) {
+        json(res, 404, { error: "Cursor API Key not found" });
+        return;
+      }
+      clearCursorApiKeyCooldown(record);
+      json(res, 200, { success: true, scope, keys: cursorApiKeyAdminMetadata(userCtx, scope) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/cursor-api-keys/test") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const scope = payload?.scope === "user" ? "user" : "global";
+      const id = String(payload?.id || "").trim();
+      const record = cursorApiKeyRowsForScope(userCtx, scope).find((item) => item.id === id);
+      if (!record) {
+        json(res, 404, { error: "Cursor API Key not found" });
+        return;
+      }
+      const testId = `${scope}:${record.id}`;
+      if (activeCursorApiKeyTests.has(testId)) {
+        json(res, 409, { error: "该 Cursor API Key 正在测试中" });
+        return;
+      }
+      activeCursorApiKeyTests.add(testId);
+      try {
+        const result = await probeCursorApiKey(root, record);
+        json(res, result.success ? 200 : 502, {
+          result,
+          scope,
+          keys: cursorApiKeyAdminMetadata(userCtx, scope),
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      } finally {
+        activeCursorApiKeyTests.delete(testId);
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/user-env") {
       let payload;
       try {
@@ -3919,6 +4084,7 @@ export function startUiServer({
       }
       try {
         const result = deleteMarketplaceNodePackage(root, id, version, userCtx);
+        if (result.ok) markRepositoryIndexDirty(root);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -3959,6 +4125,7 @@ export function startUiServer({
           if (!resolved.error && resolved.flowDir) flowDir = resolved.flowDir;
         }
         const result = publishNodeFromInstance(root, payload || {}, { flowDir, ...userCtx });
+        if (result.ok) markRepositoryIndexDirty(root);
         json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { ok: false, error: (e && e.message) || String(e) });

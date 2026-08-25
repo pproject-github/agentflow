@@ -5884,6 +5884,18 @@ button.af-project-card {
   gap: 0.65rem;
 }
 
+.af-set-cursor-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.af-set-cursor-summary-cooling {
+  color: #f4bd75;
+  background: rgba(190, 117, 36, 0.14);
+}
+
 .af-set-cursor-scope {
   width: 12rem;
 }
@@ -5916,7 +5928,7 @@ button.af-project-card {
 
 .af-set-cursor-key-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 2.2rem;
+  grid-template-columns: minmax(12rem, 0.8fr) minmax(15rem, 1.2fr) auto;
   align-items: center;
   gap: 0.65rem;
   min-height: 3.15rem;
@@ -5948,13 +5960,134 @@ button.af-project-card {
 }
 
 .af-set-cursor-key-meta {
+  display: block;
+  margin-top: 0.1rem;
   color: rgba(229, 226, 225, 0.34);
   font-size: 0.72rem;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .af-set-cursor-key-delete {
-  justify-self: end;
+  flex: 0 0 auto;
+}
+
+.af-set-cursor-runtime {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.22rem;
+}
+
+.af-set-cursor-runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.65rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.af-set-cursor-runtime-badge .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-set-cursor-runtime-badge.is-available {
+  color: #80d7b7;
+  background: rgba(62, 151, 119, 0.14);
+}
+
+.af-set-cursor-runtime-badge.is-degraded {
+  color: #96c6ff;
+  background: rgba(69, 130, 196, 0.14);
+}
+
+.af-set-cursor-runtime-badge.is-cooling {
+  color: #f4bd75;
+  background: rgba(190, 117, 36, 0.14);
+}
+
+.af-set-cursor-runtime-badge.is-loading {
+  color: rgba(229, 226, 225, 0.48);
+  background: rgba(229, 226, 225, 0.07);
+}
+
+.af-set-cursor-runtime-detail,
+.af-set-cursor-runtime-error {
+  max-width: 100%;
+  color: rgba(229, 226, 225, 0.42);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.af-set-cursor-runtime-error {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(244, 170, 150, 0.62);
+}
+
+.af-set-cursor-key-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.af-set-cursor-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgba(151, 117, 230, 0.24);
+  border-radius: 0.5rem;
+  color: rgba(218, 207, 245, 0.78);
+  background: rgba(100, 72, 165, 0.1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.af-set-cursor-action:hover:not(:disabled) {
+  border-color: rgba(151, 117, 230, 0.48);
+  background: rgba(100, 72, 165, 0.2);
+}
+
+.af-set-cursor-action:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.af-set-cursor-action .material-symbols-outlined {
+  font-size: 1rem;
+}
+
+.af-set-cursor-test-result {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(229, 226, 225, 0.06);
+  color: rgba(229, 226, 225, 0.56);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.af-set-cursor-test-result.is-success {
+  color: rgba(128, 215, 183, 0.78);
+}
+
+.af-set-cursor-test-result.is-error {
+  color: rgba(244, 170, 150, 0.78);
+}
+
+.af-set-cursor-test-result .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 1rem;
 }
 
 .af-set-cursor-key-empty {
@@ -5984,7 +6117,8 @@ button.af-project-card {
   }
 
   .af-set-cursor-key-meta,
-  .af-set-cursor-key-delete {
+  .af-set-cursor-key-delete,
+  .af-set-cursor-key-actions {
     justify-self: start;
   }
 
@@ -28470,6 +28604,9 @@ body:has(.af-public-display-page--canvas) {
 .af-marketplace-error,
 .af-marketplace-empty { max-width: 1600px; margin: 20px auto; padding: 24px; color: #aaa6b5; border: 1px dashed #3b3743; border-radius: 14px; text-align: center; }
 .af-marketplace-error { color: #ff9c9c; border-color: rgba(255, 100, 100, 0.35); }
+.af-marketplace-pagination { display: flex; justify-content: center; max-width: 1600px; margin: 20px auto 0; }
+.af-marketplace-pagination button { padding: 10px 18px; color: #d8d0ee; border: 1px solid #4b405e; border-radius: 10px; background: #2b2535; }
+.af-marketplace-pagination button:disabled { opacity: 0.55; cursor: wait; }
 
 .af-marketplace-snippet-projects__empty { padding: 26px 12px; color: #898290; text-align: center; }
 .af-marketplace-snippet-project-list { display: grid; max-height: 285px; gap: 7px; overflow-y: auto; }
