@@ -56,7 +56,7 @@
     "dev:web": "cd builtin/web-ui && npm run dev",
     "dev:website": "cd website && npm run dev",
     "preview:website": "cd website && npm run preview",
-    "version": "npm --prefix builtin/web-ui run build && git add builtin/web-ui/dist",
+    "version": "npm run build:agentflow-cli-skill-runtime && npm --prefix builtin/web-ui run build && git add skills/agentflow-cli/runtime builtin/web-ui/dist",
     "prepack": "npm run build:web-ui"
   },
   "dependencies": {

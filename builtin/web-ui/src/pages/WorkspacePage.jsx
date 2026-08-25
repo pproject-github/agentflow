@@ -9030,6 +9030,13 @@ function WorkspacePageInner() {
       handled: false,
     };
   })());
+  const pendingMarketplaceNodeRef = useRef((() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      definitionId: String(params.get("marketplaceNodeDefinitionId") || "").trim(),
+      handled: false,
+    };
+  })());
   const workspaceViewportStorageKey = useMemo(
     () => (
       flowParams.workspaceId
@@ -13887,7 +13894,7 @@ function WorkspacePageInner() {
       return;
     }
     insertFlowSnippet(snippet);
-    showFlowSnippetToast(`已从市场添加：${snippet.displayName || snippet.id}`);
+    showFlowSnippetToast(`已从流程仓库添加：${snippet.displayName || snippet.id}`);
   }, [flowSnippets, flowSnippetsLoading, insertFlowSnippet, showFlowSnippetToast, workspaceSyncPhase, workspaceWritable]);
 
   const openPublishSnippetDialog = useCallback(() => {
@@ -14862,6 +14869,29 @@ function WorkspacePageInner() {
     return id;
   }, [activeSubflowId, defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setEdges, setNodes, workspaceWritable]);
 
+  useEffect(() => {
+    const pending = pendingMarketplaceNodeRef.current;
+    if (!pending.definitionId || pending.handled || !loadedRef.current || !workspaceWritable || palette.length === 0) return;
+    const definition = palette.find((item) => (
+      String(item?.id || "") === pending.definitionId
+      || String(item?.marketplaceDefinitionId || "") === pending.definitionId
+    ));
+    if (!definition) {
+      if (workspaceSyncPhase !== "synced") return;
+      pending.handled = true;
+      setStatus(`未找到节点：${pending.definitionId}`);
+    } else {
+      pending.handled = true;
+      const nodeId = addNodeFromDefinition(definition, { openProperties: true });
+      if (nodeId) {
+        setStatus(`已从流程仓库添加节点：${definition.displayName || definition.label || definition.id}`);
+      }
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("marketplaceNodeDefinitionId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [addNodeFromDefinition, palette, workspaceSyncPhase, workspaceWritable]);
+
   const isValidConnection = useCallback((params) => {
     const sourceNode = nodesRef.current.find((node) => node.id === params?.source);
     const targetNode = nodesRef.current.find((node) => node.id === params?.target);
@@ -15562,7 +15592,7 @@ function WorkspacePageInner() {
   ]);
   const handleMarketplacePreviewAction = useCallback(async () => {
     if (!flowParams.marketplacePreview || marketplacePreviewBusy) return;
-    if (flowParams.marketplaceAction === "add-snippet") {
+    if (["add-snippet", "add-node"].includes(flowParams.marketplaceAction)) {
       setMarketplacePreviewBusy(true);
       setMarketplacePreviewProjectError("");
       try {
@@ -15624,10 +15654,17 @@ function WorkspacePageInner() {
     ));
     if (!project) return;
     const target = new URL(flowUrlForView(project, "workspace"), window.location.origin);
-    target.searchParams.set("marketplaceSnippetId", flowParams.marketplaceResourceId);
-    target.searchParams.set("marketplaceSnippetVersion", flowParams.marketplaceVersion || "1.0.0");
+    if (flowParams.marketplaceAction === "add-node") {
+      target.searchParams.set(
+        "marketplaceNodeDefinitionId",
+        `marketplace:${flowParams.marketplaceResourceId}@${flowParams.marketplaceVersion}`,
+      );
+    } else {
+      target.searchParams.set("marketplaceSnippetId", flowParams.marketplaceResourceId);
+      target.searchParams.set("marketplaceSnippetVersion", flowParams.marketplaceVersion || "1.0.0");
+    }
     navigate(`${target.pathname}${target.search}`);
-  }, [flowParams.marketplaceResourceId, flowParams.marketplaceVersion, marketplacePreviewProjectKey, marketplacePreviewProjects, navigate]);
+  }, [flowParams.marketplaceAction, flowParams.marketplaceResourceId, flowParams.marketplaceVersion, marketplacePreviewProjectKey, marketplacePreviewProjects, navigate]);
   const workspaceProjectTitle = String(flowParams.marketplaceTitle || flowParams.flowId || "").trim() || "Workspace";
   const singleNodeDisplayShare = displayShareDraft?.mode === "single-node";
   const displayShareSourceNode = singleNodeDisplayShare
@@ -15637,7 +15674,7 @@ function WorkspacePageInner() {
     ? [displayShareSourceNode]
     : workspaceDisplayNodes;
   const workspaceBackTarget = flowParams.marketplacePreview
-    ? "/marketplace?kind=flow"
+    ? `/marketplace?kind=${flowParams.marketplaceKind === "node" ? "node" : "flow"}`
     : flowParams.adminOwnerId
     ? "/admin/usage"
     : flowParams.returnTo || (workspaceMode === "workflow" ? "/workflows" : "/projects");
@@ -15728,18 +15765,22 @@ function WorkspacePageInner() {
               onClick={() => void handleMarketplacePreviewAction()}
             >
               <span className="material-symbols-outlined" aria-hidden>
-                {flowParams.marketplaceAction === "add-snippet"
+                {flowParams.marketplaceAction === "add-node"
+                  ? "add_box"
+                  : flowParams.marketplaceAction === "add-snippet"
                   ? "add_to_photos"
                   : flowParams.marketplaceAction === "open-source" || flowParams.marketplaceAction === "open-installed" ? "open_in_new" : "download"}
               </span>
               {marketplacePreviewBusy
-                ? "安装中"
+                ? "处理中"
                 : flowParams.marketplaceAction === "open-source"
                   ? "打开原流程"
                   : flowParams.marketplaceAction === "open-installed"
                     ? "打开已安装流程"
+                    : flowParams.marketplaceAction === "add-node"
+                      ? "添加到流程"
                     : flowParams.marketplaceAction === "add-snippet"
-                      ? "添加到 Project"
+                      ? "添加到流程"
                       : "安装到个人空间"}
             </button>
           ) : null}
@@ -17709,15 +17750,15 @@ function WorkspacePageInner() {
         ) : null}
         {marketplacePreviewProjectOpen ? createPortal(
           <div className="af-flow-snippet-modal-overlay" onMouseDown={() => setMarketplacePreviewProjectOpen(false)}>
-            <div className="af-flow-snippet-modal af-marketplace-preview-project-modal" role="dialog" aria-modal="true" aria-label="添加到 Project" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="af-flow-snippet-modal af-marketplace-preview-project-modal" role="dialog" aria-modal="true" aria-label="添加到流程" onMouseDown={(event) => event.stopPropagation()}>
               <div className="af-flow-snippet-modal__head">
-                <span className="af-flow-snippet-modal__title"><span className="material-symbols-outlined" aria-hidden>add_to_photos</span>添加到 Project</span>
+                <span className="af-flow-snippet-modal__title"><span className="material-symbols-outlined" aria-hidden>{flowParams.marketplaceAction === "add-node" ? "add_box" : "add_to_photos"}</span>添加到流程</span>
                 <button type="button" className="af-flow-snippet-modal__close" onClick={() => setMarketplacePreviewProjectOpen(false)} aria-label="关闭">
                   <span className="material-symbols-outlined" aria-hidden>close</span>
                 </button>
               </div>
               <div className="af-flow-snippet-modal__body">
-                <p className="af-marketplace-preview-project-hint">选择目标后，将进入对应 Workspace，并把当前片段复制到调整态画布。</p>
+                <p className="af-marketplace-preview-project-hint">选择目标后，将进入对应 Workspace，并把当前{flowParams.marketplaceAction === "add-node" ? "节点" : "片段"}加入调整态画布。</p>
                 {marketplacePreviewProjectError ? <div className="af-flow-snippet-error">{marketplacePreviewProjectError}</div> : null}
                 {!marketplacePreviewProjectError && marketplacePreviewProjects.length === 0 ? <div className="af-marketplace-snippet-projects__empty">暂无可编辑 Project。</div> : null}
                 <div className="af-marketplace-snippet-project-list">

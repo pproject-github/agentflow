@@ -116,7 +116,7 @@ test("完整 Flow 以关闭定时入口的市场快照发布，安装副本保�
   assert.equal(listMarketplaceFlows(root, { userId: "owner-1", marketplaceScope: "owned" }).flows[0].visibility, "private");
 });
 
-test("市场查询 API 默认按使用次数倒序，并把统计字段返回给调用方", async () => {
+test("流程仓库只列可运行流程，并提供流程与节点的只读 Workspace 预览", async () => {
   const root = tempWorkspace();
   const previousHome = process.env.AGENTFLOW_HOME;
   process.env.AGENTFLOW_HOME = path.join(root, "data");
@@ -140,6 +140,11 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const consumer = loginOrCreateUser("market-consumer", "market-consumer-password");
     assert.equal(owner.ok, true);
     assert.equal(consumer.ok, true);
+    const previewNode = publishNodePackage(root, writeNodePackage(root, "preview_node", "1.0.0"), {
+      ownerUserId: owner.user.userId,
+      immutable: true,
+    });
+    assert.equal(previewNode.ok, true);
     const runnableProjectDir = path.join(getUserPipelinesRoot(owner.user.userId), "auto-runnable-flow");
     fs.mkdirSync(runnableProjectDir, { recursive: true });
     fs.writeFileSync(path.join(runnableProjectDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
@@ -255,13 +260,8 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const body = await response.json();
     assert.equal(body.sort, "useCount");
     assert.equal(body.order, "desc");
-    assert.deepEqual(
-      body.items.filter((item) => item.resourceType === "flow" && !item.projectFlow).map((item) => item.id),
-      ["more-used", "less-used"],
-    );
-    assert.equal(body.items[0].useCount, 2);
-    assert.equal(body.items[0].installCount, 0);
-    assert.equal(body.items[0].uniqueUserCount, 1);
+    assert.equal(body.items.every((item) => item.resourceType === "flow" && item.projectFlow === true), true);
+    assert.equal(body.items.some((item) => ["more-used", "less-used", "useful-snippet"].includes(item.id)), false);
     const automaticFlow = body.items.find((item) => item.displayName === "auto-runnable-flow");
     assert.equal(automaticFlow.displayName, "auto-runnable-flow");
     assert.equal(automaticFlow.visibility, "public");
@@ -359,9 +359,7 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     });
     assert.equal(snippetStatsResponse.status, 200);
     const snippetStats = await snippetStatsResponse.json();
-    assert.equal(snippetStats.items[0].resourceType, "flow-snippet");
-    assert.equal(snippetStats.items[0].useCount, 1, "same insertion event must be counted once");
-    assert.equal(snippetStats.items[0].uniqueUserCount, 1);
+    assert.deepEqual(snippetStats.items, [], "流程片段保留在 Workspace Palette，不混入流程仓库列表");
     const snippetWorkspacePreviewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/workspace-preview`, {
       method: "POST",
       headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
@@ -379,8 +377,7 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     });
     assert.equal(ownedResponse.status, 200);
     const ownedBody = await ownedResponse.json();
-    assert.equal(ownedBody.items.length, 1);
-    assert.equal(ownedBody.items[0].resourceType, "flow-snippet");
+    assert.equal(ownedBody.items.length, 0);
 
     const installResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/install`, {
       method: "POST",
@@ -393,8 +390,7 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     });
     assert.equal(installedResponse.status, 200);
     const installedBody = await installedResponse.json();
-    assert.deepEqual(installedBody.items.map((item) => item.id), ["more-used"]);
-    assert.deepEqual(installedBody.items[0].installedFlowIds, ["installed-market-flow"]);
+    assert.deepEqual(installedBody.items, [], "旧市场模板即使已安装也不回流到流程仓库");
 
     const installAutomaticResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/install`, {
       method: "POST",
@@ -430,6 +426,31 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     assert.equal(installedNodesResponse.status, 200);
     const installedNodesBody = await installedNodesResponse.json();
     assert.ok(installedNodesBody.items.some((item) => item.localCatalog === true));
+
+    const nodeResourcesResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=node&q=preview_node`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const nodeResources = await nodeResourcesResponse.json();
+    assert.equal(nodeResourcesResponse.status, 200, JSON.stringify(nodeResources));
+    assert.equal(nodeResources.items[0].id, "preview_node");
+    const nodePreviewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/workspace-preview`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "preview_node", version: "1.0.0", kind: "node" }),
+    });
+    const nodePreview = await nodePreviewResponse.json();
+    assert.equal(nodePreviewResponse.status, 200, JSON.stringify(nodePreview));
+    const nodePreviewUrl = new URL(nodePreview.url, `http://127.0.0.1:${server.address().port}`);
+    assert.equal(nodePreviewUrl.searchParams.get("marketplaceKind"), "node");
+    assert.equal(nodePreviewUrl.searchParams.get("marketplaceAction"), "add-node");
+    assert.equal(nodePreviewUrl.searchParams.get("focusNodeId"), "node_preview");
+    const nodePreviewGraphResponse = await fetch(`${nodePreviewUrl.origin}/api/workspace/graph?flowId=${encodeURIComponent(nodePreviewUrl.searchParams.get("flowId"))}&flowSource=workspace&archived=1`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const nodePreviewGraph = await nodePreviewGraphResponse.json();
+    assert.equal(nodePreviewGraphResponse.status, 200, JSON.stringify(nodePreviewGraph));
+    assert.equal(nodePreviewGraph.writable, false);
+    assert.equal(nodePreviewGraph.graph.instances.node_preview.marketplaceRef, "marketplace:preview_node@1.0.0");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

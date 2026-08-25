@@ -747,7 +747,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      window.alert(`${flow.id}@${version} 已发布为${visibility === "public" ? "公开" : "私有"}市场模板；定时入口已自动关闭。`);
+      window.alert(`${flow.id}@${version} 已发布为${visibility === "public" ? "公开" : "私有"}流程仓库版本；定时入口已自动关闭。`);
     } catch (publishError) {
       window.alert(`发布失败：${String(publishError?.message || publishError)}`);
     }
@@ -1577,7 +1577,7 @@ export default function ProjectsPage({ resourceKind = "", authUser = null }) {
                           ) : null}
                           {canPublishMarketplace ? (
                             <button type="button" onClick={() => publishFlowToMarketplace(f)}>
-                              发布到市场
+                              发布到流程仓库
                             </button>
                           ) : null}
                           {canPromote ? (

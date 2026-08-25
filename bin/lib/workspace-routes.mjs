@@ -1451,15 +1451,6 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         const installedCopies = installedMarketplaceFlowCopies(userCtx.userId);
-        const flows = listMarketplaceFlows(root, { ...userCtx, marketplaceScope }).flows.map((flow) => {
-          const installedFlowIds = installedCopies.get(`${flow.id}@${flow.version}`) || [];
-          return {
-            ...flow,
-            resourceType: "flow",
-            installed: installedFlowIds.length > 0,
-            installedFlowIds,
-          };
-        });
         const projectFlows = listRunnableProjectMarketplaceFlows(root, userCtx, scope).map((flow) => {
           const installedFlowIds = installedCopies.get(`${flow.id}@${flow.version}`) || [];
           return publicProjectFlowMarketplaceResource({
@@ -1468,10 +1459,8 @@ async function workspaceRoutes(req, res, ctx) {
             installedFlowIds,
           });
         });
-        const snippets = scope === "installed" ? [] : listMarketplaceFlowSnippets(root, { ...userCtx, marketplaceScope }).snippets
-          .map((snippet) => ({ ...snippet, resourceType: "flow-snippet", installed: false }));
         const items = sortMarketplaceResources(
-          [...projectFlows, ...flows, ...snippets]
+          projectFlows
             .filter((item) => scope !== "installed" || item.installed)
             .filter((item) => marketplaceResourceMatches(item, queryText)),
         );
@@ -1584,7 +1573,7 @@ async function workspaceRoutes(req, res, ctx) {
       }
       const id = String(payload?.id || "").trim();
       const version = String(payload?.version || "").trim();
-      const previewKind = payload?.kind === "snippet" ? "snippet" : "flow";
+      const previewKind = ["snippet", "node"].includes(payload?.kind) ? payload.kind : "flow";
       const projectFlow = payload?.projectFlow === true;
       if (!id || !version) {
         json(res, 400, { error: "Missing marketplace flow id or version" });
@@ -1594,7 +1583,33 @@ async function workspaceRoutes(req, res, ctx) {
         const installedCopies = installedMarketplaceFlowCopies(userCtx.userId);
         let graph;
         let resource;
-        if (previewKind === "snippet") {
+        if (previewKind === "node") {
+          const node = listMarketplacePackages(root, { ...userCtx, marketplaceScope: "all" }).nodes
+            .find((item) => item.id === id && item.version === version);
+          if (!node) {
+            json(res, 404, { error: "Node package not found or is private" });
+            return;
+          }
+          graph = {
+            version: 1,
+            instances: {
+              node_preview: {
+                definitionId: node.definitionId,
+                marketplaceRef: node.definitionId,
+                marketplacePackageId: node.id,
+                marketplaceVersion: node.version,
+                label: node.displayName || node.id,
+                role: "normal",
+                body: "",
+                input: Array.isArray(node.inputs) ? node.inputs : [],
+                output: Array.isArray(node.outputs) ? node.outputs : [],
+              },
+            },
+            edges: [],
+            ui: { nodePositions: { node_preview: { x: 320, y: 220 } } },
+          };
+          resource = { ...node, resourceType: "node", owned: node.ownerUserId === userCtx.userId };
+        } else if (previewKind === "snippet") {
           const snippet = listMarketplaceFlowSnippets(root, { ...userCtx, marketplaceScope: "all" }).snippets
             .find((item) => item.id === id && item.version === version);
           if (!snippet) {
@@ -1655,8 +1670,9 @@ async function workspaceRoutes(req, res, ctx) {
         writeWorkspaceGraph(flowDir, graph, root);
         writeWorkspacePreviewMetadata(flowDir, metadata);
         const installedFlowId = resource.installedFlowIds?.[0] || "";
-        const action = previewKind === "snippet"
-          ? "add-snippet"
+        const action = previewKind === "node"
+          ? "add-node"
+          : previewKind === "snippet" ? "add-snippet"
           : resource.projectFlow && resource.owned
             ? "open-source"
             : installedFlowId ? "open-installed" : "install";
@@ -1673,6 +1689,7 @@ async function workspaceRoutes(req, res, ctx) {
           marketplaceAction: action,
           marketplaceInstallFlowId: resource.installFlowId || resource.liveFlowId || resource.definitionId || id,
         });
+        if (previewKind === "node") previewParams.set("focusNodeId", "node_preview");
         if (action === "open-source") {
           previewParams.set("marketplaceTargetFlowId", resource.liveFlowId || resource.definitionId || "");
           previewParams.set("marketplaceTargetFlowSource", resource.liveFlowSource || "user");

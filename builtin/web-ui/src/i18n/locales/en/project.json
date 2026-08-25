@@ -11,8 +11,8 @@
   "globalNodes": "Global Nodes",
   "nodeScopeAll": "All Nodes",
   "nodeScopeMine": "My Nodes",
-  "myNodesHint": "Manage node versions published to the current workspace marketplace, {{count}} total.",
-  "myFlowsHint": "Manage flow snippets published to the current workspace marketplace, {{count}} total.",
+  "myNodesHint": "Manage node versions published to the Flow Repository, {{count}} total.",
+  "myFlowsHint": "Manage published flow snippets, {{count}} total.",
   "globalSkills": "Global Skills",
   "createNew": "Create New Project",
   "newPipeline": "New Pipeline",
@@ -31,7 +31,7 @@
   "nodesPurposeTitle": "Executable building blocks for pipeline runtime",
   "nodesPurposeDesc": "Nodes define what can be placed on the canvas, which inputs and outputs exist, and whether runtime behavior is agent, control, provide, or marketplace logic.",
   "myNodesPurposeTitle": "Published local node packages",
-  "myNodesPurposeDesc": "Only node versions published to this workspace marketplace appear here. Inspect details and delete versions that no flow uses.",
+  "myNodesPurposeDesc": "Only node versions published to the Flow Repository appear here. Inspect details and delete versions that no flow uses.",
   "myFlowsPurposeTitle": "Published flow snippets",
   "myFlowsPurposeDesc": "Flow snippets published from Pipeline or Workspace canvases appear here. Search and inspect them, then load them from the canvas flow palette.",
   "skillsPurposeTitle": "Operating guides for Composer and agents",
@@ -121,14 +121,14 @@
   "resourceSource": {
     "flow": "Flow",
     "global": "Global",
-    "marketplace": "Marketplace"
+    "marketplace": "Flow Repository"
   },
   "resourceFilter": {
     "all": "All",
     "agent": "Agent",
     "control": "Control",
     "provide": "Provide",
-    "marketplace": "Marketplace",
+    "marketplace": "Flow Repository",
     "builtin": "AgentFlow",
     "workspace-agents": ".agents",
     "workspace-cursor": ".cursor"

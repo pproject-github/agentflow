@@ -28,14 +28,8 @@ function formatCount(value) {
   return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 }
 
-function portCount(value) {
-  if (Array.isArray(value)) return value.length;
-  if (value && typeof value === "object") return Object.keys(value).length;
-  return 0;
-}
-
 function sourceLabel(source) {
-  if (source === "marketplace") return "Marketplace";
+  if (source === "marketplace") return "节点仓库";
   if (source === "flow") return "流程内节点";
   if (source === "project") return "项目节点";
   if (source === "builtin") return "内置节点";
@@ -92,7 +86,7 @@ export default function MarketplacePage({ authUser }) {
         body: JSON.stringify({
           id: item.id,
           version: item.version,
-          kind: item.resourceType === "flow-snippet" ? "snippet" : "flow",
+          kind: item.resourceType === "node" ? "node" : item.resourceType === "flow-snippet" ? "snippet" : "flow",
           projectFlow: item.projectFlow === true,
         }),
       });
@@ -159,9 +153,9 @@ export default function MarketplacePage({ authUser }) {
     <main className="af-marketplace-page">
       <header className="af-marketplace-hero">
         <div>
-          <span className="af-marketplace-eyebrow">AGENTFLOW RESOURCE CENTER</span>
-          <h1>市场</h1>
-          <p>发现、安装并管理完整 Flow、流程片段与可复用节点。</p>
+          <span className="af-marketplace-eyebrow">AGENTFLOW FLOW REPOSITORY</span>
+          <h1>流程仓库</h1>
+          <p>发现经过验证的可运行流程与可审阅节点，预览后再加入自己的 Workspace。</p>
         </div>
         <label className="af-marketplace-search">
           <span className="material-symbols-outlined">search</span>
@@ -188,7 +182,7 @@ export default function MarketplacePage({ authUser }) {
       </div>
 
       {error ? <div className="af-marketplace-error">{error}</div> : null}
-      {loading ? <div className="af-marketplace-empty">正在加载市场…</div> : null}
+      {loading ? <div className="af-marketplace-empty">正在加载流程仓库…</div> : null}
       {!loading && items.length === 0 ? (
         <div className="af-marketplace-empty">
           {scope === "owned" ? "你还没有发布匹配的资源" : scope === "installed" ? "没有匹配的已安装或可用资源" : `没有匹配的${kind === "flow" ? "流程" : "节点"}`}
@@ -224,17 +218,9 @@ export default function MarketplacePage({ authUser }) {
               <div className="af-marketplace-version">
                 {item.definitionId || item.id}{item.runModeLabel ? ` · ${item.runModeLabel}` : ""}{item.versionLabel ? ` · ${item.versionLabel}` : item.version ? ` · v${item.version}` : ""}
               </div>
-              {item.localCatalog ? (
-                <div className="af-marketplace-stats">
-                  <strong><span className="material-symbols-outlined">input</span>{formatCount(portCount(item.inputs))}<small>输入</small></strong>
-                  <strong><span className="material-symbols-outlined">output</span>{formatCount(portCount(item.outputs))}<small>输出</small></strong>
-                  <strong><span className="material-symbols-outlined">inventory_2</span><em>{sourceLabel(item.source)}</em><small>来源</small></strong>
-                </div>
-              ) : (
-                <div className="af-marketplace-stats">
-                  <strong><span className="material-symbols-outlined">play_circle</span>{formatCount(item.useCount)}<small>使用</small></strong>
-                </div>
-              )}
+              <div className="af-marketplace-stats">
+                <strong><span className="material-symbols-outlined">play_circle</span>{formatCount(item.useCount)}<small>使用</small></strong>
+              </div>
               <footer>
                 <span>{item.localCatalog ? sourceLabel(item.source) : `by ${item.ownerUserId || "AgentFlow"}`}</span>
                 <div>
@@ -257,7 +243,7 @@ export default function MarketplacePage({ authUser }) {
                     >
                       {previewBusy ? "打开中…" : "预览"}
                     </button>
-                  ) : resourceType === "flow-snippet" ? (
+                  ) : (
                     <button
                       className="is-primary"
                       type="button"
@@ -266,8 +252,6 @@ export default function MarketplacePage({ authUser }) {
                     >
                       {previewBusy ? "打开中…" : "预览"}
                     </button>
-                  ) : (
-                    <button className="is-primary" type="button" onClick={() => navigate("/projects")}>在流程中使用</button>
                   )}
                 </div>
               </footer>

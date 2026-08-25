@@ -211,7 +211,7 @@ export default function NodeStudioPage() {
             className="af-node-studio-actions__primary"
             onClick={() => void publish()}
             disabled={!currentPackageTestPassed || Boolean(busy)}
-            title={currentPackageTestPassed ? "发布完整节点包到本 workspace 的节点市场" : "当前节点包必须先通过 Test"}
+            title={currentPackageTestPassed ? "发布完整节点包到流程仓库" : "当前节点包必须先通过 Test"}
           >
             <span className="material-symbols-outlined" aria-hidden>{busy === "publishing" ? "sync" : "publish"}</span>
             Publish
