@@ -81,30 +81,26 @@ export default function MarketplacePage({ authUser }) {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const installFlow = useCallback(async (item) => {
-    const flowId = window.prompt("安装到个人空间，Flow ID：", item.liveFlowId || item.definitionId || item.id);
-    if (!flowId) return;
-    const key = `install:${item.resourceType}:${item.id}@${item.version}`;
+  const openFlowPreview = useCallback(async (item) => {
+    const key = `preview:${item.id}@${item.version}`;
     setBusy(key);
     setError("");
     try {
-      const response = await fetch("/api/marketplace/flows/install", {
+      const response = await fetch("/api/marketplace/flows/workspace-preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: item.id,
           version: item.version,
-          flowId,
+          kind: item.resourceType === "flow-snippet" ? "snippet" : "flow",
           projectFlow: item.projectFlow === true,
-          ownerUserId: item.liveOwnerUserId || item.ownerUserId || "",
-          flowSource: item.liveFlowSource || "",
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      navigate(body.url || `/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`);
-    } catch (installError) {
-      setError(String(installError?.message || installError));
+      navigate(body.url);
+    } catch (previewError) {
+      setError(String(previewError?.message || previewError));
     } finally {
       setBusy("");
     }
@@ -206,8 +202,7 @@ export default function MarketplacePage({ authUser }) {
           const mine = ownedBy(item, authUser);
           const visibilityBusy = busy === `visibility:${resourceType}:${item.id}@${item.version}`;
           const deleteBusy = busy === `delete:${resourceType}:${item.id}@${item.version}`;
-          const installBusy = busy === `install:${resourceType}:${item.id}@${item.version}`;
-          const installedFlowId = Array.isArray(item.installedFlowIds) ? item.installedFlowIds[0] : "";
+          const previewBusy = busy === `preview:${item.id}@${item.version}`;
           return (
             <article className="af-marketplace-card" key={key}>
               <div className="af-marketplace-card__top">
@@ -227,7 +222,7 @@ export default function MarketplacePage({ authUser }) {
               <h2>{item.displayName || item.id}</h2>
               <p>{item.description || "暂无说明"}</p>
               <div className="af-marketplace-version">
-                {item.definitionId || item.id}{item.versionLabel ? ` · ${item.versionLabel}` : item.version ? ` · v${item.version}` : ""}
+                {item.definitionId || item.id}{item.runModeLabel ? ` · ${item.runModeLabel}` : ""}{item.versionLabel ? ` · ${item.versionLabel}` : item.version ? ` · v${item.version}` : ""}
               </div>
               {item.localCatalog ? (
                 <div className="af-marketplace-stats">
@@ -235,17 +230,9 @@ export default function MarketplacePage({ authUser }) {
                   <strong><span className="material-symbols-outlined">output</span>{formatCount(portCount(item.outputs))}<small>输出</small></strong>
                   <strong><span className="material-symbols-outlined">inventory_2</span><em>{sourceLabel(item.source)}</em><small>来源</small></strong>
                 </div>
-              ) : resourceType === "flow-snippet" ? (
-                <div className="af-marketplace-stats">
-                  <strong><span className="material-symbols-outlined">add_circle</span>{formatCount(item.useCount)}<small>添加</small></strong>
-                  <strong><span className="material-symbols-outlined">account_tree</span>{formatCount(item.nodeCount)}<small>节点</small></strong>
-                  <strong><span className="material-symbols-outlined">group</span>{formatCount(item.uniqueUserCount)}<small>用户</small></strong>
-                </div>
               ) : (
                 <div className="af-marketplace-stats">
                   <strong><span className="material-symbols-outlined">play_circle</span>{formatCount(item.useCount)}<small>使用</small></strong>
-                  <strong><span className="material-symbols-outlined">download</span>{formatCount(item.installCount)}<small>安装</small></strong>
-                  <strong><span className="material-symbols-outlined">group</span>{formatCount(item.uniqueUserCount)}<small>用户</small></strong>
                 </div>
               )}
               <footer>
@@ -262,35 +249,22 @@ export default function MarketplacePage({ authUser }) {
                     </button>
                   ) : null}
                   {resourceType === "flow" ? (
-                    item.projectFlow && mine ? (
-                      <button
-                        className="is-primary"
-                        type="button"
-                        onClick={() => {
-                          const params = new URLSearchParams({
-                            flowId: item.liveFlowId || item.definitionId,
-                            flowSource: item.liveFlowSource || "user",
-                          });
-                          if (item.liveWorkspaceId) params.set("workspaceId", item.liveWorkspaceId);
-                          navigate(`/workspace?${params}`);
-                        }}
-                      >
-                        打开
-                      </button>
-                    ) : installedFlowId ? (
-                      <button className="is-primary" type="button" onClick={() => navigate(`/workspace?flowId=${encodeURIComponent(installedFlowId)}&flowSource=user`)}>打开</button>
-                    ) : (
-                      <button className="is-primary" type="button" disabled={installBusy} onClick={() => installFlow(item)}>
-                        {installBusy ? "安装中…" : "安装到个人空间"}
-                      </button>
-                    )
+                    <button
+                      className="is-primary"
+                      type="button"
+                      disabled={previewBusy}
+                      onClick={() => void openFlowPreview(item)}
+                    >
+                      {previewBusy ? "打开中…" : "预览"}
+                    </button>
                   ) : resourceType === "flow-snippet" ? (
                     <button
                       className="is-primary"
                       type="button"
-                      onClick={() => navigate(`/marketplace/preview?id=${encodeURIComponent(item.id)}&version=${encodeURIComponent(item.version || "1.0.0")}`)}
+                      disabled={previewBusy}
+                      onClick={() => void openFlowPreview(item)}
                     >
-                      预览
+                      {previewBusy ? "打开中…" : "预览"}
                     </button>
                   ) : (
                     <button className="is-primary" type="button" onClick={() => navigate("/projects")}>在流程中使用</button>

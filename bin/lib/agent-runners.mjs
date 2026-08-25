@@ -7,13 +7,18 @@ import { normalizeCursorModelForCli } from "./model-config.mjs";
 import { t } from "./i18n.mjs";
 import { readMergedEnvObject } from "./user-env.mjs";
 import {
+  classifyCursorApiKeyLimitError,
+  clearCursorApiKeyLaneCooldown,
   createCursorApiKeyAttempts,
   cursorApiKeyCooldownMinutes,
   cursorApiKeyEnv,
   cursorApiKeyLabel,
+  isCursorAutoFallbackEligible,
   isCursorQuotaError,
-  markCursorApiKeyQuotaBlocked,
+  markCursorApiKeyLaneBlocked,
+  recordCursorApiKeyFallbackModel,
 } from "./cursor-api-key-pool.mjs";
+import { discoverCursorModels } from "./cursor-model-catalog.mjs";
 import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 function shouldPassCursorModelArg(model) {
@@ -53,6 +58,16 @@ function nextCursorAttemptOptions(options = {}, attempts = [], attemptIndex = 0)
     ...options,
     _agentflowCursorApiKeyAttempts: attempts,
     _agentflowCursorApiKeyAttemptIndex: attemptIndex + 1,
+    _agentflowCursorModelSelection: undefined,
+  };
+}
+
+function cursorModelAttemptOptions(options = {}, attempts = [], attemptIndex = 0, modelSelection) {
+  return {
+    ...options,
+    _agentflowCursorApiKeyAttempts: attempts,
+    _agentflowCursorApiKeyAttemptIndex: attemptIndex,
+    _agentflowCursorModelSelection: modelSelection,
   };
 }
 
@@ -402,7 +417,7 @@ function tryEmitOpenCodeLineAsNatural(line, emit) {
 export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {}) {
   const onStreamEvent = typeof options.onStreamEvent === "function" ? options.onStreamEvent : null;
   const ws = path.resolve(cliWorkspace);
-  const model = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
+  const requestedModel = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
   const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
   const {
     baseEnv: cursorBaseEnv,
@@ -410,6 +425,13 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     attemptIndex: cursorAttemptIndex,
     selection: cursorSelection,
   } = cursorAttemptOptions(options);
+  const hasExplicitModel = shouldPassCursorModelArg(requestedModel);
+  const cursorModelSelection = hasExplicitModel
+    ? { lane: "auto", modelId: requestedModel, modelName: requestedModel }
+    : options._agentflowCursorModelSelection
+      || cursorSelection?.modelSelection
+      || { lane: "auto", modelId: "auto", modelName: "Auto" };
+  const model = hasExplicitModel ? requestedModel : cursorModelSelection.modelId;
   // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
   const args = ["--print", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--workspace", ws];
   const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
@@ -446,6 +468,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     emit({
       type: "status",
       line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} / ${cursorAttempts.length}`,
+    });
+  }
+  if (cursorModelSelection.lane === "fallback") {
+    emit({
+      type: "status",
+      line: `Cursor is using Composer fallback: ${cursorModelSelection.modelName}`,
     });
   }
 
@@ -588,20 +616,83 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       }
       const retryCursorQuota = (errorText) => {
         if (!cursorSelection) return false;
-        if (cursorAttemptIndex >= cursorAttempts.length - 1) return false;
         if (hadToolActivity) return false;
         if (!isCursorQuotaError(errorText)) return false;
-        markCursorApiKeyQuotaBlocked(cursorSelection, cursorApiKeyCooldownMinutes(cursorBaseEnv));
-        emit({
-          type: "status",
-          line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached quota, retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}`,
-        });
-        const next = runCursorAgentWithPrompt(
-          cliWorkspace,
-          promptText,
-          nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex),
+        const errorCategory = classifyCursorApiKeyLimitError(errorText);
+        const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv);
+        markCursorApiKeyLaneBlocked(
+          cursorSelection,
+          cursorModelSelection.lane,
+          cooldownMinutes,
+          errorText,
         );
-        next.finished.then(resolve).catch(reject);
+        const canTryComposer = !hasExplicitModel
+          && cursorModelSelection.lane === "auto"
+          && errorCategory === "explicit_limit"
+          && isCursorAutoFallbackEligible(errorText);
+        const hasNextKey = cursorAttemptIndex < cursorAttempts.length - 1;
+        if (!canTryComposer && !hasNextKey) return false;
+
+        const retry = async () => {
+          if (canTryComposer) {
+            emit({
+              type: "status",
+              line: `Cursor Auto on API Key ${cursorApiKeyLabel(cursorSelection)} is out of usage; discovering Composer fallback...`,
+            });
+            const catalog = await discoverCursorModels({
+              keyId: cursorSelection.id,
+              cwd: ws,
+              command: agentCmd,
+              env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
+            });
+            if (catalog.fallbackModel) {
+              recordCursorApiKeyFallbackModel(cursorSelection, catalog.fallbackModel);
+              const fallbackSelection = {
+                lane: "fallback",
+                modelId: catalog.fallbackModel.id,
+                modelName: catalog.fallbackModel.displayName,
+              };
+              emit({
+                type: "status",
+                line: `Switching the same Cursor API Key to ${fallbackSelection.modelName}.`,
+              });
+              emit({
+                type: "raw",
+                source: "cursor",
+                stream: "runner",
+                eventType: "model_fallback",
+                text: `auto -> ${fallbackSelection.modelId}`,
+              });
+              const fallback = runCursorAgentWithPrompt(
+                cliWorkspace,
+                promptText,
+                cursorModelAttemptOptions(options, cursorAttempts, cursorAttemptIndex, fallbackSelection),
+              );
+              await fallback.finished;
+              return;
+            }
+            emit({
+              type: "status",
+              line: `Composer fallback is unavailable${catalog.error ? `: ${catalog.error}` : "."}`,
+            });
+          }
+
+          if (hasNextKey) {
+            emit({
+              type: "status",
+              line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached its limit; retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}.`,
+            });
+            const next = runCursorAgentWithPrompt(
+              cliWorkspace,
+              promptText,
+              nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex),
+            );
+            await next.finished;
+            return;
+          }
+          throw new Error(errorText || "Cursor API Key reached its limit.");
+        };
+        retry().then(resolve).catch(reject);
         return true;
       };
       if (code !== 0 && lastResult == null) {
@@ -622,6 +713,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         reject(new Error(msg));
         return;
       }
+      if (cursorSelection) clearCursorApiKeyLaneCooldown(cursorSelection, cursorModelSelection.lane);
       resolve();
     });
   });

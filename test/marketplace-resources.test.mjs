@@ -127,7 +127,7 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
       { loginOrCreateUser },
       { getUserPipelinesRoot, PIPELINES_DIR },
       { ensureWorkspaceCollaboration },
-      { publishWorkspaceRelease },
+      { appendWorkspaceRunFinished, appendWorkspaceRunStarted, publishWorkspaceRelease },
       { startUiServer },
     ] = await Promise.all([
       import(`../bin/lib/auth.mjs?marketplace-api=${nonce}`),
@@ -146,21 +146,55 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     fs.writeFileSync(path.join(runnableProjectDir, "workspace.graph.json"), `${JSON.stringify({
       version: 1,
       instances: {
-        run: { instanceId: "run", definitionId: "workspace_run", label: "Run", input: [], output: [] },
-        work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [], output: [] },
+        run: { instanceId: "run", definitionId: "workspace_run", label: "Run", input: [], output: [{ name: "next", type: "node" }] },
+        work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [{ name: "prev", type: "node" }], output: [] },
+        unrelated: { instanceId: "unrelated", definitionId: "provide_text", label: "Unrelated project note", input: [], output: [] },
       },
-      edges: [],
+      edges: [{ source: "run", sourceHandle: "output-0", target: "work", targetHandle: "input-0" }],
       ui: { description: "Automatically visible runnable project" },
     }, null, 2)}\n`, "utf-8");
     const stableRelease = publishWorkspaceRelease(runnableProjectDir, root, { createdBy: owner.user.userId });
     assert.equal(stableRelease.ok, true);
+    const directRun = {
+      runId: "direct-project-run-1",
+      userId: owner.user.userId,
+      username: owner.user.username,
+      flowId: "auto-runnable-flow",
+      flowSource: "user",
+      runNodeId: "run",
+      startedAt: Date.now() - 500,
+      endedAt: Date.now(),
+      workspaceRoot: root,
+    };
+    appendWorkspaceRunStarted(directRun);
+    appendWorkspaceRunFinished(directRun, "success");
     const nonRunnableProjectDir = path.join(getUserPipelinesRoot(owner.user.userId), "not-runnable-flow");
     fs.mkdirSync(nonRunnableProjectDir, { recursive: true });
     fs.writeFileSync(path.join(nonRunnableProjectDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
     fs.writeFileSync(path.join(nonRunnableProjectDir, "workspace.graph.json"), `${JSON.stringify({
       version: 1,
-      instances: { work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [], output: [] } },
+      instances: {
+        empty_run: { instanceId: "empty_run", definitionId: "workspace_run", label: "Run", input: [], output: [{ name: "next", type: "node" }] },
+        work: { instanceId: "work", definitionId: "provide_text", label: "Work", input: [], output: [] },
+      },
       edges: [],
+    }, null, 2)}\n`, "utf-8");
+    const multiRunnableProjectDir = path.join(getUserPipelinesRoot(owner.user.userId), "multi-runnable-flow");
+    fs.mkdirSync(multiRunnableProjectDir, { recursive: true });
+    fs.writeFileSync(path.join(multiRunnableProjectDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
+    fs.writeFileSync(path.join(multiRunnableProjectDir, "workspace.graph.json"), `${JSON.stringify({
+      version: 1,
+      instances: {
+        run_a: { instanceId: "run_a", definitionId: "workspace_run", label: "Morning", input: [], output: [{ name: "next", type: "node" }] },
+        work_a: { instanceId: "work_a", definitionId: "provide_text", label: "Morning work", input: [{ name: "prev", type: "node" }], output: [] },
+        run_b: { instanceId: "run_b", definitionId: "workspace_scheduled_run", label: "Nightly", input: [], output: [{ name: "next", type: "node" }] },
+        work_b: { instanceId: "work_b", definitionId: "provide_text", label: "Nightly work", input: [{ name: "prev", type: "node" }], output: [] },
+        note: { instanceId: "note", definitionId: "provide_text", label: "Project note", input: [], output: [] },
+      },
+      edges: [
+        { source: "run_a", sourceHandle: "output-0", target: "work_a", targetHandle: "input-0" },
+        { source: "run_b", sourceHandle: "output-0", target: "work_b", targetHandle: "input-0" },
+      ],
     }, null, 2)}\n`, "utf-8");
     const sharedRunnableDir = path.join(root, PIPELINES_DIR, "shared-runnable-flow");
     fs.mkdirSync(sharedRunnableDir, { recursive: true });
@@ -168,9 +202,10 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     fs.writeFileSync(path.join(sharedRunnableDir, "workspace.graph.json"), `${JSON.stringify({
       version: 1,
       instances: {
-        scheduled: { instanceId: "scheduled", definitionId: "workspace_scheduled_run", label: "Scheduled Run", input: [], output: [] },
+        scheduled: { instanceId: "scheduled", definitionId: "workspace_scheduled_run", label: "Scheduled Run", input: [], output: [{ name: "next", type: "node" }] },
+        work: { instanceId: "work", definitionId: "provide_text", label: "Scheduled work", input: [{ name: "prev", type: "node" }], output: [] },
       },
-      edges: [],
+      edges: [{ source: "scheduled", sourceHandle: "output-0", target: "work", targetHandle: "input-0" }],
     }, null, 2)}\n`, "utf-8");
     const sharedCollaboration = ensureWorkspaceCollaboration({
       flowId: "shared-runnable-flow",
@@ -231,10 +266,51 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     assert.equal(automaticFlow.displayName, "auto-runnable-flow");
     assert.equal(automaticFlow.visibility, "public");
     assert.equal(automaticFlow.versionLabel, "Stable v1");
+    assert.equal(automaticFlow.useCount, 1, "successful source runs must count as flow usage");
     const sharedAutomaticFlow = body.items.find((item) => item.displayName === "shared-runnable-flow");
     assert.equal(sharedAutomaticFlow.liveFlowSource, "workspace");
     assert.equal(sharedAutomaticFlow.liveWorkspaceId, sharedCollaboration.record.id);
     assert.equal(body.items.some((item) => item.displayName === "not-runnable-flow"), false);
+    const multiFlows = body.items.filter((item) => String(item.displayName || "").startsWith("multi-runnable-flow ·"));
+    assert.equal(multiFlows.length, 2, "each connected Run entry must become one flow card");
+    assert.deepEqual(multiFlows.map((item) => item.nodeCount).sort(), [2, 2]);
+    assert.deepEqual(new Set(multiFlows.map((item) => item.runModeLabel)), new Set(["手动运行", "定时运行"]));
+
+    const previewParams = new URLSearchParams({
+      id: automaticFlow.id,
+      version: automaticFlow.version,
+      projectFlow: "1",
+    });
+    const previewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/preview?${previewParams}`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const previewBody = await previewResponse.json();
+    assert.equal(previewResponse.status, 200, JSON.stringify(previewBody));
+    assert.equal(previewBody.flow.versionLabel, "Stable v1");
+    assert.equal(previewBody.flow.owned, false);
+    assert.equal(previewBody.graph.instances.run.definitionId, "workspace_run");
+    assert.equal(previewBody.graph.instances.work.definitionId, "provide_text");
+    assert.equal(Object.prototype.hasOwnProperty.call(previewBody.graph.instances, "unrelated"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(previewBody.flow, "_graph"), false);
+
+    const workspacePreviewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/workspace-preview`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: automaticFlow.id, version: automaticFlow.version, projectFlow: true }),
+    });
+    const workspacePreviewBody = await workspacePreviewResponse.json();
+    assert.equal(workspacePreviewResponse.status, 200, JSON.stringify(workspacePreviewBody));
+    const workspacePreviewUrl = new URL(workspacePreviewBody.url, `http://127.0.0.1:${server.address().port}`);
+    assert.equal(workspacePreviewUrl.pathname, "/workspace");
+    assert.equal(workspacePreviewUrl.searchParams.get("marketplacePreview"), "1");
+    const readonlyGraphResponse = await fetch(`${workspacePreviewUrl.origin}/api/workspace/graph?flowId=${encodeURIComponent(workspacePreviewUrl.searchParams.get("flowId"))}&flowSource=workspace&archived=1`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const readonlyGraph = await readonlyGraphResponse.json();
+    assert.equal(readonlyGraphResponse.status, 200, JSON.stringify(readonlyGraph));
+    assert.equal(readonlyGraph.writable, false);
+    assert.equal(readonlyGraph.graph.instances.run.definitionId, "workspace_run");
+    assert.equal(Object.prototype.hasOwnProperty.call(readonlyGraph.graph.instances, "unrelated"), false);
 
     const privateResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/visibility`, {
       method: "PATCH",
@@ -253,6 +329,10 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     const hiddenBody = await hiddenResponse.json();
     assert.equal(hiddenResponse.status, 200, JSON.stringify(hiddenBody));
     assert.equal(hiddenBody.items.some((item) => item.id === automaticFlow.id), false);
+    const hiddenPreviewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/preview?${previewParams}`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    assert.equal(hiddenPreviewResponse.status, 404);
 
     const publicResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/visibility`, {
       method: "PATCH",
@@ -282,6 +362,17 @@ test("市场查询 API 默认按使用次数倒序，并把统计字段返回给
     assert.equal(snippetStats.items[0].resourceType, "flow-snippet");
     assert.equal(snippetStats.items[0].useCount, 1, "same insertion event must be counted once");
     assert.equal(snippetStats.items[0].uniqueUserCount, 1);
+    const snippetWorkspacePreviewResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/flows/workspace-preview`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${consumer.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "useful-snippet", version: "1.0.0", kind: "snippet" }),
+    });
+    const snippetWorkspacePreview = await snippetWorkspacePreviewResponse.json();
+    assert.equal(snippetWorkspacePreviewResponse.status, 200, JSON.stringify(snippetWorkspacePreview));
+    const snippetWorkspaceUrl = new URL(snippetWorkspacePreview.url, `http://127.0.0.1:${server.address().port}`);
+    assert.equal(snippetWorkspaceUrl.pathname, "/workspace");
+    assert.equal(snippetWorkspaceUrl.searchParams.get("marketplaceAction"), "add-snippet");
+    assert.equal(snippetWorkspaceUrl.searchParams.get("marketplaceKind"), "snippet");
 
     const ownedResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&scope=owned&q=snippet`, {
       headers: { Authorization: `Bearer ${owner.token}` },

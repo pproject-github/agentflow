@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BodyPromptEditor } from "./BodyPromptEditor.jsx";
+import { CodeDisplayContent } from "./displayRenderers.jsx";
 import { VALID_ROLES } from "./flowFormat.js";
 
 /** @type {RegExp} */
@@ -10,6 +11,208 @@ const NODE_INSTANCE_ID_RE = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
 function modelEntryId(entry) {
   const idx = entry.indexOf(" - ");
   return idx >= 0 ? entry.slice(0, idx).trim() : entry.trim();
+}
+
+function reviewSources(snapshot) {
+  return Array.isArray(snapshot?.sources) ? snapshot.sources : [];
+}
+
+function reviewSourceByPath(snapshot, sourcePath) {
+  const sources = reviewSources(snapshot);
+  if (sourcePath) return sources.find((source) => source.path === sourcePath) || null;
+  return sources[0] || null;
+}
+
+function compactSha(value) {
+  const text = String(value || "");
+  return text ? text.slice(0, 12) : "";
+}
+
+function buildReviewDiff(beforeText, afterText) {
+  const before = String(beforeText || "").replace(/\r\n/g, "\n").split("\n");
+  const after = String(afterText || "").replace(/\r\n/g, "\n").split("\n");
+  if (before.length * after.length > 120000) {
+    let prefix = 0;
+    while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < before.length - prefix
+      && suffix < after.length - prefix
+      && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+    ) suffix += 1;
+    return [
+      ...before.slice(0, prefix).map((text, index) => ({ type: "same", text, oldNumber: index + 1, newNumber: index + 1 })),
+      ...before.slice(prefix, before.length - suffix).map((text, index) => ({ type: "remove", text, oldNumber: prefix + index + 1, newNumber: null })),
+      ...after.slice(prefix, after.length - suffix).map((text, index) => ({ type: "add", text, oldNumber: null, newNumber: prefix + index + 1 })),
+      ...after.slice(after.length - suffix).map((text, index) => ({
+        type: "same",
+        text,
+        oldNumber: before.length - suffix + index + 1,
+        newNumber: after.length - suffix + index + 1,
+      })),
+    ];
+  }
+  const rows = Array.from({ length: before.length + 1 }, () => new Uint16Array(after.length + 1));
+  for (let oldIndex = before.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = after.length - 1; newIndex >= 0; newIndex -= 1) {
+      rows[oldIndex][newIndex] = before[oldIndex] === after[newIndex]
+        ? rows[oldIndex + 1][newIndex + 1] + 1
+        : Math.max(rows[oldIndex + 1][newIndex], rows[oldIndex][newIndex + 1]);
+    }
+  }
+  const diff = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < before.length || newIndex < after.length) {
+    if (oldIndex < before.length && newIndex < after.length && before[oldIndex] === after[newIndex]) {
+      diff.push({ type: "same", text: before[oldIndex], oldNumber: oldIndex + 1, newNumber: newIndex + 1 });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (newIndex < after.length && (oldIndex >= before.length || rows[oldIndex][newIndex + 1] >= rows[oldIndex + 1][newIndex])) {
+      diff.push({ type: "add", text: after[newIndex], oldNumber: null, newNumber: newIndex + 1 });
+      newIndex += 1;
+    } else {
+      diff.push({ type: "remove", text: before[oldIndex], oldNumber: oldIndex + 1, newNumber: null });
+      oldIndex += 1;
+    }
+  }
+  return diff;
+}
+
+function NodeExecutionReview({ review, loading, error, onReload }) {
+  const [mode, setMode] = useState("draft");
+  const [sourcePath, setSourcePath] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const draft = review?.draft || null;
+  const stable = review?.stable || null;
+  const availablePaths = useMemo(() => {
+    const seen = new Set();
+    return [...reviewSources(draft), ...reviewSources(stable)].filter((source) => {
+      if (!source?.path || seen.has(source.path)) return false;
+      seen.add(source.path);
+      return true;
+    });
+  }, [draft, stable]);
+
+  useEffect(() => {
+    setMode("draft");
+    setSourcePath("");
+    setExpanded(false);
+  }, [review?.nodeId]);
+
+  useEffect(() => {
+    if (!availablePaths.length) return;
+    if (!availablePaths.some((source) => source.path === sourcePath)) setSourcePath(availablePaths[0].path);
+  }, [availablePaths, sourcePath]);
+
+  const draftSource = reviewSourceByPath(draft, sourcePath);
+  const stableSource = reviewSourceByPath(stable, sourcePath);
+  const activeSnapshot = mode === "stable" ? stable : draft;
+  const activeSource = mode === "stable" ? stableSource : draftSource;
+  const diff = useMemo(() => (
+    mode === "diff" ? buildReviewDiff(stableSource?.content || "", draftSource?.content || "") : []
+  ), [draftSource?.content, mode, stableSource?.content]);
+  const contentChanged = Boolean(draftSource || stableSource) && draftSource?.sha256 !== stableSource?.sha256;
+
+  const viewer = mode === "diff" ? (
+    <div className="af-node-review-diff" role="table" aria-label="Draft 与 Stable 执行内容差异">
+      {diff.map((line, index) => (
+        <div className={`af-node-review-diff__line is-${line.type}`} role="row" key={`${line.type}-${line.oldNumber || 0}-${line.newNumber || 0}-${index}`}>
+          <span>{line.oldNumber || ""}</span>
+          <span>{line.newNumber || ""}</span>
+          <strong>{line.type === "add" ? "+" : line.type === "remove" ? "−" : " "}</strong>
+          <code>{line.text || " "}</code>
+        </div>
+      ))}
+    </div>
+  ) : activeSource ? (
+    <CodeDisplayContent
+      content={activeSource.content}
+      language={activeSource.language}
+      fileName={activeSource.path}
+      defaultWrap={activeSource.language === "markdown" || activeSource.language === "text"}
+    />
+  ) : (
+    <div className="af-node-review-empty">当前版本没有这份执行内容。</div>
+  );
+
+  if (loading && !review) return <div className="af-node-review-empty">正在解析节点执行内容…</div>;
+  return (
+    <section className="af-node-review">
+      <div className="af-node-review-summary">
+        <div>
+          <span className={`af-node-review-status${draft?.reviewable ? " is-reviewable" : " is-warning"}`}>
+            <span className="material-symbols-outlined" aria-hidden>{draft?.reviewable ? "verified" : "warning"}</span>
+            {draft?.reviewable ? "执行内容可审查" : "没有可解析的执行内容"}
+          </span>
+          <small>{draft?.definitionId || stable?.definitionId || review?.nodeId || "节点"}</small>
+        </div>
+        <button type="button" className="af-icon-btn" onClick={onReload} disabled={loading} title="重新解析">
+          <span className="material-symbols-outlined" aria-hidden>refresh</span>
+        </button>
+      </div>
+      {error ? <div className="af-node-review-error">{error}</div> : null}
+      {[...(draft?.errors || []), ...(stable?.errors || [])].map((message, index) => (
+        <div className="af-node-review-error" key={`${message}-${index}`}>{message}</div>
+      ))}
+      <div className="af-node-review-meta">
+        {draft?.package ? <span>Package <code>{draft.package.id}@{draft.package.version}</code></span> : null}
+        {draft?.package?.contentSha256 ? <span>SHA <code>{compactSha(draft.package.contentSha256)}</code></span> : null}
+        {draft?.model ? <span>Model <code>{draft.model}</code></span> : null}
+      </div>
+      <div className="af-node-review-mode" role="tablist" aria-label="执行内容版本">
+        <button type="button" className={mode === "draft" ? "is-active" : ""} onClick={() => setMode("draft")}>Draft</button>
+        <button type="button" className={mode === "stable" ? "is-active" : ""} onClick={() => setMode("stable")} disabled={!stable}>
+          {review?.stableReleaseId ? `Stable ${review.stableReleaseId}` : "Stable"}
+        </button>
+        <button type="button" className={mode === "diff" ? "is-active" : ""} onClick={() => setMode("diff")} disabled={!stable}>
+          对比{stable && contentChanged ? " · 有变化" : ""}
+        </button>
+      </div>
+      {availablePaths.length ? (
+        <div className="af-node-review-files" aria-label="执行文件">
+          {availablePaths.map((source) => (
+            <button type="button" className={source.path === sourcePath ? "is-active" : ""} onClick={() => setSourcePath(source.path)} key={source.path}>
+              <span className="material-symbols-outlined" aria-hidden>{source.kind === "prompt" ? "notes" : "code"}</span>
+              <span>{source.title || source.path}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="af-node-review-source-head">
+        <div>
+          <strong>{mode === "diff" ? (draftSource?.path || stableSource?.path || "执行内容") : (activeSource?.path || "执行内容")}</strong>
+          <small>
+            {mode === "diff"
+              ? `${compactSha(stableSource?.sha256) || "新增"} → ${compactSha(draftSource?.sha256) || "已删除"}`
+              : `${activeSnapshot?.label || "Draft"}${activeSource?.sha256 ? ` · SHA ${compactSha(activeSource.sha256)}` : ""}`}
+          </small>
+        </div>
+        <button type="button" className="af-icon-btn" onClick={() => setExpanded(true)} disabled={!activeSource && mode !== "diff"} title="全屏审查">
+          <span className="material-symbols-outlined" aria-hidden>open_in_full</span>
+        </button>
+      </div>
+      <div className="af-node-review-viewer">{viewer}</div>
+      {expanded ? (
+        <div className="af-node-props-expand-overlay" role="dialog" aria-modal="true" aria-label="全屏审查节点执行内容" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setExpanded(false);
+        }}>
+          <div className="af-node-review-expand-panel">
+            <div className="af-node-props-expand-head">
+              <div className="af-node-review-expand-title">
+                <strong>{draft?.definitionId || stable?.definitionId}</strong>
+                <span>{mode === "diff" ? "Draft 与 Stable 对比" : activeSource?.path}</span>
+              </div>
+              <button type="button" className="af-icon-btn" onClick={() => setExpanded(false)} aria-label="关闭全屏审查">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="af-node-review-expand-content">{viewer}</div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 /**
@@ -179,6 +382,10 @@ function IoPinsEditor({ kind, label, slots, onSlotsChange, disabled, requiredRea
  *   allowEditRequiredPins?: boolean,
  *   error: string,
  *   ioSlots: { inputs?: { name?: string, type?: string }[], outputs?: { name?: string, type?: string }[] },
+ *   executionReview?: any,
+ *   executionReviewLoading?: boolean,
+ *   executionReviewError?: string,
+ *   onReloadExecutionReview?: () => void,
  * }} props
  */
 export function NodePropertiesPanel({
@@ -194,11 +401,20 @@ export function NodePropertiesPanel({
   allowEditRequiredPins = false,
   error,
   ioSlots,
+  executionReview,
+  executionReviewLoading = false,
+  executionReviewError = "",
+  onReloadExecutionReview,
 }) {
   const { t } = useTranslation();
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [scriptExpanded, setScriptExpanded] = useState(false);
   const [publishState, setPublishState] = useState({ status: "idle", message: "" });
+  const [panelTab, setPanelTab] = useState(disabled ? "review" : "config");
+
+  useEffect(() => {
+    setPanelTab(disabled ? "review" : "config");
+  }, [disabled, draft?.id]);
 
   const update = useCallback(
     (patch) => {
@@ -277,6 +493,17 @@ export function NodePropertiesPanel({
             {publishState.message}
           </p>
         ) : null}
+
+        <div className="af-node-props-tabs" role="tablist" aria-label="节点属性视图">
+          <button type="button" className={panelTab === "config" ? "is-active" : ""} onClick={() => setPanelTab("config")}>配置</button>
+          <button type="button" className={panelTab === "review" ? "is-active" : ""} onClick={() => setPanelTab("review")}>
+            <span className="material-symbols-outlined" aria-hidden>fact_check</span>
+            执行内容
+          </button>
+        </div>
+
+        {panelTab === "config" ? (
+          <>
 
         <label className="af-pipeline-drawer-field af-node-props-field">
           <span className="af-node-props-label">{t("flow:node.nodeType")}</span>
@@ -517,6 +744,15 @@ export function NodePropertiesPanel({
             spellCheck={false}
           />
         </label>
+          </>
+        ) : (
+          <NodeExecutionReview
+            review={executionReview}
+            loading={executionReviewLoading}
+            error={executionReviewError}
+            onReload={onReloadExecutionReview}
+          />
+        )}
       </div>
 
       {scriptExpanded ? (

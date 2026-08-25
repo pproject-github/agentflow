@@ -1182,6 +1182,7 @@ function normalizeWorkspaceUsageRecord(parsed, source = "workspace-run") {
     username: String(parsed?.username || userId),
     flowId,
     flowSource: String(parsed?.flowSource || "user"),
+    runNodeId: String(parsed?.runNodeId || ""),
     runId: String(parsed?.runId || ""),
     at,
     endedAt: parsed?.endedAt == null ? null : Number(parsed.endedAt),

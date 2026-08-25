@@ -59,7 +59,7 @@ import {
   getSlotConnectionLabel,
   slotTypeCompatibility,
 } from "../nodeSchema.js";
-import { recordPipelineView } from "../pipelineViewPreference.js";
+import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
 import { placeWorkspaceRelationLabel } from "../workspaceEdgeLabelPlacement.js";
 import {
   sortWorkflowIssueLinks,
@@ -172,6 +172,17 @@ function readFlowParamsFromUrl() {
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
     returnTo: returnTo === "/workflows" || returnTo.startsWith("/workflows?") ? returnTo : "",
     workflowDemo: sp.get("workflowDemo") === "1",
+    marketplacePreview: sp.get("marketplacePreview") === "1",
+    marketplaceKind: sp.get("marketplaceKind") || "flow",
+    marketplaceResourceId: sp.get("marketplaceResourceId") || "",
+    marketplaceVersion: sp.get("marketplaceVersion") || "",
+    marketplaceProjectFlow: sp.get("marketplaceProjectFlow") === "1",
+    marketplaceTitle: sp.get("marketplaceTitle") || "",
+    marketplaceAction: sp.get("marketplaceAction") || "",
+    marketplaceInstallFlowId: sp.get("marketplaceInstallFlowId") || "",
+    marketplaceTargetFlowId: sp.get("marketplaceTargetFlowId") || "",
+    marketplaceTargetFlowSource: sp.get("marketplaceTargetFlowSource") || "",
+    marketplaceTargetWorkspaceId: sp.get("marketplaceTargetWorkspaceId") || "",
   };
 }
 
@@ -185,6 +196,17 @@ function flowParamsQuery(params) {
   if (params.archived) q.set("archived", "1");
   if (params.returnTo) q.set("returnTo", params.returnTo);
   if (params.workflowDemo) q.set("workflowDemo", "1");
+  if (params.marketplacePreview) q.set("marketplacePreview", "1");
+  if (params.marketplaceKind) q.set("marketplaceKind", params.marketplaceKind);
+  if (params.marketplaceResourceId) q.set("marketplaceResourceId", params.marketplaceResourceId);
+  if (params.marketplaceVersion) q.set("marketplaceVersion", params.marketplaceVersion);
+  if (params.marketplaceProjectFlow) q.set("marketplaceProjectFlow", "1");
+  if (params.marketplaceTitle) q.set("marketplaceTitle", params.marketplaceTitle);
+  if (params.marketplaceAction) q.set("marketplaceAction", params.marketplaceAction);
+  if (params.marketplaceInstallFlowId) q.set("marketplaceInstallFlowId", params.marketplaceInstallFlowId);
+  if (params.marketplaceTargetFlowId) q.set("marketplaceTargetFlowId", params.marketplaceTargetFlowId);
+  if (params.marketplaceTargetFlowSource) q.set("marketplaceTargetFlowSource", params.marketplaceTargetFlowSource);
+  if (params.marketplaceTargetWorkspaceId) q.set("marketplaceTargetWorkspaceId", params.marketplaceTargetWorkspaceId);
   return q;
 }
 
@@ -9125,6 +9147,9 @@ function WorkspacePageInner() {
   const [nodePropDraft, setNodePropDraft] = useState(null);
   const nodePropDraftRef = useRef(null);
   const [nodePropsError, setNodePropsError] = useState("");
+  const [nodeExecutionReview, setNodeExecutionReview] = useState(null);
+  const [nodeExecutionReviewLoading, setNodeExecutionReviewLoading] = useState(false);
+  const [nodeExecutionReviewError, setNodeExecutionReviewError] = useState("");
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaceWritable, setWorkspaceWritable] = useState(!flowParams.adminOwnerId);
@@ -9134,6 +9159,11 @@ function WorkspacePageInner() {
   const [workspaceReleaseBusy, setWorkspaceReleaseBusy] = useState(false);
   const [workspaceReleaseError, setWorkspaceReleaseError] = useState("");
   const [workspaceReleaseNotes, setWorkspaceReleaseNotes] = useState("");
+  const [marketplacePreviewBusy, setMarketplacePreviewBusy] = useState(false);
+  const [marketplacePreviewProjectOpen, setMarketplacePreviewProjectOpen] = useState(false);
+  const [marketplacePreviewProjects, setMarketplacePreviewProjects] = useState([]);
+  const [marketplacePreviewProjectKey, setMarketplacePreviewProjectKey] = useState("");
+  const [marketplacePreviewProjectError, setMarketplacePreviewProjectError] = useState("");
   const [adminReview, setAdminReview] = useState(() => (
     flowParams.adminOwnerId
       ? { readonly: true, ownerUserId: flowParams.adminOwnerId, ownerUsername: flowParams.adminOwnerId }
@@ -9469,6 +9499,32 @@ function WorkspacePageInner() {
     setFiles(nextFiles);
     setCollapsedDirs(new Set(collectDirectoryPaths(nextFiles)));
     setWorkspaceRoot(json.root || "");
+  }, [flowParams]);
+
+  const loadNodeExecutionReview = useCallback(async (requestedNodeId = "") => {
+    const nodeId = String(requestedNodeId || selectedNodeIdRef.current || "").trim();
+    if (!nodeId || !flowParams.flowId) {
+      setNodeExecutionReview(null);
+      setNodeExecutionReviewError("");
+      return;
+    }
+    setNodeExecutionReviewLoading(true);
+    setNodeExecutionReviewError("");
+    try {
+      const query = flowParamsQuery(flowParams);
+      query.set("nodeId", nodeId);
+      const response = await fetch(`/api/workspace/node-review?${query.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "解析节点执行内容失败");
+      if (selectedNodeIdRef.current === nodeId) setNodeExecutionReview(payload);
+    } catch (error) {
+      if (selectedNodeIdRef.current === nodeId) {
+        setNodeExecutionReview(null);
+        setNodeExecutionReviewError(String(error?.message || error));
+      }
+    } finally {
+      if (selectedNodeIdRef.current === nodeId) setNodeExecutionReviewLoading(false);
+    }
   }, [flowParams]);
 
   const loadFlowSnippets = useCallback(async () => {
@@ -9912,7 +9968,7 @@ function WorkspacePageInner() {
       workspaceValueEqual(current, nextCollaboration) ? current : nextCollaboration
     ));
     setAdminReview(graphJson.adminReview || null);
-    setWorkspaceIsTransientDraft(graphJson.draft === true);
+    setWorkspaceIsTransientDraft(graphJson.draft === true || flowParams.marketplacePreview);
     setWorkspaceRelease(graphJson.release || null);
     setWorkspaceConflict(null);
     if (shouldInitializeWorkspaceViewport) {
@@ -11692,6 +11748,16 @@ function WorkspacePageInner() {
   useEffect(() => {
     selectedNodeIdRef.current = selectedNodeId;
   }, [selectedNodeId]);
+
+  useEffect(() => {
+    if (!selectedNodeId) {
+      setNodeExecutionReview(null);
+      setNodeExecutionReviewError("");
+      setNodeExecutionReviewLoading(false);
+      return;
+    }
+    void loadNodeExecutionReview(selectedNodeId);
+  }, [loadNodeExecutionReview, selectedNodeId, workspaceRelease?.stableReleaseId]);
 
   useEffect(() => {
     connectionMenuRef.current = connectionMenu;
@@ -15494,7 +15560,75 @@ function WorkspacePageInner() {
     activeComposerTechnicalMessages.length,
     composerSidebarOpen,
   ]);
-  const workspaceProjectTitle = String(flowParams.flowId || "").trim() || "Workspace";
+  const handleMarketplacePreviewAction = useCallback(async () => {
+    if (!flowParams.marketplacePreview || marketplacePreviewBusy) return;
+    if (flowParams.marketplaceAction === "add-snippet") {
+      setMarketplacePreviewBusy(true);
+      setMarketplacePreviewProjectError("");
+      try {
+        const response = await fetch("/api/flows?view=personal");
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+        const editable = (Array.isArray(body) ? body : []).filter((flow) => (
+          !flow?.archived
+          && !["builtin", "admin"].includes(String(flow?.source || "user"))
+          && flow?.collaboration?.role !== "viewer"
+        ));
+        setMarketplacePreviewProjects(editable);
+        const first = editable[0];
+        setMarketplacePreviewProjectKey(first ? `${first.source || "user"}:${first.id || ""}:${first.collaboration?.id || ""}` : "");
+        setMarketplacePreviewProjectOpen(true);
+      } catch (previewError) {
+        setMarketplacePreviewProjectError(String(previewError?.message || previewError));
+        setMarketplacePreviewProjectOpen(true);
+      } finally {
+        setMarketplacePreviewBusy(false);
+      }
+      return;
+    }
+    if (["open-source", "open-installed"].includes(flowParams.marketplaceAction)) {
+      const params = new URLSearchParams({
+        flowId: flowParams.marketplaceTargetFlowId,
+        flowSource: flowParams.marketplaceTargetFlowSource || "user",
+      });
+      if (flowParams.marketplaceTargetWorkspaceId) params.set("workspaceId", flowParams.marketplaceTargetWorkspaceId);
+      navigate(`/workspace?${params}`);
+      return;
+    }
+    const flowId = window.prompt("安装到个人空间，Flow ID：", flowParams.marketplaceInstallFlowId || flowParams.marketplaceTitle);
+    if (!flowId) return;
+    setMarketplacePreviewBusy(true);
+    try {
+      const response = await fetch("/api/marketplace/flows/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: flowParams.marketplaceResourceId,
+          version: flowParams.marketplaceVersion,
+          flowId,
+          projectFlow: flowParams.marketplaceProjectFlow,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      navigate(body.url || `/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`);
+    } catch (previewError) {
+      setStatus(String(previewError?.message || previewError));
+    } finally {
+      setMarketplacePreviewBusy(false);
+    }
+  }, [flowParams, marketplacePreviewBusy, navigate]);
+  const addMarketplacePreviewSnippet = useCallback(() => {
+    const project = marketplacePreviewProjects.find((item) => (
+      `${item.source || "user"}:${item.id || ""}:${item.collaboration?.id || ""}` === marketplacePreviewProjectKey
+    ));
+    if (!project) return;
+    const target = new URL(flowUrlForView(project, "workspace"), window.location.origin);
+    target.searchParams.set("marketplaceSnippetId", flowParams.marketplaceResourceId);
+    target.searchParams.set("marketplaceSnippetVersion", flowParams.marketplaceVersion || "1.0.0");
+    navigate(`${target.pathname}${target.search}`);
+  }, [flowParams.marketplaceResourceId, flowParams.marketplaceVersion, marketplacePreviewProjectKey, marketplacePreviewProjects, navigate]);
+  const workspaceProjectTitle = String(flowParams.marketplaceTitle || flowParams.flowId || "").trim() || "Workspace";
   const singleNodeDisplayShare = displayShareDraft?.mode === "single-node";
   const displayShareSourceNode = singleNodeDisplayShare
     ? workspaceDisplayNodes.find((node) => node.id === displayShareDraft.sourceNodeId || displayShareDraft.nodeIds?.includes(node.id)) || null
@@ -15502,7 +15636,9 @@ function WorkspacePageInner() {
   const displayShareSelectableNodes = singleNodeDisplayShare && displayShareSourceNode
     ? [displayShareSourceNode]
     : workspaceDisplayNodes;
-  const workspaceBackTarget = flowParams.adminOwnerId
+  const workspaceBackTarget = flowParams.marketplacePreview
+    ? "/marketplace?kind=flow"
+    : flowParams.adminOwnerId
     ? "/admin/usage"
     : flowParams.returnTo || (workspaceMode === "workflow" ? "/workflows" : "/projects");
 
@@ -15553,6 +15689,12 @@ function WorkspacePageInner() {
               只读查看 · {adminReview.ownerUsername || adminReview.ownerUserId}
             </span>
           ) : null}
+          {flowParams.marketplacePreview ? (
+            <span className="af-workspace-admin-review-badge" title="流程仓库只读预览不会修改或运行原流程">
+              <span className="material-symbols-outlined" aria-hidden>visibility</span>
+              流程仓库 · 只读预览
+            </span>
+          ) : null}
           <div className="af-view-switch" aria-label="视图切换">
             <button
               type="button"
@@ -15578,6 +15720,29 @@ function WorkspacePageInner() {
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
+          {flowParams.marketplacePreview ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn af-workspace-release-publish-btn"
+              disabled={marketplacePreviewBusy}
+              onClick={() => void handleMarketplacePreviewAction()}
+            >
+              <span className="material-symbols-outlined" aria-hidden>
+                {flowParams.marketplaceAction === "add-snippet"
+                  ? "add_to_photos"
+                  : flowParams.marketplaceAction === "open-source" || flowParams.marketplaceAction === "open-installed" ? "open_in_new" : "download"}
+              </span>
+              {marketplacePreviewBusy
+                ? "安装中"
+                : flowParams.marketplaceAction === "open-source"
+                  ? "打开原流程"
+                  : flowParams.marketplaceAction === "open-installed"
+                    ? "打开已安装流程"
+                    : flowParams.marketplaceAction === "add-snippet"
+                      ? "添加到 Project"
+                      : "安装到个人空间"}
+            </button>
+          ) : null}
           {!isWorkflowMode ? (
             <span
               className={`af-workspace-sync-light is-${workspaceSyncIndicator.phase}`}
@@ -15641,7 +15806,7 @@ function WorkspacePageInner() {
               处理冲突
             </button>
           ) : null}
-          {isDisplayMode ? (
+          {isDisplayMode && !flowParams.marketplacePreview ? (
             <>
               <button
                 type="button"
@@ -15668,30 +15833,32 @@ function WorkspacePageInner() {
               </button>
             </>
           ) : null}
-          <button
-            type="button"
-            className="af-workspace-display-share-btn"
-            disabled={isWorkflowMode
-              ? !workflowTapdId
-              : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
-            onClick={() => {
-              if (isWorkflowMode) {
-                setWorkflowCollaborationOpenRequest((request) => request + 1);
-              } else {
-                openWorkspaceShareDialog();
-              }
-            }}
-            title={isWorkflowMode
-              ? !workflowTapdId
-                ? "先读取一个 TAPD 需求"
-                : "管理当前需求的成员权限和只读链接"
-              : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
-                ? "仅 Workspace 所有者可以管理项目协作"
-                : "管理项目的团队和成员协作"}
-          >
-            <span className="material-symbols-outlined" aria-hidden>group_add</span>
-            协作
-          </button>
+          {!flowParams.marketplacePreview ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn"
+              disabled={isWorkflowMode
+                ? !workflowTapdId
+                : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
+              onClick={() => {
+                if (isWorkflowMode) {
+                  setWorkflowCollaborationOpenRequest((request) => request + 1);
+                } else {
+                  openWorkspaceShareDialog();
+                }
+              }}
+              title={isWorkflowMode
+                ? !workflowTapdId
+                  ? "先读取一个 TAPD 需求"
+                  : "管理当前需求的成员权限和只读链接"
+                : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
+                  ? "仅 Workspace 所有者可以管理项目协作"
+                  : "管理项目的团队和成员协作"}
+            >
+              <span className="material-symbols-outlined" aria-hidden>group_add</span>
+              协作
+            </button>
+          ) : null}
           {isWorkflowMode && authUser?.isAdmin === true && !flowParams.workflowShare && !flowParams.workflowDemo ? (
             <button
               type="button"
@@ -15704,7 +15871,7 @@ function WorkspacePageInner() {
               {workflowDeleteBusy ? "清理中" : "清理 Workflow"}
             </button>
           ) : null}
-          {!adminReview && !isWorkflowMode ? (
+          {!adminReview && !isWorkflowMode && !flowParams.marketplacePreview ? (
             <button
               type="button"
               className="af-workspace-display-share-btn"
@@ -15715,7 +15882,7 @@ function WorkspacePageInner() {
               我的分享
             </button>
           ) : null}
-          {!isWorkflowMode ? (
+          {!isWorkflowMode && !flowParams.marketplacePreview ? (
             <>
               <button
                 type="button"
@@ -16648,6 +16815,10 @@ function WorkspacePageInner() {
               onClose={() => setSelectedNodeId("")}
               onPublishToMarketplace={publishNodeToMarketplace}
               error={nodePropsError}
+              executionReview={nodeExecutionReview}
+              executionReviewLoading={nodeExecutionReviewLoading}
+              executionReviewError={nodeExecutionReviewError}
+              onReloadExecutionReview={() => void loadNodeExecutionReview(selectedNode.id)}
               ioSlots={{
                 inputs: Array.isArray(nodePropDraft?.inputs) ? nodePropDraft.inputs : [],
                 outputs: Array.isArray(nodePropDraft?.outputs) ? nodePropDraft.outputs : [],
@@ -17531,6 +17702,40 @@ function WorkspacePageInner() {
                     );
                   })}
                 </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {marketplacePreviewProjectOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay" onMouseDown={() => setMarketplacePreviewProjectOpen(false)}>
+            <div className="af-flow-snippet-modal af-marketplace-preview-project-modal" role="dialog" aria-modal="true" aria-label="添加到 Project" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title"><span className="material-symbols-outlined" aria-hidden>add_to_photos</span>添加到 Project</span>
+                <button type="button" className="af-flow-snippet-modal__close" onClick={() => setMarketplacePreviewProjectOpen(false)} aria-label="关闭">
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <p className="af-marketplace-preview-project-hint">选择目标后，将进入对应 Workspace，并把当前片段复制到调整态画布。</p>
+                {marketplacePreviewProjectError ? <div className="af-flow-snippet-error">{marketplacePreviewProjectError}</div> : null}
+                {!marketplacePreviewProjectError && marketplacePreviewProjects.length === 0 ? <div className="af-marketplace-snippet-projects__empty">暂无可编辑 Project。</div> : null}
+                <div className="af-marketplace-snippet-project-list">
+                  {marketplacePreviewProjects.map((project) => {
+                    const key = `${project.source || "user"}:${project.id || ""}:${project.collaboration?.id || ""}`;
+                    return (
+                      <label key={key} className={marketplacePreviewProjectKey === key ? "is-selected" : ""}>
+                        <input type="radio" name="workspace-preview-project" value={key} checked={marketplacePreviewProjectKey === key} onChange={() => setMarketplacePreviewProjectKey(key)} />
+                        <span><strong>{project.id}</strong><small>{project.source === "workspace" ? "共享 Project" : "个人 Project"}</small></span>
+                        <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button type="button" className="af-flow-snippet-modal__btn" onClick={() => setMarketplacePreviewProjectOpen(false)}>取消</button>
+                <button type="button" className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary" disabled={!marketplacePreviewProjectKey} onClick={addMarketplacePreviewSnippet}>添加到流程</button>
               </div>
             </div>
           </div>,

@@ -3,7 +3,6 @@ import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import MarketplacePage from "./pages/MarketplacePage.jsx";
-import MarketplaceSnippetPreviewPage from "./pages/MarketplaceSnippetPreviewPage.jsx";
 import SpacesPage from "./pages/SpacesPage.jsx";
 import SpacePage from "./pages/SpacePage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
@@ -113,7 +112,6 @@ function RoutedContent({ authUser }) {
   const { path } = useRoute();
   if (path === "/projects" || path === "/") return <ProjectsPage authUser={authUser} />;
   if (path === "/marketplace") return <MarketplacePage authUser={authUser} />;
-  if (path === "/marketplace/preview") return <MarketplaceSnippetPreviewPage />;
   if (path === "/spaces") return <SpacesPage authUser={authUser} />;
   if (path === "/nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="installed" />;
   if (path === "/my-nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="owned" />;
@@ -246,7 +244,7 @@ function AuthGate({ children }) {
 function AppShell({ authUser, onLogout }) {
   const { path } = useRoute();
   const workflowReportStandalone = path === "/workflow-report";
-  const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist" || path === "/marketplace/preview";
+  const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist";
   const fullBleed = pipelineFullBleed || workflowReportStandalone;
   return (
     <div className="af-app">

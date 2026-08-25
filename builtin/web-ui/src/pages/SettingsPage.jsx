@@ -933,7 +933,7 @@ export default function SettingsPage({ authUser }) {
                     </div>
                     <div>
                       <h2 className="af-set-h2">Cursor API Key 池</h2>
-                      <p className="af-set-card-subtitle">按请求轮换，遇到 usage limit 或 resource_exhausted 会自动尝试下一个 Key。</p>
+                      <p className="af-set-card-subtitle">Auto 明确用量耗尽时，优先在同一 Key 动态切换可用 Composer；其他限流会冷却当前 Key 并尝试下一个。</p>
                     </div>
                   </div>
                   <span className={"af-set-badge" + (cursorApiKeyRecords.length ? " af-set-badge--ok" : " af-set-badge--muted")}>
