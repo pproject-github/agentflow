@@ -42,6 +42,7 @@ import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
 import LoadingState from "../components/LoadingState.jsx";
+import AiExplorationPanel from "../components/AiExplorationPanel.jsx";
 import {
   ComposerAssistantActivity,
   ComposerAssistantInput,
@@ -9388,6 +9389,7 @@ function WorkspacePageInner() {
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
+  const [aiExplorationOpen, setAiExplorationOpen] = useState(false);
   const composerSidebarThreadRef = useRef(null);
   const composerActiveSessionTabRef = useRef(null);
   const [workspaceRunLogsTarget, setWorkspaceRunLogsTarget] = useState(null);
@@ -15956,6 +15958,22 @@ function WorkspacePageInner() {
           >
             <span className="material-symbols-outlined">help</span>
           </button>
+          {!isWorkflowMode && !isDisplayMode ? (
+            <button
+              type="button"
+              className={"af-composer-topbar-btn af-ai-exploration-topbar-btn" + (aiExplorationOpen ? " af-composer-topbar-btn--active" : "")}
+              disabled={!workspaceWritable}
+              onClick={() => {
+                setComposerSidebarOpen(false);
+                setSelectedNodeId("");
+                setAiExplorationOpen((value) => !value);
+              }}
+              title="先生成预计运行图、进行 Dry-run 策略预检，再固化为 Workspace DSL"
+            >
+              <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+              探索
+            </button>
+          ) : null}
           <button
             type="button"
             className={"af-composer-topbar-btn" + (isWorkflowMode ? " af-composer-topbar-btn--workflow" : "") + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
@@ -15966,6 +15984,7 @@ function WorkspacePageInner() {
                 return;
               }
               setWorkspaceRunLogsTarget(null);
+              setAiExplorationOpen(false);
               setComposerSidebarOpen((v) => {
                 if (!v) setActiveComposerSessionId(latestComposerSessionId());
                 return !v;
@@ -15997,7 +16016,7 @@ function WorkspacePageInner() {
 	      <div
 	        className={
 	          "af-workspace-body" +
-	          (!isDisplayMode && !isWorkflowMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
+	          (!isDisplayMode && !isWorkflowMode && (composerSidebarOpen || aiExplorationOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
 	          (!isDisplayMode && !isWorkflowMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
 	          (isDisplayMode ? " af-workspace-body--display-mode" : "") +
 	          (isWorkflowMode ? " af-workspace-body--workflow-mode" : "")
@@ -16753,7 +16772,18 @@ function WorkspacePageInner() {
           ) : null}
         </main>
         )}
-        {!isDisplayMode && !isWorkflowMode && composerSidebarOpen ? (
+        {!isDisplayMode && !isWorkflowMode && aiExplorationOpen ? (
+          <AiExplorationPanel
+            flowParams={flowParams}
+            workspaceWritable={workspaceWritable}
+            model={composerModel}
+            onClose={() => setAiExplorationOpen(false)}
+            onMaterialized={async () => {
+              await loadWorkspace();
+              setStatus("探索计划已固化到 Workspace DSL 调整态");
+            }}
+          />
+        ) : !isDisplayMode && !isWorkflowMode && composerSidebarOpen ? (
           <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workspace-composer-drawer" aria-label="Workspace AI Composer">
             <div className="af-composer-sidebar">
               <div className="af-pipeline-drawer-head">

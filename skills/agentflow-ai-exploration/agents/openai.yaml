@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentFlow AI Exploration"
+  short_description: "Plan, trace, review, and materialize AI runs"
+  default_prompt: "Use $agentflow-ai-exploration to plan this task, stream its execution trace, and materialize the reviewed result as Workspace DSL."

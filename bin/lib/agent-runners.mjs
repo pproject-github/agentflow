@@ -124,7 +124,7 @@ function shouldSkipCodexGitCheck(workspace) {
   return !hasGitMetadataAncestor(workspace);
 }
 
-function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessagePath, promptText, configArgs = [] }) {
+function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessagePath, promptText, configArgs = [], sandboxMode = "", allowDanger = true }) {
   const args = [];
   for (const cfg of Array.isArray(configArgs) ? configArgs : []) {
     const value = String(cfg || "").trim();
@@ -138,10 +138,10 @@ function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessageP
     const abs = path.resolve(dir);
     if (abs && abs !== workspace) args.push("--add-dir", abs);
   }
-  if (envFlag("AGENTFLOW_CODEX_DANGER", false)) {
+  if (allowDanger && envFlag("AGENTFLOW_CODEX_DANGER", false)) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else {
-    args.push("--sandbox", String(process.env.AGENTFLOW_CODEX_SANDBOX || "workspace-write").trim() || "workspace-write");
+    args.push("--sandbox", String(sandboxMode || process.env.AGENTFLOW_CODEX_SANDBOX || "workspace-write").trim() || "workspace-write");
   }
   if (shouldSkipCodexGitCheck(workspace)) args.push("--skip-git-repo-check");
   if (envFlag("AGENTFLOW_CODEX_EPHEMERAL", false)) args.push("--ephemeral");
@@ -557,14 +557,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           if (options.onToolCall) options.onToolCall("thinking", "");
         } else if (event.type === "result") {
           lastResult = event;
-          const resultNl = extractCursorResultNl(event);
+          const resultNl = options.includeJsonResult && typeof event.result === "string"
+            ? normalizeStreamTextChunk(event.result)
+            : extractCursorResultNl(event);
           if (resultNl) emit({ type: "natural", kind: "result", text: resultNl });
           if (event.subtype === "success" && !event.is_error) {
             hadError = false;
             emit({ type: "status", line: t("runner.completed") });
           } else {
             hadError = true;
-            const errNl = extractCursorResultNl(event);
+            const errNl = options.includeJsonResult && typeof event.result === "string"
+              ? normalizeStreamTextChunk(event.result)
+              : extractCursorResultNl(event);
             if (errNl) emit({ type: "natural", kind: "error", text: errNl });
             emit({
               type: "status",
@@ -851,6 +855,7 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
   const model = options.model && String(options.model).trim();
   const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
   const bypassPermissions =
+    options.allowDanger !== false &&
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", ws];
@@ -1044,6 +1049,8 @@ export function runCodexAgentWithPrompt(cliWorkspace, promptText, options = {}) 
     outputLastMessagePath,
     promptText,
     configArgs: options.codexConfigArgs,
+    sandboxMode: options.sandboxMode,
+    allowDanger: options.allowDanger !== false,
   });
 
   const useStderrInherit =

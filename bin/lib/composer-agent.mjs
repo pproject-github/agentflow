@@ -319,6 +319,11 @@ function runCursorAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
  * @param {string} [opts.modelKey]
  * @param {Record<string, string>} [opts.extraEnv]
  * @param {boolean} [opts.force]
+ * @param {"ask" | "plan"} [opts.mode]
+ * @param {boolean} [opts.sandboxDisabled]
+ * @param {boolean} [opts.approveMcps]
+ * @param {"read-only" | "workspace-write" | "danger-full-access"} [opts.sandboxMode]
+ * @param {boolean} [opts.includeJsonResult]
  * @param {(ev: object) => void} [opts.onStreamEvent]
  * @param {(subtype: string, toolName: string) => void} [opts.onToolCall]
  * @returns {{ child: import('child_process').ChildProcess, finished: Promise<void> }}
@@ -343,6 +348,12 @@ export function startComposerAgent(opts) {
     onChild: opts.onChild,
     detached: Boolean(opts.detached),
     force: Boolean(opts.force),
+    ...(opts.mode ? { mode: String(opts.mode) } : {}),
+    ...(opts.sandboxDisabled === false ? { sandboxDisabled: false } : {}),
+    ...(typeof opts.approveMcps === "boolean" ? { approveMcps: opts.approveMcps } : {}),
+    ...(opts.sandboxMode ? { sandboxMode: String(opts.sandboxMode) } : {}),
+    ...(opts.allowDanger === false ? { allowDanger: false } : {}),
+    ...(opts.includeJsonResult === true ? { includeJsonResult: true } : {}),
     env,
     addDirs: Array.isArray(opts.writableDirs)
       ? opts.writableDirs.map((dir) => String(dir || "").trim()).filter(Boolean)

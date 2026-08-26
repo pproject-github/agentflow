@@ -13,6 +13,19 @@
 
 import { listNodesJson, readNodeDetailJson, readNodeFilePreview } from "./catalog-flows.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
+import {
+  aiMaterializationPrompt,
+  aiPlanPrompt,
+  appendAiTraceEvents,
+  createAiExplorationSession,
+  classifyAiToolSideEffect,
+  listAiExplorationSessions,
+  materializableAiTraceEvents,
+  parseAiPlanResult,
+  readAiExplorationSession,
+  updateAiExplorationSession,
+  writeAiExplorationMaterialization,
+} from "./ai-exploration.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
 import { runGit } from "./git-worktree.mjs";
@@ -3917,6 +3930,436 @@ async function workspaceRoutes(req, res, ctx) {
         json(res, 200, { ok: true, path: rel });
       } catch (e) {
         json(res, /traversal/i.test(String(e.message || e)) ? 403 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/explorations") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          adminOwnerId: url.searchParams.get("adminOwnerId") || "",
+          archived: url.searchParams.get("archived") === "1" || url.searchParams.get("flowArchived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        json(res, 200, { ok: true, explorations: listAiExplorationSessions(scoped.root) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workspace/exploration") {
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: url.searchParams.get("flowId") || "",
+          flowSource: url.searchParams.get("flowSource") || "user",
+          adminOwnerId: url.searchParams.get("adminOwnerId") || "",
+          archived: url.searchParams.get("archived") === "1" || url.searchParams.get("flowArchived") === "1",
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        json(res, 200, { ok: true, exploration: readAiExplorationSession(scoped.root, url.searchParams.get("id") || "") });
+      } catch (e) {
+        json(res, /Invalid exploration|ENOENT/.test(String(e?.message || e)) ? 404 : 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/exploration") {
+      let payload;
+      try { payload = JSON.parse(await readBody(req)); } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Exploration write permission denied" });
+          return;
+        }
+        const exploration = createAiExplorationSession(scoped.root, {
+          title: payload.title,
+          goal: payload.goal,
+          mode: payload.mode || "observed",
+          status: payload.status || "running",
+          source: payload.source || { provider: "external", agent: "custom" },
+        });
+        json(res, 201, {
+          ok: true,
+          exploration,
+          ingest: {
+            method: "POST",
+            path: "/api/workspace/exploration/events",
+            body: {
+              flowId: payload.flowId || "",
+              flowSource: payload.flowSource || "user",
+              id: exploration.id,
+              events: [],
+            },
+          },
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/exploration/events") {
+      let payload;
+      try { payload = JSON.parse(await readBody(req)); } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Exploration write permission denied" });
+          return;
+        }
+        const appended = appendAiTraceEvents(scoped.root, payload.id, payload.events || [], {
+          phase: payload.phase || "observed",
+        });
+        if (payload.status || payload.summary) {
+          appended.session = updateAiExplorationSession(scoped.root, payload.id, {
+            ...(payload.status ? { status: payload.status } : {}),
+            ...(payload.summary ? { summary: payload.summary } : {}),
+          });
+        }
+        json(res, 200, { ok: true, ...appended });
+      } catch (e) {
+        json(res, /Invalid exploration|ENOENT/.test(String(e?.message || e)) ? 404 : 400, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/exploration/plan") {
+      let payload;
+      try { payload = JSON.parse(await readBody(req)); } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const goal = String(payload?.goal || "").trim();
+      if (!goal) {
+        json(res, 400, { error: "Missing exploration goal" });
+        return;
+      }
+      let scoped;
+      let exploration;
+      try {
+        scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Exploration write permission denied" });
+          return;
+        }
+        const graphRead = readWorkspaceGraph(scoped.root);
+        const graph = graphRead?.graph || graphRead;
+        const workspaceSource = workspaceGraphAsSource(graph);
+        exploration = createAiExplorationSession(scoped.root, {
+          title: payload.title || goal.slice(0, 80),
+          goal,
+          mode: "planned",
+          status: "planning",
+          source: { provider: "agentflow", agent: String(payload.model || "default") },
+        });
+        const chunks = [];
+        let result = "";
+        const handle = startComposerAgent({
+          uiWorkspaceRoot: scoped.root,
+          cliWorkspace: scoped.root,
+          prompt: aiPlanPrompt({ goal, workspaceSource }),
+          modelKey: typeof payload.model === "string" ? payload.model.trim() : "",
+          agentflowUserId: userCtx.userId || "",
+          mode: "plan",
+          force: false,
+          sandboxDisabled: false,
+          approveMcps: false,
+          sandboxMode: "read-only",
+          allowDanger: false,
+          includeJsonResult: true,
+          onStreamEvent(ev) {
+            if (ev?.type !== "natural" || typeof ev.text !== "string") return;
+            if (ev.kind === "result") result = ev.text.trim();
+            else if (ev.kind === "assistant" && ev.text.trim()) chunks.push(ev.text.trim());
+          },
+        });
+        await handle.finished;
+        const plan = parseAiPlanResult(result || chunks.at(-1) || chunks.join("\n"), exploration.id);
+        const appended = appendAiTraceEvents(scoped.root, exploration.id, plan.events, { phase: "planned" });
+        const ready = updateAiExplorationSession(scoped.root, exploration.id, {
+          title: plan.title,
+          summary: plan.summary,
+          status: "ready",
+          eventCount: appended.session.eventCount,
+        });
+        json(res, 201, { ok: true, exploration: { ...ready, events: appended.events } });
+      } catch (e) {
+        if (scoped?.root && exploration?.id) {
+          try { updateAiExplorationSession(scoped.root, exploration.id, { status: "failed", summary: String(e?.message || e) }); } catch {}
+        }
+        json(res, 500, { error: (e && e.message) || String(e), ...(exploration?.id ? { explorationId: exploration.id } : {}) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/exploration/dry-run") {
+      let payload;
+      try { payload = JSON.parse(await readBody(req)); } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      try {
+        const scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Exploration dry-run permission denied" });
+          return;
+        }
+        const exploration = readAiExplorationSession(scoped.root, payload.id);
+        const planned = exploration.events.filter((event) => event.phase === "planned");
+        if (!planned.length) {
+          json(res, 400, { error: "Exploration has no planned spans" });
+          return;
+        }
+        const runToken = Date.now().toString(36);
+        const simulated = planned.map((event, index) => {
+          const blocked = event.requiresApproval === true || ["write", "external"].includes(event.sideEffect);
+          return {
+            id: `dry_${runToken}_${index + 1}`,
+            spanId: `dry_${runToken}_${event.spanId}`,
+            parentSpanId: event.parentSpanId ? `dry_${runToken}_${event.parentSpanId}` : "",
+            phase: "simulated",
+            type: event.type,
+            name: event.name,
+            summary: blocked
+              ? `策略预检已阻断：${event.summary || event.name}。真实执行前需要明确授权。`
+              : `策略预检通过：${event.summary || event.name}。本次未执行真实工具。`,
+            sideEffect: event.sideEffect,
+            requiresApproval: blocked,
+            status: blocked ? "blocked" : "success",
+            inputPreview: event.inputPreview || "",
+            outputPreview: blocked ? "副作用未执行" : "约束检查通过，未执行真实工具",
+          };
+        });
+        const appended = appendAiTraceEvents(scoped.root, exploration.id, simulated, { phase: "simulated" });
+        const blockedCount = appended.events.filter((event) => event.status === "blocked").length;
+        const updated = updateAiExplorationSession(scoped.root, exploration.id, {
+          mode: "simulated",
+          status: "ready",
+          summary: `Dry-run 策略预检完成：${appended.events.length - blockedCount} 项通过，${blockedCount} 项等待授权。`,
+          eventCount: appended.session.eventCount,
+        });
+        json(res, 200, {
+          ok: true,
+          exploration: { ...updated, events: [...exploration.events, ...appended.events] },
+          dryRun: { kind: "policy-check", executedTools: false, blockedCount },
+        });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/workspace/exploration/materialize") {
+      let payload;
+      try { payload = JSON.parse(await readBody(req)); } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      let scoped;
+      let exploration;
+      let materializeRunId = "";
+      try {
+        scoped = resolveWorkspaceScopeRoot(root, {
+          flowId: payload.flowId || "",
+          flowSource: payload.flowSource || "user",
+          adminOwnerId: payload.adminOwnerId || "",
+          archived: payload.archived === true || payload.flowArchived === true,
+        }, userCtx);
+        if (scoped.error) {
+          json(res, 400, { error: scoped.error });
+          return;
+        }
+        if (scoped.archived || isReadonlyBuiltinFlowSource(scoped.flowSource) || scoped.collaborationAccess?.writable === false) {
+          json(res, 403, { error: "Exploration materialization permission denied" });
+          return;
+        }
+        exploration = readAiExplorationSession(scoped.root, payload.id);
+        if (!exploration.events.length) {
+          json(res, 400, { error: "Exploration has no trace events" });
+          return;
+        }
+        const materializableEvents = materializableAiTraceEvents(exploration);
+        if (!materializableEvents.length) {
+          json(res, 400, { error: "Exploration has no planned or observed spans to materialize" });
+          return;
+        }
+        const dangerousEvents = materializableEvents.filter((event) => event.requiresApproval || ["write", "external"].includes(event.sideEffect));
+        if (dangerousEvents.length && payload.approveSideEffects !== true) {
+          json(res, 409, {
+            error: "Side-effect review is required before materialization",
+            sideEffects: dangerousEvents.map((event) => ({ spanId: event.spanId, name: event.name, sideEffect: event.sideEffect })),
+          });
+          return;
+        }
+        const beforeGraphRead = readWorkspaceGraph(scoped.root);
+        const beforeGraph = beforeGraphRead?.graph || beforeGraphRead;
+        const beforeIds = new Set([
+          ...(beforeGraph.nodes || []).map((node) => String(node.id || "")),
+          ...Object.keys(beforeGraph.instances || {}),
+        ].filter(Boolean));
+        materializeRunId = `materialize_${Date.now().toString(36)}`;
+        appendAiTraceEvents(scoped.root, exploration.id, [{
+          id: `${materializeRunId}_start`,
+          spanId: materializeRunId,
+          type: "agent",
+          name: "固化 Agent",
+          summary: "开始把已审核 Trace 转换为 Workspace DSL 调整态",
+          status: "running",
+          phase: "observed",
+          sideEffect: "write",
+        }], { phase: "observed" });
+        updateAiExplorationSession(scoped.root, exploration.id, { mode: "observed", status: "running" });
+        let reply = "";
+        let toolIndex = 0;
+        const handle = startComposerAgent({
+          uiWorkspaceRoot: scoped.root,
+          cliWorkspace: scoped.root,
+          prompt: aiMaterializationPrompt(exploration, workspaceGraphAsSource(beforeGraph)),
+          modelKey: typeof payload.model === "string" ? payload.model.trim() : "",
+          agentflowUserId: userCtx.userId || "",
+          force: true,
+          sandboxDisabled: false,
+          approveMcps: false,
+          sandboxMode: "workspace-write",
+          allowDanger: false,
+          onToolCall(subtype, toolName) {
+            toolIndex += 1;
+            try {
+              const toolStatus = /(?:complete|success|done)/i.test(String(subtype || ""))
+                ? "success"
+                : /(?:error|fail)/i.test(String(subtype || "")) ? "error" : "running";
+              const sideEffect = classifyAiToolSideEffect(toolName, subtype);
+              appendAiTraceEvents(scoped.root, exploration.id, [{
+                id: `${materializeRunId}_tool_${toolIndex}`,
+                spanId: `${materializeRunId}_tool_${toolIndex}`,
+                parentSpanId: materializeRunId,
+                type: String(subtype || "").toLowerCase() === "thinking" ? "decision" : "tool",
+                name: String(toolName || subtype || "Agent tool"),
+                summary: subtype ? `Agent 工具事件：${subtype}` : "Agent 工具调用",
+                status: toolStatus,
+                phase: "observed",
+                sideEffect,
+              }], { phase: "observed" });
+            } catch {
+              // Trace persistence must not interrupt an in-flight materialization.
+            }
+          },
+          onStreamEvent(ev) {
+            if (ev?.type === "natural" && ["assistant", "result"].includes(ev.kind) && typeof ev.text === "string" && ev.text.trim()) {
+              reply = ev.text.trim();
+            }
+          },
+        });
+        await handle.finished;
+        appendAiTraceEvents(scoped.root, exploration.id, [{
+          id: `${materializeRunId}_finish`,
+          spanId: materializeRunId,
+          type: "agent",
+          name: "固化 Agent",
+          summary: reply || "Workspace DSL 调整态生成完成",
+          status: "success",
+          phase: "observed",
+          sideEffect: "write",
+          endedAt: new Date().toISOString(),
+        }], { phase: "observed" });
+        const graphRead = readWorkspaceGraph(scoped.root);
+        const graph = graphRead?.graph || graphRead;
+        const graphIds = [
+          ...(graph.nodes || []).map((node) => String(node.id || "")),
+          ...Object.keys(graph.instances || {}),
+        ].filter(Boolean);
+        const nodeIds = [...new Set(graphIds)].filter((id) => !beforeIds.has(id));
+        const materialization = writeAiExplorationMaterialization(scoped.root, exploration.id, {
+          nodeIds,
+          designRevision: workspaceDesignRevision(graph),
+        });
+        appendAiTraceEvents(scoped.root, exploration.id, [{
+          type: "status",
+          name: "固化为 Workspace DSL",
+          summary: reply || `新增 ${nodeIds.length} 个节点`,
+          status: "success",
+          phase: "materialized",
+          sideEffect: "write",
+          artifacts: [{ kind: "dsl", path: "workspace.flow.js", label: "Workspace DSL" }],
+        }], { phase: "materialized" });
+        const updated = updateAiExplorationSession(scoped.root, exploration.id, {
+          mode: "materialized",
+          status: "completed",
+          materializedAt: materialization.materializedAt,
+        });
+        json(res, 200, { ok: true, exploration: updated, materialization, graph, reply });
+      } catch (e) {
+        if (scoped?.root && exploration?.id) {
+          try {
+            if (materializeRunId) {
+              appendAiTraceEvents(scoped.root, exploration.id, [{
+                id: `${materializeRunId}_error`,
+                spanId: materializeRunId,
+                type: "agent",
+                name: "固化 Agent",
+                summary: String(e?.message || e),
+                status: "error",
+                phase: "observed",
+                sideEffect: "write",
+                endedAt: new Date().toISOString(),
+              }], { phase: "observed" });
+            }
+            updateAiExplorationSession(scoped.root, exploration.id, { mode: "observed", status: "failed" });
+          } catch {}
+        }
+        json(res, 500, { error: (e && e.message) || String(e) });
       }
       return;
     }
