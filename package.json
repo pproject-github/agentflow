@@ -34,7 +34,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "registry": "http://npm.ppx520.com/"
   },
   "files": [
     "bin",
