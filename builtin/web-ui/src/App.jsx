@@ -2,6 +2,9 @@ import { RouteProvider, useRoute } from "./routeContext.jsx";
 import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
+import MarketplacePage from "./pages/MarketplacePage.jsx";
+import SpacesPage from "./pages/SpacesPage.jsx";
+import SpacePage from "./pages/SpacePage.jsx";
 import WorkspacePage from "./pages/WorkspacePage.jsx";
 import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -16,7 +19,6 @@ import WorkflowsPage from "./pages/WorkflowsPage.jsx";
 import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
 import WorkflowChecklistPage from "./pages/WorkflowChecklistPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
-import FlowEditorPage from "./pages/FlowEditorPage.jsx";
 import { OnboardingTour } from "./onboarding/OnboardingTour.jsx";
 import RunningIndicator from "./RunningIndicator.jsx";
 import AppVersionNotice from "./components/AppVersionNotice.jsx";
@@ -61,6 +63,14 @@ function RedirectFlowToWorkspace() {
   return null;
 }
 
+function RedirectLegacyResourceToMarketplace({ kind, scope }) {
+  const { navigate } = useRoute();
+  useEffect(() => {
+    navigate(`/marketplace?kind=${encodeURIComponent(kind)}&scope=${encodeURIComponent(scope)}`);
+  }, [kind, navigate, scope]);
+  return null;
+}
+
 class UiErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -101,9 +111,11 @@ class UiErrorBoundary extends Component {
 function RoutedContent({ authUser }) {
   const { path } = useRoute();
   if (path === "/projects" || path === "/") return <ProjectsPage authUser={authUser} />;
-  if (path === "/nodes") return <ProjectsPage authUser={authUser} resourceKind="nodes" />;
-  if (path === "/my-nodes") return <ProjectsPage authUser={authUser} resourceKind="my-nodes" />;
-  if (path === "/my-flows") return <ProjectsPage authUser={authUser} resourceKind="my-flows" />;
+  if (path === "/marketplace") return <MarketplacePage authUser={authUser} />;
+  if (path === "/spaces") return <SpacesPage authUser={authUser} />;
+  if (path === "/nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="installed" />;
+  if (path === "/my-nodes") return <RedirectLegacyResourceToMarketplace kind="node" scope="owned" />;
+  if (path === "/my-flows") return <RedirectLegacyResourceToMarketplace kind="flow" scope="owned" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage authUser={authUser} />;
@@ -112,10 +124,10 @@ function RoutedContent({ authUser }) {
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
   if (path === "/node-studio") return <NodeStudioPage />;
-  if (path === "/flow-preview") return <FlowEditorPage previewMode />;
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
   if (path.startsWith("/display")) return <DisplayPage />;
+  if (path.startsWith("/s/")) return <SpacePage />;
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
   if (path === "/admin/teams") return <AdminTeamsPage authUser={authUser} />;
@@ -232,7 +244,7 @@ function AuthGate({ children }) {
 function AppShell({ authUser, onLogout }) {
   const { path } = useRoute();
   const workflowReportStandalone = path === "/workflow-report";
-  const pipelineFullBleed = path === "/flow" || path === "/flow-preview" || path === "/workspace" || path === "/workflow-checklist";
+  const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist";
   const fullBleed = pipelineFullBleed || workflowReportStandalone;
   return (
     <div className="af-app">
@@ -259,8 +271,8 @@ export default function App() {
 
 function PublicOrAuthedApp() {
   const { path } = useRoute();
-  if (path === "/flow-preview" || window.__AGENTFLOW_STATIC_FLOW_PREVIEW__) return <FlowEditorPage previewMode />;
   if (path.startsWith("/display")) return <DisplayPage />;
+  if (path.startsWith("/s/")) return <SpacePage />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   if (isWorkflowSharePath(path)) return path === "/workflow-checklist" ? <WorkflowChecklistPage /> : <WorkspacePage />;
   return (

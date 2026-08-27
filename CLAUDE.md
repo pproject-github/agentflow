@@ -9,16 +9,40 @@ AgentFlow is an orchestration system for long-running complex agent tasks. It us
 - **Persistence, Not Volatility**: Every node's inputs, outputs, and execution state are recorded in intermediate files.
 - **CI-Friendly**: Long-running, fixed workflows, recoverable—suitable for CI/CD integration.
 
+## Execution Model
+
+**Execution happens in the Workspace graph only.** Runs are started from the Web UI
+(`/api/workspace/run`) or by a `workspace_scheduled_run` node.
+
+**The graph is code.** Inside the flow directory:
+
+```
+workspace.flow.js      graph structure — restricted ESM, never executed, only statically parsed
+workspace.layout.json  canvas positions/sizes — machine-managed
+workspace.nodes.json   images, model, marketplaceRef, external-file manifest — machine-managed
+workspace.state.json   run output — machine-managed
+prompts/ docs/ scripts/  authored text longer than 3 KB
+```
+
+`workspace.graph.json` is a **read-only legacy format**: it is still read when there is no
+`workspace.flow.js`, and the next save converts the flow to code. Never write it.
+See `docs/wiki/flow-dsl.zh-CN.md` and the `agentflow-flow-dsl` skill for the syntax.
+
+The legacy Start/End Pipeline runtime (`flow.yaml` + `control_start` / `control_end`,
+driven by `agentflow apply`) is **retired**. `agentflow apply` / `resume` / `replay` /
+`scheduler` all fail with `Legacy Start/End Pipeline execution has been retired.`, and
+`/api/flow/run`, `/api/flow/run/stop`, `/api/flow/run-config`, `/api/flow/schedule*`
+all return HTTP 410. `flow.yaml` is now read/migrate/audit material only.
+
 ## Key Commands
 
 | Command | Description |
 |---------|-------------|
 | `agentflow list` | List all pipelines |
 | `agentflow ui` | Start Web UI (port 8765) |
-| `agentflow apply <FlowName>` | Execute flow |
-| `agentflow validate <FlowName>` | Validate flow structure |
-| `agentflow resume <FlowName> <uuid>` | Resume from breakpoint |
-| `agentflow replay <FlowName> <uuid> <instanceId>` | Retry a specific node |
+| `agentflow validate <FlowName>` | Validate a flow — Workspace graphs go through `flow dsl lint`, legacy `flow.yaml` flows through the old validator |
+| `agentflow flow dsl lint <flowDir>` | Static-check `workspace.flow.js` — run after editing it |
+| `agentflow flow dsl migrate <FlowName\|dir> [--allow-loss]` | Convert a legacy `workspace.graph.json` **or `flow.yaml`** to code. The yaml path rewords `runtime: none` nodes and refuses lossy migration unless `--allow-loss`; `agentflow-cli migrate-flow` does the same over HTTP for platform flows |
 | `agentflow run-status <FlowName> <uuid>` | View node execution status |
 | `agentflow extract-thinking <FlowName> <uuid>` | Extract agent thinking process |
 
@@ -58,22 +82,84 @@ When working with AgentFlow nodes, understand the node type and apply appropriat
 - General-purpose node executor
 - Follow node context and task body to complete work
 
-## Environment Variables
+## Node Runtime Contract (Workspace)
 
-When executing nodes, only reference these explicitly provided variables:
+### `tool_nodejs` script placeholders
 
-- `workspaceRoot`: Workspace root directory
-- `flowName`: Name of the flow
-- `uuid`: Unique run identifier
-- `instanceId`: Node instance identifier
+`script` / `scriptRef` are resolved against these constants plus every input and output
+slot name (`${slotName}`):
 
-## Reporting Failures
+- `${workspaceRoot}` / `${pipelineWorkspace}` / `${flowDir}`: the scoped workspace root
+- `${cwd}`: working directory for the node
+- `${nodeRunDir}` / `${nodeTmpDir}` / `${outputsDir}`: per-node run, scratch, output dirs
+- `${scriptRef}`: absolute path of the referenced script file
 
-When a task explicitly fails, report using:
+Success/failure is the process exit code (0 = success). Do **not** wrap stdout in JSON.
 
-```bash
-agentflow apply -ai write-result ${workspaceRoot} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"failure reason"}'
+### Code node packages (`<dir>/nodes/<name>/index.mjs`)
+
+A code node is a **directory**. `index.mjs` carries both the declaration and the
+implementation:
+
+```js
+import fs from "node:fs/promises";
+
+export default {
+  id: "count_lines",              // required — becomes marketplace:count_lines@<version>
+  version: "1.0.0",               // required
+  name: "统计行数",
+  description: "读一个文本文件，统计行数",
+  inputs:  { filePath: { type: "text", description: "文件路径", required: true } },
+  outputs: { total: { type: "text" } },
+};
+
+export async function run(inputs, outputs, dirs) {
+  const text = await fs.readFile(inputs.filePath, "utf-8");
+  await fs.writeFile(outputs.total, String(text.split("\n").length));
+  console.log(`共 ${text.split("\n").length} 行`);   // stdout 即节点 result
+}
 ```
+
+- `export default` is read by **acorn static parse — the package is never executed** to
+  list it in the palette or render the canvas. It must therefore be a **pure object
+  literal**: any variable reference, function call, or spread is a hard error (with a
+  message), not a silent empty manifest.
+- `inputs` / `outputs` are ordered maps; slot order follows declaration order, and a
+  control slot (`prev` / `next`) is prepended automatically. Slot types: `text`, `file`,
+  `bool`, `node`, `image`, `json`.
+- `run(inputs, outputs, dirs)` — `outputs.<name>` is the **absolute path to write**, not a
+  value. `dirs` has `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir`.
+- Each declared output slot gets its own file; whatever you write lands in that slot. The
+  **first non-control output slot** carries the node's result body.
+- Failure = throw or non-zero exit. stdout becomes the node result **only when the node did
+  not write a file for the result slot** — a `console.log` progress line never clobbers a
+  value you wrote deliberately.
+- Search order when resolving `marketplace:<id>@<version>`: the flow's own
+  `<flowDir>/nodes/*/` first, then published workspace packages, then collections. A
+  flow's local implementation is never shadowed by a same-named published package.
+- `node.yaml` still works as a fallback manifest for already-published packages.
+
+### `agent_subAgent` output protocol
+
+Agent nodes receive `AGENTFLOW_RESULT_FILE`, `AGENTFLOW_OUTPUTS_DIR`,
+`AGENTFLOW_NODE_RUN_DIR`, `AGENTFLOW_NODE_TMP_DIR` and `AGENTFLOW_OUTPUT_FILES_JSON`
+in the environment. Results are returned **in the reply**, not written by hand:
+
+- No extra output slots → reply with the result body only. AgentFlow writes it to the
+  result file itself; do not create that file and do not emit an envelope.
+- With extra output slots → emit exactly one envelope, nothing else:
+
+```
+---agentflow
+result: |
+  <full result body, each line indented two spaces>
+outParams:
+  <slotName>: <short value>
+---end
+```
+
+A node fails by failing — a non-zero exit or an error in the reply. There is no
+`write-result` command in the workspace runtime.
 
 ## File Structure
 
@@ -91,13 +177,35 @@ AgentFlow/
 ## Workflow Tips
 
 1. **For complex flows**: Use AI Composer mode in Web UI with natural language descriptions
-2. **Loop patterns**: Use `control_anyOne` + `control_toBool` (deterministic) or `control_agent_toBool` (AI judgment) + `control_if` for check-fix-loop patterns
-3. **Checkpoint recovery**: Every node state is persisted—failures can resume from the exact failure point
-4. **Parallel execution**: Use `--parallel` flag to execute same-round nodes concurrently
+2. **Branching**: `control_if` is the branch primitive the Workspace runtime implements —
+   the taken branch runs, the other is skipped
+3. **Acyclic graph, explicit iteration**: the Workspace run planner rejects cyclic graphs
+   (`Workspace run graph contains a cycle`). Use native `control_while` to repeat one
+   deterministic step command inside a bounded node state machine; do not add a back edge.
+   Its iteration/timeout limits are cumulative across `wait` resumes, and external writes
+   should consume `AGENTFLOW_WHILE_IDEMPOTENCY_KEY` for deduplication.
+   The old `control_anyOne` + `control_toBool` + `control_if` ring only worked under the
+   retired Start/End runtime
+4. **Node coverage**: every node type declares its own support tier in the `runtime:`
+   frontmatter field of `builtin/nodes/<id>.md` — this is the single source of truth:
+   - `native` — the Workspace runtime has an explicit handler
+   - `degraded` — no dedicated handler; works via the generic agent path plus the output
+     envelope, so the documented semantics hold only by convention
+   - `none` — no implementation; the definition exists only so historical graphs still
+     parse. These also carry `palette: hidden` and never reach the node palette,
+     `/api/nodes`, or the Composer node reference
+
+   `skills/agentflow-node-reference/references/builtin-nodes.md` is generated from these
+   files by `scripts/generate-agentflow-skill-references.mjs`; rerun it after editing any
+   node definition (a test enforces this)
 
 ---
 
 ## Flow Editing Skills
+
+> The rest of this section is about **`flow.yaml`**, which is legacy read/migrate/audit
+> material. To change a Workspace graph, edit `workspace.flow.js` — see
+> `agentflow-flow-dsl`.
 
 ### Editing Existing Node Fields (`agentflow-flow-edit-node-fields`)
 
@@ -138,10 +246,14 @@ When adding **new nodes** to a flow:
 | Condition | Recommended `definitionId` |
 |-----------|---------------------------|
 | Behavior fully determined by input, no AI reasoning | `tool_nodejs` + `script` |
-| Display prominent output to user | `tool_print` |
+| Display prominent output to user | `tool_print` ⚠️ |
 | Requires AI understanding, judgment, content generation | `agent_subAgent` |
-| Pause and wait for the user to confirm/edit content | `tool_user_check` |
-| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` |
+| Pause and wait for the user to confirm/edit content | `tool_user_check` ⚠️ |
+| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` ⚠️ |
+
+⚠️ = `runtime: none` in `builtin/nodes/<id>.md`. These only ever ran under the retired
+Start/End Pipeline runtime. **Never put them in a Workspace graph** — use `display_markdown`
+instead of `tool_print`; there is no Workspace equivalent for the two human-gate nodes.
 
 **YAML structure:**
 ```yaml
@@ -166,18 +278,23 @@ ui:
       y: <number>
 ```
 
-**Handle quick reference:**
+**Handle quick reference** (⚠️ = `runtime: none`, legacy Start/End only — never in a Workspace graph):
 | definitionId | Common outputs | Common inputs |
 |--------------|----------------|---------------|
-| control_start | next → output-0 | — |
-| control_end | — | prev → input-0 |
+| control_start ⚠️ | next → output-0 | — |
+| control_end ⚠️ | — | prev → input-0 |
 | control_if | next1(TRUE) → output-0, next2(FALSE) → output-1 | prev → input-0, prediction → input-1 |
-| control_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
+| control_toBool ⚠️ | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
 | control_agent_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
-| control_anyOne | next → output-0 | prev1 → input-0, prev2 → input-1 |
+| control_anyOne ⚠️ | next → output-0 | prev1 → input-0, prev2 → input-1 |
 | tool_nodejs | next → output-0, result → output-1 | prev → input-0, [dynamic inputs] |
-| tool_user_check | next → output-0, content → output-1 | prev → input-0, content → input-1 |
-| tool_user_ask | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+| tool_user_check ⚠️ | next → output-0, content → output-1 | prev → input-0, content → input-1 |
+| tool_user_ask ⚠️ | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+
+`control_agent_toBool` is `runtime: degraded` — it does run, but only because the generic
+agent path honors the output envelope. Nothing constrains the model's `prediction` value,
+and `parse-bool.mjs` accepts only exactly `true` / `1` / `yes` / `on`; `是` or
+`true（因为…）` silently yields false.
 
 **Edge fan-out / fan-in rule:** One output can connect to multiple inputs (fan-out OK). One input can only have one incoming edge (fan-in forbidden). Never write two edges with the same `target + targetHandle` — runtime only uses the first match, the rest are silently ignored.
 

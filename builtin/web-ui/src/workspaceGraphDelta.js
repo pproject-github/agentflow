@@ -41,7 +41,7 @@ function hasSafeGraphShape(baseGraph, nextGraph) {
   const unknownTopLevelBase = objectWithoutKeys(baseGraph, ["version", "instances", "edges", "ui"]);
   const unknownTopLevelNext = objectWithoutKeys(nextGraph, ["version", "instances", "edges", "ui"]);
   if (!workspaceValueEqual(unknownTopLevelBase, unknownTopLevelNext)) return false;
-  const knownUiKeys = ["nodePositions", "nodeSizes", "groups", "displayPage", "viewport"];
+  const knownUiKeys = ["nodePositions", "nodeSizes", "groups", "displayPage", "viewport", "subflowBoundaryPositions"];
   return workspaceValueEqual(
     objectWithoutKeys(baseGraph.ui, knownUiKeys),
     objectWithoutKeys(nextGraph.ui, knownUiKeys),
@@ -64,6 +64,9 @@ function graphNodeIds(graph) {
     if (edge?.target) ids.add(String(edge.target));
   }
   for (const id of graphGroupsById(graph).keys()) ids.add(id);
+  for (const id of Object.keys(isObject(graphUi(graph).subflowBoundaryPositions)
+    ? graphUi(graph).subflowBoundaryPositions
+    : {})) ids.add(id);
   return ids;
 }
 
@@ -78,6 +81,9 @@ function graphNodeRecord(graph, id) {
       : null,
     size: isObject(ui.nodeSizes) && Object.prototype.hasOwnProperty.call(ui.nodeSizes, id)
       ? ui.nodeSizes[id]
+      : null,
+    boundaryPosition: isObject(ui.subflowBoundaryPositions) && Object.prototype.hasOwnProperty.call(ui.subflowBoundaryPositions, id)
+      ? ui.subflowBoundaryPositions[id]
       : null,
     group: groups.get(id) || null,
   };

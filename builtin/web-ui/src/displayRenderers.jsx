@@ -93,7 +93,9 @@ function parseMermaidFlowchart(code) {
     const text = String(raw || "").trim().replace(/[;,]+$/, "");
     const match = text.match(/^([A-Za-z][A-Za-z0-9_]*)(?:\[(.+?)\]|\((.+?)\)|\{(.+?)\})?$/);
     if (!match) return ensure(text.replace(/[^A-Za-z0-9_]/g, "_"), text);
-    return ensure(match[1], match[2] || match[3] || match[4] || match[1]);
+    // A later bare reference (for example `B --> C`) must not replace the
+    // descriptive label captured earlier from `B{Quality gate}` with "B".
+    return ensure(match[1], match[2] || match[3] || match[4] || "");
   };
   for (const line of lines) {
     const dir = line.match(/^(graph|flowchart)\s+(TD|TB|BT|LR|RL)\b/i);
@@ -101,9 +103,9 @@ function parseMermaidFlowchart(code) {
       direction = dir[2].toUpperCase();
       continue;
     }
-    const edge = line.match(/^(.+?)\s*-{1,2}>+\s*(.+)$/);
+    const edge = line.match(/^(.+?)\s*(-->|==>|-\.->)\s*(?:\|([^|]+)\|\s*)?(.+?)\s*$/);
     if (edge) {
-      edges.push({ from: parseEndpoint(edge[1]), to: parseEndpoint(edge[2]) });
+      edges.push({ from: parseEndpoint(edge[1]), to: parseEndpoint(edge[4]), label: String(edge[3] || "").trim() });
       continue;
     }
     parseEndpoint(line);
@@ -111,24 +113,105 @@ function parseMermaidFlowchart(code) {
   return { nodes: Array.from(nodes.values()), edges, direction };
 }
 
-function MermaidFlowchartPreview({ code }) {
+function MermaidFlowchartPreview({ code, interactive = false }) {
   const graph = useMemo(() => parseMermaidFlowchart(code), [code]);
+  const svgRef = useRef(null);
+  const nodeDragRef = useRef(null);
+  const [positionOverrides, setPositionOverrides] = useState({});
+  useEffect(() => {
+    setPositionOverrides({});
+  }, [code]);
   const horizontal = graph.direction === "LR" || graph.direction === "RL";
   const nodeW = 150;
   const nodeH = 46;
-  const gapX = horizontal ? 102 : 38;
-  const gapY = horizontal ? 34 : 72;
+  const gapX = horizontal ? 86 : 42;
+  const gapY = horizontal ? 40 : 76;
+  const outgoing = new Map(graph.nodes.map((node) => [node.id, []]));
+  const incoming = new Map(graph.nodes.map((node) => [node.id, 0]));
+  for (const edge of graph.edges) {
+    outgoing.get(edge.from)?.push(edge.to);
+    incoming.set(edge.to, (incoming.get(edge.to) || 0) + 1);
+  }
+  const ranks = new Map();
+  const queue = graph.nodes.filter((node) => (incoming.get(node.id) || 0) === 0).map((node) => node.id);
+  if (queue.length === 0 && graph.nodes[0]) queue.push(graph.nodes[0].id);
+  for (const id of queue) ranks.set(id, 0);
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor];
+    for (const target of outgoing.get(id) || []) {
+      if (ranks.has(target)) continue;
+      ranks.set(target, (ranks.get(id) || 0) + 1);
+      queue.push(target);
+    }
+  }
+  for (const node of graph.nodes) {
+    if (!ranks.has(node.id)) ranks.set(node.id, 0);
+  }
+  const rankGroups = new Map();
+  for (const node of graph.nodes) {
+    const rank = ranks.get(node.id) || 0;
+    if (!rankGroups.has(rank)) rankGroups.set(rank, []);
+    rankGroups.get(rank).push(node);
+  }
   const positions = new Map();
-  graph.nodes.forEach((node, idx) => {
-    positions.set(node.id, {
-      x: 28 + (horizontal ? idx * (nodeW + gapX) : (idx % 3) * (nodeW + gapX)),
-      y: 28 + (horizontal ? (idx % 3) * (nodeH + gapY) : idx * (nodeH + gapY)),
+  for (const [rank, nodesAtRank] of rankGroups) {
+    nodesAtRank.forEach((node, index) => {
+      positions.set(node.id, {
+        x: 34 + (horizontal ? rank * (nodeW + gapX) : index * (nodeW + gapX)),
+        y: 34 + (horizontal ? index * (nodeH + gapY) : rank * (nodeH + gapY)),
+      });
     });
-  });
+  }
   const maxX = Math.max(520, ...Array.from(positions.values()).map((p) => p.x + nodeW + 28));
   const maxY = Math.max(220, ...Array.from(positions.values()).map((p) => p.y + nodeH + 28));
+  for (const [nodeId, position] of Object.entries(positionOverrides)) {
+    if (positions.has(nodeId)) positions.set(nodeId, position);
+  }
+
+  const eventPoint = (event) => {
+    const svg = svgRef.current;
+    const matrix = svg?.getScreenCTM?.();
+    if (!svg || !matrix) return null;
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(matrix.inverse());
+    return { x: local.x, y: local.y };
+  };
+
+  const moveDraggedNode = (event) => {
+    const drag = nodeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const point = eventPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const x = Math.min(maxX - nodeW - 12, Math.max(12, drag.x + point.x - drag.pointerX));
+    const y = Math.min(maxY - nodeH - 12, Math.max(12, drag.y + point.y - drag.pointerY));
+    setPositionOverrides((current) => ({ ...current, [drag.nodeId]: { x, y } }));
+  };
+
+  const stopDraggingNode = (event) => {
+    if (nodeDragRef.current?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    nodeDragRef.current = null;
+    svgRef.current?.releasePointerCapture?.(event.pointerId);
+  };
+
   return (
-    <svg viewBox={`0 0 ${maxX} ${maxY}`} role="img" aria-label="Mermaid flowchart preview">
+    <svg
+      ref={svgRef}
+      className="af-md-mermaid-preview"
+      viewBox={`0 0 ${maxX} ${maxY}`}
+      width={maxX}
+      height={maxY}
+      role="img"
+      aria-label="Mermaid flowchart preview"
+      onPointerMove={interactive ? moveDraggedNode : undefined}
+      onPointerUp={interactive ? stopDraggingNode : undefined}
+      onPointerCancel={interactive ? stopDraggingNode : undefined}
+    >
       <defs>
         <marker id="af-md-mermaid-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -138,15 +221,50 @@ function MermaidFlowchartPreview({ code }) {
         const a = positions.get(edge.from);
         const b = positions.get(edge.to);
         if (!a || !b) return null;
+        const reverse = horizontal ? b.x <= a.x : b.y <= a.y;
         const d = horizontal
-          ? `M ${a.x + nodeW} ${a.y + nodeH / 2} C ${(a.x + b.x + nodeW) / 2} ${a.y + nodeH / 2}, ${(a.x + b.x + nodeW) / 2} ${b.y + nodeH / 2}, ${b.x} ${b.y + nodeH / 2}`
-          : `M ${a.x + nodeW / 2} ${a.y + nodeH} C ${a.x + nodeW / 2} ${a.y + nodeH + 28}, ${b.x + nodeW / 2} ${b.y - 28}, ${b.x + nodeW / 2} ${b.y}`;
-        return <path key={`${edge.from}-${edge.to}-${idx}`} className="af-md-mermaid-edge" d={d} markerEnd="url(#af-md-mermaid-arrow)" />;
+          ? reverse
+            ? `M ${a.x} ${a.y + nodeH / 2} C ${a.x - 74} ${a.y + nodeH / 2}, ${b.x + nodeW / 2} ${b.y + nodeH + 74}, ${b.x + nodeW / 2} ${b.y + nodeH}`
+            : `M ${a.x + nodeW} ${a.y + nodeH / 2} C ${(a.x + b.x + nodeW) / 2} ${a.y + nodeH / 2}, ${(a.x + b.x + nodeW) / 2} ${b.y + nodeH / 2}, ${b.x} ${b.y + nodeH / 2}`
+          : reverse
+            ? `M ${a.x + nodeW / 2} ${a.y} C ${a.x + nodeW / 2} ${a.y - 74}, ${b.x + nodeW / 2} ${b.y + nodeH + 74}, ${b.x + nodeW / 2} ${b.y + nodeH}`
+            : `M ${a.x + nodeW / 2} ${a.y + nodeH} C ${a.x + nodeW / 2} ${a.y + nodeH + 28}, ${b.x + nodeW / 2} ${b.y - 28}, ${b.x + nodeW / 2} ${b.y}`;
+        const labelX = horizontal
+          ? reverse ? (a.x + b.x + nodeW / 2) / 2 : (a.x + nodeW + b.x) / 2
+          : a.x + nodeW / 2 + 10;
+        const labelY = horizontal
+          ? reverse ? Math.max(a.y + nodeH / 2, b.y + nodeH) + 28 : (a.y + b.y + nodeH) / 2 - 8
+          : reverse ? (a.y + b.y + nodeH) / 2 : (a.y + nodeH + b.y) / 2;
+        return (
+          <g key={`${edge.from}-${edge.to}-${idx}`}>
+            <path className="af-md-mermaid-edge" d={d} markerEnd="url(#af-md-mermaid-arrow)" />
+            {edge.label ? <text className="af-md-sequence-label" x={labelX} y={labelY} textAnchor={horizontal ? "middle" : "start"}>{edge.label.slice(0, 28)}</text> : null}
+          </g>
+        );
       })}
       {graph.nodes.map((node) => {
         const p = positions.get(node.id);
         return (
-          <g key={node.id}>
+          <g
+            key={node.id}
+            className={interactive ? "af-md-mermaid-node af-md-mermaid-node--draggable" : "af-md-mermaid-node"}
+            onPointerDown={interactive ? (event) => {
+              if (event.button !== 0) return;
+              const point = eventPoint(event);
+              if (!point) return;
+              event.preventDefault();
+              event.stopPropagation();
+              nodeDragRef.current = {
+                pointerId: event.pointerId,
+                nodeId: node.id,
+                pointerX: point.x,
+                pointerY: point.y,
+                x: p.x,
+                y: p.y,
+              };
+              svgRef.current?.setPointerCapture?.(event.pointerId);
+            } : undefined}
+          >
             <rect className="af-md-mermaid-box" x={p.x} y={p.y} width={nodeW} height={nodeH} rx="8" />
             <text className="af-md-mermaid-text" x={p.x + nodeW / 2} y={p.y + nodeH / 2 + 5} textAnchor="middle">
               {node.label.slice(0, 24)}
@@ -202,7 +320,14 @@ function MermaidSequencePreview({ code }) {
     return left + idx * colW + colW / 2;
   };
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Mermaid sequence diagram preview">
+    <svg
+      className="af-md-mermaid-preview"
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      role="img"
+      aria-label="Mermaid sequence diagram preview"
+    >
       <defs>
         <marker id="af-md-sequence-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -242,14 +367,285 @@ function MermaidSequencePreview({ code }) {
   );
 }
 
-function MermaidDisplayBlock({ code }) {
+function MermaidInteractiveViewport({ children }) {
+  const viewportRef = useRef(null);
+  const canvasRef = useRef(null);
+  const dragRef = useRef(null);
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
+
+  const fitDiagram = () => {
+    const viewport = viewportRef.current;
+    const svg = canvasRef.current?.querySelector?.("svg");
+    if (!viewport || !svg) return;
+    const box = svg.viewBox?.baseVal;
+    const width = Number(box?.width || svg.getAttribute("width") || 1);
+    const height = Number(box?.height || svg.getAttribute("height") || 1);
+    const scale = Math.min(
+      2,
+      Math.max(0.2, Math.min((viewport.clientWidth - 72) / width, (viewport.clientHeight - 72) / height)),
+    );
+    setView({ x: 0, y: 0, scale });
+  };
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(fitDiagram);
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return () => window.cancelAnimationFrame(frame);
+    const observer = new ResizeObserver(fitDiagram);
+    observer.observe(viewport);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [children]);
+
+  const zoomBy = (factor) => {
+    setView((current) => ({
+      ...current,
+      scale: Math.min(4, Math.max(0.2, current.scale * factor)),
+    }));
+  };
+
+  return (
+    <div
+      ref={viewportRef}
+      className="af-mermaid-interactive nodrag nowheel"
+      onWheel={(event) => {
+        event.preventDefault();
+        zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || event.target.closest?.(".af-mermaid-interactive__controls")) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, x: view.x, y: view.y };
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        setView((current) => ({
+          ...current,
+          x: drag.x + event.clientX - drag.clientX,
+          y: drag.y + event.clientY - drag.clientY,
+        }));
+      }}
+      onPointerUp={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+      }}
+      onPointerCancel={(event) => {
+        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+      }}
+    >
+      <div
+        ref={canvasRef}
+        className="af-mermaid-interactive__canvas"
+        style={{ transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})` }}
+      >
+        {children}
+      </div>
+      <div className="af-mermaid-interactive__controls" onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" onClick={() => zoomBy(1 / 1.2)} aria-label="缩小" title="缩小">
+          <span className="material-symbols-outlined" aria-hidden>remove</span>
+        </button>
+        <span>{Math.round(view.scale * 100)}%</span>
+        <button type="button" onClick={() => zoomBy(1.2)} aria-label="放大" title="放大">
+          <span className="material-symbols-outlined" aria-hidden>add</span>
+        </button>
+        <button type="button" onClick={fitDiagram} aria-label="适应窗口" title="适应窗口">
+          <span className="material-symbols-outlined" aria-hidden>fit_screen</span>
+        </button>
+        <button type="button" onClick={() => setView({ x: 0, y: 0, scale: 1 })} aria-label="重置视图" title="重置视图">
+          <span className="material-symbols-outlined" aria-hidden>center_focus_strong</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function MermaidDisplayBlock({ code, interactive = false }) {
   const text = String(code || "").trim();
   if (!text) return null;
   const isSequence = /^sequenceDiagram\b/i.test(text);
+  const diagram = isSequence
+    ? <MermaidSequencePreview code={text} />
+    : <MermaidFlowchartPreview code={text} interactive={interactive} />;
+  return interactive ? <MermaidInteractiveViewport>{diagram}</MermaidInteractiveViewport> : diagram;
+}
+
+const CODE_LANGUAGE_ALIASES = {
+  bash: "shell",
+  sh: "shell",
+  zsh: "shell",
+  shell: "shell",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  javascript: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
+  typescript: "typescript",
+  py: "python",
+  python: "python",
+  kt: "kotlin",
+  kts: "kotlin",
+  kotlin: "kotlin",
+  yml: "yaml",
+  yaml: "yaml",
+  md: "markdown",
+  markdown: "markdown",
+  html: "html",
+  htm: "html",
+  xml: "xml",
+  css: "css",
+  scss: "scss",
+  json: "json",
+  java: "java",
+  go: "go",
+  rust: "rust",
+  rs: "rust",
+  sql: "sql",
+};
+
+const CODE_KEYWORDS = new Set([
+  "abstract", "as", "async", "await", "boolean", "break", "case", "catch", "class", "const", "continue",
+  "data", "def", "default", "delete", "do", "double", "elif", "else", "enum", "export", "extends", "false",
+  "final", "finally", "float", "for", "from", "fun", "function", "go", "if", "implements", "import", "in",
+  "instanceof", "int", "interface", "internal", "is", "let", "long", "map", "new", "nil", "none", "null",
+  "object", "package", "private", "protected", "public", "raise", "readonly", "return", "select", "short",
+  "static", "struct", "super", "suspend", "switch", "this", "throw", "throws", "trait", "true", "try", "type",
+  "typeof", "undefined", "val", "var", "void", "when", "where", "while", "with", "yield",
+]);
+
+function normalizeCodeLanguage(language, fileName = "") {
+  const direct = String(language || "").trim().toLowerCase().replace(/^language-/, "");
+  const extension = String(fileName || "").trim().toLowerCase().split(/[?#]/)[0].split(".").pop() || "";
+  const value = direct || extension;
+  return CODE_LANGUAGE_ALIASES[value] || value || "text";
+}
+
+function codeTokenClass(token, language, line, endIndex) {
+  const lower = token.toLowerCase();
+  if (/^\s*(?:\/\/|\/\*|\*|<!--)/.test(token)) return "comment";
+  if ((language === "shell" || language === "python" || language === "yaml") && /^#/.test(token)) return "comment";
+  if (/^['"`]/.test(token)) {
+    if ((language === "json" || language === "yaml") && line.slice(endIndex).trimStart().startsWith(":")) return "key";
+    return "string";
+  }
+  if (/^\d/.test(token)) return "number";
+  if (["true", "false", "null", "undefined", "none", "nil"].includes(lower)) return "literal";
+  if (CODE_KEYWORDS.has(lower)) return "keyword";
+  if (/^<\/?[A-Za-z]/.test(token)) return "tag";
+  return "identifier";
+}
+
+function highlightedCodeLine(line, language, lineIndex) {
+  const commentPattern = language === "shell" || language === "python" || language === "yaml"
+    ? "#.*$"
+    : "\\/\\/.*$|\\/\\*.*?\\*\\/|<!--.*?-->";
+  const tagPattern = language === "html" || language === "xml" ? "<\\/?[A-Za-z][^>]*>" : "(?!)";
+  const tokenPattern = new RegExp(
+    `(${commentPattern}|${tagPattern}|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|\`(?:\\\\.|[^\`\\\\])*\`|\\b\\d+(?:\\.\\d+)?\\b|\\b[A-Za-z_$][A-Za-z0-9_$]*\\b)`,
+    "g",
+  );
+  const out = [];
+  let cursor = 0;
+  let match;
+  while ((match = tokenPattern.exec(line))) {
+    if (match.index > cursor) out.push(line.slice(cursor, match.index));
+    const token = match[0];
+    const className = codeTokenClass(token, language, line, match.index + token.length);
+    out.push(<span className={`af-code-token af-code-token--${className}`} key={`${lineIndex}-${match.index}`}>{token}</span>);
+    cursor = match.index + token.length;
+    if (tokenPattern.lastIndex === match.index) tokenPattern.lastIndex += 1;
+  }
+  if (cursor < line.length) out.push(line.slice(cursor));
+  return out.length ? out : " ";
+}
+
+function downloadCodeFile(content, fileName, language) {
+  const extensionByLanguage = {
+    javascript: "js", typescript: "ts", python: "py", shell: "sh", kotlin: "kt", java: "java", json: "json",
+    yaml: "yaml", html: "html", xml: "xml", css: "css", scss: "scss", go: "go", rust: "rs", sql: "sql",
+  };
+  const safeName = String(fileName || "").trim().replace(/[\\/:*?"<>|]+/g, "-")
+    || `code.${extensionByLanguage[language] || "txt"}`;
+  const url = URL.createObjectURL(new Blob([String(content || "")], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = safeName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function copyCodeText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Intranet HTTP deployments may expose Clipboard API but reject writes.
+      // Continue with the selection-based fallback below.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Copy is unavailable");
+}
+
+export function CodeDisplayContent({ content, language = "", fileName = "", defaultWrap = false }) {
+  const text = String(content || "").replace(/\r\n/g, "\n");
+  const normalizedLanguage = normalizeCodeLanguage(language, fileName);
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const [wrapped, setWrapped] = useState(Boolean(defaultWrap));
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setWrapped(Boolean(defaultWrap));
+  }, [defaultWrap]);
+
+  const copyCode = async () => {
+    try {
+      await copyCodeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <div className="af-md-mermaid-preview">
-      {isSequence ? <MermaidSequencePreview code={text} /> : <MermaidFlowchartPreview code={text} />}
-    </div>
+    <section className={`af-code-display nodrag nowheel${wrapped ? " af-code-display--wrapped" : ""}`} data-language={normalizedLanguage}>
+      <div className="af-code-display__actions">
+        <button type="button" onClick={() => setWrapped((value) => !value)} aria-label={wrapped ? "关闭自动换行" : "开启自动换行"} title={wrapped ? "关闭自动换行" : "开启自动换行"}>
+          <span className="material-symbols-outlined" aria-hidden>{wrapped ? "wrap_text" : "notes"}</span>
+        </button>
+        <button type="button" onClick={copyCode} aria-label="复制代码" title="复制代码">
+          <span className="material-symbols-outlined" aria-hidden>{copied ? "done" : "content_copy"}</span>
+        </button>
+        <button type="button" onClick={() => downloadCodeFile(text, fileName, normalizedLanguage)} aria-label="下载代码" title="下载代码">
+          <span className="material-symbols-outlined" aria-hidden>download</span>
+        </button>
+      </div>
+      <div className="af-code-display__viewport">
+        <ol className="af-code-display__lines">
+          {lines.map((line, index) => (
+            <li key={index}>
+              <code>{highlightedCodeLine(line, normalizedLanguage, index)}</code>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
   );
 }
 

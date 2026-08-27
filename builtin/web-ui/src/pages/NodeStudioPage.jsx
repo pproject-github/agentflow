@@ -1,168 +1,185 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NodeUiKitCard } from "../NodeUiKit.jsx";
 
-const EMPTY_DRAFT = {
-  id: "",
-  title: "Untitled Node",
-  definitionId: "",
-  agentMessages: [],
-  promptDraft: "",
-  manifest: {
-    id: "",
-    version: "1.0.0",
-    name: "",
-    runtime: { type: "agent_subAgent" },
-    inputs: [],
-    outputs: [],
-    configSchema: { fields: [] },
-    ui: { card: { icon: "extension", variant: "default", actions: [] } },
-  },
-  config: {},
-  files: {},
-  test: { inputs: {}, log: [], status: "not run" },
-};
+// 清单的形状由 `readNodePackageManifest` 决定——`input` / `output` / `displayName`，
+// 不是 `inputs` / `outputs` / `name`。这里曾经按后者读，于是无论生成什么节点，
+// Contract 面板永远显示 0 inputs 0 outputs。
+const EMPTY_MANIFEST = { id: "", version: "", displayName: "", description: "", input: [], output: [] };
 
-function draftDefinitionId(draft) {
-  const manifest = draft?.manifest || {};
-  return draft?.definitionId || `marketplace:${manifest.id || draft?.id || "node"}@${manifest.version || "1.0.0"}`;
-}
+/** 控制槽由运行时自动前置，不该出现在测试输入和契约表里。 */
+const isControlSlot = (slot) => String(slot?.type || "") === "node" || slot?.name === "prev" || slot?.name === "next";
 
-function buildInternalSections(draft) {
-  const manifest = draft?.manifest || {};
-  const files = draft?.files || {};
-  const inputs = Array.isArray(manifest.inputs) ? manifest.inputs : [];
-  const outputs = Array.isArray(manifest.outputs) ? manifest.outputs : [];
-  const fields = Array.isArray(manifest.configSchema?.fields) ? manifest.configSchema.fields : [];
-  const actions = Array.isArray(manifest.ui?.card?.actions) ? manifest.ui.card.actions : [];
-  const testInputs = draft?.test?.inputs && typeof draft.test.inputs === "object" ? draft.test.inputs : {};
-  return [
-    {
-      id: "contract",
-      label: "Contract",
-      icon: "account_tree",
-      rows: [
-        ...inputs.map((slot) => [`input.${slot.name || "-"}`, `${slot.type || "text"}${slot.required ? " · required" : ""}${slot.default ? ` · default: ${slot.default}` : ""}`]),
-        ...outputs.map((slot) => [`output.${slot.name || "-"}`, slot.type || "text"]),
-        ...fields.map((field) => [`config.${field.key || "-"}`, field.type || "text"]),
-      ],
-    },
-    {
-      id: "runtime",
-      label: "Runtime",
-      icon: "terminal",
-      rows: [
-        ["runtime.type", manifest.runtime?.type || manifest.baseDefinitionId || "tool_nodejs"],
-        ["runtime.entry", manifest.runtime?.entry || "scripts/run.mjs"],
-        ["prompt.md", files["prompt.md"] || "-"],
-        ["implementation.md", files["implementation.md"] || "-"],
-      ],
-    },
-    {
-      id: "ui",
-      label: "UI",
-      icon: "dashboard_customize",
-      rows: [
-        ["card.variant", manifest.ui?.card?.variant || "default"],
-        ["card.icon", manifest.ui?.card?.icon || "extension"],
-        ...actions.map((action) => [`action.${action.id || action.label || "-"}`, action.variant || action.label || "secondary"]),
-      ],
-    },
-    {
-      id: "tests",
-      label: "Tests",
-      icon: "science",
-      rows: [
-        ...Object.entries(testInputs).map(([key, value]) => [`sample.${key}`, String(value)]),
-        ["last run", `${draft?.test?.status || "not run"}${draft?.test?.durationMs ? ` · ${draft.test.durationMs}ms` : ""}`],
-      ],
-    },
-  ];
+function dataSlots(list) {
+  return (Array.isArray(list) ? list : []).filter((slot) => slot?.name && !isControlSlot(slot));
 }
 
 export default function NodeStudioPage() {
   const [draft, setDraft] = useState(null);
-  const [internalTab, setInternalTab] = useState("runtime");
-  const [testRunning, setTestRunning] = useState(false);
+  const [drafts, setDrafts] = useState([]);
+  const [internalTab, setInternalTab] = useState("source");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
-  const activeDraft = draft || EMPTY_DRAFT;
-  const sections = useMemo(() => buildInternalSections(activeDraft), [activeDraft]);
-  const section = useMemo(
-    () => sections.find((item) => item.id === internalTab) || sections[1],
-    [internalTab, sections],
-  );
-  const manifest = activeDraft?.manifest || {};
-  const config = activeDraft?.config || {};
-  const testInputs = activeDraft?.test?.inputs || {};
-  const testLog = Array.isArray(activeDraft?.test?.log) ? activeDraft.test.log : [];
-  const cardIcon = manifest.ui?.card?.icon || "event_repeat";
-  const cardVariant = manifest.ui?.card?.variant || "default";
-  const enabled = config.enabled === true;
+  const [testInputs, setTestInputs] = useState({});
 
-  const loadDraft = useCallback(async () => {
+  const manifest = draft?.manifest && draft.manifest.id ? draft.manifest : EMPTY_MANIFEST;
+  const parseError = String(draft?.parseError || "");
+  const source = String(draft?.files?.["index.mjs"] || "");
+  const packageFiles = useMemo(() => Object.entries(draft?.files || {}).sort(([a], [b]) => a.localeCompare(b)), [draft]);
+  const inputSlots = useMemo(() => dataSlots(manifest.input), [manifest]);
+  const outputSlots = useMemo(() => dataSlots(manifest.output), [manifest]);
+  const testLog = Array.isArray(draft?.test?.log) ? draft.test.log : [];
+  const definitionId = manifest.id ? `marketplace:${manifest.id}@${manifest.version}` : "";
+  const canPublish = Boolean(source) && !parseError && Boolean(manifest.id);
+  const currentPackageTestPassed = canPublish
+    && draft?.test?.status === "passed"
+    && Boolean(draft?.packageDigest)
+    && draft?.test?.packageDigest === draft?.packageDigest;
+
+  const applyDraft = useCallback((next) => {
+    setDraft(next || null);
+    setPromptDraft(String(next?.promptDraft || ""));
+    const saved = next?.test?.inputs;
+    if (saved && typeof saved === "object") setTestInputs(saved);
+  }, []);
+
+  const loadDraft = useCallback(async (draftId = "") => {
     setLoading(true);
     setError("");
     try {
       const listRes = await fetch("/api/node-studio/drafts");
       const listJson = await listRes.json().catch(() => ({}));
       if (!listRes.ok) throw new Error(listJson.error || "读取节点草稿失败");
-      const first = Array.isArray(listJson.drafts) ? listJson.drafts[0] : null;
-      if (!first?.id) {
-        setDraft(null);
-        setPromptDraft("");
+      const rows = Array.isArray(listJson.drafts) ? listJson.drafts : [];
+      setDrafts(rows);
+      const wanted = draftId || rows[0]?.id || "";
+      if (!wanted) {
+        applyDraft(null);
         return;
       }
-      const res = await fetch(`/api/node-studio/draft?id=${encodeURIComponent(first.id)}`);
+      const res = await fetch(`/api/node-studio/draft?id=${encodeURIComponent(wanted)}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "读取节点草稿失败");
-      setDraft(json.draft || null);
-      setPromptDraft(String(json.draft?.promptDraft || ""));
+      applyDraft(json.draft);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyDraft]);
 
   useEffect(() => {
     void loadDraft();
   }, [loadDraft]);
 
-  const saveDraft = useCallback(async (patch = {}) => {
-    setSaving(true);
+  const sendPrompt = useCallback(async () => {
+    const requirement = promptDraft.trim();
+    if (!requirement) return;
+    setBusy("generating");
     setError("");
+    setNotice("");
     try {
       const res = await fetch("/api/node-studio/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: draft?.id || "untitled_node", ...patch }),
+        body: JSON.stringify({ id: draft?.id || "untitled_node", promptDraft: requirement, appendUserMessage: true }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok || json.ok === false) throw new Error(json.error || "保存节点草稿失败");
-      setDraft(json.draft || draft);
-      setPromptDraft(String((json.draft || draft)?.promptDraft || ""));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "生成失败");
+      applyDraft(json.draft);
+      await loadDraft(json.draft?.id || "");
     } catch (e) {
       setError(String(e.message || e));
     } finally {
-      setSaving(false);
+      setBusy("");
+    }
+  }, [applyDraft, draft, loadDraft, promptDraft]);
+
+  const runTest = useCallback(async () => {
+    if (!draft?.id) return;
+    setBusy("testing");
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/node-studio/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: draft.id, inputs: testInputs }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "测试失败");
+      applyDraft(json.draft);
+      setInternalTab("tests");
+      setNotice(json.status === "passed" ? `测试通过 · ${json.durationMs}ms` : "测试失败，看下方日志");
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setBusy("");
+    }
+  }, [applyDraft, draft, testInputs]);
+
+  const publish = useCallback(async () => {
+    if (!draft?.id) return;
+    setBusy("publishing");
+    setError("");
+    setNotice("");
+    try {
+      const res = await fetch("/api/node-studio/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: draft.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) throw new Error(json.error || "发布失败");
+      setNotice(`已发布 ${json.definitionId || `${json.id}@${json.version}`}`);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setBusy("");
     }
   }, [draft]);
 
-  const runTest = () => {
-    setTestRunning(true);
-    window.setTimeout(() => setTestRunning(false), 900);
-  };
-
-  const toggleEnabled = (nextEnabled) => {
-    const nextConfig = { ...config, enabled: nextEnabled };
-    setDraft((current) => ({ ...(current || EMPTY_DRAFT), config: nextConfig }));
-    void saveDraft({ config: { enabled: nextEnabled } });
-  };
-
-  const sendPrompt = () => {
-    void saveDraft({ promptDraft, appendUserMessage: true });
-  };
+  const sections = useMemo(() => [
+    {
+      id: "source",
+      label: "index.mjs",
+      icon: "code",
+      code: source || "// 还没有 index.mjs。在左侧描述你要的节点，Agent 会把实现写在这里。",
+      rows: [
+        ["package", definitionId || "-"],
+        ["run()", source.includes("export function run") || source.includes("export async function run") ? "已导出" : "缺失"],
+      ],
+    },
+    {
+      id: "files",
+      label: `Files (${packageFiles.length})`,
+      icon: "folder_open",
+      code: packageFiles.map(([name, content]) => `// ${name}\n${content}`).join("\n\n") || "还没有包文件。",
+      rows: packageFiles.map(([name, content]) => [name, `${new Blob([content]).size} bytes`]),
+    },
+    {
+      id: "contract",
+      label: "Contract",
+      icon: "account_tree",
+      code: JSON.stringify({ input: manifest.input || [], output: manifest.output || [] }, null, 2),
+      rows: [
+        ...inputSlots.map((slot) => [`input.${slot.name}`, `${slot.type || "text"}${slot.required ? " · required" : ""}`]),
+        ...outputSlots.map((slot) => [`output.${slot.name}`, slot.type || "text"]),
+      ],
+    },
+    {
+      id: "tests",
+      label: "Tests",
+      icon: "science",
+      code: testLog.length ? testLog.join("\n") : "还没跑过。",
+      rows: [
+        ["last run", `${draft?.test?.status || "not run"}${draft?.test?.durationMs ? ` · ${draft.test.durationMs}ms` : ""}`],
+      ],
+    },
+  ], [definitionId, draft, inputSlots, manifest, outputSlots, packageFiles, source, testLog]);
+  const section = sections.find((item) => item.id === internalTab) || sections[0];
 
   return (
     <div className="af-node-studio-page">
@@ -176,16 +193,27 @@ export default function NodeStudioPage() {
           <h1>节点编辑器</h1>
         </div>
         <div className="af-node-studio-actions">
-          <button type="button" onClick={() => void loadDraft()} disabled={loading}>
-            <span className="material-symbols-outlined" aria-hidden>visibility</span>
-            {loading ? "Loading" : "Preview"}
+          {drafts.length > 1 ? (
+            <select value={draft?.id || ""} onChange={(event) => void loadDraft(event.target.value)}>
+              {drafts.map((row) => <option key={row.id} value={row.id}>{row.title || row.id}</option>)}
+            </select>
+          ) : null}
+          <button type="button" onClick={() => void loadDraft(draft?.id || "")} disabled={loading || Boolean(busy)}>
+            <span className="material-symbols-outlined" aria-hidden>refresh</span>
+            {loading ? "Loading" : "Reload"}
           </button>
-          <button type="button" onClick={runTest}>
-            <span className="material-symbols-outlined" aria-hidden>{testRunning ? "sync" : "science"}</span>
+          <button type="button" onClick={() => void runTest()} disabled={!canPublish || Boolean(busy)}>
+            <span className="material-symbols-outlined" aria-hidden>{busy === "testing" ? "sync" : "science"}</span>
             Test
           </button>
-          <button type="button" className="af-node-studio-actions__primary">
-            <span className="material-symbols-outlined" aria-hidden>publish</span>
+          <button
+            type="button"
+            className="af-node-studio-actions__primary"
+            onClick={() => void publish()}
+            disabled={!currentPackageTestPassed || Boolean(busy)}
+            title={currentPackageTestPassed ? "发布完整节点包到流程仓库" : "当前节点包必须先通过 Test"}
+          >
+            <span className="material-symbols-outlined" aria-hidden>{busy === "publishing" ? "sync" : "publish"}</span>
             Publish
           </button>
         </div>
@@ -198,33 +226,38 @@ export default function NodeStudioPage() {
             <strong>AI Agent</strong>
           </div>
           {error ? <div className="af-node-studio-error">{error}</div> : null}
+          {notice ? <div className="af-node-studio-notice">{notice}</div> : null}
           <div className="af-node-studio-thread">
             {!draft ? (
               <div className="af-node-studio-empty">
-                还没有节点草稿。描述你要创建的节点，发送后会创建一个新的 draft。
+                还没有节点草稿。描述你要创建的节点，Agent 会生成完整节点包。
               </div>
             ) : null}
-            {(Array.isArray(activeDraft?.agentMessages) ? activeDraft.agentMessages : []).map((message, index) => (
+            {(Array.isArray(draft?.agentMessages) ? draft.agentMessages : []).map((message, index) => (
               <div
                 key={`${message.role || "message"}-${index}`}
-                className={message.role === "user" ? "af-node-studio-message af-node-studio-message--user" : "af-node-studio-message"}
+                className={[
+                  "af-node-studio-message",
+                  message.role === "user" ? "af-node-studio-message--user" : "",
+                  message.error ? "af-node-studio-message--error" : "",
+                ].filter(Boolean).join(" ")}
               >
                 {message.text || ""}
               </div>
             ))}
-            <div className="af-node-studio-agent-tools">
-              <button type="button"><span className="material-symbols-outlined" aria-hidden>edit</span>修改 UI</button>
-              <button type="button"><span className="material-symbols-outlined" aria-hidden>code</span>改脚本</button>
-              <button type="button"><span className="material-symbols-outlined" aria-hidden>bug_report</span>修复报错</button>
-            </div>
+            {busy === "generating" ? <div className="af-node-studio-message">正在生成节点包...</div> : null}
           </div>
           <label className="af-node-studio-prompt">
             <span>需求</span>
-            <textarea value={promptDraft} onChange={(event) => setPromptDraft(event.target.value)} />
+            <textarea
+              value={promptDraft}
+              placeholder="例如：读一个 CSV，按某一列去重后输出行数和去重后的文件"
+              onChange={(event) => setPromptDraft(event.target.value)}
+            />
           </label>
-          <button type="button" className="af-node-studio-send" onClick={sendPrompt} disabled={saving}>
-            <span className="material-symbols-outlined" aria-hidden>{saving ? "sync" : "send"}</span>
-            {saving ? "Saving" : "Send"}
+          <button type="button" className="af-node-studio-send" onClick={() => void sendPrompt()} disabled={Boolean(busy) || !promptDraft.trim()}>
+            <span className="material-symbols-outlined" aria-hidden>{busy === "generating" ? "sync" : "send"}</span>
+            {busy === "generating" ? "Generating" : "Send"}
           </button>
         </aside>
 
@@ -235,70 +268,46 @@ export default function NodeStudioPage() {
           </div>
           <div className="af-node-studio-preview-grid">
             <div className="af-node-studio-preview-stage">
-              {!draft ? (
+              {!source ? (
                 <div className="af-node-preview-empty">
                   <span className="material-symbols-outlined" aria-hidden>add_box</span>
                   <strong>暂无预览</strong>
-                  <p>先在左侧描述你要创建的节点，AI 生成 draft 后这里会展示节点卡片。</p>
+                  <p>先在左侧描述你要创建的节点，Agent 生成 index.mjs 后这里会展示节点卡片。</p>
                 </div>
-              ) : cardVariant === "schedule" ? (
-                <div className="af-node-preview-card">
-                  <div className="af-node-preview-card__head">
-                    <span className="material-symbols-outlined" aria-hidden>{cardIcon}</span>
-                    <strong>{activeDraft.title || manifest.name || "Untitled Node"}</strong>
-                    <code>{draftDefinitionId(activeDraft)}</code>
-                  </div>
-                  <label className="af-node-preview-toggle">
-                    <input type="checkbox" checked={enabled} onChange={(event) => toggleEnabled(event.target.checked)} />
-                    <span>{enabled ? "定时开启" : "定时关闭"}</span>
-                  </label>
-                  <div className="af-node-preview-fields">
-                    <label>
-                      <span>频率</span>
-                      <select value={config.scheduleType || "daily"} onChange={(event) => saveDraft({ config: { scheduleType: event.target.value } })}>
-                        <option value="daily">每天</option>
-                        <option value="weekly">每周</option>
-                      </select>
-                    </label>
-                    <label>
-                      <span>时间</span>
-                      <div>
-                        <select value={config.hour || "09"} onChange={(event) => saveDraft({ config: { hour: event.target.value } })}><option>09</option><option>10</option></select>
-                        <select value={config.minute || "00"} onChange={(event) => saveDraft({ config: { minute: event.target.value } })}><option>00</option><option>30</option></select>
-                      </div>
-                    </label>
-                  </div>
-                  <div className="af-node-preview-meta">
-                    <span>{config.scheduleType === "weekly" ? "每周" : "每天"} {config.hour || "09"}:{config.minute || "00"}</span>
-                    <span>Next -</span>
-                    <span>{enabled ? "enabled" : "disabled"}</span>
-                  </div>
-                  <div className="af-node-preview-actions">
-                    <button type="button" className="af-node-preview-run">
-                      <span className="material-symbols-outlined" aria-hidden>play_arrow</span>
-                      立即运行
-                    </button>
-                    <button type="button">
-                      <span className="material-symbols-outlined" aria-hidden>article</span>
-                      日志
-                    </button>
-                  </div>
+              ) : parseError ? (
+                <div className="af-node-preview-empty">
+                  <span className="material-symbols-outlined" aria-hidden>error</span>
+                  <strong>声明解析失败</strong>
+                  <p>{parseError}</p>
+                  <p>export default 必须是纯字面量——它由 acorn 静态解析，永远不会被执行。</p>
                 </div>
               ) : (
                 <div className="af-node-preview-card af-node-preview-card--default">
                   <div className="af-node-preview-card__head">
-                    <span className="material-symbols-outlined" aria-hidden>{cardIcon}</span>
-                    <strong>{activeDraft.title || manifest.name || "Untitled Node"}</strong>
-                    <code>{draftDefinitionId(activeDraft)}</code>
+                    <span className="material-symbols-outlined" aria-hidden>{manifest.ui?.card?.icon || "extension"}</span>
+                    <strong>{manifest.displayName || manifest.id}</strong>
+                    <code>{definitionId}</code>
                   </div>
-                  <div className="af-node-preview-default-body">
-                    <p>{manifest.description || "这个节点还没有描述。AI 生成 runtime、prompt 或 script 后，内部信息会显示在右侧。"}</p>
-                    <div>
-                      <span>{Array.isArray(manifest.inputs) ? manifest.inputs.length : 0} inputs</span>
-                      <span>{Array.isArray(manifest.outputs) ? manifest.outputs.length : 0} outputs</span>
-                      <span>{manifest.runtime?.type || manifest.baseDefinitionId || "agent_subAgent"}</span>
+                  {manifest.ui?.card ? (
+                    <div className="af-node-preview-default-body af-node-preview-default-body--kit">
+                      <NodeUiKitCard data={{
+                        nodeUi: manifest.ui,
+                        inputs: inputSlots,
+                        outputs: outputSlots,
+                        script: manifest.runtime?.command || manifest.runtime?.entry || "index.mjs",
+                        scriptRef: manifest.runtime?.entry || "",
+                      }} />
                     </div>
-                  </div>
+                  ) : (
+                    <div className="af-node-preview-default-body">
+                      <p>{manifest.description || "这个节点还没有 description。"}</p>
+                      <div>
+                        <span>{inputSlots.length} inputs</span>
+                        <span>{outputSlots.length} outputs</span>
+                        <span>tool_nodejs</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -306,17 +315,26 @@ export default function NodeStudioPage() {
             <div className="af-node-studio-test">
               <div className="af-node-studio-subhead">
                 <strong>Test Inputs</strong>
-                <button type="button" onClick={runTest}>
-                  <span className="material-symbols-outlined" aria-hidden>{testRunning ? "sync" : "play_arrow"}</span>
+                <button type="button" onClick={() => void runTest()} disabled={!canPublish || Boolean(busy)}>
+                  <span className="material-symbols-outlined" aria-hidden>{busy === "testing" ? "sync" : "play_arrow"}</span>
                   Run
                 </button>
               </div>
               <div className="af-node-studio-inputs">
-                <label><span>project</span><input value={testInputs.project || ""} readOnly placeholder="-" /></label>
-                <label><span>date</span><input value={testInputs.date || ""} readOnly placeholder="-" /></label>
+                {inputSlots.length === 0 ? <span className="af-node-studio-empty">节点还没有输入槽。</span> : null}
+                {inputSlots.map((slot) => (
+                  <label key={slot.name}>
+                    <span>{slot.name}{slot.required ? " *" : ""}</span>
+                    <input
+                      value={testInputs[slot.name] || ""}
+                      placeholder={slot.description || slot.type || "text"}
+                      onChange={(event) => setTestInputs((current) => ({ ...current, [slot.name]: event.target.value }))}
+                    />
+                  </label>
+                ))}
               </div>
               <div className="af-node-studio-log">
-                {(testRunning ? ["running..."] : testLog.length ? testLog : ["No test run yet."]).map((line, index) => (
+                {(busy === "testing" ? ["running..."] : testLog.length ? testLog : ["No test run yet."]).map((line, index) => (
                   <span key={`${line}-${index}`}>{line}</span>
                 ))}
               </div>
@@ -350,13 +368,7 @@ export default function NodeStudioPage() {
               </div>
             ))}
           </div>
-          <pre className="af-node-studio-code">{section.id === "ui"
-            ? JSON.stringify(manifest.ui || {}, null, 2)
-            : section.id === "contract"
-              ? JSON.stringify({ inputs: manifest.inputs || [], outputs: manifest.outputs || [], configSchema: manifest.configSchema || {} }, null, 2)
-              : section.id === "tests"
-                ? JSON.stringify(activeDraft?.test || {}, null, 2)
-                : JSON.stringify({ runtime: manifest.runtime || {}, files: activeDraft?.files || {} }, null, 2)}</pre>
+          <pre className="af-node-studio-code">{section.code}</pre>
         </aside>
       </main>
     </div>

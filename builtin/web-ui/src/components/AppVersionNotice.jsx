@@ -22,7 +22,6 @@ export default function AppVersionNotice() {
   const [update, setUpdate] = useState(null);
 
   useEffect(() => {
-    if (window.__AGENTFLOW_STATIC_FLOW_PREVIEW__) return undefined;
     let cancelled = false;
     let checking = false;
 

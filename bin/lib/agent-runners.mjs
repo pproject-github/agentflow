@@ -3,21 +3,23 @@ import fs from "fs";
 import path from "path";
 import chalk from "chalk";
 import { createMarkdownStreamer, render as renderMarkdown } from "markdansi";
-import { getAgentPath, loadAgentPromptWithReplacements, stripYamlFrontmatter } from "./agents-path.mjs";
-import { machineReadable } from "./log.mjs";
 import { normalizeCursorModelForCli } from "./model-config.mjs";
-import { appendRunLogLine } from "./run-events.mjs";
-import { writeWithPrefix } from "./terminal.mjs";
 import { t } from "./i18n.mjs";
 import { readMergedEnvObject } from "./user-env.mjs";
 import {
+  classifyCursorApiKeyLimitError,
+  clearCursorApiKeyLaneCooldown,
   createCursorApiKeyAttempts,
   cursorApiKeyCooldownMinutes,
   cursorApiKeyEnv,
   cursorApiKeyLabel,
+  isCursorAutoFallbackEligible,
   isCursorQuotaError,
-  markCursorApiKeyQuotaBlocked,
+  markCursorApiKeyLaneBlocked,
+  recordCursorApiKeyFallbackModel,
+  recordCursorApiKeyUsage,
 } from "./cursor-api-key-pool.mjs";
+import { discoverCursorModels } from "./cursor-model-catalog.mjs";
 import { outputNodeBasename } from "../pipeline/get-exec-id.mjs";
 
 function shouldPassCursorModelArg(model) {
@@ -57,6 +59,16 @@ function nextCursorAttemptOptions(options = {}, attempts = [], attemptIndex = 0)
     ...options,
     _agentflowCursorApiKeyAttempts: attempts,
     _agentflowCursorApiKeyAttemptIndex: attemptIndex + 1,
+    _agentflowCursorModelSelection: undefined,
+  };
+}
+
+function cursorModelAttemptOptions(options = {}, attempts = [], attemptIndex = 0, modelSelection) {
+  return {
+    ...options,
+    _agentflowCursorApiKeyAttempts: attempts,
+    _agentflowCursorApiKeyAttemptIndex: attemptIndex,
+    _agentflowCursorModelSelection: modelSelection,
   };
 }
 
@@ -81,15 +93,26 @@ function cursorResultErrorText(event) {
   return "";
 }
 
-function writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, text) {
-  const body = String(text ?? "").trim();
-  if (!body) return;
-  fs.mkdirSync(path.dirname(absResultPath), { recursive: true });
-  fs.writeFileSync(absResultPath, body + "\n", "utf-8");
-  if (!instanceId) return;
-  const slotPath = path.join(absRunDir, "output", instanceId, outputNodeBasename(instanceId, 1, "result"));
-  fs.mkdirSync(path.dirname(slotPath), { recursive: true });
-  fs.writeFileSync(slotPath, body + "\n", "utf-8");
+export function isCursorAgentLoopingError(error = "") {
+  const text = String(error?.message || error || "");
+  return /agent looping detected|got stuck in a repeating response pattern/i.test(text);
+}
+
+function isCursorReadOnlyToolCall(toolName = "") {
+  const name = String(toolName || "").trim();
+  if (!name) return false;
+  return /^(read|glob|grep|search|semanticSearch|list|find|fetch|webSearch|view|inspect)/i.test(name);
+}
+
+function annotateCursorFailure(error, { hadToolActivity = false, hadMutatingToolActivity = false } = {}) {
+  const failure = error instanceof Error ? error : new Error(String(error || "Cursor Agent failed."));
+  failure.cursorHadToolActivity = Boolean(hadToolActivity);
+  failure.cursorHadMutatingToolActivity = Boolean(hadMutatingToolActivity);
+  if (isCursorAgentLoopingError(failure)) {
+    failure.code = "CURSOR_AGENT_LOOPING";
+    failure.agentflowFailureCategory = "agent_looping";
+  }
+  return failure;
 }
 
 function envFlag(name, defaultValue = false) {
@@ -123,7 +146,7 @@ function shouldSkipCodexGitCheck(workspace) {
   return !hasGitMetadataAncestor(workspace);
 }
 
-function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessagePath, promptText, configArgs = [] }) {
+function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessagePath, promptText, configArgs = [], sandboxMode = "", allowDanger = true }) {
   const args = [];
   for (const cfg of Array.isArray(configArgs) ? configArgs : []) {
     const value = String(cfg || "").trim();
@@ -137,10 +160,10 @@ function buildCodexExecArgs({ workspace, addDirs = [], model, outputLastMessageP
     const abs = path.resolve(dir);
     if (abs && abs !== workspace) args.push("--add-dir", abs);
   }
-  if (envFlag("AGENTFLOW_CODEX_DANGER", false)) {
+  if (allowDanger && envFlag("AGENTFLOW_CODEX_DANGER", false)) {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else {
-    args.push("--sandbox", String(process.env.AGENTFLOW_CODEX_SANDBOX || "workspace-write").trim() || "workspace-write");
+    args.push("--sandbox", String(sandboxMode || process.env.AGENTFLOW_CODEX_SANDBOX || "workspace-write").trim() || "workspace-write");
   }
   if (shouldSkipCodexGitCheck(workspace)) args.push("--skip-git-repo-check");
   if (envFlag("AGENTFLOW_CODEX_EPHEMERAL", false)) args.push("--ephemeral");
@@ -319,920 +342,6 @@ export function summarizeCursorStderr(stderr, maxChars = 1200) {
 /**
  * Run Cursor CLI with stream-json, forward events to stdout, return success/failure.
  */
-export function runCursorAgentForNode(
-  workspaceRoot,
-  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-  options = {},
-) {
-  const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
-  const absResultPath = path.join(absRunDir, resultPathRel);
-  const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
-  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
-  const absWorkspaceRoot = path.resolve(workspaceRoot);
-  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
-  const replacements = {
-    workspaceRoot: execWorkspaceRoot,
-    executionWorkspaceRoot: execWorkspaceRoot,
-    pipelineWorkspace: absWorkspaceRoot,
-    promptPath: absPromptPath,
-    nodeContext: nodeContext ?? "",
-    taskBody: taskBody ?? "",
-    resultPath: absResultPath,
-    intermediatePath: path.join(absRunDir, "intermediate"),
-    outputDir,
-    flowName: options.flowName ?? "",
-    uuid: options.uuid ?? "",
-    instanceId: instanceId ?? "",
-  };
-  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
-  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
-  if (agentContent) {
-    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
-    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
-    agentPathForPrompt = resolvedAgentPath;
-  }
-  const rawAgentContent =
-    agentContent != null
-      ? agentContent
-      : fs.existsSync(agentPathForPrompt)
-        ? fs.readFileSync(agentPathForPrompt, "utf8")
-        : "";
-  const promptText = stripYamlFrontmatter(rawAgentContent);
-
-  const modelRaw = options.model ?? process.env.CURSOR_AGENT_MODEL ?? null;
-  const model = normalizeCursorModelForCli(modelRaw);
-  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
-  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
-  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
-  const {
-    baseEnv: cursorBaseEnv,
-    attempts: cursorAttempts,
-    attemptIndex: cursorAttemptIndex,
-    selection: cursorSelection,
-  } = cursorAttemptOptions(options);
-
-  return new Promise((resolve, reject) => {
-    const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
-    const args = ["--print", "--output-format", "stream-json", "--trust", "--workspace", execWorkspaceRoot];
-    const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
-    if (approveMcps) args.push("--approve-mcps");
-    if (options.force) args.push("--force");
-    if (shouldPassCursorModelArg(model)) args.push("--model", model);
-    args.push(promptText);
-    if (options.flowName && options.uuid) {
-      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
-      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI 完整参数: ${agentCmd} ${JSON.stringify(argvLog)}`);
-      if (cursorAttempts.length > 1) {
-        appendRunLogLine(
-          workspaceRoot,
-          options.flowName,
-          options.uuid,
-          "cli-raw",
-          `Cursor API Key 尝试: ${cursorApiKeyLabel(cursorSelection)} / ${cursorAttempts.length}`,
-        );
-      }
-      appendRunLogLine(
-        workspaceRoot,
-        options.flowName,
-        options.uuid,
-        "cli-raw",
-        `Cursor CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`,
-      );
-      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Cursor CLI prompt 完整:\n${promptText}`);
-    }
-    const useStderrInherit = process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "1" || process.env.AGENTFLOW_CURSOR_STDERR_INHERIT === "true";
-    const child = spawn(agentCmd, args, {
-      cwd: execWorkspaceRoot,
-      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
-      shell: false,
-      env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
-    });
-
-    let lastResult = null;
-    let hadError = false;
-    let hadToolActivity = false;
-    const assistantTextChunks = [];
-    const STDERR_CAP_BYTES = 1024 * 1024;
-    const stderrChunks = [];
-    let stderrTotalBytes = 0;
-    const stderrBuffer = options.stderrBuffer || null;
-    let stderrLineBuffer = "";
-    const flowName = options.flowName ?? null;
-    const uuid = options.uuid ?? null;
-
-    const outStream = machineReadable ? process.stderr : process.stdout;
-    function writeStdout(text) {
-      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
-      else if (text) outStream.write(agentContentColor(text));
-      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout", text);
-    }
-
-    function flushStderrLines() {
-      if (!coloredPrefix) return;
-      let idx;
-      while ((idx = stderrLineBuffer.indexOf("\n")) !== -1) {
-        const line = stderrLineBuffer.slice(0, idx + 1);
-        stderrLineBuffer = stderrLineBuffer.slice(idx + 1);
-        writeWithPrefix(process.stderr, line, coloredPrefix, agentContentColor);
-      }
-    }
-
-    if (!useStderrInherit) {
-      child.stderr.on("data", (chunk) => {
-        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
-        const len = buf.length;
-        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
-          const drop = stderrChunks.shift();
-          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
-        }
-        stderrChunks.push(buf);
-        stderrTotalBytes += len;
-        if (stderrBuffer) {
-          stderrBuffer.push(chunk);
-        } else if (coloredPrefix) {
-          stderrLineBuffer += s;
-          flushStderrLines();
-        } else {
-          process.stderr.write(chunk);
-        }
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stderr", s);
-      });
-    }
-
-    const stdoutWidth = process.stdout.columns ?? 80;
-    const mdStreamer = createMarkdownStreamer({
-      render: (md) => renderMarkdown(md, { width: stdoutWidth }),
-      spacing: "single",
-    });
-
-    const STDOUT_RAW_CAP = 200;
-    const debugStdout = process.env.AGENTFLOW_DEBUG_STDOUT === "1" || process.env.AGENTFLOW_DEBUG_STDOUT === "true";
-
-    function isLikelyBase64(s) {
-      if (!s || typeof s !== "string") return false;
-      const t = s.trim();
-      if (t.startsWith("data:image/") && t.includes(";base64,")) return true;
-      if (t.length < 80) return false;
-      return /^[A-Za-z0-9+/]+=*$/.test(t);
-    }
-
-    child.stdout.setEncoding("utf-8");
-    let stdoutLineBuffer = "";
-    child.stdout.on("data", (chunk) => {
-      stdoutLineBuffer += chunk;
-      const idx = stdoutLineBuffer.lastIndexOf("\n");
-      const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
-      if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
-      const lines = complete.split("\n").filter(Boolean);
-      for (const line of lines) {
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout-raw", line);
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "assistant" && event.message?.content) {
-            let text = (event.message.content || [])
-              .filter((c) => c.type === "text" && c.text)
-              .map((c) => c.text)
-              .join("");
-            if (text) {
-              text = text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
-              assistantTextChunks.push(text);
-              const out = mdStreamer.push(text);
-              if (out) writeStdout(out);
-            }
-          } else if (event.type === "tool_call") {
-            hadToolActivity = true;
-            const toolName =
-              event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
-            const subtype = event.subtype ?? "";
-            if (options.onToolCall) options.onToolCall(subtype, toolName);
-          } else if (event.type === "thinking") {
-            if (options.onToolCall) options.onToolCall("thinking", "");
-          } else if (event.type === "result") {
-            lastResult = event;
-            if (event.subtype === "success" && !event.is_error) {
-              hadError = false;
-            } else {
-              hadError = true;
-            }
-          } else {
-            writeStdout(`[cursor-stdout] event: ${event.type ?? "unknown"}\n`);
-          }
-        } catch (_) {
-          let out;
-          if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
-            hadToolActivity = true;
-            let subtype = "?";
-            try {
-              const ev = JSON.parse(line);
-              if (ev && ev.type === "tool_call") subtype = ev.subtype ?? "?";
-            } catch {
-              const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
-              if (m) subtype = m[1];
-            }
-            out = `[cursor] tool_call ${subtype}\n`;
-          } else if (isLikelyBase64(line)) {
-            out = `[cursor-stdout] (base64 图片/数据, ${line.length} 字符)\n`;
-          } else if (debugStdout || line.length <= STDOUT_RAW_CAP) {
-            out = line + "\n";
-          } else if (lastResult == null) {
-            out = `[cursor-stdout] (非 JSON，可能为 Cursor 报错) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`;
-          } else {
-            out = `[cursor-stdout] (解析失败或未处理的一行, ${line.length} 字符)\n`;
-          }
-          writeStdout(out);
-        }
-      }
-    });
-
-    child.on("error", (err) => {
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.removeAllListeners();
-      reject(new Error(`Cursor CLI failed to start: ${err.message}. Ensure '${agentCmd}' is in PATH.`));
-    });
-
-    child.on("close", (code) => {
-      if (stdoutLineBuffer.trim() && flowName && uuid) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, "cursor-stdout-raw", stdoutLineBuffer.trim());
-      }
-      child.stdout.removeAllListeners();
-      if (!useStderrInherit) child.stderr.removeAllListeners();
-      child.removeAllListeners();
-      const tail = mdStreamer.finish();
-      if (tail) writeStdout(tail);
-      if (coloredPrefix && stderrLineBuffer) {
-        writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
-      }
-      const retryCursorQuota = (errorText) => {
-        if (!cursorSelection) return false;
-        if (cursorAttemptIndex >= cursorAttempts.length - 1) return false;
-        if (hadToolActivity) return false;
-        if (!isCursorQuotaError(errorText)) return false;
-        markCursorApiKeyQuotaBlocked(cursorSelection, cursorApiKeyCooldownMinutes(cursorBaseEnv));
-        const nextOptions = nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex);
-        const line = `[agentflow] Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached quota, retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}...\n`;
-        writeStdout(line);
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "cli-raw", line.trim());
-        runCursorAgentForNode(
-          workspaceRoot,
-          { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-          nextOptions,
-        ).then(resolve).catch(reject);
-        return true;
-      };
-      if (code !== 0 && lastResult == null) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
-        if (retryCursorQuota(stderrTail)) return;
-        const stderrSummary = summarizeCursorStderr(stderr);
-        const autoOnly =
-          /named models unavailable/i.test(stderrTail) ||
-          (/free plans?/i.test(stderrTail) && /only use auto/i.test(stderrTail)) ||
-          /only use auto/i.test(stderrTail);
-        if (autoOnly && model !== "Auto" && !options._agentflowAutoRetry) {
-          writeStdout(t("runner.cursor_account_limit") + "\n");
-          runCursorAgentForNode(
-            workspaceRoot,
-            { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-            { ...options, model: "Auto", _agentflowAutoRetry: true },
-          ).then(resolve).catch(reject);
-          return;
-        }
-        const logHint =
-          flowName && uuid
-            ? ` 检查 run 目录 logs/log.txt 查看完整 Cursor stderr；常见原因：未登录 Cursor、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CURSOR_STDERR_INHERIT=1 后重跑，使 Cursor 的 stderr 直接输出到终端。`
-            : "";
-        const err = new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}${logHint}`);
-        err.cursorStderrTail = stderrTail;
-        reject(err);
-        return;
-      }
-      if (hadError || (lastResult && lastResult.is_error)) {
-        const errorText = cursorResultErrorText(lastResult) || "Agent reported error.";
-        if (retryCursorQuota(errorText)) return;
-        reject(new Error(errorText));
-        return;
-      }
-      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, assistantTextChunks.join("") || lastResult?.result || "");
-      resolve();
-    });
-  });
-}
-
-/**
- * Run OpenCode CLI in non-interactive mode for a node.
- */
-export function runOpenCodeAgentForNode(
-  workspaceRoot,
-  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-  options = {},
-) {
-  const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
-  const absResultPath = path.join(absRunDir, resultPathRel);
-  const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
-  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
-  const absWorkspaceRoot = path.resolve(workspaceRoot);
-  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
-  const replacements = {
-    workspaceRoot: execWorkspaceRoot,
-    executionWorkspaceRoot: execWorkspaceRoot,
-    pipelineWorkspace: absWorkspaceRoot,
-    promptPath: absPromptPath,
-    nodeContext: nodeContext ?? "",
-    taskBody: taskBody ?? "",
-    resultPath: absResultPath,
-    intermediatePath: path.join(absRunDir, "intermediate"),
-    outputDir,
-    flowName: options.flowName ?? "",
-    uuid: options.uuid ?? "",
-    instanceId: instanceId ?? "",
-  };
-  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
-  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
-  if (agentContent) {
-    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
-    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
-    agentPathForPrompt = resolvedAgentPath;
-  }
-  const rawAgentContent =
-    agentContent != null
-      ? agentContent
-      : fs.existsSync(agentPathForPrompt)
-        ? fs.readFileSync(agentPathForPrompt, "utf8")
-        : "";
-  const promptText = stripYamlFrontmatter(rawAgentContent);
-
-  const model = options.model && String(options.model).trim();
-  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
-  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
-  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
-
-  return new Promise((resolve, reject) => {
-    const opencodeCmd = process.env.OPENCODE_CMD || "opencode";
-    const args = ["run"];
-    if (model) {
-      args.push("--model", model);
-    }
-    args.push("--dir", execWorkspaceRoot);
-    args.push("--", promptText);
-    const spawnOpts = {
-      cwd: execWorkspaceRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      env: childEnv(options),
-    };
-    if (options.force) {
-      spawnOpts.env = {
-        ...spawnOpts.env,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({
-          permission: { external_directory: "allow" },
-        }),
-      };
-    }
-    const child = spawn(opencodeCmd, args, spawnOpts);
-    const flowName = options.flowName ?? null;
-    const uuid = options.uuid ?? null;
-
-    let stdoutLogBuf = "";
-    let stderrLogBuf = "";
-    let stdoutCaptured = "";
-
-    function drainLogBuf(buf, tag) {
-      let idx;
-      while ((idx = buf.indexOf("\n")) !== -1) {
-        const raw = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        const line = stripAnsi(raw).trimEnd();
-        if (line.trim() && flowName && uuid) {
-          appendRunLogLine(workspaceRoot, flowName, uuid, tag, line);
-        }
-      }
-      return buf;
-    }
-
-    function flushLogBuf(buf, tag) {
-      if (!buf) return;
-      const line = stripAnsi(buf).trimEnd();
-      if (line.trim() && flowName && uuid) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, tag, line);
-      }
-    }
-
-    child.stdout.setEncoding("utf-8");
-    child.stdout.on("data", (chunk) => {
-      if (coloredPrefix) writeWithPrefix(process.stdout, chunk, coloredPrefix, agentContentColor);
-      else process.stdout.write(agentContentColor(chunk));
-      const normalizedChunk = String(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      stdoutCaptured += normalizedChunk;
-      stdoutLogBuf += normalizedChunk;
-      stdoutLogBuf = drainLogBuf(stdoutLogBuf, "opencode-stdout");
-    });
-
-    child.stderr.on("data", (chunk) => {
-      const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-      if (coloredPrefix) {
-        writeWithPrefix(process.stderr, s, coloredPrefix, agentContentColor);
-      } else {
-        process.stderr.write(chunk);
-      }
-      stderrLogBuf += s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      stderrLogBuf = drainLogBuf(stderrLogBuf, "opencode-stderr");
-    });
-
-    child.on("error", (err) => {
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.removeAllListeners();
-      reject(new Error(`OpenCode CLI failed to start: ${err.message}. Ensure '${opencodeCmd}' is in PATH.`));
-    });
-
-    child.on("close", (code) => {
-      child.stdout.removeAllListeners();
-      child.stderr.removeAllListeners();
-      child.removeAllListeners();
-      flushLogBuf(stdoutLogBuf, "opencode-stdout");
-      flushLogBuf(stderrLogBuf, "opencode-stderr");
-      if (code !== 0) {
-        reject(new Error(`OpenCode CLI exited ${code}.`));
-        return;
-      }
-      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, stripAnsi(stdoutCaptured));
-      resolve();
-    });
-  });
-}
-
-/**
- * Run Claude Code CLI (`claude`) in non-interactive stream-json mode for a node.
- * NDJSON event schema: system(init) / assistant(message.content[]) / user(tool_result) / result.
- * Thinking and text both live as content blocks inside assistant events (not as top-level events).
- */
-export function runClaudeCodeAgentForNode(
-  workspaceRoot,
-  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-  options = {},
-) {
-  const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
-  const absResultPath = path.join(absRunDir, resultPathRel);
-  const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
-  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
-  const absWorkspaceRoot = path.resolve(workspaceRoot);
-  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
-  const replacements = {
-    workspaceRoot: execWorkspaceRoot,
-    executionWorkspaceRoot: execWorkspaceRoot,
-    pipelineWorkspace: absWorkspaceRoot,
-    promptPath: absPromptPath,
-    nodeContext: nodeContext ?? "",
-    taskBody: taskBody ?? "",
-    resultPath: absResultPath,
-    intermediatePath: path.join(absRunDir, "intermediate"),
-    outputDir,
-    flowName: options.flowName ?? "",
-    uuid: options.uuid ?? "",
-    instanceId: instanceId ?? "",
-  };
-  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
-  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
-  if (agentContent) {
-    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
-    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
-    agentPathForPrompt = resolvedAgentPath;
-  }
-  const rawAgentContent =
-    agentContent != null
-      ? agentContent
-      : fs.existsSync(agentPathForPrompt)
-        ? fs.readFileSync(agentPathForPrompt, "utf8")
-        : "";
-  const promptText = stripYamlFrontmatter(rawAgentContent);
-
-  const model = options.model && String(options.model).trim();
-  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
-  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
-  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
-
-  return new Promise((resolve, reject) => {
-    const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
-    const bypassPermissions =
-      process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
-      process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", execWorkspaceRoot, "--add-dir", absWorkspaceRoot];
-    if (bypassPermissions) args.push("--dangerously-skip-permissions");
-    if (model) args.push("--model", model);
-    args.push(promptText);
-    if (options.flowName && options.uuid) {
-      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
-      appendRunLogLine(
-        workspaceRoot,
-        options.flowName,
-        options.uuid,
-        "cli-raw",
-        `Claude Code CLI 完整参数: ${claudeCmd} ${JSON.stringify(argvLog)}`,
-      );
-      appendRunLogLine(
-        workspaceRoot,
-        options.flowName,
-        options.uuid,
-        "cli-raw",
-        `Claude Code CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`,
-      );
-      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Claude Code CLI prompt 完整:\n${promptText}`);
-    }
-    const useStderrInherit =
-      process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "1" ||
-      process.env.AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT === "true";
-    const child = spawn(claudeCmd, args, {
-      cwd: execWorkspaceRoot,
-      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
-      shell: false,
-      env: childEnv(options),
-    });
-
-    let lastResult = null;
-    let hadError = false;
-    let sessionId = null;
-    const assistantTextChunks = [];
-    const STDERR_CAP_BYTES = 1024 * 1024;
-    const stderrChunks = [];
-    let stderrTotalBytes = 0;
-    const stderrBuffer = options.stderrBuffer || null;
-    let stderrLineBuffer = "";
-    const flowName = options.flowName ?? null;
-    const uuid = options.uuid ?? null;
-
-    const outStream = machineReadable ? process.stderr : process.stdout;
-    function writeStdout(text) {
-      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
-      else if (text) outStream.write(agentContentColor(text));
-      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout", text);
-    }
-
-    function flushStderrLines() {
-      if (!coloredPrefix) return;
-      let idx;
-      while ((idx = stderrLineBuffer.indexOf("\n")) !== -1) {
-        const line = stderrLineBuffer.slice(0, idx + 1);
-        stderrLineBuffer = stderrLineBuffer.slice(idx + 1);
-        writeWithPrefix(process.stderr, line, coloredPrefix, agentContentColor);
-      }
-    }
-
-    if (!useStderrInherit) {
-      child.stderr.on("data", (chunk) => {
-        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
-        const len = buf.length;
-        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
-          const drop = stderrChunks.shift();
-          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
-        }
-        stderrChunks.push(buf);
-        stderrTotalBytes += len;
-        if (stderrBuffer) {
-          stderrBuffer.push(chunk);
-        } else if (coloredPrefix) {
-          stderrLineBuffer += s;
-          flushStderrLines();
-        } else {
-          process.stderr.write(chunk);
-        }
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stderr", s);
-      });
-    }
-
-    const stdoutWidth = process.stdout.columns ?? 80;
-    const mdStreamer = createMarkdownStreamer({
-      render: (md) => renderMarkdown(md, { width: stdoutWidth }),
-      spacing: "single",
-    });
-
-    child.stdout.setEncoding("utf-8");
-    let stdoutLineBuffer = "";
-    child.stdout.on("data", (chunk) => {
-      stdoutLineBuffer += chunk;
-      const idx = stdoutLineBuffer.lastIndexOf("\n");
-      const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
-      if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
-      const lines = complete.split("\n").filter(Boolean);
-      for (const line of lines) {
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout-raw", line);
-        try {
-          const event = JSON.parse(line);
-          if (event && typeof event === "object" && event.session_id && !sessionId) {
-            sessionId = event.session_id;
-          }
-          if (event.type === "system") {
-            // init 等元事件，仅记录
-          } else if (event.type === "assistant" && event.message && Array.isArray(event.message.content)) {
-            for (const block of event.message.content) {
-              if (!block || typeof block !== "object") continue;
-              if (block.type === "text" && block.text) {
-                const text = normalizeStreamTextChunk(block.text);
-                assistantTextChunks.push(text);
-                const out = mdStreamer.push(text);
-                if (out) writeStdout(out);
-              } else if (block.type === "thinking") {
-                if (options.onToolCall) options.onToolCall("thinking", "");
-              } else if (block.type === "tool_use") {
-                const toolName = block.name || "?";
-                if (options.onToolCall) options.onToolCall("tool_use", toolName);
-                writeStdout(`[claude-code] tool ${toolName}\n`);
-              }
-            }
-          } else if (event.type === "user" && event.message && Array.isArray(event.message.content)) {
-            // tool_result 回传；不向用户 stdout 渲染，只记录
-          } else if (event.type === "result") {
-            lastResult = event;
-            const isSuccess = event.subtype === "success" && !event.is_error;
-            hadError = !isSuccess;
-          } else {
-            writeStdout(`[claude-code-stdout] event: ${event.type ?? "unknown"}\n`);
-          }
-        } catch (_) {
-          writeStdout(`[claude-code-stdout] (非 JSON) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`);
-        }
-      }
-    });
-
-    child.on("error", (err) => {
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.removeAllListeners();
-      reject(
-        new Error(
-          `Claude Code CLI failed to start: ${err.message}. Install via 'npm i -g @anthropic-ai/claude-code' and run 'claude /login', or set CLAUDE_CODE_CMD.`,
-        ),
-      );
-    });
-
-    child.on("close", (code) => {
-      if (stdoutLineBuffer.trim() && flowName && uuid) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, "claude-code-stdout-raw", stdoutLineBuffer.trim());
-      }
-      child.stdout.removeAllListeners();
-      if (!useStderrInherit) child.stderr.removeAllListeners();
-      child.removeAllListeners();
-      const tail = mdStreamer.finish();
-      if (tail) writeStdout(tail);
-      if (coloredPrefix && stderrLineBuffer) {
-        writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
-      }
-      if (code !== 0 && lastResult == null) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
-        const logHint =
-          flowName && uuid
-            ? ` 检查 run 目录 logs/log.txt 查看完整 Claude Code stderr；常见原因：未登录 claude /login、模型不可用、网络/权限。若无报错内容，可设置 AGENTFLOW_CLAUDE_CODE_STDERR_INHERIT=1 后重跑。`
-            : "";
-        const err = new Error(`Claude Code CLI exited ${code}. ${stderrTail || "No result event received."}${logHint}`);
-        err.claudeCodeStderrTail = stderrTail;
-        reject(err);
-        return;
-      }
-      if (hadError || (lastResult && lastResult.is_error)) {
-        const msg =
-          (lastResult && typeof lastResult.result === "string" && lastResult.result) ||
-          (lastResult && lastResult.subtype) ||
-          "Agent reported error.";
-        reject(new Error(String(msg)));
-        return;
-      }
-      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, assistantTextChunks.join("") || lastResult?.result || "");
-      resolve();
-    });
-  });
-}
-
-/**
- * Run Codex CLI (`codex exec`) in non-interactive JSONL mode for a node.
- */
-export function runCodexAgentForNode(
-  workspaceRoot,
-  { promptPath, nodeContext, taskBody, intermediatePath, resultPathRel, subagent, instanceId },
-  options = {},
-) {
-  const absPromptPath = path.resolve(workspaceRoot, promptPath);
-  const absRunDir = path.resolve(workspaceRoot, intermediatePath);
-  const absResultPath = path.join(absRunDir, resultPathRel);
-  const nodeIntermediateDir = path.dirname(absPromptPath);
-  const outputDir = instanceId ? path.join(absRunDir, "output", instanceId) : path.join(absRunDir, "output");
-  if (instanceId) fs.mkdirSync(outputDir, { recursive: true });
-  const absWorkspaceRoot = path.resolve(workspaceRoot);
-  const execWorkspaceRoot = path.resolve(options.execWorkspaceRoot || workspaceRoot);
-  const replacements = {
-    workspaceRoot: execWorkspaceRoot,
-    executionWorkspaceRoot: execWorkspaceRoot,
-    pipelineWorkspace: absWorkspaceRoot,
-    promptPath: absPromptPath,
-    nodeContext: nodeContext ?? "",
-    taskBody: taskBody ?? "",
-    resultPath: absResultPath,
-    intermediatePath: path.join(absRunDir, "intermediate"),
-    outputDir,
-    flowName: options.flowName ?? "",
-    uuid: options.uuid ?? "",
-    instanceId: instanceId ?? "",
-  };
-  const agentContent = loadAgentPromptWithReplacements(workspaceRoot, subagent, replacements);
-  let agentPathForPrompt = getAgentPath(workspaceRoot, subagent);
-  if (agentContent) {
-    const resolvedAgentPath = path.join(nodeIntermediateDir, `agent-${subagent}.md`);
-    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    fs.writeFileSync(resolvedAgentPath, agentContent, "utf8");
-    agentPathForPrompt = resolvedAgentPath;
-  }
-  const rawAgentContent =
-    agentContent != null
-      ? agentContent
-      : fs.existsSync(agentPathForPrompt)
-        ? fs.readFileSync(agentPathForPrompt, "utf8")
-        : "";
-  const promptText = stripYamlFrontmatter(rawAgentContent);
-
-  const model = cleanModel(options.model, "CODEX_MODEL");
-  const rawPrefix = options.outputPrefix != null ? `[${options.outputPrefix}] ` : "";
-  const coloredPrefix = rawPrefix && options.prefixColor ? options.prefixColor(rawPrefix) : rawPrefix;
-  const agentContentColor = options.contentColor ?? ((line) => chalk.gray(line));
-
-  return new Promise((resolve, reject) => {
-    const codexCmd = process.env.CODEX_CMD || "codex";
-    fs.mkdirSync(nodeIntermediateDir, { recursive: true });
-    const outputLastMessagePath = path.join(nodeIntermediateDir, "codex-last-message.txt");
-    const args = buildCodexExecArgs({
-      workspace: execWorkspaceRoot,
-      addDirs: [absWorkspaceRoot],
-      model,
-      outputLastMessagePath,
-      promptText,
-      configArgs: options.codexConfigArgs,
-    });
-    if (options.flowName && options.uuid) {
-      const argvLog = args.slice(0, -1).concat([`(prompt ${args[args.length - 1].length} chars)`]);
-      appendRunLogLine(
-        workspaceRoot,
-        options.flowName,
-        options.uuid,
-        "cli-raw",
-        `Codex CLI 完整参数: ${codexCmd} ${JSON.stringify(argvLog)}`,
-      );
-      appendRunLogLine(
-        workspaceRoot,
-        options.flowName,
-        options.uuid,
-        "cli-raw",
-        `Codex CLI prompt 前 800 字:\n${promptText.slice(0, 800)}${promptText.length > 800 ? "..." : ""}`,
-      );
-      appendRunLogLine(workspaceRoot, options.flowName, options.uuid, "cli-raw", `Codex CLI prompt 完整:\n${promptText}`);
-    }
-
-    const useStderrInherit =
-      process.env.AGENTFLOW_CODEX_STDERR_INHERIT === "1" ||
-      process.env.AGENTFLOW_CODEX_STDERR_INHERIT === "true";
-    const child = spawn(codexCmd, args, {
-      cwd: execWorkspaceRoot,
-      stdio: ["ignore", "pipe", useStderrInherit ? "inherit" : "pipe"],
-      shell: false,
-      env: childEnv(options),
-    });
-
-    let hadError = false;
-    const assistantTextChunks = [];
-    const STDERR_CAP_BYTES = 1024 * 1024;
-    const stderrChunks = [];
-    let stderrTotalBytes = 0;
-    const stderrBuffer = options.stderrBuffer || null;
-    let stderrLineBuffer = "";
-    const flowName = options.flowName ?? null;
-    const uuid = options.uuid ?? null;
-
-    const outStream = machineReadable ? process.stderr : process.stdout;
-    function writeStdout(text) {
-      if (coloredPrefix) writeWithPrefix(outStream, text, coloredPrefix, agentContentColor);
-      else if (text) outStream.write(agentContentColor(text));
-      if (text && flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "codex-stdout", text);
-    }
-
-    function flushStderrLines() {
-      if (!coloredPrefix) return;
-      let idx;
-      while ((idx = stderrLineBuffer.indexOf("\n")) !== -1) {
-        const line = stderrLineBuffer.slice(0, idx + 1);
-        stderrLineBuffer = stderrLineBuffer.slice(idx + 1);
-        writeWithPrefix(process.stderr, line, coloredPrefix, agentContentColor);
-      }
-    }
-
-    if (!useStderrInherit) {
-      child.stderr.on("data", (chunk) => {
-        const s = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf-8");
-        const len = buf.length;
-        while (stderrChunks.length > 0 && stderrTotalBytes + len > STDERR_CAP_BYTES) {
-          const drop = stderrChunks.shift();
-          stderrTotalBytes -= Buffer.isBuffer(drop) ? drop.length : Buffer.byteLength(drop, "utf-8");
-        }
-        stderrChunks.push(buf);
-        stderrTotalBytes += len;
-        if (stderrBuffer) {
-          stderrBuffer.push(chunk);
-        } else if (coloredPrefix) {
-          stderrLineBuffer += s;
-          flushStderrLines();
-        } else {
-          process.stderr.write(chunk);
-        }
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "codex-stderr", s);
-      });
-    }
-
-    const stdoutWidth = process.stdout.columns ?? 80;
-    const mdStreamer = createMarkdownStreamer({
-      render: (md) => renderMarkdown(md, { width: stdoutWidth }),
-      spacing: "single",
-    });
-
-    function emitNatural(_kind, text) {
-      assistantTextChunks.push(text);
-      const out = mdStreamer.push(text);
-      if (out) writeStdout(out);
-    }
-
-    function emitStatus(line) {
-      if (line) writeStdout(`[codex] ${line}\n`);
-    }
-
-    child.stdout.setEncoding("utf-8");
-    let stdoutLineBuffer = "";
-    child.stdout.on("data", (chunk) => {
-      stdoutLineBuffer += chunk;
-      const idx = stdoutLineBuffer.lastIndexOf("\n");
-      const complete = idx >= 0 ? stdoutLineBuffer.slice(0, idx) : "";
-      if (idx >= 0) stdoutLineBuffer = stdoutLineBuffer.slice(idx + 1);
-      const lines = complete.split("\n").filter(Boolean);
-      for (const line of lines) {
-        if (flowName && uuid) appendRunLogLine(workspaceRoot, flowName, uuid, "codex-stdout-raw", line);
-        try {
-          const event = JSON.parse(line);
-          const result = handleCodexEvent(event, { emitNatural, emitStatus, onToolCall: options.onToolCall });
-          if (result.hadError) hadError = true;
-          if (!result.handled) writeStdout(`[codex-stdout] event: ${codexEventKind(event)}\n`);
-        } catch (_) {
-          writeStdout(`[codex-stdout] (非 JSON) ${line.slice(0, 500)}${line.length > 500 ? "..." : ""}\n`);
-        }
-      }
-    });
-
-    child.on("error", (err) => {
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.removeAllListeners();
-      reject(new Error(`Codex CLI failed to start: ${err.message}. Ensure '${codexCmd}' is in PATH and run 'codex login'.`));
-    });
-
-    child.on("close", (code) => {
-      if (stdoutLineBuffer.trim() && flowName && uuid) {
-        appendRunLogLine(workspaceRoot, flowName, uuid, "codex-stdout-raw", stdoutLineBuffer.trim());
-      }
-      child.stdout.removeAllListeners();
-      if (!useStderrInherit) child.stderr.removeAllListeners();
-      child.removeAllListeners();
-      const tail = mdStreamer.finish();
-      if (tail) writeStdout(tail);
-      if (coloredPrefix && stderrLineBuffer) {
-        writeWithPrefix(process.stderr, stderrLineBuffer.endsWith("\n") ? stderrLineBuffer : stderrLineBuffer + "\n", coloredPrefix);
-      }
-      const finalMessage = fs.existsSync(outputLastMessagePath)
-        ? fs.readFileSync(outputLastMessagePath, "utf-8").trim()
-        : assistantTextChunks.join("").trim();
-      if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
-        const err = new Error(codexFailureMessage(code, stderrTail, { flowName, uuid }));
-        err.codexStderrTail = stderrTail;
-        reject(err);
-        return;
-      }
-      if (hadError) {
-        reject(new Error(finalMessage || "Codex reported error."));
-        return;
-      }
-      writeAgentTextArtifacts(absResultPath, absRunDir, instanceId, finalMessage || assistantTextChunks.join(""));
-      resolve();
-    });
-  });
-}
-
 const COMPOSER_STATUS_MAX = 200;
 
 /**
@@ -1331,7 +440,7 @@ function tryEmitOpenCodeLineAsNatural(line, emit) {
 export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {}) {
   const onStreamEvent = typeof options.onStreamEvent === "function" ? options.onStreamEvent : null;
   const ws = path.resolve(cliWorkspace);
-  const model = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
+  const requestedModel = normalizeCursorModelForCli(options.model ?? process.env.CURSOR_AGENT_MODEL ?? null);
   const agentCmd = process.env.CURSOR_AGENT_CMD || "agent";
   const {
     baseEnv: cursorBaseEnv,
@@ -1339,11 +448,23 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     attemptIndex: cursorAttemptIndex,
     selection: cursorSelection,
   } = cursorAttemptOptions(options);
+  const hasExplicitModel = shouldPassCursorModelArg(requestedModel);
+  const cursorModelSelection = hasExplicitModel
+    ? { lane: "auto", modelId: requestedModel, modelName: requestedModel }
+    : options._agentflowCursorModelSelection
+      || cursorSelection?.modelSelection
+      || { lane: "auto", modelId: "auto", modelName: "Auto" };
+  const model = hasExplicitModel ? requestedModel : cursorModelSelection.modelId;
+  if (cursorSelection) recordCursorApiKeyUsage(cursorSelection, cursorModelSelection);
   // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
-  const args = ["--print", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--workspace", ws];
-  const approveMcps = process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false";
+  const args = ["--print", "--output-format", "stream-json"];
+  if (options.mode) args.push("--mode", String(options.mode));
+  args.push("--trust");
+  if (options.sandboxDisabled !== false) args.push("--sandbox", "disabled");
+  args.push("--workspace", ws);
+  const approveMcps = options.approveMcps ?? (process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false");
   if (approveMcps) args.push("--approve-mcps");
-  args.push("--force");
+  if (options.force !== false) args.push("--force");
   if (shouldPassCursorModelArg(model)) args.push("--model", model);
   args.push(promptText);
 
@@ -1360,6 +481,14 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   let lastResult = null;
   let hadError = false;
   let hadToolActivity = false;
+  let hadMutatingToolActivity = false;
+  const annotateFailure = (error) => {
+    const failure = annotateCursorFailure(error, { hadToolActivity, hadMutatingToolActivity });
+    failure.cursorModelLane = cursorModelSelection.lane;
+    failure.cursorModelId = cursorModelSelection.modelId;
+    failure.cursorModelName = cursorModelSelection.modelName;
+    return failure;
+  };
   const STDERR_CAP_BYTES = 1024 * 1024;
   const stderrChunks = [];
   let stderrTotalBytes = 0;
@@ -1375,6 +504,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
     emit({
       type: "status",
       line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} / ${cursorAttempts.length}`,
+    });
+  }
+  if (cursorModelSelection.lane === "fallback") {
+    emit({
+      type: "status",
+      line: `Cursor is using Composer fallback: ${cursorModelSelection.modelName}`,
     });
   }
 
@@ -1441,6 +576,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           hadToolActivity = true;
           const toolName =
             event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
+          if (!isCursorReadOnlyToolCall(toolName)) hadMutatingToolActivity = true;
           const subtype = event.subtype ?? "";
           const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
           emit({ type: "status", line: statusLine });
@@ -1452,14 +588,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           if (options.onToolCall) options.onToolCall("thinking", "");
         } else if (event.type === "result") {
           lastResult = event;
-          const resultNl = extractCursorResultNl(event);
+          const resultNl = options.includeJsonResult && typeof event.result === "string"
+            ? normalizeStreamTextChunk(event.result)
+            : extractCursorResultNl(event);
           if (resultNl) emit({ type: "natural", kind: "result", text: resultNl });
           if (event.subtype === "success" && !event.is_error) {
             hadError = false;
             emit({ type: "status", line: t("runner.completed") });
           } else {
             hadError = true;
-            const errNl = extractCursorResultNl(event);
+            const errNl = options.includeJsonResult && typeof event.result === "string"
+              ? normalizeStreamTextChunk(event.result)
+              : extractCursorResultNl(event);
             if (errNl) emit({ type: "natural", kind: "error", text: errNl });
             emit({
               type: "status",
@@ -1474,13 +614,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
           hadToolActivity = true;
           let subtype = "?";
+          let toolName = "?";
           try {
             const ev = JSON.parse(line);
-            if (ev && ev.type === "tool_call") subtype = ev.subtype ?? "?";
+            if (ev && ev.type === "tool_call") {
+              subtype = ev.subtype ?? "?";
+              toolName = ev.tool_call && typeof ev.tool_call === "object" ? Object.keys(ev.tool_call)[0] ?? "?" : "?";
+            }
           } catch {
             const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
             if (m) subtype = m[1];
           }
+          if (!isCursorReadOnlyToolCall(toolName)) hadMutatingToolActivity = true;
           emit({ type: "status", line: t("runner.tool_call", { subtype }) });
         } else if (isLikelyBase64(line)) {
           emit({ type: "status", line: t("runner.base64_data", { len: line.length }) });
@@ -1515,30 +660,110 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         const rest = stderrComposerBuffer.trim();
         emit({ type: "status", line: `[stderr] ${truncateComposerLine(rest)}` });
       }
-      const retryCursorQuota = (errorText) => {
-        if (!cursorSelection) return false;
-        if (cursorAttemptIndex >= cursorAttempts.length - 1) return false;
-        if (hadToolActivity) return false;
-        if (!isCursorQuotaError(errorText)) return false;
-        markCursorApiKeyQuotaBlocked(cursorSelection, cursorApiKeyCooldownMinutes(cursorBaseEnv));
-        emit({
-          type: "status",
-          line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached quota, retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}`,
-        });
-        const next = runCursorAgentWithPrompt(
-          cliWorkspace,
-          promptText,
-          nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex),
-        );
-        next.finished.then(resolve).catch(reject);
+      const retryCursorFailure = (errorText) => {
+        const quotaFailure = isCursorQuotaError(errorText);
+        const loopingFailure = isCursorAgentLoopingError(errorText);
+        if (!quotaFailure && !loopingFailure) return false;
+        if (quotaFailure && hadToolActivity) return false;
+        if (loopingFailure && hadMutatingToolActivity) return false;
+        const errorCategory = quotaFailure ? classifyCursorApiKeyLimitError(errorText) : "agent_looping";
+        if (quotaFailure && cursorSelection) {
+          const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv, errorText);
+          markCursorApiKeyLaneBlocked(
+            cursorSelection,
+            cursorModelSelection.lane,
+            cooldownMinutes,
+            errorText,
+            Date.now(),
+            {
+              modelId: cursorModelSelection.modelId,
+              modelName: cursorModelSelection.modelName,
+            },
+          );
+        }
+        const canTryComposer = !hasExplicitModel
+          && cursorModelSelection.lane === "auto"
+          && (
+            loopingFailure
+            || (errorCategory === "explicit_limit" && isCursorAutoFallbackEligible(errorText))
+          );
+        const hasNextKey = quotaFailure && Boolean(cursorSelection) && cursorAttemptIndex < cursorAttempts.length - 1;
+        if (!canTryComposer && !hasNextKey) return false;
+
+        const retry = async () => {
+          if (canTryComposer) {
+            const authLabel = cursorSelection
+              ? `API Key ${cursorApiKeyLabel(cursorSelection)}`
+              : "login session";
+            emit({
+              type: "status",
+              line: loopingFailure
+                ? `Cursor Auto on ${authLabel} entered a response loop; discovering Composer fallback...`
+                : `Cursor Auto on ${authLabel} is out of usage; discovering Composer fallback...`,
+            });
+            const catalog = await discoverCursorModels({
+              keyId: cursorSelection?.id || `login:${cursorBaseEnv.AGENTFLOW_USER_ID || "default"}`,
+              cwd: ws,
+              command: agentCmd,
+              env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
+            });
+            if (catalog.fallbackModel) {
+              if (cursorSelection) recordCursorApiKeyFallbackModel(cursorSelection, catalog.fallbackModel);
+              const fallbackSelection = {
+                lane: "fallback",
+                modelId: catalog.fallbackModel.id,
+                modelName: catalog.fallbackModel.displayName,
+              };
+              emit({
+                type: "status",
+                line: `Switching the same Cursor API Key to ${fallbackSelection.modelName}.`,
+              });
+              emit({
+                type: "raw",
+                source: "cursor",
+                stream: "runner",
+                eventType: "model_fallback",
+                text: `auto -> ${fallbackSelection.modelId}`,
+                reason: loopingFailure ? "agent_looping" : "usage_limit",
+              });
+              const fallback = runCursorAgentWithPrompt(
+                cliWorkspace,
+                promptText,
+                cursorModelAttemptOptions(options, cursorAttempts, cursorAttemptIndex, fallbackSelection),
+              );
+              await fallback.finished;
+              return;
+            }
+            emit({
+              type: "status",
+              line: `Composer fallback is unavailable${catalog.error ? `: ${catalog.error}` : "."}`,
+            });
+          }
+
+          if (hasNextKey) {
+            emit({
+              type: "status",
+              line: `Cursor API Key ${cursorApiKeyLabel(cursorSelection)} reached its limit; retrying ${cursorAttemptIndex + 2}/${cursorAttempts.length}.`,
+            });
+            const next = runCursorAgentWithPrompt(
+              cliWorkspace,
+              promptText,
+              nextCursorAttemptOptions(options, cursorAttempts, cursorAttemptIndex),
+            );
+            await next.finished;
+            return;
+          }
+          throw annotateFailure(new Error(errorText || (loopingFailure ? "Cursor Agent entered a response loop." : "Cursor API Key reached its limit.")));
+        };
+        retry().then(resolve).catch(reject);
         return true;
       };
       if (code !== 0 && lastResult == null) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
-        if (retryCursorQuota(stderrTail)) return;
+        if (retryCursorFailure(stderrTail)) return;
         const stderrSummary = summarizeCursorStderr(stderr);
-        const err = new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}`);
+        const err = annotateFailure(new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}`));
         err.cursorStderrTail = stderrTail;
         emit({ type: "status", line: truncateComposerLine(err.message) });
         reject(err);
@@ -1546,11 +771,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       }
       if (hadError || (lastResult && lastResult.is_error)) {
         const msg = cursorResultErrorText(lastResult) || "Agent reported error.";
-        if (retryCursorQuota(msg)) return;
+        if (retryCursorFailure(msg)) return;
         emit({ type: "status", line: truncateComposerLine(msg) });
-        reject(new Error(msg));
+        reject(annotateFailure(new Error(msg)));
         return;
       }
+      if (cursorSelection) clearCursorApiKeyLaneCooldown(cursorSelection, cursorModelSelection.lane);
       resolve();
     });
   });
@@ -1677,6 +903,7 @@ export function runClaudeCodeAgentWithPrompt(cliWorkspace, promptText, options =
   const model = options.model && String(options.model).trim();
   const claudeCmd = process.env.CLAUDE_CODE_CMD || "claude";
   const bypassPermissions =
+    options.allowDanger !== false &&
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "0" &&
     process.env.AGENTFLOW_CLAUDE_CODE_BYPASS_PERMISSIONS !== "false";
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--add-dir", ws];
@@ -1870,6 +1097,8 @@ export function runCodexAgentWithPrompt(cliWorkspace, promptText, options = {}) 
     outputLastMessagePath,
     promptText,
     configArgs: options.codexConfigArgs,
+    sandboxMode: options.sandboxMode,
+    allowDanger: options.allowDanger !== false,
   });
 
   const useStderrInherit =

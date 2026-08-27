@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "nodes": {
+    "advanceIssue": {
+      "x": 1590,
+      "y": 820
+    },
+    "advanceUntilBoundary": {
+      "x": 520,
+      "y": 70,
+      "w": 560,
+      "h": 520
+    },
+    "bodyIdempotencyKey": {
+      "x": 950,
+      "y": 1060
+    },
+    "bodyIteration": {
+      "x": 950,
+      "y": 940
+    },
+    "bodyState": {
+      "x": 950,
+      "y": 820
+    },
+    "checkBoundary": {
+      "x": 430,
+      "y": 820
+    },
+    "conditionIteration": {
+      "x": 60,
+      "y": 940
+    },
+    "conditionState": {
+      "x": 60,
+      "y": 820
+    },
+    "initialState": {
+      "x": 80,
+      "y": 80
+    },
+    "result": {
+      "x": 1180,
+      "y": 80,
+      "w": 520,
+      "h": 360
+    },
+    "run": {
+      "x": 80,
+      "y": 300
+    },
+    "saveState": {
+      "x": 1920,
+      "y": 820
+    },
+    "selectIssue": {
+      "x": 1260,
+      "y": 820
+    },
+    "validateNextState": {
+      "x": 2360,
+      "y": 1372
+    }
+  },
+  "description": "While 双子流程设计预览：Condition 负责决策，Body 负责单轮推进，图本身保持 DAG"
+}

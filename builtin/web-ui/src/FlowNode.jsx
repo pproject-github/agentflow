@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { getHandleColor } from "./nodeSchema.js";
 import { IMAGE_TOKEN_RE, addImageFiles, filterImagesReferencedByBody, imageFilesFromClipboardEvent, imageFilesFromDropEvent, normalizeImages } from "./imageAttachments.js";
+import { NodeUiKitCard } from "./NodeUiKit.jsx";
 
 function modelEntryId(entry) {
   const idx = entry.indexOf(" - ");
@@ -24,8 +25,180 @@ function boolValueFromSlot(slot) {
   return ["true", "1", "yes", "on"].includes(String(slot?.value ?? slot?.default ?? "").trim().toLowerCase());
 }
 
+function validJsonText(value) {
+  try {
+    JSON.parse(String(value || "").trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseJsonPreview(value) {
+  try {
+    return { valid: true, value: JSON.parse(String(value || "").trim()) };
+  } catch (error) {
+    return { valid: false, value: null, error: String(error?.message || "JSON 格式错误") };
+  }
+}
+
+function jsonValueKind(value) {
+  if (Array.isArray(value)) return `ARRAY · ${value.length}`;
+  if (value && typeof value === "object") return `OBJECT · ${Object.keys(value).length}`;
+  if (value === null) return "NULL";
+  return String(typeof value).toUpperCase();
+}
+
+function compactJsonPreview(value) {
+  if (Array.isArray(value)) {
+    const sample = value.slice(0, 2).map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        return Object.values(item).filter((entry) => ["string", "number"].includes(typeof entry)).slice(0, 2).join(" · ");
+      }
+      return String(item ?? "null");
+    }).filter(Boolean).join("  /  ");
+    return `Array(${value.length})${sample ? ` · ${sample}` : ""}`;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value);
+    return `Object(${keys.length})${keys.length ? ` · ${keys.slice(0, 3).join(" · ")}` : ""}`;
+  }
+  if (typeof value === "string") return value || '""';
+  return JSON.stringify(value);
+}
+
+function jsonObjectArray(value) {
+  return Array.isArray(value) && value.length > 0 && value.every((item) => (
+    item && typeof item === "object" && !Array.isArray(item)
+  ));
+}
+
+function jsonTableColumns(rows) {
+  const columns = [];
+  for (const row of rows.slice(0, 20)) {
+    for (const key of Object.keys(row)) {
+      if (!columns.includes(key)) columns.push(key);
+      if (columns.length >= 6) return columns;
+    }
+  }
+  return columns;
+}
+
+function JsonObjectArrayTable({ label, rows }) {
+  const columns = jsonTableColumns(rows);
+  const visibleRows = rows.slice(0, 50);
+  return (
+    <details className="af-flow-node__json-collection" open>
+      <summary>
+        <span className="material-symbols-outlined" aria-hidden>chevron_right</span>
+        <code>{label}</code>
+        <em>Array({rows.length})</em>
+      </summary>
+      <div className="af-flow-node__json-table-scroll">
+        <table>
+          <thead>
+            <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row, rowIndex) => (
+              <tr key={String(row?.id ?? rowIndex)}>
+                {columns.map((column) => {
+                  const value = row?.[column];
+                  const preview = compactJsonPreview(value);
+                  return <td key={column} title={preview}>{preview}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {rows.length > visibleRows.length ? <div className="af-flow-node__json-more">还有 {rows.length - visibleRows.length} 行，请进入编辑器查看</div> : null}
+      </div>
+    </details>
+  );
+}
+
+function JsonProvidePreview({ text, readOnly, onEdit }) {
+  const parsed = parseJsonPreview(text);
+  const entries = parsed.valid && parsed.value && typeof parsed.value === "object"
+    ? (Array.isArray(parsed.value) ? parsed.value.map((value, index) => [String(index), value]) : Object.entries(parsed.value))
+    : parsed.valid ? [["value", parsed.value]] : [];
+  const rootTable = parsed.valid && jsonObjectArray(parsed.value)
+    ? [["items", parsed.value]]
+    : [];
+  const tableEntries = rootTable.length
+    ? rootTable
+    : entries.filter(([, value]) => jsonObjectArray(value));
+  const plainEntries = rootTable.length
+    ? []
+    : entries.filter(([, value]) => !jsonObjectArray(value));
+  return (
+    <div className={`af-flow-node__json-card nodrag${parsed.valid ? "" : " is-invalid"}`} onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+      <div className="af-flow-node__json-card-head">
+        <span className="af-flow-node__json-kind">{"{}"} {parsed.valid ? jsonValueKind(parsed.value) : "INVALID JSON"}</span>
+        <button type="button" onClick={onEdit} aria-label={readOnly ? "查看 JSON" : "编辑 JSON"}>
+          <span className="material-symbols-outlined" aria-hidden>{readOnly ? "visibility" : "edit"}</span>
+          {readOnly ? "查看" : "编辑 JSON"}
+        </button>
+      </div>
+      {parsed.valid ? (
+        <div className="af-flow-node__json-content">
+          {plainEntries.length ? (
+            <div className="af-flow-node__json-rows">
+              {plainEntries.map(([key, value]) => (
+                <div key={key} className="af-flow-node__json-row">
+                  <code>{key}</code>
+                  <span title={compactJsonPreview(value)}>{compactJsonPreview(value)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {tableEntries.map(([key, value]) => <JsonObjectArrayTable key={key} label={key} rows={value} />)}
+        </div>
+      ) : (
+        <div className="af-flow-node__json-error">{parsed.error}</div>
+      )}
+    </div>
+  );
+}
+
 function stopInteractiveEvent(e) {
   e.stopPropagation();
+}
+
+export function FlowNodePortRail({ slots = [], direction = "in", connectable = true }) {
+  const { t } = useTranslation();
+  const input = direction === "in";
+  const visibleSlots = Array.isArray(slots) ? slots : [];
+  return (
+    <div className={`af-flow-node__ports af-flow-node__ports--${input ? "in" : "out"}`}>
+      {visibleSlots.map((slot, index) => {
+        if (slot?.showOnNode === false) return null;
+        const label = slot?.name || `#${index + 1}`;
+        const tip = t(input ? "flow:node.inputTooltip" : "flow:node.outputTooltip", {
+          name: slot?.name || `#${index}`,
+          type: slot?.type,
+        }) + (slot?.default != null && slot.default !== ""
+          ? t("flow:node.defaultSuffix", { value: slot.default })
+          : "");
+        return (
+          <div key={`${input ? "in" : "out"}-${index}`} className="af-flow-node__port-row" title={tip}>
+            <span className={`af-flow-node__port-label af-flow-node__port-label--${input ? "in" : "out"}`}>
+              {label}{slot?.required ? <span className="af-flow-node__port-required">*</span> : null}
+            </span>
+            <Handle
+              type={input ? "target" : "source"}
+              position={input ? Position.Left : Position.Right}
+              id={`${input ? "input" : "output"}-${index}`}
+              className="af-flow-node__handle"
+              style={{ background: getHandleColor(slot?.type) }}
+              title={tip}
+              isConnectable={connectable && slot?.connectable !== false}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function escapeRegExp(text) {
@@ -242,6 +415,10 @@ export function FlowNode({
   const nodeElapsed = data?.nodeElapsed ?? null;
   const nodeRunDetail = data?.nodeRunDetail ?? null;
   const definitionId = data?.definitionId || "";
+  const nodeUiCard = data?.nodeUi?.card;
+  const hasDeclarativeNodeUi = Boolean(nodeUiCard && Array.isArray(nodeUiCard.sections));
+  const isSubflowCallCard = Boolean(nodeUiCard?.sections?.some((section) => section?.type === "subflow"));
+  const isWhileSubflowCard = definitionId === "control_while" && Boolean(data?.whileSubflowInfo);
   const isJenkinsBuild = definitionId === "tool_jenkins_build";
   const jenkinsDisplayStatus = String(
     nodeRunDetail?.jenkinsStatus ||
@@ -250,6 +427,7 @@ export function FlowNode({
   const isProvideNode = definitionId.startsWith("provide_");
   const isProvideBool = definitionId === "provide_bool";
   const isProvideText = definitionId === "provide_str";
+  const isProvideJson = definitionId === "provide_json";
   const isProvideFile = definitionId === "provide_file";
   const isProvidePassword = definitionId === "provide_password";
   const isSubAgent = definitionId === "agent_subAgent";
@@ -264,10 +442,12 @@ export function FlowNode({
   const hasNodeBodyContent =
     isProvideBool ||
     isProvideText ||
+    isProvideJson ||
     isProvideFile ||
     isProvidePassword ||
     hasInlineBodyEditor ||
-    Boolean(bodyPreview);
+    Boolean(bodyPreview) ||
+    hasDeclarativeNodeUi;
   const provideComposingRef = useRef(false);
   const bodyComposingRef = useRef(false);
   const bodyPromptStackRef = useRef(null);
@@ -276,6 +456,7 @@ export function FlowNode({
   const bodyPromptScrollbarTrackRef = useRef(null);
   const bodyFullscreenTextareaRef = useRef(null);
   const [provideDraft, setProvideDraft] = useState(provideValue);
+  const [jsonEditing, setJsonEditing] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [bodyDraft, setBodyDraft] = useState(bodyValue);
   const [bodyComposing, setBodyComposing] = useState(false);
@@ -298,6 +479,10 @@ export function FlowNode({
   useEffect(() => {
     if (!provideComposingRef.current) setProvideDraft(provideValue);
   }, [id, provideValue]);
+
+  useEffect(() => {
+    setJsonEditing(false);
+  }, [id]);
 
   useEffect(() => {
     if (!bodyComposingRef.current) setBodyDraft(bodyValue);
@@ -474,6 +659,23 @@ export function FlowNode({
     if (readOnly) return;
     if (deferTextCommit && provideDraft === provideValue) return;
     onProvideValueChange?.(id, provideDraft);
+  };
+
+  const openJsonEditor = (e) => {
+    e.stopPropagation();
+    const parsed = parseJsonPreview(provideDraft);
+    if (parsed.valid) setProvideDraft(JSON.stringify(parsed.value, null, 2));
+    setJsonEditing(true);
+  };
+
+  const closeJsonEditor = (e) => {
+    e.stopPropagation();
+    const parsed = parseJsonPreview(provideDraft);
+    if (!parsed.valid) return;
+    const formatted = JSON.stringify(parsed.value, null, 2);
+    setProvideDraft(formatted);
+    if (!readOnly) onProvideValueChange?.(id, formatted);
+    setJsonEditing(false);
   };
 
   const handleProvideFilePick = (e) => {
@@ -672,12 +874,21 @@ export function FlowNode({
         (isDim ? " af-flow-node--dim" : "") +
         (hasInlineBodyEditor ? " af-flow-node--inline-body-editor" : "") +
         (isProvideText ? " af-flow-node--provide-text" : "") +
+        (isProvideJson ? " af-flow-node--provide-json" : "") +
         (isProvidePassword ? " af-flow-node--provide-password" : "") +
         " af-flow-node--" + schemaType.replace(/[^a-z0-9_-]/g, "")
+        + (hasDeclarativeNodeUi ? " af-flow-node--node-ui-kit" : "")
+        + (isSubflowCallCard ? " af-flow-node--subflow-call" : "")
+        + (isWhileSubflowCard ? " af-flow-node--while-subflow" : "")
       }
       data-schema={schemaType}
     >
       <div className="af-flow-node__chrome">
+        {hasDeclarativeNodeUi && nodeUiCard.icon ? (
+          <span className="material-symbols-outlined af-flow-node__kit-icon" aria-hidden>{nodeUiCard.icon}</span>
+        ) : null}
+        {isSubflowCallCard ? <span className="af-flow-node__kind-badge">SUBFLOW CALL</span> : null}
+        {isWhileSubflowCard ? <span className="af-flow-node__kind-badge">WHILE · 2 SUBFLOWS</span> : null}
         <span className="af-flow-node__title af-flow-node__title--chrome" title={`${nodeTitle}${id ? ` (${id})` : ""}${typeLabel ? ` · ${typeLabel}` : ""}`}>{nodeTitle}</span>
         {!isRunMode && needsModel && (
           <div className="af-flow-node__model-wrap nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
@@ -809,29 +1020,7 @@ export function FlowNode({
         )}
       </div>
       <div className="af-flow-node__body">
-        <div className="af-flow-node__ports af-flow-node__ports--in">
-          {inputs.map((slot, i) => {
-            if (slot.showOnNode === false) return null;
-            const tip = t("flow:node.inputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
-              (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
-            const label = slot.name || `#${i + 1}`;
-            return (
-              <div key={`in-${i}`} className="af-flow-node__port-row" title={tip}>
-                <span className="af-flow-node__port-label af-flow-node__port-label--in">
-                  {label}{slot.required ? <span className="af-flow-node__port-required">*</span> : null}
-                </span>
-                <Handle
-                  type="target"
-                  position={Position.Left}
-                  id={`input-${i}`}
-                  className="af-flow-node__handle"
-                  style={{ background: getHandleColor(slot.type) }}
-                  title={tip}
-                />
-              </div>
-            );
-          })}
-        </div>
+        <FlowNodePortRail slots={inputs} direction="in" />
         <div className="af-flow-node__title-wrap">
           {isRunMode && isJenkinsBuild && nodeRunDetail ? (
             <div className="af-flow-node__jenkins-runtime">
@@ -888,6 +1077,31 @@ export function FlowNode({
               rows={2}
               readOnly={readOnly}
             />
+          ) : isProvideJson ? (
+            jsonEditing ? (
+              <div className="af-flow-node__json-editor nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
+                <div className="af-flow-node__json-editor-head">
+                  <span>{validJsonText(provideDraft) ? "JSON 格式正确" : "JSON 格式错误"}</span>
+                  <button type="button" onClick={closeJsonEditor} disabled={!validJsonText(provideDraft)}>
+                    {readOnly ? "返回" : "完成"}
+                  </button>
+                </div>
+                <textarea
+                  className={`af-flow-node__inline-text af-flow-node__inline-json nodrag${validJsonText(provideDraft) ? "" : " is-invalid"}`}
+                  value={provideDraft}
+                  onChange={handleProvideValueChange}
+                  onCompositionStart={handleProvideCompositionStart}
+                  onCompositionEnd={handleProvideCompositionEnd}
+                  onBlur={handleProvideValueBlur}
+                  placeholder='{"key":"value"}'
+                  rows={8}
+                  readOnly={readOnly}
+                  aria-invalid={!validJsonText(provideDraft)}
+                  title={validJsonText(provideDraft) ? "Valid JSON" : "Invalid JSON"}
+                  spellCheck={false}
+                />
+              </div>
+            ) : <JsonProvidePreview text={provideDraft} readOnly={readOnly} onEdit={openJsonEditor} />
           ) : isProvideFile ? (
             <div className="af-flow-node__file-value nodrag" onPointerDown={stopInteractiveEvent} onMouseDown={stopInteractiveEvent} onClick={stopInteractiveEvent}>
               <input
@@ -1030,36 +1244,51 @@ export function FlowNode({
               {bodyPreview}
             </span>
           ) : null}
+          {hasDeclarativeNodeUi ? <NodeUiKitCard data={data} /> : null}
           {!hasNodeBodyContent ? (
             <span className="af-flow-node__body-title" title={nodeTitle}>
               {nodeTitle}
             </span>
           ) : null}
         </div>
-        <div className="af-flow-node__ports af-flow-node__ports--out">
-          {outputs.map((slot, i) => {
-            if (slot.showOnNode === false) return null;
-            const tip = t("flow:node.outputTooltip", { name: slot.name || `#${i}`, type: slot.type }) +
-              (slot.default != null && slot.default !== "" ? t("flow:node.defaultSuffix", { value: slot.default }) : "");
-            const label = slot.name || `#${i + 1}`;
-            return (
-              <div key={`out-${i}`} className="af-flow-node__port-row" title={tip}>
-                <span className="af-flow-node__port-label af-flow-node__port-label--out">
-                  {label}{slot.required ? <span className="af-flow-node__port-required">*</span> : null}
-                </span>
-                <Handle
-                  type="source"
-                  position={Position.Right}
-                  id={`output-${i}`}
-                  className="af-flow-node__handle"
-                  style={{ background: getHandleColor(slot.type) }}
-                  title={tip}
-                />
-              </div>
-            );
-          })}
-        </div>
+        <FlowNodePortRail slots={outputs} direction="out" />
       </div>
+      {isSubflowCallCard ? (
+        <div className="af-flow-node__subflow-call-port" title="子流程引用（不参与父流程 next 控制链）">
+          <span>CALLS</span>
+          <Handle
+            type="source"
+            position={Position.Bottom}
+            id="subflow-call"
+            className="af-flow-node__subflow-call-handle"
+            isConnectable={false}
+          />
+        </div>
+      ) : null}
+      {isWhileSubflowCard ? (
+        <div className="af-flow-node__while-subflow-ports" aria-label="While subflow relations">
+          <div className="af-flow-node__while-subflow-port af-flow-node__while-subflow-port--condition">
+            <span>CHECKS</span>
+            <Handle
+              type="source"
+              position={Position.Bottom}
+              id="while-condition"
+              className="af-flow-node__subflow-call-handle"
+              isConnectable={false}
+            />
+          </div>
+          <div className="af-flow-node__while-subflow-port af-flow-node__while-subflow-port--body">
+            <span>RUNS</span>
+            <Handle
+              type="source"
+              position={Position.Bottom}
+              id="while-body"
+              className="af-flow-node__subflow-call-handle"
+              isConnectable={false}
+            />
+          </div>
+        </div>
+      ) : null}
       {bodyFullscreenEditor ? createPortal(
         <div
           className="af-flow-node-full-editor nodrag"

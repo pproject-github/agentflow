@@ -1,24 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-
-function formatTime(value) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number) || number <= 0) return "-";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(number));
-}
-
-function eventKindText(kind) {
-  if (kind === "thinking") return "Thinking";
-  if (kind === "tool") return "工具";
-  if (kind === "error") return "错误";
-  if (kind === "result") return "结果";
-  return "过程";
-}
+import { useCallback, useEffect, useState } from "react";
+import RunInspector from "./RunInspector.jsx";
 
 function statusText(status) {
   const value = String(status || "unknown");
@@ -30,11 +11,10 @@ function statusText(status) {
   return value;
 }
 
-export default function AdminRunDetailDrawer({ run, onClose }) {
+export default function AdminRunDetailDrawer({ run, onClose, onOpenFlow }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState("timeline");
 
   const loadDetail = useCallback(async ({ quiet = false } = {}) => {
     if (!run?.runId) return;
@@ -61,7 +41,6 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
 
   useEffect(() => {
     setDetail(null);
-    setTab("timeline");
     void loadDetail();
   }, [loadDetail]);
 
@@ -74,12 +53,7 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
   }, [loadDetail, run?.status]);
 
   const events = Array.isArray(detail?.events) ? detail.events : [];
-  const thinking = useMemo(
-    () => events.filter((event) => event?.kind === "thinking"),
-    [events],
-  );
   const rawLines = Array.isArray(detail?.rawLines) ? detail.rawLines : [];
-  const visibleEvents = tab === "thinking" ? thinking : events;
 
   return (
     <div className="af-admin-run-detail-overlay" role="presentation" onMouseDown={onClose}>
@@ -99,6 +73,17 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
             <p>{run.username || run.userId} · <code>{run.runId}</code></p>
           </div>
           <div className="af-admin-run-detail__actions">
+            {onOpenFlow ? (
+              <button
+                type="button"
+                className="af-admin-run-detail__open-flow"
+                onClick={onOpenFlow}
+                title="以管理员只读模式查看 Flow"
+              >
+                <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+                <span>查看 Flow</span>
+              </button>
+            ) : null}
             <button type="button" onClick={() => void loadDetail()} disabled={loading} title="刷新详情">
               <span className="material-symbols-outlined" aria-hidden>refresh</span>
             </button>
@@ -107,18 +92,6 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
             </button>
           </div>
         </header>
-
-        <div className="af-admin-run-detail__tabs" role="tablist" aria-label="Run 详情分类">
-          <button type="button" className={tab === "timeline" ? "is-active" : ""} onClick={() => setTab("timeline")}>
-            过程 <span>{events.length}</span>
-          </button>
-          <button type="button" className={tab === "thinking" ? "is-active" : ""} onClick={() => setTab("thinking")}>
-            Thinking <span>{thinking.length}</span>
-          </button>
-          <button type="button" className={tab === "raw" ? "is-active" : ""} onClick={() => setTab("raw")}>
-            原始日志 <span>{rawLines.length}</span>
-          </button>
-        </div>
 
         {detail?.truncated ? (
           <div className="af-admin-run-detail__notice">
@@ -129,33 +102,7 @@ export default function AdminRunDetailDrawer({ run, onClose }) {
         {loading && !detail ? <div className="af-admin-run-detail__empty">正在读取 Run 详情...</div> : null}
 
         <div className="af-admin-run-detail__body">
-          {tab === "raw" ? (
-            rawLines.length > 0 ? (
-              <pre className="af-admin-run-detail__raw">{rawLines.join("\n")}</pre>
-            ) : (
-              <div className="af-admin-run-detail__empty">这个 Run 没有原始日志。</div>
-            )
-          ) : visibleEvents.length > 0 ? (
-            <div className="af-admin-run-detail__timeline">
-              {visibleEvents.map((event, index) => (
-                <article key={event.id || `${event.ts || 0}-${index}`} className={`af-admin-run-detail__event is-${event.kind || "process"}`}>
-                  <div className="af-admin-run-detail__event-meta">
-                    <time>{formatTime(event.ts)}</time>
-                    <span className={`af-admin-run-detail__kind is-${event.kind || "process"}`}>{eventKindText(event.kind)}</span>
-                    <span>{event.type || "event"}</span>
-                    {event.nodeId ? <code>{event.nodeId}</code> : null}
-                  </div>
-                  <pre>{event.text || "-"}</pre>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="af-admin-run-detail__empty">
-              {tab === "thinking"
-                ? "该模型或 CLI 没有为这个 Run 输出可记录的 Thinking。"
-                : "这个 Run 暂无过程事件。"}
-            </div>
-          )}
+          <RunInspector run={{ ...run, ...(detail?.run || {}) }} events={events} rawLines={rawLines} loading={loading} />
         </div>
       </aside>
     </div>

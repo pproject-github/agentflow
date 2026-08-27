@@ -27,7 +27,17 @@ ${taskBody}
 
 ---
 
-Complete the task as described above. If the node involves file writing operations, they can be executed. Exit when done — the system automatically marks the result as success. **Only if the task explicitly fails**, run the following command to report failure (`agentflow` is a CLI command available directly in the terminal):
-```bash
-agentflow apply -ai write-result ${pipelineWorkspace} ${flowName} ${uuid} ${instanceId} --json '{"status":"failed","message":"reason for failure"}'
+Complete the task as described above. If the node involves file writing operations, they can be executed. 
+
+**Returning the result**: the body of your final reply *is* this node's result. AgentFlow writes it to `AGENTFLOW_RESULT_FILE` for you — do not create that file and do not print a path. If the node declares extra output slots, emit exactly one agentflow envelope and nothing else:
+
 ```
+---agentflow
+result: |
+  <full result body, each line indented two spaces>
+outParams:
+  <slotName>: <short value>
+---end
+```
+
+**Reporting failure**: on a real failure, exit non-zero or state the reason in your reply — do not call any CLI to write status.

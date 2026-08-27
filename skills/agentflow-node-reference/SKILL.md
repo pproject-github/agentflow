@@ -9,13 +9,13 @@ description: >-
 
 使用本技能处理这些问题：
 
-- 选择 `agent_subAgent`、`tool_nodejs`、`tool_git_checkout`、`control_cd_workspace`、`tool_print` 等节点。
+- 选择 `agent_subAgent`、`tool_nodejs`、`tool_git_checkout`、`control_cd_workspace`、`display_markdown` 等节点。
 - 创建或修改 Workspace Graph 时需要确认 input/output 名称、类型、顺序和 handle 索引。
 - 判断节点是否 local-only，是否会调用 agent，是否需要 `script`。
 
 ## 必读规则
 
-- 先读 [builtin-nodes.md](references/builtin-nodes.md)，再改 `workspace.graph.json` 的 `definitionId`、`input`、`output` 或 `edges`。
+- 先读 [builtin-nodes.md](references/builtin-nodes.md)，再改 `workspace.flow.js` 的节点调用、引脚和连线；DSL 里的调用名见 **agentflow-flow-dsl** 的 node-calls.md。
 - 新图入口使用 `workspace_run` / `workspace_scheduled_run`，不要新增 `control_start` / `control_end`。
 - `input-N` / `output-N` 必须与节点定义中的槽位顺序一致。
 - `tool_nodejs` 只有写了完整 `script` 才会确定性执行；自然语言任务用 `agent_subAgent`。

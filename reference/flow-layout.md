@@ -78,7 +78,7 @@ ui:
 
 ## 5. 参考示例
 
-- **builtin/pipelines/new/flow.yaml**：主链从左到右（start 负 x → control_end 大 x），provide/collect 等偏左，检查/修复分支在 y 上有区分。
+- 主链从左到右（入口 `workspace_run` 在最左，x 依次递增），provide/collect 等数据源偏左，分支路径在 y 上错开。
 - **builtin/pipelines/module-migrate/flow.yaml**：主链沿 x 递增；provide/SaveKey 在左侧（x≈50～240）；静态环与编译环在 y 上分层（如 agent_fix_todo、control_if_fixed 等 y≈460～470，与主链 y≈100～280 分开），回流不压在主链一条线上。
 
 生成或手改 `ui.nodePositions` 时，可先按「主链 x 递增 + 分支/环 y 错开」排一版，再微调间距与对齐。

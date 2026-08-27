@@ -5,7 +5,7 @@ import {
   prdWorkflowDashboardPage,
   prdWorkflowDashboardTimeline,
   prdWorkflowDefaultTimelineKey,
-} from "../bin/lib/ui-server.mjs";
+} from "../bin/lib/prd-workflow-server.mjs";
 
 test("Workflow Dashboard merges platform variants of the same scheduled iteration", () => {
   const shared = {

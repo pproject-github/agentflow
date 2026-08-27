@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentFlow Flow DSL"
+  short_description: "Author AgentFlow graphs, subflows, and controlled loops in DSL"
+  default_prompt: "Use $agentflow-flow-dsl to create or modify an AgentFlow workspace.flow.js graph, including subflows and controlled loops."

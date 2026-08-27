@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import RunInspector from "./RunInspector.jsx";
 
 function formatTime(value) {
   const n = Number(value || 0);
@@ -17,25 +18,6 @@ function formatDuration(ms) {
   const min = Math.floor(sec / 60);
   const rest = sec % 60;
   return `${min}m${String(rest).padStart(2, "0")}s`;
-}
-
-function eventText(event) {
-  if (!event || typeof event !== "object") return "";
-  if (event.line) return String(event.line);
-  if (event.text) return String(event.text);
-  if (event.error) return String(event.error);
-  if (event.message) return String(event.message);
-  if (event.status) return String(event.status);
-  if (event.type === "graph") {
-    const ids = Array.isArray(event.displayNodeIds) ? event.displayNodeIds.join(", ") : "";
-    return ids ? `graph updated: ${ids}` : "graph updated";
-  }
-  const text = JSON.stringify(event);
-  return text.length > 4000 ? `${text.slice(0, 4000)}\n... [truncated]` : text;
-}
-
-function eventNode(event) {
-  return String(event?.nodeId || event?.runNodeId || "");
 }
 
 function statusClass(status) {
@@ -62,7 +44,6 @@ export default function WorkspaceRunLogsDrawer({
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
 
   const loadRuns = useCallback(async () => {
     if (!flowParams?.flowId) return;
@@ -72,6 +53,7 @@ export default function WorkspaceRunLogsDrawer({
       const q = new URLSearchParams();
       q.set("flowId", flowParams.flowId);
       q.set("flowSource", flowParams.flowSource || "user");
+      if (flowParams.adminOwnerId) q.set("adminOwnerId", flowParams.adminOwnerId);
       if (scheduleNodeId) q.set("scheduleNodeId", scheduleNodeId);
       else if (runNodeId) q.set("runNodeId", runNodeId);
       q.set("limit", "80");
@@ -93,7 +75,7 @@ export default function WorkspaceRunLogsDrawer({
     } finally {
       setLoadingRuns(false);
     }
-  }, [flowParams?.flowId, flowParams?.flowSource, lastRunId, runNodeId, scheduleNodeId]);
+  }, [flowParams?.adminOwnerId, flowParams?.flowId, flowParams?.flowSource, lastRunId, runNodeId, scheduleNodeId]);
 
   const loadDetail = useCallback(async (runId) => {
     if (!runId) {
@@ -101,11 +83,13 @@ export default function WorkspaceRunLogsDrawer({
       return;
     }
     setLoadingDetail(true);
+    setDetail(null);
     try {
       const q = new URLSearchParams({
         flowId: flowParams?.flowId || "",
         flowSource: flowParams?.flowSource || "user",
       });
+      if (flowParams?.adminOwnerId) q.set("adminOwnerId", flowParams.adminOwnerId);
       if (flowParams?.archived) q.set("archived", "1");
       const res = await fetch(`/api/workspace/run-logs/${encodeURIComponent(runId)}?${q.toString()}`);
       const json = await res.json().catch(() => ({}));
@@ -116,7 +100,7 @@ export default function WorkspaceRunLogsDrawer({
     } finally {
       setLoadingDetail(false);
     }
-  }, [flowParams?.archived, flowParams?.flowId, flowParams?.flowSource]);
+  }, [flowParams?.adminOwnerId, flowParams?.archived, flowParams?.flowId, flowParams?.flowSource]);
 
   useEffect(() => {
     void loadRuns();
@@ -137,23 +121,12 @@ export default function WorkspaceRunLogsDrawer({
     return () => window.clearInterval(id);
   }, [loadDetail, loadRuns, runs, selectedRunId]);
 
-  const filteredEvents = useMemo(() => {
-    const events = Array.isArray(detail?.events) ? detail.events : [];
-    const q = search.trim().toLowerCase();
-    if (!q) return events;
-    return events.filter((event) => (
-      String(event.type || "").toLowerCase().includes(q) ||
-      eventNode(event).toLowerCase().includes(q) ||
-      eventText(event).toLowerCase().includes(q)
-    ));
-  }, [detail?.events, search]);
-
   const selectedRun = detail?.run || runs.find((item) => item.runId === selectedRunId) || null;
 
   return (
     <div className="af-work-run-logs">
       <div className="af-pipeline-drawer-head">
-        <h2 className="af-pipeline-drawer-title">执行日志</h2>
+        <h2 className="af-pipeline-drawer-title">运行记录</h2>
         <button type="button" className="af-pipeline-drawer-close af-icon-btn" onClick={onClose} aria-label="关闭日志侧栏">
           <span className="material-symbols-outlined">close</span>
         </button>
@@ -196,23 +169,16 @@ export default function WorkspaceRunLogsDrawer({
               <span className={`af-work-run-logs__status af-work-run-logs__status--${statusClass(selectedRun.status)}`}>{selectedRun.status}</span>
             ) : null}
           </div>
-          <label className="af-work-run-logs__search">
-            <span className="material-symbols-outlined" aria-hidden>search</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索事件、节点、错误" />
-          </label>
-          {loadingDetail ? <div className="af-work-run-logs__empty">正在读取日志详情…</div> : null}
           {detail?.error ? <div className="af-work-run-logs__error">{detail.error}</div> : null}
-          {!loadingDetail && !filteredEvents.length ? <div className="af-work-run-logs__empty">暂无事件</div> : null}
-          <div className="af-work-run-logs__events">
-            {filteredEvents.map((event, index) => (
-              <div key={`${event.ts || index}-${index}`} className="af-work-run-logs__event">
-                <span className="af-work-run-logs__event-time">{formatTime(event.ts)}</span>
-                <span className="af-work-run-logs__event-type">{event.type || "event"}</span>
-                {eventNode(event) ? <span className="af-work-run-logs__event-node">{eventNode(event)}</span> : null}
-                <pre>{eventText(event)}</pre>
-              </div>
-            ))}
-          </div>
+          {loadingDetail && !detail ? (
+            <div className="af-run-inspector__empty">正在读取日志详情…</div>
+          ) : (
+            <RunInspector
+              run={selectedRun}
+              events={Array.isArray(detail?.events) ? detail.events : []}
+              loading={loadingDetail}
+            />
+          )}
         </div>
       </div>
     </div>

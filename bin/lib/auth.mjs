@@ -6,10 +6,22 @@ import {
   getAgentflowDataRoot,
   getUserPipelinesRoot,
   sanitizeAgentflowUserId,
+  isFlowDir,
 } from "./paths.mjs";
 
 const SESSION_COOKIE = "af_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const CLI_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const CLI_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
+const CLI_AUTHORIZATION_SCOPES = [
+  "workspace:read",
+  "workspace:write",
+  "workspace:run",
+  "flow:publish",
+  "schedule:manage",
+  "node-package:manage",
+  "workflow:manage",
+];
 
 function authRoot() {
   return path.join(getAgentflowDataRoot(), "auth");
@@ -21,6 +33,10 @@ function usersPath() {
 
 function sessionsPath() {
   return path.join(authRoot(), "sessions.json");
+}
+
+function cliAuthorizationsPath() {
+  return path.join(authRoot(), "cli-authorizations.json");
 }
 
 function userAllowlistPath() {
@@ -59,6 +75,67 @@ function verifyPassword(password, record) {
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function createSessionForUser(userId, options = {}) {
+  const users = readAuthUsers();
+  const user = users[userId];
+  if (!user) return { ok: false, error: "用户不存在" };
+  const now = Date.now();
+  const token = crypto.randomBytes(32).toString("base64url");
+  const sessions = readJsonObject(sessionsPath());
+  sessions[hashToken(token)] = {
+    userId,
+    kind: String(options.kind || "web"),
+    clientName: String(options.clientName || "").trim(),
+    scopes: Array.isArray(options.scopes) ? options.scopes.map(String).filter(Boolean) : [],
+    createdAt: now,
+    expiresAt: now + (Number(options.ttlMs) || SESSION_TTL_MS),
+  };
+  writeJsonObject(sessionsPath(), sessions);
+  return {
+    ok: true,
+    token,
+    expiresAt: sessions[hashToken(token)].expiresAt,
+    user: { userId, username: user.username || userId, isAdmin: Boolean(user.isAdmin) },
+  };
+}
+
+function purgeExpiredCliAuthorizations(authorizations, now = Date.now()) {
+  let changed = false;
+  for (const [requestId, record] of Object.entries(authorizations)) {
+    if (Number(record?.expiresAt) > now && record?.status !== "consumed") continue;
+    delete authorizations[requestId];
+    changed = true;
+  }
+  return changed;
+}
+
+function normalizedCliClientName(value) {
+  const text = String(value || "AgentFlow CLI").trim().slice(0, 80);
+  return text || "AgentFlow CLI";
+}
+
+function cliAuthorizationSummary(requestId, record) {
+  if (!record) return null;
+  return {
+    requestId,
+    userCode: String(record.userCode || ""),
+    clientName: String(record.clientName || "AgentFlow CLI"),
+    scopes: Array.isArray(record.scopes) ? record.scopes.map(String) : [],
+    status: String(record.status || "pending"),
+    createdAt: Number(record.createdAt) || 0,
+    expiresAt: Number(record.expiresAt) || 0,
+    approvedUserId: String(record.approvedUserId || ""),
+  };
+}
+
+function randomUserCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.randomBytes(8);
+  let out = "";
+  for (let i = 0; i < 8; i += 1) out += alphabet[bytes[i] % alphabet.length];
+  return `${out.slice(0, 4)}-${out.slice(4)}`;
 }
 
 function parseCookies(header) {
@@ -229,7 +306,7 @@ function listFlowDirs(root) {
     return fs.readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .filter((entry) => entry.name !== ARCHIVED_PIPELINES_DIR_NAME)
-      .filter((entry) => fs.existsSync(path.join(root, entry.name, "flow.yaml")))
+      .filter((entry) => isFlowDir(path.join(root, entry.name)))
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b));
   } catch {
@@ -321,7 +398,158 @@ export function getAuthUserFromRequest(req) {
     userId: session.userId,
     username: user.username || session.userId,
     isAdmin: Boolean(user.isAdmin),
+    sessionKind: String(session.kind || "web"),
+    clientName: String(session.clientName || ""),
+    scopes: Array.isArray(session.scopes) ? session.scopes.map(String) : [],
+    sessionExpiresAt: Number(session.expiresAt) || 0,
   };
+}
+
+export function createCliAuthorization({ publicBaseUrl, clientName } = {}) {
+  const now = Date.now();
+  const requestId = crypto.randomBytes(18).toString("base64url");
+  const deviceCode = crypto.randomBytes(32).toString("base64url");
+  const approvalNonce = crypto.randomBytes(24).toString("base64url");
+  const authorizations = readJsonObject(cliAuthorizationsPath());
+  purgeExpiredCliAuthorizations(authorizations, now);
+  const active = Object.entries(authorizations)
+    .sort((left, right) => Number(left[1]?.createdAt) - Number(right[1]?.createdAt));
+  while (active.length >= 256) {
+    const [oldestId] = active.shift();
+    delete authorizations[oldestId];
+  }
+  authorizations[requestId] = {
+    deviceCodeHash: hashToken(deviceCode),
+    approvalNonceHash: hashToken(approvalNonce),
+    approvalNonce,
+    userCode: randomUserCode(),
+    clientName: normalizedCliClientName(clientName),
+    scopes: [...CLI_AUTHORIZATION_SCOPES],
+    status: "pending",
+    createdAt: now,
+    expiresAt: now + CLI_AUTHORIZATION_TTL_MS,
+  };
+  writeJsonObject(cliAuthorizationsPath(), authorizations);
+  const base = String(publicBaseUrl || "").replace(/\/+$/, "");
+  return {
+    ...cliAuthorizationSummary(requestId, authorizations[requestId]),
+    deviceCode,
+    approvalNonce,
+    verificationUrl: `${base}/cli/authorize?request=${encodeURIComponent(requestId)}`,
+    pollInterval: 3,
+  };
+}
+
+export function getCliAuthorization(requestId, { includeApprovalNonce = false } = {}) {
+  const id = String(requestId || "").trim();
+  if (!id) return { ok: false, status: 400, error: "缺少授权请求" };
+  const authorizations = readJsonObject(cliAuthorizationsPath());
+  const changed = purgeExpiredCliAuthorizations(authorizations);
+  if (changed) writeJsonObject(cliAuthorizationsPath(), authorizations);
+  const record = authorizations[id];
+  if (!record) return { ok: false, status: 404, error: "授权请求不存在或已过期" };
+  return {
+    ok: true,
+    authorization: cliAuthorizationSummary(id, record),
+    ...(includeApprovalNonce ? { approvalNonce: String(record.approvalNonce || "") } : {}),
+  };
+}
+
+export function decideCliAuthorization({ requestId, approvalNonce, userId, approved }) {
+  const id = String(requestId || "").trim();
+  const normalizedUserId = sanitizeAgentflowUserId(userId);
+  if (!id || !normalizedUserId) return { ok: false, status: 400, error: "授权请求无效" };
+  const authorizations = readJsonObject(cliAuthorizationsPath());
+  purgeExpiredCliAuthorizations(authorizations);
+  const record = authorizations[id];
+  if (!record) {
+    writeJsonObject(cliAuthorizationsPath(), authorizations);
+    return { ok: false, status: 404, error: "授权请求不存在或已过期" };
+  }
+  if (record.status !== "pending") {
+    return { ok: false, status: 409, error: "授权请求已经处理" };
+  }
+  const suppliedNonce = String(approvalNonce || "");
+  if (!suppliedNonce || hashToken(suppliedNonce) !== String(record.approvalNonceHash || "")) {
+    return { ok: false, status: 403, error: "授权确认已失效，请刷新页面" };
+  }
+  record.status = approved ? "approved" : "denied";
+  record.approvedUserId = normalizedUserId;
+  record.decidedAt = Date.now();
+  authorizations[id] = record;
+  writeJsonObject(cliAuthorizationsPath(), authorizations);
+  return { ok: true, authorization: cliAuthorizationSummary(id, record) };
+}
+
+export function exchangeCliAuthorization(deviceCode) {
+  const codeHash = hashToken(String(deviceCode || ""));
+  if (!String(deviceCode || "").trim()) return { ok: false, status: 400, error: "缺少 deviceCode" };
+  const now = Date.now();
+  const authorizations = readJsonObject(cliAuthorizationsPath());
+  purgeExpiredCliAuthorizations(authorizations, now);
+  const entry = Object.entries(authorizations).find(([, record]) => record?.deviceCodeHash === codeHash);
+  if (!entry) {
+    writeJsonObject(cliAuthorizationsPath(), authorizations);
+    return { ok: false, status: 410, error: "授权请求不存在或已过期", code: "expired_token" };
+  }
+  const [requestId, record] = entry;
+  if (record.status === "pending") {
+    if (Number(record.lastPolledAt) > 0 && now - Number(record.lastPolledAt) < 1000) {
+      return {
+        ok: false,
+        status: 429,
+        error: "轮询过于频繁",
+        code: "slow_down",
+        authorization: cliAuthorizationSummary(requestId, record),
+      };
+    }
+    record.lastPolledAt = now;
+    authorizations[requestId] = record;
+    writeJsonObject(cliAuthorizationsPath(), authorizations);
+    return {
+      ok: false,
+      status: 202,
+      error: "等待用户授权",
+      code: "authorization_pending",
+      authorization: cliAuthorizationSummary(requestId, record),
+    };
+  }
+  if (record.status === "denied") {
+    delete authorizations[requestId];
+    writeJsonObject(cliAuthorizationsPath(), authorizations);
+    return { ok: false, status: 403, error: "用户拒绝了授权", code: "access_denied" };
+  }
+  if (record.status !== "approved" || !record.approvedUserId) {
+    return { ok: false, status: 409, error: "授权状态无效", code: "invalid_grant" };
+  }
+  const session = createSessionForUser(record.approvedUserId, {
+    kind: "cli",
+    clientName: record.clientName,
+    scopes: record.scopes,
+    ttlMs: CLI_SESSION_TTL_MS,
+  });
+  if (!session.ok) return { ok: false, status: 401, error: session.error || "无法创建 CLI Session" };
+  delete authorizations[requestId];
+  writeJsonObject(cliAuthorizationsPath(), authorizations);
+  return {
+    ok: true,
+    token: session.token,
+    tokenType: "Bearer",
+    expiresAt: session.expiresAt,
+    user: session.user,
+    scopes: Array.isArray(record.scopes) ? record.scopes.map(String) : [],
+  };
+}
+
+export function revokeSessionToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw) return false;
+  const sessions = readJsonObject(sessionsPath());
+  const key = hashToken(raw);
+  if (!sessions[key]) return false;
+  delete sessions[key];
+  writeJsonObject(sessionsPath(), sessions);
+  return true;
 }
 
 export function loginOrCreateUser(username, password) {
@@ -363,26 +591,16 @@ export function loginOrCreateUser(username, password) {
     }
   }
 
-  const token = crypto.randomBytes(32).toString("base64url");
-  const sessions = readJsonObject(sessionsPath());
-  sessions[hashToken(token)] = {
-    userId,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS,
-  };
-  writeJsonObject(sessionsPath(), sessions);
+  const session = createSessionForUser(userId, { kind: "web" });
   return {
     ok: true,
-    token,
+    token: session.token,
     user: { userId, username: user.username || userId, isAdmin: Boolean(user.isAdmin) },
     migration,
   };
 }
 
 export function logoutRequest(req) {
-  const token = parseCookies(req.headers.cookie || "")[SESSION_COOKIE];
-  if (!token) return;
-  const sessions = readJsonObject(sessionsPath());
-  delete sessions[hashToken(token)];
-  writeJsonObject(sessionsPath(), sessions);
+  const token = getSessionTokenFromRequest(req);
+  revokeSessionToken(token);
 }

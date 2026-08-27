@@ -2,20 +2,20 @@ import { useRoute } from "../routeContext.jsx";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import agentflowIconUrl from "../assets/agentflow-icon.svg?url";
+import { FEEDBACK_UI_ENABLED, SPACES_UI_ENABLED } from "../featureFlags.js";
 
 const ITEMS = [
   { to: "/projects", labelKey: "common:nav.projects", icon: "folder_open" },
+  { to: "/marketplace", labelKey: "common:nav.marketplace", icon: "storefront" },
+  { to: "/spaces", label: "空间", icon: "library_books", hidden: !SPACES_UI_ENABLED },
   { to: "/workflows", label: "迭代", icon: "timeline" },
   { to: "/workspaces", label: "知识库", icon: "folder_managed" },
-  { to: "/nodes", labelKey: "common:nav.nodes", icon: "account_tree" },
-  { to: "/my-flows", labelKey: "common:nav.myFlows", icon: "schema" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
-  { to: "/node-studio", label: "节点编辑器", icon: "draw" },
   { to: "/schedules", label: "定时任务", icon: "event_busy" },
   { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
   { to: "/admin/teams", label: "团队管理", icon: "groups", adminOnly: true },
-  { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review" },
+  { to: "/feedback", labelKey: "common:nav.feedback", icon: "rate_review", hidden: !FEEDBACK_UI_ENABLED },
   { to: "/settings", labelKey: "common:nav.settings", icon: "settings" },
 ];
 
@@ -31,7 +31,7 @@ const EXTERNAL_LINKS = [
 
 function isActive(path, to) {
   if (to === "/projects") return path === "/projects" || path === "/";
-  if (to === "/nodes") return path === "/nodes" || path === "/my-nodes";
+  if (to === "/marketplace") return path === "/marketplace" || path === "/nodes" || path === "/my-nodes" || path === "/my-flows";
   return path === to || path.startsWith(to + "/");
 }
 
@@ -63,7 +63,7 @@ export default function Sidebar({ authUser, onLogout }) {
         </div>
       </div>
       <nav className="af-nav">
-        {ITEMS.filter((item) => !item.adminOnly || authUser?.isAdmin).map((item) => (
+        {ITEMS.filter((item) => !item.hidden && (!item.adminOnly || authUser?.isAdmin)).map((item) => (
           <button
             key={item.to}
             type="button"

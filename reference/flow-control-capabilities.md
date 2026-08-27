@@ -1,6 +1,6 @@
 # AgentFlow 常见流程控制能力
 
-本文档供 AI 参考：流程中常用的控制节点及其用法、连线方式与典型模式。
+本文档供 AI 参考：Workspace 图中常用的控制节点及其用法、连线方式与典型模式。
 
 **说明**：下文中的 handle（如 input-0、output-1）是**可变的**，由节点类或 instance 的 input/output 列表顺序决定；若槽位顺序有变动，须以实际 definition/instance 的 frontmatter 为准。
 
@@ -8,14 +8,16 @@
 
 ---
 
-## 1. 入口与出口
+## 1. 入口
 
-| 节点 | definitionId   | 作用 |
-|------|----------------|------|
-| **Start** | control_start | 流程唯一入口，无 input，只有 output `next`（output-0）。所有边从 start 连出到第一个执行节点。 |
-| **End**   | control_end   | 流程唯一出口，只有 input `prev`（input-0），无 output。所有最终节点连到 end。 |
+| 节点 | definitionId | 作用 |
+|------|--------------|------|
+| **Run** | workspace_run | 手动运行的入口。点 Run 时从它沿控制边向下游展开。 |
+| **Scheduled Run** | workspace_scheduled_run | 定时运行的入口，按 cron 配置触发。 |
 
-**约定**：每个 flow 必须包含且仅包含一个 control_start、一个 control_end。
+图不需要出口节点——控制链走到尽头即结束。
+
+**旧版 `control_start` / `control_end` 已下线**，不要新增。
 
 ---
 
@@ -23,81 +25,68 @@
 
 - **control_if**：单节点双分支。根据 **prediction**（bool）：为 true 时沿 **next1**（output-0）继续，为 false 时沿 **next2**（output-1）继续。适用于「二选一」分支。
 
-**典型用法**：上游接一个能输出布尔值的节点（如 **control_toBool**（确定性）或 **control_agent_toBool**（AI 判断）），把布尔槽位连到 If 的 **input-1**（prediction），再根据需要连到不同分支。
+**典型用法**：上游接 **provide_bool**，把它的 bool 输出连到 If 的 **input-1**（prediction），再把两个分支分别连到 output-0 / output-1。
 
 **control_if Handle**：
-- input: prev → input-0, prediction → input-1  
+- input: prev → input-0, prediction → input-1
 - output: next1 → output-0（条件为真时）, next2 → output-1（条件为假时）
 
 ---
 
-## 3. 转布尔（ToBool）
+## 3. 图必须是 DAG（无环），重复执行用 control_while
 
-### 3a. control_toBool（本地确定性执行）
+Workspace 运行计划做拓扑排序，**遇到环直接抛 `Workspace run graph contains a cycle`**，整次运行失败。
 
-- **definitionId**: control_toBool  
-- **作用**：**本地代码**将上游 **value** 文本用 parseBool 解析为布尔（true/1/yes/on → true，其余 → false），写入 **prediction**。**不调用 AI agent**。
-- **适用场景**：上游输出已是明确的 "true"/"false"、"1"/"0"、"yes"/"no" 等确定性文本。
+因此：
 
-**Handle**：
-- input: prev → input-0, value → input-1  
-- output: next → output-0, prediction → output-1  
+- **禁止**从下游节点连边回到上游节点。
+- 「检查 → 修复 → 复检」涉及不同角色时要**向前展开**成多个节点，而不是回流成环。
+- 同一个确定性动作需要反复推进时，用 `control_while`。它在单节点状态机里重复 step 命令，
+  父图仍是 DAG；`continue` 继续、`wait` 暂停且不跑下游、`done` 放行下游、`fail` 失败。
 
-### 3b. control_agent_toBool（AI agent 执行）
+step 的 stdout 必须严格是一个 JSON 对象：
 
-- **definitionId**: control_agent_toBool  
-- **作用**：由 **AI agent** 理解上游 **value** 内容的语义，判断布尔含义后写入 **prediction**。
-- **适用场景**：上游输出是自然语言描述、代码分析结果、复杂报告等需要语义理解才能判定真假的内容。
+```json
+{"decision":"continue|wait|done|fail","state":{},"summary":"本轮摘要"}
+```
 
-**Handle**：
-- input: prev → input-0, value → input-1  
-- output: next → output-0, prediction → output-1  
+循环上下文通过 `AGENTFLOW_WHILE_STATE`、绝对轮次 `AGENTFLOW_WHILE_ITERATION`、
+`AGENTFLOW_WHILE_MAX_ITERATIONS`、`AGENTFLOW_WHILE_TIMEOUT_MS` 和稳定的逐轮
+`AGENTFLOW_WHILE_IDEMPOTENCY_KEY` 注入。外部写操作应尽量把该幂等键传给目标 API。stdout
+留给决策对象，普通进度写 stderr。`maxIterations` 默认 20，`timeout` 默认 30m，二者在
+`wait` 后恢复时继续累计；checkpoint 同时保留 state、history、已用执行时间和下一轮编号。
+输入变化会重置 checkpoint，指纹匹配但 checkpoint 损坏时会拒绝恢复，避免静默重放副作用。
 
-**共同约定**：写入 **prediction**（output-1）的**文件内容必须仅为 true 或 false**，供下游 control_if 等解析；不得写入长文本或 markdown 报告。
-
----
-
-## 4. 多路汇合（AnyOne）
-
-- **definitionId**: control_anyOne  
-- **作用**：多个上游分支中**任意一个**就绪（success）时，即从 **next** 继续，常用于「多路并行、任一路完成即进入下一步」的场景。
-
-**Handle**：
-- input: prev1 → input-0, prev2 → input-1（可扩展更多输入槽位时按 input-2, input-3… 约定）  
-- output: next → output-0  
+旧版用于成环的 `control_anyOne` / `control_toBool` / `control_agent_toBool` / `control_interval_loop` 均已下线。
 
 ---
 
-## 5. 全局存储与环境（LoadKey / SaveKey / GetEnv）
+## 4. 子流程（Subflow）
 
-用于**当前 flow 在一次 run 内的全局信息保存与读取**：按 key 在 run 目录下的 memory 存储中写入或读取文本，供多节点共享状态、跨分支传递结果。**GetEnv** 从系统环境变量与用户目录 `~/.cursor/config.json` 按 key 读取，用于注入 API Key、工作区配置等。
+可复用的一段节点拓扑用 `flow.input`、`flow.subflow` 和 `flow.call` 表达。子流程内部继续使用
+标准 AgentFlow 节点与边，父流程只连接调用节点的契约引脚；禁止跨边界直接连内部节点。
 
-| 节点 | definitionId   | 作用 |
-|------|----------------|------|
-| **LoadKey** | tool_load_key | 按 **key** 从当前 run 的存储中读取一个值，结果输出到 **result** 槽位，可连到下游节点的 input。 |
-| **SaveKey** | tool_save_key | 按 **key** 将 **value** 写入当前 run 的存储；value 可为字面文本，或 run 内相对路径（如 `output/node_xxx_result.md`），脚本会读文件内容后写入。 |
-| **GetEnv** | tool_get_env | 按 **key** 从系统环境变量与 `~/.cursor/config.json` 读取一个值（优先环境变量）；key 支持点号路径如 `openai.apiKey` 读取 config 嵌套字段；结果输出到 **value** 槽位。 |
+每次调用拥有独立 `callFrameId`，内部事件同时带 `parentNodeId` 和 `subflowId`。禁止递归调用。
+当前第一版不支持子流程内部 `wait/deferred`，遇到会明确失败；可恢复调用栈补齐后再开放。
 
-**Handle**：
+---
 
-- **LoadKey**  
-  - input: prev → input-0, key → input-1  
-  - output: next → output-0, result → output-1  
-- **SaveKey**  
-  - input: prev → input-0, key → input-1, value → input-2  
-  - output: next → output-0  
-- **GetEnv**
-  - input: key → input-0
-  - output: value → output-0
+## 5. 展示结果（Display）
 
-**典型用法**：
+把产出槽连到 `display_*` 节点的 `content` 输入即可在画布上渲染：
 
-1. **保存后再读**：某节点产出结果 → SaveKey（key 固定如 `flowName`，value 接上游 output）→ 下游分支中 LoadKey（同一 key）→ result 连到后续 agent/tool。
-2. **跨分支共享**：并行分支中一路用 SaveKey 写入（如「选中的方案名」），汇合后或另一分支用 LoadKey 读取，保证全 flow 看到同一份全局信息。
-3. **占位符**：instance 中 key/value 可写占位符（如 `${output/node_plan_result.md}`），由 apply 在 resolvedInputs 中解析后传入脚本。
-4. **环境/配置注入**：GetEnv（key 如 `OPENAI_API_KEY` 或 `openai.apiKey`）→ value 连到下游 agent 的 input，用于从环境或 `~/.cursor/config.json` 读取密钥或配置，避免写死在 flow 中。
+| definitionId | 内容形态 |
+|--------------|----------|
+| display_markdown | Markdown 正文 |
+| display_html | 可直接放进 iframe 的 HTML |
+| display_react_app | React 工程 JSON（title / entry / files） |
+| display_table | `{"columns":[...],"rows":[...]}` |
+| display_chart | ChartSpec JSON |
+| display_mermaid | Mermaid 图表代码 |
+| display_ascii | 纯文本 / ASCII 图 |
+| display_image | 图片地址、data URL 或 base64 |
 
-存储由 apply 通过 `agentflow apply -ai run-tool-nodejs` 调用 load-key/save-key 实现；GetEnv 由 `agentflow apply -ai get-env <workspaceRoot> <flowName> <uuid> <instanceId> <execId> <key>` 直接执行，run 上下文通过命令行参数传入，不再经 run-tool-nodejs。LoadKey/SaveKey 数据仅在**当前 run**（同一 uuid 的 `~/agentflow/runBuild/<FlowName>/<uuid>/`）内有效；GetEnv 读取的是系统环境与用户级 `~/.cursor/config.json`，不随 run 隔离。
+**旧版 `tool_print` 已下线**，改用 `display_markdown`。
 
 ---
 
@@ -107,48 +96,39 @@
 
 | 场景 | 推荐节点 | 原因 |
 |------|----------|------|
-| 执行已知命令/脚本（打印、文件操作、数据处理等） | **tool_nodejs** + `script` 字段 | 直接执行，零 LLM 调用，毫秒级完成 |
-| 向用户输出醒目信息 | **tool_print** | 专用输出节点 |
+| 执行已知命令/脚本（文件操作、数据处理等） | **tool_nodejs** + `script` 字段 | 直接执行，零 LLM 调用，毫秒级完成 |
+| 向用户展示结果 | **display_\*** | 专用展示节点 |
 | 需要 AI 理解上下文、做判断、生成内容 | **agent_subAgent** | 需要 LLM 推理能力 |
 
 ### 6.1 tool_nodejs 直接执行模式（推荐）
 
-在 instance 中设置 `script` 字段，流水线**跳过 AI 直接执行命令**：
+在 instance 中设置 `script` 字段，运行时**跳过 AI 直接 spawn 命令**：
 
 ```yaml
-print_hello:
+write_summary:
   definitionId: tool_nodejs
-  label: 打印Hello
-  script: node -e "console.log(${value})"
+  label: 写摘要
+  script: node ${flowDir}/scripts/write-summary.mjs --input ${value} --output ${summary}
   input:
-    - type: 节点
-      name: prev
-      value: ''
-    - type: 文本
-      name: value
-      value: ''
+    - { type: node, name: prev, value: '' }
+    - { type: text, name: value, value: '' }
   output:
-    - type: 节点
-      name: next
-      value: ''
-    - type: 文本
-      name: result
-      value: ''
+    - { type: node, name: next, value: '' }
+    - { type: text, name: result, value: '' }
+    - { type: file, name: summary, value: '' }
 ```
 
-- `script` 支持 `${}` 占位符（workspaceRoot、flowName、runDir 及所有 input 槽位），值自动 shell-quote。
-- 适用于：打印文本、运行已有脚本、文件复制/移动、数据格式转换等**确定性操作**。
-- input 可按需添加额外的文本/文件槽位（如上例的 `value`），供 `script` 中 `${value}` 引用。
+- `script` / `scriptRef` 支持 `${}` 占位符：`workspaceRoot` / `pipelineWorkspace` / `flowDir`（三者都解析为当前 scoped workspace 根）、`cwd`、`nodeRunDir`、`nodeTmpDir`、`outputsDir`、`scriptRef`，以及**所有 input / output 槽位名**。值自动 shell-quote，不要自己加引号。
+- 适用于：运行已有脚本、文件复制/移动、数据格式转换等**确定性操作**。
 - **成败判定**：以脚本进程 **exit code** 为准（0 = success，非 0 = failed）。
-- **stdout → result**：脚本 stdout 直接作为 result 槽位内容，纯文本即可（如 `console.log("hello")`）。
-- **JSON 兼容（可选）**：stdout 为 `{"err_code":0,"message":{"result":"..."}}` 时，err_code 覆盖 exit code 语义——仅在需要与 exit code 不同的成败语义时使用。
+- **stdout → result**：脚本 stdout 直接作为 result 槽位内容，纯文本即可。**不要用 JSON 封装 stdout。**
 
 ### 6.2 判断标准
 
 问自己：**"这个步骤的行为是否完全由输入决定，不需要 AI 推理？"**
 
-- **是** → 用 `tool_nodejs` + `script`，或 `tool_print`
-  - 例：打印一段文字、执行 `agentflow apply -ai validate-flow`、跑一个已有的 `.mjs` 脚本
+- **是** → 用 `tool_nodejs` + `script`
+  - 例：跑一个已有的 `.mjs` 脚本、格式化 JSON、复制产物
 - **否** → 用 `agent_subAgent`
   - 例：根据需求撰写文档、分析代码并提出修改方案、理解上下文后做决策
 
@@ -156,46 +136,24 @@ print_hello:
 
 | 字段 | 职责 | 有 `script` 时 | 无 `script` 时 |
 |------|------|---------------|---------------|
-| `script` | 实际执行的 shell/node 命令 | 流水线直接 spawn 执行 | — |
-| `body` | 纯文档说明（供人类阅读） | **完全忽略**，不参与执行 | 作为 AI 指令兜底（AI 执行模式） |
+| `script` | 实际执行的 shell/node 命令 | 运行时直接 spawn 执行 | — |
+| `body` | 纯文档说明（供人类阅读） | **完全忽略**，不参与执行 | 节点无法执行，必须改用 agent_subAgent |
 
 **约束规则**：
-1. `tool_nodejs` **必须写 `script` 字段**，内容为完整可执行的命令
-2. `script` 中的 `${}` 占位符自动 shell-quote，引用 input/output 槽位或系统变量
+1. `tool_nodejs` **必须写 `script` 或 `scriptRef`**，内容为完整可执行的命令
+2. `script` 中的 `${}` 占位符自动 shell-quote，引用 input/output 槽位或运行时常量
 3. **`script` 必须引用所有非 node 类型的 input 和 output 引脚**（validate-flow 硬性校验）：
    - input 引脚 `${slotName}` → 解析为上游数据值或文件路径
    - output 引脚 `${slotName}` → 解析为 output 文件的绝对路径，脚本应 `fs.writeFileSync(path, value)` 直接写入
-   - **禁止使用 JSON stdout 封装**（`{"err_code":0,"message":{...}}`），用 exit code 0/非 0 决定成败
+   - **禁止使用 JSON stdout 封装**，用 exit code 0/非 0 决定成败
 4. `body` 可选，仅用于文档说明，**禁止写期望被执行的逻辑**
 5. 如果无法写出完整可执行的 `script`（需要 AI 理解/判断），**必须改用 `agent_subAgent`**
 6. `script` 支持多行（YAML `|` 语法）和管道组合
+7. **`scripts/` 下的脚本必须写成 `${flowDir}/scripts/xxx.mjs`**，不要硬编码 workspace 路径
 
-**复杂脚本示例（API 调用 + JSON 处理）**：
-
+**错误示范**（校验将报错）：
 ```yaml
-fetch_user_list:
-  definitionId: tool_nodejs
-  label: 获取用户列表
-  script: |
-    curl -s -H "Authorization: Bearer ${token}" "${apiUrl}/users" | node -e "
-      let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
-        const res=JSON.parse(d);
-        console.log(JSON.stringify(res.data.map(u=>({id:u.id,name:u.name}))));
-      });"
-  body: |
-    调用 API 获取用户列表并提取 id 和 name
-  input:
-    - { type: 节点, name: prev, value: '' }
-    - { type: 文本, name: apiUrl, value: '' }
-    - { type: 文本, name: token, value: '' }
-  output:
-    - { type: 节点, name: next, value: '' }
-    - { type: 文本, name: result, value: '' }
-```
-
-**错误示范**（校验将报 warning）：
-```yaml
-# ❌ tool_nodejs 无 script，body 写自然语言 → 节点无法正确执行
+# ❌ tool_nodejs 无 script，body 写自然语言 → 节点无法执行
 bad_example:
   definitionId: tool_nodejs
   label: 获取数据
@@ -207,9 +165,9 @@ bad_example:
 
 | 用户需求 | 错误做法 | 正确做法 |
 |----------|----------|----------|
-| 打印一段文字 | agent_subAgent + body 描述打印任务 | tool_nodejs + `script: node -e "console.log(${value})"` |
-| 执行已有脚本 | agent_subAgent + body 要求运行脚本 | tool_nodejs + `script: node scripts/xxx.mjs` |
-| 读取环境变量 | agent_subAgent + body 要求读环境变量 | tool_get_env（专用节点） |
+| 展示一段结果 | agent_subAgent + body 描述展示任务 | 产出槽连到 `display_markdown.content` |
+| 执行已有脚本 | agent_subAgent + body 要求运行脚本 | tool_nodejs + `script: node ${flowDir}/scripts/xxx.mjs` |
+| 注入密钥 | 写死在 flow 里 | `tool_set_run_env` 或运行时环境变量 |
 | 复杂 AI 推理/生成 | tool_nodejs + body 写自然语言 | agent_subAgent（需 LLM 能力时必须用 agent） |
 
 ### 6.5 节点单一职责（必须遵守）
@@ -233,42 +191,28 @@ bad_example:
 
 ---
 
-## 7. 常见流程模式简述
+## 7. 常见流程模式
 
-1. **线性链**：Start → A → B → … → End  
-2. **条件分支**：  
-   - **单节点 If**：… → ToBool → **control_if** → next1 连分支A、next2 连分支B（true 走 output-0，false 走 output-1）。  
-3. **多路任一**：分支1、分支2 均连到 AnyOne（prev1/prev2），AnyOne 的 next 再连到后续或 End。  
-4. **用户确认**：在需要暂停处插入 **tool_user_check**，用户确认后再继续。  
-5. **全局存储**：用 **SaveKey** 写入、**LoadKey** 读取当前 flow 的全局信息（见上节）。  
-6. **检查 → 修改 → 检查 → 修改**：见下节。
-
----
-
-### 8 入环 → 检查 → 修复 → 检查 → 修复 → 检查 → 出环
-
-该流程可概括为：**入环 → 检查 → 修复 → 检查 → 修复 → … → 检查通过 → 出环**。参考 **builtin/pipelines/module-migrate** 的连线方式。
-
-- **入环**：用 **control_anyOne** 汇合两条路——「首次进入」与「上一轮修复完成后再检查」。prev1 / prev2 任一路就绪即从 next 继续，进入**检查**。
-- **检查**：执行检查节点（可并行、可汇总），结果经 **control_toBool**（确定性）或 **control_agent_toBool**（AI 判断）转为布尔，再接到 **control_if**。
-- **分支**：**control_if** 的 next1（true，通过）→ 出环到后续或 End；next2（false，未通过）→ 进入**修复**。
-- **修复**：修复节点消费检查结果，修改后通过边回到「检查」上游或回到 **AnyOne** 的 prev2，形成环；可再套一层 ToBool + If 判断「是否修完」，未修完再修复、修完再回检查。
-- **出环**：当 **control_if** 为 true 时，从 next1 连到环外节点，不再回到 AnyOne。
-
-要点：**AnyOne** 做入环/复入环汇合；**ToBool + If** 做通过/未通过二选一；未通过 → 修复 → 回到检查或 AnyOne（成环）；通过 → 连到环外即出环。
+1. **线性链**：Run → A → B → … → display
+2. **条件分支**：… → provide_bool → **control_if** → next1 连分支A、next2 连分支B（true 走 output-0，false 走 output-1）
+3. **控制扇出**：同一个 output 扇出到多个下游节点；当前 Workspace 运行时按拓扑序串行执行
+4. **单步收敛**：Run → control_while（重复同一 step）→ 下游；wait 时停在 While
+5. **检查 → 修复 → 复检**：不同角色向前排成多个节点。**不要连回上游**
+6. **批量任务**：拆解节点产出清单 → control_while 每轮推进一项 → done 后汇总
 
 ---
 
-## 9. Edge 与 Handle 注意点
+## 8. Edge 与 Handle 注意点
 
-- **Fan-out 允许，Fan-in 禁止**：一个 output handle 可连多个 input（扇出），但**一个 input handle 只允许一条入边**（禁止扇入）。同一 `target + targetHandle` 不得出现在多条 edge 中——运行时 `resolve-inputs` 仅取 `find()` 首条匹配，其余静默丢失。若需替换连线，先删旧边再加新边。
-- 条件/分支节点有多输入时，必须在 edge 上写清 **targetHandle**（如 prediction 用 input-1）。  
-- 从 ToBool 的 prediction 连到 If（control_if）时：sourceHandle 用 **output-1**，targetHandle 用 **input-1**。  
+- **Fan-out 允许，Fan-in 禁止**：一个 output handle 可连多个 input（扇出），但**一个 input handle 只允许一条入边**（禁止扇入）。同一 `target + targetHandle` 不得出现在多条 edge 中——运行时仅取首条匹配，其余静默丢失。若需替换连线，先删旧边再加新边。
+- **禁止回流边**：任何从下游连回上游的边都会让运行计划判定成环，整次运行失败。
+- 条件/分支节点有多输入时，必须在 edge 上写清 **targetHandle**（如 prediction 用 input-1）。
+- 从 `provide_bool` 的 bool 输出连到 `control_if` 时：targetHandle 用 **input-1**。
 - 多输出节点连到不同下游时，用不同 **sourceHandle**（output-0, output-1, …）区分槽位。
-- **control_if** 必须写清：从 output-0 连到「条件为真」的后继、从 output-1 连到「条件为假」的后继，否则 get-ready-nodes 无法正确解锁分支。
+- **control_if** 必须写清：从 output-0 连到「条件为真」的后继、从 output-1 连到「条件为假」的后继。
 
 ---
 
-## 10. 图与 USER_PROMPT 的读写一致性
+## 9. 图与 USER_PROMPT 的读写一致性
 
 ${USER_PROMPT} 中描述的「读取」「写入」应与图中的 **handler 节点**（input/output 通过 edge 连接的节点）对应：描述的每项「读」应有节点的 input 入边，每项「写」应有节点的 output 出边。详见 [flow-prompt-handler-check.md](./flow-prompt-handler-check.md)。

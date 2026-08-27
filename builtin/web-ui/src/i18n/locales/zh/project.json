@@ -11,8 +11,8 @@
   "globalNodes": "全局 Nodes",
   "nodeScopeAll": "全部 Nodes",
   "nodeScopeMine": "我的 Nodes",
-  "myNodesHint": "管理当前工作区已发布到本地 Marketplace 的节点，共 {{count}} 个。",
-  "myFlowsHint": "管理当前工作区已发布到本地 Marketplace 的流程片段，共 {{count}} 个。",
+  "myNodesHint": "管理当前工作区已发布到流程仓库的节点，共 {{count}} 个。",
+  "myFlowsHint": "管理当前工作区已发布的流程片段，共 {{count}} 个。",
   "globalSkills": "全局 Skills",
   "createNew": "创建新项目",
   "newPipeline": "新建流水线",
@@ -31,7 +31,7 @@
   "nodesPurposeTitle": "流程运行时的可执行积木",
   "nodesPurposeDesc": "Nodes 决定画布上能拖什么、节点有哪些输入输出，以及运行时走 agent、control、provide 或 marketplace 哪类逻辑。",
   "myNodesPurposeTitle": "已发布的本地节点包",
-  "myNodesPurposeDesc": "这里仅显示你发布到当前 Workspace Marketplace 的节点版本；可查看详情并删除未被 Flow 使用的版本。",
+  "myNodesPurposeDesc": "这里仅显示你发布到当前流程仓库的节点版本；可查看详情并删除未被 Flow 使用的版本。",
   "myFlowsPurposeTitle": "已发布的流程片段",
   "myFlowsPurposeDesc": "这里显示从 Pipeline 或 Workspace 画布发布的流程片段，可搜索、检查内容，并从画布的流程面板中加载复用。",
   "skillsPurposeTitle": "Composer/Agent 的操作指南",
@@ -87,7 +87,7 @@
   "myFlowManagement": "流程片段管理",
   "deleteMyFlow": "删除流程片段",
   "deletingMyFlow": "删除中…",
-  "deleteMyFlowHint": "删除后不会影响已经加载到画布里的节点，只会移除 Marketplace 中这个可复用片段。",
+  "deleteMyFlowHint": "删除后不会影响已经加载到画布里的节点，只会移除这个可复用片段。",
   "deleteMyFlowConfirm": "确定删除 {{id}}@{{version}}？此操作不可撤销。",
   "deleteMyFlowSuccess": "已删除 {{id}}@{{version}}。",
   "noSlots": "无槽位",
@@ -121,14 +121,14 @@
   "resourceSource": {
     "flow": "Flow",
     "global": "Global",
-    "marketplace": "Marketplace"
+    "marketplace": "流程仓库"
   },
   "resourceFilter": {
     "all": "全部",
     "agent": "Agent",
     "control": "Control",
     "provide": "Provide",
-    "marketplace": "Marketplace",
+    "marketplace": "流程仓库",
     "builtin": "AgentFlow",
     "workspace-agents": ".agents",
     "workspace-cursor": ".cursor"

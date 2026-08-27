@@ -1,5 +1,7 @@
 import {
+  BaseEdge,
   Background,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   NodeResizeControl,
@@ -9,9 +11,11 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  getBezierPath,
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStore,
   useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
@@ -19,15 +23,28 @@ import "@xyflow/react/dist/style.css";
 import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChartDisplayContent, MarkdownDisplayContent, TableDisplayContent } from "../displayRenderers.jsx";
+import { ChartDisplayContent, CodeDisplayContent, MarkdownDisplayContent, MermaidDisplayBlock, TableDisplayContent } from "../displayRenderers.jsx";
+import { SPACES_UI_ENABLED } from "../featureFlags.js";
 import { buildCanvasClipboard, buildInstancesForYaml, pasteCanvasClipboard, VALID_ROLES } from "../flowFormat.js";
-import { FLOW_NODE_TYPE, FlowNode } from "../FlowNode.jsx";
+import { FLOW_NODE_TYPE, FlowNode, FlowNodePortRail } from "../FlowNode.jsx";
 import { normalizeImages } from "../imageAttachments.js";
-import { cloneNodeIoDraftSlots, filterValidEdges, mergeNodeWithPalette, revealConnectedSlots } from "../mergeFlowNodes.js";
+import {
+  cloneNodeIoDraftSlots,
+  buildNodeUiInputBindings,
+  filterValidEdges,
+  mergeNodeWithPalette,
+  persistedNodeUiStatus,
+  revealConnectedSlots,
+  revealConnectedSlotsForEdges,
+  sanitizeRuntimeOutputsForCanvas,
+} from "../mergeFlowNodes.js";
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
+import WorkspaceRunAuditPanel from "../components/WorkspaceRunAuditPanel.jsx";
+import { stripAgentflowReceipt } from "../lib/composerRunPresentation.js";
 import LoadingState from "../components/LoadingState.jsx";
+import AiExplorationPanel from "../components/AiExplorationPanel.jsx";
 import {
   ComposerAssistantActivity,
   ComposerAssistantInput,
@@ -43,8 +60,10 @@ import {
   getHandleColor,
   getNodeSlotByHandle,
   getSlotConnectionLabel,
+  slotTypeCompatibility,
 } from "../nodeSchema.js";
-import { recordPipelineView } from "../pipelineViewPreference.js";
+import { flowUrlForView, recordPipelineView } from "../pipelineViewPreference.js";
+import { placeWorkspaceRelationLabel } from "../workspaceEdgeLabelPlacement.js";
 import {
   sortWorkflowIssueLinks,
   workflowIssueIsLogicalParent,
@@ -72,6 +91,7 @@ import {
   reconcileWorkspaceNodes,
   workspaceValueEqual,
 } from "../workspaceGraphDelta.js";
+import { layoutWorkspaceNodePositions } from "../../../../bin/lib/workspace-auto-layout.mjs";
 import {
   coalesceWorkspaceCanvasChanges,
   coalesceWorkspaceSaveRequest,
@@ -83,7 +103,9 @@ import {
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
+  workspaceResizePresentationSize,
   workspaceSaveBaselineAfterSuccess,
+  workspaceSyncIndicatorPresentation,
 } from "../workspaceSyncGuard.js";
 import {
   addSkillKeys,
@@ -95,101 +117,32 @@ import {
 } from "../skillCollections.js";
 import { useRoute } from "../routeContext.jsx";
 import { isEditableFocus, isQuestionMarkShortcut } from "../hotkeyUtils.js";
+import {
+  expandWorkspaceGroupPositionChanges,
+  expandWorkspaceGroupsToMembers,
+} from "../workspaceGroups.js";
+import {
+  buildWorkspaceSubflowProjection,
+  isRuntimeOnlyWhileInput,
+  workspaceSubflowCallRelations,
+  workspaceSubflowReturnNodeId,
+  workspaceSubflowStartNodeId,
+} from "../workspaceSubflowProjection.js";
+import {
+  activeSubflowCanvas,
+  addNodeToSubflow,
+  applySubflowBoundaryConnection,
+  createWhileSubflowScaffold,
+  reconcileSubflowCallOutputs,
+  removeSubflowOutput,
+  renameSubflowOutput,
+} from "../workspaceSubflowEditing.js";
 
 const WorkflowAssistantThread = lazy(() => import("../components/WorkflowAssistantThread.jsx"));
 
 const STORAGE_FALLBACK_KEY = "af:workspace-graph:v2";
 const WORKSPACE_SIDEBAR_COLLAPSED_STORAGE_PREFIX = "agentflow.workspace.sidebarCollapsed";
 const PALETTE_ORDER = ["DISPLAY", "CONTROL", "TOOL", "PROVIDE", "AGENT"];
-const HIDDEN_WORKSPACE_DEFS = new Set(["control_start", "control_end", "control_load_skills", "control_load_mcp", "control_cd_workspace", "control_user_workspace"]);
-const WORKSPACE_RUN_DEFINITION = {
-  id: "workspace_run",
-  displayName: "Run",
-  label: "Run",
-  description: "Run the downstream workspace subgraph connected from this node.",
-  type: "control",
-  inputs: [{ type: "node", name: "prev", default: "" }],
-  outputs: [{ type: "node", name: "next", default: "" }],
-};
-const WORKSPACE_SCHEDULED_RUN_DEFINITION = {
-  id: "workspace_scheduled_run",
-  displayName: "Scheduled Run",
-  label: "Scheduled Run",
-  description: "Run the downstream workspace subgraph on a schedule.",
-  type: "control",
-  inputs: [{ type: "node", name: "prev", default: "" }],
-  outputs: [{ type: "node", name: "next", default: "" }],
-};
-const WORKSPACE_LOAD_SKILLS_DEFINITION = {
-  id: "control_load_skills",
-  displayName: "Load Skills",
-  label: "Load Skills",
-  description: "Load the currently selected Workspace skill collection for downstream agent nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "skillKeys", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "skillsContext", default: "", showOnNode: true },
-  ],
-};
-const WORKSPACE_LOAD_MCP_DEFINITION = {
-  id: "control_load_mcp",
-  displayName: "Load MCP",
-  label: "Load MCP",
-  description: "Load selected Cursor MCP server tool manifests for downstream agent nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "serverNames", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "mcpContext", default: "", showOnNode: true },
-  ],
-};
-const WORKSPACE_LOAD_WORKSPACE_DEFINITION = {
-  id: "control_cd_workspace",
-  displayName: "加载知识库",
-  label: "加载知识库",
-  description: "Select one or more knowledge sources and pass knowledgeContext to downstream nodes.",
-  type: "control",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "path", default: "", showOnNode: false },
-    { type: "text", name: "label", default: "", showOnNode: false },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: true },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-    { type: "file", name: "cwd", default: "", showOnNode: false },
-  ],
-};
-const WORKSPACE_CONTEXT_RUN_DEFINITION = {
-  id: "workspace_one_click_task",
-  displayName: "一键任务",
-  label: "一键任务",
-  description: "输入任务，选择 Skills、workspace 上下文和输出类型后直接运行。",
-  type: "agent",
-  inputs: [
-    { type: "node", name: "prev", default: "" },
-    { type: "text", name: "skillKeys", default: "", showOnNode: false },
-    { type: "bool", name: "includeWorkspaceContext", default: "true", showOnNode: false },
-    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
-    { type: "text", name: "knowledgeContext", default: "", showOnNode: false },
-    { type: "text", name: "workspaceContext", default: "", showOnNode: false },
-  ],
-  outputs: [
-    { type: "node", name: "next", default: "" },
-    { type: "text", name: "content", default: "", showOnNode: true },
-    { type: "text", name: "displayType", default: "markdown", showOnNode: false },
-  ],
-};
 
 const WORKSPACE_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 const DEFAULT_WORKSPACE_NODE_WIDTH = 320;
@@ -203,6 +156,7 @@ const WORKSPACE_GROUP_PADDING = 52;
 const MIN_WORKSPACE_GROUP_WIDTH = 240;
 const MIN_WORKSPACE_GROUP_HEIGHT = 160;
 const DISPLAY_REF_PREFIX = "display-ref:";
+const DISPLAY_GROUP_REF_PREFIX = "display-group-ref:";
 const DEFAULT_WORKSPACE_SCHEDULE_CRON = "0 9 * * *";
 const DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE = "Asia/Shanghai";
 
@@ -221,6 +175,17 @@ function readFlowParamsFromUrl() {
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
     returnTo: returnTo === "/workflows" || returnTo.startsWith("/workflows?") ? returnTo : "",
     workflowDemo: sp.get("workflowDemo") === "1",
+    marketplacePreview: sp.get("marketplacePreview") === "1",
+    marketplaceKind: sp.get("marketplaceKind") || "flow",
+    marketplaceResourceId: sp.get("marketplaceResourceId") || "",
+    marketplaceVersion: sp.get("marketplaceVersion") || "",
+    marketplaceProjectFlow: sp.get("marketplaceProjectFlow") === "1",
+    marketplaceTitle: sp.get("marketplaceTitle") || "",
+    marketplaceAction: sp.get("marketplaceAction") || "",
+    marketplaceInstallFlowId: sp.get("marketplaceInstallFlowId") || "",
+    marketplaceTargetFlowId: sp.get("marketplaceTargetFlowId") || "",
+    marketplaceTargetFlowSource: sp.get("marketplaceTargetFlowSource") || "",
+    marketplaceTargetWorkspaceId: sp.get("marketplaceTargetWorkspaceId") || "",
   };
 }
 
@@ -234,6 +199,17 @@ function flowParamsQuery(params) {
   if (params.archived) q.set("archived", "1");
   if (params.returnTo) q.set("returnTo", params.returnTo);
   if (params.workflowDemo) q.set("workflowDemo", "1");
+  if (params.marketplacePreview) q.set("marketplacePreview", "1");
+  if (params.marketplaceKind) q.set("marketplaceKind", params.marketplaceKind);
+  if (params.marketplaceResourceId) q.set("marketplaceResourceId", params.marketplaceResourceId);
+  if (params.marketplaceVersion) q.set("marketplaceVersion", params.marketplaceVersion);
+  if (params.marketplaceProjectFlow) q.set("marketplaceProjectFlow", "1");
+  if (params.marketplaceTitle) q.set("marketplaceTitle", params.marketplaceTitle);
+  if (params.marketplaceAction) q.set("marketplaceAction", params.marketplaceAction);
+  if (params.marketplaceInstallFlowId) q.set("marketplaceInstallFlowId", params.marketplaceInstallFlowId);
+  if (params.marketplaceTargetFlowId) q.set("marketplaceTargetFlowId", params.marketplaceTargetFlowId);
+  if (params.marketplaceTargetFlowSource) q.set("marketplaceTargetFlowSource", params.marketplaceTargetFlowSource);
+  if (params.marketplaceTargetWorkspaceId) q.set("marketplaceTargetWorkspaceId", params.marketplaceTargetWorkspaceId);
   return q;
 }
 
@@ -309,7 +285,11 @@ function normalizeComposerRunSessionsForPersistence(sessions) {
       return {
         id,
         label: clipConversationText(session?.label || id, 120),
+        alias: clipConversationText(session?.alias || "", 120),
+        runNodeId: clipConversationText(session?.runNodeId || "", 160),
         status: status === "failed" ? "failed" : "done",
+        startedAt: Number(session?.startedAt || 0) || 0,
+        endedAt: Number(session?.endedAt || 0) || 0,
         messages,
       };
     })
@@ -505,6 +485,22 @@ function formatWorkspaceRunDuration(ms) {
   return `${minutes}m${seconds ? `${seconds}s` : ""}`;
 }
 
+function workspaceRunSessionOptionLabel(session) {
+  const label = String(session?.label || session?.runNodeId || "Run").trim();
+  const timestamp = Number(session?.startedAt || 0);
+  const time = Number.isFinite(timestamp) && timestamp > 0
+    ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(timestamp))
+    : "--:--:--";
+  const status = {
+    running: "运行中",
+    stopping: "停止中",
+    paused: "等待中",
+    failed: "失败",
+    done: "完成",
+  }[String(session?.status || "")] || String(session?.status || "未知");
+  return `${label} · ${time} · ${status}`;
+}
+
 function prdWorkflowPhaseLabel(phase) {
   const key = String(phase || "").trim().toLowerCase();
   const labels = {
@@ -649,7 +645,7 @@ function prdWorkflowActionTitle(item, index) {
 
 function prdWorkflowActionDetail(item) {
   if (!item || typeof item !== "object") return "";
-  return String(item.detail || item.description || item.summary || item.message || item.reason || "");
+  return String(item.detail || item.content || item.description || item.summary || item.message || item.reason || "");
 }
 
 function prdWorkflowActionCodeText(item) {
@@ -682,6 +678,10 @@ function prdWorkflowActionIssueLabel(item, fallback = "当前任务") {
 
 function prdWorkflowActionDisplayTitle(item, index) {
   const title = prdWorkflowActionTitle(item, index);
+  const explicitTitle = String(
+    item?.title || item?.label || item?.name || item?.actionLabel || item?.action_label || "",
+  ).trim();
+  if (explicitTitle) return explicitTitle;
   const status = prdWorkflowActionStatus(item?.status);
   const durableDone = prdWorkflowActionCountsAsDone(item);
   const stage = prdWorkflowStageKey(item);
@@ -703,6 +703,8 @@ function prdWorkflowActionDisplayTitle(item, index) {
 
 function prdWorkflowActionDisplayDetail(item) {
   if (!item || typeof item !== "object") return "";
+  const raw = prdWorkflowActionDetail(item);
+  if (raw) return raw;
   const status = prdWorkflowActionStatus(item.status);
   const truth = prdWorkflowActionTruth(item);
   const durableDone = prdWorkflowActionCountsAsDone(item);
@@ -737,10 +739,7 @@ function prdWorkflowActionDisplayDetail(item) {
   if (/implementation_ready/.test(text)) {
     return "方案文档和 GitLab Issue 已就绪，等待开始实现。";
   }
-  const raw = prdWorkflowActionDetail(item);
-  if (!raw) return "";
-  if (raw.length > 180 && links.length) return "相关结果和产物已更新；可从下方链接查看。";
-  return raw;
+  return "";
 }
 
 function prdWorkflowActionTime(item) {
@@ -1791,6 +1790,23 @@ function workspaceConnectionCompatible(connection, nodes) {
   return Boolean(srcSlot && tgtSlot && areSlotsCompatible(srcSlot, tgtSlot));
 }
 
+function workspaceConnectionErrorMessage(connection, nodes) {
+  const source = String(connection?.source || "");
+  const target = String(connection?.target || "");
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const srcSlot = getNodeSlotByHandle(nodeById.get(source), connection?.sourceHandle || "output-0", "source");
+  const tgtSlot = getNodeSlotByHandle(nodeById.get(target), connection?.targetHandle || "input-0", "target");
+  if (!srcSlot || !tgtSlot) return "端口不存在，已取消连线";
+  const compatibility = slotTypeCompatibility(srcSlot.type, tgtSlot.type);
+  if (!compatibility.compatible) {
+    const hint = compatibility.source === "text" && compatibility.target === "json"
+      ? "；请先插入 Parse JSON 节点"
+      : "；请使用同类型引脚或显式转换";
+    return `不能连接 ${compatibility.source} → ${compatibility.target}${hint}`;
+  }
+  return `端口语义不匹配：${getSlotConnectionLabel(srcSlot)} → ${getSlotConnectionLabel(tgtSlot)}`;
+}
+
 function buildWorkspaceConnectionDraft(params, nodes) {
   const nodeId = String(params?.nodeId || "");
   const handleId = String(params?.handleId || "");
@@ -1853,7 +1869,7 @@ function buildWorkspaceExistingConnectionCandidates(nodes, edges, draft) {
   const candidates = [];
   const wantInputs = draft.handleType === "source";
   for (const node of nodes || []) {
-    if (!node || node.id === draft.nodeId) continue;
+    if (!node || node.id === draft.nodeId || node.data?.isSubflowBoundary) continue;
     const slots = Array.isArray(wantInputs ? node.data?.inputs : node.data?.outputs)
       ? (wantInputs ? node.data.inputs : node.data.outputs)
       : [];
@@ -2098,6 +2114,9 @@ function normalizeWorkspaceGroups(raw) {
         id,
         title: String(group?.title || workspaceGroupTitle(index)).trim() || workspaceGroupTitle(index),
         color: String(group?.color || "purple").trim() || "purple",
+        nodeIds: Array.from(new Set((Array.isArray(group?.nodeIds) ? group.nodeIds : [])
+          .map((nodeId) => String(nodeId || "").trim())
+          .filter(Boolean))),
         x,
         y,
         width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width)),
@@ -2107,8 +2126,52 @@ function normalizeWorkspaceGroups(raw) {
     .filter(Boolean);
 }
 
-function workspaceGroupNodesFromGraph(graph) {
+function inferredWorkspaceGroupNodeIds(group, graph) {
+  if (Array.isArray(group?.nodeIds) && group.nodeIds.length > 0) return group.nodeIds;
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object" ? graph.ui.nodePositions : {};
+  const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
+  return Object.keys(instances).filter((nodeId) => {
+    const position = positions[nodeId];
+    if (!position || !Number.isFinite(Number(position.x)) || !Number.isFinite(Number(position.y))) return false;
+    const size = sizes[nodeId] || {};
+    const centerX = Number(position.x) + Math.max(1, Number(size.width) || DEFAULT_WORKSPACE_NODE_WIDTH) / 2;
+    const centerY = Number(position.y) + Math.max(1, Number(size.height) || MIN_WORKSPACE_NODE_HEIGHT) / 2;
+    return centerX >= group.x && centerX <= group.x + group.width && centerY >= group.y && centerY <= group.y + group.height;
+  });
+}
+
+function workspaceGroupNodesFromGraph(graph, resolvedPositions = {}, resolvedSizes = {}, hiddenNodeIds = new Set()) {
   const groups = normalizeWorkspaceGroups(graph?.ui?.groups);
+  const explicitIds = new Set(groups.map((group) => group.id));
+  for (const [subflowId, subflow] of Object.entries(graph?.subflows || {})) {
+    const id = `subflow-group:${subflowId}`;
+    if (explicitIds.has(id)) continue;
+    const nodeIds = (subflow?.nodeIds || []).filter((nodeId) => (
+      resolvedPositions[nodeId] && !hiddenNodeIds.has(String(nodeId))
+    ));
+    if (!nodeIds.length) continue;
+    const bounds = nodeIds.reduce((acc, nodeId) => {
+      const position = resolvedPositions[nodeId] || { x: 0, y: 0 };
+      const size = resolvedSizes[nodeId] || { width: DEFAULT_WORKSPACE_NODE_WIDTH, height: MIN_WORKSPACE_NODE_HEIGHT };
+      return {
+        minX: Math.min(acc.minX, Number(position.x) || 0),
+        minY: Math.min(acc.minY, Number(position.y) || 0),
+        maxX: Math.max(acc.maxX, (Number(position.x) || 0) + (Number(size.width) || DEFAULT_WORKSPACE_NODE_WIDTH)),
+        maxY: Math.max(acc.maxY, (Number(position.y) || 0) + (Number(size.height) || MIN_WORKSPACE_NODE_HEIGHT)),
+      };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    groups.push({
+      id,
+      title: `SUBFLOW · ${subflow.label || subflowId}`,
+      color: "purple",
+      nodeIds,
+      x: bounds.minX - WORKSPACE_GROUP_PADDING,
+      y: bounds.minY - WORKSPACE_GROUP_PADDING,
+      width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, bounds.maxX - bounds.minX + WORKSPACE_GROUP_PADDING * 2),
+      height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, bounds.maxY - bounds.minY + WORKSPACE_GROUP_PADDING * 2),
+    });
+  }
   return groups.map((group) => ({
     id: group.id,
     type: FLOW_NODE_TYPE,
@@ -2117,13 +2180,16 @@ function workspaceGroupNodesFromGraph(graph) {
     height: group.height,
     selected: false,
     draggable: true,
+    dragHandle: ".af-work-group-node__drag-handle",
     selectable: true,
     zIndex: 0,
     data: {
       isWorkspaceGroup: true,
+      isSubflowGroup: group.id.startsWith("subflow-group:"),
       label: group.title,
       title: group.title,
       color: group.color,
+      nodeIds: inferredWorkspaceGroupNodeIds(group, graph).filter((nodeId) => !hiddenNodeIds.has(String(nodeId))),
       nodeSize: { width: group.width, height: group.height },
     },
   }));
@@ -2191,24 +2257,109 @@ function workspaceNodeLayoutSignature(node) {
 function workspaceHydratedNodeRuntimeEqual(a, b) {
   if (!a || !b) return false;
   return a.selected === b.selected &&
+    a.hasConnections === b.hasConnections &&
     a.isExecuting === b.isExecuting &&
     a.nodeStatus === b.nodeStatus &&
     a.nodeElapsed === b.nodeElapsed &&
+    a.nodeRunDetail === b.nodeRunDetail &&
     a.optimizingRun === b.optimizingRun &&
     a.scheduledRunState === b.scheduledRunState &&
     a.nodeChatActive === b.nodeChatActive &&
-    a.nodeChat === b.nodeChat;
+    a.nodeChat === b.nodeChat &&
+    a.callRelationSelected === b.callRelationSelected &&
+    a.nodeUiBindings === b.nodeUiBindings;
 }
 
 const EMPTY_DISPLAY_SOURCE_NODES = new Map();
 const EMPTY_DISPLAY_CANVAS_NODES = [];
 
-function graphToFlow(graph, palette) {
+function workspaceVirtualSubflowCallEdges(instances, subflows, edges = []) {
+  return workspaceSubflowCallRelations(instances, subflows, edges).flatMap((relation) => {
+    const subflow = subflows?.[relation.subflowId];
+    const rootId = (subflow?.roots || [])[0];
+    if (!rootId || !instances?.[rootId]) return [];
+    const condition = relation.kind === "while" && relation.role === "condition";
+    const color = condition ? "#f6bd60" : "#9d83ff";
+    const verb = relation.kind === "call" ? "calls" : condition ? "checks" : "runs";
+    const mappingSignature = JSON.stringify([relation.inputMappings, relation.outputMappings]);
+    return [{
+      id: relation.id,
+      type: "workspaceSubflowCall",
+      source: relation.callerId,
+      target: workspaceSubflowStartNodeId(relation.subflowId),
+      sourceHandle: relation.kind === "call" ? "subflow-call" : `while-${relation.role}`,
+      targetHandle: "input-0",
+      animated: true,
+      interactionWidth: 28,
+      style: { stroke: color, strokeDasharray: "7 6", strokeWidth: 2 },
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      data: {
+        virtualSubflowCall: true,
+        virtualWhileSubflow: relation.kind === "while",
+        whileRole: relation.kind === "while" ? relation.role : "",
+        verb,
+        color,
+        callerLabel: relation.callerLabel,
+        subflowLabel: relation.subflowLabel,
+        inputMappings: relation.inputMappings,
+        outputMappings: relation.outputMappings,
+        returnNodeId: workspaceSubflowReturnNodeId(relation.subflowId),
+        mappingSignature,
+      },
+    }];
+  });
+}
+
+function reconcileWorkspaceVirtualSubflowCallEdges(edges, instances, subflows) {
+  const current = Array.isArray(edges) ? edges : [];
+  const expected = workspaceVirtualSubflowCallEdges(instances, subflows, current);
+  const existingVirtual = current.filter((edge) => edge?.data?.virtualSubflowCall);
+  const alreadyCurrent = existingVirtual.length === expected.length && expected.every((edge) => (
+    existingVirtual.some((item) => item.id === edge.id &&
+      item.source === edge.source &&
+      item.target === edge.target &&
+      item.sourceHandle === edge.sourceHandle &&
+      item.targetHandle === edge.targetHandle &&
+      item.data?.mappingSignature === edge.data?.mappingSignature)
+  ));
+  if (alreadyCurrent) return current;
+  const existingById = new Map(existingVirtual.map((edge) => [edge.id, edge]));
+  return [
+    ...current.filter((edge) => !edge?.data?.virtualSubflowCall),
+    ...expected.map((edge) => ({ ...edge, selected: Boolean(existingById.get(edge.id)?.selected) })),
+  ];
+}
+
+function workspaceSubflowsFromSaveResult(savedSubflows, submittedSubflows) {
+  const saved = savedSubflows && typeof savedSubflows === "object" && !Array.isArray(savedSubflows)
+    ? savedSubflows
+    : null;
+  const submitted = submittedSubflows && typeof submittedSubflows === "object" && !Array.isArray(submittedSubflows)
+    ? submittedSubflows
+    : {};
+  // A response from an older/partial server must not erase contracts that were present
+  // in the graph just submitted. An actually empty submitted graph remains empty.
+  if (saved && (Object.keys(saved).length > 0 || Object.keys(submitted).length === 0)) return saved;
+  return submitted;
+}
+
+function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const instances = sanitizeWorkspaceRuntimeOutputs(rawInstances);
+  const instances = preserveRuntimeOutputs ? rawInstances : sanitizeRuntimeOutputsForCanvas(rawInstances, palette);
   const rawEdges = Array.isArray(graph?.edges) ? graph.edges : [];
-  const positions = graph?.ui?.nodePositions && typeof graph.ui.nodePositions === "object" ? graph.ui.nodePositions : {};
+  // 缺坐标通常来自 AI 新写的 DSL。统一走 CLI 同款确定性排版；原有坐标保持不动，避免打开
+  // 页面时覆盖用户手工拖拽结果。
+  const positions = layoutWorkspaceNodePositions(graph, { preserveExisting: true });
   const sizes = graph?.ui?.nodeSizes && typeof graph.ui.nodeSizes === "object" ? graph.ui.nodeSizes : {};
+  const subflowProjection = buildWorkspaceSubflowProjection({
+    instances,
+    subflows: graph?.subflows || {},
+    edges: rawEdges,
+    positions,
+    sizes,
+    boundaryPositions: graph?.ui?.subflowBoundaryPositions || {},
+  });
+  const hiddenSubflowInputNodeIds = new Set(subflowProjection.hiddenNodeIds || []);
   const nodeIds = new Set(Object.keys(instances));
   for (const edge of rawEdges) {
     if (edge?.source) nodeIds.add(String(edge.source));
@@ -2224,19 +2375,23 @@ function graphToFlow(graph, palette) {
     const runtimeScript = scriptFromMarketplaceRuntime(def);
     const pos = positions[id] && typeof positions[id].x === "number" && typeof positions[id].y === "number"
       ? positions[id]
-      : { x: 320 + nodeIds.size * 20, y: 180 + nodeIds.size * 12 };
+      : { x: 120, y: 360 };
     const isDisplay = Boolean(workspaceDisplayKindFromData({ definitionId: runtimeDefinitionId, inputs: inst.input, outputs: inst.output }));
     const rawSize = sizes[id] && typeof sizes[id].width === "number" && typeof sizes[id].height === "number"
       ? { width: sizes[id].width, height: sizes[id].height }
       : null;
     const size = normalizeWorkspaceNodeSize(rawSize, { display: isDisplay });
-    const useSize = size && !isOneClickTaskDefinitionId(runtimeDefinitionId);
+    const useSize = size &&
+      !isOneClickTaskDefinitionId(runtimeDefinitionId) &&
+      runtimeDefinitionId !== "control_subflow_call";
     return {
       id,
       type: FLOW_NODE_TYPE,
       position: pos,
+      ...(hiddenSubflowInputNodeIds.has(id) ? { hidden: true, selectable: false, draggable: false } : {}),
       ...(useSize ? { width: size.width, height: size.height } : {}),
       data: {
+        ...(hiddenSubflowInputNodeIds.has(id) ? { isSubflowInputProxy: true } : {}),
         label: inst.label || labelForDefinition(def) || labelForDefinition(runtimeDef) || id,
         definitionId: runtimeDefinitionId,
         ...(marketplaceRef ? { marketplaceRef } : {}),
@@ -2250,14 +2405,73 @@ function graphToFlow(graph, palette) {
         scriptRef: inst.scriptRef || "",
         implementationRef: inst.implementationRef || "",
         implementationMode: inst.implementationMode || "",
+        ...(inst.subflowId && graph?.subflows?.[inst.subflowId] ? {
+          subflowInfo: {
+            id: inst.subflowId,
+            label: graph.subflows[inst.subflowId].label || inst.subflowId,
+            nodeCount: (graph.subflows[inst.subflowId].nodeIds || []).length,
+            inputs: Object.keys(graph.subflows[inst.subflowId].inputs || {}),
+            outputs: Object.keys(graph.subflows[inst.subflowId].outputs || {}),
+          },
+        } : {}),
+        ...(runtimeDefinitionId === "control_while" && (inst.conditionSubflowId || inst.bodySubflowId) ? {
+          whileSubflowInfo: {
+            condition: inst.conditionSubflowId && graph?.subflows?.[inst.conditionSubflowId] ? {
+              id: inst.conditionSubflowId,
+              label: graph.subflows[inst.conditionSubflowId].label || inst.conditionSubflowId,
+              nodeCount: (graph.subflows[inst.conditionSubflowId].nodeIds || []).filter((nodeId) => (
+                String(instances?.[nodeId]?.definitionId || "") !== "workspace_subflow_input"
+              )).length,
+              inputs: Object.keys(graph.subflows[inst.conditionSubflowId].inputs || {})
+                .filter((name) => !isRuntimeOnlyWhileInput(name)),
+              outputs: ["decision", "summary"],
+            } : null,
+            body: inst.bodySubflowId && graph?.subflows?.[inst.bodySubflowId] ? {
+              id: inst.bodySubflowId,
+              label: graph.subflows[inst.bodySubflowId].label || inst.bodySubflowId,
+              nodeCount: (graph.subflows[inst.bodySubflowId].nodeIds || []).filter((nodeId) => (
+                String(instances?.[nodeId]?.definitionId || "") !== "workspace_subflow_input"
+              )).length,
+              inputs: Object.keys(graph.subflows[inst.bodySubflowId].inputs || {})
+                .filter((name) => !isRuntimeOnlyWhileInput(name)),
+              outputs: ["state", "summary"],
+            } : null,
+          },
+        } : {}),
         displayReloadKey: inst.displayReloadKey || "",
         ...(useSize ? { nodeSize: size } : {}),
         ...(isDisplay && useSize ? { displaySize: size } : {}),
       },
     };
   });
-  const merged = rawNodes.map((node) => mergeNodeWithPalette(node, instances, palette));
-  const groupNodes = workspaceGroupNodesFromGraph(graph);
+  const runtimeContextHiddenInputs = new Set(subflowProjection.hiddenInputHandles || []);
+  const merged = rawNodes.map((node) => {
+    const mergedNode = mergeNodeWithPalette(node, instances, palette);
+    const inputs = Array.isArray(mergedNode.data?.inputs)
+      ? mergedNode.data.inputs.map((slot, index) => (
+          runtimeContextHiddenInputs.has(`${mergedNode.id}\u0000input-${index}`)
+            ? { ...slot, showOnNode: false }
+            : slot
+        ))
+      : mergedNode.data?.inputs;
+    return inputs === mergedNode.data?.inputs
+      ? mergedNode
+      : { ...mergedNode, data: { ...mergedNode.data, inputs } };
+  });
+  const groupNodes = workspaceGroupNodesFromGraph(graph, positions, sizes, hiddenSubflowInputNodeIds).map((node) => {
+    if (!node.data?.isSubflowGroup) return node;
+    const subflowId = String(node.id).replace(/^subflow-group:/, "");
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        nodeIds: Array.from(new Set([
+          ...(node.data?.nodeIds || []),
+          ...(subflowProjection.groupMemberIds[subflowId] || []),
+        ])),
+      },
+    };
+  });
   const edges = rawEdges
     .filter((e) => e?.source && e?.target)
     .filter((e) => !groupNodes.some((node) => node.id === String(e.source) || node.id === String(e.target)))
@@ -2267,9 +2481,34 @@ function graphToFlow(graph, palette) {
       target: String(e.target),
       sourceHandle: e.sourceHandle ?? undefined,
       targetHandle: e.targetHandle ?? undefined,
+      hidden: hiddenSubflowInputNodeIds.has(String(e.source)) || hiddenSubflowInputNodeIds.has(String(e.target)),
       markerEnd: { type: MarkerType.ArrowClosed },
     }));
-  const nodes = [...groupNodes, ...merged];
+  edges.push(...subflowProjection.edges.map((edge) => ({
+    ...edge,
+    style: edge.data?.boundaryEdgeKind === "control"
+      ? { stroke: "#ffad42", strokeWidth: 2.2 }
+      : { stroke: "#4da6ff", strokeWidth: 2 },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: edge.data?.boundaryEdgeKind === "control" ? "#ffad42" : "#4da6ff",
+    },
+    selectable: false,
+    deletable: false,
+  })));
+  edges.push(...workspaceVirtualSubflowCallEdges(instances, graph?.subflows || {}, rawEdges));
+  // 首次加载的边和用户刚拉出的边遵守同一条规则：边存在，端点 handle 就必须可见。
+  // 否则 React Flow 会保留语义边，但因为端点没有渲染而完全画不出来。
+  const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges.filter((edge) => !edge.hidden));
+  const nodes = expandWorkspaceGroupsToMembers([
+    ...groupNodes,
+    ...edgeAwareNodes,
+    ...subflowProjection.nodes,
+  ], {
+    padding: WORKSPACE_GROUP_PADDING,
+    minWidth: MIN_WORKSPACE_GROUP_WIDTH,
+    minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
+  });
   return { nodes, edges: filterValidEdges(edges, nodes), instances };
 }
 
@@ -2280,6 +2519,39 @@ function displayRefNodeId(sourceId) {
 function sourceIdFromDisplayRefId(nodeId) {
   const text = String(nodeId || "");
   return text.startsWith(DISPLAY_REF_PREFIX) ? text.slice(DISPLAY_REF_PREFIX.length) : text;
+}
+
+function displayGroupRefNodeId(groupId) {
+  return `${DISPLAY_GROUP_REF_PREFIX}${groupId}`;
+}
+
+function displayGroupBounds(group, displayPage, sourceNodeById) {
+  const memberIds = (Array.isArray(group?.nodeIds) ? group.nodeIds : [])
+    .filter((id) => displayPage.nodeIds.includes(id) && sourceNodeById.has(id));
+  if (memberIds.length === 0) return null;
+  const bounds = memberIds.reduce((acc, id) => {
+    const sourceNode = sourceNodeById.get(id);
+    const fallbackSize = persistedWorkspaceNodeSize(sourceNode) || { width: 520, height: 320 };
+    const size = normalizeWorkspaceNodeSize(displayPage.nodeSizes[id] || fallbackSize, { display: true }) || fallbackSize;
+    const position = displayPage.nodePositions[id] || sourceNode?.position || { x: 0, y: 0 };
+    return {
+      minX: Math.min(acc.minX, Number(position.x) || 0),
+      minY: Math.min(acc.minY, Number(position.y) || 0),
+      maxX: Math.max(acc.maxX, (Number(position.x) || 0) + size.width),
+      maxY: Math.max(acc.maxY, (Number(position.y) || 0) + size.height),
+    };
+  }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  return {
+    memberIds,
+    position: {
+      x: bounds.minX - WORKSPACE_GROUP_PADDING,
+      y: bounds.minY - WORKSPACE_GROUP_PADDING,
+    },
+    size: {
+      width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, bounds.maxX - bounds.minX + WORKSPACE_GROUP_PADDING * 2),
+      height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, bounds.maxY - bounds.minY + WORKSPACE_GROUP_PADDING * 2),
+    },
+  };
 }
 
 function normalizeCanvasViewport(raw) {
@@ -2460,6 +2732,45 @@ function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
   };
 }
 
+function workspaceElementVerticalInsets(element) {
+  if (!element || typeof window === "undefined") return 0;
+  const style = window.getComputedStyle(element);
+  return [
+    style.paddingTop,
+    style.paddingBottom,
+    style.borderTopWidth,
+    style.borderBottomWidth,
+  ].reduce((total, value) => total + (Number.parseFloat(value) || 0), 0);
+}
+
+function workspacePortRailIntrinsicHeight(rail) {
+  if (!rail || typeof window === "undefined") return 0;
+  const rows = Array.from(rail.querySelectorAll(":scope > .af-flow-node__port-row"));
+  if (!rows.length) return 0;
+  const style = window.getComputedStyle(rail);
+  const gap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const rowsHeight = rows.reduce((total, row) => total + row.getBoundingClientRect().height, 0);
+  return rowsHeight + (gap * Math.max(0, rows.length - 1)) + workspaceElementVerticalInsets(rail);
+}
+
+function workspaceWhileIntrinsicHeight(card) {
+  if (!card) return 0;
+  const chrome = card.querySelector(":scope > .af-flow-node__chrome");
+  const body = card.querySelector(":scope > .af-flow-node__body");
+  const titleWrap = body?.querySelector(":scope > .af-flow-node__title-wrap");
+  const kit = titleWrap?.querySelector(":scope > .af-node-ui-kit");
+  if (!chrome || !body || !titleWrap || !kit) return 0;
+  const chromeHeight = chrome.getBoundingClientRect().height;
+  const kitHeight = kit.scrollHeight;
+  const titleHeight = kitHeight + workspaceElementVerticalInsets(titleWrap);
+  const railsHeight = Math.max(
+    0,
+    ...Array.from(body.querySelectorAll(":scope > .af-flow-node__ports")).map(workspacePortRailIntrinsicHeight),
+  );
+  const bodyHeight = Math.max(titleHeight, railsHeight) + workspaceElementVerticalInsets(body);
+  return Math.ceil(chromeHeight + bodyHeight + 2);
+}
+
 function normalizeWorkspaceDisplaySize(size) {
   const normalized = normalizeWorkspaceNodeSize(size, { display: true });
   if (!normalized) return null;
@@ -2494,11 +2805,15 @@ function persistedWorkspaceNodeSize(node) {
   return normalizeWorkspaceNodeSize({ width, height }, { display: isDisplay });
 }
 
-function flowToGraph(nodes, edges, instances) {
+function flowToGraph(nodes, edges, instances, subflows = {}) {
   const regularNodes = (nodes || []).filter((node) => !isWorkspaceGroupNode(node));
+  const persistentNodes = regularNodes.filter((node) => !node?.data?.isSubflowBoundary);
+  const subflowBoundaryNodes = regularNodes.filter((node) => node?.data?.isSubflowBoundary);
   const groupNodes = (nodes || []).filter(isWorkspaceGroupNode);
-  const graphInstances = sanitizeWorkspaceRuntimeOutputs(buildInstancesForYaml(regularNodes, instances || {}));
-  const graphEdges = edges.map((edge) => ({
+  const graphInstances = sanitizeWorkspaceRuntimeOutputsForSave(buildInstancesForYaml(persistentNodes, instances || {}));
+  const graphEdges = edges.filter((edge) => (
+    !edge?.data?.virtualSubflowCall && !edge?.data?.virtualSubflowBoundary
+  )).map((edge) => ({
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle ?? null,
@@ -2508,11 +2823,18 @@ function flowToGraph(nodes, edges, instances) {
   ));
   const nodePositions = {};
   const nodeSizes = {};
+  const subflowBoundaryPositions = {};
   const groups = [];
-  for (const node of regularNodes) {
+  for (const node of persistentNodes) {
     nodePositions[node.id] = { x: node.position?.x || 0, y: node.position?.y || 0 };
     const size = persistedWorkspaceNodeSize(node);
     if (size) nodeSizes[node.id] = size;
+  }
+  for (const node of subflowBoundaryNodes) {
+    subflowBoundaryPositions[node.id] = {
+      x: Number(node.position?.x || 0),
+      y: Number(node.position?.y || 0),
+    };
   }
   for (const node of groupNodes) {
     const width = Number(node.data?.nodeSize?.width || node.width || node.measured?.width || 0);
@@ -2521,31 +2843,43 @@ function flowToGraph(nodes, edges, instances) {
       id: node.id,
       title: String(node.data?.title || node.data?.label || "Group"),
       color: String(node.data?.color || "purple"),
+      nodeIds: Array.from(new Set((Array.isArray(node.data?.nodeIds) ? node.data.nodeIds : [])
+        .map((nodeId) => String(nodeId || "").trim())
+        .filter((nodeId) => persistentNodes.some((regularNode) => regularNode.id === nodeId)))),
       x: Number(node.position?.x || 0),
       y: Number(node.position?.y || 0),
       width: Math.max(MIN_WORKSPACE_GROUP_WIDTH, Math.round(width || MIN_WORKSPACE_GROUP_WIDTH)),
       height: Math.max(MIN_WORKSPACE_GROUP_HEIGHT, Math.round(height || MIN_WORKSPACE_GROUP_HEIGHT)),
     });
   }
-  return { version: 1, instances: graphInstances, edges: graphEdges, ui: { nodePositions, nodeSizes, groups } };
+  return {
+    version: 1,
+    instances: graphInstances,
+    edges: graphEdges,
+    subflows,
+    ui: {
+      nodePositions,
+      nodeSizes,
+      groups,
+      ...(Object.keys(subflowBoundaryPositions).length ? { subflowBoundaryPositions } : {}),
+    },
+  };
 }
 
-function sanitizeWorkspaceRuntimeOutputs(instances) {
+// Design saves must not echo stale runtime outputs back to the server. Runtime state is merged
+// separately there; this is intentionally stricter than the Node UI-aware canvas loader.
+function sanitizeWorkspaceRuntimeOutputsForSave(instances) {
   const next = {};
   for (const [id, instance] of Object.entries(instances || {})) {
     const definitionId = String(instance?.definitionId || id);
-    const shouldKeepOutputValues = Boolean(displayKind(definitionId)) || definitionId.startsWith("provide_");
-    if (shouldKeepOutputValues || !Array.isArray(instance?.output)) {
+    const keepAll = Boolean(displayKind(definitionId)) || definitionId.startsWith("provide_");
+    if (keepAll || !Array.isArray(instance?.output)) {
       next[id] = instance;
       continue;
     }
     next[id] = {
       ...instance,
-      output: instance.output.map((slot) => ({
-        ...slot,
-        value: "",
-        default: "",
-      })),
+      output: instance.output.map((slot) => ({ ...slot, value: "", default: "" })),
     };
   }
   return next;
@@ -2554,6 +2888,7 @@ function sanitizeWorkspaceRuntimeOutputs(instances) {
 function displayKind(definitionId) {
   const id = String(definitionId || "");
   if (id === "display_markdown") return "markdown";
+  if (id === "display_code") return "code";
   if (id === "display_mermaid") return "mermaid";
   if (id === "display_ascii") return "ascii";
   if (id === "display_html") return "html";
@@ -2601,6 +2936,7 @@ function displayTextFilePath(value, kind = "") {
     html: new Set(["html", "htm"]),
     react: new Set(["json", "jsx", "tsx", "js", "txt"]),
     markdown: new Set(["md", "markdown", "txt"]),
+    code: new Set(["txt", "js", "jsx", "mjs", "cjs", "ts", "tsx", "py", "kt", "kts", "java", "go", "rs", "sh", "bash", "zsh", "json", "yaml", "yml", "xml", "html", "htm", "css", "scss", "sql", "md"]),
     mermaid: new Set(["mmd", "mermaid", "txt"]),
     ascii: new Set(["txt", "log"]),
     chart: new Set(["json"]),
@@ -2994,6 +3330,7 @@ function displayAltText(data) {
 }
 
 function displayIcon(kind) {
+  if (kind === "code") return "code";
   if (kind === "mermaid") return "account_tree";
   if (kind === "ascii") return "notes";
   if (kind === "html") return "html";
@@ -3002,89 +3339,6 @@ function displayIcon(kind) {
   if (kind === "chart") return "bar_chart";
   if (kind === "table") return "table";
   return "article";
-}
-
-function parseMermaidFlowchart(code) {
-  const lines = String(code || "").split(/\r?\n/).map((line) => line.replace(/%%.*$/, "").trim()).filter(Boolean);
-  const nodes = new Map();
-  const edges = [];
-  let direction = "TD";
-  const ensure = (id, label = "") => {
-    const clean = String(id || "").replace(/[^A-Za-z0-9_]/g, "_") || `N${nodes.size + 1}`;
-    if (!nodes.has(clean)) nodes.set(clean, { id: clean, label: label || clean });
-    else if (label) nodes.get(clean).label = label;
-    return clean;
-  };
-  const parseEndpoint = (raw) => {
-    const text = String(raw || "").trim().replace(/[;,]+$/, "");
-    const match = text.match(/^([A-Za-z][A-Za-z0-9_]*)(?:\[(.+?)\]|\((.+?)\)|\{(.+?)\})?$/);
-    if (!match) return ensure(text.replace(/[^A-Za-z0-9_]/g, "_"), text);
-    return ensure(match[1], match[2] || match[3] || match[4] || match[1]);
-  };
-  for (const line of lines) {
-    const dir = line.match(/^(graph|flowchart)\s+(TD|TB|BT|LR|RL)\b/i);
-    if (dir) {
-      direction = dir[2].toUpperCase();
-      continue;
-    }
-    const edge = line.match(/^(.+?)\s*-{1,2}>+\s*(.+)$/);
-    if (edge) {
-      edges.push({ from: parseEndpoint(edge[1]), to: parseEndpoint(edge[2]) });
-      continue;
-    }
-    parseEndpoint(line);
-  }
-  return { nodes: Array.from(nodes.values()), edges, direction };
-}
-
-function MermaidPreview({ code }) {
-  const graph = useMemo(() => parseMermaidFlowchart(code), [code]);
-  if (!String(code || "").trim()) return null;
-  const horizontal = graph.direction === "LR" || graph.direction === "RL";
-  const nodeW = 142;
-  const nodeH = 44;
-  const gapX = horizontal ? 96 : 32;
-  const gapY = horizontal ? 30 : 68;
-  const positions = new Map();
-  graph.nodes.forEach((node, idx) => {
-    positions.set(node.id, {
-      x: 24 + (horizontal ? idx * (nodeW + gapX) : (idx % 3) * (nodeW + gapX)),
-      y: 24 + (horizontal ? (idx % 3) * (nodeH + gapY) : idx * (nodeH + gapY)),
-    });
-  });
-  const maxX = Math.max(360, ...Array.from(positions.values()).map((p) => p.x + nodeW + 24));
-  const maxY = Math.max(180, ...Array.from(positions.values()).map((p) => p.y + nodeH + 24));
-  return (
-    <div className="af-work-node__mermaid-preview">
-      <svg viewBox={`0 0 ${maxX} ${maxY}`} role="img" aria-label="Mermaid preview">
-        <defs>
-          <marker id="af-work-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-        </defs>
-        {graph.edges.map((edge, idx) => {
-          const a = positions.get(edge.from);
-          const b = positions.get(edge.to);
-          if (!a || !b) return null;
-          const d = horizontal
-            ? `M ${a.x + nodeW} ${a.y + nodeH / 2} C ${(a.x + b.x + nodeW) / 2} ${a.y + nodeH / 2}, ${(a.x + b.x + nodeW) / 2} ${b.y + nodeH / 2}, ${b.x} ${b.y + nodeH / 2}`
-            : `M ${a.x + nodeW / 2} ${a.y + nodeH} C ${a.x + nodeW / 2} ${a.y + nodeH + 28}, ${b.x + nodeW / 2} ${b.y - 28}, ${b.x + nodeW / 2} ${b.y}`;
-          return <path key={`${edge.from}-${edge.to}-${idx}`} className="af-work-node__mermaid-edge" d={d} markerEnd="url(#af-work-arrow)" />;
-        })}
-        {graph.nodes.map((node) => {
-          const p = positions.get(node.id);
-          return (
-            <g key={node.id}>
-              <rect className="af-work-node__mermaid-box" x={p.x} y={p.y} width={nodeW} height={nodeH} rx="8" />
-              <text className="af-work-node__mermaid-text" x={p.x + nodeW / 2} y={p.y + nodeH / 2 + 5} textAnchor="middle">
-                {node.label.slice(0, 22)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
 }
 
 function VisibleScrollFrame({ className = "", children }) {
@@ -3181,7 +3435,7 @@ function VisibleScrollFrame({ className = "", children }) {
   );
 }
 
-function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
+function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, readingMode = false, interactiveMermaid = false }) {
   const kind = workspaceDisplayKindFromData(data);
   const rawContent = displayContent(data);
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
@@ -3253,7 +3507,24 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
   if (kind === "markdown") {
     return (
       <VisibleScrollFrame className="af-work-display-body af-work-display-body--markdown">
-        <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+        {readingMode ? (
+          <article className="af-markdown-reading-surface">
+            <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+          </article>
+        ) : (
+          <MarkdownDisplayContent content={content} basePath={filePath} resolveSrc={(src, opts) => workspaceRawFileUrl(src, flowParams, opts)} />
+        )}
+      </VisibleScrollFrame>
+    );
+  }
+  if (kind === "code") {
+    const inputSlots = data?.inputs || data?.input || [];
+    const language = workspaceSlotConfigValue(inputSlots, "language", "");
+    const fileName = workspaceSlotConfigValue(inputSlots, "fileName", "") || (filePath ? filePath.split("/").pop() : "");
+    const defaultWrap = ["true", "1", "yes", "on"].includes(workspaceSlotConfigValue(inputSlots, "wrap", "false").toLowerCase());
+    return (
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--code">
+        <CodeDisplayContent content={content} language={language} fileName={fileName} defaultWrap={defaultWrap} />
       </VisibleScrollFrame>
     );
   }
@@ -3264,10 +3535,16 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
     return <VisibleScrollFrame className="af-work-display-body af-work-display-body--table"><TableDisplayContent content={content} /></VisibleScrollFrame>;
   }
   if (kind === "mermaid") {
+    if (interactiveMermaid) {
+      return (
+        <div className="af-work-display-body af-work-display-body--mermaid af-work-display-body--mermaid-interactive">
+          <MermaidDisplayBlock code={content} interactive />
+        </div>
+      );
+    }
     return (
-      <VisibleScrollFrame className="af-work-display-body">
-        <MermaidPreview code={content} />
-        <pre className="af-work-node__diagram af-work-node__diagram--mermaid">{content}</pre>
+      <VisibleScrollFrame className="af-work-display-body af-work-display-body--mermaid">
+        <MermaidDisplayBlock code={content} />
       </VisibleScrollFrame>
     );
   }
@@ -3277,55 +3554,57 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0 }) {
 function DisplayFullscreenPreview({ node, onClose }) {
   const htmlFrameRef = useRef(null);
   const kind = workspaceDisplayKindFromData(node?.data);
-  const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : "Display 预览");
+  const title = node?.data?.label || (kind === "html" ? "HTML 展示" : kind === "markdown" ? "Markdown 展示" : kind === "code" ? "代码展示" : "Display 预览");
   const readOnly = Boolean(node?.data?.readOnly);
-  const [markdownEditing, setMarkdownEditing] = useState(false);
-  const [markdownDraft, setMarkdownDraft] = useState("");
-  const [markdownFileContent, setMarkdownFileContent] = useState("");
-  const [markdownFileLoading, setMarkdownFileLoading] = useState(false);
+  const editableTextKind = kind === "markdown" || kind === "mermaid";
+  const sourceLabel = kind === "mermaid" ? "Mermaid" : "Markdown";
+  const [sourceEditing, setSourceEditing] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState("");
+  const [sourceFileContent, setSourceFileContent] = useState("");
+  const [sourceFileLoading, setSourceFileLoading] = useState(false);
   const currentDisplayContent = displayContent(node?.data);
-  const markdownSourceContent = kind === "markdown" ? displayOutputEnvelopeContent(currentDisplayContent) : "";
-  const markdownFilePath = kind === "markdown" ? displayTextFilePath(markdownSourceContent, "markdown") : "";
-  const markdownContent = kind === "markdown" ? (markdownFilePath ? markdownFileContent : markdownSourceContent) : "";
+  const sourceContent = editableTextKind ? displayOutputEnvelopeContent(currentDisplayContent) : "";
+  const sourceFilePath = editableTextKind ? displayTextFilePath(sourceContent, kind) : "";
+  const editableContent = editableTextKind ? (sourceFilePath ? sourceFileContent : sourceContent) : "";
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
-      if (markdownEditing) {
-        setMarkdownDraft(String(markdownContent || ""));
-        setMarkdownEditing(false);
+      if (sourceEditing) {
+        setSourceDraft(String(editableContent || ""));
+        setSourceEditing(false);
         return;
       }
       onClose?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [markdownContent, markdownEditing, onClose]);
+  }, [editableContent, onClose, sourceEditing]);
   useEffect(() => {
     let cancelled = false;
-    if (kind !== "markdown" || !markdownFilePath) {
-      setMarkdownFileContent("");
-      setMarkdownFileLoading(false);
+    if (!editableTextKind || !sourceFilePath) {
+      setSourceFileContent("");
+      setSourceFileLoading(false);
       return () => { cancelled = true; };
     }
-    setMarkdownFileLoading(true);
-    readWorkspaceTextFile(node?.data?.flowParams || {}, markdownFilePath)
+    setSourceFileLoading(true);
+    readWorkspaceTextFile(node?.data?.flowParams || {}, sourceFilePath)
       .then((text) => {
-        if (!cancelled) setMarkdownFileContent(text);
+        if (!cancelled) setSourceFileContent(text);
       })
       .catch((error) => {
         if (!cancelled) {
-          setMarkdownFileContent("");
+          setSourceFileContent("");
           node?.data?.onStatus?.(String(error.message || error));
         }
       })
       .finally(() => {
-        if (!cancelled) setMarkdownFileLoading(false);
+        if (!cancelled) setSourceFileLoading(false);
       });
     return () => { cancelled = true; };
-  }, [kind, markdownFilePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
+  }, [editableTextKind, sourceFilePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
   useEffect(() => {
-    if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
-  }, [markdownContent, markdownEditing]);
+    if (!sourceEditing) setSourceDraft(String(editableContent || ""));
+  }, [editableContent, sourceEditing]);
   if (!node) return null;
   return createPortal(
     <div className="af-display-preview-overlay" role="dialog" aria-modal="true" aria-label="全屏预览">
@@ -3337,23 +3616,24 @@ function DisplayFullscreenPreview({ node, onClose }) {
             <span>{node.id}</span>
           </div>
           <div className="af-display-preview-actions">
-            {kind === "markdown" ? (
-              markdownEditing ? (
+            {editableTextKind ? (
+              sourceEditing ? (
                 <>
                   <button
                     type="button"
                     className="af-display-preview-action"
-                    disabled={readOnly || markdownFileLoading}
+                    disabled={readOnly || sourceFileLoading}
                     onClick={async () => {
                       try {
-                        await saveMarkdownDisplayEdit({
+                        await saveTextDisplayEdit({
                           nodeId: node.id,
                           data: node.data,
-                          filePath: markdownFilePath,
-                          content: markdownDraft,
-                          setFileContent: setMarkdownFileContent,
+                          filePath: sourceFilePath,
+                          content: sourceDraft,
+                          kind,
+                          setFileContent: setSourceFileContent,
                         });
-                        setMarkdownEditing(false);
+                        setSourceEditing(false);
                       } catch (error) {
                         node?.data?.onStatus?.(String(error.message || error));
                       }
@@ -3367,8 +3647,8 @@ function DisplayFullscreenPreview({ node, onClose }) {
                     type="button"
                     className="af-display-preview-action"
                     onClick={() => {
-                      setMarkdownDraft(String(markdownContent || ""));
-                      setMarkdownEditing(false);
+                      setSourceDraft(String(editableContent || ""));
+                      setSourceEditing(false);
                     }}
                     aria-label="取消编辑"
                     title="取消编辑"
@@ -3380,13 +3660,13 @@ function DisplayFullscreenPreview({ node, onClose }) {
                 <button
                   type="button"
                   className="af-display-preview-action"
-                  disabled={readOnly || markdownFileLoading}
+                  disabled={readOnly || sourceFileLoading}
                   onClick={() => {
-                    setMarkdownDraft(String(markdownContent || ""));
-                    setMarkdownEditing(true);
+                    setSourceDraft(String(editableContent || ""));
+                    setSourceEditing(true);
                   }}
-                  aria-label="编辑 Markdown"
-                  title="编辑 Markdown"
+                  aria-label={`编辑 ${sourceLabel} 源码`}
+                  title={`编辑 ${sourceLabel} 源码`}
                 >
                   <span className="material-symbols-outlined" aria-hidden>edit</span>
                 </button>
@@ -3397,11 +3677,24 @@ function DisplayFullscreenPreview({ node, onClose }) {
             </button>
           </div>
         </div>
-        <div className="af-display-preview-content">
-          {kind === "markdown" && markdownEditing ? (
-            <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={node.data?.onUploadWorkspaceImage} readOnly={readOnly} />
+        <div className={`af-display-preview-content${kind === "markdown" && !sourceEditing ? " af-display-preview-content--reading" : ""}`}>
+          {editableTextKind && sourceEditing ? (
+            <MarkdownDisplayEditor
+              value={sourceDraft}
+              onChange={setSourceDraft}
+              onUploadImage={kind === "markdown" ? node.data?.onUploadWorkspaceImage : undefined}
+              allowImageUpload={kind === "markdown"}
+              placeholder={kind === "mermaid" ? "输入 Mermaid 源码" : "输入 Markdown 内容"}
+              readOnly={readOnly}
+            />
           ) : (
-            <DisplayBody data={node.data} flowParams={node.data?.flowParams} htmlFrameRef={htmlFrameRef} />
+            <DisplayBody
+              data={node.data}
+              flowParams={node.data?.flowParams}
+              htmlFrameRef={htmlFrameRef}
+              readingMode={kind === "markdown"}
+              interactiveMermaid={kind === "mermaid"}
+            />
           )}
         </div>
       </div>
@@ -3461,6 +3754,13 @@ function DisplayPickerPreview({ node }) {
       </div>
     );
   }
+  if (kind === "code") {
+    const inputSlots = node?.data?.inputs || node?.data?.input || [];
+    const language = workspaceSlotConfigValue(inputSlots, "language", "");
+    const fileName = workspaceSlotConfigValue(inputSlots, "fileName", "") || (filePath ? filePath.split("/").pop() : "");
+    const defaultWrap = ["true", "1", "yes", "on"].includes(workspaceSlotConfigValue(inputSlots, "wrap", "false").toLowerCase());
+    return <CodeDisplayContent content={content} language={language} fileName={fileName} defaultWrap={defaultWrap} />;
+  }
   if (kind === "chart") {
     return <ChartDisplayContent content={content} />;
   }
@@ -3470,15 +3770,14 @@ function DisplayPickerPreview({ node }) {
   if (kind === "mermaid") {
     return (
       <div className="af-display-picker-preview__diagram">
-        <MermaidPreview code={content} />
-        <pre>{content}</pre>
+        <MermaidDisplayBlock code={content} />
       </div>
     );
   }
   return <pre className="af-display-picker-preview__pre">{content}</pre>;
 }
 
-function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = false }) {
+function MarkdownDisplayEditor({ value, onChange, onUploadImage, allowImageUpload = true, placeholder = "输入 Markdown 内容", readOnly = false }) {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const scrollbarTrackRef = useRef(null);
@@ -3585,19 +3884,21 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
       className="af-work-display-editor nodrag nopan"
       onClick={(event) => event.stopPropagation()}
       onDragOver={(event) => {
+        if (!allowImageUpload) return;
         const hasImage = Array.from(event.dataTransfer?.items || []).some((item) => String(item?.type || "").startsWith("image/"));
         if (!hasImage) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(event) => {
+        if (!allowImageUpload) return;
         const file = Array.from(event.dataTransfer?.files || []).find(isWorkspaceImageFile);
         if (!file) return;
         event.preventDefault();
         uploadAndInsert(file);
       }}
     >
-      <div className="af-work-display-editor__toolbar">
+      {allowImageUpload ? <div className="af-work-display-editor__toolbar">
         <button
           type="button"
           className="af-work-display-card__action"
@@ -3619,7 +3920,7 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
             if (file) uploadAndInsert(file);
           }}
         />
-      </div>
+      </div> : null}
       <textarea
         ref={textareaRef}
         className="af-work-display-editor__textarea"
@@ -3629,7 +3930,7 @@ function MarkdownDisplayEditor({ value, onChange, onUploadImage, readOnly = fals
         onKeyDown={(event) => {
           if (event.key === "Escape") event.stopPropagation();
         }}
-        placeholder="输入 Markdown 内容"
+        placeholder={placeholder}
         spellCheck={false}
         readOnly={readOnly}
       />
@@ -3762,6 +4063,7 @@ function WorkspaceNodeChat({ nodeId, data }) {
 }
 
 function displayFileExtension(kind) {
+  if (kind === "code") return "txt";
   if (kind === "mermaid") return "mmd";
   if (kind === "ascii") return "txt";
   if (kind === "html") return "html";
@@ -3818,7 +4120,9 @@ function suggestDisplayFilePath(id, data) {
   return `outputs/${stem}.${displayFileExtension(kind)}`;
 }
 
-async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFileContent }) {
+async function saveTextDisplayEdit({ nodeId, data, filePath, content, kind = "markdown", setFileContent }) {
+  const problem = validateDisplayContentForWrite(kind, content);
+  if (problem) throw new Error(problem);
   if (filePath) {
     const savedPath = await writeWorkspaceTextFile(data?.flowParams || {}, filePath, content);
     setFileContent?.(content);
@@ -3831,11 +4135,11 @@ async function saveMarkdownDisplayEdit({ nodeId, data, filePath, content, setFil
   }
   data?.onSetDisplayNodeContent?.(nodeId, content, "replace", {
     logChat: false,
-    statusMessage: "已更新 Markdown 内容",
+    statusMessage: `已更新 ${kind === "mermaid" ? "Mermaid" : "Markdown"} 内容`,
   });
 }
 
-function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
+function WorkspaceDisplayNode({ id, data, selected, deleteNode, width, height }) {
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const outputEntries = outputs
@@ -3909,12 +4213,17 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
   useEffect(() => {
     if (!markdownEditing) setMarkdownDraft(String(markdownContent || ""));
   }, [markdownContent, markdownEditing]);
-  const title = data?.label || (kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
+  const title = data?.label || (kind === "code" ? "Code" : kind === "mermaid" ? "Mermaid" : kind === "ascii" ? "ASCII" : kind === "html" ? "HTML" : kind === "react" ? "React App" : kind === "image" ? "Image" : kind === "chart" ? "Chart" : kind === "table" ? "Table" : "Markdown");
   const shareNodeId = String(data?.sourceNodeId || id);
   const sharingDisplay = data?.sharingDisplayNodeId === shareNodeId;
-  const displaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
+  const persistedDisplaySize = data?.displaySize && Number(data.displaySize.width) > 0 && Number(data.displaySize.height) > 0
     ? { width: Number(data.displaySize.width), height: Number(data.displaySize.height) }
     : null;
+  const displaySize = workspaceResizePresentationSize({
+    resizing: resizingDisplay,
+    liveSize: normalizeWorkspaceDisplaySize({ width, height }),
+    persistedSize: persistedDisplaySize,
+  });
   const saveHtmlImage = useCallback(async () => {
     if (kind !== "html" || savingHtmlImage) return;
     const rawContent = displayContent(data);
@@ -4029,6 +4338,7 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       className={
         "af-work-display-card" +
         (displaySize ? " af-work-display-card--sized" : "") +
+        (data?.hasConnections ? " af-work-display-card--connected" : "") +
         (selected ? " af-work-display-card--selected" : "") +
         (resizingDisplay ? " af-work-display-card--resizing" : "") +
         (imageDragActive ? " af-work-display-card--image-drop" : "") +
@@ -4158,11 +4468,12 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
                 disabled={readOnly || markdownFileLoading}
                 onClick={async () => {
                   try {
-                    await saveMarkdownDisplayEdit({
+                    await saveTextDisplayEdit({
                       nodeId: id,
                       data,
                       filePath: markdownFilePath,
                       content: markdownDraft,
+                      kind: "markdown",
                       setFileContent: setMarkdownFileContent,
                     });
                     setMarkdownEditing(false);
@@ -4285,7 +4596,12 @@ function WorkspaceDisplayNode({ id, data, selected, deleteNode }) {
       {kind === "markdown" && markdownEditing ? (
         <MarkdownDisplayEditor value={markdownDraft} onChange={setMarkdownDraft} onUploadImage={data?.onUploadWorkspaceImage} readOnly={readOnly} />
       ) : (
-        <DisplayBody data={data} flowParams={data?.flowParams} htmlFrameRef={htmlFrameRef} htmlFrameVersion={htmlFrameVersion} />
+        <DisplayBody
+          data={data}
+          flowParams={data?.flowParams}
+          htmlFrameRef={htmlFrameRef}
+          htmlFrameVersion={htmlFrameVersion}
+        />
       )}
       <WorkspaceNodeChat nodeId={id} data={data} />
     </div>
@@ -4369,6 +4685,19 @@ function WorkspaceRunNode({ id, data, selected, deleteNode }) {
         >
           <span className="material-symbols-outlined">{running ? "stop_circle" : "play_arrow"}</span>
           <span>{running ? "Stop" : "Run line"}</span>
+        </button>
+        <button
+          type="button"
+          className="af-work-run-card__button af-work-run-card__rerun nodrag"
+          disabled={readOnly || running || optimizing}
+          title="忽略缓存重跑：上游节点即使产出还在、指纹也对得上，照样重新执行"
+          aria-label="忽略缓存重跑"
+          onClick={(event) => {
+            event.stopPropagation();
+            data?.onRunWorkspaceNode?.(id, { ignoreCache: true });
+          }}
+        >
+          <span className="material-symbols-outlined">restart_alt</span>
         </button>
         <button
           type="button"
@@ -5007,6 +5336,7 @@ function WorkspaceContextRunNode({ id, data, selected, deleteNode, skills, skill
             onChange={(event) => updateConfig({ displayType: event.target.value })}
           >
             <option value="markdown">Markdown</option>
+            <option value="code">Code</option>
             <option value="html">HTML</option>
             <option value="react">React</option>
             <option value="table">Table</option>
@@ -5306,13 +5636,19 @@ function WorkspaceScheduledRunNode({ id, data, selected, deleteNode }) {
   );
 }
 
-function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
+function WorkspaceGroupNode({ id, data, selected, deleteNode, width, height }) {
   const { setNodes } = useReactFlow();
   const readOnly = Boolean(data?.readOnly);
-  const size = normalizeWorkspaceGroupSize(data?.nodeSize) || {
+  const [resizingGroup, setResizingGroup] = useState(false);
+  const persistedSize = normalizeWorkspaceGroupSize(data?.nodeSize) || {
     width: MIN_WORKSPACE_GROUP_WIDTH,
     height: MIN_WORKSPACE_GROUP_HEIGHT,
   };
+  const size = workspaceResizePresentationSize({
+    resizing: resizingGroup,
+    liveSize: normalizeWorkspaceGroupSize({ width, height }),
+    persistedSize,
+  });
   const onSelectGroupPointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".af-work-group-node__resize, .af-work-group-node__delete")) return;
@@ -5320,7 +5656,11 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
   }, [id, setNodes]);
   return (
     <div
-      className={"af-work-group-node" + (selected ? " af-work-group-node--selected" : "")}
+      className={
+        "af-work-group-node" +
+        (selected ? " af-work-group-node--selected" : "") +
+        (data?.displayPageMode ? " af-work-group-node--presentation" : "")
+      }
       style={{ width: size.width, height: size.height }}
       onPointerDownCapture={onSelectGroupPointerDown}
     >
@@ -5330,25 +5670,299 @@ function WorkspaceGroupNode({ id, data, selected, deleteNode }) {
           minWidth={MIN_WORKSPACE_GROUP_WIDTH}
           minHeight={MIN_WORKSPACE_GROUP_HEIGHT}
           position="bottom-right"
+          onResizeStart={() => setResizingGroup(true)}
+          onResizeEnd={() => setResizingGroup(false)}
         >
           <span className="material-symbols-outlined">open_in_full</span>
         </NodeResizeControl>
       ) : null}
-      <div className="af-work-group-node__title nodrag">
-        <span>{data?.title || data?.label || "Group"}</span>
-        <button
-          type="button"
-          className="af-work-group-node__delete"
-          disabled={readOnly}
-          onClick={(event) => {
-            event.stopPropagation();
-            deleteNode?.(id);
-          }}
-          aria-label="删除分组"
-          title="删除分组"
+      <div className="af-work-group-node__title af-work-group-node__drag-handle">
+        <span className="af-work-group-node__title-label">
+          {data?.isSubflowGroup ? <span className="material-symbols-outlined" aria-hidden>account_tree</span> : null}
+          <span>{data?.title || data?.label || "Group"}</span>
+        </span>
+        {!readOnly ? (
+          <button
+            type="button"
+            className="af-work-group-node__delete nodrag"
+            onClick={(event) => {
+              event.stopPropagation();
+              deleteNode?.(id);
+            }}
+            aria-label="解组"
+            title="解组（保留内部节点）"
+          >
+            <span className="material-symbols-outlined">ungroup</span>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceSubflowCallEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  data,
+  selected,
+}) {
+  const storeApi = useStoreApi();
+  const nodeObstacleSignature = useStore((state) => Array.from(state.nodeLookup?.values?.() || [])
+    .filter((node) => !node?.hidden && !node?.data?.isWorkspaceGroup)
+    .map((node) => [
+      node.id,
+      Number(node?.internals?.positionAbsolute?.x) || 0,
+      Number(node?.internals?.positionAbsolute?.y) || 0,
+      Number(node?.measured?.width ?? node?.width ?? node?.initialWidth) || 0,
+      Number(node?.measured?.height ?? node?.height ?? node?.initialHeight) || 0,
+    ].join(":"))
+    .join("|"));
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+  const inputMappings = Array.isArray(data?.inputMappings) ? data.inputMappings : [];
+  const outputMappings = Array.isArray(data?.outputMappings) ? data.outputMappings : [];
+  const verb = String(data?.verb || "calls").toUpperCase();
+  const nodeRects = useMemo(() => Array.from(storeApi.getState().nodeLookup?.values?.() || [])
+    .filter((node) => !node?.hidden && !node?.data?.isWorkspaceGroup)
+    .map((node) => ({
+      x: Number(node?.internals?.positionAbsolute?.x) || 0,
+      y: Number(node?.internals?.positionAbsolute?.y) || 0,
+      width: Number(node?.measured?.width ?? node?.width ?? node?.initialWidth) || 0,
+      height: Number(node?.measured?.height ?? node?.height ?? node?.initialHeight) || 0,
+    })), [nodeObstacleSignature, storeApi]);
+  const labelPosition = placeWorkspaceRelationLabel({
+    edgePath,
+    fallbackX: labelX,
+    fallbackY: labelY,
+    nodeRects,
+  });
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        interactionWidth={28}
+        style={{ ...style, strokeWidth: selected ? 3.2 : Number(style?.strokeWidth) || 2 }}
+      />
+      <EdgeLabelRenderer>
+        <div
+          className={"af-subflow-call-bus" + (selected ? " af-subflow-call-bus--expanded" : "")}
+          style={{ transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)` }}
         >
-          <span className="material-symbols-outlined">close</span>
-        </button>
+          <div className="af-subflow-call-bus__summary" style={{ "--af-subflow-call-color": data?.color || "#9d83ff" }}>
+            <strong>{verb}</strong>
+            <span>{inputMappings.length} IN / {outputMappings.length} OUT</span>
+          </div>
+          {selected ? (
+            <div className="af-subflow-call-bus__panel">
+              <div className="af-subflow-call-bus__title">
+                <span>{data?.callerLabel || "Caller"}</span>
+                <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                <span>{data?.subflowLabel || "Subflow"}</span>
+              </div>
+              <div className="af-subflow-call-bus__mappings">
+                {inputMappings.map((mapping) => (
+                  <div key={`in:${mapping.name}`} className="af-subflow-call-bus__mapping">
+                    <span className="af-subflow-call-bus__direction">IN</span>
+                    <span title={mapping.from}>{mapping.from}</span>
+                    <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                    <span title={mapping.to}>{mapping.to}</span>
+                  </div>
+                ))}
+                {outputMappings.map((mapping) => (
+                  <div key={`out:${mapping.name}`} className="af-subflow-call-bus__mapping af-subflow-call-bus__mapping--out">
+                    <span className="af-subflow-call-bus__direction">OUT</span>
+                    <span title={mapping.from}>{mapping.from}</span>
+                    <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                    <span title={mapping.to}>{mapping.to}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+function EditableSubflowOutputName({ data, slot }) {
+  const [draft, setDraft] = useState(String(slot?.name || ""));
+  useEffect(() => setDraft(String(slot?.name || "")), [slot?.name]);
+  const commit = () => {
+    const next = draft.trim();
+    if (next === slot?.name) return;
+    const accepted = data?.onRenameSubflowOutput?.(data?.subflowId, slot?.name, next);
+    if (accepted === false) setDraft(String(slot?.name || ""));
+  };
+  return (
+    <input
+      className="af-subflow-boundary__contract-name-input nodrag"
+      value={draft}
+      disabled={Boolean(data?.readOnly)}
+      aria-label={`重命名输出 ${slot?.name || ""}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(String(slot?.name || ""));
+          event.currentTarget.blur();
+        }
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+    />
+  );
+}
+
+function WorkspaceSubflowBoundaryNode({ data, selected }) {
+  const isStart = data?.boundaryKind === "start";
+  const [stateExpanded, setStateExpanded] = useState(false);
+  const contract = Array.isArray(data?.contract) ? data.contract : [];
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
+  const callRelation = Array.isArray(data?.callRelations) ? data.callRelations[0] : null;
+  const controlInput = inputs.find((slot) => String(slot?.type || "") === "node");
+  const controlOutput = outputs.find((slot) => String(slot?.type || "") === "node");
+  return (
+    <div
+      className={
+        "af-flow-node af-subflow-boundary" +
+        (isStart ? " af-subflow-boundary--start" : " af-subflow-boundary--return") +
+        (selected ? " af-subflow-boundary--selected" : "") +
+        (data?.callRelationSelected ? " af-subflow-boundary--call-selected" : "")
+      }
+      style={{ width: data?.nodeSize?.width, minHeight: data?.nodeSize?.height }}
+    >
+      <div className="af-flow-node__chrome af-subflow-boundary__head">
+        <span className="material-symbols-outlined af-flow-node__kit-icon" aria-hidden>{isStart ? "play_circle" : "keyboard_return"}</span>
+        <span className="af-flow-node__kind-badge">{isStart ? "SUBFLOW START" : "SUBFLOW RETURN"}</span>
+        <span className="af-flow-node__title af-flow-node__title--chrome">{isStart ? "进入调用帧" : "返回父流程"}</span>
+      </div>
+      <div className="af-flow-node__body af-subflow-boundary__body">
+        <FlowNodePortRail slots={inputs} direction="in" connectable={!data?.readOnly && data?.activeSubflowEditorId === data?.subflowId} />
+        <div className="af-subflow-boundary__content">
+          <div className="af-subflow-boundary__control-contract">
+            <span>{controlInput?.name || (isStart ? "calls" : "prev")}</span>
+            <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+            <span>{controlOutput?.name || (isStart ? "next" : "return")}</span>
+          </div>
+          <div className="af-subflow-boundary__contract-head">
+            <strong>{isStart ? "CALL FRAME INPUTS" : data?.subflowRole === "condition" ? "WHILE CONDITION OUTPUTS" : data?.subflowRole === "body" ? "WHILE BODY OUTPUTS" : "RETURN OUTPUTS"}</strong>
+            {data?.fixedContract ? (
+              <span className="af-subflow-boundary__contract-lock" title="While 运行协议的固定契约，不能重命名或删除">
+                <span className="material-symbols-outlined" aria-hidden>lock</span>
+                FIXED
+              </span>
+            ) : <span>{contract.length}</span>}
+          </div>
+          <div className="af-subflow-boundary__contract-list">
+            {contract.length ? contract.map((slot) => (
+              <div key={`${slot.name}:${slot.type}`} className={"af-subflow-boundary__contract-row" + (!isStart && slot.connected === false ? " is-unconnected" : "")}>
+                <span className="af-subflow-boundary__contract-direction">{isStart ? "IN" : slot.required ? "REQ" : "OPT"}</span>
+                {!isStart && !data?.fixedContract ? (
+                  <EditableSubflowOutputName data={data} slot={slot} />
+                ) : (
+                  <span
+                    className="af-subflow-boundary__contract-name"
+                    title={isStart
+                      ? callRelation?.inputMappings?.find((mapping) => mapping.name === slot.name)?.from || slot.name
+                      : callRelation?.outputMappings?.find((mapping) => mapping.name === slot.name)?.to || slot.name}
+                  >
+                    {isStart
+                      ? `${callRelation?.inputMappings?.find((mapping) => mapping.name === slot.name)?.fromShort || "call frame"} → ${slot.name}`
+                      : `${slot.name} → ${callRelation?.outputMappings?.find((mapping) => mapping.name === slot.name)?.toShort || "caller"}`}
+                  </span>
+                )}
+                <span className="af-subflow-boundary__contract-type">{slot.type || "text"}</span>
+                {!isStart && !data?.fixedContract ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__contract-delete nodrag"
+                    disabled={Boolean(data?.readOnly)}
+                    title={`删除输出 ${slot.name}`}
+                    aria-label={`删除输出 ${slot.name}`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      data?.onDeleteSubflowOutput?.(data?.subflowId, slot.name);
+                    }}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>close</span>
+                  </button>
+                ) : null}
+                {!isStart && data?.fixedContract && slot.name === "state" ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__state-toggle nodrag"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setStateExpanded((value) => !value);
+                    }}
+                  >
+                    {stateExpanded ? "收起" : "查看结构"}
+                  </button>
+                ) : null}
+              </div>
+            )) : (
+              <span className="af-subflow-boundary__contract-empty">No data contract</span>
+            )}
+            {!isStart && !data?.fixedContract ? (
+              <div className="af-subflow-boundary__add-output">
+                <span className="material-symbols-outlined" aria-hidden>add_circle</span>
+                <span>把任意数据输出拖到 <b>add output</b> 引脚</span>
+              </div>
+            ) : null}
+          </div>
+          {!isStart && data?.fixedContract && stateExpanded ? (
+            <div className="af-subflow-boundary__state-preview nodrag" onPointerDown={(event) => event.stopPropagation()}>
+              <div>
+                <strong>STATE JSON</strong>
+                <span>结构由连到 state 的 JSON 输出决定</span>
+                {data?.statePreview?.sourceNodeId ? (
+                  <button
+                    type="button"
+                    className="af-subflow-boundary__state-source nodrag"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      data?.onFocusSubflowNode?.(data.statePreview.sourceNodeId);
+                    }}
+                  >
+                    编辑来源
+                  </button>
+                ) : null}
+              </div>
+              {data?.statePreview?.fields?.length ? (
+                <ul>
+                  {data.statePreview.fields.map((field) => (
+                    <li key={field.name}>
+                      <code>{field.name}</code>
+                      <em>{field.type}</em>
+                      <span title={field.preview}>{field.preview}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p>尚无可用的运行时 state；运行后会在这里展示字段。</p>}
+            </div>
+          ) : null}
+        </div>
+        <FlowNodePortRail slots={outputs} direction="out" connectable={!data?.readOnly && data?.activeSubflowEditorId === data?.subflowId} />
       </div>
     </div>
   );
@@ -5358,13 +5972,57 @@ function WorkspaceFlowNode(props) {
   const { setEdges, setNodes } = useReactFlow();
   const syncNodePropDraft = props.data?.onSyncNodePropDraft;
   const readOnly = Boolean(props.data?.readOnly);
+  const isSubflowCall = props.data?.definitionId === "control_subflow_call";
+  const isWhileNode = props.data?.definitionId === "control_while";
+  const flowNodeShellRef = useRef(null);
   const [resizingFlowNode, setResizingFlowNode] = useState(false);
-  const nodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
+  const persistedNodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
     ? { width: Number(props.data.nodeSize.width), height: Number(props.data.nodeSize.height) }
     : null;
+  const nodeSize = workspaceResizePresentationSize({
+    resizing: resizingFlowNode,
+    liveSize: normalizeWorkspaceNodeSize({ width: props.width, height: props.height }),
+    persistedSize: persistedNodeSize,
+  });
+  useEffect(() => {
+    if (!isWhileNode || resizingFlowNode) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = flowNodeShellRef.current;
+      const card = shell?.querySelector?.(":scope > .af-flow-node");
+      if (!card) return;
+      const currentHeight = Math.round(Number(nodeSize?.height || card.clientHeight || 0));
+      // The card itself is height:100%, so card.scrollHeight includes the persisted
+      // node height. Measuring it made every render add two pixels until the 900px
+      // cap. Measure the UI kit's intrinsic content instead, and fit in both
+      // directions so stale oversized While cards heal themselves.
+      const intrinsicHeight = workspaceWhileIntrinsicHeight(card);
+      const requiredHeight = clampNumber(
+        intrinsicHeight,
+        MIN_WORKSPACE_NODE_HEIGHT,
+        MAX_WORKSPACE_NODE_HEIGHT,
+      );
+      if (!currentHeight || !requiredHeight || Math.abs(requiredHeight - currentHeight) <= 2) return;
+      setNodes((list) => list.map((node) => {
+        if (node.id !== props.id) return node;
+        const width = Math.round(Number(node.data?.nodeSize?.width || node.width || nodeSize?.width || card.clientWidth));
+        return {
+          ...node,
+          width,
+          height: requiredHeight,
+          data: {
+            ...node.data,
+            nodeSize: { width, height: requiredHeight },
+          },
+        };
+      }));
+      props.data?.onRefreshNodeInternals?.(props.id);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isWhileNode, nodeSize?.height, nodeSize?.width, props.data?.nodeStatus, props.data?.outputs, props.data?.onRefreshNodeInternals, props.id, resizingFlowNode, setNodes]);
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
     props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
+    props.data?.onRemoveNodeFromSubflows?.(nodeId);
     const linkedDisplayId = isOneClickTaskDefinitionId(props.data?.definitionId) ? contextRunLinkedDisplayNodeId(nodeId) : "";
     const deleteIds = new Set([nodeId, linkedDisplayId].filter(Boolean));
     setNodes((list) => list.filter((node) => !deleteIds.has(node.id)));
@@ -5373,9 +6031,17 @@ function WorkspaceFlowNode(props) {
   const onSelectNodePointerDown = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
     if (event.target?.closest?.(".react-flow__handle, .af-work-display-resize")) return;
-    setNodes((list) => selectSingleCanvasNodeUnlessDraggingSelection(list, props.id));
-    setEdges((list) => clearSelectedCanvasEdges(list));
-  }, [props.id, setEdges, setNodes]);
+    setNodes((list) => {
+      const next = selectSingleCanvasNodeUnlessDraggingSelection(list, props.id);
+      if (next !== list) props.data?.onSuppressWorkspaceSelectionAutosave?.({ nodes: next });
+      return next;
+    });
+    setEdges((list) => {
+      const next = clearSelectedCanvasEdges(list);
+      if (next !== list) props.data?.onSuppressWorkspaceSelectionAutosave?.({ edges: next });
+      return next;
+    });
+  }, [props.data, props.id, setEdges, setNodes]);
   const onModelChange = useCallback((nodeId, model) => {
     if (readOnly) return;
     setNodes((list) => list.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, model } } : node));
@@ -5415,6 +6081,9 @@ function WorkspaceFlowNode(props) {
   if (props.data?.isWorkspaceGroup) {
     return <WorkspaceGroupNode {...props} deleteNode={deleteNode} />;
   }
+  if (props.data?.isSubflowBoundary) {
+    return <WorkspaceSubflowBoundaryNode {...props} />;
+  }
   if (displayKind(props.data?.definitionId)) {
     return <WorkspaceDisplayNode {...props} data={{ ...props.data, onSelectNodePointerDown }} deleteNode={deleteNode} />;
   }
@@ -5436,7 +6105,7 @@ function WorkspaceFlowNode(props) {
       />
     );
   }
-  if (props.data?.definitionId === "control_load_skills") {
+  if (props.data?.definitionId === "control_load_skills" || props.data?.definitionId === "context_skills") {
     return (
       <WorkspaceLoadSkillsNode
         {...props}
@@ -5459,7 +6128,7 @@ function WorkspaceFlowNode(props) {
       />
     );
   }
-  if (props.data?.definitionId === "control_cd_workspace") {
+  if (props.data?.definitionId === "control_cd_workspace" || props.data?.definitionId === "context_knowledge") {
     return (
       <WorkspaceLoadWorkspaceNode
         {...props}
@@ -5473,19 +6142,22 @@ function WorkspaceFlowNode(props) {
   }
   return (
     <div
+      ref={flowNodeShellRef}
       className={
         "af-work-flow-node" +
+        (isSubflowCall ? " af-work-flow-node--subflow-call" : "") +
         (props.selected ? " af-work-flow-node--selected" : "") +
         (resizingFlowNode ? " af-work-flow-node--resizing" : "") +
+        (isWhileNode && Number(nodeSize?.height || 0) >= MAX_WORKSPACE_NODE_HEIGHT ? " af-work-flow-node--height-capped" : "") +
         (props.data?.isExecuting || props.data?.nodeStatus === "running" ? " af-work-flow-node--executing" : "") +
         (props.data?.nodeStatus === "success" ? " af-work-flow-node--done" : "") +
         (props.data?.nodeStatus === "failed" ? " af-work-flow-node--failed" : "") +
         (props.data?.nodeStatus === "stopped" ? " af-work-flow-node--stopped" : "")
       }
-      style={nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
+      style={!isSubflowCall && nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
       onPointerDownCapture={onSelectNodePointerDown}
     >
-      {!readOnly ? (
+      {!readOnly && !isSubflowCall ? (
         <NodeResizeControl
           className="af-work-display-resize af-work-flow-resize nodrag"
           position="bottom-right"
@@ -5514,6 +6186,7 @@ function WorkspaceFlowNode(props) {
 }
 
 const nodeTypes = { [FLOW_NODE_TYPE]: memo(WorkspaceFlowNode) };
+const edgeTypes = { workspaceSubflowCall: memo(WorkspaceSubflowCallEdge) };
 
 function flattenFiles(files, out = []) {
   for (const item of files || []) {
@@ -5827,10 +6500,21 @@ function isWorkspaceComposerTechnicalMessage(msg) {
 
 function workspaceComposerConversationMessages(messages, running = false) {
   const list = Array.isArray(messages) ? messages : [];
-  const conversational = list.filter((msg) => !isWorkspaceComposerTechnicalMessage(msg));
+  const conversational = list
+    .filter((msg) => !isWorkspaceComposerTechnicalMessage(msg))
+    .map((msg) => ({ ...msg, text: stripAgentflowReceipt(msg?.text) }))
+    .filter((msg) => String(msg.text || "").trim())
+    .filter((msg, index, items) => {
+      if (msg.role === "user") return true;
+      const text = String(msg.text || "").trim();
+      return !items.slice(0, index).some((previous) => (
+        previous.role !== "user" && String(previous.text || "").trim() === text
+      ));
+    });
   if (conversational.length > 0) return conversational;
   const fallback = [...list].reverse().find((msg) => msg?.kind === "result" || msg?.kind === "assistant" || msg?.error);
-  if (fallback) return [fallback];
+  const fallbackText = stripAgentflowReceipt(fallback?.text);
+  if (fallback && fallbackText) return [{ ...fallback, text: fallbackText }];
   if (list.length > 0 || running) {
     if (running) return [];
     return [{
@@ -5863,13 +6547,13 @@ function selectedSkillKeysFromNodeData(data) {
   const bodyKeys = selectedSkillKeysFromValue(data?.body || "");
   if (bodyKeys.length > 0) return bodyKeys;
   const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
-  const slot = inputs.find((item) => item?.name === "skillsContext" || item?.name === "skillKeys" || item?.type === "text");
+  const slot = inputs.find((item) => item?.name === "skills" || item?.name === "skillsContext" || item?.name === "skillKeys" || item?.type === "text");
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
 function selectedSkillKeysFromConfigSlots(data) {
   const slots = [...(Array.isArray(data?.inputs) ? data.inputs : []), ...(Array.isArray(data?.outputs) ? data.outputs : [])];
-  const slot = slots.find((item) => item?.name === "skillKeys" || item?.name === "skillsContext");
+  const slot = slots.find((item) => item?.name === "skills" || item?.name === "skillKeys" || item?.name === "skillsContext");
   return selectedSkillKeysFromValue(slot?.default || slot?.value || "");
 }
 
@@ -5909,7 +6593,7 @@ function workspaceSlotConfigJsonValue(slots, name) {
 
 function normalizeContextRunDisplayType(value) {
   const text = String(value || "").trim().toLowerCase();
-  return ["markdown", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
+  return ["markdown", "code", "html", "react", "table", "chart", "ascii", "mermaid"].includes(text) ? text : "markdown";
 }
 
 function workspaceModelEntryId(entry) {
@@ -5920,6 +6604,7 @@ function workspaceModelEntryId(entry) {
 
 function contextRunDisplayDefinitionId(displayType) {
   const kind = normalizeContextRunDisplayType(displayType);
+  if (kind === "code") return "display_code";
   if (kind === "html") return "display_html";
   if (kind === "react") return "display_react_app";
   if (kind === "table") return "display_table";
@@ -6065,6 +6750,12 @@ function workspaceSelectionFromNodeData(data) {
   };
 }
 
+function workspaceIdsFromNodeData(data) {
+  const inputs = Array.isArray(data?.inputs) ? data.inputs : [];
+  const slot = inputs.find((item) => item?.name === "workspaceIds");
+  return selectedSkillKeysFromValue(slot?.value ?? slot?.default ?? "");
+}
+
 function nodeToPropDraft(node) {
   if (!node) return null;
   const { inputs, outputs } = cloneNodeIoDraftSlots(node);
@@ -6126,7 +6817,7 @@ function workspaceNodeDataFromPropDraft(selectedNode, draft, nextId) {
       : normalizeWorkspacePropIoSlots(draft?.outputs),
   };
   const scriptTrim = String(draft?.script ?? "").trim();
-  if (defId === "tool_nodejs" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
+  if (defId === "tool_nodejs" || defId === "control_while" || scriptTrim !== "") nextData.script = String(draft?.script ?? "");
   else delete nextData.script;
   for (const key of ["scriptRef", "implementationRef", "implementationMode"]) {
     const value = String(draft?.[key] ?? "").trim();
@@ -6738,7 +7429,7 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
   const outputs = Array.isArray(data?.outputs) ? data.outputs : [];
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const selectedKnowledge = workspaceSelectionFromNodeData(data);
+  const catalogBinding = data?.definitionId === "context_knowledge";
   const workspaceList = useMemo(() => (Array.isArray(workspaces) ? workspaces : [])
     .map((item) => ({
       id: String(item?.id || ""),
@@ -6752,13 +7443,19 @@ function WorkspaceLoadWorkspaceNode({ id, data, selected, deleteNode, workspaces
       exists: item?.exists !== false,
     }))
     .filter((item) => item.path), [workspaces]);
+  const selectedKnowledge = workspaceSelectionFromNodeData(data);
+  const selectedWorkspaceIds = workspaceIdsFromNodeData(data);
   const filteredWorkspaces = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return workspaceList;
     return workspaceList.filter((item) => [item.id, item.label, item.path, item.repoUrl, item.branch, item.mountPath].join(" ").toLowerCase().includes(q));
   }, [search, workspaceList]);
-  const selectedKeys = useMemo(() => new Set((selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [selectedKnowledge.sources]);
-  const selectedWorkspaceNames = useMemo(() => (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path), [selectedKnowledge.sources]);
+  const selectedKeys = useMemo(() => new Set(catalogBinding
+    ? selectedWorkspaceIds
+    : (selectedKnowledge.sources || []).map((item) => item.id || item.path || item.repoPath).filter(Boolean)), [catalogBinding, selectedKnowledge.sources, selectedWorkspaceIds]);
+  const selectedWorkspaceNames = useMemo(() => (catalogBinding
+    ? selectedWorkspaceIds.map((workspaceId) => workspaceList.find((item) => item.id === workspaceId)?.label || workspaceId)
+    : (selectedKnowledge.sources || []).map((item) => item.label || item.id || item.mountPath || item.path)), [catalogBinding, selectedKnowledge.sources, selectedWorkspaceIds, workspaceList]);
   const title = useMemo(() => compactSelectionParts(selectedWorkspaceNames, "选择知识库"), [selectedWorkspaceNames]);
   const workspaceMenuScrollbar = useWorkspaceMenuScrollbar(open, [
     filteredWorkspaces.length,
@@ -8359,6 +9056,21 @@ function WorkspacePageInner() {
   const flowParams = useMemo(readFlowParamsFromUrl, []);
   const isWorkflowShareView = Boolean(flowParams.workflowShare);
   const initialFocusNodeIdRef = useRef(new URLSearchParams(window.location.search).get("focusNodeId") || "");
+  const pendingMarketplaceSnippetRef = useRef((() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      id: String(params.get("marketplaceSnippetId") || "").trim(),
+      version: String(params.get("marketplaceSnippetVersion") || "").trim(),
+      handled: false,
+    };
+  })());
+  const pendingMarketplaceNodeRef = useRef((() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      definitionId: String(params.get("marketplaceNodeDefinitionId") || "").trim(),
+      handled: false,
+    };
+  })());
   const workspaceViewportStorageKey = useMemo(
     () => (
       flowParams.workspaceId
@@ -8400,6 +9112,9 @@ function WorkspacePageInner() {
   const [connectionMenu, setConnectionMenu] = useState(null);
   const [instances, setInstances] = useState({});
   const instancesRef = useRef({});
+  const subflowsRef = useRef({});
+  const [activeSubflowId, setActiveSubflowId] = useState("");
+  const [activeSubflowRole, setActiveSubflowRole] = useState("");
   const loadedRef = useRef(false);
   const saveTimerRef = useRef(null);
   const workspaceRevisionRef = useRef("");
@@ -8416,6 +9131,7 @@ function WorkspacePageInner() {
   const skipNextWorkspaceAutosaveRef = useRef(false);
   const workspaceAutosaveSuppressedStateRef = useRef(null);
   const workspaceCanvasInteractionActiveRef = useRef(false);
+  const workspaceGroupDragOriginsRef = useRef(new Map());
   const workspaceCanvasPointerIdsRef = useRef(new Set());
   const workspaceViewportInteractionActiveRef = useRef(false);
   const workspaceFlushAfterInteractionRef = useRef(false);
@@ -8472,9 +9188,23 @@ function WorkspacePageInner() {
   const [nodePropDraft, setNodePropDraft] = useState(null);
   const nodePropDraftRef = useRef(null);
   const [nodePropsError, setNodePropsError] = useState("");
+  const [nodeExecutionReview, setNodeExecutionReview] = useState(null);
+  const [nodeExecutionReviewLoading, setNodeExecutionReviewLoading] = useState(false);
+  const [nodeExecutionReviewError, setNodeExecutionReviewError] = useState("");
   const [files, setFiles] = useState([]);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaceWritable, setWorkspaceWritable] = useState(!flowParams.adminOwnerId);
+  const [workspaceIsTransientDraft, setWorkspaceIsTransientDraft] = useState(false);
+  const [workspaceRelease, setWorkspaceRelease] = useState(null);
+  const [workspaceReleaseOpen, setWorkspaceReleaseOpen] = useState(false);
+  const [workspaceReleaseBusy, setWorkspaceReleaseBusy] = useState(false);
+  const [workspaceReleaseError, setWorkspaceReleaseError] = useState("");
+  const [workspaceReleaseNotes, setWorkspaceReleaseNotes] = useState("");
+  const [marketplacePreviewBusy, setMarketplacePreviewBusy] = useState(false);
+  const [marketplacePreviewProjectOpen, setMarketplacePreviewProjectOpen] = useState(false);
+  const [marketplacePreviewProjects, setMarketplacePreviewProjects] = useState([]);
+  const [marketplacePreviewProjectKey, setMarketplacePreviewProjectKey] = useState("");
+  const [marketplacePreviewProjectError, setMarketplacePreviewProjectError] = useState("");
   const [adminReview, setAdminReview] = useState(() => (
     flowParams.adminOwnerId
       ? { readonly: true, ownerUserId: flowParams.adminOwnerId, ownerUsername: flowParams.adminOwnerId }
@@ -8691,7 +9421,9 @@ function WorkspacePageInner() {
   const [composerMessages, setComposerMessages] = useState([]);
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
+  const [composerRunView, setComposerRunView] = useState("result");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
+  const [aiExplorationOpen, setAiExplorationOpen] = useState(false);
   const composerSidebarThreadRef = useRef(null);
   const composerActiveSessionTabRef = useRef(null);
   const [workspaceRunLogsTarget, setWorkspaceRunLogsTarget] = useState(null);
@@ -8730,6 +9462,7 @@ function WorkspacePageInner() {
   const [status, setStatus] = useState("");
   const [workspaceSyncPhase, setWorkspaceSyncPhase] = useState("loading");
   const [workspaceSyncDetail, setWorkspaceSyncDetail] = useState("正在载入 Project");
+  const [workspaceNodeInteractionUiActive, setWorkspaceNodeInteractionUiActive] = useState(false);
   const skillsStorageKey = useMemo(() => workspaceSkillsStorageKey(flowParams), [flowParams]);
   const [skillsStorageReadyKey, setSkillsStorageReadyKey] = useState("");
   const flowSource = flowParams.flowSource || "user";
@@ -8763,20 +9496,19 @@ function WorkspacePageInner() {
     && workspaceCollaboration?.role
     && workspaceCollaboration.role !== "owner"
   );
-  const workspaceSyncLabel = {
-    loading: "载入中",
-    dirty: "有未同步修改",
-    saving: "同步中",
-    synced: "已同步",
-    conflict: "同步冲突",
-    error: "同步失败",
-    readonly: "只读",
-  }[workspaceSyncPhase] || "同步状态";
+  const workspaceSyncIndicator = workspaceSyncIndicatorPresentation({
+    phase: workspaceSyncPhase,
+    detail: workspaceSyncDetail,
+    nodeInteracting: workspaceNodeInteractionUiActive,
+  });
   const markWorkspaceDirty = useCallback(() => {
     if (!loadedRef.current || !workspaceWritable) return;
     skipNextWorkspaceAutosaveRef.current = false;
     workspaceEditVersionRef.current += 1;
     workspaceDirtyRef.current = true;
+    setWorkspaceRelease((current) => (
+      current?.enabled ? { ...current, hasDraftChanges: true } : current
+    ));
     setWorkspaceSyncPhase("dirty");
     setWorkspaceSyncDetail("本地修改等待同步");
   }, [workspaceWritable]);
@@ -8812,6 +9544,32 @@ function WorkspacePageInner() {
     setWorkspaceRoot(json.root || "");
   }, [flowParams]);
 
+  const loadNodeExecutionReview = useCallback(async (requestedNodeId = "") => {
+    const nodeId = String(requestedNodeId || selectedNodeIdRef.current || "").trim();
+    if (!nodeId || !flowParams.flowId) {
+      setNodeExecutionReview(null);
+      setNodeExecutionReviewError("");
+      return;
+    }
+    setNodeExecutionReviewLoading(true);
+    setNodeExecutionReviewError("");
+    try {
+      const query = flowParamsQuery(flowParams);
+      query.set("nodeId", nodeId);
+      const response = await fetch(`/api/workspace/node-review?${query.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "解析节点执行内容失败");
+      if (selectedNodeIdRef.current === nodeId) setNodeExecutionReview(payload);
+    } catch (error) {
+      if (selectedNodeIdRef.current === nodeId) {
+        setNodeExecutionReview(null);
+        setNodeExecutionReviewError(String(error?.message || error));
+      }
+    } finally {
+      if (selectedNodeIdRef.current === nodeId) setNodeExecutionReviewLoading(false);
+    }
+  }, [flowParams]);
+
   const loadFlowSnippets = useCallback(async () => {
     setFlowSnippetsLoading(true);
     setFlowSnippetsError("");
@@ -8838,7 +9596,7 @@ function WorkspacePageInner() {
     }
     setWorkspaceSyncPhase("saving");
     setWorkspaceSyncDetail("正在同步修改");
-    const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current);
+    const graph = flowToGraph(nextNodes, nextEdges, instancesRef.current, subflowsRef.current);
     graph.ui = {
       ...(graph.ui || {}),
       displayPage: displayPageForGraph(displayPageRef.current, nextNodes),
@@ -8889,8 +9647,14 @@ function WorkspacePageInner() {
       throw saveError;
     }
     const hasNewerLocalEdits = workspaceEditVersionRef.current !== saveEditVersion;
+    const savedGraph = json.graph && typeof json.graph === "object"
+      ? {
+          ...json.graph,
+          subflows: workspaceSubflowsFromSaveResult(json.graph.subflows, graph.subflows),
+        }
+      : graph;
     const savedBaseline = workspaceSaveBaselineAfterSuccess({
-      savedGraph: json.graph,
+      savedGraph,
       sentGraph: graph,
       savedRevision: json.revision,
       currentRevision: workspaceRevisionRef.current,
@@ -8898,21 +9662,34 @@ function WorkspacePageInner() {
     workspaceRevisionRef.current = savedBaseline.revision;
     workspaceBaseGraphRef.current = savedBaseline.graph;
     if (!hasNewerLocalEdits) {
-      instancesRef.current = json.graph?.instances || graph.instances;
+      instancesRef.current = savedGraph.instances || graph.instances;
+      subflowsRef.current = savedGraph.subflows || {};
       setInstances(instancesRef.current);
       if (json.merged && json.graph) {
-        const mergedFlow = graphToFlow(json.graph, palette);
-        const mergedDisplayPage = normalizeDisplayPageState(json.graph?.ui?.displayPage, mergedFlow.nodes);
+        const mergedFlow = graphToFlow(savedGraph, palette);
+        subflowsRef.current = savedGraph.subflows || {};
+        const mergedDisplayPage = normalizeDisplayPageState(savedGraph?.ui?.displayPage, mergedFlow.nodes);
         instancesRef.current = mergedFlow.instances;
         setInstances(mergedFlow.instances);
         setNodes(mergedFlow.nodes);
         setEdges(mergedFlow.edges);
         displayPageRef.current = mergedDisplayPage;
         setDisplayPage(mergedDisplayPage);
+      } else {
+        // The call relation is DSL metadata, not a persisted DAG edge. A regular save must
+        // re-materialize it because React Flow may have pruned the cross-group visual edge.
+        const reconciledEdges = reconcileWorkspaceVirtualSubflowCallEdges(
+          nextEdges,
+          instancesRef.current,
+          subflowsRef.current,
+        );
+        edgesRef.current = reconciledEdges;
+        setEdges(reconciledEdges);
       }
       workspaceDirtyRef.current = false;
     }
     setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+    setWorkspaceRelease(json.release || null);
     setWorkspaceConflict(null);
     setWorkspaceConflictOpen(false);
     setWorkspaceSyncPhase(hasNewerLocalEdits ? "dirty" : "synced");
@@ -8981,6 +9758,68 @@ function WorkspacePageInner() {
     return resultPromise;
   }, [edges, nodes, performSaveGraph]);
 
+  const publishStableRelease = useCallback(async () => {
+    if (!workspaceWritable || workspaceIsTransientDraft || !flowParams.flowId) return;
+    setWorkspaceReleaseBusy(true);
+    setWorkspaceReleaseError("");
+    try {
+      const saved = await saveGraph();
+      const response = await fetch("/api/workspace/releases/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: flowParams.flowId,
+          flowSource: flowParams.flowSource || "user",
+          workspaceId: flowParams.workspaceId || "",
+          archived: Boolean(flowParams.archived),
+          expectedRevision: saved?.revision || workspaceRevisionRef.current || "",
+          notes: workspaceReleaseNotes.trim(),
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error || "发布稳定版本失败");
+      setWorkspaceRelease(json.status || null);
+      setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+      setWorkspaceReleaseNotes("");
+      setWorkspaceReleaseOpen(false);
+      showFlowSnippetToast(`已发布稳定版本 ${json.release?.id || ""}`.trim());
+    } catch (error) {
+      setWorkspaceReleaseError(String(error?.message || error));
+    } finally {
+      setWorkspaceReleaseBusy(false);
+    }
+  }, [flowParams, saveGraph, showFlowSnippetToast, workspaceIsTransientDraft, workspaceReleaseNotes, workspaceWritable]);
+
+  const rollbackStableRelease = useCallback(async (releaseId) => {
+    const target = String(releaseId || "").trim();
+    if (!target || !workspaceWritable || workspaceIsTransientDraft) return;
+    if (!window.confirm(`将生产稳定版本回退到 ${target}？调整态内容不会被覆盖。`)) return;
+    setWorkspaceReleaseBusy(true);
+    setWorkspaceReleaseError("");
+    try {
+      const response = await fetch("/api/workspace/releases/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          flowId: flowParams.flowId,
+          flowSource: flowParams.flowSource || "user",
+          workspaceId: flowParams.workspaceId || "",
+          archived: Boolean(flowParams.archived),
+          releaseId: target,
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error || "回退稳定版本失败");
+      setWorkspaceRelease(json.status || null);
+      setScheduledRunState(scheduledRunStateFromServer(json.workspaceSchedules || []));
+      showFlowSnippetToast(`Stable 已回退到 ${target}`);
+    } catch (error) {
+      setWorkspaceReleaseError(String(error?.message || error));
+    } finally {
+      setWorkspaceReleaseBusy(false);
+    }
+  }, [flowParams, showFlowSnippetToast, workspaceIsTransientDraft, workspaceWritable]);
+
   const restoreCanvasSnapshot = useCallback((snapshot) => {
     const nextInstances = snapshot?.extra?.instances && typeof snapshot.extra.instances === "object"
       ? snapshot.extra.instances
@@ -8988,7 +9827,13 @@ function WorkspacePageInner() {
     instancesRef.current = nextInstances;
     setInstances(nextInstances);
     setNodes(Array.isArray(snapshot?.nodes) ? snapshot.nodes : []);
-    setEdges(Array.isArray(snapshot?.edges) ? snapshot.edges : []);
+    const nextEdges = reconcileWorkspaceVirtualSubflowCallEdges(
+      Array.isArray(snapshot?.edges) ? snapshot.edges : [],
+      nextInstances,
+      subflowsRef.current,
+    );
+    edgesRef.current = nextEdges;
+    setEdges(nextEdges);
     setSelectedNodeId("");
     setConnectionMenu(null);
   }, [setEdges, setNodes]);
@@ -9023,6 +9868,9 @@ function WorkspacePageInner() {
     } else {
       const nodeQ = flowParamsQuery(flowParams);
       nodeQ.set("lang", String(i18n.language || "zh").startsWith("zh") ? "zh" : "en");
+      // Hidden structural nodes still need their UI schema when already instantiated.
+      // The palette filters them below; this request is for hydration, not authoring.
+      nodeQ.set("includeHidden", "1");
       const [nodesRes, nextGraphRes] = await Promise.all([
         fetch(`/api/nodes?${nodeQ.toString()}`),
         fetch(`/api/workspace/graph?${q.toString()}`),
@@ -9038,6 +9886,7 @@ function WorkspacePageInner() {
       background,
       requestId,
       currentRequestId: workspaceLoadRequestRef.current,
+      interactionActive: workspaceCanvasIsInteracting(),
       dirty: workspaceDirtyRef.current,
       startedEditVersion,
       currentEditVersion: workspaceEditVersionRef.current,
@@ -9047,6 +9896,9 @@ function WorkspacePageInner() {
     if (skipReason === "superseded") {
       return { skipped: true, reason: skipReason };
     }
+    if (skipReason === "interaction-active") {
+      return { skipped: true, reason: skipReason };
+    }
     if (skipReason === "local-edits") {
       setStatus("检测到远端更新；本地修改将在保存时自动合并");
       return { skipped: true, reason: skipReason };
@@ -9054,19 +9906,15 @@ function WorkspacePageInner() {
     const paletteList = background
       ? paletteRef.current
       : [
-          ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []).filter((node) => !HIDDEN_WORKSPACE_DEFS.has(node.id)),
-          WORKSPACE_CONTEXT_RUN_DEFINITION,
-          WORKSPACE_LOAD_WORKSPACE_DEFINITION,
-          WORKSPACE_LOAD_SKILLS_DEFINITION,
-          WORKSPACE_LOAD_MCP_DEFINITION,
-          WORKSPACE_RUN_DEFINITION,
-          WORKSPACE_SCHEDULED_RUN_DEFINITION,
+          // 节点定义单一来源：builtin/nodes/*.md（面板可见性由 frontmatter 的 palette: hidden 决定）
+          ...(Array.isArray(nodesJson) ? nodesJson : nodesJson.nodes || []),
         ];
     if (!background) {
       paletteRef.current = paletteList;
       setPalette(paletteList);
     }
     const graph = graphJson.graph || JSON.parse(localStorage.getItem(STORAGE_FALLBACK_KEY) || "null") || {};
+    subflowsRef.current = graph?.subflows || {};
     const flow = graphToFlow(graph, paletteList);
     const nextDisplayPage = normalizeDisplayPageState(graph?.ui?.displayPage, flow.nodes);
     const shouldInitializeWorkspaceViewport = !workspaceViewportInitializedRef.current;
@@ -9139,6 +9987,18 @@ function WorkspacePageInner() {
       setSelectedDisplayNodeIds([]);
       resetCanvasHistory(flow.nodes, flow.edges, { instances: flow.instances });
     }
+    // Background refreshes can report no persisted edge delta (correctly, since this
+    // relation is stored as subflowId). Still repair the derived call edge if the canvas
+    // library removed it while reconciling groups or handles.
+    setEdges((current) => {
+      const next = reconcileWorkspaceVirtualSubflowCallEdges(
+        current,
+        instancesRef.current,
+        subflowsRef.current,
+      );
+      edgesRef.current = next;
+      return next;
+    });
     const nextScheduledRunState = scheduledRunStateFromServer(graphJson.workspaceSchedules || []);
     setScheduledRunState((current) => (
       workspaceValueEqual(current, nextScheduledRunState) ? current : nextScheduledRunState
@@ -9151,6 +10011,8 @@ function WorkspacePageInner() {
       workspaceValueEqual(current, nextCollaboration) ? current : nextCollaboration
     ));
     setAdminReview(graphJson.adminReview || null);
+    setWorkspaceIsTransientDraft(graphJson.draft === true || flowParams.marketplacePreview);
+    setWorkspaceRelease(graphJson.release || null);
     setWorkspaceConflict(null);
     if (shouldInitializeWorkspaceViewport) {
       setWorkspaceViewport(nextWorkspaceViewport);
@@ -9170,7 +10032,7 @@ function WorkspacePageInner() {
     );
     loadedRef.current = true;
     return { skipped: false };
-  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceViewportStorageKey]);
+  }, [flowParams, i18n.language, loadFiles, resetCanvasHistory, setEdges, setNodes, workspaceCanvasIsInteracting, workspaceViewportStorageKey]);
 
   const scheduleWorkspaceRemoteRefresh = useCallback((event = {}) => {
     if (!loadedRef.current) return;
@@ -9216,8 +10078,12 @@ function WorkspacePageInner() {
       workspaceRemoteRefreshQueuedRef.current = false;
       workspaceRemoteRefreshInFlightRef.current = true;
       try {
-        await loadWorkspace({ background: true });
-        workspaceRemoteRefreshTargetRevisionRef.current = workspaceRevisionRef.current;
+        const result = await loadWorkspace({ background: true });
+        if (result?.reason === "interaction-active") {
+          workspaceRemoteRefreshQueuedRef.current = true;
+        } else {
+          workspaceRemoteRefreshTargetRevisionRef.current = workspaceRevisionRef.current;
+        }
       } catch (error) {
         workspaceRemoteRefreshTargetRevisionRef.current = "";
         setStatus(String(error.message || error));
@@ -9548,7 +10414,7 @@ function WorkspacePageInner() {
     setStatus(`Optimizing run: ${runNodeId}`);
     try {
       await saveGraph(nodesRef.current, edgesRef.current);
-      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
       const effectiveModel = workspaceRunNodeModel(nodesRef.current, instancesRef.current, runNodeId, composerModel);
       const res = await fetch("/api/workspace/run/optimize", {
         method: "POST",
@@ -9563,6 +10429,7 @@ function WorkspacePageInner() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.ok === false) throw new Error(json.error || "优化失败");
       const nextGraph = json.graph || graph;
+      subflowsRef.current = nextGraph?.subflows || subflowsRef.current;
       const flow = graphToFlow(nextGraph, palette);
       instancesRef.current = flow.instances;
       setInstances(flow.instances);
@@ -9641,7 +10508,7 @@ function WorkspacePageInner() {
         const next = { ...current };
         for (const id of affectedIds) {
           if (!id) continue;
-          if (!next[id] || next[id]?.status === "running") next[id] = { status: "stopped" };
+          if (!next[id] || ["running", "waiting"].includes(next[id]?.status)) next[id] = { ...next[id], status: "stopped" };
         }
         return next;
       });
@@ -9691,7 +10558,24 @@ function WorkspacePageInner() {
       const res = await fetch(`/api/workspace/run/status?${q.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) return;
-      if (!json.running) return;
+      if (!json.running) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          for (const [sessionId, session] of Object.entries(next)) {
+            if (["running", "stopping", "waiting", "polling"].includes(String(session?.status || ""))) delete next[sessionId];
+          }
+          return next;
+        });
+        setWorkspaceExecutingNodes(new Set());
+        setWorkspaceNodeRunStatus((current) => {
+          const next = { ...current };
+          for (const [nodeId, state] of Object.entries(next)) {
+            if (["running", "waiting"].includes(String(state?.status || ""))) delete next[nodeId];
+          }
+          return next;
+        });
+        return;
+      }
       const runs = Array.isArray(json.runs) && json.runs.length
         ? json.runs
         : [{ runId: `run-restored-${json.startedAt || Date.now()}`, runNodeId: json.runNodeId || "", startedAt: json.startedAt || Date.now(), plannedNodeIds: [] }];
@@ -9706,11 +10590,14 @@ function WorkspacePageInner() {
           id: sessionId,
           runNodeId,
           label: alias,
-          status: item?.state === "stopping" ? "stopping" : "running",
+          status: ["waiting", "polling"].includes(String(item?.state || "")) ? "waiting" : item?.state === "stopping" ? "stopping" : "running",
           plannedNodeIds: Array.isArray(item?.plannedNodeIds) ? item.plannedNodeIds : [],
+          waitingNodeId: String(item?.waitingNodeId || ""),
           startedAt: item?.startedAt || Date.now(),
         };
         if (runNodeId) restoredNodeIds.push(runNodeId);
+        const waitingNodeId = String(item?.waitingNodeId || "").trim();
+        if (waitingNodeId) restoredNodeIds.push(waitingNodeId);
       }
       if (!Object.keys(restoredSessions).length) return;
       setRunningRunSessionsSynced((current) => ({ ...current, ...restoredSessions }));
@@ -9721,7 +10608,25 @@ function WorkspacePageInner() {
       });
       setWorkspaceNodeRunStatus((current) => {
         const next = { ...current };
-        for (const runNodeId of restoredNodeIds) next[runNodeId] = { status: "running" };
+        for (const item of runs) {
+          const runNodeId = String(item?.runNodeId || "").trim();
+          const waitingNodeId = String(item?.waitingNodeId || "").trim();
+          if (runNodeId) next[runNodeId] = { status: ["waiting", "polling"].includes(String(item?.state || "")) ? "waiting" : "running" };
+          if (waitingNodeId) {
+            next[waitingNodeId] = {
+              status: "waiting",
+              detail: {
+                phase: String(item?.phase || ""),
+                jenkinsStatus: String(item?.jenkinsStatus || ""),
+                message: String(item?.message || ""),
+                buildNumber: String(item?.buildNumber || ""),
+                url: String(item?.url || ""),
+                qrUrl: String(item?.qrUrl || ""),
+                wakeAt: String(item?.wakeAt || ""),
+              },
+            };
+          }
+        }
         return next;
       });
       setStatus(restoredNodeIds.length ? `Workspace run still running: ${restoredNodeIds.join(", ")}` : "Workspace run still running");
@@ -9758,7 +10663,10 @@ function WorkspacePageInner() {
     }
   }, [flowParams, nodesRef, setRunningRunSessionsSynced]);
 
-  const runWorkspaceNode = useCallback(async (runNodeId) => {
+  // ignoreCache：这一趟不吃缓存。缓存靠指纹判定，而指纹只覆盖图里的东西——节点读了仓库、
+  // 读了网络，这些变化它看不见。所以「强制重跑」不是锦上添花，是这套缓存的必要配套。
+  const runWorkspaceNode = useCallback(async (runNodeId, runOptions = {}) => {
+    const ignoreCache = runOptions?.ignoreCache === true;
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
@@ -9802,7 +10710,7 @@ function WorkspacePageInner() {
         refreshNodeInternals(applied.nextId || draft.id);
       }
     }
-    const graph = flowToGraph(runNodes, runEdges, runInstances);
+    const graph = flowToGraph(runNodes, runEdges, runInstances, subflowsRef.current);
     const runSessionId = `run-${Date.now()}-${String(runNodeId).replace(/[^a-z0-9_-]+/gi, "_")}`;
     const runAlias = workspaceRunNodeAlias(runNodes, runInstances, runNodeId, "Workspace Run");
     const runSessionLabel = workspaceRunNameWithId(runAlias, runNodeId, "Workspace Run");
@@ -9811,7 +10719,7 @@ function WorkspacePageInner() {
       const planRes = await fetch("/api/workspace/run/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...flowParams, graph, runNodeId }),
+        body: JSON.stringify({ ...flowParams, graph, runNodeId, ignoreCache }),
       });
       const planJson = await planRes.json().catch(() => ({}));
       if (!planRes.ok || planJson?.ok === false) throw new Error(planJson.error || "Workspace run plan failed");
@@ -9870,6 +10778,7 @@ function WorkspacePageInner() {
         status: "running",
         startedAt: Date.now(),
         steps: [],
+        events: [{ type: "run-start", runId: runSessionId, runNodeId, status: "running", ts: Date.now() }],
         messages: [{ role: "assistant", kind: "run-summary", text: "准备运行...", at: Date.now() }],
       },
     ]);
@@ -9892,11 +10801,12 @@ function WorkspacePageInner() {
         const next = { ...current };
         for (const id of affectedIds) {
           if (!id) continue;
-          if (!next[id] || next[id]?.status === "running") next[id] = { status: finalStatus };
+          if (!next[id] || ["running", "waiting"].includes(next[id]?.status)) next[id] = { ...next[id], status: finalStatus };
         }
         return next;
       });
     };
+    let finalDeferred = null;
     try {
       await saveGraph(runNodes, runEdges);
       const effectiveModel = workspaceRunNodeModel(runNodes, runInstances, runNodeId, composerModel);
@@ -9914,6 +10824,7 @@ function WorkspacePageInner() {
           clientId: collaborationClientIdRef.current,
           model: effectiveModel,
           selectedSkills,
+          ignoreCache,
           stream: true,
         }),
       });
@@ -9972,6 +10883,15 @@ function WorkspacePageInner() {
             nextMessages.unshift(summaryMessage);
           }
           return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const appendRunAuditEvent = (sourceEvent) => {
+        if (!sourceEvent || typeof sourceEvent !== "object") return;
+        const event = { ...sourceEvent, ts: Number(sourceEvent.ts || sourceEvent.at || Date.now()) };
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const currentEvents = Array.isArray(session.events) ? session.events : [];
+          return { ...session, events: [...currentEvents, event].slice(-1000) };
         }));
       };
     const ensureContextRunResultDisplay = (nodeId, rawContent) => {
@@ -10113,7 +11033,7 @@ function WorkspacePageInner() {
         [id]: { status: "running" },
       }));
     };
-      const markNodeDone = (nodeId) => {
+      const markNodeDone = (nodeId, event = null) => {
         const id = String(nodeId || "").trim();
         if (!id) return;
         setWorkspaceExecutingNodes((current) => {
@@ -10121,7 +11041,44 @@ function WorkspacePageInner() {
           next.delete(id);
           return next;
         });
-        setWorkspaceNodeRunStatus((current) => ({ ...current, [id]: { status: "success" } }));
+        const jenkinsStatus = String(event?.jenkinsStatus || "").trim().toUpperCase();
+        const decision = String(event?.decision || "").trim();
+        const status = decision === "wait"
+          ? "waiting"
+          : decision === "fail"
+            ? "outcome_failed"
+            : jenkinsStatus && jenkinsStatus !== "SUCCESS"
+              ? "outcome_failed"
+              : "success";
+        setWorkspaceNodeRunStatus((current) => ({
+          ...current,
+          [id]: {
+            ...current[id],
+            status,
+            ...(jenkinsStatus ? { detail: { ...(current[id]?.detail || {}), jenkinsStatus } } : {}),
+          },
+        }));
+      };
+      const updateNodeRunDetail = (event) => {
+        const id = String(event?.nodeId || "").trim();
+        if (!id || (!event?.phase && !event?.jenkinsStatus)) return;
+        const detail = {
+          phase: String(event.phase || ""),
+          jenkinsStatus: String(event.jenkinsStatus || ""),
+          message: String(event.line || event.message || ""),
+          buildNumber: String(event.buildNumber || ""),
+          url: String(event.url || ""),
+          qrUrl: String(event.qrUrl || ""),
+          wakeAt: String(event.wakeAt || ""),
+        };
+        setWorkspaceNodeRunStatus((current) => ({
+          ...current,
+          [id]: {
+            ...current[id],
+            status: detail.phase === "complete" ? (current[id]?.status || "running") : "waiting",
+            detail,
+          },
+        }));
       };
       const appendNaturalText = (kind, text) => {
         const chunk = String(text || "");
@@ -10271,7 +11228,26 @@ function WorkspacePageInner() {
       };
       const markRunSessionStatus = (sessionStatus) => {
         setComposerRunSessions((list) => list.map((session) => (
-          session.id === runSessionId ? { ...session, status: sessionStatus, endedAt: Date.now() } : session
+          session.id === runSessionId
+            ? (() => {
+                const endedAt = Date.now();
+                const currentEvents = Array.isArray(session.events) ? session.events : [];
+                const finalEvent = {
+                  type: "run-finish",
+                  runId: runSessionId,
+                  runNodeId,
+                  status: sessionStatus === "done" ? "success" : sessionStatus,
+                  ts: endedAt,
+                  durationMs: Math.max(0, endedAt - Number(session.startedAt || endedAt)),
+                };
+                return {
+                  ...session,
+                  status: sessionStatus,
+                  ...(sessionStatus === "waiting" ? {} : { endedAt }),
+                  events: [...currentEvents, finalEvent].slice(-1000),
+                };
+              })()
+            : session
         )));
       };
       const eventTouchedNodeIds = (event) => {
@@ -10295,7 +11271,12 @@ function WorkspacePageInner() {
         return ids;
       };
       const applyGraph = (nextGraph, touchedNodeIds = null) => {
-        const flow = graphToFlow(nextGraph || graph, palette);
+        // Runtime graph events carry the just-produced output values. Keep them
+        // in the in-memory canvas so declarative Node UI Kit cards can expose
+        // decisions, summaries and progress. flowToGraph still strips these
+        // transient values before ordinary workspace saves.
+        const flow = graphToFlow(nextGraph || graph, palette, { preserveRuntimeOutputs: true });
+        subflowsRef.current = nextGraph?.subflows || graph?.subflows || subflowsRef.current;
         const incomingNodesById = new Map(flow.nodes.map((node) => [node.id, node]));
         const incomingInstances = flow.instances || {};
         const scopedIds = touchedNodeIds instanceof Set ? touchedNodeIds : null;
@@ -10321,7 +11302,7 @@ function WorkspacePageInner() {
         };
         setNodes((currentNodes) => {
           const currentIds = new Set(currentNodes.map((node) => node.id));
-          const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current);
+          const currentGraph = flowToGraph(currentNodes, edgesRef.current, instancesRef.current, subflowsRef.current);
           const nextInstances = { ...(currentGraph.instances || {}) };
           for (const [instanceId, instance] of Object.entries(incomingInstances)) {
             if (scopedIds && !scopedIds.has(instanceId)) continue;
@@ -10364,6 +11345,7 @@ function WorkspacePageInner() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
+          appendRunAuditEvent(event);
           if (event.type === "error") throw new Error(event.error || "Workspace run failed");
           if (event.type === "stopped") {
             workspaceRunStoppedRef.current.add(runSessionId);
@@ -10379,11 +11361,16 @@ function WorkspacePageInner() {
           if (event.type === "node-done") {
             const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
             if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
-            markNodeDone(event.nodeId);
+            markNodeDone(event.nodeId, event);
             updateRunStep(event.nodeId, event.definitionId, "done");
           }
           if (event.type === "status") {
+            updateNodeRunDetail(event);
             updateRunActivity(event.line || event.message || "", event);
+          }
+          if (event.type === "node-waiting") {
+            updateNodeRunDetail(event);
+            updateRunStep(event.nodeId, event.definitionId, "waiting");
           }
           if (event.type === "paused") {
             finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
@@ -10418,10 +11405,31 @@ function WorkspacePageInner() {
             finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
             updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
           }
+          if (event.type === "waiting") {
+            finalDeferred = event;
+            if (event.revision) workspaceRevisionRef.current = String(event.revision);
+            if (event.graph) {
+              workspaceBaseGraphRef.current = event.graph;
+              const touchedIds = eventTouchedNodeIds(event);
+              applyGraph(event.graph, touchedIds);
+            }
+            updateNodeRunDetail({
+              nodeId: event.nodeId,
+              phase: event.phase,
+              jenkinsStatus: event.jenkinsStatus,
+              line: event.message,
+              buildNumber: event.buildNumber,
+              url: event.url,
+              qrUrl: event.qrUrl,
+              wakeAt: event.wakeAt,
+            });
+            updateRunActivity("已转入后台等待 Jenkins", event);
+          }
         }
       }
       if (buffer.trim()) {
         const event = JSON.parse(buffer);
+        appendRunAuditEvent(event);
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
         if (event.type === "stopped") {
           workspaceRunStoppedRef.current.add(runSessionId);
@@ -10435,11 +11443,16 @@ function WorkspacePageInner() {
         if (event.type === "node-done") {
           const finalText = latestResultByNodeId.get(String(event.nodeId || "").trim());
           if (finalText) ensureContextRunResultDisplay(event.nodeId, finalText);
-          markNodeDone(event.nodeId);
+          markNodeDone(event.nodeId, event);
           updateRunStep(event.nodeId, event.definitionId, "done");
         }
         if (event.type === "status") {
+          updateNodeRunDetail(event);
           updateRunActivity(event.line || event.message || "", event);
+        }
+        if (event.type === "node-waiting") {
+          updateNodeRunDetail(event);
+          updateRunStep(event.nodeId, event.definitionId, "waiting");
         }
         if (event.type === "paused") {
           finalPauseNodeIds = Array.isArray(event.nodeIds) ? event.nodeIds : [];
@@ -10474,6 +11487,26 @@ function WorkspacePageInner() {
           finalPauseNodeIds = Array.isArray(event.pauseNodeIds) ? event.pauseNodeIds : finalPauseNodeIds;
           updateRunActivity(finalPauseNodeIds.length ? "运行暂停" : "运行完成", event);
         }
+        if (event.type === "waiting") {
+          finalDeferred = event;
+          if (event.revision) workspaceRevisionRef.current = String(event.revision);
+          if (event.graph) {
+            workspaceBaseGraphRef.current = event.graph;
+            const touchedIds = eventTouchedNodeIds(event);
+            applyGraph(event.graph, touchedIds);
+          }
+          updateNodeRunDetail({
+            nodeId: event.nodeId,
+            phase: event.phase,
+            jenkinsStatus: event.jenkinsStatus,
+            line: event.message,
+            buildNumber: event.buildNumber,
+            url: event.url,
+            qrUrl: event.qrUrl,
+            wakeAt: event.wakeAt,
+          });
+          updateRunActivity("已转入后台等待 Jenkins", event);
+        }
       }
       if (isRunStopped()) {
         removeSessionExecutingNodes(plannedNodeIds);
@@ -10481,15 +11514,32 @@ function WorkspacePageInner() {
       }
       const finalStatusMessage = isRunStopped()
         ? `Workspace run stopped: ${runNodeId}`
+        : finalDeferred
+        ? `Workspace run waiting in background: ${finalDeferred.message || finalDeferred.nodeId || runNodeId}`
         : finalPauseNodeIds.length
         ? `Workspace run paused at ${finalPauseNodeIds.join(", ")}`
         : `Workspace run done: ${finalOrder.length ? finalOrder.join(" -> ") : runNodeId}`;
       setStatus(finalStatusMessage);
-      if (!isRunStopped()) {
-        markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "paused" : "success");
+      if (!isRunStopped() && !finalDeferred) {
+        markSessionNodesFinal(plannedNodeIds, finalPauseNodeIds.length ? "waiting" : "success");
       }
-      markRunSessionStatus(isRunStopped() ? "stopped" : finalPauseNodeIds.length ? "paused" : "done");
-      if (!isRunStopped()) {
+      markRunSessionStatus(isRunStopped() ? "stopped" : finalDeferred ? "waiting" : finalPauseNodeIds.length ? "paused" : "done");
+      if (finalDeferred) {
+        setRunningRunSessionsSynced((current) => ({
+          ...current,
+          [runSessionId]: {
+            ...(current[runSessionId] || {}),
+            id: runSessionId,
+            runNodeId,
+            label: runAlias,
+            status: "waiting",
+            plannedNodeIds,
+            waitingNodeId: finalDeferred.nodeId || "",
+            startedAt: current[runSessionId]?.startedAt || Date.now(),
+          },
+        }));
+      }
+      if (!isRunStopped() && !finalDeferred) {
         try {
           await saveGraph(nodesRef.current, edgesRef.current);
           setStatus(finalStatusMessage);
@@ -10526,13 +11576,15 @@ function WorkspacePageInner() {
       )));
     } finally {
       if (workspaceRunAbortRefs.current.get(runSessionId) === abortController) workspaceRunAbortRefs.current.delete(runSessionId);
-      setRunningRunSessionsSynced((current) => {
-        const next = { ...current };
-        delete next[runSessionId];
-        return next;
-      });
+      if (!finalDeferred) {
+        setRunningRunSessionsSynced((current) => {
+          const next = { ...current };
+          delete next[runSessionId];
+          return next;
+        });
+      }
       workspaceRunStoppedRef.current.delete(runSessionId);
-      removeSessionExecutingNodes(plannedNodeIds);
+      if (!finalDeferred) removeSessionExecutingNodes(plannedNodeIds);
     }
   }, [composerModel, edges, flowParams, loadFiles, nodes, palette, refreshNodeInternals, saveGraph, selectedSkills, setEdges, setNodes, setRunningRunSessionsSynced, updateNodeInternals, workspaceWritable]);
 
@@ -10770,6 +11822,16 @@ function WorkspacePageInner() {
   }, [selectedNodeId]);
 
   useEffect(() => {
+    if (!selectedNodeId) {
+      setNodeExecutionReview(null);
+      setNodeExecutionReviewError("");
+      setNodeExecutionReviewLoading(false);
+      return;
+    }
+    void loadNodeExecutionReview(selectedNodeId);
+  }, [loadNodeExecutionReview, selectedNodeId, workspaceRelease?.stableReleaseId]);
+
+  useEffect(() => {
     connectionMenuRef.current = connectionMenu;
   }, [connectionMenu]);
 
@@ -10892,29 +11954,36 @@ function WorkspacePageInner() {
       return;
     }
     const serialized = serializeSkillKeys(keys);
+    const currentInstances = instancesRef.current || {};
+    const definitionId = String(currentInstances[nodeId]?.definitionId || nodes.find((node) => node.id === nodeId)?.data?.definitionId || "");
+    const isContextResource = definitionId === "context_skills";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
-      if (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text") return slot;
+      if (isContextResource ? slot?.name !== "skills" : (slot?.name !== "skillKeys" && slot?.name !== "skillsContext" && slot?.type !== "text")) return slot;
       return { ...slot, default: serialized, value: serialized };
     }) : []);
+    const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => (
+      isContextResource && slot?.name === "skillsContext" ? { ...slot, default: "", value: "" } : slot
+    )) : []);
     const nextNodes = nodes.map((node) => {
       if (node.id !== nodeId) return node;
       return {
         ...node,
         data: {
           ...node.data,
-          body: serialized,
+          body: isContextResource ? node.data?.body : serialized,
           inputs: patchInputSlots(node.data?.inputs),
+          outputs: patchOutputSlots(node.data?.outputs),
         },
       };
     });
-    const currentInstances = instancesRef.current || {};
     const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
     const nextInstances = {
       ...currentInstances,
       [nodeId]: {
         ...base,
-        body: serialized,
+        body: isContextResource ? base.body : serialized,
         input: patchInputSlots(base.input),
+        output: patchOutputSlots(base.output),
       },
     };
     instancesRef.current = nextInstances;
@@ -10924,8 +11993,9 @@ function WorkspacePageInner() {
       if (!draft || draft.id !== nodeId) return draft;
       return {
         ...draft,
-        body: serialized,
+        body: isContextResource ? draft.body : serialized,
         inputs: patchInputSlots(draft.inputs),
+        outputs: patchOutputSlots(draft.outputs),
       };
     });
     saveGraph(nextNodes, edges).catch((e) => setStatus(String(e.message || e)));
@@ -10983,12 +12053,16 @@ function WorkspacePageInner() {
     }
     const selected = (Array.isArray(workspaceOrList) ? workspaceOrList : (workspaceOrList ? [workspaceOrList] : []))
       .filter((item) => String(item?.path || "").trim());
+    const currentInstances = instancesRef.current || {};
+    const definitionId = String(currentInstances[nodeId]?.definitionId || nodes.find((node) => node.id === nodeId)?.data?.definitionId || "");
+    const isContextResource = definitionId === "context_knowledge";
     const primary = selected[0] || null;
     const pathValue = String(primary?.path || "").trim();
     const labelValue = selected.length === 1
       ? String(primary?.label || primary?.id || "知识库").trim()
       : (selected.length ? `${selected.length} 个知识库` : "");
     const knowledgeContextValue = selected.length ? JSON.stringify(knowledgeContextFromWorkspaces(selected)) : "";
+    const workspaceIdsValue = JSON.stringify(selected.map((item) => String(item?.id || "").trim()).filter(Boolean));
     const legacyWorkspaceContextValue = primary ? JSON.stringify({
       version: 1,
       id: primary?.id || "",
@@ -11002,6 +12076,8 @@ function WorkspacePageInner() {
       type: primary?.type || "",
     }) : "";
     const patchInputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (slot?.name === "workspaceIds") return { ...slot, default: workspaceIdsValue, value: workspaceIdsValue };
+      if (isContextResource) return slot;
       if (slot?.name === "path") return { ...slot, default: pathValue, value: pathValue };
       if (slot?.name === "label") return { ...slot, default: labelValue, value: labelValue };
       if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
@@ -11010,6 +12086,7 @@ function WorkspacePageInner() {
       return slot;
     }) : []);
     const patchOutputSlots = (slots) => (Array.isArray(slots) ? slots.map((slot) => {
+      if (isContextResource && slot?.name === "knowledgeContext") return { ...slot, default: "", value: "" };
       if (slot?.name === "knowledgeContext") return { ...slot, default: knowledgeContextValue, value: knowledgeContextValue };
       if (slot?.name === "workspaceContext") return { ...slot, default: legacyWorkspaceContextValue, value: legacyWorkspaceContextValue, showOnNode: false };
       if (slot?.name === "cwd") return { ...slot, default: pathValue, value: pathValue, showOnNode: false };
@@ -11028,7 +12105,6 @@ function WorkspacePageInner() {
           }
         : node
     ));
-    const currentInstances = instancesRef.current || {};
     const base = currentInstances[nodeId] && typeof currentInstances[nodeId] === "object" ? currentInstances[nodeId] : {};
     const nextInstances = {
       ...currentInstances,
@@ -11572,6 +12648,107 @@ function WorkspacePageInner() {
     });
   }, []);
 
+  const editWhileSubflow = useCallback((subflowId, role = "") => {
+    const id = String(subflowId || "").trim();
+    if (!id || !subflowsRef.current?.[id]) {
+      setStatus("子流程不存在");
+      return;
+    }
+    setActiveSubflowId(id);
+    setActiveSubflowRole(String(role || ""));
+    setSelectedNodeId("");
+    setConnectionMenu(null);
+    setComposerSidebarOpen(false);
+    window.setTimeout(() => reactFlow.fitView({ padding: 0.16, duration: 320 }), 0);
+  }, [reactFlow]);
+
+  const focusSubflowNode = useCallback((nodeId) => {
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    setNodes((list) => list.map((node) => ({ ...node, selected: node.id === id })));
+    setSelectedNodeId(id);
+    window.setTimeout(() => {
+      const node = reactFlow.getNode(id);
+      if (!node) return;
+      void reactFlow.setCenter(
+        Number(node.position?.x || 0) + Number(node.width || 320) / 2,
+        Number(node.position?.y || 0) + Number(node.height || 120) / 2,
+        { zoom: Math.max(0.8, reactFlow.getZoom()), duration: 240 },
+      );
+    }, 0);
+  }, [reactFlow, setNodes]);
+
+  const exitSubflowEditor = useCallback(() => {
+    setActiveSubflowId("");
+    setActiveSubflowRole("");
+    setSelectedNodeId("");
+    setConnectionMenu(null);
+    window.setTimeout(() => reactFlow.fitView({ padding: 0.12, duration: 320 }), 0);
+  }, [reactFlow]);
+
+  const changeNodeInputValue = useCallback((nodeId, inputName, value) => {
+    if (!workspaceWritable) return;
+    const id = String(nodeId || "");
+    const name = String(inputName || "");
+    if (!id || !name) return;
+    markWorkspaceDirty();
+    setNodes((list) => list.map((node) => {
+      if (node.id !== id) return node;
+      const inputs = (node.data?.inputs || []).map((slot) => (
+        String(slot?.name || "") === name ? { ...slot, default: String(value), value: String(value) } : slot
+      ));
+      return { ...node, data: { ...node.data, inputs } };
+    }));
+    syncNodePropDraft(id, (draft) => ({
+      inputs: (draft?.inputs || []).map((slot) => (
+        String(slot?.name || "") === name ? { ...slot, default: String(value), value: String(value) } : slot
+      )),
+    }));
+  }, [markWorkspaceDirty, setNodes, syncNodePropDraft, workspaceWritable]);
+
+  const commitSubflowContractChange = useCallback((result, successMessage, { subflowId = "", renameMap = {} } = {}) => {
+    if (result?.error) {
+      setStatus(result.error);
+      return false;
+    }
+    if (!result?.subflows || result.subflows === subflowsRef.current) return true;
+    markWorkspaceDirty();
+    const currentGraph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
+    const graph = reconcileSubflowCallOutputs(
+      { ...currentGraph, subflows: result.subflows },
+      subflowId,
+      renameMap,
+    );
+    subflowsRef.current = graph.subflows;
+    instancesRef.current = graph.instances;
+    const projected = graphToFlow(graph, palette, { preserveRuntimeOutputs: true });
+    nodesRef.current = projected.nodes;
+    edgesRef.current = projected.edges;
+    setNodes(projected.nodes);
+    setEdges(projected.edges);
+    setInstances(graph.instances);
+    setStatus(successMessage);
+    return true;
+  }, [markWorkspaceDirty, palette, setEdges, setNodes]);
+
+  const changeSubflowOutputName = useCallback((subflowId, oldName, newName) => {
+    if (!workspaceWritable) return false;
+    return commitSubflowContractChange(
+      renameSubflowOutput(subflowsRef.current, subflowId, oldName, newName),
+      `已重命名输出 ${oldName} → ${newName}`,
+      { subflowId, renameMap: { [oldName]: newName } },
+    );
+  }, [commitSubflowContractChange, workspaceWritable]);
+
+  const deleteSubflowOutput = useCallback((subflowId, name) => {
+    if (!workspaceWritable) return;
+    commitSubflowContractChange(
+      removeSubflowOutput(subflowsRef.current, subflowId, name),
+      `已删除输出 ${name}`,
+      { subflowId },
+    );
+  }, [commitSubflowContractChange, workspaceWritable]);
+
   const setProvideNodeValue = useCallback((nodeId, value) => {
     const id = String(nodeId || "");
     if (!id || !workspaceWritable) return;
@@ -11634,11 +12811,43 @@ function WorkspacePageInner() {
     }
   }, [flowParams, loadFiles, workspaceWritable]);
 
+  const removeNodeFromSubflows = useCallback((nodeId) => {
+    const id = String(nodeId || "");
+    if (!id) return;
+    subflowsRef.current = Object.fromEntries(Object.entries(subflowsRef.current || {}).map(([subflowId, subflow]) => [
+      subflowId,
+      {
+        ...subflow,
+        nodeIds: (subflow.nodeIds || []).filter((memberId) => String(memberId) !== id),
+        roots: (subflow.roots || []).filter((rootId) => String(rootId) !== id),
+        outputs: Object.fromEntries(Object.entries(subflow.outputs || {}).filter(([, binding]) => String(binding?.nodeId || "") !== id)),
+      },
+    ]));
+    const nextInstances = { ...instancesRef.current };
+    delete nextInstances[id];
+    instancesRef.current = nextInstances;
+    setInstances(nextInstances);
+  }, []);
+
+  const suppressWorkspaceSelectionAutosave = useCallback((patch = {}) => {
+    const current = workspaceAutosaveSuppressedStateRef.current || {
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      displayPage: displayPageRef.current,
+    };
+    workspaceAutosaveSuppressedStateRef.current = {
+      ...current,
+      ...patch,
+      displayPage: displayPageRef.current,
+    };
+  }, []);
+
   const hydratedNodeCommonData = useMemo(() => ({
     modelLists,
     showBodyPreview: true,
     flowParams,
     readOnly: !workspaceWritable,
+    activeSubflowEditorId: activeSubflowId,
     onRunWorkspaceNode: runWorkspaceNode,
     onStopWorkspaceNode: stopWorkspaceRun,
     onOpenWorkspaceRunLogs: openWorkspaceRunLogs,
@@ -11673,8 +12882,39 @@ function WorkspacePageInner() {
     onUpdateNodeChatDraft: updateNodeChatDraft,
     onSendNodeChat: sendNodeChat,
     onSyncNodePropDraft: syncNodePropDraft,
+    onEditWhileSubflow: editWhileSubflow,
+    onFocusSubflowNode: focusSubflowNode,
+    onNodeInputValueChange: changeNodeInputValue,
+    onRenameSubflowOutput: changeSubflowOutputName,
+    onDeleteSubflowOutput: deleteSubflowOutput,
     onCleanupWorkspaceNodeOutputs: cleanupWorkspaceNodeOutputs,
-  }), [changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeScheduledRunConfig, cleanupWorkspaceNodeOutputs, closeNodeChat, ensureWorkspaceNodeDisplaySize, flowParams, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
+    onRemoveNodeFromSubflows: removeNodeFromSubflows,
+    onSuppressWorkspaceSelectionAutosave: suppressWorkspaceSelectionAutosave,
+  }), [activeSubflowId, changeContextRunConfig, changeLoadMcpNames, changeLoadSkillKeys, changeLoadWorkspace, changeNodeInputValue, changeScheduledRunConfig, changeSubflowOutputName, cleanupWorkspaceNodeOutputs, closeNodeChat, deleteSubflowOutput, editWhileSubflow, ensureWorkspaceNodeDisplaySize, flowParams, focusSubflowNode, mcpServers, modelLists, openProvideFilePicker, openWorkspaceRunLogs, optimizeWorkspaceRun, refreshMcps, refreshNodeInternals, refreshSkills, refreshWorkspaces, removeNodeFromSubflows, runWorkspaceNode, runningRunNodeIds, saveDisplayNodeToFile, sendNodeChat, setDisplayNodeContent, shareDisplayNode, sharingDisplayNodeId, skillCollections, skills, stopWorkspaceRun, suppressWorkspaceSelectionAutosave, syncNodePropDraft, toggleNodeChat, updateNodeChatDraft, uploadImageToDisplayNode, uploadWorkspaceImage, workspaceTargets, workspaceWritable]);
+
+  const connectedWorkspaceNodeIds = useMemo(() => {
+    const ids = new Set();
+    for (const edge of edges) {
+      if (edge?.source) ids.add(String(edge.source));
+      if (edge?.target) ids.add(String(edge.target));
+    }
+    return ids;
+  }, [edges]);
+
+  const nodeUiInputBindings = useMemo(
+    () => buildNodeUiInputBindings(nodes, edges),
+    [edges, nodes],
+  );
+
+  const selectedSubflowBoundaryIds = useMemo(() => {
+    const ids = new Set();
+    for (const edge of edges) {
+      if (!edge?.selected || !edge?.data?.virtualSubflowCall) continue;
+      if (edge.target) ids.add(String(edge.target));
+      if (edge.data?.returnNodeId) ids.add(String(edge.data.returnNodeId));
+    }
+    return ids;
+  }, [edges]);
 
   const hydratedNodeCacheRef = useRef(new Map());
   const hydratedNodes = useMemo(() => {
@@ -11683,13 +12923,17 @@ function WorkspacePageInner() {
     const nextNodes = nodes.map((node) => {
       const runtime = {
         selected: node.selected === true,
+        hasConnections: connectedWorkspaceNodeIds.has(node.id),
         isExecuting: workspaceExecutingNodes.has(node.id),
-        nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? null,
+        nodeStatus: workspaceNodeRunStatus[node.id]?.status ?? persistedNodeUiStatus(node.data),
         nodeElapsed: workspaceNodeRunStatus[node.id]?.elapsed ?? null,
+        nodeRunDetail: workspaceNodeRunStatus[node.id]?.detail ?? null,
         optimizingRun: optimizingRunNodeId === node.id,
         scheduledRunState: scheduledRunState[node.id] || null,
         nodeChatActive: activeNodeChatId === node.id,
         nodeChat: nodeChatSessions[node.id] || null,
+        callRelationSelected: selectedSubflowBoundaryIds.has(node.id),
+        nodeUiBindings: nodeUiInputBindings.get(node.id) || null,
       };
       const cached = cache.get(node.id);
       if (
@@ -11725,7 +12969,7 @@ function WorkspacePageInner() {
       if (!seen.has(id)) cache.delete(id);
     }
     return nextNodes;
-  }, [activeNodeChatId, hydratedNodeCommonData, nodeChatSessions, nodes, optimizingRunNodeId, scheduledRunState, workspaceExecutingNodes, workspaceNodeRunStatus]);
+  }, [activeNodeChatId, connectedWorkspaceNodeIds, hydratedNodeCommonData, nodeChatSessions, nodeUiInputBindings, nodes, optimizingRunNodeId, scheduledRunState, selectedSubflowBoundaryIds, workspaceExecutingNodes, workspaceNodeRunStatus]);
 
   const isDisplayMode = workspaceMode === "display";
   const isWorkflowMode = workspaceMode === "workflow";
@@ -11755,6 +12999,37 @@ function WorkspacePageInner() {
     const selected = new Set(selectedDisplayNodeIds);
     const cache = displayCanvasNodeCacheRef.current;
     const seen = new Set();
+    const groupNodes = Array.from(displaySourceNodeById.values())
+      .filter(isWorkspaceGroupNode)
+      .map((sourceGroup) => {
+        const group = {
+          id: sourceGroup.id,
+          title: sourceGroup.data?.title || sourceGroup.data?.label || "Group",
+          color: sourceGroup.data?.color || "purple",
+          nodeIds: sourceGroup.data?.nodeIds || [],
+        };
+        const bounds = displayGroupBounds(group, displayPage, displaySourceNodeById);
+        if (!bounds) return null;
+        return {
+          ...sourceGroup,
+          id: displayGroupRefNodeId(sourceGroup.id),
+          position: bounds.position,
+          width: bounds.size.width,
+          height: bounds.size.height,
+          selected: false,
+          draggable: false,
+          selectable: false,
+          zIndex: 0,
+          data: {
+            ...sourceGroup.data,
+            nodeIds: bounds.memberIds,
+            nodeSize: bounds.size,
+            readOnly: true,
+            displayPageMode: true,
+          },
+        };
+      })
+      .filter(Boolean);
     const result = displayPage.nodeIds
       .map((sourceId, index) => {
         const sourceNode = displaySourceNodeById.get(sourceId);
@@ -11801,7 +13076,7 @@ function WorkspacePageInner() {
     for (const sourceId of cache.keys()) {
       if (!seen.has(sourceId)) cache.delete(sourceId);
     }
-    return result;
+    return [...groupNodes, ...result];
   }, [displayPage, displaySourceNodeById, isDisplayMode, selectedDisplayNodeIds]);
 
   const availableDisplayNodes = useMemo(
@@ -12105,18 +13380,29 @@ function WorkspacePageInner() {
     });
   }, [edgeNodeDataById, edges]);
 
-  const canvasNodes = isDisplayMode ? displayCanvasNodes : hydratedNodes;
-  const canvasEdges = isDisplayMode ? [] : coloredEdges;
+  const activeSubflow = activeSubflowId ? subflowsRef.current?.[activeSubflowId] || null : null;
+  const subflowCanvas = useMemo(() => activeSubflowCanvas({
+    nodes: hydratedNodes,
+    edges: coloredEdges,
+    subflow: activeSubflow,
+    subflowId: activeSubflowId,
+  }), [activeSubflow, activeSubflowId, coloredEdges, hydratedNodes]);
+  const canvasNodes = isDisplayMode ? displayCanvasNodes : activeSubflowId ? subflowCanvas.nodes : hydratedNodes;
+  const canvasEdges = isDisplayMode ? [] : activeSubflowId ? subflowCanvas.edges : coloredEdges;
   const canvasNodesRef = useRef(canvasNodes);
   const transientCanvasNodesRef = useRef([]);
+  const pendingTransientCanvasNodeChangesRef = useRef([]);
+  const transientCanvasFrameRef = useRef(null);
   if (!workspaceCanvasInteractionActiveRef.current) {
     canvasNodesRef.current = canvasNodes;
   }
   const jumpPaletteNodes = useMemo(() => (
     isDisplayMode
-      ? displayCanvasNodes.map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
-      : hydratedNodes
-  ), [displayCanvasNodes, hydratedNodes, isDisplayMode]);
+      ? displayCanvasNodes
+        .filter((node) => !isWorkspaceGroupNode(node))
+        .map((node) => ({ ...node, id: sourceIdFromDisplayRefId(node.id) }))
+      : canvasNodes
+  ), [canvasNodes, displayCanvasNodes, isDisplayMode]);
 
   const jumpToWorkspaceNodeById = useCallback((nodeId) => {
     const sourceId = String(nodeId || "").trim();
@@ -12186,6 +13472,7 @@ function WorkspacePageInner() {
     const q = paletteSearch.trim().toLowerCase();
     const grouped = { DISPLAY: [], CONTROL: [], TOOL: [], PROVIDE: [], AGENT: [] };
     for (const item of palette) {
+      if (item?.paletteHidden) continue;
       if (q && ![item.id, item.label, item.displayName, item.description].some((x) => String(x || "").toLowerCase().includes(q))) continue;
       grouped[paletteCategory(item)].push(item);
     }
@@ -12196,6 +13483,7 @@ function WorkspacePageInner() {
   const quickAddItems = useMemo(() => {
     const q = quickAddSearch.trim().toLowerCase();
     return palette
+      .filter((item) => !item?.paletteHidden)
       .filter((item) => !q || [item.id, item.label, item.displayName, item.description]
         .some((x) => String(x || "").toLowerCase().includes(q)))
       .sort((a, b) => {
@@ -12350,6 +13638,7 @@ function WorkspacePageInner() {
         label: workspaceGroupTitle(index - 1),
         title: workspaceGroupTitle(index - 1),
         color: "purple",
+        nodeIds: selectedNodes.map((node) => node.id),
         nodeSize: size,
       },
     };
@@ -12410,6 +13699,7 @@ function WorkspacePageInner() {
       return;
     }
     setWorkspaceMode(nextMode);
+    exitSubflowEditor();
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
     setConnectionMenu(null);
@@ -12423,7 +13713,7 @@ function WorkspacePageInner() {
     }
     const url = `/workspace${q.toString() ? `?${q.toString()}` : ""}`;
     window.history.pushState({}, "", url);
-  }, [flowParams, isWorkflowMode, openWorkflowProjectView, workflowProjectBindings, workflowTapdId]);
+  }, [exitSubflowEditor, flowParams, isWorkflowMode, openWorkflowProjectView, workflowProjectBindings, workflowTapdId]);
 
   const addDisplayPageNode = useCallback((sourceId) => {
     const id = String(sourceId || "").trim();
@@ -12642,7 +13932,35 @@ function WorkspacePageInner() {
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
     setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}（已选中 ${insertedNodeIds.length} 个节点）`);
+    if (snippetEntry?.id && snippetEntry?.version) {
+      const insertionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      void fetch("/api/marketplace/flow-snippets/use", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: snippetEntry.id, version: snippetEntry.version, eventId: insertionId }),
+      }).catch(() => undefined);
+    }
   }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes, workspaceWritable]);
+
+  useEffect(() => {
+    const pending = pendingMarketplaceSnippetRef.current;
+    if (!pending.id || pending.handled || flowSnippetsLoading || !loadedRef.current || !workspaceWritable) return;
+    pending.handled = true;
+    const snippet = flowSnippets.find((item) => (
+      String(item.id || "") === pending.id
+      && (!pending.version || String(item.version || "") === pending.version)
+    ));
+    const url = new URL(window.location.href);
+    url.searchParams.delete("marketplaceSnippetId");
+    url.searchParams.delete("marketplaceSnippetVersion");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    if (!snippet) {
+      setStatus(`未找到流程片段：${pending.id}${pending.version ? `@${pending.version}` : ""}`);
+      return;
+    }
+    insertFlowSnippet(snippet);
+    showFlowSnippetToast(`已从流程仓库添加：${snippet.displayName || snippet.id}`);
+  }, [flowSnippets, flowSnippetsLoading, insertFlowSnippet, showFlowSnippetToast, workspaceSyncPhase, workspaceWritable]);
 
   const openPublishSnippetDialog = useCallback(() => {
     if (selectedCanvasNodes.length < 2) {
@@ -12800,7 +14118,7 @@ function WorkspacePageInner() {
   }, [flowParams, workspaceCollaboration?.ownerId]);
 
   const backupDraftAndReloadWorkspace = useCallback(async () => {
-    const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current);
+    const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
     graph.ui = {
       ...(graph.ui || {}),
       ...(workspaceViewportRef.current ? { viewport: workspaceViewportRef.current } : {}),
@@ -13199,6 +14517,27 @@ function WorkspacePageInner() {
       }
       return;
     }
+    const removedNodeIds = new Set((changes || [])
+      .filter((change) => change?.type === "remove")
+      .map((change) => String(change.id || ""))
+      .filter((id) => id && !id.startsWith("subflow-start:") && !id.startsWith("subflow-return:")));
+    if (removedNodeIds.size > 0) {
+      subflowsRef.current = Object.fromEntries(Object.entries(subflowsRef.current || {}).map(([subflowId, subflow]) => {
+        const outputs = Object.fromEntries(Object.entries(subflow?.outputs || {}).filter(([, binding]) => (
+          !removedNodeIds.has(String(binding?.nodeId || ""))
+        )));
+        return [subflowId, {
+          ...subflow,
+          nodeIds: (subflow.nodeIds || []).filter((nodeId) => !removedNodeIds.has(String(nodeId))),
+          roots: (subflow.roots || []).filter((nodeId) => !removedNodeIds.has(String(nodeId))),
+          outputs,
+        }];
+      }));
+      const nextInstances = { ...instancesRef.current };
+      removedNodeIds.forEach((id) => delete nextInstances[id]);
+      instancesRef.current = nextInstances;
+      setInstances(nextInstances);
+    }
     // Selection is React Flow UI state, not part of the persisted workspace graph.
     // Without this guard, pressing a node schedules an autosave before its first
     // drag event. That save can rerender the controlled canvas with the old
@@ -13224,7 +14563,7 @@ function WorkspacePageInner() {
         }
       }
       const applied = applyNodeChanges(changes, current);
-      const next = resized.size === 0
+      const resizedNodes = resized.size === 0
         ? applied
         : applied.map((node) => {
             const size = resized.get(node.id);
@@ -13241,6 +14580,11 @@ function WorkspacePageInner() {
               data: nextData,
             };
           });
+      const next = expandWorkspaceGroupsToMembers(resizedNodes, {
+        padding: WORKSPACE_GROUP_PADDING,
+        minWidth: MIN_WORKSPACE_GROUP_WIDTH,
+        minHeight: MIN_WORKSPACE_GROUP_HEIGHT,
+      });
       if (!interaction.mutated) {
         workspaceAutosaveSuppressedStateRef.current = {
           nodes: next,
@@ -13267,13 +14611,64 @@ function WorkspacePageInner() {
     if (merged.length > 0) applyCanvasNodeChanges(merged);
   }, [applyCanvasNodeChanges]);
 
+  const cancelPendingTransientCanvasFrame = useCallback(() => {
+    if (transientCanvasFrameRef.current != null) {
+      window.cancelAnimationFrame(transientCanvasFrameRef.current);
+      transientCanvasFrameRef.current = null;
+    }
+    pendingTransientCanvasNodeChangesRef.current = [];
+  }, []);
+
+  const flushTransientCanvasNodeChanges = useCallback(() => {
+    transientCanvasFrameRef.current = null;
+    const pending = pendingTransientCanvasNodeChangesRef.current;
+    pendingTransientCanvasNodeChangesRef.current = [];
+    if (pending.length === 0) return;
+    const appliedTransientNodes = applyNodeChanges(
+      pending,
+      transientCanvasNodesRef.current,
+    );
+    // During drag/resize, React Flow owns the live geometry. Group bounds are
+    // reconciled once on pointer-up; doing it on every frame can round or grow
+    // the group and make the pointer feel as if remote state pulled it back.
+    const nextTransientNodes = appliedTransientNodes;
+    transientCanvasNodesRef.current = nextTransientNodes;
+    reactFlowStore.getState().setNodes(nextTransientNodes);
+  }, [reactFlowStore]);
+
+  const scheduleTransientCanvasNodeChanges = useCallback((changes) => {
+    pendingTransientCanvasNodeChangesRef.current = coalesceWorkspaceCanvasChanges([
+      ...pendingTransientCanvasNodeChangesRef.current,
+      ...changes,
+    ]);
+    if (transientCanvasFrameRef.current != null) return;
+    transientCanvasFrameRef.current = window.requestAnimationFrame(flushTransientCanvasNodeChanges);
+  }, [flushTransientCanvasNodeChanges]);
+
   const handleNodesChange = useCallback((changes) => {
+    const canvasSnapshot = transientCanvasNodesRef.current.length > 0
+      ? transientCanvasNodesRef.current
+      : canvasNodesRef.current;
+    const nodeById = new Map(canvasSnapshot.map((node) => [node.id, node]));
+    // Boundary geometry is derived from the subflow contract. React Flow still
+    // reports a first measurement, but accepting it would create a fake design edit.
+    const persistentChanges = (changes || []).filter((change) => !(
+      change?.type === "dimensions" && nodeById.get(change.id)?.data?.isSubflowBoundary
+    ));
+    const expandedChanges = workspaceMode === "display"
+      ? persistentChanges
+      : expandWorkspaceGroupPositionChanges(
+          persistentChanges,
+          canvasSnapshot,
+          workspaceGroupDragOriginsRef.current,
+        );
     const {
       transient,
       committed,
       finishesInteraction,
-    } = partitionWorkspaceCanvasChanges(changes);
+    } = partitionWorkspaceCanvasChanges(expandedChanges);
     if (transient.length > 0) {
+      setWorkspaceNodeInteractionUiActive(true);
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -13286,20 +14681,17 @@ function WorkspacePageInner() {
         ...lastActiveCanvasNodeChangesRef.current,
         ...transient,
       ]);
-      const nextTransientNodes = applyNodeChanges(
-        transient,
-        transientCanvasNodesRef.current,
-      );
-      transientCanvasNodesRef.current = nextTransientNodes;
-      reactFlowStore.getState().setNodes(nextTransientNodes);
+      scheduleTransientCanvasNodeChanges(transient);
     }
     if (finishesInteraction) {
+      setWorkspaceNodeInteractionUiActive(false);
+      cancelPendingTransientCanvasFrame();
       transientCanvasNodesRef.current = [];
       flushPendingCanvasNodeChanges(committed, { finish: true });
       return;
     }
     if (committed.length > 0) applyCanvasNodeChanges(committed);
-  }, [applyCanvasNodeChanges, flushPendingCanvasNodeChanges, reactFlowStore]);
+  }, [applyCanvasNodeChanges, cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleTransientCanvasNodeChanges, workspaceMode]);
 
   const settleWorkspaceCanvasInteraction = useCallback(() => {
     if (
@@ -13312,13 +14704,16 @@ function WorkspacePageInner() {
       workspaceCanvasInteractionActiveRef.current
       || lastActiveCanvasNodeChangesRef.current.length > 0
     ) {
+      setWorkspaceNodeInteractionUiActive(false);
+      cancelPendingTransientCanvasFrame();
       flushPendingCanvasNodeChanges([], { finish: true });
       transientCanvasNodesRef.current = [];
+      workspaceGroupDragOriginsRef.current.clear();
     }
     if (workspaceRemoteRefreshQueuedRef.current) {
       scheduleWorkspaceRemoteRefresh({ type: "interaction.finished" });
     }
-  }, [flushPendingCanvasNodeChanges, scheduleWorkspaceRemoteRefresh]);
+  }, [cancelPendingTransientCanvasFrame, flushPendingCanvasNodeChanges, scheduleWorkspaceRemoteRefresh]);
 
   const trackWorkspaceCanvasPointer = useCallback((event) => {
     if (event?.pointerId == null) return;
@@ -13345,6 +14740,7 @@ function WorkspacePageInner() {
     const finishInterruptedInteraction = () => {
       workspaceCanvasPointerIdsRef.current.clear();
       workspaceViewportInteractionActiveRef.current = false;
+      workspaceGroupDragOriginsRef.current.clear();
       settleWorkspaceCanvasInteraction();
     };
     const finishWhenHidden = () => {
@@ -13363,10 +14759,12 @@ function WorkspacePageInner() {
       document.removeEventListener("visibilitychange", finishWhenHidden);
       workspaceCanvasPointerIdsRef.current.clear();
       workspaceViewportInteractionActiveRef.current = false;
+      workspaceGroupDragOriginsRef.current.clear();
       lastActiveCanvasNodeChangesRef.current = [];
+      cancelPendingTransientCanvasFrame();
       transientCanvasNodesRef.current = [];
     };
-  }, [finishWorkspaceCanvasPointer, settleWorkspaceCanvasInteraction]);
+  }, [cancelPendingTransientCanvasFrame, finishWorkspaceCanvasPointer, settleWorkspaceCanvasInteraction]);
 
   const handleEdgesChange = useCallback((changes) => {
     if (workspaceMode === "display") return;
@@ -13381,9 +14779,22 @@ function WorkspacePageInner() {
       }
       return;
     }
-    if ((changes || []).some((change) => change?.type !== "select")) markWorkspaceDirty();
+    const protectedChanges = (changes || []).filter((change) => !(
+      change?.type === "remove" &&
+      edgesRef.current.some((edge) => (
+        edge.id === change.id && (edge?.data?.virtualSubflowCall || edge?.data?.virtualSubflowBoundary)
+      ))
+    ));
+    if (protectedChanges.some((change) => change?.type !== "select")) markWorkspaceDirty();
     setEdges((current) => {
-      const next = applyEdgeChanges(changes, current);
+      // Subflow call/boundary edges visualize a call frame and are not editable DAG edges.
+      // Ignore incidental remove events; graph reload deterministically projects them again.
+      const changed = applyEdgeChanges(protectedChanges, current);
+      const next = reconcileWorkspaceVirtualSubflowCallEdges(
+        changed,
+        instancesRef.current,
+        subflowsRef.current,
+      );
       edgesRef.current = next;
       return next;
     });
@@ -13424,7 +14835,7 @@ function WorkspacePageInner() {
     const id = overrides.id || nextNodeId(runtimeDefinitionId, nodes);
     const input = cloneSlots(def.inputs);
     const output = cloneSlots(def.outputs);
-    const instance = {
+    let instance = {
       definitionId: runtimeDefinitionId,
       ...(marketplaceRef ? { marketplaceRef } : {}),
       ...(def.packageId ? { marketplacePackageId: def.packageId } : {}),
@@ -13439,6 +14850,23 @@ function WorkspacePageInner() {
       input: overrides.inputs || input,
       output: overrides.outputs || output,
     };
+    let nextSubflows = subflowsRef.current;
+    if (activeSubflowId && nextSubflows?.[activeSubflowId]) {
+      instance = { ...instance, subflowId: activeSubflowId };
+      nextSubflows = addNodeToSubflow(nextSubflows, activeSubflowId, id);
+    }
+    const whileScaffold = runtimeDefinitionId === "control_while" && !instance.conditionSubflowId && !instance.bodySubflowId
+      ? createWhileSubflowScaffold({
+          whileId: id,
+          instance,
+          instances: { ...instancesRef.current, [id]: instance },
+          subflows: nextSubflows,
+        })
+      : null;
+    if (whileScaffold) {
+      instance = whileScaffold.instance;
+      nextSubflows = { ...nextSubflows, ...whileScaffold.subflows };
+    }
     const node = {
       id,
       type: FLOW_NODE_TYPE,
@@ -13462,20 +14890,118 @@ function WorkspacePageInner() {
     };
     const merged = { ...mergeNodeWithPalette(node, { ...instancesRef.current, [id]: instance }, palette), selected: true };
     markWorkspaceDirty();
-    setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
+    const nextInstances = {
+      ...instancesRef.current,
+      [id]: instance,
+      ...(whileScaffold?.instances || {}),
+    };
+    instancesRef.current = nextInstances;
+    subflowsRef.current = nextSubflows;
+    setInstances(nextInstances);
+    if (whileScaffold) {
+      const proxyPosition = overrides.position || defaultWorkspaceNodePosition();
+      const proxyNodes = Object.entries(whileScaffold.instances).map(([proxyId, proxy], index) => ({
+        id: proxyId,
+        type: FLOW_NODE_TYPE,
+        position: { x: proxyPosition.x + 120, y: proxyPosition.y + 180 + index * 90 },
+        hidden: true,
+        selectable: false,
+        draggable: false,
+        data: {
+          label: proxy.label,
+          definitionId: proxy.definitionId,
+          inputs: proxy.input,
+          outputs: proxy.output,
+          isSubflowInputProxy: true,
+        },
+      }));
+      const graph = flowToGraph(
+        [...nodesRef.current, merged, ...proxyNodes],
+        edgesRef.current,
+        nextInstances,
+        nextSubflows,
+      );
+      const projected = graphToFlow(graph, palette, { preserveRuntimeOutputs: true });
+      const selectedNodes = projected.nodes.map((item) => ({ ...item, selected: item.id === id }));
+      nodesRef.current = selectedNodes;
+      edgesRef.current = projected.edges;
+      setNodes(selectedNodes);
+      setEdges(projected.edges);
+    } else {
+      setNodes((list) => [...list.map((item) => ({ ...item, selected: false })), merged]);
+    }
     if (overrides.openProperties) setSelectedNodeId(id);
     return id;
-  }, [defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setNodes, workspaceWritable]);
+  }, [activeSubflowId, defaultWorkspaceNodePosition, markWorkspaceDirty, nodes, palette, setEdges, setNodes, workspaceWritable]);
 
-  const isValidConnection = useCallback((params) => workspaceConnectionCompatible(params, nodesRef.current), []);
+  useEffect(() => {
+    const pending = pendingMarketplaceNodeRef.current;
+    if (!pending.definitionId || pending.handled || !loadedRef.current || !workspaceWritable || palette.length === 0) return;
+    const definition = palette.find((item) => (
+      String(item?.id || "") === pending.definitionId
+      || String(item?.marketplaceDefinitionId || "") === pending.definitionId
+    ));
+    if (!definition) {
+      if (workspaceSyncPhase !== "synced") return;
+      pending.handled = true;
+      setStatus(`未找到节点：${pending.definitionId}`);
+    } else {
+      pending.handled = true;
+      const nodeId = addNodeFromDefinition(definition, { openProperties: true });
+      if (nodeId) {
+        setStatus(`已从流程仓库添加节点：${definition.displayName || definition.label || definition.id}`);
+      }
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("marketplaceNodeDefinitionId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [addNodeFromDefinition, palette, workspaceSyncPhase, workspaceWritable]);
+
+  const isValidConnection = useCallback((params) => {
+    const sourceNode = nodesRef.current.find((node) => node.id === params?.source);
+    const targetNode = nodesRef.current.find((node) => node.id === params?.target);
+    if (sourceNode?.data?.isSubflowBoundary || targetNode?.data?.isSubflowBoundary) {
+      return Boolean(activeSubflowId);
+    }
+    return workspaceConnectionCompatible(params, nodesRef.current);
+  }, [activeSubflowId]);
 
   const handleConnect = useCallback((params) => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
       return;
     }
+    const sourceNode = nodesRef.current.find((node) => node.id === params.source);
+    const targetNode = nodesRef.current.find((node) => node.id === params.target);
+    if (sourceNode?.data?.isSubflowBoundary || targetNode?.data?.isSubflowBoundary) {
+      const graph = flowToGraph(nodesRef.current, edgesRef.current, instancesRef.current, subflowsRef.current);
+      const applied = applySubflowBoundaryConnection({
+        graph,
+        params,
+        sourceNode,
+        targetNode,
+        activeSubflowId,
+      });
+      if (applied.error) {
+        setStatus(applied.error);
+        return;
+      }
+      if (applied.handled) {
+        markWorkspaceDirty();
+        subflowsRef.current = applied.graph.subflows || subflowsRef.current;
+        instancesRef.current = applied.graph.instances || instancesRef.current;
+        const projected = graphToFlow(applied.graph, palette, { preserveRuntimeOutputs: true });
+        nodesRef.current = projected.nodes;
+        edgesRef.current = projected.edges;
+        setInstances(instancesRef.current);
+        setNodes(projected.nodes);
+        setEdges(projected.edges);
+        setStatus(applied.addedOutputName ? `已添加输出 ${applied.addedOutputName}` : "子流程契约已更新");
+        return;
+      }
+    }
     if (!workspaceConnectionCompatible(params, nodesRef.current)) {
-      setStatus("端口类型不匹配，已取消连线");
+      setStatus(workspaceConnectionErrorMessage(params, nodesRef.current));
       return;
     }
     setConnectionMenu(null);
@@ -13489,7 +15015,7 @@ function WorkspacePageInner() {
       edgesRef.current = next;
       return next;
     });
-  }, [markWorkspaceDirty, setEdges, setNodes, workspaceWritable]);
+  }, [activeSubflowId, markWorkspaceDirty, palette, setEdges, setNodes, workspaceWritable]);
 
   const handleConnectStart = useCallback((event, params) => {
     if (!workspaceWritable) return;
@@ -13581,7 +15107,7 @@ function WorkspacePageInner() {
     }
     const nextConnection = candidate?.connection;
     if (!nextConnection || !workspaceConnectionCompatible(nextConnection, nodesRef.current)) {
-      setStatus("端口类型不匹配，已取消连线");
+      setStatus(workspaceConnectionErrorMessage(nextConnection, nodesRef.current));
       setConnectionMenu(null);
       return;
     }
@@ -13796,12 +15322,15 @@ function WorkspacePageInner() {
   const addDisplayFromFile = useCallback(async (item, position) => {
     const fileName = String(item?.name || item?.path || "").toLowerCase();
     const ext = fileName.split(".").pop();
-    const displayDefinitionId = ["jsx", "tsx", "js"].includes(ext)
+    const codeExtensions = new Set(["mjs", "cjs", "ts", "py", "kt", "kts", "java", "go", "rs", "sh", "bash", "zsh", "yaml", "yml", "xml", "css", "scss", "sql"]);
+    const displayDefinitionId = ["js", "jsx", "tsx"].includes(ext)
       ? "display_react_app"
       : ext === "html"
       ? "display_html"
       : ext === "csv" || ext === "tsv" || (ext === "json" && /\b(table|data|rows|report)\b/i.test(fileName))
         ? "display_table"
+      : codeExtensions.has(ext) || (ext === "json" && !/\b(table|data|rows|report)\b/i.test(fileName))
+        ? "display_code"
       : ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
         ? "display_image"
         : "display_markdown";
@@ -13822,7 +15351,13 @@ function WorkspacePageInner() {
     }
     const primaryName = displayDefinitionId === "display_image" ? "src" : "content";
     const inputs = cloneSlots(def.inputs).map((slot) => (
-      slot.name === primaryName ? { ...slot, default: content, value: content } : slot
+      slot.name === primaryName
+        ? { ...slot, default: content, value: content }
+        : displayDefinitionId === "display_code" && slot.name === "language"
+          ? { ...slot, default: ext, value: ext }
+          : displayDefinitionId === "display_code" && slot.name === "fileName"
+            ? { ...slot, default: String(item?.name || ""), value: String(item?.name || "") }
+            : slot
     ));
     const outputs = cloneSlots(def.outputs).map((slot) => (
       slot.name === primaryName ? { ...slot, default: content, value: content } : slot
@@ -14000,7 +15535,7 @@ function WorkspacePageInner() {
     const previousMessages = targetRunSession
       ? (Array.isArray(targetRunSession.messages) ? targetRunSession.messages : [])
       : composerMessages;
-    const graph = flowToGraph(nodes, edges, instancesRef.current);
+    const graph = flowToGraph(nodes, edges, instancesRef.current, subflowsRef.current);
     setComposerText("");
     setComposerRunning(true);
     setComposerSidebarOpen(true);
@@ -14079,6 +15614,20 @@ function WorkspacePageInner() {
   }, [activeComposerSessionId, composerMessages, composerModel, composerRunSessions, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
+  useEffect(() => {
+    setComposerRunView("result");
+  }, [activeComposerSessionId]);
+  const orderedComposerRunSessions = useMemo(() => {
+    const sessions = Array.isArray(composerRunSessions) ? composerRunSessions : [];
+    const newestFirst = [...sessions].reverse();
+    return [
+      ...newestFirst.filter((session) => session.status === "running" || session.status === "stopping"),
+      ...newestFirst.filter((session) => session.status !== "running" && session.status !== "stopping"),
+    ];
+  }, [composerRunSessions]);
+  const runningComposerRunCount = orderedComposerRunSessions.filter((session) => (
+    session.status === "running" || session.status === "stopping"
+  )).length;
   const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
   const activeComposerRunning = activeRunSession
     ? (activeRunSession.status === "running" || activeRunSession.status === "stopping" || composerRunning)
@@ -14120,7 +15669,82 @@ function WorkspacePageInner() {
     activeComposerTechnicalMessages.length,
     composerSidebarOpen,
   ]);
-  const workspaceProjectTitle = String(flowParams.flowId || "").trim() || "Workspace";
+  const handleMarketplacePreviewAction = useCallback(async () => {
+    if (!flowParams.marketplacePreview || marketplacePreviewBusy) return;
+    if (["add-snippet", "add-node"].includes(flowParams.marketplaceAction)) {
+      setMarketplacePreviewBusy(true);
+      setMarketplacePreviewProjectError("");
+      try {
+        const response = await fetch("/api/flows?view=personal");
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+        const editable = (Array.isArray(body) ? body : []).filter((flow) => (
+          !flow?.archived
+          && !["builtin", "admin"].includes(String(flow?.source || "user"))
+          && flow?.collaboration?.role !== "viewer"
+        ));
+        setMarketplacePreviewProjects(editable);
+        const first = editable[0];
+        setMarketplacePreviewProjectKey(first ? `${first.source || "user"}:${first.id || ""}:${first.collaboration?.id || ""}` : "");
+        setMarketplacePreviewProjectOpen(true);
+      } catch (previewError) {
+        setMarketplacePreviewProjectError(String(previewError?.message || previewError));
+        setMarketplacePreviewProjectOpen(true);
+      } finally {
+        setMarketplacePreviewBusy(false);
+      }
+      return;
+    }
+    if (["open-source", "open-installed"].includes(flowParams.marketplaceAction)) {
+      const params = new URLSearchParams({
+        flowId: flowParams.marketplaceTargetFlowId,
+        flowSource: flowParams.marketplaceTargetFlowSource || "user",
+      });
+      if (flowParams.marketplaceTargetWorkspaceId) params.set("workspaceId", flowParams.marketplaceTargetWorkspaceId);
+      navigate(`/workspace?${params}`);
+      return;
+    }
+    const flowId = window.prompt("安装到个人空间，Flow ID：", flowParams.marketplaceInstallFlowId || flowParams.marketplaceTitle);
+    if (!flowId) return;
+    setMarketplacePreviewBusy(true);
+    try {
+      const response = await fetch("/api/marketplace/flows/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: flowParams.marketplaceResourceId,
+          version: flowParams.marketplaceVersion,
+          flowId,
+          projectFlow: flowParams.marketplaceProjectFlow,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      navigate(body.url || `/workspace?flowId=${encodeURIComponent(flowId)}&flowSource=user`);
+    } catch (previewError) {
+      setStatus(String(previewError?.message || previewError));
+    } finally {
+      setMarketplacePreviewBusy(false);
+    }
+  }, [flowParams, marketplacePreviewBusy, navigate]);
+  const addMarketplacePreviewSnippet = useCallback(() => {
+    const project = marketplacePreviewProjects.find((item) => (
+      `${item.source || "user"}:${item.id || ""}:${item.collaboration?.id || ""}` === marketplacePreviewProjectKey
+    ));
+    if (!project) return;
+    const target = new URL(flowUrlForView(project, "workspace"), window.location.origin);
+    if (flowParams.marketplaceAction === "add-node") {
+      target.searchParams.set(
+        "marketplaceNodeDefinitionId",
+        `marketplace:${flowParams.marketplaceResourceId}@${flowParams.marketplaceVersion}`,
+      );
+    } else {
+      target.searchParams.set("marketplaceSnippetId", flowParams.marketplaceResourceId);
+      target.searchParams.set("marketplaceSnippetVersion", flowParams.marketplaceVersion || "1.0.0");
+    }
+    navigate(`${target.pathname}${target.search}`);
+  }, [flowParams.marketplaceAction, flowParams.marketplaceResourceId, flowParams.marketplaceVersion, marketplacePreviewProjectKey, marketplacePreviewProjects, navigate]);
+  const workspaceProjectTitle = String(flowParams.marketplaceTitle || flowParams.flowId || "").trim() || "Workspace";
   const singleNodeDisplayShare = displayShareDraft?.mode === "single-node";
   const displayShareSourceNode = singleNodeDisplayShare
     ? workspaceDisplayNodes.find((node) => node.id === displayShareDraft.sourceNodeId || displayShareDraft.nodeIds?.includes(node.id)) || null
@@ -14128,7 +15752,9 @@ function WorkspacePageInner() {
   const displayShareSelectableNodes = singleNodeDisplayShare && displayShareSourceNode
     ? [displayShareSourceNode]
     : workspaceDisplayNodes;
-  const workspaceBackTarget = flowParams.adminOwnerId
+  const workspaceBackTarget = flowParams.marketplacePreview
+    ? `/marketplace?kind=${flowParams.marketplaceKind === "node" ? "node" : "flow"}`
+    : flowParams.adminOwnerId
     ? "/admin/usage"
     : flowParams.returnTo || (workspaceMode === "workflow" ? "/workflows" : "/projects");
 
@@ -14149,10 +15775,40 @@ function WorkspacePageInner() {
             <span className="af-pipeline-brand-name">{workspaceProjectTitle}</span>
             <span className="af-pipeline-brand-ver">V{APP_VERSION}-STABLE</span>
           </div>
+          {!isWorkflowMode && !workspaceIsTransientDraft && workspaceRelease ? (
+            <button
+              type="button"
+              className={`af-workspace-release-badge ${workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "is-draft" : "is-stable") : "is-unreleased"}`}
+              onClick={() => {
+                setWorkspaceReleaseError("");
+                setWorkspaceReleaseOpen(true);
+              }}
+              title={workspaceRelease.enabled
+                ? workspaceRelease.hasDraftChanges
+                  ? `调整态基于 ${workspaceRelease.stableReleaseId}，生产仍运行 Stable`
+                  : `生产稳定版本 ${workspaceRelease.stableReleaseId}`
+                : "尚未创建不可变稳定版本"}
+            >
+              <span className="material-symbols-outlined" aria-hidden>
+                {workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "edit_note" : "verified") : "new_releases"}
+              </span>
+              {workspaceRelease.enabled
+                ? workspaceRelease.hasDraftChanges
+                  ? `调整中 · Stable ${workspaceRelease.stableReleaseId}`
+                  : `Stable ${workspaceRelease.stableReleaseId}`
+                : "未发布"}
+            </button>
+          ) : null}
           {adminReview ? (
             <span className="af-workspace-admin-review-badge" title="管理员审阅模式不会修改、运行或加入该 Workspace">
               <span className="material-symbols-outlined" aria-hidden>visibility</span>
               只读查看 · {adminReview.ownerUsername || adminReview.ownerUserId}
+            </span>
+          ) : null}
+          {flowParams.marketplacePreview ? (
+            <span className="af-workspace-admin-review-badge" title="流程仓库只读预览不会修改或运行原流程">
+              <span className="material-symbols-outlined" aria-hidden>visibility</span>
+              流程仓库 · 只读预览
             </span>
           ) : null}
           <div className="af-view-switch" aria-label="视图切换">
@@ -14180,15 +15836,75 @@ function WorkspacePageInner() {
           </div>
         </div>
         <div className="af-pipeline-top-right af-workspace-actions">
+          {flowParams.marketplacePreview ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn af-workspace-release-publish-btn"
+              disabled={marketplacePreviewBusy}
+              onClick={() => void handleMarketplacePreviewAction()}
+            >
+              <span className="material-symbols-outlined" aria-hidden>
+                {flowParams.marketplaceAction === "add-node"
+                  ? "add_box"
+                  : flowParams.marketplaceAction === "add-snippet"
+                  ? "add_to_photos"
+                  : flowParams.marketplaceAction === "open-source" || flowParams.marketplaceAction === "open-installed" ? "open_in_new" : "download"}
+              </span>
+              {marketplacePreviewBusy
+                ? "处理中"
+                : flowParams.marketplaceAction === "open-source"
+                  ? "打开原流程"
+                  : flowParams.marketplaceAction === "open-installed"
+                    ? "打开已安装流程"
+                    : flowParams.marketplaceAction === "add-node"
+                      ? "添加到流程"
+                    : flowParams.marketplaceAction === "add-snippet"
+                      ? "添加到流程"
+                      : "安装到个人空间"}
+            </button>
+          ) : null}
           {!isWorkflowMode ? (
             <span
-              className={`af-workspace-sync-light is-${workspaceSyncPhase}`}
-              title={`${workspaceSyncLabel} · ${workspaceSyncDetail}`}
+              className={`af-workspace-sync-light is-${workspaceSyncIndicator.phase}`}
+              title={`${workspaceSyncIndicator.label} · ${workspaceSyncIndicator.detail}`}
               role="status"
-              aria-label={`${workspaceSyncLabel}：${workspaceSyncDetail}`}
+              aria-label={`${workspaceSyncIndicator.label}：${workspaceSyncIndicator.detail}`}
             >
               <span className="af-workspace-sync-light__dot" aria-hidden />
             </span>
+          ) : null}
+          {!isWorkflowMode && !workspaceIsTransientDraft && workspaceRelease ? (
+            <>
+              <button
+                type="button"
+                className="af-workspace-display-share-btn"
+                onClick={() => {
+                  setWorkspaceReleaseError("");
+                  setWorkspaceReleaseOpen(true);
+                }}
+                title="查看 Stable 与版本历史"
+              >
+                <span className="material-symbols-outlined" aria-hidden>history</span>
+                版本
+              </button>
+              {canManageCurrentFlow ? (
+                <button
+                  type="button"
+                  className="af-workspace-display-share-btn af-workspace-release-publish-btn"
+                  disabled={workspaceReleaseBusy || (workspaceRelease.enabled && !workspaceRelease.hasDraftChanges)}
+                  onClick={() => {
+                    setWorkspaceReleaseError("");
+                    setWorkspaceReleaseOpen(true);
+                  }}
+                  title={workspaceRelease.enabled && !workspaceRelease.hasDraftChanges
+                    ? "当前调整态与 Stable 一致"
+                    : "保存调整态并发布为新的不可变 Stable"}
+                >
+                  <span className="material-symbols-outlined" aria-hidden>publish</span>
+                  {workspaceReleaseBusy ? "发布中" : "发布 Stable"}
+                </button>
+              ) : null}
+            </>
           ) : null}
           {!isWorkflowMode && workspaceConflict ? (
             <button
@@ -14210,7 +15926,7 @@ function WorkspacePageInner() {
               处理冲突
             </button>
           ) : null}
-          {isDisplayMode ? (
+          {isDisplayMode && !flowParams.marketplacePreview ? (
             <>
               <button
                 type="button"
@@ -14237,30 +15953,32 @@ function WorkspacePageInner() {
               </button>
             </>
           ) : null}
-          <button
-            type="button"
-            className="af-workspace-display-share-btn"
-            disabled={isWorkflowMode
-              ? !workflowTapdId
-              : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
-            onClick={() => {
-              if (isWorkflowMode) {
-                setWorkflowCollaborationOpenRequest((request) => request + 1);
-              } else {
-                openWorkspaceShareDialog();
-              }
-            }}
-            title={isWorkflowMode
-              ? !workflowTapdId
-                ? "先读取一个 TAPD 需求"
-                : "管理当前需求的成员权限和只读链接"
-              : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
-                ? "仅 Workspace 所有者可以管理项目协作"
-                : "管理项目的团队和成员协作"}
-          >
-            <span className="material-symbols-outlined" aria-hidden>group_add</span>
-            协作
-          </button>
+          {!flowParams.marketplacePreview ? (
+            <button
+              type="button"
+              className="af-workspace-display-share-btn"
+              disabled={isWorkflowMode
+                ? !workflowTapdId
+                : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
+              onClick={() => {
+                if (isWorkflowMode) {
+                  setWorkflowCollaborationOpenRequest((request) => request + 1);
+                } else {
+                  openWorkspaceShareDialog();
+                }
+              }}
+              title={isWorkflowMode
+                ? !workflowTapdId
+                  ? "先读取一个 TAPD 需求"
+                  : "管理当前需求的成员权限和只读链接"
+                : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
+                  ? "仅 Workspace 所有者可以管理项目协作"
+                  : "管理项目的团队和成员协作"}
+            >
+              <span className="material-symbols-outlined" aria-hidden>group_add</span>
+              协作
+            </button>
+          ) : null}
           {isWorkflowMode && authUser?.isAdmin === true && !flowParams.workflowShare && !flowParams.workflowDemo ? (
             <button
               type="button"
@@ -14273,7 +15991,7 @@ function WorkspacePageInner() {
               {workflowDeleteBusy ? "清理中" : "清理 Workflow"}
             </button>
           ) : null}
-          {!adminReview && !isWorkflowMode ? (
+          {!adminReview && !isWorkflowMode && !flowParams.marketplacePreview ? (
             <button
               type="button"
               className="af-workspace-display-share-btn"
@@ -14284,7 +16002,7 @@ function WorkspacePageInner() {
               我的分享
             </button>
           ) : null}
-          {!isWorkflowMode ? (
+          {!isWorkflowMode && !flowParams.marketplacePreview ? (
             <>
               <button
                 type="button"
@@ -14327,6 +16045,7 @@ function WorkspacePageInner() {
                 return;
               }
               setWorkspaceRunLogsTarget(null);
+              setAiExplorationOpen(false);
               setComposerSidebarOpen((v) => {
                 if (!v) setActiveComposerSessionId(latestComposerSessionId());
                 return !v;
@@ -14358,7 +16077,7 @@ function WorkspacePageInner() {
 	      <div
 	        className={
 	          "af-workspace-body" +
-	          (!isDisplayMode && !isWorkflowMode && (composerSidebarOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
+	          (!isDisplayMode && !isWorkflowMode && (composerSidebarOpen || aiExplorationOpen || nodePropDraft) ? " af-workspace-body--drawer" : "") +
 	          (!isDisplayMode && !isWorkflowMode && workspaceSidebarCollapsed ? " af-workspace-body--sidebar-collapsed" : "") +
 	          (isDisplayMode ? " af-workspace-body--display-mode" : "") +
 	          (isWorkflowMode ? " af-workspace-body--workflow-mode" : "")
@@ -14673,15 +16392,31 @@ function WorkspacePageInner() {
           }}
           onLostPointerCaptureCapture={finishWorkspaceCanvasPointer}
         >
+          {activeSubflowId ? (
+            <div className="af-subflow-editor-bar nodrag">
+              <button type="button" onClick={exitSubflowEditor}>
+                <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
+                父流程
+              </button>
+              <span className="af-subflow-editor-bar__separator">/</span>
+              <span className="af-subflow-editor-bar__kind">WHILE</span>
+              <strong>{activeSubflowRole === "condition" ? "Condition" : activeSubflowRole === "body" ? "Body" : "Subflow"}</strong>
+              <span className="af-subflow-editor-bar__separator">·</span>
+              <span>{activeSubflow?.label || activeSubflowId}</span>
+              <em>拖入节点会自动加入当前子流程；连接 START / RETURN 即定义契约</em>
+            </div>
+          ) : null}
           <ReactFlow
             className={
               "af-flow-canvas af-workspace-flow" +
               (canvasTool === "pan" ? " af-flow-canvas--tool-pan" : " af-flow-canvas--tool-select") +
-              (isDisplayMode ? " af-workspace-flow--display-mode" : "")
+              (isDisplayMode ? " af-workspace-flow--display-mode" : "") +
+              (activeSubflowId ? " af-workspace-flow--subflow-edit" : "")
             }
             nodes={canvasNodes}
             edges={canvasEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onMoveStart={handleWorkspaceViewportMoveStart}
@@ -14692,6 +16427,7 @@ function WorkspacePageInner() {
             isValidConnection={isDisplayMode ? undefined : isValidConnection}
             onNodeClick={(event, node) => {
               if (isDisplayMode) {
+                if (isWorkspaceGroupNode(node)) return;
                 setSelectedDisplayNodeIds([sourceIdFromDisplayRefId(node.id)]);
                 return;
               }
@@ -15097,7 +16833,18 @@ function WorkspacePageInner() {
           ) : null}
         </main>
         )}
-        {!isDisplayMode && !isWorkflowMode && composerSidebarOpen ? (
+        {!isDisplayMode && !isWorkflowMode && aiExplorationOpen ? (
+          <AiExplorationPanel
+            flowParams={flowParams}
+            workspaceWritable={workspaceWritable}
+            model={composerModel}
+            onClose={() => setAiExplorationOpen(false)}
+            onMaterialized={async () => {
+              await loadWorkspace();
+              setStatus("探索计划已固化到 Workspace DSL 调整态");
+            }}
+          />
+        ) : !isDisplayMode && !isWorkflowMode && composerSidebarOpen ? (
           <aside className="af-pipeline-drawer af-pipeline-drawer--wide af-workspace-composer-drawer" aria-label="Workspace AI Composer">
             <div className="af-composer-sidebar">
               <div className="af-pipeline-drawer-head">
@@ -15111,71 +16858,116 @@ function WorkspacePageInner() {
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
-              <div className="af-composer-session-tabs">
+              <div className="af-composer-session-tabs" role="tablist" aria-label="Composer 工作区">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeComposerSessionId === "workspace"}
                   className={"af-composer-session-tab" + (activeComposerSessionId === "workspace" ? " af-composer-session-tab--active" : "")}
                   ref={activeComposerSessionId === "workspace" ? composerActiveSessionTabRef : null}
                   onClick={() => setActiveComposerSessionId("workspace")}
                 >
                   <span className="af-composer-session-label">Workspace</span>
                 </button>
-                {composerRunSessions.map((session) => (
-                  <div
-                    key={session.id}
+                {orderedComposerRunSessions.length > 0 ? (
+                  <button
+                    type="button"
                     role="tab"
-                    tabIndex={0}
-                    ref={activeComposerSessionId === session.id ? composerActiveSessionTabRef : null}
+                    aria-selected={activeComposerSessionId !== "workspace"}
+                    ref={activeComposerSessionId !== "workspace" ? composerActiveSessionTabRef : null}
                     className={
                       "af-composer-session-tab" +
-                      (activeComposerSessionId === session.id ? " af-composer-session-tab--active" : "") +
-                      (session.status === "running" || session.status === "stopping" ? " af-composer-session-tab--running" : "")
+                      (activeComposerSessionId !== "workspace" ? " af-composer-session-tab--active" : "") +
+                      (runningComposerRunCount > 0 ? " af-composer-session-tab--running" : "")
                     }
-                    onClick={() => setActiveComposerSessionId(session.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setActiveComposerSessionId(session.id);
-                      }
-                    }}
-                    title={session.runNodeId || session.label}
+                    onClick={() => setActiveComposerSessionId((current) => (
+                      current === "workspace" ? latestComposerSessionId() : current
+                    ))}
                   >
-                    <span className="af-composer-session-label">{session.label}</span>
-                    <button
-                      type="button"
-                      className="af-composer-session-close"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        closeComposerRunSession(session.id);
-                      }}
-                      aria-label={`关闭 ${session.label}`}
-                      title="关闭 tab"
+                    <span className="af-composer-session-label">Runs</span>
+                    <span className="af-composer-session-count" aria-label={`${orderedComposerRunSessions.length} 个运行会话`}>
+                      {runningComposerRunCount > 0 ? `${runningComposerRunCount}/${orderedComposerRunSessions.length}` : orderedComposerRunSessions.length}
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+              {activeRunSession ? (
+                <div className="af-composer-run-switcher">
+                  <label>
+                    <span className="material-symbols-outlined" aria-hidden>manage_history</span>
+                    <select
+                      aria-label="选择 Run"
+                      value={activeRunSession.id}
+                      onChange={(event) => setActiveComposerSessionId(event.target.value)}
                     >
-                      <span className="material-symbols-outlined" aria-hidden>close</span>
+                      {runningComposerRunCount > 0 ? (
+                        <optgroup label="运行中">
+                          {orderedComposerRunSessions.filter((session) => session.status === "running" || session.status === "stopping").map((session) => (
+                            <option key={session.id} value={session.id}>{workspaceRunSessionOptionLabel(session)}</option>
+                          ))}
+                        </optgroup>
+                      ) : null}
+                      <optgroup label="最近完成">
+                        {orderedComposerRunSessions.filter((session) => session.status !== "running" && session.status !== "stopping").map((session) => (
+                          <option key={session.id} value={session.id}>{workspaceRunSessionOptionLabel(session)}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <span className="material-symbols-outlined af-composer-run-switcher__chevron" aria-hidden>expand_more</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => closeComposerRunSession(activeRunSession.id)}
+                    disabled={activeRunSession.status === "running" || activeRunSession.status === "stopping"}
+                    aria-label={`从最近运行中移除 ${activeRunSession.label}`}
+                    title={activeRunSession.status === "running" || activeRunSession.status === "stopping" ? "运行中不可移除" : "从最近运行中移除"}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>close</span>
+                  </button>
+                </div>
+              ) : null}
+              {activeRunSession ? (
+                <div className="af-composer-run-viewbar">
+                  <div className="af-composer-run-viewbar__tabs" role="tablist" aria-label="Run 展示方式">
+                    <button type="button" role="tab" aria-selected={composerRunView === "result"} className={composerRunView === "result" ? "is-active" : ""} onClick={() => setComposerRunView("result")}>
+                      结果
+                    </button>
+                    <button type="button" role="tab" aria-selected={composerRunView === "audit"} className={composerRunView === "audit" ? "is-active" : ""} onClick={() => setComposerRunView("audit")}>
+                      审核图
                     </button>
                   </div>
-                ))}
-              </div>
-              <div
-                className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
-                role="status"
-                aria-live="polite"
-              >
-                {activeComposerStatus}
-              </div>
+                  <span className={`af-composer-run-state is-${activeRunSession.status || "done"}`} role="status">
+                    <i aria-hidden />
+                    {activeRunSession.status === "running" ? "运行中" : activeRunSession.status === "failed" ? "失败" : activeRunSession.status === "waiting" ? "等待中" : "已完成"}
+                  </span>
+                </div>
+              ) : (
+                <div
+                  className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {activeComposerStatus}
+                </div>
+              )}
               <div className="af-composer-sidebar-thread" ref={composerSidebarThreadRef}>
-                <WorkspaceComposerThread
-                  messages={activeComposerConversationMessages}
-                  running={activeComposerRunning}
-                  showRunningIndicator={!activeRunSession}
-                />
-                <WorkspaceComposerThread
-                  messages={activeComposerTechnicalMessages}
-                  running={activeComposerRunning}
-                  showRunningIndicator={false}
-                  technical
-                />
+                {activeRunSession && composerRunView === "audit" ? (
+                  <WorkspaceRunAuditPanel flowParams={flowParams} session={activeRunSession} />
+                ) : (
+                  <>
+                    <WorkspaceComposerThread
+                      messages={activeComposerConversationMessages}
+                      running={activeComposerRunning}
+                      showRunningIndicator={!activeRunSession}
+                    />
+                    <WorkspaceComposerThread
+                      messages={activeComposerTechnicalMessages}
+                      running={activeComposerRunning}
+                      showRunningIndicator={false}
+                      technical
+                    />
+                  </>
+                )}
               </div>
               <ComposerAssistantInput
                 value={composerText}
@@ -15200,6 +16992,10 @@ function WorkspacePageInner() {
               onClose={() => setSelectedNodeId("")}
               onPublishToMarketplace={publishNodeToMarketplace}
               error={nodePropsError}
+              executionReview={nodeExecutionReview}
+              executionReviewLoading={nodeExecutionReviewLoading}
+              executionReviewError={nodeExecutionReviewError}
+              onReloadExecutionReview={() => void loadNodeExecutionReview(selectedNode.id)}
               ioSlots={{
                 inputs: Array.isArray(nodePropDraft?.inputs) ? nodePropDraft.inputs : [],
                 outputs: Array.isArray(nodePropDraft?.outputs) ? nodePropDraft.outputs : [],
@@ -15352,6 +17148,126 @@ function WorkspacePageInner() {
                     onClick={() => openWorkflowProjectView(workflowProjectBindings[0], workflowProjectPendingMode)}
                   >
                     {workflowProjectPendingMode === "display" ? "进入 Display" : "进入 Workspace"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {workspaceReleaseOpen && workspaceRelease ? createPortal(
+          <div className="af-flow-snippet-modal-overlay" onMouseDown={() => !workspaceReleaseBusy && setWorkspaceReleaseOpen(false)}>
+            <div
+              className="af-flow-snippet-modal af-workspace-release-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Workspace 版本"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title">
+                  <span className="material-symbols-outlined" aria-hidden>deployed_code_history</span>
+                  Stable 与版本历史
+                </span>
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__close"
+                  disabled={workspaceReleaseBusy}
+                  onClick={() => setWorkspaceReleaseOpen(false)}
+                  aria-label="关闭"
+                >
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <div className={`af-workspace-release-summary ${workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "is-draft" : "is-stable") : "is-unreleased"}`}>
+                  <span className="material-symbols-outlined" aria-hidden>
+                    {workspaceRelease.enabled ? (workspaceRelease.hasDraftChanges ? "edit_note" : "verified") : "new_releases"}
+                  </span>
+                  <div>
+                    <strong>
+                      {workspaceRelease.enabled
+                        ? workspaceRelease.hasDraftChanges
+                          ? `调整态 · 生产仍运行 ${workspaceRelease.stableReleaseId}`
+                          : `生产稳定版本 ${workspaceRelease.stableReleaseId}`
+                        : "尚未发布 Stable"}
+                    </strong>
+                    <small>
+                      {workspaceRelease.enabled
+                        ? workspaceRelease.hasDraftChanges
+                          ? "当前 Workspace 的修改不会影响定时任务，发布后才切换生产版本。"
+                          : "当前 Workspace 与生产稳定版本一致。后续修改会自动进入调整态。"
+                        : "首次发布前保持兼容模式：定时任务仍读取当前 Workspace。"}
+                    </small>
+                  </div>
+                </div>
+
+                {canManageCurrentFlow && (!workspaceRelease.enabled || workspaceRelease.hasDraftChanges) ? (
+                  <label className="af-flow-snippet-field">
+                    <span>发布说明</span>
+                    <textarea
+                      value={workspaceReleaseNotes}
+                      onChange={(event) => setWorkspaceReleaseNotes(event.target.value)}
+                      placeholder="本次调整了什么、试运行结果如何（可选）"
+                      rows={3}
+                    />
+                  </label>
+                ) : null}
+
+                {workspaceReleaseError ? <div className="af-flow-snippet-error">{workspaceReleaseError}</div> : null}
+
+                <div className="af-workspace-release-list">
+                  <div className="af-workspace-release-list__head">
+                    <strong>不可变 Release</strong>
+                    <span>{workspaceRelease.releases?.length || 0} 个版本</span>
+                  </div>
+                  {(workspaceRelease.releases || []).length === 0 ? (
+                    <div className="af-workspace-release-empty">发布后，版本会保存在这里并支持一键回退。</div>
+                  ) : (workspaceRelease.releases || []).map((release) => {
+                    const stable = release.id === workspaceRelease.stableReleaseId;
+                    return (
+                      <article key={release.id} className={`af-workspace-release-item ${stable ? "is-stable" : ""}`}>
+                        <div className="af-workspace-release-item__version">
+                          <span className="material-symbols-outlined" aria-hidden>{stable ? "verified" : "deployed_code"}</span>
+                          <strong>{release.id}</strong>
+                          {stable ? <em>Stable</em> : null}
+                        </div>
+                        <div className="af-workspace-release-item__meta">
+                          <span>{release.createdBy || "unknown"} · {release.createdAt ? new Date(release.createdAt).toLocaleString() : "-"}</span>
+                          <code>{release.designRevision || "-"}</code>
+                          {release.notes ? <p>{release.notes}</p> : null}
+                        </div>
+                        {canManageCurrentFlow && !stable ? (
+                          <button
+                            type="button"
+                            disabled={workspaceReleaseBusy}
+                            onClick={() => void rollbackStableRelease(release.id)}
+                          >
+                            回退到此版本
+                          </button>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button
+                  type="button"
+                  className="af-flow-snippet-modal__btn"
+                  disabled={workspaceReleaseBusy}
+                  onClick={() => setWorkspaceReleaseOpen(false)}
+                >
+                  关闭
+                </button>
+                {canManageCurrentFlow && (!workspaceRelease.enabled || workspaceRelease.hasDraftChanges) ? (
+                  <button
+                    type="button"
+                    className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary"
+                    disabled={workspaceReleaseBusy}
+                    onClick={() => void publishStableRelease()}
+                  >
+                    {workspaceReleaseBusy ? "正在发布…" : workspaceRelease.enabled ? "发布为新 Stable" : "发布首个 Stable"}
                   </button>
                 ) : null}
               </div>
@@ -15665,6 +17581,14 @@ function WorkspacePageInner() {
                     >
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
+                    {SPACES_UI_ENABLED ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                      >
+                        加入空间
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 {displayShareError ? <div className="af-flow-snippet-error">{displayShareError}</div> : null}
@@ -15722,6 +17646,15 @@ function WorkspacePageInner() {
                       <span className="material-symbols-outlined" aria-hidden>{displayLinkCopyState === "copied" ? "check" : "content_copy"}</span>
                       {displayLinkCopyState === "copied" ? "已复制" : displayLinkCopyState === "failed" ? "复制失败" : "复制"}
                     </button>
+                    {SPACES_UI_ENABLED ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/spaces?shareId=${encodeURIComponent(displayShareResult.share?.id || "")}&title=${encodeURIComponent(displayShareDraft.title || flowParams.flowId || "新页面")}`)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>library_add</span>
+                        加入空间
+                      </button>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="af-display-link-modal__empty">还没有生成展示链接</div>
@@ -15946,6 +17879,40 @@ function WorkspacePageInner() {
                     );
                   })}
                 </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        {marketplacePreviewProjectOpen ? createPortal(
+          <div className="af-flow-snippet-modal-overlay" onMouseDown={() => setMarketplacePreviewProjectOpen(false)}>
+            <div className="af-flow-snippet-modal af-marketplace-preview-project-modal" role="dialog" aria-modal="true" aria-label="添加到流程" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="af-flow-snippet-modal__head">
+                <span className="af-flow-snippet-modal__title"><span className="material-symbols-outlined" aria-hidden>{flowParams.marketplaceAction === "add-node" ? "add_box" : "add_to_photos"}</span>添加到流程</span>
+                <button type="button" className="af-flow-snippet-modal__close" onClick={() => setMarketplacePreviewProjectOpen(false)} aria-label="关闭">
+                  <span className="material-symbols-outlined" aria-hidden>close</span>
+                </button>
+              </div>
+              <div className="af-flow-snippet-modal__body">
+                <p className="af-marketplace-preview-project-hint">选择目标后，将进入对应 Workspace，并把当前{flowParams.marketplaceAction === "add-node" ? "节点" : "片段"}加入调整态画布。</p>
+                {marketplacePreviewProjectError ? <div className="af-flow-snippet-error">{marketplacePreviewProjectError}</div> : null}
+                {!marketplacePreviewProjectError && marketplacePreviewProjects.length === 0 ? <div className="af-marketplace-snippet-projects__empty">暂无可编辑 Project。</div> : null}
+                <div className="af-marketplace-snippet-project-list">
+                  {marketplacePreviewProjects.map((project) => {
+                    const key = `${project.source || "user"}:${project.id || ""}:${project.collaboration?.id || ""}`;
+                    return (
+                      <label key={key} className={marketplacePreviewProjectKey === key ? "is-selected" : ""}>
+                        <input type="radio" name="workspace-preview-project" value={key} checked={marketplacePreviewProjectKey === key} onChange={() => setMarketplacePreviewProjectKey(key)} />
+                        <span><strong>{project.id}</strong><small>{project.source === "workspace" ? "共享 Project" : "个人 Project"}</small></span>
+                        <span className="material-symbols-outlined" aria-hidden>arrow_forward</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="af-flow-snippet-modal__foot">
+                <button type="button" className="af-flow-snippet-modal__btn" onClick={() => setMarketplacePreviewProjectOpen(false)}>取消</button>
+                <button type="button" className="af-flow-snippet-modal__btn af-flow-snippet-modal__btn--primary" disabled={!marketplacePreviewProjectKey} onClick={addMarketplacePreviewSnippet}>添加到流程</button>
               </div>
             </div>
           </div>,

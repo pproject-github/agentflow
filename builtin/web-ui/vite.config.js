@@ -14,6 +14,10 @@ export default defineConfig({
   plugins: [react()],
   /** 本地 `npm run dev` 时把 /api 转到 agentflow ui（默认 8765），否则侧栏等接口会拿到 index.html 导致一直“加载中” */
   server: {
+    fs: {
+      // Workspace 自动排版是 CLI 与 UI 共用的纯模块，位于仓库级 bin/lib。
+      allow: [path.resolve(__dirname, "../..")],
+    },
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8765",

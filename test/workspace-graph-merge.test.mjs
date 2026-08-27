@@ -37,6 +37,35 @@ test("design revision includes provide node values", () => {
   assert.notEqual(workspaceDesignRevision(changed), workspaceDesignRevision(base));
 });
 
+test("design revision and three-way merge preserve subflow contracts", () => {
+  const base = {
+    ...graph({
+      call: { definitionId: "control_subflow_call", subflowId: "inspect" },
+      step: { definitionId: "agent_subAgent", subflowId: "inspect" },
+    }),
+    subflows: {
+      inspect: {
+        label: "Inspect",
+        nodeIds: ["step"],
+        roots: ["step"],
+        inputs: { issue: { nodeId: "step", slot: "issue", type: "text" } },
+        outputs: { summary: { nodeId: "step", slot: "result", type: "text" } },
+      },
+    },
+  };
+  const changed = structuredClone(base);
+  changed.subflows.inspect.label = "Inspect issue";
+  assert.notEqual(workspaceDesignRevision(changed), workspaceDesignRevision(base));
+
+  const incoming = structuredClone(base);
+  incoming.instances.call.label = "Call inspect";
+  const result = mergeWorkspaceGraphs({ baseGraph: base, currentGraph: changed, incomingGraph: incoming });
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(result.graph.subflows.inspect.label, "Inspect issue");
+  assert.equal(result.graph.instances.call.label, "Call inspect");
+  assert.deepEqual(result.graph.subflows.inspect.roots, ["step"]);
+});
+
 test("three-way merge combines different nodes and different fields", () => {
   const base = graph({
     a: { definitionId: "agent_prompt", label: "A", model: "one" },

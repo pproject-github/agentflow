@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import fs from "fs";
 import path from "path";
-import yaml from "js-yaml";
 import { fileURLToPath } from "url";
+import { parseNodeFrontmatter } from "../bin/lib/catalog-flows.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+// 这些 definition 只由 flow.input / flow.call 投影生成，不是用户可直接创建的节点 API。
+const INTERNAL_NODE_DEFINITION_IDS = new Set(["control_subflow_call", "workspace_subflow_input"]);
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -18,23 +20,27 @@ function stripFrontmatter(raw) {
 
 function parseNodeDefinition(filePath) {
   const raw = fs.readFileSync(filePath, "utf-8");
-  const fm = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  let meta = {};
-  if (fm) {
-    try { meta = yaml.load(fm[1]) || {}; } catch (_) {}
-  }
   const id = path.basename(filePath, ".md");
+  const meta = parseNodeFrontmatter(raw);
   return {
     id,
     displayName: String(meta.displayName || id).trim(),
     description: String(meta.description || "").trim().replace(/\s+/g, " "),
-    input: Array.isArray(meta.input) ? meta.input : [],
-    output: Array.isArray(meta.output) ? meta.output : [],
+    input: meta.input,
+    output: meta.output,
+    runtime: meta.runtime,
+    category: meta.type,
     body: stripFrontmatter(raw),
   };
 }
 
-function categoryForNode(id) {
+/** 分组用；display_ 单独成组，其余优先看 frontmatter 的 type:，再回落到 id 前缀。 */
+function categoryForNode(node) {
+  const id = node.id;
+  if (id.startsWith("display_")) return "display";
+  if (node.category === "agent") return "agent";
+  if (node.category === "control") return "control";
+  if (node.category === "provide") return "provide";
   if (id.startsWith("control_")) return "control";
   if (id.startsWith("tool_")) return "tool";
   if (id.startsWith("provide_")) return "provide";
@@ -59,25 +65,12 @@ function generateNodeReference() {
   const nodes = fs.readdirSync(dir)
     .filter((name) => name.endsWith(".md"))
     .map((name) => parseNodeDefinition(path.join(dir, name)))
+    // 只收 Workspace 运行时有专用 handler 的类型：Composer 读到 none/degraded 就会照着
+    // 生成拿不到文档承诺语义的图。分级来自各节点 .md 的 `runtime:` 字段。
+    .filter((node) => node.runtime === "native" && !INTERNAL_NODE_DEFINITION_IDS.has(node.id))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const localOnly = new Set([
-    "control_if",
-    "control_delay",
-    "control_wait_until",
-    "control_deadline",
-    "control_cancelled",
-    "control_interval_loop",
-    "control_cd_workspace",
-    "control_load_skills",
-    "control_start",
-    "control_end",
-    "tool_git_checkout",
-    "tool_print",
-    "tool_user_check",
-    "tool_user_ask",
-    "provide_str",
-    "provide_file",
-  ]);
+  // native 里唯一会真正调 agent 的三个；其余都由 runtime 本地执行完。
+  const agentBacked = new Set(["agent_subAgent", "tool_nodejs", "workspace_one_click_task"]);
   const lines = [
     "# AgentFlow Builtin Nodes Reference",
     "",
@@ -86,13 +79,15 @@ function generateNodeReference() {
     "## Rules Of Thumb",
     "",
     "- `tool_nodejs` needs an executable `script`; `body` is documentation when `script` exists.",
+    "- `control_while` runs bounded Condition/Body subflows without adding a graph cycle; one-step scripts are legacy compatibility.",
     "- `agent_subAgent` is for semantic/code/text reasoning tasks.",
     "- Local-only nodes are executed by AgentFlow runtime and do not call an agent.",
+    "- The Workspace runtime executes a DAG; cyclic graphs are rejected. Express check-then-fix as forward steps.",
     "- Edge handles are positional: `input-0`, `output-0`, etc. Match slot order exactly.",
     "",
   ];
-  for (const cat of ["agent", "control", "tool", "provide", "other"]) {
-    const group = nodes.filter((n) => categoryForNode(n.id) === cat);
+  for (const cat of ["agent", "control", "tool", "display", "provide", "other"]) {
+    const group = nodes.filter((n) => categoryForNode(n) === cat);
     if (group.length === 0) continue;
     lines.push(`## ${cat}`, "");
     for (const node of group) {
@@ -100,7 +95,10 @@ function generateNodeReference() {
       lines.push("");
       lines.push(`- Display: ${node.displayName}`);
       if (node.description) lines.push(`- Description: ${node.description}`);
-      lines.push(`- Runtime: ${localOnly.has(node.id) ? "local-only" : node.id === "tool_nodejs" ? "direct script when script exists, otherwise agent" : "agent/runner"}`);
+      lines.push(`- Runtime: ${node.id === "tool_nodejs"
+        ? "direct script when script exists, otherwise agent"
+        : node.id === "control_while" ? "bounded Condition/Body state machine"
+        : agentBacked.has(node.id) ? "agent/runner" : "local-only"}`);
       lines.push(`- Inputs: ${slotsTable(node.input)}`);
       lines.push(`- Outputs: ${slotsTable(node.output)}`);
       lines.push("");
@@ -143,6 +141,38 @@ function generatePlaceholderReference() {
   ].join("\n");
 }
 
+/**
+ * DSL 的节点调用表。手写会漂——上一版表里还留着运行时早就不读的 mergeMode / previous
+ * 这些槽，所以从定义表直接生成。
+ */
+async function generateDslNodeTable() {
+  const { DEFINITIONS, apiName } = await import("../bin/lib/flow-dsl/defs.mjs");
+  const CTRL = new Set(["prev", "next", "next1", "next2"]);
+  const rows = Object.entries(DEFINITIONS)
+    .filter(([id, def]) => def.runtime === "native" && !INTERNAL_NODE_DEFINITION_IDS.has(id))
+    .map(([id, def]) => {
+      const fmt = (slots) => slots
+        .filter((s) => !CTRL.has(s.name))
+        .map((s) => `${s.name}:${s.type}`)
+        .join(", ") || "—";
+      return { call: apiName(id), input: fmt(def.input), output: fmt(def.output) };
+    })
+    .sort((a, b) => a.call.localeCompare(b.call));
+  return [
+    "# AgentFlow Flow DSL — 内置节点调用表",
+    "",
+    "> Generated from `builtin/nodes/*.md` by `scripts/generate-agentflow-skill-references.mjs`.",
+    "> 只列 `runtime: native` 的节点——其余类型 lint 会直接报错。",
+    "",
+    "`prev` / `next` / `next1` / `next2` 是控制引脚，由 `flow()` 自动接，**不要手写**。",
+    "",
+    "| 调用 | 输入引脚 | 输出引脚 |",
+    "|------|----------|----------|",
+    ...rows.map((r) => `| \`${r.call}\` | ${r.input} | ${r.output} |`),
+    "",
+  ].join("\n");
+}
+
 function writeGenerated(relPath, content) {
   const abs = path.join(root, relPath);
   ensureDir(path.dirname(abs));
@@ -151,4 +181,5 @@ function writeGenerated(relPath, content) {
 
 writeGenerated("skills/agentflow-node-reference/references/builtin-nodes.md", generateNodeReference());
 writeGenerated("skills/agentflow-placeholder-reference/references/placeholders.md", generatePlaceholderReference());
+writeGenerated("skills/agentflow-flow-dsl/references/node-calls.md", await generateDslNodeTable());
 console.log("Generated AgentFlow skill references.");

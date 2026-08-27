@@ -15,6 +15,7 @@ function graph({
   nodeSizes = {},
   groups = [],
   displayPage = null,
+  subflowBoundaryPositions = {},
 } = {}) {
   return {
     version: 1,
@@ -24,6 +25,7 @@ function graph({
       nodePositions,
       nodeSizes,
       groups,
+      subflowBoundaryPositions,
       ...(displayPage ? { displayPage } : {}),
     },
   };
@@ -49,6 +51,20 @@ test("workspace graph diff identifies only the moved node", () => {
   assert.equal(delta.nodesChanged, true);
   assert.equal(delta.edgesChanged, false);
   assert.equal(delta.displayPageChanged, false);
+});
+
+test("workspace graph diff treats a moved subflow boundary as one node change", () => {
+  const boundaryId = "subflow-return:inspectIssue";
+  const base = graph({
+    subflowBoundaryPositions: { [boundaryId]: { x: 900, y: 500 } },
+  });
+  const next = structuredClone(base);
+  next.ui.subflowBoundaryPositions[boundaryId] = { x: 1100, y: 620 };
+
+  const delta = diffWorkspaceGraphsForUi(base, next);
+  assert.equal(delta.safe, true);
+  assert.deepEqual(delta.changedNodeIds, [boundaryId]);
+  assert.equal(delta.nodesChanged, true);
 });
 
 test("workspace node reconciliation preserves unchanged references and selection", () => {

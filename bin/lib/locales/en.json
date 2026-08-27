@@ -106,7 +106,7 @@
     "type_text": "Text",
     "pipeline_header": "Pipeline",
     "source_header": "Source",
-    "apply_example_header": "Apply Example"
+    "open_example_header": "Validate Command"
   },
   "composer": {
     "edit_context": "## AgentFlow Edit Context",
@@ -350,6 +350,10 @@
     "display_markdown": {
       "displayName": "Markdown Display",
       "description": "Render Markdown content on the Workspace canvas and pass the text downstream"
+    },
+    "display_code": {
+      "displayName": "Code Display",
+      "description": "Render highlighted source code with line numbers, copy, wrap, and download controls, then pass the code downstream"
     },
     "display_mermaid": {
       "displayName": "Mermaid Display",

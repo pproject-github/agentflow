@@ -47,6 +47,10 @@ description: >-
 
 ## 节点写入
 
-新增或更新 `workspace.graph.json` 中的 `display_image` instance 时，`body`、`input.src.value`、`output.src.value` 使用同一份图片 src。
+在 `workspace.flow.js` 里写一个 `display.image` 节点，图片地址放 `src` 引脚：
 
-建议默认尺寸：宽 520-760，高 420-680。
+```js
+const shot = display.image("截图", { src: "outputs/image.png" });
+```
+
+尺寸由平台维护，不要手写。

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "nodes": {
+    "callInspect": {
+      "subflowId": "inspectIssue"
+    },
+    "inspect": {
+      "subflowId": "inspectIssue"
+    },
+    "issueIn": {
+      "subflowId": "inspectIssue",
+      "subflowInputName": "issue",
+      "subflowInputType": "text"
+    },
+    "normalize": {
+      "subflowId": "inspectIssue"
+    }
+  }
+}

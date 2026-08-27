@@ -7,6 +7,11 @@ import { runLedgerId } from "./run-ledger.mjs";
 const MAX_EVENT_TEXT_CHARS = 20_000;
 const MAX_INDEX_RECORDS = 10_000;
 const SECRET_KEY_RE = /(token|password|passwd|secret|webhook|authorization|api[_-]?key|access[_-]?key)/i;
+const SECRET_TEXT_PATTERNS = [
+  [/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 ***"],
+  [/((?:token|password|passwd|secret|authorization|api[_-]?key|access[_-]?key)\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1***"],
+  [/(["'](?:token|password|passwd|secret|authorization|api[_-]?key|access[_-]?key)["']\s*:\s*)("[^"]*"|'[^']*')/gi, "$1\"***\""],
+];
 
 function safeSegment(value, fallback = "run") {
   return String(value || fallback)
@@ -34,9 +39,15 @@ function truncateText(value) {
   return `${text.slice(0, MAX_EVENT_TEXT_CHARS)}\n... [truncated ${text.length - MAX_EVENT_TEXT_CHARS} chars]`;
 }
 
+function redactText(value) {
+  let text = truncateText(value);
+  for (const [pattern, replacement] of SECRET_TEXT_PATTERNS) text = text.replace(pattern, replacement);
+  return text;
+}
+
 function redact(value, depth = 0) {
   if (depth > 8) return "[MaxDepth]";
-  if (typeof value === "string") return truncateText(value);
+  if (typeof value === "string") return redactText(value);
   if (value == null || typeof value === "number" || typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.slice(0, 200).map((item) => redact(item, depth + 1));
   if (typeof value === "object") {
@@ -90,6 +101,8 @@ function indexRecord(meta = {}, patch = {}) {
     flowSource: String(meta.flowSource || "user"),
     scheduleNodeId: String(meta.scheduleNodeId || ""),
     runNodeId: String(meta.runNodeId || ""),
+    releaseId: String(meta.releaseId || ""),
+    designRevision: String(meta.designRevision || ""),
     scheduled: meta.scheduled === true,
     trigger: String(meta.trigger || (meta.scheduled === true ? "scheduled" : "manual")),
     label: String(meta.label || ""),

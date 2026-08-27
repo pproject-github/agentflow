@@ -8,11 +8,28 @@ import {
   MARKETPLACE_PACKAGES_DIR,
   PIPELINES_DIR,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
+import { NODE_PACKAGE_ENTRY, isNodePackageDir, readNodePackageManifest } from "./node-package-manifest.mjs";
+import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
+import {
+  NODE_PACKAGE_METADATA_FILENAME,
+  createNodePackageArchive,
+  inspectNodePackageArchive,
+  inspectNodePackageDirectory,
+  writeNodePackageFiles,
+} from "./node-package-archive.mjs";
+import {
+  marketplaceStatsFor,
+  marketplaceUsageStats,
+  normalizeMarketplaceVisibility,
+} from "./marketplace-usage.mjs";
 
 const NODE_MANIFEST = "node.yaml";
 const COLLECTION_MANIFEST = "collection.yaml";
 const FLOW_SNIPPET_MANIFEST = "flow-snippet.yaml";
+const FLOW_PACKAGE_MANIFEST = "flow-package.yaml";
+const FLOW_PACKAGE_GRAPH = "workspace.graph.json";
 const LOCK_FILENAME = "agentflow.lock.json";
 
 function workspacePackageRoot(workspaceRoot) {
@@ -80,6 +97,21 @@ function normalizeSlotList(value) {
   });
 }
 
+/**
+ * 读取节点包清单：`index.mjs` 的静态声明优先，回退 `node.yaml`。
+ * 声明写得不合法时不静默吞掉——按目录名报错，否则节点会莫名从面板消失。
+ */
+function readNodeManifestRaw(dir) {
+  try {
+    const manifest = readNodePackageManifest(dir, readYamlObject);
+    const metadata = readJsonObject(path.join(dir, NODE_PACKAGE_METADATA_FILENAME));
+    return manifest && metadata ? { ...manifest, ...metadata } : manifest;
+  } catch (e) {
+    console.warn(`[agentflow] 节点包 ${path.basename(dir)} 清单无效：${(e && e.message) || e}`);
+    return null;
+  }
+}
+
 function normalizeManifest(raw, packageDir, source = "workspace") {
   if (!raw || typeof raw !== "object") return null;
   const id = raw.id != null ? String(raw.id).trim() : path.basename(packageDir);
@@ -94,6 +126,9 @@ function normalizeManifest(raw, packageDir, source = "workspace") {
         : runtime.type != null && String(runtime.type).trim() !== ""
           ? String(runtime.type).trim()
           : "";
+  const input = normalizeSlotList(raw.input || raw.inputs);
+  const output = normalizeSlotList(raw.output || raw.outputs);
+  const ui = normalizeNodeUiForSlots(raw.ui, input, output);
   return {
     ...raw,
     id,
@@ -103,9 +138,11 @@ function normalizeManifest(raw, packageDir, source = "workspace") {
     baseDefinitionId,
     displayName: raw.displayName != null ? String(raw.displayName) : raw.name != null ? String(raw.name) : id,
     description: raw.description != null ? String(raw.description) : "",
-    input: normalizeSlotList(raw.input || raw.inputs),
-    output: normalizeSlotList(raw.output || raw.outputs),
+    visibility: normalizeMarketplaceVisibility(raw.visibility),
+    input,
+    output,
     runtime,
+    ...(ui ? { ui } : {}),
     source,
   };
 }
@@ -139,7 +176,12 @@ function canManageMarketplaceOwner(ownerUserId, opts = {}) {
 
 function canAccessMarketplaceNode(manifest, opts = {}) {
   if ((manifest?.source || "marketplace") !== "marketplace") return true;
-  return canAccessMarketplaceOwner(manifestOwnerUserId(manifest), opts);
+  const ownerUserId = manifestOwnerUserId(manifest);
+  if (!canAccessMarketplaceOwner(ownerUserId, opts)) return false;
+  if (normalizeMarketplaceVisibility(manifest?.visibility) === "public") return true;
+  const requestedUserId = String(opts.userId || "").trim();
+  if (!requestedUserId) return true;
+  return isAdminRequest(opts) || Boolean(ownerUserId) && ownerUserId === requestedUserId;
 }
 
 function sortVersionsDesc(versions) {
@@ -175,6 +217,14 @@ function resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version) {
   return target;
 }
 
+function resolveWorkspaceFlowPackageDir(workspaceRoot, id, version) {
+  if (!isSafePathSegment(id) || !isSafePathSegment(version)) return null;
+  const base = path.resolve(workspacePackageRoot(workspaceRoot), "flows");
+  const target = path.resolve(base, id, version);
+  if (target !== base && !target.startsWith(base + path.sep)) return null;
+  return target;
+}
+
 function collectFlowDirs(rootDir, source, archived = false) {
   const out = [];
   if (!fs.existsSync(rootDir)) return out;
@@ -187,7 +237,7 @@ function collectFlowDirs(rootDir, source, archived = false) {
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === ARCHIVED_PIPELINES_DIR_NAME) continue;
     const dir = path.join(rootDir, entry.name);
-    if (!fs.existsSync(path.join(dir, "flow.yaml"))) continue;
+    if (!isFlowDir(dir)) continue;
     out.push({ flowId: entry.name, flowSource: source, archived, flowDir: dir });
   }
   return out;
@@ -263,11 +313,11 @@ function findNodePackageDir(workspaceRoot, id, version) {
   const nodeBase = path.join(root, "nodes", id);
   if (version) {
     const direct = path.join(nodeBase, version);
-    if (fs.existsSync(path.join(direct, NODE_MANIFEST))) return direct;
+    if (isNodePackageDir(direct)) return direct;
   } else {
     for (const v of sortVersionsDesc(listVersionDirs(nodeBase))) {
       const direct = path.join(nodeBase, v);
-      if (fs.existsSync(path.join(direct, NODE_MANIFEST))) return direct;
+      if (isNodePackageDir(direct)) return direct;
     }
   }
   return null;
@@ -289,13 +339,13 @@ function iterCollectionNodeDirs(workspaceRoot, collectionDeps = []) {
       for (const entry of fs.readdirSync(nodesRoot, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const direct = path.join(nodesRoot, entry.name);
-        if (fs.existsSync(path.join(direct, NODE_MANIFEST))) {
+        if (isNodePackageDir(direct)) {
           out.push(direct);
           continue;
         }
         for (const nodeVersion of sortVersionsDesc(listVersionDirs(direct))) {
           const versioned = path.join(direct, nodeVersion);
-          if (fs.existsSync(path.join(versioned, NODE_MANIFEST))) out.push(versioned);
+          if (isNodePackageDir(versioned)) out.push(versioned);
         }
       }
     }
@@ -317,6 +367,13 @@ function dependencyVersion(flowData, id) {
   return null;
 }
 
+/**
+ * 只读，没有写入方——写 `agentflow.lock.json` 的是已删除的 `install-node`。
+ *
+ * 留着是因为磁盘上仍可能有它当年写下的锁文件，那些流程的版本钉应该继续生效。代码化流程
+ * 不依赖它：版本钉在实例的 `marketplaceRef`（`marketplace:<id>@<version>`）上，解析时
+ * `parsed.version` 先命中，这条兜底根本走不到。
+ */
 function lockVersion(flowDir, id) {
   const lock = readJsonObject(path.join(flowDir, LOCK_FILENAME));
   const entry = lock && lock.nodes && lock.nodes[id];
@@ -330,18 +387,58 @@ function collectionDeps(flowData) {
   return deps && Array.isArray(deps.collections) ? deps.collections : [];
 }
 
+/**
+ * flow 自带的代码节点包：`<flowDir>/nodes/<dirName>/`，不带版本子目录。
+ *
+ * 这类包跟着 flow 走——AI 生成流程时可以顺手把节点实现写在流程目录里，不必先发布到
+ * marketplace。id 以包声明为准（目录名只是回退），所以目录名和 id 可以不一致。
+ */
+function findFlowLocalNodePackageDir(flowDir, id, requestedVersion) {
+  const nodesRoot = flowDir ? path.join(path.resolve(flowDir), "nodes") : "";
+  if (!nodesRoot || !fs.existsSync(nodesRoot) || !fs.statSync(nodesRoot).isDirectory()) return null;
+  for (const entry of fs.readdirSync(nodesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(nodesRoot, entry.name);
+    if (!isNodePackageDir(dir)) continue;
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "flow");
+    if (!manifest || manifest.id !== id) continue;
+    if (requestedVersion && manifest.version !== requestedVersion) continue;
+    return dir;
+  }
+  return null;
+}
+
+/**
+ * 列出一个 `nodes/` 目录下的所有代码节点包（子目录形式，不带版本层）。
+ * 供节点目录把 flow 自带的节点一起摆进面板。
+ */
+export function listNodePackagesInDir(nodesRoot) {
+  const out = [];
+  const root = String(nodesRoot || "");
+  if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return out;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(root, entry.name);
+    if (!isNodePackageDir(dir)) continue;
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "flow");
+    if (manifest) out.push(manifest);
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 export function resolveMarketplaceNodePackage(workspaceRoot, flowDir, definitionId, flowData = null, opts = {}) {
   const parsed = parseMarketplaceDefinitionId(definitionId);
   if (!parsed) return null;
   const id = parsed.id;
   const requestedVersion = parsed.version || dependencyVersion(flowData, id) || lockVersion(flowDir, id);
-  let packageDir = findNodePackageDir(workspaceRoot, id, requestedVersion);
-  let packageSource = "marketplace";
+  // flow 自带的包优先：流程目录里的实现就是这个流程要用的那份，不该被同名的已发布包顶掉
+  let packageDir = findFlowLocalNodePackageDir(flowDir, id, requestedVersion);
+  let packageSource = packageDir ? "flow" : "marketplace";
+  if (!packageDir) packageDir = findNodePackageDir(workspaceRoot, id, requestedVersion);
 
   if (!packageDir) {
     for (const dir of iterCollectionNodeDirs(workspaceRoot, collectionDeps(flowData))) {
-      const raw = readYamlObject(path.join(dir, NODE_MANIFEST));
-      const manifest = normalizeManifest(raw, dir, "collection");
+      const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "collection");
       if (!manifest || manifest.id !== id) continue;
       if (requestedVersion && manifest.version !== requestedVersion) continue;
       packageDir = dir;
@@ -351,7 +448,7 @@ export function resolveMarketplaceNodePackage(workspaceRoot, flowDir, definition
   }
 
   if (!packageDir) return null;
-  const manifest = normalizeManifest(readYamlObject(path.join(packageDir, NODE_MANIFEST)), packageDir, packageSource);
+  const manifest = normalizeManifest(readNodeManifestRaw(packageDir), packageDir, packageSource);
   if (!manifest) return null;
   if (!canAccessMarketplaceNode(manifest, opts)) return null;
   return {
@@ -366,7 +463,7 @@ export function listMarketplaceNodes(workspaceRoot, flowData = null, opts = {}) 
   const out = [];
   const seen = new Set();
   const addManifest = (dir, source = "marketplace") => {
-    const manifest = normalizeManifest(readYamlObject(path.join(dir, NODE_MANIFEST)), dir, source);
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, source);
     if (!manifest) return;
     if (!canAccessMarketplaceNode(manifest, opts)) return;
     const key = `${manifest.id}@${manifest.version}`;
@@ -394,6 +491,7 @@ export function listMarketplaceNodes(workspaceRoot, flowData = null, opts = {}) 
 
 export function listMarketplacePackages(workspaceRoot, opts = {}) {
   const root = workspacePackageRoot(workspaceRoot);
+  const stats = marketplaceUsageStats(workspaceRoot);
   const nodes = listMarketplaceNodes(workspaceRoot, null, opts).map((n) => ({
     id: n.id,
     version: n.version,
@@ -403,10 +501,27 @@ export function listMarketplacePackages(workspaceRoot, opts = {}) {
     description: n.description,
     inputs: n.input,
     outputs: n.output,
+    ui: n.ui,
     packagedFiles: Array.isArray(n.packagedFiles) ? n.packagedFiles : [],
+    fileList: Array.isArray(n.fileList) ? n.fileList : [],
+    fileCount: Number(n.fileCount) || 0,
+    totalBytes: Number(n.totalBytes) || 0,
+    contentSha256: String(n.contentSha256 || ""),
+    archiveSha256: String(n.archiveSha256 || ""),
+    installedFrom: String(n.installedFrom || ""),
+    installedAt: String(n.installedAt || ""),
+    ownerUserId: n.ownerUserId || n.createdBy || "",
+    createdBy: n.createdBy || n.ownerUserId || "",
+    visibility: normalizeMarketplaceVisibility(n.visibility),
     packageDir: n.packageDir,
     usage: listMarketplaceNodeUsages(workspaceRoot, n.id, n.version, opts),
-  }));
+    ...marketplaceStatsFor(stats, "node", n.id, n.version, n.ownerUserId || n.createdBy || ""),
+  })).sort((a, b) => (
+    Number(b.useCount || 0) - Number(a.useCount || 0)
+    || Number(b.installCount || 0) - Number(a.installCount || 0)
+    || String(a.id).localeCompare(String(b.id))
+    || String(b.version).localeCompare(String(a.version), undefined, { numeric: true, sensitivity: "base" })
+  ));
   const collections = [];
   const collectionsRoot = path.join(root, "collections");
   if (fs.existsSync(collectionsRoot)) {
@@ -433,6 +548,7 @@ export function listMarketplaceFlowSnippets(workspaceRoot, opts = {}) {
   const root = workspacePackageRoot(workspaceRoot);
   const snippetsRoot = path.join(root, "flow-snippets");
   const snippets = [];
+  const stats = marketplaceUsageStats(workspaceRoot);
   const requestedUserId = String(opts.userId || "").trim();
   if (!fs.existsSync(snippetsRoot)) return { snippets };
   for (const entry of fs.readdirSync(snippetsRoot, { withFileTypes: true })) {
@@ -445,6 +561,8 @@ export function listMarketplaceFlowSnippets(workspaceRoot, opts = {}) {
       const snippet = manifest.snippet && typeof manifest.snippet === "object" ? manifest.snippet : {};
       const ownerUserId = String(manifest.ownerUserId || manifest.createdBy || "").trim();
       if (requestedUserId && !canAccessMarketplaceOwner(ownerUserId, opts)) continue;
+      const visibility = normalizeMarketplaceVisibility(manifest.visibility);
+      if (visibility === "private" && requestedUserId && !isAdminRequest(opts) && ownerUserId !== requestedUserId) continue;
       snippets.push({
         id: manifest.id || entry.name,
         version: manifest.version || version,
@@ -456,16 +574,160 @@ export function listMarketplaceFlowSnippets(workspaceRoot, opts = {}) {
         createdAt: manifest.createdAt || "",
         updatedAt: manifest.updatedAt || "",
         ownerUserId,
+        visibility,
         packageDir: dir,
         snippet,
+        ...marketplaceStatsFor(stats, "flow-snippet", manifest.id || entry.name, manifest.version || version, ownerUserId),
       });
     }
   }
   snippets.sort((a, b) => {
+    const byUsage = Number(b.useCount || 0) - Number(a.useCount || 0);
+    const byInstall = Number(b.installCount || 0) - Number(a.installCount || 0);
     const byTime = String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
-    return byTime || a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
+    return byUsage || byInstall || byTime || a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
   });
   return { snippets };
+}
+
+function marketplaceRecordAccessible(manifest, opts = {}) {
+  const ownerUserId = String(manifest?.ownerUserId || manifest?.createdBy || "").trim();
+  if (!canAccessMarketplaceOwner(ownerUserId, opts)) return false;
+  if (normalizeMarketplaceVisibility(manifest?.visibility) === "public") return true;
+  const requestedUserId = String(opts.userId || "").trim();
+  if (!requestedUserId) return true;
+  return isAdminRequest(opts) || ownerUserId === requestedUserId;
+}
+
+export function listMarketplaceFlows(workspaceRoot, opts = {}) {
+  const base = path.join(workspacePackageRoot(workspaceRoot), "flows");
+  const stats = marketplaceUsageStats(workspaceRoot);
+  const flows = [];
+  if (!fs.existsSync(base)) return { flows };
+  for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    for (const version of listVersionDirs(path.join(base, entry.name))) {
+      const packageDir = resolveWorkspaceFlowPackageDir(workspaceRoot, entry.name, version);
+      const manifest = packageDir ? readYamlObject(path.join(packageDir, FLOW_PACKAGE_MANIFEST)) : null;
+      if (!manifest || !marketplaceRecordAccessible(manifest, opts)) continue;
+      const id = String(manifest.id || entry.name);
+      const resourceVersion = String(manifest.version || version);
+      flows.push({
+        id,
+        version: resourceVersion,
+        displayName: String(manifest.displayName || manifest.name || id),
+        description: String(manifest.description || ""),
+        tags: Array.isArray(manifest.tags) ? manifest.tags.map((tag) => String(tag)) : [],
+        ownerUserId: String(manifest.ownerUserId || manifest.createdBy || ""),
+        visibility: normalizeMarketplaceVisibility(manifest.visibility),
+        nodeCount: Number(manifest.nodeCount || 0),
+        edgeCount: Number(manifest.edgeCount || 0),
+        createdAt: String(manifest.createdAt || ""),
+        updatedAt: String(manifest.updatedAt || manifest.createdAt || ""),
+        packageDir,
+        ...marketplaceStatsFor(stats, "flow", id, resourceVersion, String(manifest.ownerUserId || manifest.createdBy || "")),
+      });
+    }
+  }
+  flows.sort((a, b) => (
+    Number(b.useCount || 0) - Number(a.useCount || 0)
+    || Number(b.installCount || 0) - Number(a.installCount || 0)
+    || String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+    || a.id.localeCompare(b.id)
+    || b.version.localeCompare(a.version, undefined, { numeric: true, sensitivity: "base" })
+  ));
+  return { flows };
+}
+
+export function publishMarketplaceFlow(workspaceRoot, payload = {}, opts = {}) {
+  const ownerUserId = String(opts.userId || "").trim();
+  if (!ownerUserId) return { ok: false, error: "Authentication required" };
+  const label = String(payload.displayName || payload.name || payload.id || "flow").trim();
+  const id = safePackageId(payload.id || payload.packageId || label);
+  const version = normalizeVersion(payload.version || "1.0.0");
+  const graph = payload.graph && typeof payload.graph === "object" && !Array.isArray(payload.graph) ? payload.graph : null;
+  if (!id || !graph) return { ok: false, error: "Invalid marketplace flow" };
+  const packageDir = resolveWorkspaceFlowPackageDir(workspaceRoot, id, version);
+  if (!packageDir) return { ok: false, error: "Invalid marketplace flow id or version" };
+  const existing = readYamlObject(path.join(packageDir, FLOW_PACKAGE_MANIFEST));
+  if (existing && !canManageMarketplaceOwner(String(existing.ownerUserId || existing.createdBy || ""), opts)) {
+    return { ok: false, error: "Marketplace flow permission denied" };
+  }
+  if (existing) {
+    const existingGraph = readJsonObject(path.join(packageDir, FLOW_PACKAGE_GRAPH));
+    if (JSON.stringify(existingGraph) !== JSON.stringify(graph)) {
+      return { ok: false, conflict: true, error: `${id}@${version} 已存在且内容不同，请提升版本号` };
+    }
+    return {
+      ok: true,
+      alreadyExists: true,
+      ...existing,
+      visibility: normalizeMarketplaceVisibility(existing.visibility),
+      packageDir,
+    };
+  }
+  const now = new Date().toISOString();
+  const manifest = {
+    id,
+    version,
+    displayName: label,
+    description: String(payload.description || "").trim(),
+    tags: Array.isArray(payload.tags) ? payload.tags.map((tag) => String(tag).trim()).filter(Boolean) : [],
+    visibility: normalizeMarketplaceVisibility(payload.visibility),
+    ownerUserId,
+    createdBy: ownerUserId,
+    nodeCount: Object.keys(graph.instances || {}).length,
+    edgeCount: Array.isArray(graph.edges) ? graph.edges.length : 0,
+    createdAt: String(existing?.createdAt || now),
+    updatedAt: now,
+  };
+  fs.mkdirSync(path.dirname(packageDir), { recursive: true });
+  fs.rmSync(packageDir, { recursive: true, force: true });
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(path.join(packageDir, FLOW_PACKAGE_MANIFEST), yaml.dump(manifest, { lineWidth: -1 }), "utf-8");
+  fs.writeFileSync(path.join(packageDir, FLOW_PACKAGE_GRAPH), `${JSON.stringify(graph, null, 2)}\n`, "utf-8");
+  fs.writeFileSync(path.join(packageDir, "README.md"), `# ${label}\n\n${manifest.description || "Published AgentFlow template."}\n`, "utf-8");
+  return { ok: true, ...manifest, packageDir };
+}
+
+export function readMarketplaceFlow(workspaceRoot, id, version, opts = {}) {
+  const packageDir = resolveWorkspaceFlowPackageDir(workspaceRoot, id, version);
+  const manifest = packageDir ? readYamlObject(path.join(packageDir, FLOW_PACKAGE_MANIFEST)) : null;
+  if (!manifest || !marketplaceRecordAccessible(manifest, opts)) return { ok: false, error: "Marketplace flow not found" };
+  const graph = readJsonObject(path.join(packageDir, FLOW_PACKAGE_GRAPH));
+  if (!graph) return { ok: false, error: "Marketplace flow graph is missing" };
+  return { ok: true, manifest, graph, packageDir };
+}
+
+export function setMarketplaceVisibility(workspaceRoot, kind, id, version, visibility, opts = {}) {
+  const normalized = normalizeMarketplaceVisibility(visibility);
+  let manifestPath = "";
+  if (kind === "flow") {
+    const dir = resolveWorkspaceFlowPackageDir(workspaceRoot, id, version);
+    manifestPath = dir ? path.join(dir, FLOW_PACKAGE_MANIFEST) : "";
+  } else if (kind === "flow-snippet") {
+    const dir = resolveWorkspaceFlowSnippetPackageDir(workspaceRoot, id, version);
+    manifestPath = dir ? path.join(dir, FLOW_SNIPPET_MANIFEST) : "";
+  } else if (kind === "node") {
+    const dir = resolveWorkspaceNodePackageDir(workspaceRoot, id, version);
+    if (!dir) return { ok: false, error: "Invalid marketplace node" };
+    const manifest = normalizeManifest(readNodeManifestRaw(dir), dir, "marketplace");
+    if (!manifest || !canManageMarketplaceOwner(manifestOwnerUserId(manifest), opts)) {
+      return { ok: false, error: "Marketplace node permission denied" };
+    }
+    const metadataPath = path.join(dir, NODE_PACKAGE_METADATA_FILENAME);
+    const metadata = readJsonObject(metadataPath) || {};
+    fs.writeFileSync(metadataPath, `${JSON.stringify({ ...metadata, visibility: normalized }, null, 2)}\n`, "utf-8");
+    return { ok: true, kind, id, version, visibility: normalized };
+  } else {
+    return { ok: false, error: "Unsupported marketplace resource kind" };
+  }
+  const manifest = manifestPath ? readYamlObject(manifestPath) : null;
+  if (!manifest || !canManageMarketplaceOwner(String(manifest.ownerUserId || manifest.createdBy || ""), opts)) {
+    return { ok: false, error: "Marketplace resource permission denied" };
+  }
+  fs.writeFileSync(manifestPath, yaml.dump({ ...manifest, visibility: normalized, updatedAt: new Date().toISOString() }, { lineWidth: -1 }), "utf-8");
+  return { ok: true, kind, id, version, visibility: normalized };
 }
 
 export function deleteMarketplaceNodePackage(workspaceRoot, id, version, opts = {}) {
@@ -519,42 +781,128 @@ export function deleteMarketplaceFlowSnippetPackage(workspaceRoot, id, version, 
   return { ok: true, id, version, packageDir };
 }
 
-export function writeFlowMarketplaceLock(workspaceRoot, flowDir, flowData, opts = {}) {
-  if (!flowData || !flowData.instances || typeof flowData.instances !== "object") return null;
-  const nodes = {};
-  for (const inst of Object.values(flowData.instances)) {
-    const defId = inst && (inst.marketplaceRef || inst.definitionId);
-    const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, defId, flowData, opts);
-    if (!resolved) continue;
-    nodes[resolved.id] = {
-      version: resolved.version,
-      resolved: path.relative(flowDir, resolved.packageDir).replace(/\\/g, "/"),
-      definitionId: resolved.resolvedDefinitionId,
+
+export function publishNodePackage(workspaceRoot, sourceDir, opts = {}) {
+  const src = path.resolve(sourceDir);
+  // 走和读取同一条路径：`index.mjs` 的静态声明优先，回落 `node.yaml`。只认后者的话，
+  // 一个目录扫描、面板、运行时都跑得通的 index.mjs 包偏偏发布不出去。
+  const inspected = inspectNodePackageDirectory(src, { allowLegacyManifest: true });
+  if (!inspected.ok) return inspected;
+  const manifest = normalizeManifest(inspected.manifest, src);
+  if (!manifest) return { ok: false, error: `Invalid node package manifest: ${src}` };
+  const dest = resolveWorkspaceNodePackageDir(workspaceRoot, manifest.id, manifest.version);
+  if (!dest) return { ok: false, error: "Invalid marketplace node id or version" };
+  const existing = fs.existsSync(dest) ? inspectNodePackageDirectory(dest, { allowLegacyManifest: true }) : null;
+  if (existing?.ok && existing.contentSha256 === inspected.contentSha256) {
+    return {
+      ok: true,
+      alreadyExists: true,
+      id: manifest.id,
+      version: manifest.version,
+      packageDir: dest,
+      definitionId: manifest.definitionId,
+      contentSha256: inspected.contentSha256,
+      fileList: inspected.fileList,
     };
   }
-  const lockPath = path.join(flowDir, LOCK_FILENAME);
-  if (Object.keys(nodes).length === 0) return null;
-  const lock = readJsonObject(lockPath) || {};
-  const next = {
-    ...lock,
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    nodes: { ...(lock.nodes && typeof lock.nodes === "object" ? lock.nodes : {}), ...nodes },
-  };
-  fs.writeFileSync(lockPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
-  return next;
-}
-
-export function publishNodePackage(workspaceRoot, sourceDir) {
-  const src = path.resolve(sourceDir);
-  const manifestPath = path.join(src, NODE_MANIFEST);
-  const manifest = normalizeManifest(readYamlObject(manifestPath), src);
-  if (!manifest) return { ok: false, error: `Invalid node package manifest: ${manifestPath}` };
-  const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", manifest.id, manifest.version);
+  if (existing?.ok && opts.immutable === true) {
+    return { ok: false, conflict: true, error: `${manifest.id}@${manifest.version} 已存在且内容不同，请提升版本号` };
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src, dest, { recursive: true });
-  return { ok: true, id: manifest.id, version: manifest.version, packageDir: dest, definitionId: manifest.definitionId };
+  const ownerUserId = String(opts.ownerUserId || opts.userId || manifest.ownerUserId || manifest.createdBy || "").trim();
+  fs.writeFileSync(path.join(dest, NODE_PACKAGE_METADATA_FILENAME), `${JSON.stringify({
+    ...(ownerUserId ? { ownerUserId, createdBy: ownerUserId } : {}),
+    visibility: normalizeMarketplaceVisibility(opts.visibility),
+    contentSha256: inspected.contentSha256,
+    fileList: inspected.fileList,
+    fileCount: inspected.fileCount,
+    totalBytes: inspected.totalBytes,
+    publishedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf-8");
+  return {
+    ok: true,
+    id: manifest.id,
+    version: manifest.version,
+    packageDir: dest,
+    definitionId: manifest.definitionId,
+    contentSha256: inspected.contentSha256,
+    fileList: inspected.fileList,
+  };
+}
+
+export function publishNodePackageArchive(workspaceRoot, archiveInput, opts = {}) {
+  const inspected = inspectNodePackageArchive(archiveInput);
+  if (!inspected.ok) return inspected;
+  const manifest = normalizeManifest(inspected.manifest, "");
+  if (!manifest) return { ok: false, error: "Invalid node package manifest" };
+  const dest = resolveWorkspaceNodePackageDir(workspaceRoot, manifest.id, manifest.version);
+  if (!dest) return { ok: false, error: "Invalid marketplace node id or version" };
+  const existing = fs.existsSync(dest) ? inspectNodePackageDirectory(dest) : null;
+  if (existing?.ok) {
+    if (existing.contentSha256 !== inspected.contentSha256) {
+      return { ok: false, conflict: true, error: `${manifest.id}@${manifest.version} 已存在且内容不同，请提升版本号` };
+    }
+    return {
+      ok: true,
+      alreadyExists: true,
+      id: manifest.id,
+      version: manifest.version,
+      definitionId: manifest.definitionId,
+      packageDir: dest,
+      contentSha256: inspected.contentSha256,
+      archiveSha256: inspected.archiveSha256,
+      fileList: inspected.fileList,
+    };
+  }
+  const parent = path.dirname(dest);
+  fs.mkdirSync(parent, { recursive: true });
+  // 先在同一父目录完整写好再 rename。这样进程中断或磁盘异常时不会留下一个被目录扫描到、
+  // 但脚本只写了一半的版本。
+  const staging = fs.mkdtempSync(path.join(parent, `.${manifest.version}.installing-`));
+  const ownerUserId = String(opts.ownerUserId || opts.userId || "").trim();
+  const installedFrom = String(opts.installedFrom || "").trim();
+  const installedAt = String(opts.installedAt || "").trim();
+  try {
+    const written = writeNodePackageFiles(staging, inspected.files);
+    if (!written.ok) return written;
+    fs.writeFileSync(path.join(staging, NODE_PACKAGE_METADATA_FILENAME), `${JSON.stringify({
+      ...(ownerUserId ? { ownerUserId, createdBy: ownerUserId } : {}),
+      visibility: normalizeMarketplaceVisibility(opts.visibility),
+      contentSha256: inspected.contentSha256,
+      archiveSha256: inspected.archiveSha256,
+      fileList: inspected.fileList,
+      fileCount: inspected.fileCount,
+      totalBytes: inspected.totalBytes,
+      publishedAt: new Date().toISOString(),
+      ...(installedFrom ? { installedFrom } : {}),
+      ...(installedAt ? { installedAt } : {}),
+    }, null, 2)}\n`, "utf-8");
+    fs.renameSync(staging, dest);
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  } finally {
+    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+  }
+  return {
+    ok: true,
+    id: manifest.id,
+    version: manifest.version,
+    definitionId: manifest.definitionId,
+    packageDir: dest,
+    contentSha256: inspected.contentSha256,
+    archiveSha256: inspected.archiveSha256,
+    fileList: inspected.fileList,
+  };
+}
+
+export function nodePackageArchive(workspaceRoot, id, version, opts = {}) {
+  const packageDir = resolveWorkspaceNodePackageDir(workspaceRoot, id, version);
+  if (!packageDir || !fs.existsSync(packageDir)) return { ok: false, error: `Node package not found: ${id}@${version}` };
+  const manifest = normalizeManifest(readNodeManifestRaw(packageDir), packageDir, "marketplace");
+  if (!manifest || !canAccessMarketplaceNode(manifest, opts)) return { ok: false, error: "Node package permission denied" };
+  return createNodePackageArchive(packageDir);
 }
 
 function safePackageId(raw) {
@@ -779,6 +1127,7 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
   const implementationMode = String(payload.implementationMode || "").trim();
   const body = String(payload.body || "").trim();
   const description = String(payload.description || body || `Published from node ${label}`).trim();
+  const ui = normalizeNodeUiForSlots(payload.ui, inputs, outputs);
   const dest = path.join(workspacePackageRoot(workspaceRoot), "nodes", id, version);
   const existingManifest = readYamlObject(path.join(dest, NODE_MANIFEST));
   if (existingManifest) {
@@ -820,8 +1169,10 @@ export function publishNodeFromInstance(workspaceRoot, payload = {}, options = {
     runtime,
     inputs,
     outputs,
+    ...(ui ? { ui } : {}),
     ownerUserId,
     createdBy: ownerUserId,
+    visibility: normalizeMarketplaceVisibility(payload.visibility),
     createdAt: existingManifest?.createdAt || now,
     updatedAt: now,
   };
@@ -884,6 +1235,7 @@ export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
     tags: Array.isArray(payload.tags) ? payload.tags.map((x) => String(x).trim()).filter(Boolean) : [],
     ownerUserId,
     createdBy: ownerUserId,
+    visibility: normalizeMarketplaceVisibility(payload.visibility),
     nodeCount,
     edgeCount: edges.length,
     createdAt: now,
@@ -906,23 +1258,4 @@ export function publishFlowSnippet(workspaceRoot, payload = {}, opts = {}) {
     "utf-8",
   );
   return { ok: true, id, version, packageDir: dest, snippet: manifest.snippet };
-}
-
-export function installFlowDependency(workspaceRoot, flowDir, spec, opts = {}) {
-  const parsed = parseMarketplaceDefinitionId(spec.startsWith("marketplace:") ? spec : `marketplace:${spec}`);
-  if (!parsed) return { ok: false, error: `Invalid marketplace node spec: ${spec}` };
-  const resolved = resolveMarketplaceNodePackage(workspaceRoot, flowDir, `marketplace:${parsed.id}${parsed.version ? `@${parsed.version}` : ""}`, { dependencies: {} }, opts);
-  if (!resolved) return { ok: false, error: `Marketplace node not found: ${spec}` };
-
-  const flowYamlPath = path.join(flowDir, "flow.yaml");
-  const data = readYamlObject(flowYamlPath);
-  if (!data) return { ok: false, error: `Invalid flow.yaml: ${flowYamlPath}` };
-  const deps = data.dependencies && typeof data.dependencies === "object" ? data.dependencies : {};
-  const nodes = Array.isArray(deps.nodes) ? deps.nodes : [];
-  const exists = nodes.some((item) => (typeof item === "string" ? item === resolved.id : item && item.id === resolved.id));
-  if (!exists) nodes.push({ id: resolved.id, version: resolved.version });
-  data.dependencies = { ...deps, nodes };
-  fs.writeFileSync(flowYamlPath, yaml.dump(data, { lineWidth: -1 }), "utf-8");
-  writeFlowMarketplaceLock(workspaceRoot, flowDir, data, opts);
-  return { ok: true, id: resolved.id, version: resolved.version, definitionId: `marketplace:${resolved.id}@${resolved.version}` };
 }

@@ -60,6 +60,11 @@ HTML 展示节点接收完整 HTML 文档或 HTML fragment：
 
 ## 节点写入
 
-新增或更新 `workspace.graph.json` 中的 `display_html` instance 时，`body`、`input.content.value`、`output.content.value` 使用同一份 HTML。
+在 `workspace.flow.js` 里写一个 `display.html` 节点，HTML 放 `content` 引脚：
 
-建议默认尺寸：宽 430-760，高 640-860，按原型复杂度调整。
+```js
+const proto = display.html("原型", { content: file("docs/proto.html") });
+```
+
+超过 3000 字符就像上面这样抽成 `docs/*.html`——整页 HTML 内联会把流程结构淹没。
+尺寸由平台维护，不要手写。

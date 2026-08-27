@@ -1,6 +1,6 @@
 {
   "name": "@fieldwangai/agentflow",
-  "version": "0.1.153",
+  "version": "0.1.168",
   "description": "Orchestration system for long-running complex agent tasks using Cursor, OpenCode, Claude Code, or Codex as execution backends",
   "type": "module",
   "main": "bin/agentflow.mjs",
@@ -40,6 +40,7 @@
     "bin",
     "agents",
     "skills",
+    "shared",
     "builtin/nodes",
     "builtin/pipelines",
     "builtin/web-ui/dist",
@@ -49,14 +50,17 @@
     "test": "node --test test/*.test.mjs",
     "postinstall": "node bin/ensure-workspace-reference.mjs",
     "build:web-ui": "cd builtin/web-ui && npm install && npm run build",
+    "build:agentflow-cli-skill-runtime": "node scripts/build-agentflow-cli-skill-runtime.mjs",
     "build:website": "cd website && npm install && npm run build",
     "dev": "AGENTFLOW_DEV=1 node bin/agentflow.mjs ui",
     "dev:web": "cd builtin/web-ui && npm run dev",
     "dev:website": "cd website && npm run dev",
     "preview:website": "cd website && npm run preview",
+    "version": "npm run build:agentflow-cli-skill-runtime && npm --prefix builtin/web-ui run build && git add skills/agentflow-cli/runtime builtin/web-ui/dist",
     "prepack": "npm run build:web-ui"
   },
   "dependencies": {
+    "acorn": "^8.18.0",
     "busboy": "^1.6.0",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",
@@ -66,5 +70,8 @@
     "ora": "^9.3.0",
     "sharp": "^0.34.5",
     "update-notifier": "^7.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

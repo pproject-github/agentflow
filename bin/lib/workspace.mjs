@@ -11,6 +11,7 @@ import {
   getUserPipelinesRoot,
   resolveUniqueUserPipelineDir,
   ARCHIVED_PIPELINES_DIR_NAME,
+  isFlowDir,
 } from "./paths.mjs";
 
 export { getRunDir } from "./paths.mjs";
@@ -144,7 +145,7 @@ export function listRunsWithLogs(workspaceRoot) {
 /** 解析活跃 flow 目录：user → workspace → legacy workspace → builtin。归档 flow 必须走显式 archived resolver。 */
 export function getFlowDir(workspaceRoot, flowName, opts = {}) {
   const root = path.resolve(workspaceRoot);
-  const hasFlow = (dir) => fs.existsSync(dir) && fs.existsSync(path.join(dir, "flow.yaml"));
+  const hasFlow = (dir) => isFlowDir(dir);
 
   // user pipelines
   const userRoot = getUserPipelinesRoot(opts.userId);

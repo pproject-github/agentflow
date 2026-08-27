@@ -1,11 +1,13 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # AgentFlow run 目录（intermediate、output、logs）
 .workspace/
 .agents/
 tmp/
 workspace.graph.json
+workspace.state.json
 
 # Env / local
 .env

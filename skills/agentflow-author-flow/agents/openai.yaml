@@ -1,4 +1,4 @@
 interface:
-  display_name: "AgentFlow Flow Authoring"
-  short_description: "Generate, preview, confirm, and publish AgentFlow flows"
-  default_prompt: "Use $agentflow-author-flow to generate a local AgentFlow, open its platform-style preview, and publish it after I confirm."
+  display_name: "AgentFlow 流程创作"
+  short_description: "创建、预览、试运行、修改、发布并配置定时 Flow"
+  default_prompt: "使用 $agentflow-author-flow 把我的想法做成可运行 Draft，和我一起修改；确认后再发布，并按我的选择配置定时运行。"

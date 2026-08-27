@@ -19,11 +19,13 @@ test("admin can review another user's Workspace but cannot modify or run it", as
     const nonce = Date.now();
     const [
       { loginOrCreateUser },
-      { getUserPipelinesRoot },
+      { getUserPipelinesRoot, PIPELINES_DIR },
+      { ensureWorkspaceCollaboration },
       { startUiServer },
     ] = await Promise.all([
       import(`../bin/lib/auth.mjs?admin-workspace=${nonce}`),
       import(`../bin/lib/paths.mjs?admin-workspace=${nonce}`),
+      import(`../bin/lib/workspace-collaboration.mjs?admin-workspace=${nonce}`),
       import(`../bin/lib/ui-server.mjs?admin-workspace=${nonce}`),
     ]);
 
@@ -63,6 +65,44 @@ test("admin can review another user's Workspace but cannot modify or run it", as
       "utf-8",
     );
     fs.writeFileSync(path.join(flowDir, "owner-note.md"), "owner workspace content\n", "utf-8");
+
+    const sharedFlowDir = path.join(workspaceRoot, PIPELINES_DIR, "shared_project");
+    fs.mkdirSync(sharedFlowDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sharedFlowDir, "flow.yaml"),
+      [
+        "version: 1",
+        "ui:",
+        "  description: Shared owner project",
+        "instances: {}",
+        "edges: []",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sharedFlowDir, "workspace.graph.json"),
+      `${JSON.stringify({
+        ...originalGraph,
+        instances: {
+          shared_note: {
+            instanceId: "shared_note",
+            definitionId: "provide_text",
+            label: "Shared owner note",
+            input: [],
+            output: [],
+          },
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(sharedFlowDir, "shared-note.md"), "shared workspace content\n", "utf-8");
+    const sharedWorkspace = ensureWorkspaceCollaboration({
+      flowId: "shared_project",
+      flowSource: "workspace",
+      userId: owner.user.userId,
+    });
+    assert.equal(sharedWorkspace.created, true);
 
     server = await startUiServer({
       workspaceRoot,
@@ -111,6 +151,37 @@ test("admin can review another user's Workspace but cannot modify or run it", as
     assert.equal(graph.adminReview.ownerUserId, owner.user.userId);
     assert.equal(graph.graph.instances.note_1.label, "Owner note");
 
+    const sharedReviewQuery = new URLSearchParams({
+      flowId: "shared_project",
+      flowSource: "workspace",
+      adminOwnerId: owner.user.userId,
+    });
+    const allowedSharedGraph = await request(admin.token, `/api/workspace/graph?${sharedReviewQuery}`);
+    const sharedGraph = await allowedSharedGraph.json();
+    assert.equal(allowedSharedGraph.status, 200, JSON.stringify(sharedGraph));
+    assert.equal(sharedGraph.writable, false);
+    assert.equal(sharedGraph.adminReview.readonly, true);
+    assert.equal(sharedGraph.adminReview.ownerUserId, owner.user.userId);
+    assert.equal(sharedGraph.graph.instances.shared_note.label, "Shared owner note");
+    const sharedFileQuery = new URLSearchParams(sharedReviewQuery);
+    sharedFileQuery.set("path", "shared-note.md");
+    const allowedSharedFile = await request(admin.token, `/api/workspace/file?${sharedFileQuery}`);
+    const sharedFile = await allowedSharedFile.json();
+    assert.equal(allowedSharedFile.status, 200, JSON.stringify(sharedFile));
+    assert.equal(sharedFile.content, "shared workspace content\n");
+
+    const sharedWriteAttempt = await request(admin.token, "/api/workspace/graph", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flowId: "shared_project",
+        flowSource: "workspace",
+        adminOwnerId: owner.user.userId,
+        graph: { ...originalGraph, instances: {} },
+      }),
+    });
+    assert.equal(sharedWriteAttempt.status >= 400, true);
+
     const fileQuery = new URLSearchParams(reviewQuery);
     fileQuery.set("path", "owner-note.md");
     const allowedFile = await request(admin.token, `/api/workspace/file?${fileQuery}`);
@@ -143,8 +214,12 @@ test("admin can review another user's Workspace but cannot modify or run it", as
     });
     assert.equal(runAttempt.status, 403);
 
-    const storedGraph = JSON.parse(fs.readFileSync(path.join(flowDir, "workspace.graph.json"), "utf-8"));
-    assert.equal(storedGraph.instances.note_1.label, "Owner note");
+    // 启动迁移可能已经把历史 workspace.graph.json 转成 workspace.flow.js；通过权威读取
+    // 接口验证只读访问没有改图，不再把权限测试绑定到旧存储文件名。
+    const storedResponse = await request(admin.token, `/api/workspace/graph?${reviewQuery}`);
+    const stored = await storedResponse.json();
+    assert.equal(storedResponse.status, 200, JSON.stringify(stored));
+    assert.equal(stored.graph.instances.note_1.label, "Owner note");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

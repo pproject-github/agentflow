@@ -1,5 +1,20 @@
 # How to Create a Module Migration Workflow
 
+> [!WARNING]
+> **This guide targets the retired Start/End Pipeline runtime.**
+>
+> `control_start` / `control_end` topologies, `agentflow apply` / `resume` / `replay`
+> and `/api/flow/run` have all been removed. Loop patterns built from
+> `control_anyOne` + `control_toBool` + `control_if` no longer work either — the
+> Workspace run planner is a DAG and rejects cyclic graphs outright.
+>
+> Runs now start from the Workspace graph: open the flow in the Web UI and hit
+> **Run**, or add a `workspace_scheduled_run` node for scheduled execution. This
+> document is kept for migration and audit reference — **do not copy** its node
+> choices or wiring directly. For the current node set see
+> `skills/agentflow-node-reference/references/builtin-nodes.md`.
+
+
 ## Background
 
 Module migration is a common scenario in code refactoring: migrating code from a main module to a submodule involves multiple steps such as file movement, dependency updates, and compilation verification. Traditional methods require manual repetition of these steps, which is inefficient and error-prone.

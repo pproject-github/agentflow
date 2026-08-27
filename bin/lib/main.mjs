@@ -1,9 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import chalk from "chalk";
-import { apply, replay, resume } from "./apply.mjs";
 import {
   addRoleJson,
   copyBuiltinAgentJson,
@@ -20,28 +18,47 @@ import {
   readFlowJson,
   readNodeJson,
 } from "./catalog-flows.mjs";
-import { writeFlowYaml } from "./flow-write.mjs";
 import { printHelp } from "./help.mjs";
 import { LOG_LEVELS, log, setLogLevel, setMachineReadable } from "./log.mjs";
 import { updateModelLists } from "./model-lists.mjs";
-import { APPLY_AI_STEPS, LEGACY_PIPELINES_DIR, PIPELINES_DIR, USER_AGENTFLOW_PIPELINES_LABEL } from "./paths.mjs";
+import { LEGACY_PIPELINES_DIR, PIPELINES_DIR, USER_AGENTFLOW_PIPELINES_LABEL } from "./paths.mjs";
 import { isValidUuid, runNodeScript } from "./pipeline-scripts.mjs";
 import { Table } from "./table.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, listRunsWithLogs } from "./workspace.mjs";
 import { startUiServer } from "./ui-server.mjs";
-import { hubLogin, hubLogout } from "./hub-login.mjs";
-import { hubPublish } from "./hub-publish.mjs";
-import { hubListRemote, hubDownload } from "./hub-remote.mjs";
-import { cancelScheduledRun, listScheduleStatuses, startScheduler } from "./scheduler.mjs";
-import { installFlowDependency, listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
+import { listMarketplacePackages, publishNodePackage } from "./marketplace.mjs";
 import { startMcpServer } from "./mcp-server.mjs";
-import { writeStaticFlowPreview } from "./flow-static-preview.mjs";
 import { LEGACY_FLOW_EXECUTION_DISABLED, LEGACY_FLOW_EXECUTION_MESSAGE } from "./legacy-flow-execution.mjs";
 
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * 把 yaml 迁移的损耗清单打到 stderr。
+ *
+ * 迁移唯一的卖点就是「丢了什么当场说清楚」，所以这段在成功和拒绝两种结局下都要打——
+ * `--allow-loss` 迁过去了不代表没丢东西，只代表用户认了。
+ */
+function writeMigrationLoss(result) {
+  for (const r of result.remapped || []) {
+    process.stderr.write(`${chalk.cyan("换词")}   ${r.id}: ${r.from} -> ${r.to}\n`);
+    for (const rn of r.renamedSlots || []) process.stderr.write(`         槽位 ${rn}\n`);
+    for (const f of r.droppedFields || []) {
+      // 原文照打——新节点装不下，用户得能直接捡走贴到别处
+      process.stderr.write(`         ${chalk.yellow("丢")} ${f.field}: ${JSON.stringify(f.text)}\n`);
+    }
+    if (r.caveat) process.stderr.write(`         ${chalk.yellow("!")} ${r.caveat}\n`);
+  }
+  for (const d of result.dropped || []) {
+    process.stderr.write(`${chalk.red("丢节点")} ${d.id} (${d.definitionId})：${d.reason}\n`);
+  }
+  for (const e of result.droppedEdges || []) {
+    process.stderr.write(`${chalk.red("丢边")}   ${e.source} -> ${e.target}：${e.reason}\n`);
+  }
+  for (const w of result.warnings || []) process.stderr.write(`${chalk.yellow("warn")}   ${w}\n`);
 }
 
 export async function main() {
@@ -61,53 +78,25 @@ export async function main() {
     printHelp();
     process.exit(0);
   }
-  const dryRun = argv.includes("--dry-run");
-  if (dryRun) argv.splice(argv.indexOf("--dry-run"), 1);
+  if (argv.includes("--dry-run")) argv.splice(argv.indexOf("--dry-run"), 1);
   if (argv.includes("--debug")) {
     setLogLevel(LOG_LEVELS.debug);
     argv.splice(argv.indexOf("--debug"), 1);
   }
-  let force = true;
-  if (argv.includes("--no-force")) {
-    force = false;
-    argv.splice(argv.indexOf("--no-force"), 1);
-  }
-  if (argv.includes("--force")) {
-    force = true;
-    argv.splice(argv.indexOf("--force"), 1);
-  }
-  if (argv.includes("--yolo")) {
-    force = true;
-    argv.splice(argv.indexOf("--yolo"), 1);
-  }
-  let parallel = false;
-  if (argv.includes("--parallel")) {
-    parallel = true;
-    argv.splice(argv.indexOf("--parallel"), 1);
-  }
-  if (argv.includes("--no-parallel")) {
-    parallel = false;
-    argv.splice(argv.indexOf("--no-parallel"), 1);
+  // 以下开关只服务已下线的 Start/End 执行，保留解析以免旧脚本把它们当成子命令。
+  for (const legacyFlag of ["--no-force", "--force", "--yolo", "--parallel", "--no-parallel"]) {
+    while (argv.includes(legacyFlag)) argv.splice(argv.indexOf(legacyFlag), 1);
   }
   if (argv.includes("--machine-readable")) {
     setMachineReadable(true);
     argv.splice(argv.indexOf("--machine-readable"), 1);
   }
   const jsonMode = argv.includes("--json");
-  const cliInputs = {};
   while (argv.includes("--input")) {
     const idx = argv.indexOf("--input");
     const pair = argv[idx + 1];
     if (!pair || !pair.includes("=")) {
       throw new Error("Invalid --input format. Use: --input name=value");
-    }
-    const eqIdx = pair.indexOf("=");
-    const name = pair.slice(0, eqIdx);
-    const value = pair.slice(eqIdx + 1);
-    if (value.startsWith("file:")) {
-      cliInputs[name] = { type: "file", path: value.slice(5) };
-    } else {
-      cliInputs[name] = { type: "str", value };
     }
     argv.splice(idx, 2);
   }
@@ -129,7 +118,6 @@ export async function main() {
     "list-flows",
     "list-nodes",
     "read-flow",
-    "write-flow",
     "read-node",
     "copy-builtin",
     "list-agents",
@@ -140,12 +128,8 @@ export async function main() {
   if (jsonMode && jsonOnlySubs.includes(sub)) {
     argv.splice(argv.indexOf("--json"), 1);
   }
-  let agentModel = process.env.CURSOR_AGENT_MODEL || null;
   const modelIdx = argv.indexOf("--model");
-  if (modelIdx >= 0 && argv[modelIdx + 1]) {
-    agentModel = argv[modelIdx + 1];
-    argv.splice(modelIdx, 2);
-  }
+  if (modelIdx >= 0 && argv[modelIdx + 1]) argv.splice(modelIdx, 2);
   if (sub === "list-flows" && jsonMode) {
     const list = listFlowsJson(workspaceRoot);
     process.stdout.write(JSON.stringify(list) + "\n");
@@ -243,19 +227,7 @@ export async function main() {
       else throw new Error(result.error || "publish-node failed");
       process.exit(result.ok ? 0 : 1);
     }
-    if (action === "install-node") {
-      const flowId = shift();
-      const spec = shift();
-      if (!flowId || !spec) throw new Error("Usage: agentflow marketplace install-node <flow> <nodeSpec> [--json]");
-      const flowDir = getFlowDir(workspaceRoot, flowId);
-      if (!flowDir) throw new Error(`Flow not found: ${flowId}`);
-      const result = installFlowDependency(workspaceRoot, flowDir, spec);
-      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
-      else if (result.ok) process.stdout.write(`Installed ${result.definitionId} into ${flowId}\n`);
-      else throw new Error(result.error || "install-node failed");
-      process.exit(result.ok ? 0 : 1);
-    }
-    throw new Error("Usage: agentflow marketplace <list|publish-node|install-node> [--json]");
+    throw new Error("Usage: agentflow marketplace <list|publish-node> [--json]");
   }
   if (sub === "copy-builtin" && jsonMode) {
     const flowId = shift();
@@ -321,101 +293,105 @@ export async function main() {
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(result.success ? 0 : 1);
   }
-  if (sub === "write-flow" && jsonMode) {
-    let flowSource = "user";
-    const flowSourceIdx = argv.indexOf("--flow-source");
-    if (flowSourceIdx >= 0 && argv[flowSourceIdx + 1]) {
-      flowSource = argv[flowSourceIdx + 1];
-      argv.splice(flowSourceIdx, 2);
-    }
-    if (flowSource === "builtin") {
-      process.stderr.write(
-        "agentflow: --flow-source builtin 已弃用（包内 builtin 不可写）；已按 workspace 写入 .workspace/agentflow/pipelines。\n",
-      );
-      flowSource = "workspace";
-    }
-    if (flowSource !== "user" && flowSource !== "workspace") {
-      process.stdout.write(
-        JSON.stringify({ success: false, error: "Invalid --flow-source (use user or workspace)" }) + "\n",
-      );
-      process.exit(1);
-    }
-    const flowId = argv.find((a) => !a.startsWith("--"));
-    if (!flowId) {
-      process.stdout.write(JSON.stringify({ success: false, error: "Missing flowId" }) + "\n");
-      process.exit(1);
-    }
-    const flowYaml = await readStdin();
-    const result = writeFlowYaml(workspaceRoot, flowId, flowSource, flowYaml);
-    process.stdout.write(JSON.stringify(result.success ? { success: true } : result) + "\n");
-    process.exit(result.success ? 0 : 1);
-  }
-  if (sub === "flow" && argv[0] === "preview") {
+  if (sub === "flow" && argv[0] === "dsl") {
     shift();
+    const action = shift();
     const target = shift();
-    if (!target) throw new Error("Usage: agentflow flow preview <FlowName|flow.yaml> [--output <preview.html>] [--no-open]");
-    let outputPath = "";
-    const outputIdx = argv.indexOf("--output");
-    if (outputIdx >= 0 && argv[outputIdx + 1]) {
-      outputPath = path.resolve(workspaceRoot, argv[outputIdx + 1]);
-      argv.splice(outputIdx, 2);
+    const usage = "Usage: agentflow flow dsl <export|import|lint|layout|migrate> <FlowName|dir> [--out <dir>] [--allow-loss] [--all]";
+    if (!action || !target) throw new Error(usage);
+    let outDir = "";
+    const outIdx = argv.indexOf("--out");
+    if (outIdx >= 0 && argv[outIdx + 1]) {
+      outDir = path.resolve(workspaceRoot, argv[outIdx + 1]);
+      argv.splice(outIdx, 2);
     }
-    const noOpen = argv.includes("--no-open");
-    if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
-    if (argv.length > 0) throw new Error(`Unknown flow preview option: ${argv[0]}`);
+    // 不叫 --force：那个名字在上面被当成已下线执行栈的遗留开关提前吃掉了
+    const lossIdx = argv.indexOf("--allow-loss");
+    const force = lossIdx >= 0;
+    if (force) argv.splice(lossIdx, 1);
+    const allIdx = argv.indexOf("--all");
+    const all = allIdx >= 0;
+    if (all) argv.splice(allIdx, 1);
+    if (argv.length > 0) throw new Error(`Unknown flow dsl option: ${argv[0]}`);
+    if (all && action !== "layout") throw new Error("--all 只用于 flow dsl layout");
 
-    const targetPath = path.resolve(workspaceRoot, target);
-    let previewFlowPath = "";
-    if (fs.existsSync(targetPath)) {
-      previewFlowPath = fs.statSync(targetPath).isDirectory()
-        ? path.join(targetPath, "flow.yaml")
-        : targetPath;
-    } else {
-      const flowDir = getFlowDir(workspaceRoot, target);
-      if (flowDir) previewFlowPath = path.join(flowDir, "flow.yaml");
-    }
-    if (!previewFlowPath || !fs.existsSync(previewFlowPath) || !fs.statSync(previewFlowPath).isFile()) {
-      throw new Error(`Flow not found: ${target}`);
-    }
-    previewFlowPath = fs.realpathSync(previewFlowPath);
-    const flowId = path.basename(path.dirname(previewFlowPath)) || "local-preview";
-    const safeFlowId = flowId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "flow-preview";
-    if (!outputPath) {
-      outputPath = path.join(workspaceRoot, ".workspace", "agentflow", "previews", `${safeFlowId}.html`);
-    }
-    if (!/\.html?$/i.test(outputPath)) throw new Error("Preview output must be an HTML file");
-    const nodeCatalog = listNodesJson(workspaceRoot, flowId, "", {
-      staticFlowPath: previewFlowPath,
-      marketplaceScope: "all",
-    });
-    const result = writeStaticFlowPreview({
-      flowId,
-      flowPath: previewFlowPath,
-      nodeCatalog,
-      outputPath,
-      distDir: path.join(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))), "builtin", "web-ui", "dist"),
-    });
-    const url = pathToFileURL(result.outputPath).href;
-    process.stderr.write(`AgentFlow static preview: ${result.outputPath}\nSource: ${previewFlowPath}\n`);
-    if (!noOpen) {
-      if (process.platform === "win32") {
-        const child = spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" });
-        child.unref();
-      } else if (process.platform === "darwin") {
-        const child = spawn("open", [url], { detached: true, stdio: "ignore" });
-        child.unref();
+    const direct = path.resolve(workspaceRoot, target);
+    const dir = fs.existsSync(direct) && fs.statSync(direct).isDirectory()
+      ? direct
+      : getFlowDir(workspaceRoot, target);
+    if (!dir || !fs.existsSync(dir)) throw new Error(`Flow not found: ${target}`);
+
+    const { exportFlowDsl, importFlowDsl, layoutWorkspaceFlowDir, lintFlowDir, migrateFlowDirToDsl } = await import("./flow-dsl/cli.mjs");
+
+    if (action === "migrate") {
+      const result = migrateFlowDirToDsl(dir, { force, marketplaceRoot: workspaceRoot });
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      if (result.format === "empty") process.stderr.write(`${chalk.yellow("skip")}   ${dir}：没有图\n`);
+      else if (!result.migrated && result.format === "dsl") process.stderr.write(`${chalk.green("ok")}     ${dir}：已经是代码形态\n`);
+      else if (result.migrated) {
+        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.flow.js（来自 ${result.source}）\n`);
+        for (const rel of result.externals) process.stderr.write(`         ${rel}\n`);
+      } else if (result.leftYaml) {
+        // 够不着代码形态，但已经离开 yaml——图从此读得出、画得出、跑得动
+        process.stderr.write(`${chalk.green("ok")}     ${dir} -> workspace.graph.json（来自 flow.yaml）\n`);
+        process.stderr.write(`         ${chalk.dim(`还差一步到代码：${result.degradedReason}`)}\n`);
+      } else if (result.format === "yaml") {
+        process.stderr.write(`${chalk.red("keep")}   ${dir}：${result.degradedReason}\n`);
       } else {
-        const child = spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
-        child.unref();
+        process.stderr.write(`${chalk.red("keep")}   ${dir}：${result.degradedReason}，保留 workspace.graph.json\n`);
+        process.exitCode = 1;
       }
+      // 损耗清单在成功和拒绝两种结局下都要打出来——`--allow-loss` 迁过去了不代表没丢东西
+      writeMigrationLoss(result);
+      if (result.format === "yaml" && !result.migrated) process.exitCode = 1;
+      return;
     }
-    return;
+
+    if (action === "export") {
+      const result = exportFlowDsl(dir, outDir);
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      else {
+        process.stderr.write(`Exported to ${result.outDir}\n`);
+        for (const rel of result.written) process.stderr.write(`  ${rel}\n`);
+      }
+      return;
+    }
+    if (action === "import") {
+      const result = importFlowDsl(dir, outDir);
+      if (jsonMode) { process.stdout.write(JSON.stringify(result) + "\n"); return; }
+      else {
+        process.stderr.write(`Wrote ${result.graphPath}\n  ${result.nodeCount} 节点 / ${result.edgeCount} 边\n`);
+        for (const w of result.warnings) process.stderr.write(`  warning: ${w}\n`);
+      }
+      return;
+    }
+    if (action === "lint") {
+      const result = lintFlowDir(dir, { workspaceRoot });
+      if (jsonMode) process.stdout.write(JSON.stringify({ errors: result.errors, warnings: result.warnings }) + "\n");
+      else {
+        for (const e of result.errors) process.stderr.write(`${chalk.red("error")}  ${e}\n`);
+        for (const w of result.warnings) process.stderr.write(`${chalk.yellow("warn")}   ${w}\n`);
+        if (!result.errors.length) process.stderr.write(`${chalk.green("ok")}     lint 通过\n`);
+      }
+      if (result.errors.length) process.exitCode = 1;
+      return;
+    }
+    if (action === "layout") {
+      const result = layoutWorkspaceFlowDir(dir, { all, workspaceRoot });
+      if (jsonMode) process.stdout.write(JSON.stringify(result) + "\n");
+      else process.stderr.write(`${chalk.green("ok")}     ${result.positioned}/${result.nodeCount} 个节点已${all ? "重新" : "补充"}排版\n  ${result.layoutPath}\n`);
+      return;
+    }
+    throw new Error(usage);
+  }
+  if (sub === "flow") {
+    // `flow preview` 曾经在这儿。它把 flow.yaml 原文塞进页面，代码化流程没有 yaml 可塞；
+    // Web 的 /api/workspace/preview 接的是图对象，本来就通用，所以删掉而不是重写。
+    throw new Error("Usage: agentflow flow dsl <export|import|lint|layout|migrate> <FlowName|dir> [--out <dir>] [--all]");
   }
   if (sub === "ui") {
     let port = 8765;
     let host = process.env.AGENTFLOW_UI_HOST || "127.0.0.1";
-    let schedulerEnabled = false;
-    let schedulerPollMs;
     let hideCommunityLinks = /^(1|true|yes|on)$/i.test(String(process.env.AGENTFLOW_HIDE_COMMUNITY_LINKS || ""));
     const portIdx = argv.indexOf("--port");
     if (portIdx >= 0 && argv[portIdx + 1]) {
@@ -426,19 +402,6 @@ export async function main() {
     if (hostIdx >= 0 && argv[hostIdx + 1]) {
       host = argv[hostIdx + 1];
       argv.splice(hostIdx, 2);
-    }
-    if (argv.includes("--scheduler")) {
-      schedulerEnabled = true;
-      argv.splice(argv.indexOf("--scheduler"), 1);
-    }
-    if (argv.includes("--no-scheduler")) {
-      schedulerEnabled = false;
-      argv.splice(argv.indexOf("--no-scheduler"), 1);
-    }
-    const schedulerPollIdx = argv.indexOf("--scheduler-poll-ms");
-    if (schedulerPollIdx >= 0 && argv[schedulerPollIdx + 1]) {
-      schedulerPollMs = parseInt(argv[schedulerPollIdx + 1], 10);
-      argv.splice(schedulerPollIdx, 2);
     }
     const noOpen = argv.includes("--no-open");
     if (noOpen) argv.splice(argv.indexOf("--no-open"), 1);
@@ -453,11 +416,6 @@ export async function main() {
       throw new Error("Invalid --host");
     }
     await startUiServer({ workspaceRoot, port, host, hideCommunityLinks });
-    if (schedulerEnabled) {
-      startScheduler(workspaceRoot, { pollMs: schedulerPollMs }).catch((e) => {
-        log.error("Scheduler failed: " + ((e && e.message) || String(e)));
-      });
-    }
     const browserHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
     const url = "http://" + (browserHost.includes(":") ? `[${browserHost}]` : browserHost) + ":" + port;
     process.stderr.write("AgentFlow UI: " + url + (browserHost === host ? "" : ` (listening on ${host}:${port})`) + "\n");
@@ -475,130 +433,12 @@ export async function main() {
     }
     await new Promise(() => {});
   }
-  if (sub === "scheduler") {
-    const action = shift();
-    if (action === "start") {
-      let pollMs;
-      const pollIdx = argv.indexOf("--poll-ms");
-      if (pollIdx >= 0 && argv[pollIdx + 1]) {
-        pollMs = parseInt(argv[pollIdx + 1], 10);
-        argv.splice(pollIdx, 2);
-      }
-      const once = argv.includes("--once");
-      if (once) argv.splice(argv.indexOf("--once"), 1);
-      await startScheduler(workspaceRoot, { pollMs, once });
-      process.exit(0);
-    }
-    if (action === "status") {
-      if (jsonMode) {
-        process.stdout.write(JSON.stringify({ schedules: listScheduleStatuses(workspaceRoot) }) + "\n");
-        process.exit(0);
-      }
-      const rows = listScheduleStatuses(workspaceRoot);
-      const table = new Table({ head: ["flow", "source", "enabled", "cron", "timezone", "next", "running", "waiting", "lastRun", "error"], style: { head: [] } });
-      for (const r of rows) {
-        table.push([
-          r.flowId,
-          r.flowSource,
-          r.enabled ? "yes" : "no",
-          r.cron || "",
-          r.timezone || "",
-          r.nextRunAt || "",
-          r.running ? "yes" : "no",
-          String(r.waiting || 0),
-          r.lastRunUuid || "",
-          r.lastError || "",
-        ]);
-      }
-      process.stdout.write(table.toString() + "\n");
-      process.exit(0);
-    }
-    if (action === "cancel") {
-      const flowId = shift();
-      const uuid = shift();
-      if (!flowId || !uuid) throw new Error("Usage: agentflow scheduler cancel <flow> <uuid> [--json]");
-      const result = cancelScheduledRun(workspaceRoot, flowId, uuid);
-      if (jsonMode) {
-        process.stdout.write(JSON.stringify(result) + "\n");
-      } else if (result.ok) {
-        process.stdout.write(`Cancelled ${flowId}/${uuid}; updated waits: ${result.updatedWaits}\n`);
-      } else {
-        throw new Error(result.error || "cancel failed");
-      }
-      process.exit(result.ok ? 0 : 1);
-    }
-    throw new Error("Usage: agentflow scheduler <start|status|cancel> [--once] [--poll-ms <ms>] [--json]");
-  }
   // ──── Hub commands ────
-  if (sub === "login") {
-    await hubLogin(argv);
-    process.exit(0);
-  }
-  if (sub === "logout") {
-    hubLogout();
-    process.exit(0);
-  }
-  if (sub === "publish") {
-    await hubPublish(workspaceRoot, argv);
-    process.exit(0);
-  }
-  if (sub === "list-remote") {
-    await hubListRemote(argv);
-    process.exit(0);
-  }
-  if (sub === "download") {
-    await hubDownload(argv);
-    process.exit(0);
-  }
   // ──── Local commands ────
   if (sub === "list") {
     listPipelines(workspaceRoot);
-  } else if (sub === "apply") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const aiMode = argv[0] === "-ai" || argv[0] === "--ai";
-    if (aiMode) {
-      argv.shift();
-      const step = argv.shift();
-      if (!step || !APPLY_AI_STEPS.includes(step)) {
-        throw new Error(
-          "Missing or invalid step. Usage: agentflow apply -ai <step> <args...>. Steps: " + APPLY_AI_STEPS.join(", "),
-        );
-      }
-      if (argv.length === 0) {
-        throw new Error("Missing args for step " + step + ". Example: agentflow apply -ai ensure-run-dir <workspaceRoot> [uuid] <flowName>");
-      }
-      const stepWorkspaceRoot = path.resolve(argv[0]);
-      ensureReference(stepWorkspaceRoot);
-      const scriptName = step + ".mjs";
-      const result = runNodeScript(stepWorkspaceRoot, scriptName, argv, { captureStdout: false });
-      process.exit(result.status ?? 0);
-    }
-    const first = shift();
-    if (!first) throw new Error("Missing FlowName or uuid. Usage: agentflow apply <FlowName> [uuid] | agentflow apply <uuid>");
-    let flowName, uuidArg;
-    if (isValidUuid(first)) {
-      flowName = findFlowNameByUuid(workspaceRoot, first);
-      if (!flowName) throw new Error("No run found for uuid " + first + ". Run apply with FlowName first (e.g. agentflow apply <FlowName>).");
-      uuidArg = first;
-    } else {
-      flowName = first;
-      uuidArg = isValidUuid(argv[0]) ? shift() : undefined;
-    }
-    await apply(workspaceRoot, flowName, uuidArg, dryRun, agentModel, force, parallel, cliInputs);
-  } else if (sub === "resume") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const flowName = shift();
-    const uuidArg = shift();
-    if (!flowName || !uuidArg) throw new Error("Usage: agentflow resume <FlowName> <uuid> [instanceId]");
-    const instanceIdOpt = argv.length > 0 && !argv[0].startsWith("--") ? shift() : undefined;
-    await resume(workspaceRoot, flowName, uuidArg, instanceIdOpt, agentModel, force, parallel);
-  } else if (sub === "replay") {
-    if (LEGACY_FLOW_EXECUTION_DISABLED) throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
-    const a = shift(),
-      b = shift(),
-      c = shift();
-    if (!a || !b) throw new Error("Usage: agentflow replay <uuid> <instanceId> or agentflow replay <flowName> <uuid> <instanceId>");
-    await replay(workspaceRoot, a, b, c, agentModel, force);
+  } else if (sub === "apply" || sub === "resume" || sub === "replay") {
+    throw new Error(LEGACY_FLOW_EXECUTION_MESSAGE);
   } else if (sub === "run-status") {
     const flowName = shift();
     const uuidArg = shift();
@@ -663,6 +503,33 @@ export async function main() {
           ", or builtin)",
       );
     }
+    // Workspace 图归 flow dsl lint 管。validate-flow.mjs 校验的是 flow.yaml，而 Workspace
+    // 流程的 flow.yaml 只是个空壳，让它去校验只会得到「必须包含 instances 且至少一个节点」
+    // 这种必然失败的结论。
+    const { lintWorkspaceFlowDir } = await import("./flow-dsl/cli.mjs");
+    const workspaceLint = lintWorkspaceFlowDir(flowDir);
+    if (workspaceLint.format !== "empty") {
+      if (wantJson || process.stdout.isTTY !== true) {
+        process.stdout.write(JSON.stringify({
+          ok: workspaceLint.errors.length === 0,
+          target: "workspace",
+          errors: workspaceLint.errors,
+          warnings: workspaceLint.warnings,
+        }) + "\n");
+      } else {
+        process.stdout.write(`\n${chalk.bold("校验: ")}${flowName}  ${
+          workspaceLint.errors.length ? chalk.red("✗ 未通过") : chalk.green("✓ 通过")
+        }\n`);
+        for (const e of workspaceLint.errors) process.stdout.write(`${chalk.red("  • ")}${e}\n`);
+        for (const w of workspaceLint.warnings) process.stdout.write(`${chalk.yellow("  ! ")}${w}\n`);
+        if (workspaceLint.format === "json") {
+          process.stdout.write(chalk.dim("  （这张图还是 workspace.graph.json；跑 agentflow flow dsl migrate 转成代码）\n"));
+        }
+      }
+      process.exit(workspaceLint.errors.length ? 1 : 0);
+      return;
+    }
+
     const args = [workspaceRoot, flowName, flowDir];
     if (uuidArg) args.push(uuidArg);
     const result = runNodeScript(workspaceRoot, "validate-flow.mjs", args, { captureStdout: true });
@@ -724,7 +591,6 @@ export async function main() {
   } else if (
     sub === "list-flows" ||
     sub === "read-flow" ||
-    sub === "write-flow" ||
     sub === "read-node" ||
     sub === "copy-builtin" ||
     sub === "copy-builtin-agent" ||
@@ -736,7 +602,7 @@ export async function main() {
     throw new Error(
       "Unknown command: " +
         sub +
-        ". Use login, logout, publish, list-remote, download, list, ui, apply, validate, resume, replay, run-status, extract-thinking.",
+        ". Use list, ui, validate, run-status, extract-thinking, flow, marketplace, mcp.",
     );
   }
 }

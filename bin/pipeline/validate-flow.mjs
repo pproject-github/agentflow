@@ -501,10 +501,10 @@ function checkFlowCore(nodes, edges, flowDir, nodeIdToSlots, getNodeBody, instan
         }
       }
 
-      // provide_str / provide_file / provide_bool output 类型校验
-      if (defId === "provide_str" || defId === "provide_file" || defId === "provide_bool") {
+      // provide_str / provide_json / provide_file / provide_bool output 类型校验
+      if (defId === "provide_str" || defId === "provide_json" || defId === "provide_file" || defId === "provide_bool") {
         const out = Array.isArray(inst.output) ? inst.output : [];
-        const expectedType = defId === "provide_file" ? "file" : defId === "provide_bool" ? "bool" : "text";
+        const expectedType = defId === "provide_file" ? "file" : defId === "provide_bool" ? "bool" : defId === "provide_json" ? "json" : "text";
         if (out.length !== 1) {
           errors.push(`节点 "${n.id}"（${defId}）output 必须仅有 1 个槽位（value:${expectedType}），当前 ${out.length} 个`);
         } else {

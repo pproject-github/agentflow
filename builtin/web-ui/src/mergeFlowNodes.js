@@ -50,9 +50,11 @@ const BUILTIN_DEFAULT_LABEL_ALIASES = {
   provide_file: ["File"],
   provide_password: ["Password"],
   provide_bool: ["Boolean"],
+  provide_json: ["JSON"],
   provide_text: ["Text"],
   provide_str: ["Text"],
   display_markdown: ["Markdown Display"],
+  display_code: ["Code Display"],
   display_react_app: ["React App"],
   display_mermaid: ["Mermaid Display"],
   display_ascii: ["ASCII Display"],
@@ -79,6 +81,7 @@ const CANVAS_HIDDEN_SLOT_NAMES = {
   control_cd_workspace: new Set(["mode", "label", "workspaceContext", "cwd", "previous"]),
   control_user_workspace: new Set(["cwd"]),
   display_markdown: new Set(["prev", "next"]),
+  display_code: new Set(["prev", "next", "language", "fileName", "wrap"]),
   display_mermaid: new Set(["prev", "next"]),
   display_ascii: new Set(["prev", "next"]),
   display_html: new Set(["prev", "next"]),
@@ -123,6 +126,7 @@ const CANVAS_VISIBLE_SLOT_NAMES = {
 
 const DISPLAY_DEFINITION_IDS = new Set([
   "display_markdown",
+  "display_code",
   "display_mermaid",
   "display_ascii",
   "display_html",
@@ -131,6 +135,64 @@ const DISPLAY_DEFINITION_IDS = new Set([
   "display_chart",
   "display_table",
 ]);
+
+function nodeUiRuntimeOutputNames(ui) {
+  const names = new Set();
+  for (const section of Array.isArray(ui?.card?.sections) ? ui.card.sections : []) {
+    const direct = String(section?.output || "").trim();
+    if (direct) names.add(direct);
+    for (const item of Array.isArray(section?.items) ? section.items : []) {
+      const itemOutput = String(item?.output || "").trim();
+      if (itemOutput) names.add(itemOutput);
+    }
+  }
+  return names;
+}
+
+/**
+ * 普通运行产出在设计画布加载时继续隐藏；Node UI Kit 明确引用的输出例外，因为它们就是
+ * 卡片的持久运行态（决策、进度、摘要、历史）。只保留声明引用的槽，避免把大结果意外灌进 DOM。
+ */
+export function sanitizeRuntimeOutputsForCanvas(instances, palette = []) {
+  const definitions = Array.isArray(palette) ? palette : [];
+  const next = {};
+  for (const [id, instance] of Object.entries(instances || {})) {
+    const definitionId = String(instance?.definitionId || id);
+    const marketplaceRef = String(instance?.marketplaceRef || "");
+    const definition = definitions.find((item) => String(item?.id || "") === marketplaceRef)
+      || definitions.find((item) => String(item?.id || "") === definitionId)
+      || null;
+    const visibleOutputs = nodeUiRuntimeOutputNames(definition?.ui);
+    const keepAll = DISPLAY_DEFINITION_IDS.has(definitionId) || definitionId.startsWith("provide_");
+    if (keepAll || !Array.isArray(instance?.output)) {
+      next[id] = instance;
+      continue;
+    }
+    next[id] = {
+      ...instance,
+      output: instance.output.map((slot) => (
+        visibleOutputs.has(String(slot?.name || ""))
+          ? slot
+          : { ...slot, value: "", default: "" }
+      )),
+    };
+  }
+  return next;
+}
+
+/** Restore a meaningful badge after refresh from a declarative decision section. */
+export function persistedNodeUiStatus(data) {
+  const decisionSection = (Array.isArray(data?.nodeUi?.card?.sections) ? data.nodeUi.card.sections : [])
+    .find((section) => section?.type === "decision" && section?.output);
+  if (!decisionSection) return null;
+  const slot = (Array.isArray(data?.outputs) ? data.outputs : [])
+    .find((item) => String(item?.name || "") === String(decisionSection.output));
+  const decision = String(slot?.value ?? slot?.default ?? "").trim();
+  if (decision === "wait") return "waiting";
+  if (decision === "done") return "success";
+  if (decision === "fail") return "outcome_failed";
+  return null;
+}
 
 function isDisplayPrimarySlot(definitionId, slot) {
   if (!DISPLAY_DEFINITION_IDS.has(String(definitionId || ""))) return false;
@@ -242,8 +304,13 @@ export function cloneNodeIoDraftSlots(node) {
  */
 export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations, flowId) {
   const definitionId = n.data?.definitionId || String(n.id).replace(/-\d+$/, "");
-  const def = palette.find((p) => p.id === definitionId);
   const inst = instances[n.id];
+  const explicitMarketplaceRef = inst?.marketplaceRef || n.data?.marketplaceRef || "";
+  // marketplace 节点用自身定义描述引脚，用 baseDefinitionId 选择运行时卡片。
+  // 只按 runtime definitionId（例如 tool_nodejs）查 palette 会把自定义引脚按内置槽位
+  // 的下标错误合并，最终把已经连接的第 2、3 个输入隐藏掉。
+  const def = palette.find((p) => p.id === explicitMarketplaceRef)
+    || palette.find((p) => p.id === definitionId);
   let inputs = [];
   let outputs = [];
   let label = n.data?.label ?? n.id;
@@ -288,7 +355,7 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     if (outputs.length === 0 && def?.outputs?.length) outputs = def.outputs.map((x) => ({ ...x }));
   }
   const resolvedDefId = runtimeDefinitionIdForPalette(def, def?.id ?? definitionId);
-  const marketplaceRef = inst?.marketplaceRef || n.data?.marketplaceRef || marketplaceRefForDefinition(def);
+  const marketplaceRef = explicitMarketplaceRef || marketplaceRefForDefinition(def);
   if (resolvedDefId === "agent_subAgent" && !outputs.some((slot) => slot?.name === "result")) {
     const resultSlot = def?.outputs?.find((slot) => slot?.name === "result");
     outputs = [...outputs, resultSlot ? { ...resultSlot } : { type: "text", name: "result", default: "" }];
@@ -297,8 +364,12 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
     const knowledgeSlot = def?.inputs?.find((slot) => slot?.name === "knowledgeContext");
     inputs = [...inputs, knowledgeSlot ? { ...knowledgeSlot } : { type: "text", name: "knowledgeContext", default: "", showOnNode: true }];
   }
+  if ((resolvedDefId === "agent_subAgent" || resolvedDefId === "control_while") && !inputs.some((slot) => slot?.name === "context")) {
+    const contextSlot = def?.inputs?.find((slot) => slot?.name === "context");
+    if (contextSlot) inputs = [...inputs, { ...contextSlot }];
+  }
   if (
-    (resolvedDefId === "display_markdown" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
+    (resolvedDefId === "display_markdown" || resolvedDefId === "display_code" || resolvedDefId === "display_mermaid" || resolvedDefId === "display_ascii" || resolvedDefId === "display_chart" || resolvedDefId === "display_table") &&
     !outputs.some((slot) => slot?.name === "next")
   ) {
     const nextSlot = def?.outputs?.find((slot) => slot?.name === "next");
@@ -316,6 +387,12 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
   }
   inputs = mergeSlotDefinitionMeta(resolvedDefId, inputs, def?.inputs);
   outputs = mergeSlotDefinitionMeta(resolvedDefId, outputs, def?.outputs);
+  if (resolvedDefId === "control_subflow_call") {
+    // A call node is the visual form of a subflow contract. Hiding an unconnected
+    // parameter makes the parent appear to expose a different API than Return.
+    inputs = inputs.map((slot) => ({ ...slot, showOnNode: true }));
+    outputs = outputs.map((slot) => ({ ...slot, showOnNode: true }));
+  }
   if (resolvedDefId.startsWith("provide_") && outputs[0] && String(outputs[0].default ?? outputs[0].value ?? "").trim() === "" && String(mergedBody).trim() !== "") {
     outputs = outputs.map((slot, index) => index === 0 ? { ...slot, default: mergedBody, value: mergedBody } : slot);
   }
@@ -347,11 +424,49 @@ export function mergeNodeWithPalette(n, instances, palette, pipelineTranslations
       outputs,
       description: translatedDescription || mergedDescription,
       guide: def?.guide || n.data?.guide,
+      nodeUi: def?.ui || n.data?.nodeUi,
       originalLabel: label,
       originalBody: mergedBody,
       ...(showScriptField ? { script: mergedScript } : {}),
     },
   };
+}
+
+function edgeHandleIndex(handle, prefix) {
+  const match = new RegExp(`^${prefix}-(\\d+)$`).exec(String(handle || ""));
+  const index = match ? Number.parseInt(match[1], 10) : 0;
+  return Number.isFinite(index) && index >= 0 ? index : 0;
+}
+
+/**
+ * 给声明式 Node UI Kit 提供“这个输入实际接到了谁”的可读信息。
+ * 它只描述当前 React Flow 图，不进入持久化 graph，也不改变执行语义。
+ */
+export function buildNodeUiInputBindings(nodes, edges) {
+  const nodeById = new Map((Array.isArray(nodes) ? nodes : []).map((node) => [String(node.id), node]));
+  const result = new Map();
+  for (const edge of Array.isArray(edges) ? edges : []) {
+    const sourceId = String(edge?.source || "");
+    const targetId = String(edge?.target || "");
+    const source = nodeById.get(sourceId);
+    const target = nodeById.get(targetId);
+    if (!source || !target) continue;
+    const sourceSlot = source.data?.outputs?.[edgeHandleIndex(edge.sourceHandle, "output")];
+    const targetSlot = target.data?.inputs?.[edgeHandleIndex(edge.targetHandle, "input")];
+    const inputName = String(targetSlot?.name || "").trim();
+    if (!inputName) continue;
+    const sourceLabel = String(source.data?.displayLabel || source.data?.label || source.id).trim();
+    const sourceSlotName = String(sourceSlot?.name || "output").trim();
+    const bindings = result.get(targetId) || {};
+    bindings[inputName] = {
+      sourceNodeId: sourceId,
+      sourceLabel,
+      sourceSlot: sourceSlotName,
+      display: `${sourceLabel}.${sourceSlotName}`,
+    };
+    result.set(targetId, bindings);
+  }
+  return result;
 }
 
 /**
@@ -363,6 +478,7 @@ export function filterValidEdges(edges, nodesWithSchema) {
   return edges.filter((e) => {
     const src = nodeById.get(e.source);
     const tgt = nodeById.get(e.target);
+    if (e?.data?.virtualSubflowCall || e?.data?.virtualSubflowBoundary) return Boolean(src && tgt);
     const srcOutputs = src?.data?.outputs?.length ?? 0;
     const tgtInputs = tgt?.data?.inputs?.length ?? 0;
     const srcHandleIdx = e.sourceHandle ? parseInt(String(e.sourceHandle).replace("output-", ""), 10) : 0;
@@ -416,4 +532,13 @@ export function revealConnectedSlots(nodes, connection) {
     return node;
   });
   return changed ? next : nodes;
+}
+
+export function revealConnectedSlotsForEdges(nodes, edges) {
+  return (Array.isArray(edges) ? edges : []).filter((edge) => (
+    !edge?.data?.virtualSubflowCall && !edge?.data?.virtualSubflowBoundary
+  )).reduce(
+    (current, edge) => revealConnectedSlots(current, edge),
+    Array.isArray(nodes) ? nodes : [],
+  );
 }

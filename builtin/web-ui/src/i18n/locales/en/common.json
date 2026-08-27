@@ -5,6 +5,7 @@
   },
   "nav": {
     "projects": "Projects",
+    "marketplace": "Flow Repository",
     "nodes": "Nodes",
     "myNodes": "My Nodes",
     "myFlows": "My Flows",

@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getFlowYamlAbs } from "./catalog-flows.mjs";
+import { resolveFlowDirAbs } from "./catalog-flows.mjs";
 
 export const SCHEDULE_CONFIG_FILENAME = "schedule.json";
 export const SCHEDULE_STATE_FILENAME = "schedule-state.json";
@@ -184,9 +184,9 @@ export function writeScheduleState(workspaceRoot, flowId, flowSource, state, opt
 }
 
 export function getFlowSchedulePaths(workspaceRoot, flowId, flowSource, opts = {}) {
-  const yamlRes = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
-  if (yamlRes.error || !yamlRes.path) return { error: yamlRes.error || "Could not resolve flow.yaml" };
-  const flowDir = path.dirname(yamlRes.path);
+  const dirRes = resolveFlowDirAbs(workspaceRoot, flowId, flowSource, opts);
+  if (dirRes.error || !dirRes.dir) return { error: dirRes.error || "Could not resolve flow dir" };
+  const flowDir = dirRes.dir;
   return {
     flowDir,
     configPath: path.join(flowDir, SCHEDULE_CONFIG_FILENAME),

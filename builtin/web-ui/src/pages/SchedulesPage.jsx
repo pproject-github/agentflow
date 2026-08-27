@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import { scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
 import LoadingState from "../components/LoadingState.jsx";
+import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -29,9 +30,13 @@ function statusLabel(schedule) {
 export default function SchedulesPage() {
   const { navigate } = useRoute();
   const [schedules, setSchedules] = useState([]);
+  const [scheduleOwners, setScheduleOwners] = useState([]);
+  const [adminView, setAdminView] = useState(false);
+  const [ownerFilter, setOwnerFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [updatingKey, setUpdatingKey] = useState("");
+  const [inspectingSchedule, setInspectingSchedule] = useState(null);
 
   const loadSchedules = useCallback(async () => {
     setLoading(true);
@@ -41,9 +46,16 @@ export default function SchedulesPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "读取定时任务失败");
       setSchedules(Array.isArray(json.schedules) ? json.schedules : []);
+      setScheduleOwners(Array.isArray(json.users) ? json.users : []);
+      setAdminView(json.adminView === true);
+      setOwnerFilter((current) => (
+        current === "all" || json.users?.some?.((user) => user.userId === current) ? current : "all"
+      ));
     } catch (e) {
       setError(String(e.message || e));
       setSchedules([]);
+      setScheduleOwners([]);
+      setAdminView(false);
     } finally {
       setLoading(false);
     }
@@ -54,7 +66,7 @@ export default function SchedulesPage() {
   }, [loadSchedules]);
 
   const toggleSchedule = useCallback(async (schedule) => {
-    const key = `${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
+    const key = `${schedule.ownerUserId || "self"}:${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
     setUpdatingKey(key);
     setError("");
     try {
@@ -66,6 +78,7 @@ export default function SchedulesPage() {
           flowId: schedule.flowId,
           flowSource: schedule.flowSource || "user",
           scheduleNodeId: schedule.scheduleNodeId || "",
+          ownerUserId: adminView ? schedule.ownerUserId || "" : "",
           enabled: !schedule.enabled,
         }),
       });
@@ -77,13 +90,19 @@ export default function SchedulesPage() {
     } finally {
       setUpdatingKey("");
     }
-  }, [loadSchedules]);
+  }, [adminView, loadSchedules]);
+
+  const visibleSchedules = useMemo(
+    () => ownerFilter === "all" ? schedules : schedules.filter((item) => item.ownerUserId === ownerFilter),
+    [ownerFilter, schedules],
+  );
 
   const counts = useMemo(() => {
-    const enabled = schedules.filter((item) => item.enabled).length;
-    const workspace = schedules.filter((item) => item.kind === "workspace").length;
-    return { total: schedules.length, enabled, workspace, pipeline: schedules.length - workspace };
-  }, [schedules]);
+    const enabled = visibleSchedules.filter((item) => item.enabled).length;
+    const workspace = visibleSchedules.filter((item) => item.kind === "workspace").length;
+    const owners = new Set(visibleSchedules.map((item) => item.ownerUserId).filter(Boolean)).size;
+    return { total: visibleSchedules.length, enabled, workspace, pipeline: visibleSchedules.length - workspace, owners };
+  }, [visibleSchedules]);
 
   return (
     <div className="af-settings-page af-schedules-page">
@@ -102,23 +121,33 @@ export default function SchedulesPage() {
         <div className="af-settings-inner">
           <section className="af-settings-hero">
             <h1 className="af-settings-h1">定时任务</h1>
-            <p className="af-settings-lead">统一查看服务器上的 Pipeline 定时任务和 Workspace Scheduled Run，并在这里快捷启停。</p>
+            <p className="af-settings-lead">{adminView ? "查看并管理所有用户的 Workspace Scheduled Run。" : "查看并管理自己的 Workspace Scheduled Run。"}</p>
           </section>
+
+          {adminView ? (
+            <div className="af-schedules-owner-filter">
+              <label htmlFor="af-schedules-owner">所属用户</label>
+              <select id="af-schedules-owner" value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
+                <option value="all">全部用户</option>
+                {scheduleOwners.map((user) => <option key={user.userId} value={user.userId}>{user.username || user.userId}</option>)}
+              </select>
+            </div>
+          ) : null}
 
           <div className="af-schedules-summary" aria-label="定时任务汇总">
             <div><span>全部</span><strong>{counts.total}</strong></div>
             <div><span>启用中</span><strong>{counts.enabled}</strong></div>
             <div><span>Workspace</span><strong>{counts.workspace}</strong></div>
-            <div><span>Pipeline</span><strong>{counts.pipeline}</strong></div>
+            <div><span>{adminView ? "涉及用户" : "Pipeline"}</span><strong>{adminView ? counts.owners : counts.pipeline}</strong></div>
           </div>
 
           {error ? <div className="af-schedules-error">{error}</div> : null}
           {loading ? <LoadingState title="正在读取定时任务" detail="同步 Pipeline 与 Workspace 调度状态…" rows={3} /> : null}
-          {!loading && schedules.length === 0 ? <div className="af-schedules-empty">暂无定时任务</div> : null}
+          {!loading && visibleSchedules.length === 0 ? <div className="af-schedules-empty">暂无定时任务</div> : null}
 
           {!loading ? <div className="af-schedules-list">
-            {schedules.map((schedule) => {
-              const key = `${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
+            {visibleSchedules.map((schedule) => {
+              const key = `${schedule.ownerUserId || "self"}:${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
               const busy = updatingKey === key;
               const targetUrl = scheduleTargetUrl(schedule);
               return (
@@ -132,6 +161,7 @@ export default function SchedulesPage() {
                       </span>
                     </div>
                     <div className="af-schedule-card__meta">
+                      {adminView ? <span className="af-schedule-owner">用户：{schedule.ownerUsername || schedule.ownerUserId || "-"}</span> : null}
                       <span>{schedule.flowId || "-"}</span>
                       <span>{schedule.flowSource || "user"}</span>
                       {schedule.scheduleNodeId ? <span>{schedule.scheduleNodeId}</span> : null}
@@ -145,6 +175,17 @@ export default function SchedulesPage() {
                     {schedule.lastError ? <p className="af-schedule-card__error">{schedule.lastError}</p> : null}
                   </div>
                   <div className="af-schedule-card__actions">
+                    {schedule.kind === "workspace" ? (
+                      <button
+                        type="button"
+                        className="af-schedule-open"
+                        title="查看真实 ScheduleRun 运行记录"
+                        onClick={() => setInspectingSchedule(schedule)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>manage_search</span>
+                        运行记录
+                      </button>
+                    ) : null}
                     {targetUrl ? (
                       <button
                         type="button"
@@ -174,6 +215,23 @@ export default function SchedulesPage() {
           </div> : null}
         </div>
       </div>
+      {inspectingSchedule ? (
+        <div className="af-workspace-run-logs-overlay" role="presentation" onMouseDown={() => setInspectingSchedule(null)}>
+          <aside className="af-workspace-run-logs-drawer" aria-label="ScheduleRun 运行记录" onMouseDown={(event) => event.stopPropagation()}>
+            <WorkspaceRunLogsDrawer
+              flowParams={{
+                flowId: inspectingSchedule.flowId || "",
+                flowSource: inspectingSchedule.flowSource || "user",
+                ...(adminView && inspectingSchedule.ownerUserId ? { adminOwnerId: inspectingSchedule.ownerUserId } : {}),
+              }}
+              scheduleNodeId={inspectingSchedule.scheduleNodeId || ""}
+              lastRunId={inspectingSchedule.lastRunId || ""}
+              label={inspectingSchedule.label || "ScheduleRun"}
+              onClose={() => setInspectingSchedule(null)}
+            />
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }

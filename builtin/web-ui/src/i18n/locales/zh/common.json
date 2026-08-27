@@ -5,6 +5,7 @@
   },
   "nav": {
     "projects": "项目",
+    "marketplace": "流程仓库",
     "nodes": "Nodes",
     "myNodes": "我的 Nodes",
     "myFlows": "我的流程",

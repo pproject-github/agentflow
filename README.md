@@ -65,35 +65,17 @@ npm install -g @fieldwangai/agentflow
 # Launch Web UI (port 8765)
 agentflow ui
 
-# Generate and open a single-file static preview using the platform canvas (no local server)
-agentflow flow preview ./my-flow/flow.yaml
-
 # Upload a Workspace graph to a server-side temporary preview project
 node skills/agentflow-cli/scripts/agentflow-cli.mjs workspace-preview \
   --file .workspace/agentflow/pipelines/my-flow/workspace.graph.json \
   --ttl-seconds 7200
 
-# Or run a flow directly
-agentflow apply <FlowName>
 ```
+
+Runs are started from the Workspace graph in the Web UI, or on a schedule via a
+`workspace_scheduled_run` node.
 
 From source: `git clone` → `npm install` → `npm link`.
-
-## AgentFlow Hub
-
-Browse, download and share community-built workflows at **[agentflow-hub.com](https://agentflow-hub.com)**.
-
-```bash
-# Browse flows from the command line
-agentflow list-remote
-
-# Download a flow
-agentflow download <slug>
-
-# Publish your flow to the Hub
-agentflow login
-agentflow publish <FlowName> --tags "migration,review"
-```
 
 ## Creating Flows
 
@@ -113,25 +95,26 @@ Create a code review flow:
 4. Loop until all pass
 ```
 
-Composer auto-detects loop patterns and generates the correct control-flow nodes. Complex flows are built in three phases: topology → node details → wiring & validation (auto-repairs up to 5 times).
+Complex flows are built in three phases: topology → node details → wiring & validation (auto-repairs up to 5 times). Note the Workspace runtime executes a DAG — cyclic graphs are rejected, so describe check-then-fix work as forward steps rather than a loop.
 
-## Running & Recovery
+## Running
+
+Runs start from the Workspace graph: open the flow in the Web UI and hit **Run**, or add a
+`workspace_scheduled_run` node for cron-driven runs. Every node's inputs, outputs and state
+are persisted under the flow's run directory.
+
+The legacy Start/End Pipeline runtime is retired — `agentflow apply` / `resume` / `replay`
+and the `/api/flow/run*` endpoints no longer execute anything.
 
 ```bash
-# Execute
-agentflow apply <FlowName>
-
-# Check status
+# Check node status of a run
 agentflow run-status <FlowName> <uuid>
-
-# Resume from failure
-agentflow resume <FlowName> <uuid>
-
-# Retry one node
-agentflow replay <FlowName> <uuid> <instanceId>
 
 # View agent reasoning
 agentflow extract-thinking <FlowName> <uuid>
+
+# Validate a flow definition
+agentflow validate <FlowName>
 ```
 
 ## Skills
@@ -163,7 +146,6 @@ For example, tell Codex/Cursor: “Use `agentflow-author-flow` to generate a Flo
 |---------|-------------|
 | `list` | List all pipelines |
 | `ui` | Start Web UI |
-| `flow preview <FlowName\|flow.yaml>` | Generate a single-file static Flow preview; use `--output` to choose the HTML path |
 | `apply` | Execute flow |
 | `validate` | Validate flow structure |
 | `resume` | Resume from breakpoint |

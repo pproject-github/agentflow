@@ -6,9 +6,11 @@ import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
 const CURSOR_API_KEYS_ENV = "CURSOR_API_KEYS";
 const CURSOR_API_KEY_COOLDOWN_ENV = "AGENTFLOW_CURSOR_API_KEY_COOLDOWN_MINUTES";
+const CURSOR_API_KEY_RESOURCE_COOLDOWN_ENV = "AGENTFLOW_CURSOR_API_KEY_RESOURCE_EXHAUSTED_COOLDOWN_MINUTES";
 const ADMIN_ONLY_ENV_KEYS = new Set([
   CURSOR_API_KEYS_ENV,
   CURSOR_API_KEY_COOLDOWN_ENV,
+  CURSOR_API_KEY_RESOURCE_COOLDOWN_ENV,
   "CURSOR_API_KEY_COOLDOWN_MINUTES",
 ]);
 const MODEL_LIST_KEYS = ["cursor", "opencode", "claudeCode", "codex"];
@@ -164,6 +166,56 @@ function maskCursorApiKey(key) {
   return `${v.slice(0, 4)}${"•".repeat(Math.min(18, v.length - 8))}${v.slice(-4)}`;
 }
 
+function formatCursorCooldown(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.ceil(total / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+}
+
+function CursorApiKeyStatus({ status }) {
+  if (!status || status.status === "loading") {
+    return (
+      <div className="af-set-cursor-runtime">
+        <span className="af-set-cursor-runtime-badge is-loading">
+          <span className="material-symbols-outlined">sync</span>
+          状态同步中
+        </span>
+      </div>
+    );
+  }
+  const cooling = status?.status === "cooling_down";
+  const degraded = status?.degraded === true;
+  const category = status?.errorCategory === "resource_exhausted" ? "资源耗尽" : "明确限额";
+  const label = cooling ? `冷却中 · ${category}` : degraded ? `降级可用 · ${status.activeModelName || "Composer"}` : "Auto 可用";
+  return (
+    <div className="af-set-cursor-runtime">
+      <span className={`af-set-cursor-runtime-badge ${cooling ? "is-cooling" : degraded ? "is-degraded" : "is-available"}`}>
+        <span className="material-symbols-outlined">{cooling ? "schedule" : degraded ? "swap_horiz" : "check_circle"}</span>
+        {label}
+      </span>
+      {cooling ? (
+        <span className="af-set-cursor-runtime-detail">
+          预计 {status.blockedUntil ? new Date(status.blockedUntil).toLocaleString() : "稍后"} 恢复（{formatCursorCooldown(status.remainingSeconds)}）
+        </span>
+      ) : null}
+      {Array.isArray(status?.laneCooldowns) && status.laneCooldowns.length ? (
+        <span className="af-set-cursor-runtime-detail">
+          {status.laneCooldowns.map((lane) => `${lane.modelName} 冷却 ${formatCursorCooldown(lane.remainingSeconds)}`).join(" · ")}
+        </span>
+      ) : null}
+      {status?.lastFailure?.errorPreview ? (
+        <span className="af-set-cursor-runtime-error" title={status.lastFailure.errorPreview}>
+          最近失败：{status.lastFailure.errorPreview}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 /** @param {string | null | undefined} iso @param {string} lang */
 function formatFetchedAt(iso, lang = "zh") {
   if (!iso) return ""; // 返回空，由调用方根据语言填充
@@ -216,6 +268,11 @@ export default function SettingsPage({ authUser }) {
   const [cursorApiKeyName, setCursorApiKeyName] = useState("");
   const [cursorApiKeyValue, setCursorApiKeyValue] = useState("");
   const [cursorApiKeyGlobal, setCursorApiKeyGlobal] = useState(Boolean(authUser?.isAdmin));
+  const [cursorApiKeyStatuses, setCursorApiKeyStatuses] = useState([]);
+  const [cursorApiKeyStatusErr, setCursorApiKeyStatusErr] = useState("");
+  const [cursorApiKeyTestingId, setCursorApiKeyTestingId] = useState("");
+  const [cursorApiKeyReleasingId, setCursorApiKeyReleasingId] = useState("");
+  const [cursorApiKeyTestResults, setCursorApiKeyTestResults] = useState({});
   const [opcodeDraft, setOpcodeDraft] = useState("");
   const [allowlistFileUsers, setAllowlistFileUsers] = useState([]);
   const [allowlistEnvUsers, setAllowlistEnvUsers] = useState([]);
@@ -642,6 +699,34 @@ export default function SettingsPage({ authUser }) {
   const cursorApiKeyRecords = useMemo(() => parseCursorApiKeyRecords(cursorApiKeyRow?.value || ""), [cursorApiKeyRow?.value]);
   const cursorCooldownRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEY_COOLDOWN_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
   const cursorCooldownMinutes = cursorCooldownRow?.value ? String(cursorCooldownRow.value) : "30";
+  const cursorResourceCooldownRow = useMemo(() => envRows.find((row) => row.key === CURSOR_API_KEY_RESOURCE_COOLDOWN_ENV && (row.scope || "user") === cursorApiKeyScope) || null, [cursorApiKeyScope, envRows]);
+  const cursorResourceCooldownMinutes = cursorResourceCooldownRow?.value ? String(cursorResourceCooldownRow.value) : "3";
+  const cursorApiKeyStatusMap = useMemo(() => new Map(cursorApiKeyStatuses.map((item) => [item.id, item])), [cursorApiKeyStatuses]);
+  const cursorAvailableCount = cursorApiKeyRecords.filter((record) => cursorApiKeyStatusMap.get(record.id)?.status === "available").length;
+  const cursorCoolingCount = cursorApiKeyRecords.filter((record) => cursorApiKeyStatusMap.get(record.id)?.status === "cooling_down").length;
+  const cursorUnknownCount = Math.max(0, cursorApiKeyRecords.length - cursorAvailableCount - cursorCoolingCount);
+
+  const loadCursorApiKeyStatuses = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    try {
+      const r = await fetch(`/api/admin/cursor-api-keys/status?scope=${encodeURIComponent(cursorApiKeyScope)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : `HTTP ${r.status}`);
+      setCursorApiKeyStatuses(Array.isArray(j.keys) ? j.keys : []);
+      setCursorApiKeyStatusErr("");
+    } catch (e) {
+      setCursorApiKeyStatusErr(String(e?.message || e));
+    }
+  }, [authUser?.isAdmin, cursorApiKeyScope]);
+
+  useEffect(() => {
+    if (!authUser?.isAdmin) return undefined;
+    setCursorApiKeyStatuses([]);
+    setCursorApiKeyTestResults({});
+    void loadCursorApiKeyStatuses();
+    const timer = window.setInterval(() => void loadCursorApiKeyStatuses(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [authUser?.isAdmin, cursorApiKeyRow?.value, loadCursorApiKeyStatuses]);
 
   const setScopedEnvValue = useCallback((key, value, scope) => {
     const cleanKey = String(key || "").trim();
@@ -681,15 +766,58 @@ export default function SettingsPage({ authUser }) {
     setScopedEnvValue(CURSOR_API_KEYS_ENV, nextRecords.length ? serializeCursorApiKeyRecords(nextRecords) : "", cursorApiKeyScope);
   }, [cursorApiKeyRecords, cursorApiKeyScope, setScopedEnvValue]);
 
-  const updateCursorCooldownMinutes = useCallback((value) => {
+  const updateCursorCooldownMinutes = useCallback((envKey, value, fallback = 30) => {
     const raw = String(value || "").replace(/[^\d]/g, "");
     if (!raw) {
-      setScopedEnvValue(CURSOR_API_KEY_COOLDOWN_ENV, "", cursorApiKeyScope);
+      setScopedEnvValue(envKey, "", cursorApiKeyScope);
       return;
     }
-    const minutes = Math.min(1440, Math.max(1, Number(raw) || 30));
-    setScopedEnvValue(CURSOR_API_KEY_COOLDOWN_ENV, String(minutes), cursorApiKeyScope);
+    const minutes = Math.min(1440, Math.max(1, Number(raw) || fallback));
+    setScopedEnvValue(envKey, String(minutes), cursorApiKeyScope);
   }, [cursorApiKeyScope, setScopedEnvValue]);
+
+  const testCursorApiKey = useCallback(async (record) => {
+    if (!authUser?.isAdmin || !record?.id || cursorApiKeyTestingId) return;
+    setCursorApiKeyTestingId(record.id);
+    setCursorApiKeyStatusErr("");
+    try {
+      const r = await fetch("/api/admin/cursor-api-keys/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: record.id, scope: cursorApiKeyScope }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (Array.isArray(j.keys)) setCursorApiKeyStatuses(j.keys);
+      if (j.result) {
+        setCursorApiKeyTestResults((results) => ({ ...results, [record.id]: j.result }));
+      }
+      if (!r.ok && !j.result) throw new Error(typeof j.error === "string" ? j.error : `HTTP ${r.status}`);
+    } catch (e) {
+      setCursorApiKeyStatusErr(String(e?.message || e));
+    } finally {
+      setCursorApiKeyTestingId("");
+    }
+  }, [authUser?.isAdmin, cursorApiKeyScope, cursorApiKeyTestingId]);
+
+  const releaseCursorApiKeyCooldown = useCallback(async (record) => {
+    if (!authUser?.isAdmin || !record?.id || cursorApiKeyReleasingId) return;
+    setCursorApiKeyReleasingId(record.id);
+    setCursorApiKeyStatusErr("");
+    try {
+      const r = await fetch("/api/admin/cursor-api-keys/cooldown", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: record.id, scope: cursorApiKeyScope }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : `HTTP ${r.status}`);
+      setCursorApiKeyStatuses(Array.isArray(j.keys) ? j.keys : []);
+    } catch (e) {
+      setCursorApiKeyStatusErr(String(e?.message || e));
+    } finally {
+      setCursorApiKeyReleasingId("");
+    }
+  }, [authUser?.isAdmin, cursorApiKeyReleasingId, cursorApiKeyScope]);
 
   const copyWorkspace = useCallback(() => {
     if (!workspaceRoot) return;
@@ -933,12 +1061,15 @@ export default function SettingsPage({ authUser }) {
                     </div>
                     <div>
                       <h2 className="af-set-h2">Cursor API Key 池</h2>
-                      <p className="af-set-card-subtitle">按请求轮换，遇到 usage limit 或 resource_exhausted 会自动尝试下一个 Key。</p>
+                      <p className="af-set-card-subtitle">Auto 明确用量耗尽时，优先在同一 Key 动态切换可用 Composer；其他限流会冷却当前 Key 并尝试下一个。</p>
                     </div>
                   </div>
-                  <span className={"af-set-badge" + (cursorApiKeyRecords.length ? " af-set-badge--ok" : " af-set-badge--muted")}>
-                    {cursorApiKeyRecords.length} keys
-                  </span>
+                  <div className="af-set-cursor-summary" aria-label="Cursor API Key 状态汇总">
+                    <span className="af-set-badge af-set-badge--muted">共 {cursorApiKeyRecords.length}</span>
+                    <span className="af-set-badge af-set-badge--ok">可用 {cursorAvailableCount}</span>
+                    {cursorCoolingCount ? <span className="af-set-badge af-set-cursor-summary-cooling">冷却 {cursorCoolingCount}</span> : null}
+                    {cursorUnknownCount ? <span className="af-set-badge af-set-badge--muted">同步中 {cursorUnknownCount}</span> : null}
+                  </div>
                 </div>
 
                 <div className="af-set-cursor-pool-controls">
@@ -961,12 +1092,22 @@ export default function SettingsPage({ authUser }) {
                     </div>
                   ) : null}
                   <label className="af-set-cursor-cooldown">
-                    <span>限额冷却</span>
+                    <span>明确限额</span>
                     <input
                       className="af-set-input af-set-input--sm af-set-input--mono"
                       inputMode="numeric"
                       value={cursorCooldownMinutes}
-                      onChange={(e) => updateCursorCooldownMinutes(e.target.value)}
+                      onChange={(e) => updateCursorCooldownMinutes(CURSOR_API_KEY_COOLDOWN_ENV, e.target.value, 30)}
+                    />
+                    <span>分钟</span>
+                  </label>
+                  <label className="af-set-cursor-cooldown">
+                    <span>资源耗尽</span>
+                    <input
+                      className="af-set-input af-set-input--sm af-set-input--mono"
+                      inputMode="numeric"
+                      value={cursorResourceCooldownMinutes}
+                      onChange={(e) => updateCursorCooldownMinutes(CURSOR_API_KEY_RESOURCE_COOLDOWN_ENV, e.target.value, 3)}
                     />
                     <span>分钟</span>
                   </label>
@@ -974,28 +1115,72 @@ export default function SettingsPage({ authUser }) {
                 </div>
 
                 <div className="af-set-cursor-key-list">
-                  {cursorApiKeyRecords.length ? cursorApiKeyRecords.map((record) => (
-                    <div key={record.id} className="af-set-cursor-key-row">
-                      <div className="af-set-cursor-key-main">
-                        <strong>{record.name}</strong>
-                        <code>{maskCursorApiKey(record.key)}</code>
+                  {cursorApiKeyRecords.length ? cursorApiKeyRecords.map((record) => {
+                    const status = cursorApiKeyStatusMap.get(record.id) || {
+                      id: record.id,
+                      status: "loading",
+                      laneCooldowns: [],
+                    };
+                    const testResult = cursorApiKeyTestResults[record.id];
+                    return (
+                      <div key={record.id} className="af-set-cursor-key-row">
+                        <div className="af-set-cursor-key-main">
+                          <strong>{record.name}</strong>
+                          <code>{maskCursorApiKey(record.key)}</code>
+                          <span className="af-set-cursor-key-meta">
+                            创建于 {record.createdAt ? new Date(record.createdAt).toLocaleString() : "历史配置"}
+                            {status.lastUsedAt ? ` · 最近使用 ${new Date(status.lastUsedAt).toLocaleString()}` : " · 尚未使用"}
+                          </span>
+                        </div>
+                        <CursorApiKeyStatus status={status} />
+                        <div className="af-set-cursor-key-actions">
+                          <button
+                            type="button"
+                            className="af-set-cursor-action"
+                            disabled={Boolean(cursorApiKeyTestingId)}
+                            onClick={() => void testCursorApiKey(record)}
+                          >
+                            <span className="material-symbols-outlined">network_check</span>
+                            {cursorApiKeyTestingId === record.id ? "测试中" : "测试"}
+                          </button>
+                          {status.status === "cooling_down" ? (
+                            <button
+                              type="button"
+                              className="af-set-cursor-action"
+                              disabled={Boolean(cursorApiKeyReleasingId)}
+                              onClick={() => void releaseCursorApiKeyCooldown(record)}
+                            >
+                              <span className="material-symbols-outlined">restart_alt</span>
+                              {cursorApiKeyReleasingId === record.id ? "解除中" : "解除冷却"}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="af-set-env-del af-set-cursor-key-delete"
+                            aria-label={`删除 ${record.name}`}
+                            onClick={() => removeCursorApiKey(record.id)}
+                          >
+                            <span className="material-symbols-outlined">delete_outline</span>
+                          </button>
+                        </div>
+                        {testResult ? (
+                          <div className={`af-set-cursor-test-result ${testResult.success ? "is-success" : "is-error"}`}>
+                            <span className="material-symbols-outlined">{testResult.success ? "check_circle" : "error"}</span>
+                            <span>
+                              {testResult.success ? "测试成功" : "测试失败"} · {(Number(testResult.durationMs || 0) / 1000).toFixed(1)}s
+                              {testResult.modelName ? ` · ${testResult.modelName}` : ""}
+                              {testResult.replyPreview ? ` · ${testResult.replyPreview}` : testResult.errorPreview ? ` · ${testResult.errorPreview}` : ""}
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
-                      <span className="af-set-cursor-key-meta">
-                        {record.createdAt ? new Date(record.createdAt).toLocaleString() : "历史 Key"}
-                      </span>
-                      <button
-                        type="button"
-                        className="af-set-env-del af-set-cursor-key-delete"
-                        aria-label={`删除 ${record.name}`}
-                        onClick={() => removeCursorApiKey(record.id)}
-                      >
-                        <span className="material-symbols-outlined">delete_outline</span>
-                      </button>
-                    </div>
-                  )) : (
+                    );
+                  }) : (
                     <div className="af-set-cursor-key-empty">还没有配置 Key。配置后 Cursor CLI runner 会自动轮换使用。</div>
                   )}
                 </div>
+
+                {cursorApiKeyStatusErr ? <p className="af-err af-set-hint af-set-hint--inline" role="alert">{cursorApiKeyStatusErr}</p> : null}
 
                 <div className="af-set-cursor-key-add">
                   <input
@@ -1023,7 +1208,7 @@ export default function SettingsPage({ authUser }) {
                 </div>
 
                 <p className="af-set-hint">
-                  保存到 {CURSOR_API_KEYS_ENV}；冷却时间保存到 {CURSOR_API_KEY_COOLDOWN_ENV}。个人配置会覆盖全局配置。
+                  保存到 {CURSOR_API_KEYS_ENV}；明确限额与资源耗尽分别使用长、短冷却。状态每 10 秒刷新，个人配置会覆盖全局配置。
                 </p>
               </section>
 

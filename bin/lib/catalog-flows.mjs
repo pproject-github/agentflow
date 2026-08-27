@@ -14,15 +14,23 @@ import {
   PROJECT_NODES_DIR,
   USER_AGENTFLOW_PIPELINES_LABEL,
   getUserPipelinesRoot,
+  isFlowDir,
 } from "./paths.mjs";
 import {
   readAdminBuiltinPipelineConfig,
   resolveAdminBuiltinPipelineDir,
 } from "./admin-builtin-pipelines.mjs";
 import { Table } from "./table.mjs";
-import { listMarketplaceNodes, parseMarketplaceDefinitionId, resolveMarketplaceNodePackage } from "./marketplace.mjs";
+import {
+  listMarketplaceNodes,
+  listNodePackagesInDir,
+  parseMarketplaceDefinitionId,
+  resolveMarketplaceNodePackage,
+} from "./marketplace.mjs";
 import { isWorkspacePreviewDir } from "./workspace-preview.mjs";
-import { LEGACY_FLOW_NODE_IDS } from "./legacy-flow-execution.mjs";
+import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
+import { RETIRED_NODE_IDS } from "./legacy-flow-execution.mjs";
+import { normalizeNodeUiForSlots } from "./node-ui-kit.mjs";
 
 /** 从指定目录收集含 flow.yaml 的子目录名。 */
 export function collectPipelineNamesFromDir(dirPath) {
@@ -30,28 +38,46 @@ export function collectPipelineNamesFromDir(dirPath) {
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
   return entries
     .filter((e) => e.isDirectory())
-    .filter((e) => fs.existsSync(path.join(dirPath, e.name, "flow.yaml")))
+    .filter((e) => isFlowDir(path.join(dirPath, e.name)))
     .filter((e) => !isWorkspacePreviewDir(path.join(dirPath, e.name)))
+    .filter((e) => !isWorkspaceDraftDir(path.join(dirPath, e.name)))
     .map((e) => e.name);
 }
 
+const trimmedOrUndefined = (value) => {
+  if (typeof value !== "string") return undefined;
+  const t = value.trim();
+  return t === "" ? undefined : t;
+};
+
 /**
- * 读取 flow.yaml 中流水线级说明（与 Web UI serialize 一致：ui.description）。
- * @param {string} flowDir 含 flow.yaml 的目录
+ * 流水线级说明（列表里那一行）。
+ *
+ * 两个来源，代码化的图优先：`ui.description` 在往返时由 `extractLayout` 透传进
+ * `workspace.layout.json` 的顶层，所以代码化的流程说明在 layout.json 里；只有 flow.yaml
+ * 的老流程还从 yaml 的 `ui.description` 读。
+ *
+ * @param {string} flowDir
  * @returns {string | undefined}
  */
 export function readPipelineListDescription(flowDir) {
+  const layoutPath = path.join(flowDir, "workspace.layout.json");
+  if (fs.existsSync(layoutPath)) {
+    try {
+      const layout = JSON.parse(fs.readFileSync(layoutPath, "utf-8"));
+      const fromLayout = trimmedOrUndefined(layout?.description);
+      if (fromLayout) return fromLayout;
+    } catch {
+      /* layout 读不动就退回 yaml */
+    }
+  }
   const yamlPath = path.join(flowDir, "flow.yaml");
   if (!fs.existsSync(yamlPath)) return undefined;
   try {
-    const raw = fs.readFileSync(yamlPath, "utf-8");
-    const data = yaml.load(raw);
+    const data = yaml.load(fs.readFileSync(yamlPath, "utf-8"));
     if (!data || typeof data !== "object") return undefined;
     const ui = data.ui && typeof data.ui === "object" ? data.ui : {};
-    const d = ui.description;
-    if (typeof d !== "string") return undefined;
-    const t = d.trim();
-    return t === "" ? undefined : t;
+    return trimmedOrUndefined(ui.description);
   } catch {
     return undefined;
   }
@@ -167,6 +193,22 @@ function normalizeFrontmatterSlots(arr) {
   });
 }
 
+/** Workspace 运行时对该节点类型的支持程度；未声明按 native 处理（兼容旧的自定义节点 .md）。 */
+const NODE_RUNTIME_TIERS = new Set(["native", "degraded", "none"]);
+
+function normalizeNodeRuntimeTier(value) {
+  const tier = String(value ?? "").trim().toLowerCase();
+  return NODE_RUNTIME_TIERS.has(tier) ? tier : "native";
+}
+
+/** 节点分类；未声明时由 id 前缀推断。 */
+const NODE_CATEGORY_TYPES = new Set(["control", "provide", "agent"]);
+
+function normalizeNodeCategory(value) {
+  const type = String(value ?? "").trim().toLowerCase();
+  return NODE_CATEGORY_TYPES.has(type) ? type : "";
+}
+
 /**
  * 解析 .md 节点文件的 frontmatter。
  * 优先用 js-yaml 解析整块 frontmatter，以支持 description: | / >- 等多行字段；
@@ -174,7 +216,17 @@ function normalizeFrontmatterSlots(arr) {
  */
 export function parseNodeFrontmatter(raw) {
   const m = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  const data = { input: [], output: [], displayName: undefined, description: undefined, guide: undefined };
+  const data = {
+    input: [],
+    output: [],
+    displayName: undefined,
+    description: undefined,
+    guide: undefined,
+    ui: undefined,
+    runtime: "native",
+    type: "",
+    paletteHidden: false,
+  };
   if (!m) return data;
   const fm = m[1];
   try {
@@ -189,8 +241,12 @@ export function parseNodeFrontmatter(raw) {
       if (parsed.guide && typeof parsed.guide === "object" && !Array.isArray(parsed.guide)) {
         data.guide = parsed.guide;
       }
+      data.runtime = normalizeNodeRuntimeTier(parsed.runtime);
+      data.type = normalizeNodeCategory(parsed.type);
+      data.paletteHidden = String(parsed.palette ?? "").trim().toLowerCase() === "hidden";
       data.input = normalizeFrontmatterSlots(parsed.input);
       data.output = normalizeFrontmatterSlots(parsed.output);
+      data.ui = normalizeNodeUiForSlots(parsed.ui, data.input, data.output);
       return data;
     }
   } catch {
@@ -225,6 +281,9 @@ export function parseNodeFrontmatter(raw) {
   const displayM = fm.match(/\bdisplayName:\s*["']?([^"'\n#][^\n]*)["']?/);
   if (descM) data.description = descM[1].trim().replace(/^["']|["']$/g, "");
   if (displayM) data.displayName = displayM[1].trim().replace(/^["']|["']$/g, "");
+  data.runtime = normalizeNodeRuntimeTier((fm.match(/^\s*runtime:\s*(\S+)/m) || [])[1]);
+  data.type = normalizeNodeCategory((fm.match(/^\s*type:\s*(\S+)/m) || [])[1]);
+  data.paletteHidden = /^\s*palette:\s*hidden\s*$/m.test(fm);
   return data;
 }
 
@@ -232,7 +291,7 @@ export function parseNodeFrontmatter(raw) {
  * @param {string} workspaceRoot
  * @param {string} flowId
  * @param {string} flowSource
- * @param {{ archived?: boolean, staticFlowPath?: string }} [opts]
+ * @param {{ archived?: boolean }} [opts]
  */
 export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const root = path.resolve(workspaceRoot);
@@ -241,14 +300,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
   const byId = new Map();
   const pipelineTranslations = {};
   let marketplaceFlowData = null;
-  const staticFlowPath = opts.staticFlowPath ? path.resolve(String(opts.staticFlowPath)) : "";
-  const staticFlowDir = staticFlowPath ? path.dirname(staticFlowPath) : "";
-  if (staticFlowPath && fs.existsSync(staticFlowPath) && fs.statSync(staticFlowPath).isFile()) {
-    try {
-      const parsed = yaml.load(fs.readFileSync(staticFlowPath, "utf-8"));
-      if (parsed && typeof parsed === "object") marketplaceFlowData = parsed;
-    } catch (_) {}
-  } else if (flowId && flowSource) {
+  if (flowId && flowSource) {
     const flowPath = getFlowYamlAbs(workspaceRoot, flowId, flowSource, opts);
     if (flowPath.path && fs.existsSync(flowPath.path)) {
       try {
@@ -262,7 +314,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
     const files = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md"));
     for (const e of files) {
       const id = e.name.replace(/\.mdx?$/i, "").replace(/\.markdown$/i, "");
-      if (LEGACY_FLOW_NODE_IDS.has(id)) continue;
+      if (RETIRED_NODE_IDS.has(id)) continue;
       let type = "agent";
       if (/^control/i.test(id)) type = "control";
       else if (/^provide/i.test(id)) type = "provide";
@@ -270,6 +322,10 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       try {
         const raw = fs.readFileSync(path.join(dir, e.name), "utf-8");
         const data = parseNodeFrontmatter(raw);
+        // frontmatter 的 type: 优先于按 id 前缀的推断（workspace_run 等不带前缀的节点靠它归类）
+        if (data.type) type = data.type;
+        // frontmatter 的 palette: hidden 与 RETIRED_NODE_IDS 等价，让节点自带可见性
+        if (data.paletteHidden && !opts.includeHidden) continue;
         const strippedId =
           id.replace(/^agent_?/i, "").replace(/^control_?/i, "").replace(/^provide_?/i, "").replace(/^tool_?/i, "") || id;
         const label = data.displayName ?? strippedId;
@@ -287,16 +343,43 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
         byId.set(id, {
           id,
           type,
+          runtimeTier: data.runtime,
           label: translatedDisplayName || label,
           displayName: translatedDisplayName || data.displayName,
           description: translatedDescription || data.description,
           guide: translatedGuide || data.guide,
+          ui: data.ui,
+          paletteHidden: Boolean(data.paletteHidden),
           inputs: data.input,
           outputs: data.output,
           source: flowIdOpt ? "flow" : "project",
           flowId: flowIdOpt,
         });
       } catch (_) {}
+    }
+    // 同一个 nodes/ 目录里，子目录形式的代码节点包（index.mjs 声明 + 实现）也进目录。
+    // 这样 AI 可以把节点实现直接写在流程目录里，不必先发布到 marketplace。
+    for (const manifest of listNodePackagesInDir(dir)) {
+      byId.set(manifest.definitionId, {
+        id: manifest.definitionId,
+        baseDefinitionId: manifest.baseDefinitionId || manifest.runtime?.type || "",
+        marketplaceDefinitionId: manifest.definitionId,
+        packageId: manifest.id,
+        version: manifest.version,
+        type: "agent",
+        runtimeTier: "native",
+        label: manifest.displayName,
+        displayName: manifest.displayName,
+        description: manifest.description,
+        ui: manifest.ui,
+        inputs: manifest.input,
+        outputs: manifest.output,
+        source: flowIdOpt ? "flow" : "project",
+        flowId: flowIdOpt,
+        packageDir: manifest.packageDir,
+        // 与 marketplace 分支同名：前端 scriptFromMarketplaceRuntime 读的就是这个对象
+        runtime: manifest.runtime,
+      });
     }
   };
   addFromDir(PACKAGE_BUILTIN_NODES_DIR, "project");
@@ -317,6 +400,7 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       label: manifest.displayName,
       displayName: manifest.displayName,
       description: manifest.description,
+      ui: manifest.ui,
       inputs: manifest.input,
       outputs: manifest.output,
       source: manifest.source || "marketplace",
@@ -325,24 +409,6 @@ export function listNodesJson(workspaceRoot, flowId, flowSource, opts = {}) {
       packageDir: manifest.packageDir,
       runtime: manifest.runtime,
     });
-  }
-  if (staticFlowDir) {
-    addFromDir(path.join(staticFlowDir, "nodes"), "flow", flowId);
-    const flowData = marketplaceFlowData;
-    if (flowData?.instances) {
-      pipelineTranslations[flowId] = pipelineTranslations[flowId] || {};
-      for (const [nodeId, inst] of Object.entries(flowData.instances)) {
-        pipelineTranslations[flowId][nodeId] = {
-          label: inst?.label,
-          body: inst?.body,
-          description: inst?.description || inst?.userDescription,
-        };
-      }
-    }
-    if (flowData?.ui?.description) {
-      pipelineTranslations[flowId] = pipelineTranslations[flowId] || {};
-      pipelineTranslations[flowId].__flowDescription = flowData.ui.description;
-    }
   }
   if (flowId && flowSource) {
     if (flowSource === "builtin") {
@@ -495,63 +561,79 @@ export function readFlowJson(workspaceRoot, flowId, flowSource, options = {}) {
 }
 
 /**
- * 解析 flow.yaml 绝对路径（与 readFlowJson 一致；user 含 workspace 回退）。
+ * 按 flowSource 列出候选目录（含 user→workspace→legacy 的历史回退顺序）。
+ * @returns {{ dirs: string[] } | { error: string }}
+ */
+function flowDirCandidates(workspaceRoot, flowId, flowSource, options = {}) {
+  const root = path.resolve(workspaceRoot);
+  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
+  if (Boolean(options.archived)) {
+    if (flowSource === "builtin") return { error: t("catalog.builtin_flow_archive_path_not_supported") };
+    if (flowSource === "user") {
+      return { dirs: [path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId)] };
+    }
+    if (flowSource === "workspace") {
+      return {
+        dirs: [
+          path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId),
+          path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId),
+        ],
+      };
+    }
+    return { error: "Invalid flowSource" };
+  }
+  if (flowSource === "builtin") return { dirs: [path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId)] };
+  if (flowSource === "admin") {
+    const dir = resolveAdminBuiltinPipelineDir(flowId);
+    return { dirs: dir ? [dir] : [] };
+  }
+  if (flowSource === "user") {
+    return {
+      dirs: [
+        path.join(userPipelinesRoot, flowId),
+        path.join(root, PIPELINES_DIR, flowId),
+        path.join(root, LEGACY_PIPELINES_DIR, flowId),
+      ],
+    };
+  }
+  if (flowSource === "workspace") {
+    return {
+      dirs: [path.join(root, PIPELINES_DIR, flowId), path.join(root, LEGACY_PIPELINES_DIR, flowId)],
+    };
+  }
+  return { error: "Invalid flowSource" };
+}
+
+/**
+ * 解析流程目录绝对路径。
+ *
+ * 大多数调用方要的其实是**目录**，以前却只能 `path.dirname(getFlowYamlAbs().path)` —— 于是
+ * 「改个名」这种和 yaml 毫无关系的操作，也被 `flow.yaml` 是否存在卡住。目录存不存在现在由
+ * `isFlowDir` 说了算（见 paths.mjs），三种标记文件任一即可。
+ *
+ * @param {{ archived?: boolean, userId?: string }} [options]
+ * @returns {{ dir: string } | { error: string }}
+ */
+export function resolveFlowDirAbs(workspaceRoot, flowId, flowSource, options = {}) {
+  const candidates = flowDirCandidates(workspaceRoot, flowId, flowSource, options);
+  if (candidates.error) return { error: candidates.error };
+  for (const dir of candidates.dirs) {
+    if (isFlowDir(dir)) return { dir };
+  }
+  return { error: "Flow not found: " + flowId };
+}
+
+/**
+ * 解析 flow.yaml 绝对路径。**只给真的要读 yaml 内容的调用方用**；要目录请用
+ * `resolveFlowDirAbs`。
  * @param {{ archived?: boolean }} [options]
  * @returns {{ path: string } | { error: string }}
  */
 export function getFlowYamlAbs(workspaceRoot, flowId, flowSource, options = {}) {
-  const root = path.resolve(workspaceRoot);
-  const archived = Boolean(options.archived);
-  const userPipelinesRoot = getUserPipelinesRoot(options.userId);
-  let yamlPath;
-  if (archived) {
-    if (flowSource === "builtin") {
-      return { error: t("catalog.builtin_flow_archive_path_not_supported") };
-    }
-    if (flowSource === "user") {
-      yamlPath = path.join(userPipelinesRoot, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-    } else if (flowSource === "workspace") {
-      yamlPath = path.join(root, PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-      if (!fs.existsSync(yamlPath)) {
-        const altLeg = path.join(root, LEGACY_PIPELINES_DIR, ARCHIVED_PIPELINES_DIR_NAME, flowId, "flow.yaml");
-        if (fs.existsSync(altLeg)) yamlPath = altLeg;
-      }
-    } else {
-      return { error: "Invalid flowSource" };
-    }
-    if (!fs.existsSync(yamlPath)) {
-      return { error: "Flow not found: " + flowId };
-    }
-    return { path: yamlPath };
-  }
-
-  if (flowSource === "builtin") {
-    yamlPath = path.join(PACKAGE_BUILTIN_PIPELINES_DIR, flowId, "flow.yaml");
-  } else if (flowSource === "admin") {
-    const flowDir = resolveAdminBuiltinPipelineDir(flowId);
-    yamlPath = flowDir ? path.join(flowDir, "flow.yaml") : "";
-  } else if (flowSource === "user") {
-    yamlPath = path.join(userPipelinesRoot, flowId, "flow.yaml");
-    if (!fs.existsSync(yamlPath)) {
-      const alt = path.join(root, PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(alt)) yamlPath = alt;
-    }
-    if (!fs.existsSync(yamlPath)) {
-      const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(altLeg)) yamlPath = altLeg;
-    }
-  } else if (flowSource === "workspace") {
-    yamlPath = path.join(root, PIPELINES_DIR, flowId, "flow.yaml");
-    if (!fs.existsSync(yamlPath)) {
-      const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId, "flow.yaml");
-      if (fs.existsSync(altLeg)) yamlPath = altLeg;
-    }
-  } else {
-    return { error: "Invalid flowSource" };
-  }
-  if (!fs.existsSync(yamlPath)) {
-    return { error: "Flow not found: " + flowId };
-  }
+  const resolved = resolveFlowDirAbs(workspaceRoot, flowId, flowSource, options);
+  if (resolved.error) return { error: resolved.error };
+  const yamlPath = path.join(resolved.dir, "flow.yaml");
+  if (!fs.existsSync(yamlPath)) return { error: "Flow not found: " + flowId };
   return { path: yamlPath };
 }
 
@@ -591,6 +673,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       version: resolved.version,
       packageDir: resolved.packageDir,
       runtime: resolved.runtime,
+      ui: resolved.ui,
     };
   }
   const fileName = nodeId.endsWith(".md") ? nodeId : `${nodeId}.md`;
@@ -632,6 +715,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       if (/^control/i.test(nodeId)) type = "control";
       else if (/^provide/i.test(nodeId)) type = "provide";
       else if (/^tool/i.test(nodeId)) type = "agent";
+      if (data.type) type = data.type;
       const strippedId =
         nodeId
           .replace(/\.md$/, "")
@@ -642,6 +726,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
       const label = data.displayName ?? strippedId;
       return {
         type,
+        runtimeTier: data.runtime,
         label,
         displayName: data.displayName,
         inputs: data.input,
@@ -649,6 +734,7 @@ export function readNodeJson(workspaceRoot, nodeId, flowId, flowSource, opts = {
         executionLogic: content || undefined,
         description: data.description,
         guide: data.guide,
+        ui: data.ui,
       };
     } catch (_) {}
   }
@@ -874,13 +960,13 @@ export function listPipelines(workspaceRoot) {
     return;
   }
   const table = new Table({
-    head: [chalk.cyan(t("catalog.pipeline_header")), chalk.cyan(t("catalog.source_header")), chalk.cyan(t("catalog.apply_example_header"))],
+    head: [chalk.cyan(t("catalog.pipeline_header")), chalk.cyan(t("catalog.source_header")), chalk.cyan(t("catalog.open_example_header"))],
     colWidths: [24, 10, 48],
     style: { head: [], border: ["grey"] },
   });
   for (const row of rows) {
     const sourceLabel = row.source === "builtin" || row.source === "admin" ? "builtin" : row.source === "workspace" ? "workspace" : "user";
-    table.push([row.id, sourceLabel, `agentflow apply ${row.id}`]);
+    table.push([row.id, sourceLabel, `agentflow validate ${row.id}`]);
   }
   log.info("\n" + chalk.bold("Pipelines"));
   log.info(table.toString());

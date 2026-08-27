@@ -14,7 +14,9 @@ import {
   workspaceCanvasInteractionPhase,
   workspaceBackgroundLoadSkipReason,
   workspaceLoadResourcePlan,
+  workspaceResizePresentationSize,
   workspaceSaveBaselineAfterSuccess,
+  workspaceSyncIndicatorPresentation,
 } from "../builtin/web-ui/src/workspaceSyncGuard.js";
 
 const cleanLoad = {
@@ -36,6 +38,13 @@ test("background workspace refresh never overwrites edits made while its request
   assert.equal(workspaceBackgroundLoadSkipReason({ ...cleanLoad, dirty: true }), "local-edits");
   assert.equal(workspaceBackgroundLoadSkipReason({ ...cleanLoad, currentEditVersion: 8 }), "local-edits");
   assert.equal(workspaceBackgroundLoadSkipReason({ ...cleanLoad, currentRevision: "revision-b" }), "local-edits");
+});
+
+test("background workspace refresh never overwrites an active canvas interaction", () => {
+  assert.equal(
+    workspaceBackgroundLoadSkipReason({ ...cleanLoad, interactionActive: true }),
+    "interaction-active",
+  );
 });
 
 test("an older workspace refresh cannot overwrite a newer refresh", () => {
@@ -110,6 +119,55 @@ test("node resizing is active while resizing and finishes on mouse release", () 
     ]),
     { active: false, finished: true, mutated: true },
   );
+});
+
+test("a resizing card follows the live React Flow size until persistence catches up", () => {
+  const persistedSize = { width: 496, height: 180 };
+  assert.deepEqual(workspaceResizePresentationSize({
+    resizing: true,
+    liveSize: { width: 720, height: 420 },
+    persistedSize,
+  }), { width: 720, height: 420 });
+  assert.deepEqual(workspaceResizePresentationSize({
+    resizing: false,
+    liveSize: { width: 720, height: 420 },
+    persistedSize,
+  }), persistedSize);
+  assert.deepEqual(workspaceResizePresentationSize({
+    resizing: true,
+    liveSize: { width: 0, height: 0 },
+    persistedSize,
+  }), persistedSize);
+});
+
+test("node dragging and resizing share an interaction-protection indicator without changing sync truth", () => {
+  assert.deepEqual(workspaceSyncIndicatorPresentation({
+    phase: "synced",
+    detail: "所有修改已同步",
+    nodeInteracting: true,
+  }), {
+    phase: "interacting",
+    label: "交互保护中",
+    detail: "远端更新暂缓，松手后同步",
+  });
+  assert.deepEqual(workspaceSyncIndicatorPresentation({
+    phase: "synced",
+    detail: "所有修改已同步",
+    nodeInteracting: false,
+  }), {
+    phase: "synced",
+    label: "已同步",
+    detail: "所有修改已同步",
+  });
+  assert.deepEqual(workspaceSyncIndicatorPresentation({
+    phase: "synced",
+    detail: "所有修改已同步",
+    viewportInteracting: true,
+  }), {
+    phase: "synced",
+    label: "已同步",
+    detail: "所有修改已同步",
+  });
 });
 
 test("continuous canvas changes keep only the latest value for each node and change type", () => {

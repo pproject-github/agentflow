@@ -166,7 +166,7 @@ export default function Home() {
                   {t('install.step3')}
                 </h3>
               </div>
-              <CodeBlock code="agentflow apply my-flow" label="Terminal" />
+              <CodeBlock code="agentflow mcp" label="Terminal" />
             </div>
           </div>
         </div>
