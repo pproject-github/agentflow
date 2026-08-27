@@ -175,6 +175,13 @@ AgentFlow 提供专用技能用于常见操作：
 | `AGENTFLOW_CODEX_IGNORE_USER_CONFIG` | `1` | 使用 `--ignore-user-config` 启动 Codex，让 AgentFlow 任务只使用 AgentFlow 显式传入的 MCP/config；设 `0` 可同时加载用户 Codex 配置 |
 | `AGENTFLOW_CODEX_STDERR_INHERIT` | `0` | Codex stderr 直接转发到终端用于调试 |
 | `AGENTFLOW_HOME` | `~/agentflow` | 用户数据目录 |
+| `AGENTFLOW_CAS_ENABLED` | `0` | 为普通 Web UI 用户启用 CAS；管理员继续使用 `/admin/login` |
+| `AGENTFLOW_CAS_BASE_URL` | `https://auth.bigo.sg/cas/` | CAS 服务根地址 |
+| `AGENTFLOW_CAS_SERVICE_URL` | 从 `AGENTFLOW_PUBLIC_BASE_URL` 推导 | CAS 回调 service 完整地址，通常为 `https://host/api/auth/cas/callback` |
+| `AGENTFLOW_LEGACY_PASSWORD_LOGIN` | 启用 CAS 时为 `0` | 迁移期临时保留普通用户旧密码 API |
+| `AGENTFLOW_PUBLIC_BASE_URL` | 请求 Origin | 反向代理后用于生成 CAS 回调地址的 Web UI 公网 Origin |
+
+启用 CAS 后，普通用户首次 CAS 登录时自动创建；管理员继续持有本地密码，并从 `/admin/login` 登录。在“管理 → 用户与归属”中，可将旧账号的 Project 迁移给已经登录过的 CAS 用户，历史运行审计仍保留原执行人。
 
 ### Codex 后端
 

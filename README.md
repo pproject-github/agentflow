@@ -183,6 +183,13 @@ For example, tell Codex/Cursor: “Use `agentflow-author-flow` to generate a Flo
 | `AGENTFLOW_CODEX_IGNORE_USER_CONFIG` | `1` | Run Codex with `--ignore-user-config` so AgentFlow jobs only use the MCP/config overrides AgentFlow passes in; set `0` to also load the user's Codex config |
 | `AGENTFLOW_CODEX_STDERR_INHERIT` | `0` | Forward Codex stderr directly to terminal for debugging |
 | `AGENTFLOW_HOME` | `~/agentflow` | User data directory |
+| `AGENTFLOW_CAS_ENABLED` | `0` | Enable CAS for regular Web UI users; admins continue to use `/admin/login` |
+| `AGENTFLOW_CAS_BASE_URL` | `https://auth.bigo.sg/cas/` | CAS server root URL |
+| `AGENTFLOW_CAS_SERVICE_URL` | derived from `AGENTFLOW_PUBLIC_BASE_URL` | Exact CAS callback service URL, normally `https://host/api/auth/cas/callback` |
+| `AGENTFLOW_LEGACY_PASSWORD_LOGIN` | `0` when CAS is enabled | Temporarily keep the legacy regular-user password API during migration |
+| `AGENTFLOW_PUBLIC_BASE_URL` | request origin | Public Web UI origin used to construct CAS callbacks behind a reverse proxy |
+
+When CAS is enabled, regular users are provisioned on their first successful CAS login. The administrator keeps a local password and signs in through `/admin/login`. In **Admin → Users & Ownership**, old Projects can be reassigned to a provisioned CAS user without rewriting historical run audit records.
 
 ### Codex Backend
 

@@ -12,6 +12,7 @@ import {
 const SESSION_COOKIE = "af_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLI_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const CAS_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const CLI_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 const CLI_AUTHORIZATION_SCOPES = [
   "workspace:read",
@@ -97,7 +98,12 @@ function createSessionForUser(userId, options = {}) {
     ok: true,
     token,
     expiresAt: sessions[hashToken(token)].expiresAt,
-    user: { userId, username: user.username || userId, isAdmin: Boolean(user.isAdmin) },
+    user: {
+      userId,
+      username: user.username || userId,
+      isAdmin: Boolean(user.isAdmin),
+      authProvider: String(user.authProvider || (user.salt && user.hash ? "password" : "cas")),
+    },
   };
 }
 
@@ -171,6 +177,8 @@ export function listAuthUsers() {
       userId,
       username: String(user?.username || userId),
       isAdmin: Boolean(user?.isAdmin),
+      authProvider: String(user?.authProvider || (user?.salt && user?.hash ? "password" : "cas")),
+      casUsername: String(user?.casUsername || ""),
       createdAt: String(user?.createdAt || ""),
       updatedAt: String(user?.updatedAt || user?.createdAt || ""),
     }))
@@ -186,6 +194,9 @@ export function resetAuthUserPassword(userId, password) {
   const users = readAuthUsers();
   const user = users[normalizedUserId];
   if (!user) return { ok: false, status: 404, error: "用户不存在" };
+  if (String(user.authProvider || "") === "cas" && !user.isAdmin) {
+    return { ok: false, status: 409, error: "CAS 用户不使用 AgentFlow 本地密码" };
+  }
 
   const nextCredential = hashPassword(nextPassword);
   users[normalizedUserId] = {
@@ -218,7 +229,7 @@ export function resetAuthUserPassword(userId, password) {
 }
 
 export function authSetupRequired() {
-  return Object.keys(readAuthUsers()).length === 0;
+  return !Object.values(readAuthUsers()).some((user) => user?.isAdmin === true);
 }
 
 function normalizeUserAllowlistInput(value) {
@@ -360,19 +371,20 @@ export function getSessionCookieName() {
   return SESSION_COOKIE;
 }
 
-export function buildSessionCookie(token) {
+export function buildSessionCookie(token, { secure = false } = {}) {
   const attrs = [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
+    secure ? "Secure" : "",
     `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
   ];
-  return attrs.join("; ");
+  return attrs.filter(Boolean).join("; ");
 }
 
-export function buildClearSessionCookie() {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function buildClearSessionCookie({ secure = false } = {}) {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=0`;
 }
 
 export function getSessionTokenFromRequest(req) {
@@ -398,6 +410,7 @@ export function getAuthUserFromRequest(req) {
     userId: session.userId,
     username: user.username || session.userId,
     isAdmin: Boolean(user.isAdmin),
+    authProvider: String(user.authProvider || (user.salt && user.hash ? "password" : "cas")),
     sessionKind: String(session.kind || "web"),
     clientName: String(session.clientName || ""),
     scopes: Array.isArray(session.scopes) ? session.scopes.map(String) : [],
@@ -574,6 +587,7 @@ export function loginOrCreateUser(username, password) {
       salt: hashed.salt,
       hash: hashed.hash,
       isAdmin: firstUser,
+      authProvider: "password",
       createdAt: new Date().toISOString(),
     };
     users[userId] = user;
@@ -595,8 +609,93 @@ export function loginOrCreateUser(username, password) {
   return {
     ok: true,
     token: session.token,
-    user: { userId, username: user.username || userId, isAdmin: Boolean(user.isAdmin) },
+    user: {
+      userId,
+      username: user.username || userId,
+      isAdmin: Boolean(user.isAdmin),
+      authProvider: String(user.authProvider || "password"),
+    },
     migration,
+  };
+}
+
+export function loginAdminUser(username, password) {
+  const userId = sanitizeAgentflowUserId(username);
+  if (!userId) return { ok: false, error: "管理员用户名无效" };
+  const pwd = String(password || "");
+  if (pwd.length < 4) return { ok: false, error: "密码至少 4 位" };
+
+  const users = readAuthUsers();
+  const hasAdmin = Object.values(users).some((user) => user?.isAdmin === true);
+  let user = users[userId];
+  if (!hasAdmin) {
+    if (user && !user.isAdmin) return { ok: false, error: "该用户名已属于普通用户，请使用其他管理员用户名" };
+    const credential = hashPassword(pwd);
+    user = {
+      ...(user || {}),
+      userId,
+      username: String(username || "").trim(),
+      salt: credential.salt,
+      hash: credential.hash,
+      isAdmin: true,
+      authProvider: "password",
+      createdAt: user?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    users[userId] = user;
+    writeJsonObject(usersPath(), users);
+  } else if (!user?.isAdmin || !verifyPassword(pwd, user)) {
+    return { ok: false, error: "管理员用户名或密码错误" };
+  }
+
+  let migration = null;
+  try {
+    migration = migrateLegacyPipelinesToAdminUser(userId);
+  } catch (e) {
+    migration = { copied: [], skipped: [], error: (e && e.message) || String(e) };
+  }
+  const session = createSessionForUser(userId, { kind: "admin-web" });
+  return {
+    ok: true,
+    token: session.token,
+    user: { userId, username: user.username || userId, isAdmin: true, authProvider: "password" },
+    migration,
+  };
+}
+
+export function loginCasUser(identity = {}) {
+  const casUsername = String(identity?.username || "").trim().toLowerCase();
+  const userId = sanitizeAgentflowUserId(casUsername);
+  if (!userId) return { ok: false, status: 400, error: "CAS 用户名无法映射为 AgentFlow 用户 ID" };
+  const users = readAuthUsers();
+  const existing = users[userId];
+  if (existing?.isAdmin) {
+    return { ok: false, status: 403, error: "管理员账号请从 /admin/login 使用密码登录" };
+  }
+  const candidate = { userId, username: casUsername, isAdmin: false };
+  if (!isAuthUserAllowed(candidate)) {
+    return { ok: false, status: 403, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
+  }
+  const attributes = identity?.attributes && typeof identity.attributes === "object" ? identity.attributes : {};
+  const displayName = String(attributes.displayName || attributes.name || attributes.cn || casUsername).trim().slice(0, 128) || casUsername;
+  const now = new Date().toISOString();
+  users[userId] = {
+    ...(existing || {}),
+    userId,
+    username: displayName,
+    isAdmin: false,
+    authProvider: "cas",
+    casUsername,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  writeJsonObject(usersPath(), users);
+  const session = createSessionForUser(userId, { kind: "cas-web", ttlMs: CAS_SESSION_TTL_MS });
+  return {
+    ok: true,
+    token: session.token,
+    user: { userId, username: displayName, isAdmin: false, authProvider: "cas", casUsername },
+    linkedLegacyAccount: Boolean(existing?.salt && existing?.hash),
   };
 }
 
