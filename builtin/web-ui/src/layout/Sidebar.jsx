@@ -10,6 +10,7 @@ const ITEMS = [
   { to: "/spaces", label: "空间", icon: "library_books", hidden: !SPACES_UI_ENABLED },
   { to: "/workflows", label: "迭代", icon: "timeline" },
   { to: "/workspaces", label: "知识库", icon: "folder_managed" },
+  { to: "/releases", label: "发版", icon: "rocket_launch" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
   { to: "/schedules", label: "定时任务", icon: "event_busy" },

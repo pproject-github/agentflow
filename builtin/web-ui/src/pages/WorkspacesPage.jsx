@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ReleaseWorkflowPanel from "../components/ReleaseWorkflowPanel.jsx";
 
 function newId() {
   return `ws_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -134,21 +133,8 @@ export default function WorkspacesPage() {
   const [tokenDraft, setTokenDraft] = useState("");
   const [envRows, setEnvRows] = useState([]);
   const [selectedKey, setSelectedKey] = useState("");
-  const [activeTab, setActiveTab] = useState("iterations");
-
   const selectedCustomIndex = useMemo(() => custom.findIndex((item, index) => workspaceKey(item, index) === selectedKey), [custom, selectedKey]);
-  const selectedCustom = useMemo(() => selectedCustomIndex >= 0 ? custom[selectedCustomIndex] : null, [custom, selectedCustomIndex]);
   const selectedBuiltin = useMemo(() => builtins.find((item, index) => workspaceKey(item, index) === selectedKey) || null, [builtins, selectedKey]);
-  const releaseWorkspace = useMemo(() => selectedCustom || selectedBuiltin || custom[0] || builtins[0] || {
-    id: "release-default-workspace",
-    label: "Likee Android 发版",
-    path: "/Users/duanfengyuan/migration-workspace/test/likee_android",
-    businessLine: "likee",
-    platform: "android",
-    version: "1.0.0",
-  }, [builtins, custom, selectedBuiltin, selectedCustom]);
-  const releaseWorkspaceLabel = releaseWorkspace.label || releaseWorkspace.name || "默认发版工作空间";
-  const releaseWorkspacePath = releaseWorkspace.path || releaseWorkspace.repoUrl || "本地发版时间线";
   const editingReadonly = Boolean(selectedBuiltin);
   const credentialEnvExists = useMemo(() => {
     const key = String(draft.credentialRef || "").trim();
@@ -358,26 +344,7 @@ export default function WorkspacesPage() {
             {status ? <p className="af-workspaces-status">{status}</p> : null}
           </header>
 
-          <nav className="af-workspaces-tabs" aria-label="知识库视图" role="tablist">
-            <button type="button" role="tab" aria-selected={activeTab === "iterations"} className={activeTab === "iterations" ? "af-workspaces-tab af-workspaces-tab--active" : "af-workspaces-tab"} onClick={() => setActiveTab("iterations")}>迭代</button>
-            <button type="button" role="tab" aria-selected={activeTab === "release"} className={activeTab === "release" ? "af-workspaces-tab af-workspaces-tab--active" : "af-workspaces-tab"} onClick={() => setActiveTab("release")}>发版</button>
-          </nav>
-
-          {activeTab === "release" ? (
-            <section className="af-workspaces-release-view" role="tabpanel">
-              <header className="af-workspaces-release-head">
-                <div>
-                  <span className="af-release-eyebrow">发版时间线</span>
-                  <h2>发版</h2>
-                  <p>当前工作空间：<strong>{releaseWorkspaceLabel}</strong></p>
-                  <small>{releaseWorkspacePath}</small>
-                </div>
-              </header>
-              <ReleaseWorkflowPanel workspace={releaseWorkspace} />
-            </section>
-          ) : (
-            <>
-              <section className="af-workspaces-summary">
+          <section className="af-workspaces-summary">
                 <div>
                   <span>内置</span>
                   <strong>{builtins.length}</strong>
@@ -390,9 +357,9 @@ export default function WorkspacesPage() {
                   <span>Git</span>
                   <strong>{custom.filter((item) => item.kind === "git").length}</strong>
                 </div>
-              </section>
+          </section>
 
-              <div className="af-workspaces-layout">
+          <div className="af-workspaces-layout">
                 <section className="af-workspaces-list">
                   <div className="af-workspaces-section-head">
                     <h2>自定义知识库</h2>
@@ -542,9 +509,7 @@ export default function WorkspacesPage() {
                     </div>
                   </div>
                 </section>
-              </div>
-            </>
-          )}
+          </div>
         </div>
       </main>
     </div>

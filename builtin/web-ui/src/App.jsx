@@ -15,6 +15,7 @@ import McpPage from "./pages/McpPage.jsx";
 import SchedulesPage from "./pages/SchedulesPage.jsx";
 import NodeStudioPage from "./pages/NodeStudioPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
+import ReleasePage from "./pages/ReleasePage.jsx";
 import WorkflowsPage from "./pages/WorkflowsPage.jsx";
 import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
 import WorkflowChecklistPage from "./pages/WorkflowChecklistPage.jsx";
@@ -118,6 +119,7 @@ function RoutedContent({ authUser }) {
   if (path === "/my-flows") return <RedirectLegacyResourceToMarketplace kind="flow" scope="owned" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
+  if (path === "/releases") return <ReleasePage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage authUser={authUser} />;
   if (path === "/workflow-report") return <WorkflowReportGuidePage />;
   if (path === "/workflow-checklist") return <WorkflowChecklistPage />;
