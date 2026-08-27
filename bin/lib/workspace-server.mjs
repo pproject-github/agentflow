@@ -7626,6 +7626,39 @@ export function updateWorkspaceScheduleEntry(key, patch) {
   return next;
 }
 
+export function reassignWorkspaceScheduleOwner({ sourceUserId, targetUserId, targetUsername = "", flowId, flowSource = "user", dryRun = false }) {
+  const sourceId = String(sourceUserId || "").trim();
+  const targetId = String(targetUserId || "").trim();
+  const projectId = String(flowId || "").trim();
+  if (!sourceId || !targetId || !projectId || sourceId === targetId) return { changed: 0 };
+  const registry = readWorkspaceScheduleRegistry();
+  const matches = Object.entries(registry.schedules || {}).filter(([, entry]) => (
+    String(entry?.userId || "") === sourceId
+    && String(entry?.flowId || "") === projectId
+    && String(entry?.flowSource || "user") === flowSource
+  ));
+  const projected = matches.map(([oldKey, entry]) => ({
+    oldKey,
+    newKey: workspaceScheduleKey(targetId, flowSource, projectId, entry.scheduleNodeId || entry.runNodeId || ""),
+    entry,
+  }));
+  const conflict = projected.find(({ oldKey, newKey }) => oldKey !== newKey && registry.schedules?.[newKey]);
+  if (conflict) return { changed: 0, conflict: true, error: `目标用户已有同名定时任务：${conflict.newKey}` };
+  if (dryRun) return { changed: 0, wouldChange: projected.length };
+  for (const { oldKey, newKey, entry } of projected) {
+    delete registry.schedules[oldKey];
+    registry.schedules[newKey] = {
+      ...entry,
+      key: newKey,
+      userId: targetId,
+      username: String(targetUsername || targetId),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  if (projected.length > 0) writeWorkspaceScheduleRegistry(registry);
+  return { changed: projected.length };
+}
+
 export async function runWorkspaceScheduledEntry(root, entry) {
   const userCtx = { userId: String(entry.userId || "") };
   const scopeKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");

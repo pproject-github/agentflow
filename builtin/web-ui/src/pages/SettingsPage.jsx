@@ -1630,6 +1630,7 @@ export default function SettingsPage({ authUser }) {
                             <span>
                               <code>{user.userId}</code>
                               {user.isAdmin ? <em>{t("settings:accounts.admin")}</em> : null}
+                              {!user.isAdmin ? <em>{user.authProvider === "cas" ? "CAS" : "旧密码"}</em> : null}
                               {isCurrent ? <em>{t("settings:accounts.current")}</em> : null}
                             </span>
                           </div>
@@ -1637,8 +1638,8 @@ export default function SettingsPage({ authUser }) {
                             type="button"
                             className="af-set-btn-outline af-set-btn-outline--compact"
                             onClick={() => beginPasswordReset(user.userId)}
-                            disabled={isCurrent || passwordResetSaving}
-                            title={isCurrent ? t("settings:accounts.selfResetDisabled") : t("settings:accounts.reset")}
+                            disabled={isCurrent || user.authProvider === "cas" || passwordResetSaving}
+                            title={user.authProvider === "cas" ? "CAS 用户没有本地密码" : isCurrent ? t("settings:accounts.selfResetDisabled") : t("settings:accounts.reset")}
                           >
                             {t("settings:accounts.reset")}
                           </button>

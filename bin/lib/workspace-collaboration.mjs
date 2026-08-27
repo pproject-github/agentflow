@@ -366,6 +366,36 @@ export function updateWorkspaceCollaborationFlow({
   return record;
 }
 
+export function reassignWorkspaceCollaborationOwner({
+  sourceUserId,
+  targetUserId,
+  flowId,
+  flowSource = "user",
+  archived = false,
+}) {
+  const sourceId = normalizeUserId(sourceUserId);
+  const targetId = normalizeUserId(targetUserId);
+  const normalizedFlowId = normalizeFlowId(flowId);
+  if (!sourceId || !targetId || !normalizedFlowId || sourceId === targetId) return { changed: false };
+  const registry = readRegistry();
+  const record = Object.values(registry.workspaces).find((item) => (
+    item?.ownerId === sourceId
+    && item?.flowId === normalizedFlowId
+    && item?.archived === (archived === true)
+    && (item?.projectSource || item?.flowSource || "workspace") === flowSource
+  )) || null;
+  if (!record) return { changed: false };
+  record.members = record.members && typeof record.members === "object" ? record.members : {};
+  delete record.members[targetId];
+  record.members[targetId] = "owner";
+  if (sourceId !== targetId) record.members[sourceId] = "editor";
+  record.ownerId = targetId;
+  record.flowKey = flowKey(normalizedFlowId, archived, flowSource, targetId);
+  record.updatedAt = new Date().toISOString();
+  writeRegistry(registry);
+  return { changed: true, workspaceId: record.id, record };
+}
+
 export function deleteWorkspaceCollaborationForFlow(flowId, archived = false) {
   const registry = readRegistry();
   const key = flowKey(flowId, archived);

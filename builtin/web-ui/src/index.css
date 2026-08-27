@@ -297,6 +297,11 @@ body {
   color: var(--af-error);
 }
 
+.af-auth-note {
+  margin: 0;
+  color: #75d3b2;
+}
+
 .af-ui-error-panel {
   max-width: min(72rem, calc(100vw - 3rem));
 }
@@ -328,6 +333,23 @@ body {
 .af-auth-submit:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.af-auth-panel--cas {
+  text-align: center;
+}
+
+.af-auth-admin-link {
+  display: block;
+  margin-top: 16px;
+  color: var(--af-text-muted, #9993a5);
+  font-size: 13px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.af-auth-admin-link:hover {
+  color: #bca7ff;
 }
 
 .af-sidebar {
@@ -6213,6 +6235,197 @@ button.af-project-card {
   background: rgba(65, 194, 106, 0.1);
   color: rgba(188, 245, 203, 0.85);
   font-size: 0.8rem;
+}
+
+.af-admin-users-page {
+  min-height: 100%;
+  padding: 40px;
+  color: #f1eef8;
+}
+
+.af-admin-users-hero,
+.af-admin-user-directory__head,
+.af-admin-transfer-card__head,
+.af-admin-transfer-fields,
+.af-admin-user-grid article {
+  display: flex;
+  align-items: center;
+}
+
+.af-admin-users-hero {
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+
+.af-admin-users-hero > div > span {
+  color: #9f83ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+
+.af-admin-users-hero h1 {
+  margin: 8px 0;
+  font-size: 32px;
+}
+
+.af-admin-users-hero p,
+.af-admin-transfer-card p,
+.af-admin-user-directory p {
+  margin: 0;
+  color: #9993a5;
+}
+
+.af-admin-users-hero button,
+.af-admin-transfer-fields button {
+  border: 1px solid #4b435b;
+  border-radius: 12px;
+  background: #24202c;
+  color: #eee9f8;
+  padding: 11px 16px;
+}
+
+.af-admin-users-hero button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.af-admin-transfer-card,
+.af-admin-user-directory {
+  border: 1px solid #373140;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #211d28, #19171e);
+  padding: 24px;
+}
+
+.af-admin-transfer-card {
+  margin-bottom: 24px;
+}
+
+.af-admin-transfer-card__head {
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.af-admin-transfer-card__head > .material-symbols-outlined {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 13px;
+  background: #37285b;
+  color: #bda6ff;
+}
+
+.af-admin-transfer-card h2,
+.af-admin-user-directory h2 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.af-admin-transfer-fields {
+  gap: 14px;
+}
+
+.af-admin-transfer-fields label {
+  display: grid;
+  flex: 1;
+  gap: 7px;
+  color: #aaa4b4;
+  font-size: 12px;
+}
+
+.af-admin-transfer-fields select {
+  width: 100%;
+  border: 1px solid #453c51;
+  border-radius: 11px;
+  background: #151319;
+  color: #eeeaf6;
+  padding: 12px;
+}
+
+.af-admin-transfer-fields button.is-primary {
+  align-self: flex-end;
+  border-color: #7455c8;
+  background: #6045aa;
+}
+
+.af-admin-transfer-fields button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.af-admin-transfer-arrow {
+  margin-top: 20px;
+  color: #756e7e;
+}
+
+.af-admin-user-directory__head {
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.af-admin-user-directory__head > strong {
+  color: #bba4ff;
+}
+
+.af-admin-user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.af-admin-user-grid article {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px 12px;
+  border: 1px solid #342f3c;
+  border-radius: 14px;
+  background: #17151b;
+  padding: 15px;
+}
+
+.af-admin-user-grid article > .material-symbols-outlined {
+  grid-row: 1 / span 2;
+  color: #a78bfa;
+}
+
+.af-admin-user-grid article > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.af-admin-user-grid article code {
+  overflow: hidden;
+  color: #87818e;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.af-admin-user-grid article em {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.af-admin-user-grid article em.is-cas { background: #17352d; color: #75d3b2; }
+.af-admin-user-grid article em.is-legacy { background: #352d21; color: #d8b275; }
+.af-admin-user-grid article em.is-admin { background: #38275e; color: #c2abff; }
+
+.af-admin-user-grid article small {
+  grid-column: 2 / span 2;
+  color: #77717e;
+}
+
+@media (max-width: 900px) {
+  .af-admin-users-page { padding: 24px; }
+  .af-admin-transfer-fields { align-items: stretch; flex-direction: column; }
+  .af-admin-transfer-arrow { margin: 0; transform: rotate(90deg); }
 }
 
 @media (max-width: 820px) {

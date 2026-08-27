@@ -81,6 +81,8 @@ import {
   getSessionTokenFromRequest,
   isAuthUserAllowed,
   listAuthUsers,
+  loginAdminUser,
+  loginCasUser,
   loginOrCreateUser,
   logoutRequest,
   readAuthUsers,
@@ -89,6 +91,17 @@ import {
   revokeSessionToken,
   writeUserAllowlist,
 } from "./auth.mjs";
+import {
+  beginCasLogin,
+  buildClearCasFlowCookie,
+  consumeCasLoginFlow,
+  createCasLogoutUrl,
+  getCasFlowTokenFromRequest,
+  readCasAuthConfig,
+  sanitizeCasReturnTo,
+  validateCasTicket,
+} from "./cas-auth.mjs";
+import { listAdminOwnedProjects, reassignAdminProjectOwner } from "./admin-project-ownership.mjs";
 import {
   renderCliAuthorizationPage,
   renderCliAuthorizationResult,
@@ -1580,6 +1593,18 @@ function serverPublicBaseUrl(req, host, port, payload = null) {
   return configuredPublicBaseUrl(payload) || requestPublicBaseUrl(req) || normalizePublicBaseUrl(`http://${host}:${port}`);
 }
 
+function requestUsesHttps(req) {
+  const forwarded = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (forwarded) return forwarded === "https";
+  return requestPublicBaseUrl(req).startsWith("https://");
+}
+
+function localPathWithQueryParam(value, key, nextValue) {
+  const url = new URL(sanitizeCasReturnTo(value), "https://agentflow.invalid");
+  url.searchParams.set(String(key), String(nextValue));
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 function html(res, status, content, headers = {}) {
   const body = String(content || "");
   res.writeHead(status, {
@@ -2273,7 +2298,10 @@ export function startUiServer({
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const reqStart = Date.now();
-    log.debug(`[ui] ${req.method} ${url.pathname}${url.search || ""}`);
+    const loggedSearch = url.pathname === "/api/auth/cas/callback" && url.searchParams.has("ticket")
+      ? "?ticket=***"
+      : url.search || "";
+    log.debug(`[ui] ${req.method} ${url.pathname}${loggedSearch}`);
 
     const origEnd = res.end.bind(res);
     res.end = function (...args) {
@@ -2281,10 +2309,86 @@ export function startUiServer({
       return origEnd(...args);
     };
 
+    if (url.pathname === "/api/auth/cas/login" && req.method === "GET") {
+      const result = beginCasLogin({
+        publicBaseUrl: serverPublicBaseUrl(req, host, uiPort),
+        returnTo: url.searchParams.get("returnTo") || "/projects",
+        secure: requestUsesHttps(req),
+      });
+      if (!result.ok) {
+        json(res, result.status || 400, { error: result.error || "CAS login failed" });
+        return;
+      }
+      res.writeHead(302, {
+        Location: result.loginUrl,
+        "Set-Cookie": result.cookie,
+        "Cache-Control": "no-store, max-age=0",
+      });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === "/api/auth/cas/callback" && req.method === "GET") {
+      const publicBaseUrl = serverPublicBaseUrl(req, host, uiPort);
+      const secure = requestUsesHttps(req);
+      const flow = consumeCasLoginFlow(getCasFlowTokenFromRequest(req));
+      if (!flow) {
+        res.writeHead(303, {
+          Location: "/projects?authError=cas_flow_expired",
+          "Set-Cookie": buildClearCasFlowCookie({ secure }),
+          "Cache-Control": "no-store, max-age=0",
+        });
+        res.end();
+        return;
+      }
+      try {
+        const identity = await validateCasTicket(url.searchParams.get("ticket") || "", publicBaseUrl);
+        const result = identity ? loginCasUser(identity) : { ok: false, status: 401, error: "CAS ticket 无效" };
+        if (!result.ok) {
+          const reason = result.status === 403 ? "cas_forbidden" : "invalid_ticket";
+          res.writeHead(303, {
+            Location: localPathWithQueryParam(flow.returnTo, "authError", reason),
+            "Set-Cookie": buildClearCasFlowCookie({ secure }),
+            "Cache-Control": "no-store, max-age=0",
+          });
+          res.end();
+          return;
+        }
+        res.writeHead(303, {
+          Location: sanitizeCasReturnTo(flow.returnTo),
+          "Set-Cookie": [buildSessionCookie(result.token, { secure }), buildClearCasFlowCookie({ secure })],
+          "Cache-Control": "no-store, max-age=0",
+        });
+        res.end();
+      } catch (e) {
+        log.warn(`[auth] CAS callback failed: ${(e && e.message) || String(e)}`);
+        res.writeHead(303, {
+          Location: localPathWithQueryParam(flow.returnTo, "authError", "cas_unavailable"),
+          "Set-Cookie": buildClearCasFlowCookie({ secure }),
+          "Cache-Control": "no-store, max-age=0",
+        });
+        res.end();
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/auth/cas/logout" && req.method === "GET") {
+      logoutRequest(req);
+      const publicBaseUrl = serverPublicBaseUrl(req, host, uiPort);
+      res.writeHead(303, {
+        Location: createCasLogoutUrl(publicBaseUrl),
+        "Set-Cookie": [buildClearSessionCookie({ secure: requestUsesHttps(req) }), buildClearCasFlowCookie({ secure: requestUsesHttps(req) })],
+        "Cache-Control": "no-store, max-age=0",
+      });
+      res.end();
+      return;
+    }
+
     if (url.pathname === "/api/auth/me" && req.method === "GET") {
       const user = getAuthUserFromRequest(req);
       const allowed = user ? isAuthUserAllowed(user) : true;
       const allowlist = readUserAllowlist();
+      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
       json(res, 200, {
         authenticated: Boolean(user && allowed),
         user: user && allowed ? user : null,
@@ -2292,6 +2396,10 @@ export function startUiServer({
         allowlistEnabled: allowlist.enabled,
         forbidden: Boolean(user && !allowed),
         error: user && !allowed ? "用户不在白名单中，请联系管理员开通访问权限" : "",
+        casEnabled: cas.enabled,
+        casLoginUrl: "/api/auth/cas/login",
+        legacyPasswordLoginEnabled: cas.legacyPasswordLoginEnabled,
+        adminLoginPath: "/admin/login",
       });
       return;
     }
@@ -2356,6 +2464,19 @@ export function startUiServer({
     if (url.pathname === "/cli/authorize" && req.method === "GET") {
       const requestId = String(url.searchParams.get("request") || "").trim();
       const user = getAuthUserFromRequest(req);
+      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
+      if (!user && cas.enabled) {
+        const login = beginCasLogin({
+          publicBaseUrl: serverPublicBaseUrl(req, host, uiPort),
+          returnTo: `${url.pathname}${url.search}`,
+          secure: requestUsesHttps(req),
+        });
+        if (login.ok) {
+          res.writeHead(302, { Location: login.loginUrl, "Set-Cookie": login.cookie, "Cache-Control": "no-store, max-age=0" });
+          res.end();
+          return;
+        }
+      }
       const result = getCliAuthorization(requestId, { includeApprovalNonce: Boolean(user) });
       if (result.ok && result.authorization.status !== "pending") {
         html(res, 200, renderCliAuthorizationResult({
@@ -2381,7 +2502,10 @@ export function startUiServer({
         html(res, pending.status || 404, renderCliAuthorizationPage({ error: pending.error }));
         return;
       }
-      const result = loginOrCreateUser(form.get("username"), form.get("password"));
+      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
+      const result = cas.legacyPasswordLoginEnabled
+        ? loginOrCreateUser(form.get("username"), form.get("password"))
+        : { ok: false, status: 410, error: "普通用户密码登录已停用，请返回授权页使用 CAS 登录" };
       if (!result.ok) {
         html(res, result.forbidden ? 403 : 401, renderCliAuthorizationPage({
           authorization: pending.authorization,
@@ -2391,7 +2515,7 @@ export function startUiServer({
       }
       res.writeHead(303, {
         Location: `/cli/authorize?request=${encodeURIComponent(requestId)}`,
-        "Set-Cookie": buildSessionCookie(result.token),
+        "Set-Cookie": buildSessionCookie(result.token, { secure: requestUsesHttps(req) }),
         "Cache-Control": "no-store, max-age=0",
       });
       res.end();
@@ -2439,6 +2563,11 @@ export function startUiServer({
         json(res, 400, { error: "Invalid JSON body" });
         return;
       }
+      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
+      if (!cas.legacyPasswordLoginEnabled) {
+        json(res, 410, { error: "普通用户密码登录已停用，请使用 CAS 登录", code: "legacy_password_login_disabled" });
+        return;
+      }
       const result = loginOrCreateUser(payload?.username, payload?.password);
       if (!result.ok) {
         json(res, result.forbidden ? 403 : 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
@@ -2448,7 +2577,31 @@ export function startUiServer({
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": Buffer.byteLength(body),
-        "Set-Cookie": buildSessionCookie(result.token),
+        "Set-Cookie": buildSessionCookie(result.token, { secure: requestUsesHttps(req) }),
+      });
+      res.end(body);
+      return;
+    }
+
+    if (url.pathname === "/api/admin/auth/login" && req.method === "POST") {
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const result = loginAdminUser(payload?.username, payload?.password);
+      if (!result.ok) {
+        json(res, 401, { error: result.error || "Admin login failed", setupRequired: authSetupRequired() });
+        return;
+      }
+      const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false, migration: result.migration || null });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": Buffer.byteLength(body),
+        "Set-Cookie": buildSessionCookie(result.token, { secure: requestUsesHttps(req) }),
+        "Cache-Control": "no-store, max-age=0",
       });
       res.end(body);
       return;
@@ -2460,7 +2613,7 @@ export function startUiServer({
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": Buffer.byteLength(body),
-        "Set-Cookie": buildClearSessionCookie(),
+        "Set-Cookie": buildClearSessionCookie({ secure: requestUsesHttps(req) }),
       });
       res.end(body);
       return;
@@ -3043,13 +3196,16 @@ export function startUiServer({
       }
     }
 
-    if (url.pathname === "/api/admin/users" || url.pathname === "/api/admin/users/reset-password") {
+    if (["/api/admin/users", "/api/admin/users/reset-password", "/api/admin/projects/reassign"].includes(url.pathname)) {
       if (!authUser?.isAdmin) {
         json(res, 403, { error: "Admin permission required" });
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/admin/users") {
-        json(res, 200, { users: listAuthUsers() });
+        json(res, 200, {
+          users: listAuthUsers(),
+          ...(url.searchParams.get("includeProjects") === "1" ? { projects: listAdminOwnedProjects() } : {}),
+        });
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/admin/users/reset-password") {
@@ -3071,6 +3227,44 @@ export function startUiServer({
           return;
         }
         json(res, 200, result);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/admin/projects/reassign") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        try {
+          const sourceUserId = String(payload?.sourceUserId || "").trim();
+          const flowId = String(payload?.flowId || "").trim();
+          const active = activeWorkspaceRunUsageRecords().some((run) => (
+            String(run?.userId || "") === sourceUserId
+            && String(run?.flowId || "") === flowId
+            && String(run?.flowSource || "user") === "user"
+          ));
+          if (active) {
+            json(res, 409, { error: "Project 正在运行，结束运行后才能迁移归属" });
+            return;
+          }
+          const result = reassignAdminProjectOwner({
+            actorUserId: authUser.userId,
+            sourceUserId,
+            targetUserId: payload?.targetUserId,
+            flowId,
+            archived: payload?.archived === true,
+          });
+          if (!result.ok) {
+            json(res, result.status || 400, { error: result.error || "Project reassignment failed" });
+            return;
+          }
+          markRepositoryIndexDirty(root);
+          json(res, 200, result);
+        } catch (e) {
+          json(res, 500, { error: (e && e.message) || String(e) });
+        }
         return;
       }
       json(res, 405, { error: "Method not allowed" });
