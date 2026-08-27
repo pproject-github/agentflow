@@ -479,6 +479,22 @@ function formatWorkspaceRunDuration(ms) {
   return `${minutes}m${seconds ? `${seconds}s` : ""}`;
 }
 
+function workspaceRunSessionOptionLabel(session) {
+  const label = String(session?.label || session?.runNodeId || "Run").trim();
+  const timestamp = Number(session?.startedAt || 0);
+  const time = Number.isFinite(timestamp) && timestamp > 0
+    ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(timestamp))
+    : "--:--:--";
+  const status = {
+    running: "运行中",
+    stopping: "停止中",
+    paused: "等待中",
+    failed: "失败",
+    done: "完成",
+  }[String(session?.status || "")] || String(session?.status || "未知");
+  return `${label} · ${time} · ${status}`;
+}
+
 function prdWorkflowPhaseLabel(phase) {
   const key = String(phase || "").trim().toLowerCase();
   const labels = {
@@ -15551,6 +15567,17 @@ function WorkspacePageInner() {
   }, [activeComposerSessionId, composerMessages, composerModel, composerRunSessions, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
+  const orderedComposerRunSessions = useMemo(() => {
+    const sessions = Array.isArray(composerRunSessions) ? composerRunSessions : [];
+    const newestFirst = [...sessions].reverse();
+    return [
+      ...newestFirst.filter((session) => session.status === "running" || session.status === "stopping"),
+      ...newestFirst.filter((session) => session.status !== "running" && session.status !== "stopping"),
+    ];
+  }, [composerRunSessions]);
+  const runningComposerRunCount = orderedComposerRunSessions.filter((session) => (
+    session.status === "running" || session.status === "stopping"
+  )).length;
   const activeComposerMessages = activeRunSession ? (Array.isArray(activeRunSession.messages) ? activeRunSession.messages : []) : composerMessages;
   const activeComposerRunning = activeRunSession
     ? (activeRunSession.status === "running" || activeRunSession.status === "stopping" || composerRunning)
@@ -16797,52 +16824,74 @@ function WorkspacePageInner() {
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
-              <div className="af-composer-session-tabs">
+              <div className="af-composer-session-tabs" role="tablist" aria-label="Composer 工作区">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeComposerSessionId === "workspace"}
                   className={"af-composer-session-tab" + (activeComposerSessionId === "workspace" ? " af-composer-session-tab--active" : "")}
                   ref={activeComposerSessionId === "workspace" ? composerActiveSessionTabRef : null}
                   onClick={() => setActiveComposerSessionId("workspace")}
                 >
                   <span className="af-composer-session-label">Workspace</span>
                 </button>
-                {composerRunSessions.map((session) => (
-                  <div
-                    key={session.id}
+                {orderedComposerRunSessions.length > 0 ? (
+                  <button
+                    type="button"
                     role="tab"
-                    tabIndex={0}
-                    ref={activeComposerSessionId === session.id ? composerActiveSessionTabRef : null}
+                    aria-selected={activeComposerSessionId !== "workspace"}
+                    ref={activeComposerSessionId !== "workspace" ? composerActiveSessionTabRef : null}
                     className={
                       "af-composer-session-tab" +
-                      (activeComposerSessionId === session.id ? " af-composer-session-tab--active" : "") +
-                      (session.status === "running" || session.status === "stopping" ? " af-composer-session-tab--running" : "")
+                      (activeComposerSessionId !== "workspace" ? " af-composer-session-tab--active" : "") +
+                      (runningComposerRunCount > 0 ? " af-composer-session-tab--running" : "")
                     }
-                    onClick={() => setActiveComposerSessionId(session.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setActiveComposerSessionId(session.id);
-                      }
-                    }}
-                    title={session.runNodeId || session.label}
+                    onClick={() => setActiveComposerSessionId((current) => (
+                      current === "workspace" ? latestComposerSessionId() : current
+                    ))}
                   >
-                    <span className="af-composer-session-label">{session.label}</span>
-                    <button
-                      type="button"
-                      className="af-composer-session-close"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        closeComposerRunSession(session.id);
-                      }}
-                      aria-label={`关闭 ${session.label}`}
-                      title="关闭 tab"
-                    >
-                      <span className="material-symbols-outlined" aria-hidden>close</span>
-                    </button>
-                  </div>
-                ))}
+                    <span className="af-composer-session-label">Runs</span>
+                    <span className="af-composer-session-count" aria-label={`${orderedComposerRunSessions.length} 个运行会话`}>
+                      {runningComposerRunCount > 0 ? `${runningComposerRunCount}/${orderedComposerRunSessions.length}` : orderedComposerRunSessions.length}
+                    </span>
+                  </button>
+                ) : null}
               </div>
+              {activeRunSession ? (
+                <div className="af-composer-run-switcher">
+                  <label>
+                    <span className="material-symbols-outlined" aria-hidden>manage_history</span>
+                    <select
+                      aria-label="选择 Run"
+                      value={activeRunSession.id}
+                      onChange={(event) => setActiveComposerSessionId(event.target.value)}
+                    >
+                      {runningComposerRunCount > 0 ? (
+                        <optgroup label="运行中">
+                          {orderedComposerRunSessions.filter((session) => session.status === "running" || session.status === "stopping").map((session) => (
+                            <option key={session.id} value={session.id}>{workspaceRunSessionOptionLabel(session)}</option>
+                          ))}
+                        </optgroup>
+                      ) : null}
+                      <optgroup label="最近完成">
+                        {orderedComposerRunSessions.filter((session) => session.status !== "running" && session.status !== "stopping").map((session) => (
+                          <option key={session.id} value={session.id}>{workspaceRunSessionOptionLabel(session)}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <span className="material-symbols-outlined af-composer-run-switcher__chevron" aria-hidden>expand_more</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => closeComposerRunSession(activeRunSession.id)}
+                    disabled={activeRunSession.status === "running" || activeRunSession.status === "stopping"}
+                    aria-label={`从最近运行中移除 ${activeRunSession.label}`}
+                    title={activeRunSession.status === "running" || activeRunSession.status === "stopping" ? "运行中不可移除" : "从最近运行中移除"}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden>close</span>
+                  </button>
+                </div>
+              ) : null}
               <div
                 className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
                 role="status"

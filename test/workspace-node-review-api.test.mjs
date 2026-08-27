@@ -79,6 +79,12 @@ export async function run() { return { result: "reviewable" }; }
           input: [],
           output: [],
         },
+        wecom: {
+          definitionId: "tool_wecom_send_group_markdown",
+          label: "WeCom Group Markdown",
+          input: [],
+          output: [],
+        },
       },
       edges: [],
       ui: { nodePositions: { worker: { x: 120, y: 120 } } },
@@ -114,6 +120,19 @@ export async function run() { return { result: "reviewable" }; }
     assert.equal(packageReview.body.draft.package.version, "1.0.0");
     assert.match(packageReview.body.draft.package.contentSha256, /^[a-f0-9]{64}$/);
     assert.match(packageReview.body.draft.sources.find((source) => source.path === "index.mjs").content, /export async function run/);
+
+    const builtinReview = await request("GET", "/api/workspace/node-review?flowId=review-flow&flowSource=user&nodeId=wecom");
+    assert.equal(builtinReview.status, 200, builtinReview.text);
+    assert.equal(builtinReview.body.draft.reviewable, true);
+    assert.equal(builtinReview.body.stable.reviewable, true);
+    const adapter = builtinReview.body.draft.sources.find((source) => source.kind === "builtin-adapter");
+    const implementation = builtinReview.body.draft.sources.find((source) => source.path === "bin/lib/wecom.mjs");
+    assert.match(adapter?.content || "", /sendWecomGroupMarkdown/);
+    assert.match(implementation?.content || "", /export async function sendWecomGroupMarkdown/);
+    assert.equal(
+      builtinReview.body.draft.sources.find((source) => source.kind === "builtin-adapter")?.sha256,
+      builtinReview.body.stable.sources.find((source) => source.kind === "builtin-adapter")?.sha256,
+    );
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

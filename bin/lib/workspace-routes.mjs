@@ -27,6 +27,7 @@ import {
   writeAiExplorationMaterialization,
 } from "./ai-exploration.mjs";
 import { buildSkillCompactInjectionBlock, loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
+import { builtinNodeReviewSources } from "./builtin-node-review.mjs";
 import { execFileBuffered } from "./exec-buffered.mjs";
 import { runGit } from "./git-worktree.mjs";
 import {
@@ -391,6 +392,10 @@ function workspaceNodeReviewSnapshot(workspaceRoot, flowRoot, graph, nodeId, use
       kind: "inline",
       content: instance.script,
     }));
+  }
+
+  if (!marketplaceRef.startsWith("marketplace:")) {
+    sources.push(...builtinNodeReviewSources(definitionId).map((source) => workspaceNodeReviewSource(source)));
   }
 
   for (const [ref, kind] of [[instance.scriptRef, "script"], [instance.implementationRef, "implementation"]]) {
@@ -3353,6 +3358,7 @@ async function workspaceRoutes(req, res, ctx) {
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId,
           flowSource: flowSource || "user",
+          adminOwnerId: url.searchParams.get("adminOwnerId") || "",
           archived: url.searchParams.get("archived") === "1",
         }, userCtx);
         if (scoped.error) {
@@ -3388,6 +3394,7 @@ async function workspaceRoutes(req, res, ctx) {
         const scoped = resolveWorkspaceScopeRoot(root, {
           flowId,
           flowSource,
+          adminOwnerId: url.searchParams.get("adminOwnerId") || "",
           archived: url.searchParams.get("archived") === "1",
         }, userCtx);
         if (scoped.error) {

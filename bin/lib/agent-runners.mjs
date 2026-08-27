@@ -93,6 +93,28 @@ function cursorResultErrorText(event) {
   return "";
 }
 
+export function isCursorAgentLoopingError(error = "") {
+  const text = String(error?.message || error || "");
+  return /agent looping detected|got stuck in a repeating response pattern/i.test(text);
+}
+
+function isCursorReadOnlyToolCall(toolName = "") {
+  const name = String(toolName || "").trim();
+  if (!name) return false;
+  return /^(read|glob|grep|search|semanticSearch|list|find|fetch|webSearch|view|inspect)/i.test(name);
+}
+
+function annotateCursorFailure(error, { hadToolActivity = false, hadMutatingToolActivity = false } = {}) {
+  const failure = error instanceof Error ? error : new Error(String(error || "Cursor Agent failed."));
+  failure.cursorHadToolActivity = Boolean(hadToolActivity);
+  failure.cursorHadMutatingToolActivity = Boolean(hadMutatingToolActivity);
+  if (isCursorAgentLoopingError(failure)) {
+    failure.code = "CURSOR_AGENT_LOOPING";
+    failure.agentflowFailureCategory = "agent_looping";
+  }
+  return failure;
+}
+
 function envFlag(name, defaultValue = false) {
   const raw = process.env[name];
   if (raw == null || raw === "") return defaultValue;
@@ -459,6 +481,14 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   let lastResult = null;
   let hadError = false;
   let hadToolActivity = false;
+  let hadMutatingToolActivity = false;
+  const annotateFailure = (error) => {
+    const failure = annotateCursorFailure(error, { hadToolActivity, hadMutatingToolActivity });
+    failure.cursorModelLane = cursorModelSelection.lane;
+    failure.cursorModelId = cursorModelSelection.modelId;
+    failure.cursorModelName = cursorModelSelection.modelName;
+    return failure;
+  };
   const STDERR_CAP_BYTES = 1024 * 1024;
   const stderrChunks = [];
   let stderrTotalBytes = 0;
@@ -546,6 +576,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           hadToolActivity = true;
           const toolName =
             event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
+          if (!isCursorReadOnlyToolCall(toolName)) hadMutatingToolActivity = true;
           const subtype = event.subtype ?? "";
           const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
           emit({ type: "status", line: statusLine });
@@ -583,13 +614,18 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         if (line.includes('"type":"tool_call"') || line.includes('"type": "tool_call"')) {
           hadToolActivity = true;
           let subtype = "?";
+          let toolName = "?";
           try {
             const ev = JSON.parse(line);
-            if (ev && ev.type === "tool_call") subtype = ev.subtype ?? "?";
+            if (ev && ev.type === "tool_call") {
+              subtype = ev.subtype ?? "?";
+              toolName = ev.tool_call && typeof ev.tool_call === "object" ? Object.keys(ev.tool_call)[0] ?? "?" : "?";
+            }
           } catch {
             const m = line.match(/"subtype"\s*:\s*"([^"]+)"/);
             if (m) subtype = m[1];
           }
+          if (!isCursorReadOnlyToolCall(toolName)) hadMutatingToolActivity = true;
           emit({ type: "status", line: t("runner.tool_call", { subtype }) });
         } else if (isLikelyBase64(line)) {
           emit({ type: "status", line: t("runner.base64_data", { len: line.length }) });
@@ -624,44 +660,55 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         const rest = stderrComposerBuffer.trim();
         emit({ type: "status", line: `[stderr] ${truncateComposerLine(rest)}` });
       }
-      const retryCursorQuota = (errorText) => {
-        if (!cursorSelection) return false;
-        if (hadToolActivity) return false;
-        if (!isCursorQuotaError(errorText)) return false;
-        const errorCategory = classifyCursorApiKeyLimitError(errorText);
-        const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv, errorText);
-        markCursorApiKeyLaneBlocked(
-          cursorSelection,
-          cursorModelSelection.lane,
-          cooldownMinutes,
-          errorText,
-          Date.now(),
-          {
-            modelId: cursorModelSelection.modelId,
-            modelName: cursorModelSelection.modelName,
-          },
-        );
+      const retryCursorFailure = (errorText) => {
+        const quotaFailure = isCursorQuotaError(errorText);
+        const loopingFailure = isCursorAgentLoopingError(errorText);
+        if (!quotaFailure && !loopingFailure) return false;
+        if (quotaFailure && hadToolActivity) return false;
+        if (loopingFailure && hadMutatingToolActivity) return false;
+        const errorCategory = quotaFailure ? classifyCursorApiKeyLimitError(errorText) : "agent_looping";
+        if (quotaFailure && cursorSelection) {
+          const cooldownMinutes = cursorApiKeyCooldownMinutes(cursorBaseEnv, errorText);
+          markCursorApiKeyLaneBlocked(
+            cursorSelection,
+            cursorModelSelection.lane,
+            cooldownMinutes,
+            errorText,
+            Date.now(),
+            {
+              modelId: cursorModelSelection.modelId,
+              modelName: cursorModelSelection.modelName,
+            },
+          );
+        }
         const canTryComposer = !hasExplicitModel
           && cursorModelSelection.lane === "auto"
-          && errorCategory === "explicit_limit"
-          && isCursorAutoFallbackEligible(errorText);
-        const hasNextKey = cursorAttemptIndex < cursorAttempts.length - 1;
+          && (
+            loopingFailure
+            || (errorCategory === "explicit_limit" && isCursorAutoFallbackEligible(errorText))
+          );
+        const hasNextKey = quotaFailure && Boolean(cursorSelection) && cursorAttemptIndex < cursorAttempts.length - 1;
         if (!canTryComposer && !hasNextKey) return false;
 
         const retry = async () => {
           if (canTryComposer) {
+            const authLabel = cursorSelection
+              ? `API Key ${cursorApiKeyLabel(cursorSelection)}`
+              : "login session";
             emit({
               type: "status",
-              line: `Cursor Auto on API Key ${cursorApiKeyLabel(cursorSelection)} is out of usage; discovering Composer fallback...`,
+              line: loopingFailure
+                ? `Cursor Auto on ${authLabel} entered a response loop; discovering Composer fallback...`
+                : `Cursor Auto on ${authLabel} is out of usage; discovering Composer fallback...`,
             });
             const catalog = await discoverCursorModels({
-              keyId: cursorSelection.id,
+              keyId: cursorSelection?.id || `login:${cursorBaseEnv.AGENTFLOW_USER_ID || "default"}`,
               cwd: ws,
               command: agentCmd,
               env: childEnv(options, cursorApiKeyEnv(cursorSelection)),
             });
             if (catalog.fallbackModel) {
-              recordCursorApiKeyFallbackModel(cursorSelection, catalog.fallbackModel);
+              if (cursorSelection) recordCursorApiKeyFallbackModel(cursorSelection, catalog.fallbackModel);
               const fallbackSelection = {
                 lane: "fallback",
                 modelId: catalog.fallbackModel.id,
@@ -677,6 +724,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
                 stream: "runner",
                 eventType: "model_fallback",
                 text: `auto -> ${fallbackSelection.modelId}`,
+                reason: loopingFailure ? "agent_looping" : "usage_limit",
               });
               const fallback = runCursorAgentWithPrompt(
                 cliWorkspace,
@@ -705,7 +753,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
             await next.finished;
             return;
           }
-          throw new Error(errorText || "Cursor API Key reached its limit.");
+          throw annotateFailure(new Error(errorText || (loopingFailure ? "Cursor Agent entered a response loop." : "Cursor API Key reached its limit.")));
         };
         retry().then(resolve).catch(reject);
         return true;
@@ -713,9 +761,9 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       if (code !== 0 && lastResult == null) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         const stderrTail = stderr ? stderr.trim().slice(-1200) : "";
-        if (retryCursorQuota(stderrTail)) return;
+        if (retryCursorFailure(stderrTail)) return;
         const stderrSummary = summarizeCursorStderr(stderr);
-        const err = new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}`);
+        const err = annotateFailure(new Error(`Cursor CLI exited ${code}. ${stderrSummary || "No result event received."}`));
         err.cursorStderrTail = stderrTail;
         emit({ type: "status", line: truncateComposerLine(err.message) });
         reject(err);
@@ -723,9 +771,9 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       }
       if (hadError || (lastResult && lastResult.is_error)) {
         const msg = cursorResultErrorText(lastResult) || "Agent reported error.";
-        if (retryCursorQuota(msg)) return;
+        if (retryCursorFailure(msg)) return;
         emit({ type: "status", line: truncateComposerLine(msg) });
-        reject(new Error(msg));
+        reject(annotateFailure(new Error(msg)));
         return;
       }
       if (cursorSelection) clearCursorApiKeyLaneCooldown(cursorSelection, cursorModelSelection.lane);

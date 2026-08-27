@@ -82,6 +82,7 @@ test("admin run detail API is admin-only and reads another user's pipeline log",
       kind: "thinking",
       nodeId: "agent_1",
       text: "分析 Workspace 数据",
+      script: "curl -H 'Authorization: Bearer workspace-bearer-token' https://example.invalid",
       password: "workspace-secret",
     });
     finishWorkspaceRunLogSession("workspace-detail-1", "success");
@@ -132,7 +133,7 @@ test("admin run detail API is admin-only and reads another user's pipeline log",
     assert.equal(workspaceResponse.status, 200, JSON.stringify(workspaceDetail));
     assert.equal(workspaceDetail.run.runType, "workspace");
     assert.equal(workspaceDetail.events.some((event) => event.kind === "thinking"), true);
-    assert.doesNotMatch(JSON.stringify(workspaceDetail), /workspace-secret/);
+    assert.doesNotMatch(JSON.stringify(workspaceDetail), /workspace-secret|workspace-bearer-token/);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

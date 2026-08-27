@@ -41,3 +41,23 @@ test("Composer Assistant styling keeps technical activity secondary to the conve
   assert.match(css, /\.af-composer-sidebar-input--assistant\s*\{/);
   assert.match(css, /\.af-workflow-assistant-message--error \.af-workflow-assistant-message__bubble/);
 });
+
+test("Composer keeps one Runs tab and switches individual runs inside it", async () => {
+  const [workspace, css] = await Promise.all([
+    readFile(workspacePath, "utf8"),
+    readFile(cssPath, "utf8"),
+  ]);
+  const tabsStart = workspace.indexOf('<div className="af-composer-session-tabs"');
+  const switcherStart = workspace.indexOf('<div className="af-composer-run-switcher">', tabsStart);
+  assert.ok(tabsStart >= 0 && switcherStart > tabsStart);
+  const topTabs = workspace.slice(tabsStart, switcherStart);
+
+  assert.match(topTabs, />Workspace</);
+  assert.match(topTabs, />Runs</);
+  assert.doesNotMatch(topTabs, /composerRunSessions\.map/);
+  assert.match(workspace.slice(switcherStart), /aria-label="选择 Run"/);
+  assert.match(workspace.slice(switcherStart), /<optgroup label="运行中">/);
+  assert.match(workspace.slice(switcherStart), /<optgroup label="最近完成">/);
+  assert.match(css, /\.af-composer-run-switcher\s*\{/);
+  assert.match(css, /\.af-composer-session-count\s*\{/);
+});

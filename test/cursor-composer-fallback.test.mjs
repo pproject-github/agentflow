@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runCursorAgentWithPrompt } from "../bin/lib/agent-runners.mjs";
+import { isCursorAgentLoopingError, runCursorAgentWithPrompt } from "../bin/lib/agent-runners.mjs";
 import {
   classifyCursorApiKeyLimitError,
   clearCursorApiKeyCooldown,
@@ -147,6 +147,122 @@ test("Cursor Auto retries the same key with the dynamically discovered Composer 
   assert.ok(events.some((event) => event.eventType === "model_fallback" && event.text === "auto -> Composer 2.5"));
 });
 
+test("Cursor login session retries the same Agent Turn with the discovered Composer model", async () => {
+  resetCursorApiKeyPoolForTests();
+  clearCursorModelCatalogCache();
+  const fixture = createMockCursorAgent();
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.CURSOR_AGENT_CMD = fixture.command;
+  const events = [];
+  try {
+    const handle = runCursorAgentWithPrompt(fixture.directory, "hello", {
+      env: {
+        AGENTFLOW_USER_ID: "login-fallback-user",
+        CURSOR_API_KEYS: "",
+        MOCK_CURSOR_LOG: fixture.logPath,
+        MOCK_CURSOR_MODE: "usage-fallback",
+      },
+      onStreamEvent: (event) => events.push(event),
+    });
+    await handle.finished;
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+
+  const calls = readJsonLines(fixture.logPath);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0].args.includes("--model"), false);
+  assert.deepEqual(calls[1].args, ["models"]);
+  assert.deepEqual(calls[2].args.slice(calls[2].args.indexOf("--model"), -1), ["--model", "Composer 2.5"]);
+  assert.deepEqual(calls.map((call) => call.key), ["", "", ""]);
+  assert.ok(events.some((event) => event.type === "status" && event.line.includes("login session")));
+  assert.ok(events.some((event) => event.eventType === "model_fallback" && event.text === "auto -> Composer 2.5"));
+});
+
+test("Cursor login session does not replay the Agent after tool activity", async () => {
+  resetCursorApiKeyPoolForTests();
+  clearCursorModelCatalogCache();
+  const fixture = createMockCursorAgent();
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.CURSOR_AGENT_CMD = fixture.command;
+  try {
+    const handle = runCursorAgentWithPrompt(fixture.directory, "hello", {
+      env: {
+        AGENTFLOW_USER_ID: "login-side-effect-user",
+        CURSOR_API_KEYS: "",
+        MOCK_CURSOR_LOG: fixture.logPath,
+        MOCK_CURSOR_MODE: "usage-after-tool",
+      },
+    });
+    await assert.rejects(handle.finished, /out of usage/);
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+
+  const calls = readJsonLines(fixture.logPath);
+  assert.equal(calls.length, 1);
+  assert.equal(calls.some((call) => call.args[0] === "models"), false);
+  assert.equal(calls.some((call) => call.args.includes("--model")), false);
+});
+
+test("Cursor Auto switches to Composer after looping with read-only tools", async () => {
+  resetCursorApiKeyPoolForTests();
+  clearCursorModelCatalogCache();
+  const fixture = createMockCursorAgent();
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.CURSOR_AGENT_CMD = fixture.command;
+  const events = [];
+  try {
+    const handle = runCursorAgentWithPrompt(fixture.directory, "hello", {
+      env: {
+        AGENTFLOW_USER_ID: "looping-read-user",
+        CURSOR_API_KEYS: "",
+        MOCK_CURSOR_LOG: fixture.logPath,
+        MOCK_CURSOR_MODE: "looping-read",
+      },
+      onStreamEvent: (event) => events.push(event),
+    });
+    await handle.finished;
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+
+  const calls = readJsonLines(fixture.logPath);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[1].args, ["models"]);
+  assert.ok(calls[2].args.includes("Composer 2.5"));
+  assert.ok(events.some((event) => event.eventType === "model_fallback" && event.reason === "agent_looping"));
+});
+
+test("Cursor does not replay a looping Agent after a mutating tool", async () => {
+  resetCursorApiKeyPoolForTests();
+  clearCursorModelCatalogCache();
+  const fixture = createMockCursorAgent();
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.CURSOR_AGENT_CMD = fixture.command;
+  let failure;
+  try {
+    const handle = runCursorAgentWithPrompt(fixture.directory, "hello", {
+      env: {
+        AGENTFLOW_USER_ID: "looping-edit-user",
+        CURSOR_API_KEYS: "",
+        MOCK_CURSOR_LOG: fixture.logPath,
+        MOCK_CURSOR_MODE: "looping-edit",
+      },
+    });
+    await handle.finished.catch((error) => { failure = error; });
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+
+  assert.equal(isCursorAgentLoopingError(failure), true);
+  assert.equal(failure?.code, "CURSOR_AGENT_LOOPING");
+  assert.equal(failure?.cursorHadMutatingToolActivity, true);
+  const calls = readJsonLines(fixture.logPath);
+  assert.equal(calls.length, 1);
+  assert.equal(calls.some((call) => call.args[0] === "models"), false);
+});
+
 test("generic 429 rotates to the next key without switching models", async () => {
   resetCursorApiKeyPoolForTests();
   clearCursorModelCatalogCache();
@@ -191,6 +307,21 @@ if (args[0] === "models") {
 const mode = process.env.MOCK_CURSOR_MODE;
 if (mode === "usage-fallback" && !args.includes("--model")) {
   console.log(JSON.stringify({ type: "result", subtype: "error", is_error: true, error: { message: "ActionRequiredError: You're out of usage" } }));
+  process.exit(0);
+}
+if (mode === "usage-after-tool") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "started", tool_call: { shell: { command: "echo changed" } } }));
+  console.log(JSON.stringify({ type: "result", subtype: "error", is_error: true, error: { message: "ActionRequiredError: You're out of usage" } }));
+  process.exit(0);
+}
+if (mode === "looping-read" && !args.includes("--model")) {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "started", tool_call: { readToolCall: { args: { path: "README.md" } } } }));
+  console.log(JSON.stringify({ type: "result", subtype: "error", is_error: true, error: { message: "NonRetriableError: Agent Looping Detected The model got stuck in a repeating response pattern" } }));
+  process.exit(0);
+}
+if (mode === "looping-edit") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "started", tool_call: { editToolCall: { args: { path: "result.html" } } } }));
+  console.log(JSON.stringify({ type: "result", subtype: "error", is_error: true, error: { message: "NonRetriableError: Agent Looping Detected The model got stuck in a repeating response pattern" } }));
   process.exit(0);
 }
 if (mode === "rate-limit" && process.env.CURSOR_API_KEY === "key-a") {

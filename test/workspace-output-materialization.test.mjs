@@ -6,7 +6,9 @@ import test from "node:test";
 import {
   workspaceMaterializeAgentResultFile,
   workspaceMaterializeNodePackageOutputValues,
+  workspaceOutputProtocolRequirements,
   workspacePublishAgentOutputFiles,
+  workspaceRecoverAgentLoopingOutput,
   workspaceStructuredAgentOutput,
 } from "../bin/lib/workspace-server.mjs";
 
@@ -182,4 +184,69 @@ test("keeps every file written to the durable downloads directory", (t) => {
 
   fs.rmSync(runPackage.nodeRunDir, { recursive: true, force: true });
   assert.equal(fs.existsSync(path.join(runPackage.outputsDir, "top100_uid_detail.csv")), true);
+});
+
+test("HTML Agent outputs use a durable result file and a short final receipt", (t) => {
+  const runPackage = {
+    ...createDurableRunPackage(t),
+    resultFileRel: "outputs/result.html",
+  };
+  runPackage.resultFileAbs = path.join(runPackage.outputsDir, "result.html");
+  const graph = {
+    instances: {
+      subAgent_5: {
+        definitionId: "agent_subAgent",
+        output: [
+          { name: "next", type: "node" },
+          { name: "result", type: "text" },
+        ],
+      },
+      display_1: {
+        definitionId: "display_html",
+        input: [
+          { name: "prev", type: "node" },
+          { name: "content", type: "text" },
+        ],
+      },
+    },
+    edges: [
+      { source: "subAgent_5", sourceHandle: "output-1", target: "display_1", targetHandle: "input-1" },
+    ],
+  };
+
+  const protocol = workspaceOutputProtocolRequirements(graph, "subAgent_5", runPackage);
+  assert.match(protocol, new RegExp(runPackage.resultFileAbs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(protocol, /resultFile: outputs\/result\.html/);
+  assert.match(protocol, /不要把完整正文再次放进最终回复/);
+  assert.doesNotMatch(protocol, /最终回复只输出完整结果正文/);
+});
+
+test("recovers a valid durable artifact after Cursor response looping", (t) => {
+  const runPackage = {
+    ...createDurableRunPackage(t),
+    resultFileRel: "outputs/result.html",
+  };
+  runPackage.resultFileAbs = path.join(runPackage.outputsDir, "result.html");
+  fs.writeFileSync(runPackage.resultFileAbs, "<!doctype html><html><body>ok</body></html>", "utf-8");
+  const error = Object.assign(new Error("NonRetriableError: Agent Looping Detected"), {
+    code: "CURSOR_AGENT_LOOPING",
+    cursorHadMutatingToolActivity: true,
+  });
+
+  const recovered = workspaceRecoverAgentLoopingOutput(error, runPackage);
+  assert.equal(recovered?.strategy, "reuse-result-file");
+  assert.equal(recovered?.resultFile, "outputs/result.html");
+  assert.match(recovered?.content || "", /resultFile: outputs\/result\.html/);
+});
+
+test("does not recover a missing or invalid result artifact", (t) => {
+  const runPackage = {
+    ...createDurableRunPackage(t),
+    resultFileRel: "outputs/result.html",
+  };
+  runPackage.resultFileAbs = path.join(runPackage.outputsDir, "result.html");
+  const error = new Error("Agent Looping Detected");
+  assert.equal(workspaceRecoverAgentLoopingOutput(error, runPackage), null);
+  fs.writeFileSync(runPackage.resultFileAbs, "not html", "utf-8");
+  assert.equal(workspaceRecoverAgentLoopingOutput(error, runPackage), null);
 });

@@ -2787,6 +2787,60 @@ export function workspaceMaterializeAgentResultFile(structured, runPackage) {
   };
 }
 
+export function workspaceIsAgentLoopingError(error = "") {
+  const text = String(error?.message || error || "");
+  return error?.code === "CURSOR_AGENT_LOOPING"
+    || error?.agentflowFailureCategory === "agent_looping"
+    || /agent looping detected|got stuck in a repeating response pattern/i.test(text);
+}
+
+function workspaceValidateRecoveredResultFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return { valid: false, reason: "result file is missing", size: 0 };
+    }
+    const stat = fs.statSync(filePath);
+    if (stat.size <= 0) return { valid: false, reason: "result file is empty", size: 0 };
+    const ext = path.extname(filePath).toLowerCase();
+    const text = fs.readFileSync(filePath, "utf-8");
+    if (!text.trim()) return { valid: false, reason: "result file is blank", size: stat.size };
+    if (ext === ".json") {
+      try {
+        JSON.parse(text);
+      } catch {
+        return { valid: false, reason: "result JSON is invalid", size: stat.size };
+      }
+    }
+    if (ext === ".html" && !/<(?:!doctype\s+html|html|head|body|main|section|article|div|svg|canvas)\b/i.test(text)) {
+      return { valid: false, reason: "result HTML has no renderable root", size: stat.size };
+    }
+    return { valid: true, reason: "", size: stat.size };
+  } catch (error) {
+    return { valid: false, reason: error?.message || String(error), size: 0 };
+  }
+}
+
+/**
+ * Cursor can finish writing the durable artifact and then fail while composing
+ * a redundant final response. In that case the artifact is the authoritative
+ * output, so recover it instead of replaying a node that may have side effects.
+ */
+export function workspaceRecoverAgentLoopingOutput(error, runPackage = {}) {
+  if (!workspaceIsAgentLoopingError(error)) return null;
+  const resultFile = workspaceSafeNodeOutputRelPath(runPackage?.resultFileRel || "");
+  const resultFileAbs = String(runPackage?.resultFileAbs || workspaceNodeOutputWritePath(runPackage, resultFile) || "").trim();
+  const validation = workspaceValidateRecoveredResultFile(resultFileAbs);
+  if (!resultFile || !validation.valid) return null;
+  return {
+    category: "agent_looping",
+    strategy: "reuse-result-file",
+    resultFile,
+    resultFileAbs,
+    size: validation.size,
+    content: ["---agentflow", `resultFile: ${resultFile}`, "---end"].join("\n"),
+  };
+}
+
 function workspaceCollectNodeOutputFiles(runPackage, maxFiles = 500) {
   const roots = [
     runPackage?.outputsDir,
@@ -3097,7 +3151,7 @@ function workspaceDownstreamInputDescription(target, slot) {
   return "";
 }
 
-function workspaceOutputProtocolRequirements(graph, nodeId) {
+export function workspaceOutputProtocolRequirements(graph, nodeId, runPackage = {}) {
   const instance = graph?.instances?.[nodeId] || {};
   const outputSlots = Array.isArray(instance.output) ? instance.output : [];
   const displayBindings = workspaceDownstreamOutputDisplayBindings(graph, nodeId);
@@ -3120,6 +3174,8 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   const resultKind = resultSpec.kind;
   const resultFile = resultSpec.resultFile;
   const resultKindText = resultKind ? ` ${resultKind}` : "";
+  const fileBackedResultKinds = new Set(["html", "react", "markdown", "code", "mermaid", "ascii", "chart", "table"]);
+  const fileBackedResult = fileBackedResultKinds.has(resultKind) && String(runPackage?.resultFileAbs || "").trim();
   const resultGuidance = {
     html: "内容必须是可直接放入 iframe 渲染的 HTML；不要使用 Markdown 代码围栏。",
     react: "内容必须是 React 工程 JSON，包含 title、entry、files；files 至少包含 src/App.jsx，可包含 CSS 文件。",
@@ -3133,19 +3189,33 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
   }[resultKind] || "内容应满足任务要求。";
   const envelopeExample = [
     "---agentflow",
-    "result: |",
-    `  <完整${resultKindText || "结果"}正文，每行缩进两个空格>`,
-    "outParams:",
-    ...slots.slice(0, 3).map((slot) => {
-      const kind = displayByField.get(`outParams.${slot.name}`) || "";
-      const fileLike = ["file", "image", "audio", "video", "binary"].includes(slot.type);
-      return kind || fileLike
-        ? `  ${slot.name}: |\n    <完整${kind ? ` ${kind}` : ""}正文，每行缩进四个空格>`
-        : `  ${slot.name}: <${slot.name} 的短值>`;
-    }),
+    fileBackedResult ? `resultFile: ${resultFile}` : "result: |",
+    fileBackedResult ? "" : `  <完整${resultKindText || "结果"}正文，每行缩进两个空格>`,
+    ...(slots.length
+      ? [
+          "outParams:",
+          ...slots.slice(0, 3).map((slot) => {
+            const kind = displayByField.get(`outParams.${slot.name}`) || "";
+            const fileLike = ["file", "image", "audio", "video", "binary"].includes(slot.type);
+            return kind || fileLike
+              ? `  ${slot.name}: |\n    <完整${kind ? ` ${kind}` : ""}正文，每行缩进四个空格>`
+              : `  ${slot.name}: <${slot.name} 的短值>`;
+          }),
+        ]
+      : []),
     "---end",
   ].join("\n");
-  const finalInstructions = slots.length
+  const fileBackedInstructions = fileBackedResult
+    ? [
+        `完整结果必须直接写入：\`${runPackage.resultFileAbs}\`（环境变量 \`AGENTFLOW_RESULT_FILE\`）。`,
+        `该文件是本次节点的持久产物，对外路径为 \`${resultFile}\`。不要把完整正文再次放进最终回复。`,
+        "写完后检查文件存在且非空；HTML/JSON 等结构化产物还要确认格式完整。",
+        "最终只输出下面的 agentflow 回执，不要输出正文、解释、进度或其它文字：",
+        "",
+        envelopeExample,
+      ]
+    : null;
+  const finalInstructions = fileBackedInstructions || (slots.length
     ? [
         `AgentFlow 会自动把 \`result\` 正文写入 \`${resultFile}\`；不要自行创建该文件，也不要返回 \`resultFile\`。`,
         `额外输出：${slots.map((slot) => `\`${slot.name}\``).join("、")}。文件型或展示型内容也直接内联，AgentFlow 负责落盘和传递。`,
@@ -3156,7 +3226,7 @@ function workspaceOutputProtocolRequirements(graph, nodeId) {
     : [
         `AgentFlow 会自动把最终回复写入 \`${resultFile}\`；不要自行创建该文件，不要返回路径或 agentflow envelope。`,
         "最终回复只输出完整结果正文，不要附加解释、进度或其它文字。",
-      ];
+      ]);
   return [
     "## 输出",
     "",
@@ -3556,7 +3626,7 @@ function workspaceNodeFileBoundaryBlock(runPackage = {}) {
     nodeRunDir ? `- 当前执行目录：\`${nodeRunDir}\`。` : "",
     nodeTmpDir ? `- 临时文件只能写入：\`${nodeTmpDir}\`，也可通过环境变量 \`AGENTFLOW_NODE_TMP_DIR\` 获取。` : "",
     Object.keys(runPackage?.inputMounts || {}).length ? "- 已挂载的输入文件位于本任务 `inputs/`；`inputs/` 只用于读取，正式产物仍写入 `outputs/`。" : "",
-    "- 主文本结果和内联额外输出由 AgentFlow 在任务结束后自动写入、发布和清理，无需自行创建结果文件。",
+    "- 主结果按下方输出协议交付；若协议要求写入 `AGENTFLOW_RESULT_FILE`，必须写入该精确路径并只返回简短回执。",
     outputsDir ? `- 可供用户下载的最终产物目录：\`${outputsDir}\`。这不是临时目录，环境变量 \`AGENTFLOW_OUTPUTS_DIR\` 指向这里。` : "",
     outputsDir ? `- CSV、图片、压缩包、工程文件等下载产物必须直接写入 \`AGENTFLOW_OUTPUTS_DIR\`，不要写入当前执行目录中的相对 \`outputs/\`。` : "",
     outputsDir ? `- 该目录中的文件会自动出现在 Workspace Files，对应相对路径为 \`${outputsRel}/\`；回复中引用下载文件时使用这个相对路径。` : "",
@@ -4751,7 +4821,7 @@ function workspaceNodePrompt(graph, nodeId, upstreamText, skillsBlock, mcpBlock 
   const runPackage = typeof nodeTmpDir === "object" && nodeTmpDir ? nodeTmpDir : { nodeTmpDir: String(nodeTmpDir || "") };
   const inputBlock = workspaceAgentInputBlock(relevantInputValues, runPackage.inputMounts || {});
   const fileBoundary = workspaceNodeFileBoundaryBlock(runPackage);
-  const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId);
+  const outputProtocolRequirements = workspaceOutputProtocolRequirements(graph, nodeId, runPackage);
   return [
     "你正在执行一个独立任务。只使用本提示中的任务、输入、可用能力和文件边界。",
     fileBoundary ? `\n${fileBoundary}` : "",
@@ -5235,7 +5305,18 @@ async function workspaceRunToolNodejsScript({
       : "";
   if (!command) throw new Error("tool_nodejs requires script or scriptRef");
 
-  emit?.({ type: "status", line: `Run script: ${scriptRef || command.slice(0, 120)}` });
+  const script = inlineScript || (scriptAbs ? fs.readFileSync(scriptAbs, "utf-8") : "");
+  const started = Date.now();
+  emit?.({
+    type: "script-start",
+    kind: "tool",
+    script,
+    scriptRef,
+    scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+    cwd: runPackage.nodeRunDir,
+    startedAt: new Date(started).toISOString(),
+    status: "running",
+  });
 
   const env = runtimeEnvForUser(userCtx, {
     ...envOverlay,
@@ -5249,7 +5330,6 @@ async function workspaceRunToolNodejsScript({
     AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify(outputAbs),
   });
 
-  const started = Date.now();
   return await new Promise((resolve, reject) => {
     const processGroup = process.platform !== "win32";
     const child = spawn(command, [], {
@@ -5296,14 +5376,50 @@ async function workspaceRunToolNodejsScript({
       }
       stderr += text;
     });
-    child.on("error", (error) => finish(() => reject(error)));
+    child.on("error", (error) => finish(() => {
+      emit?.({
+        type: "script-finish",
+        kind: "error",
+        scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+        cwd: runPackage.nodeRunDir,
+        stderr: error.message || String(error),
+        exitCode: null,
+        durationMs: Math.max(0, Date.now() - started),
+        status: "error",
+      });
+      reject(error);
+    }));
     child.on("close", (code) => {
       if (outputLimitError) {
-        finish(() => reject(outputLimitError));
+        finish(() => {
+          emit?.({
+            type: "script-finish",
+            kind: "error",
+            scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+            cwd: runPackage.nodeRunDir,
+            stdout,
+            stderr: outputLimitError.message,
+            exitCode: code,
+            durationMs: Math.max(0, Date.now() - started),
+            status: "error",
+          });
+          reject(outputLimitError);
+        });
         return;
       }
       if (signal?.aborted) {
         finish(() => {
+          emit?.({
+            type: "script-finish",
+            kind: "tool",
+            scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+            cwd: runPackage.nodeRunDir,
+            stdout,
+            stderr,
+            exitCode: code,
+            durationMs: Math.max(0, Date.now() - started),
+            status: "cancelled",
+          });
           const error = new Error("Workspace run stopped");
           error.code = "WORKSPACE_RUN_ABORTED";
           reject(error);
@@ -5315,11 +5431,34 @@ async function workspaceRunToolNodejsScript({
         else emit?.({ type: "natural", kind: "warning", text: `[script stderr]\n${stderr.trim().slice(-4000)}` });
       }
       if (code !== 0) {
-        finish(() => reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`)));
+        finish(() => {
+          emit?.({
+            type: "script-finish",
+            kind: "error",
+            scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+            cwd: runPackage.nodeRunDir,
+            stdout,
+            stderr,
+            exitCode: code,
+            durationMs: Math.max(0, Date.now() - started),
+            status: "error",
+          });
+          reject(new Error(`tool_nodejs script exited ${code}${stderr.trim() ? `: ${stderr.trim().slice(-800)}` : ""}`));
+        });
         return;
       }
       const elapsedMs = Math.max(0, Date.now() - started);
-      emit?.({ type: "status", line: `Timing script: ${elapsedMs}ms`, timing: { label: "script", elapsedMs } });
+      emit?.({
+        type: "script-finish",
+        kind: "tool",
+        scriptSha256: crypto.createHash("sha256").update(script, "utf-8").digest("hex"),
+        cwd: runPackage.nodeRunDir,
+        stdout,
+        stderr,
+        exitCode: code,
+        durationMs: elapsedMs,
+        status: "success",
+      });
       // stdout 和输出文件不是二选一：文档里的代码节点范例就是「写 outputs.total + 打印
       // 一行进度」，旧写法 `stdout || 信封` 会让那一行 console.log 把所有输出文件全吃掉。
       // 规则改成：信封照给，stdout 非空时它就是 result（覆盖 result 文件，不动其它槽）。
@@ -6692,6 +6831,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     let content = "";
     const runHistoryEvents = [];
     const maxAttempts = 3;
+    let loopingRetryUsed = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let attemptContent = "";
       try {
@@ -6759,6 +6899,52 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         break;
       } catch (e) {
         if (signal?.aborted || e?.code === "WORKSPACE_RUN_ABORTED") throwIfAborted();
+        const recovered = workspaceRecoverAgentLoopingOutput(e, runPackage);
+        if (recovered) {
+          content = recovered.content;
+          emit({
+            type: "agent-recovery",
+            nodeId,
+            category: recovered.category,
+            strategy: recovered.strategy,
+            status: "success",
+            resultFile: recovered.resultFile,
+            size: recovered.size,
+            message: `Recovered ${recovered.resultFile} after Agent response looping without replaying the node.`,
+            originalError: e?.message || String(e),
+          });
+          emit({
+            type: "natural",
+            kind: "warning",
+            nodeId,
+            text: `Agent 最终响应触发循环检测；已恢复其写入的结果文件 ${recovered.resultFile}（${recovered.size} bytes），未重跑节点。`,
+          });
+          break;
+        }
+        const safeLoopRetry = workspaceIsAgentLoopingError(e)
+          && e?.cursorHadMutatingToolActivity === false
+          && e?.cursorModelLane !== "fallback"
+          && !loopingRetryUsed
+          && attempt < maxAttempts;
+        if (safeLoopRetry) {
+          loopingRetryUsed = true;
+          emit({
+            type: "agent-retry",
+            nodeId,
+            category: "agent_looping",
+            strategy: "new-turn",
+            status: "retrying",
+            attempt: attempt + 1,
+            model: e?.cursorModelName || e?.cursorModelId || nodeModelKey || "default",
+            message: "Started one clean Turn because looping occurred before any mutating tool call.",
+          });
+          emit({
+            type: "status",
+            nodeId,
+            line: `Agent response loop detected before any mutating tool; starting one clean Turn (${attempt + 1}/${maxAttempts})`,
+          });
+          continue;
+        }
         if (attempt < maxAttempts && isTransientAgentNetworkError(e)) {
           emit({ type: "status", nodeId, line: `Workspace node retry ${attempt + 1}/${maxAttempts} after network error` });
           await sleepMs(Math.min(1500 * attempt, 5000), signal);

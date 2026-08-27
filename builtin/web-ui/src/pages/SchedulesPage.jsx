@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import { scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
 import LoadingState from "../components/LoadingState.jsx";
+import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -35,6 +36,7 @@ export default function SchedulesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [updatingKey, setUpdatingKey] = useState("");
+  const [inspectingSchedule, setInspectingSchedule] = useState(null);
 
   const loadSchedules = useCallback(async () => {
     setLoading(true);
@@ -173,6 +175,17 @@ export default function SchedulesPage() {
                     {schedule.lastError ? <p className="af-schedule-card__error">{schedule.lastError}</p> : null}
                   </div>
                   <div className="af-schedule-card__actions">
+                    {schedule.kind === "workspace" ? (
+                      <button
+                        type="button"
+                        className="af-schedule-open"
+                        title="查看真实 ScheduleRun 运行记录"
+                        onClick={() => setInspectingSchedule(schedule)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden>manage_search</span>
+                        运行记录
+                      </button>
+                    ) : null}
                     {targetUrl ? (
                       <button
                         type="button"
@@ -202,6 +215,23 @@ export default function SchedulesPage() {
           </div> : null}
         </div>
       </div>
+      {inspectingSchedule ? (
+        <div className="af-workspace-run-logs-overlay" role="presentation" onMouseDown={() => setInspectingSchedule(null)}>
+          <aside className="af-workspace-run-logs-drawer" aria-label="ScheduleRun 运行记录" onMouseDown={(event) => event.stopPropagation()}>
+            <WorkspaceRunLogsDrawer
+              flowParams={{
+                flowId: inspectingSchedule.flowId || "",
+                flowSource: inspectingSchedule.flowSource || "user",
+                ...(adminView && inspectingSchedule.ownerUserId ? { adminOwnerId: inspectingSchedule.ownerUserId } : {}),
+              }}
+              scheduleNodeId={inspectingSchedule.scheduleNodeId || ""}
+              lastRunId={inspectingSchedule.lastRunId || ""}
+              label={inspectingSchedule.label || "ScheduleRun"}
+              onClose={() => setInspectingSchedule(null)}
+            />
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }
