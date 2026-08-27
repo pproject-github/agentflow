@@ -8,13 +8,17 @@ const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
 
 function node(definition) {
-  return Object.freeze({
+  const result = {
     businessLines: ALL_BUSINESS_LINES,
     platforms: BOTH_PLATFORMS,
     durationMs: 600,
     nextNodeIds: [],
     ...definition,
-  });
+  };
+  result.businessLines = Object.freeze([...result.businessLines]);
+  result.platforms = Object.freeze([...result.platforms]);
+  result.nextNodeIds = Object.freeze([...result.nextNodeIds]);
+  return Object.freeze(result);
 }
 
 export const RELEASE_NODE_CATALOG = Object.freeze([
@@ -126,26 +130,35 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     category: "协作通知",
     nextNodeIds: [],
   }),
-].map((definition) => Object.freeze({
-  ...definition,
-  businessLines: [...definition.businessLines],
-  platforms: [...definition.platforms],
-  nextNodeIds: [...definition.nextNodeIds],
-})));
+].map((definition) => definition));
 
 const normalize = (value) => String(value ?? "").trim().toLowerCase();
 
 export function getReleaseNodes({ businessLine, platform } = {}) {
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
-  return RELEASE_NODE_CATALOG
+  const matchingIds = new Set(RELEASE_NODE_CATALOG
     .filter((item) => item.businessLines.includes(line) && item.platforms.includes(targetPlatform))
-    .map((item) => ({
+    .map((item) => item.id));
+  return RELEASE_NODE_CATALOG
+    .filter((item) => matchingIds.has(item.id))
+    .map((item) => {
+      const nextNodeIds = item.nextNodeIds.filter((nextId) => matchingIds.has(nextId));
+      // Android's supplement and channel-package stages are deliberately
+      // attached only in the Android graph, so iOS never sees those edges.
+      if (targetPlatform === "android" && item.id === "release-records") {
+        nextNodeIds.push("release-records-supplement");
+      }
+      if (targetPlatform === "android" && item.id === "release-records-supplement") {
+        nextNodeIds.push("release-channel-packages");
+      }
+      return {
       ...item,
       businessLines: [...item.businessLines],
       platforms: [...item.platforms],
-      nextNodeIds: [...item.nextNodeIds],
-    }));
+      nextNodeIds: [...new Set(nextNodeIds)],
+      };
+    });
 }
 
 function workspaceText(workspace) {
