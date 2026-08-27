@@ -13,11 +13,13 @@ function node(definition) {
     platforms: BOTH_PLATFORMS,
     durationMs: 600,
     nextNodeIds: [],
+    inputSchema: [],
     ...definition,
   };
   result.businessLines = Object.freeze([...result.businessLines]);
   result.platforms = Object.freeze([...result.platforms]);
   result.nextNodeIds = Object.freeze([...result.nextNodeIds]);
+  result.inputSchema = Object.freeze(result.inputSchema.map((input) => Object.freeze({ ...input })));
   return Object.freeze(result);
 }
 
@@ -44,7 +46,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "创建或复用 release 分支，处理受管理提交及合主干 MR。",
     skill: "release-git",
     category: "发版准备",
-    nextNodeIds: ["release-localization", "release-release-notes"],
+    nextNodeIds: ["release-localization", "release-approval", "release-release-notes"],
   }),
   node({
     id: "release-localization",
@@ -52,7 +54,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "上传源多语言并同步翻译回仓，核对工程 Git 差异。",
     skill: "release-localization",
     category: "发版准备",
-    nextNodeIds: ["release-notification", "release-release-notes"],
+    nextNodeIds: ["release-approval", "release-release-notes"],
   }),
   node({
     id: "release-approval-initial",
@@ -61,7 +63,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     skill: "release-approval",
     category: "版本发布",
     platforms: ["ios"],
-    nextNodeIds: ["release-records"],
+    nextNodeIds: ["release-approval", "release-records"],
   }),
   node({
     id: "release-approval",
@@ -86,7 +88,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "查询目标构建指标并保存可复用的指标快照。",
     skill: "release-metrics",
     category: "指标检查",
-    nextNodeIds: ["release-gray-observe", "release-approval"],
+    nextNodeIds: ["release-gray-observe", "release-records"],
   }),
   node({
     id: "release-gray-observe",
@@ -94,7 +96,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "观察灰度指标并对可疑面板进行下钻分析。",
     skill: "release-gray-observe",
     category: "指标检查",
-    nextNodeIds: ["release-approval", "release-notification"],
+    nextNodeIds: ["release-records", "release-notification"],
   }),
   node({
     id: "release-records",
@@ -102,7 +104,7 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "整理发版摘要，并在确认后追加平台发版记录。",
     skill: "release-records",
     category: "版本全量",
-    nextNodeIds: ["release-notification"],
+    nextNodeIds: ["release-records-supplement", "release-channel-packages", "release-notification"],
   }),
   node({
     id: "release-records-supplement",
@@ -111,7 +113,20 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     skill: "release-records",
     category: "版本全量",
     platforms: ["android"],
-    nextNodeIds: ["release-approval", "release-notification"],
+    inputSchema: [
+      {
+        key: "gray_percent",
+        label: "灰度百分比 (%)",
+        type: "number",
+        required: true,
+        min: 1,
+        max: 100,
+        integer: true,
+        step: 1,
+        placeholder: "例如 10",
+      },
+    ],
+    nextNodeIds: ["release-channel-packages", "release-notification"],
   }),
   node({
     id: "release-channel-packages",
@@ -144,19 +159,12 @@ export function getReleaseNodes({ businessLine, platform } = {}) {
     .filter((item) => matchingIds.has(item.id))
     .map((item) => {
       const nextNodeIds = item.nextNodeIds.filter((nextId) => matchingIds.has(nextId));
-      // Android's supplement and channel-package stages are deliberately
-      // attached only in the Android graph, so iOS never sees those edges.
-      if (targetPlatform === "android" && item.id === "release-records") {
-        nextNodeIds.push("release-records-supplement");
-      }
-      if (targetPlatform === "android" && item.id === "release-records-supplement") {
-        nextNodeIds.push("release-channel-packages");
-      }
       return {
-      ...item,
-      businessLines: [...item.businessLines],
-      platforms: [...item.platforms],
-      nextNodeIds: [...new Set(nextNodeIds)],
+        ...item,
+        businessLines: [...item.businessLines],
+        platforms: [...item.platforms],
+        inputSchema: item.inputSchema.map((input) => ({ ...input })),
+        nextNodeIds: [...new Set(nextNodeIds)],
       };
     });
 }
@@ -203,7 +211,7 @@ function createRunId() {
   return `release-${Date.now().toString(36)}-${randomId}`;
 }
 
-export function runReleaseNode(nodeDefinition, context, { signal, onProgress } = {}) {
+export function runReleaseNode(nodeDefinition, context, { signal, onProgress, onRunStart } = {}) {
   return new Promise((resolve, reject) => {
     if (!nodeDefinition || typeof nodeDefinition !== "object" || !nodeDefinition.id) {
       reject(new Error("A release node definition is required"));
@@ -215,6 +223,7 @@ export function runReleaseNode(nodeDefinition, context, { signal, onProgress } =
     }
 
     const runId = createRunId();
+    if (typeof onRunStart === "function") onRunStart(runId);
     const durationMs = Math.min(Math.max(Number(nodeDefinition.durationMs) || 600, 40), 1000);
     const progress = (value) => {
       if (typeof onProgress === "function") onProgress(value);
@@ -236,6 +245,10 @@ export function runReleaseNode(nodeDefinition, context, { signal, onProgress } =
     finishTimer = setTimeout(() => {
       cleanup();
       progress(100);
+      if (context?.simulateFailure || context?.selfTestFailure) {
+        reject(new Error("本地自测失败：已启用失败模式，请关闭后重试"));
+        return;
+      }
       resolve({
         runId,
         message: `${nodeDefinition.title} 已完成（${context?.version || "1.0.0"}）`,

@@ -29763,6 +29763,26 @@ body:has(.af-public-display-page--canvas) {
   box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.13);
 }
 
+.af-release-self-test {
+  align-content: end;
+}
+
+.af-release-self-test > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  color: rgba(255, 190, 150, 0.82);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.af-release-context__controls .af-release-self-test input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #ff9f6e;
+}
+
 .af-release-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -29908,6 +29928,9 @@ body:has(.af-public-display-page--canvas) {
 .af-release-node > div:first-child { min-width: 0; display: grid; gap: 0.2rem; }
 .af-release-node strong { overflow: hidden; color: rgba(244, 240, 255, 0.9); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-release-node small { overflow: hidden; color: rgba(216, 210, 230, 0.5); font-size: 0.69rem; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.af-release-node__inputs { display: grid; gap: 0.35rem; margin-top: 0.2rem; }
+.af-release-node__inputs label { display: grid; gap: 0.18rem; color: rgba(216, 210, 230, 0.58); font-size: 0.66rem; font-weight: 700; }
+.af-release-node__inputs input { width: min(12rem, 100%); min-height: 1.85rem; padding: 0 0.45rem; border: 1px solid rgba(178, 170, 200, 0.17); border-radius: 5px; background: rgba(0, 0, 0, 0.22); color: rgba(244, 240, 255, 0.92); font: inherit; }
 .af-release-node > span { flex-shrink: 0; color: #9de9b7; font-size: 0.67rem; font-weight: 800; }
 .af-release-node--completed { opacity: 0.68; background: rgba(116, 247, 154, 0.035); }
 .af-release-node--completed > span { color: #8ce7aa; }
