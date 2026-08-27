@@ -13729,6 +13729,24 @@ button.af-project-card {
 .af-run-inspector__toolbar > label span { color: rgba(229, 226, 225, 0.35); font-size: 0.95rem; }
 .af-run-inspector__toolbar input { width: 100%; border: 0; outline: 0; background: transparent; color: rgba(242, 238, 248, 0.85); font-size: 0.68rem; }
 
+.af-run-inspector__summary {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  background: rgba(255, 255, 255, 0.012);
+  color: rgba(229, 226, 225, 0.34);
+  font: 650 0.56rem/1.2 var(--af-mono);
+}
+
+.af-run-inspector__summary span { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.af-run-inspector__summary strong { color: rgba(238, 233, 247, 0.82); font-size: 0.68rem; }
+.af-run-inspector__summary .is-warning,
+.af-run-inspector__summary .is-warning strong { color: #e1a65f; }
+.af-run-inspector__summary .is-ok,
+.af-run-inspector__summary .is-ok strong { color: rgba(98, 195, 153, 0.8); }
+
 .af-run-inspector__layout {
   min-width: 0;
   min-height: 0;
@@ -13790,6 +13808,7 @@ button.af-project-card {
 .af-run-turn + .af-run-turn { margin-top: 0.55rem; }
 .af-run-turn.is-selected { border-color: rgba(153, 117, 239, 0.48); box-shadow: inset 3px 0 rgba(137, 96, 229, 0.75); }
 .af-run-turn.is-error { border-color: rgba(224, 96, 90, 0.3); }
+.af-run-turn.is-incomplete { border-color: rgba(218, 155, 73, 0.32); }
 
 .af-run-turn__head {
   width: 100%;
@@ -13807,10 +13826,27 @@ button.af-project-card {
 .af-run-turn__head > .material-symbols-outlined { color: #8c6bdc; font-size: 1rem; }
 .af-run-turn.is-success .af-run-turn__head > .material-symbols-outlined { color: #62c399; }
 .af-run-turn.is-error .af-run-turn__head > .material-symbols-outlined { color: #df716b; }
+.af-run-turn.is-incomplete .af-run-turn__head > .material-symbols-outlined { color: #d99d52; }
 .af-run-turn.is-waiting .af-run-turn__head > .material-symbols-outlined { color: #d39c55; }
 .af-run-turn__head em { color: rgba(165, 136, 232, 0.65); font: 800 0.52rem/1.2 var(--af-mono); font-style: normal; letter-spacing: 0.08em; }
 .af-run-turn__head strong { display: block; margin-top: 0.16rem; overflow: hidden; font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-run-turn__head small { display: block; margin-top: 0.2rem; color: rgba(229, 226, 225, 0.28); font: 600 0.55rem/1.2 var(--af-mono); }
+
+.af-run-turn__call-id {
+  margin: -0.2rem 0.62rem 0.4rem 1.78rem;
+  overflow: hidden;
+  color: rgba(129, 184, 211, 0.52);
+  font: 600 0.49rem/1.2 var(--af-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-run-turn__tool-count {
+  display: block;
+  padding: 0 0.62rem 0.45rem 1.78rem;
+  color: rgba(229, 226, 225, 0.26);
+  font: 600 0.5rem/1.2 var(--af-mono);
+}
 
 .af-run-turn__events { padding: 0 0.42rem 0.42rem 1.25rem; }
 
@@ -13851,7 +13887,7 @@ button.af-project-card {
   z-index: 2;
   display: flex;
   justify-content: space-between;
-  margin-left: 7.8rem;
+  margin-left: 10.6rem;
   padding: 0.45rem 2.7rem 0.3rem 0;
   color: rgba(229, 226, 225, 0.25);
   background: #111114;
@@ -13862,7 +13898,7 @@ button.af-project-card {
   width: 100%;
   min-height: 1.9rem;
   display: grid;
-  grid-template-columns: 7.2rem minmax(6rem, 1fr) 2.35rem;
+  grid-template-columns: 10rem minmax(6rem, 1fr) 2.35rem;
   align-items: center;
   gap: 0.48rem;
   padding: 0 0.2rem;
@@ -13877,6 +13913,7 @@ button.af-project-card {
 .af-run-waterfall__row:hover,
 .af-run-waterfall__row.is-selected { background: rgba(118, 82, 202, 0.11); }
 .af-run-waterfall__row > span:first-child { min-width: 0; display: flex; align-items: center; gap: 0.3rem; }
+.af-run-waterfall__row > span:first-child > .material-symbols-outlined { flex: 0 0 auto; color: rgba(164, 137, 226, 0.52); font-size: 0.7rem; }
 .af-run-waterfall__row em { flex: 0 0 auto; color: rgba(157, 128, 225, 0.65); font: 700 0.5rem/1.2 var(--af-mono); font-style: normal; }
 .af-run-waterfall__row strong { min-width: 0; overflow: hidden; color: rgba(235, 232, 239, 0.68); font-size: 0.59rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-run-waterfall__row > small { color: rgba(229, 226, 225, 0.28); font: 600 0.52rem/1.2 var(--af-mono); text-align: right; }
@@ -13900,6 +13937,7 @@ button.af-project-card {
 
 .af-run-waterfall__row.is-success .af-run-waterfall__bar { background: linear-gradient(90deg, #3e8c6e, #66c39e); }
 .af-run-waterfall__row.is-error .af-run-waterfall__bar { background: linear-gradient(90deg, #9f423f, #e26d67); }
+.af-run-waterfall__row.is-incomplete .af-run-waterfall__bar { background: repeating-linear-gradient(135deg, #9b672d 0 4px, #d69e50 4px 8px); }
 .af-run-waterfall__row.is-waiting .af-run-waterfall__bar { background: linear-gradient(90deg, #95632f, #d69e50); }
 .af-run-waterfall__row.is-running .af-run-waterfall__bar { animation: af-run-pulse 1.1s ease-in-out infinite; }
 
@@ -13919,6 +13957,22 @@ button.af-project-card {
 .af-run-event-inspector > header span { margin-right: 0.38rem; color: #a88cff; font: 800 0.53rem/1.2 var(--af-mono); text-transform: uppercase; }
 .af-run-event-inspector > header strong { color: rgba(242, 238, 248, 0.88); font-size: 0.73rem; }
 .af-run-event-inspector > header small { color: rgba(229, 226, 225, 0.3); font: 600 0.55rem/1.2 var(--af-mono); }
+
+.af-run-event-inspector__gap {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  margin-top: 0.55rem;
+  padding: 0.48rem 0.55rem;
+  border: 1px solid rgba(218, 155, 73, 0.28);
+  border-radius: 0.42rem;
+  background: rgba(148, 91, 28, 0.12);
+  color: rgba(239, 187, 115, 0.86);
+  font-size: 0.6rem;
+}
+
+.af-run-event-inspector__gap .material-symbols-outlined { font-size: 0.88rem; }
+.af-run-event-inspector__identity { margin-top: 0.55rem; }
 
 .af-run-event-inspector details {
   margin-top: 0.5rem;
@@ -20506,6 +20560,64 @@ button.af-project-card {
 .af-composer-run-switcher > button:disabled { opacity: 0.28; cursor: not-allowed; }
 .af-composer-run-switcher > button .material-symbols-outlined { font-size: 0.9rem; }
 
+.af-composer-run-viewbar {
+  min-height: 2.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.42rem 0.72rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.af-composer-run-viewbar__tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.16rem;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.af-composer-run-viewbar__tabs button {
+  min-height: 1.65rem;
+  padding: 0.26rem 0.65rem;
+  border: 0;
+  border-radius: 0.42rem;
+  background: transparent;
+  color: rgba(229, 226, 225, 0.5);
+  font-size: 0.64rem;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.af-composer-run-viewbar__tabs button.is-active {
+  color: rgba(246, 244, 248, 0.92);
+  background: rgba(255, 255, 255, 0.085);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.af-composer-run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  color: rgba(229, 226, 225, 0.5);
+  font-size: 0.61rem;
+  font-weight: 620;
+}
+
+.af-composer-run-state i {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: rgba(101, 202, 160, 0.85);
+}
+
+.af-composer-run-state.is-running i,
+.af-composer-run-state.is-stopping i { background: rgba(151, 113, 238, 0.9); animation: af-composer-activity-pulse 1.8s ease-in-out infinite; }
+.af-composer-run-state.is-failed i { background: rgba(235, 111, 103, 0.9); }
+.af-composer-run-state.is-waiting i { background: rgba(215, 162, 85, 0.9); }
+
 .af-composer-sidebar .af-composer-session-add {
   background: none;
   padding: 0.3rem 0.35rem;
@@ -20525,7 +20637,7 @@ button.af-project-card {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.5rem 0.75rem;
+  padding: 0.8rem 0.9rem 1.1rem;
 }
 
 .af-composer-sidebar-log-details {
@@ -20687,8 +20799,8 @@ button.af-project-card {
 .af-composer-sidebar-thread .af-composer-assistant-thread {
   max-height: none;
   overflow: visible;
-  gap: 0.95rem;
-  padding: 0.25rem 0 0.75rem;
+  gap: 0.8rem;
+  padding: 0.15rem 0 0.65rem;
 }
 
 .af-composer-sidebar-thread .af-composer-thread-assistant {
@@ -20697,11 +20809,13 @@ button.af-project-card {
 }
 
 .af-composer-sidebar-thread .af-workflow-assistant-message__bubble {
-  font-size: 0.76rem;
+  color: rgba(238, 236, 241, 0.84);
+  font-size: 0.74rem;
+  line-height: 1.62;
 }
 
 .af-composer-sidebar-thread .af-workflow-assistant-message--assistant .af-workflow-assistant-message__bubble {
-  padding-left: 1.63rem;
+  padding: 0.12rem 0 0.1rem 1.55rem;
 }
 
 .af-workflow-assistant-message--error .af-workflow-assistant-message__identity,
@@ -20723,11 +20837,12 @@ button.af-project-card {
 }
 
 .af-composer-assistant-activity {
-  margin: 0.2rem 0 0.15rem 1.63rem;
+  margin: 0.35rem 0 0.15rem 1.55rem;
   overflow: hidden;
-  border-radius: 0.7rem;
-  background: rgba(14, 14, 16, 0.58);
-  box-shadow: inset 0 0 0 1px rgba(202, 195, 216, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.62rem;
+  background: rgba(255, 255, 255, 0.018);
+  box-shadow: none;
 }
 
 .af-composer-assistant-activity > summary {
@@ -20736,7 +20851,7 @@ button.af-project-card {
   align-items: center;
   gap: 0.45rem;
   padding: 0.48rem 0.65rem;
-  color: rgba(202, 195, 216, 0.54);
+  color: rgba(229, 226, 225, 0.44);
   font-size: 0.61rem;
   cursor: pointer;
   list-style: none;
@@ -20748,7 +20863,7 @@ button.af-project-card {
 }
 
 .af-composer-assistant-activity > summary strong {
-  color: rgba(229, 226, 225, 0.76);
+  color: rgba(229, 226, 225, 0.68);
   font-size: 0.65rem;
 }
 
@@ -20793,8 +20908,75 @@ button.af-project-card {
   min-width: 0;
   padding: 0.55rem 0.6rem;
   border-radius: 0.52rem;
-  background: rgba(42, 42, 42, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  background: rgba(0, 0, 0, 0.14);
 }
+
+.af-composer-run-audit {
+  min-width: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  margin: -0.8rem -0.9rem -1.1rem;
+}
+
+.af-composer-run-audit__notice {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.65rem;
+  padding: 0.58rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.55rem;
+  color: rgba(229, 226, 225, 0.52);
+  font-size: 0.62rem;
+}
+
+.af-composer-run-audit__notice .material-symbols-outlined { font-size: 0.92rem; }
+.af-composer-run-audit__notice button { margin-left: auto; border: 0; background: transparent; color: rgba(205, 189, 255, 0.8); font-size: inherit; cursor: pointer; }
+
+.af-run-inspector--compact {
+  min-height: 100%;
+  background: transparent;
+}
+
+.af-run-inspector--compact .af-run-inspector__toolbar {
+  flex-wrap: wrap;
+  padding: 0.52rem 0.65rem;
+  border-top: 0;
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.af-run-inspector--compact .af-run-inspector__tabs button.is-active {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.af-run-inspector--compact .af-run-inspector__evidence { order: 3; width: 100%; }
+.af-run-inspector--compact .af-run-inspector__toolbar > label { width: min(12rem, 48%); }
+
+.af-run-inspector--compact .af-run-inspector__layout {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.af-run-inspector--compact .af-run-inspector__turns {
+  min-height: 17rem;
+  max-height: 24rem;
+  border-right: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.af-run-inspector--compact .af-run-inspector__execution { min-height: 28rem; }
+.af-run-inspector--compact .af-run-inspector__pane-head { min-height: 2.7rem; background: transparent; }
+.af-run-inspector--compact .af-run-inspector__pane-head span { color: rgba(229, 226, 225, 0.36); letter-spacing: 0.08em; }
+.af-run-inspector--compact .af-run-turn.is-selected { border-color: rgba(255, 255, 255, 0.13); box-shadow: inset 2px 0 rgba(151, 113, 238, 0.7); }
+.af-run-inspector--compact .af-run-turn__events button:hover,
+.af-run-inspector--compact .af-run-turn__events button.is-selected,
+.af-run-inspector--compact .af-run-waterfall__row:hover,
+.af-run-inspector--compact .af-run-waterfall__row.is-selected { background: rgba(255, 255, 255, 0.045); }
+.af-run-inspector--compact .af-run-waterfall__ruler { background: #18181a; }
 
 .af-composer-assistant-activity__item small {
   display: block;
@@ -29368,10 +29550,15 @@ body:has(.af-public-display-page--canvas) {
 }
 
 .af-marketplace-rank { color: #736e7d; font: 700 12px ui-monospace, monospace; }
+.af-marketplace-card__badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .af-marketplace-visibility { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; color: #71cfb0; border-radius: 999px; background: rgba(57, 151, 120, 0.12); font-size: 11px; }
 .af-marketplace-visibility.is-private { color: #d3a75c; background: rgba(175, 120, 39, 0.14); }
 .af-marketplace-visibility.is-local { color: #9ecaff; background: rgba(90, 146, 211, 0.14); }
 .af-marketplace-visibility .material-symbols-outlined { font-size: 14px; }
+.af-marketplace-release-state { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; color: #aaa4b6; border-radius: 999px; background: rgba(124, 116, 139, 0.14); font-size: 11px; }
+.af-marketplace-release-state.is-stable { color: #a7e5c9; background: rgba(57, 151, 120, 0.16); }
+.af-marketplace-release-state.is-draft { color: #c7b5ef; background: rgba(117, 85, 218, 0.14); }
+.af-marketplace-release-state .material-symbols-outlined { font-size: 14px; }
 .af-marketplace-card h2 { margin: 16px 0 6px; overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .af-marketplace-card > p { height: 38px; margin: 0; overflow: hidden; color: #9b97a5; font-size: 12px; line-height: 1.55; }
 .af-marketplace-version { margin-top: 9px; overflow: hidden; color: #726e7c; font: 10px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }

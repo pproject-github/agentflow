@@ -1107,7 +1107,7 @@ function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope 
 }
 
 function publicProjectFlowMarketplaceResource(resource) {
-  const { _graph, _flowRoot, ...publicResource } = resource;
+  const { _graph, _flowRoot, flowRoot, ...publicResource } = resource;
   return publicResource;
 }
 
@@ -1263,6 +1263,8 @@ async function workspaceRoutes(req, res, ctx) {
         const kind = String(url.searchParams.get("kind") || "flow").trim();
         const requestedScope = String(url.searchParams.get("scope") || "all").trim();
         const scope = ["all", "owned", "installed"].includes(requestedScope) ? requestedScope : "all";
+        const requestedReleaseState = String(url.searchParams.get("releaseState") || "all").trim().toLowerCase();
+        const releaseState = ["all", "stable", "draft"].includes(requestedReleaseState) ? requestedReleaseState : "all";
         const marketplaceScope = scope === "owned" ? "owned" : "all";
         const queryText = String(url.searchParams.get("q") || "").trim().toLowerCase();
         if (kind === "node") {
@@ -1325,6 +1327,7 @@ async function workspaceRoutes(req, res, ctx) {
         const items = sortMarketplaceResources(
           projectFlows
             .filter((item) => scope !== "installed" || item.installed)
+            .filter((item) => releaseState === "all" || item.releaseState === releaseState)
             .filter((item) => marketplaceResourceMatches(item, queryText)),
         );
         const page = paginateMarketplaceResources(items, url);
@@ -1332,6 +1335,7 @@ async function workspaceRoutes(req, res, ctx) {
         json(res, 200, {
           kind,
           scope,
+          releaseState,
           sort: "useCount",
           order: "desc",
           ...page,
@@ -1573,7 +1577,11 @@ async function workspaceRoutes(req, res, ctx) {
           marketplaceAction: action,
           marketplaceInstallFlowId: resource.installFlowId || resource.liveFlowId || resource.definitionId || id,
         });
-        if (previewKind === "node") previewParams.set("focusNodeId", "node_preview");
+        if (previewKind === "node") {
+          previewParams.set("focusNodeId", "node_preview");
+        } else if (projectFlow && resource.liveEntryId) {
+          previewParams.set("focusNodeId", resource.liveEntryId);
+        }
         if (action === "open-source") {
           previewParams.set("marketplaceTargetFlowId", resource.liveFlowId || resource.definitionId || "");
           previewParams.set("marketplaceTargetFlowSource", resource.liveFlowSource || "user");

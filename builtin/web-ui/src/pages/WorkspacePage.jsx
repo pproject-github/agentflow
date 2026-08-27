@@ -41,6 +41,8 @@ import {
 import { KeyboardShortcutsModal } from "../KeyboardShortcutsModal.jsx";
 import { NodeJumpPalette } from "../NodeJumpPalette.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
+import WorkspaceRunAuditPanel from "../components/WorkspaceRunAuditPanel.jsx";
+import { stripAgentflowReceipt } from "../lib/composerRunPresentation.js";
 import LoadingState from "../components/LoadingState.jsx";
 import AiExplorationPanel from "../components/AiExplorationPanel.jsx";
 import {
@@ -283,7 +285,11 @@ function normalizeComposerRunSessionsForPersistence(sessions) {
       return {
         id,
         label: clipConversationText(session?.label || id, 120),
+        alias: clipConversationText(session?.alias || "", 120),
+        runNodeId: clipConversationText(session?.runNodeId || "", 160),
         status: status === "failed" ? "failed" : "done",
+        startedAt: Number(session?.startedAt || 0) || 0,
+        endedAt: Number(session?.endedAt || 0) || 0,
         messages,
       };
     })
@@ -6494,10 +6500,21 @@ function isWorkspaceComposerTechnicalMessage(msg) {
 
 function workspaceComposerConversationMessages(messages, running = false) {
   const list = Array.isArray(messages) ? messages : [];
-  const conversational = list.filter((msg) => !isWorkspaceComposerTechnicalMessage(msg));
+  const conversational = list
+    .filter((msg) => !isWorkspaceComposerTechnicalMessage(msg))
+    .map((msg) => ({ ...msg, text: stripAgentflowReceipt(msg?.text) }))
+    .filter((msg) => String(msg.text || "").trim())
+    .filter((msg, index, items) => {
+      if (msg.role === "user") return true;
+      const text = String(msg.text || "").trim();
+      return !items.slice(0, index).some((previous) => (
+        previous.role !== "user" && String(previous.text || "").trim() === text
+      ));
+    });
   if (conversational.length > 0) return conversational;
   const fallback = [...list].reverse().find((msg) => msg?.kind === "result" || msg?.kind === "assistant" || msg?.error);
-  if (fallback) return [fallback];
+  const fallbackText = stripAgentflowReceipt(fallback?.text);
+  if (fallback && fallbackText) return [{ ...fallback, text: fallbackText }];
   if (list.length > 0 || running) {
     if (running) return [];
     return [{
@@ -9404,6 +9421,7 @@ function WorkspacePageInner() {
   const [composerMessages, setComposerMessages] = useState([]);
   const [composerRunSessions, setComposerRunSessions] = useState([]);
   const [activeComposerSessionId, setActiveComposerSessionId] = useState("workspace");
+  const [composerRunView, setComposerRunView] = useState("result");
   const [composerSidebarOpen, setComposerSidebarOpen] = useState(false);
   const [aiExplorationOpen, setAiExplorationOpen] = useState(false);
   const composerSidebarThreadRef = useRef(null);
@@ -10760,6 +10778,7 @@ function WorkspacePageInner() {
         status: "running",
         startedAt: Date.now(),
         steps: [],
+        events: [{ type: "run-start", runId: runSessionId, runNodeId, status: "running", ts: Date.now() }],
         messages: [{ role: "assistant", kind: "run-summary", text: "准备运行...", at: Date.now() }],
       },
     ]);
@@ -10864,6 +10883,15 @@ function WorkspacePageInner() {
             nextMessages.unshift(summaryMessage);
           }
           return { ...session, steps: nextSteps, messages: nextMessages.slice(-160) };
+        }));
+      };
+      const appendRunAuditEvent = (sourceEvent) => {
+        if (!sourceEvent || typeof sourceEvent !== "object") return;
+        const event = { ...sourceEvent, ts: Number(sourceEvent.ts || sourceEvent.at || Date.now()) };
+        setComposerRunSessions((list) => list.map((session) => {
+          if (session.id !== runSessionId) return session;
+          const currentEvents = Array.isArray(session.events) ? session.events : [];
+          return { ...session, events: [...currentEvents, event].slice(-1000) };
         }));
       };
     const ensureContextRunResultDisplay = (nodeId, rawContent) => {
@@ -11201,7 +11229,24 @@ function WorkspacePageInner() {
       const markRunSessionStatus = (sessionStatus) => {
         setComposerRunSessions((list) => list.map((session) => (
           session.id === runSessionId
-            ? { ...session, status: sessionStatus, ...(sessionStatus === "waiting" ? {} : { endedAt: Date.now() }) }
+            ? (() => {
+                const endedAt = Date.now();
+                const currentEvents = Array.isArray(session.events) ? session.events : [];
+                const finalEvent = {
+                  type: "run-finish",
+                  runId: runSessionId,
+                  runNodeId,
+                  status: sessionStatus === "done" ? "success" : sessionStatus,
+                  ts: endedAt,
+                  durationMs: Math.max(0, endedAt - Number(session.startedAt || endedAt)),
+                };
+                return {
+                  ...session,
+                  status: sessionStatus,
+                  ...(sessionStatus === "waiting" ? {} : { endedAt }),
+                  events: [...currentEvents, finalEvent].slice(-1000),
+                };
+              })()
             : session
         )));
       };
@@ -11300,6 +11345,7 @@ function WorkspacePageInner() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
+          appendRunAuditEvent(event);
           if (event.type === "error") throw new Error(event.error || "Workspace run failed");
           if (event.type === "stopped") {
             workspaceRunStoppedRef.current.add(runSessionId);
@@ -11383,6 +11429,7 @@ function WorkspacePageInner() {
       }
       if (buffer.trim()) {
         const event = JSON.parse(buffer);
+        appendRunAuditEvent(event);
         if (event.type === "error") throw new Error(event.error || "Workspace run failed");
         if (event.type === "stopped") {
           workspaceRunStoppedRef.current.add(runSessionId);
@@ -15567,6 +15614,9 @@ function WorkspacePageInner() {
   }, [activeComposerSessionId, composerMessages, composerModel, composerRunSessions, composerRunning, composerText, edges, flowParams, loadWorkspace, nodes, saveGraph, selectedCanvasNodeIds, selectedSkills, workspaceWritable]);
 
   const activeRunSession = composerRunSessions.find((session) => session.id === activeComposerSessionId) || null;
+  useEffect(() => {
+    setComposerRunView("result");
+  }, [activeComposerSessionId]);
   const orderedComposerRunSessions = useMemo(() => {
     const sessions = Array.isArray(composerRunSessions) ? composerRunSessions : [];
     const newestFirst = [...sessions].reverse();
@@ -15985,22 +16035,6 @@ function WorkspacePageInner() {
           >
             <span className="material-symbols-outlined">help</span>
           </button>
-          {!isWorkflowMode && !isDisplayMode ? (
-            <button
-              type="button"
-              className={"af-composer-topbar-btn af-ai-exploration-topbar-btn" + (aiExplorationOpen ? " af-composer-topbar-btn--active" : "")}
-              disabled={!workspaceWritable}
-              onClick={() => {
-                setComposerSidebarOpen(false);
-                setSelectedNodeId("");
-                setAiExplorationOpen((value) => !value);
-              }}
-              title="先生成预计运行图、进行 Dry-run 策略预检，再固化为 Workspace DSL"
-            >
-              <span className="material-symbols-outlined" aria-hidden>account_tree</span>
-              探索
-            </button>
-          ) : null}
           <button
             type="button"
             className={"af-composer-topbar-btn" + (isWorkflowMode ? " af-composer-topbar-btn--workflow" : "") + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
@@ -16892,25 +16926,48 @@ function WorkspacePageInner() {
                   </button>
                 </div>
               ) : null}
-              <div
-                className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
-                role="status"
-                aria-live="polite"
-              >
-                {activeComposerStatus}
-              </div>
+              {activeRunSession ? (
+                <div className="af-composer-run-viewbar">
+                  <div className="af-composer-run-viewbar__tabs" role="tablist" aria-label="Run 展示方式">
+                    <button type="button" role="tab" aria-selected={composerRunView === "result"} className={composerRunView === "result" ? "is-active" : ""} onClick={() => setComposerRunView("result")}>
+                      结果
+                    </button>
+                    <button type="button" role="tab" aria-selected={composerRunView === "audit"} className={composerRunView === "audit" ? "is-active" : ""} onClick={() => setComposerRunView("audit")}>
+                      审核图
+                    </button>
+                  </div>
+                  <span className={`af-composer-run-state is-${activeRunSession.status || "done"}`} role="status">
+                    <i aria-hidden />
+                    {activeRunSession.status === "running" ? "运行中" : activeRunSession.status === "failed" ? "失败" : activeRunSession.status === "waiting" ? "等待中" : "已完成"}
+                  </span>
+                </div>
+              ) : (
+                <div
+                  className={"af-composer-sidebar-status" + (activeComposerRunning ? " af-composer-sidebar-status--running" : "")}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {activeComposerStatus}
+                </div>
+              )}
               <div className="af-composer-sidebar-thread" ref={composerSidebarThreadRef}>
-                <WorkspaceComposerThread
-                  messages={activeComposerConversationMessages}
-                  running={activeComposerRunning}
-                  showRunningIndicator={!activeRunSession}
-                />
-                <WorkspaceComposerThread
-                  messages={activeComposerTechnicalMessages}
-                  running={activeComposerRunning}
-                  showRunningIndicator={false}
-                  technical
-                />
+                {activeRunSession && composerRunView === "audit" ? (
+                  <WorkspaceRunAuditPanel flowParams={flowParams} session={activeRunSession} />
+                ) : (
+                  <>
+                    <WorkspaceComposerThread
+                      messages={activeComposerConversationMessages}
+                      running={activeComposerRunning}
+                      showRunningIndicator={!activeRunSession}
+                    />
+                    <WorkspaceComposerThread
+                      messages={activeComposerTechnicalMessages}
+                      running={activeComposerRunning}
+                      showRunningIndicator={false}
+                      technical
+                    />
+                  </>
+                )}
               </div>
               <ComposerAssistantInput
                 value={composerText}

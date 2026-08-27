@@ -846,12 +846,21 @@ function workspaceReleaseSummary(workspaceRoot, marketplaceRoot = "", graph = nu
   const currentGraph = graph || readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
   const draftRevision = workspaceDesignRevision(currentGraph);
   const stable = registry.releases.find((release) => release.id === registry.stableReleaseId) || null;
+  const comparableStableRevisions = new Set([stable?.designRevision || ""].filter(Boolean));
+  const stableRoot = stable ? workspaceReleaseSnapshotRoot(workspaceRoot, stable.id) : "";
+  if (stableRoot && fs.existsSync(stableRoot)) {
+    try {
+      comparableStableRevisions.add(workspaceDesignRevision(readWorkspaceGraph(stableRoot, marketplaceRoot).graph));
+    } catch {
+      // Keep the immutable manifest revision when an old snapshot cannot be normalized.
+    }
+  }
   return {
     enabled: Boolean(stable),
     stableReleaseId: stable?.id || "",
     stableRevision: stable?.designRevision || "",
     draftRevision,
-    hasDraftChanges: Boolean(stable && stable.designRevision !== draftRevision),
+    hasDraftChanges: Boolean(stable && !comparableStableRevisions.has(draftRevision)),
     releases: registry.releases,
   };
 }

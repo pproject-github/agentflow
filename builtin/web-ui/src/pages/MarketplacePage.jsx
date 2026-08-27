@@ -5,7 +5,12 @@ import { useRoute } from "../routeContext.jsx";
 const MARKETPLACE_SCOPES = [
   { id: "all", label: "全部" },
   { id: "owned", label: "我的发布" },
-  { id: "installed", label: "已安装 / 可用" },
+];
+
+const FLOW_RELEASE_STATES = [
+  { id: "all", label: "全部状态" },
+  { id: "stable", label: "Stable" },
+  { id: "draft", label: "Draft" },
 ];
 
 function initialMarketplaceView() {
@@ -13,7 +18,9 @@ function initialMarketplaceView() {
   const kind = params.get("kind") === "node" ? "node" : "flow";
   const requestedScope = params.get("scope") || "all";
   const scope = MARKETPLACE_SCOPES.some((item) => item.id === requestedScope) ? requestedScope : "all";
-  return { kind, scope };
+  const requestedReleaseState = params.get("releaseState") || "all";
+  const releaseState = FLOW_RELEASE_STATES.some((item) => item.id === requestedReleaseState) ? requestedReleaseState : "all";
+  return { kind, scope, releaseState };
 }
 
 function ownedBy(item, authUser) {
@@ -41,6 +48,7 @@ export default function MarketplacePage({ authUser }) {
   const initialView = useMemo(initialMarketplaceView, []);
   const [kind, setKind] = useState(initialView.kind);
   const [scope, setScope] = useState(initialView.scope);
+  const [releaseState, setReleaseState] = useState(initialView.releaseState);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
@@ -52,8 +60,9 @@ export default function MarketplacePage({ authUser }) {
 
   useEffect(() => {
     const params = new URLSearchParams({ kind, scope });
+    if (kind === "flow" && releaseState !== "all") params.set("releaseState", releaseState);
     window.history.replaceState({}, "", `/marketplace?${params}`);
-  }, [kind, scope]);
+  }, [kind, releaseState, scope]);
 
   const load = useCallback(async ({ cursor = "", append = false } = {}) => {
     requestRef.current?.abort();
@@ -63,6 +72,7 @@ export default function MarketplacePage({ authUser }) {
     setError("");
     try {
       const params = new URLSearchParams({ kind, scope, sort: "useCount", order: "desc", limit: "24" });
+      if (kind === "flow" && releaseState !== "all") params.set("releaseState", releaseState);
       if (cursor) params.set("cursor", cursor);
       if (query.trim()) params.set("q", query.trim());
       const response = await fetch(`/api/marketplace/resources?${params}`, { signal: controller.signal });
@@ -82,7 +92,7 @@ export default function MarketplacePage({ authUser }) {
         setLoading(false);
       }
     }
-  }, [kind, query, scope]);
+  }, [kind, query, releaseState, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 180);
@@ -192,9 +202,18 @@ export default function MarketplacePage({ authUser }) {
             </button>
           ))}
         </div>
+        {kind === "flow" ? (
+          <div className="af-marketplace-scopes af-marketplace-release-tabs" aria-label="稳定状态">
+            {FLOW_RELEASE_STATES.map((item) => (
+              <button key={item.id} type="button" className={releaseState === item.id ? "is-active" : ""} onClick={() => setReleaseState(item.id)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <span className="af-marketplace-sort">
-          <span className="material-symbols-outlined">{scope === "installed" ? "inventory_2" : "trending_down"}</span>
-          {scope === "installed" ? "当前可用资源" : "使用次数从高到低"}
+          <span className="material-symbols-outlined">trending_down</span>
+          使用次数从高到低
         </span>
       </div>
 
@@ -202,7 +221,13 @@ export default function MarketplacePage({ authUser }) {
       {loading && items.length === 0 ? <div className="af-marketplace-empty">正在加载流程仓库…</div> : null}
       {!loading && items.length === 0 ? (
         <div className="af-marketplace-empty">
-          {scope === "owned" ? "你还没有发布匹配的资源" : scope === "installed" ? "没有匹配的已安装或可用资源" : `没有匹配的${kind === "flow" ? "流程" : "节点"}`}
+          {scope === "owned"
+            ? "你还没有发布匹配的资源"
+            : kind === "flow" && releaseState === "stable"
+              ? "没有匹配的 Stable 流程"
+              : kind === "flow" && releaseState === "draft"
+                ? "没有匹配的 Draft 流程"
+                : `没有匹配的${kind === "flow" ? "流程" : "节点"}`}
         </div>
       ) : null}
 
@@ -218,17 +243,27 @@ export default function MarketplacePage({ authUser }) {
             <article className="af-marketplace-card" key={key}>
               <div className="af-marketplace-card__top">
                 <span className="af-marketplace-rank">#{index + 1}</span>
-                {item.localCatalog ? (
-                  <span className="af-marketplace-visibility is-local">
-                    <span className="material-symbols-outlined">inventory_2</span>
-                    可用
-                  </span>
-                ) : (
-                  <span className={`af-marketplace-visibility is-${item.visibility || "public"}`}>
-                    <span className="material-symbols-outlined">{item.visibility === "private" ? "lock" : "public"}</span>
-                    {item.visibility === "private" ? "私有" : "公开"}
-                  </span>
-                )}
+                <div className="af-marketplace-card__badges">
+                  {resourceType === "flow" ? (
+                    <span className={`af-marketplace-release-state is-${item.releaseState || "draft"}`}>
+                      <span className="material-symbols-outlined">{item.releaseState === "stable" ? "verified" : "edit_note"}</span>
+                      {item.releaseState === "stable"
+                        ? `${item.stableReleaseId ? `Stable ${item.stableReleaseId}` : "Stable"}${item.hasUnpublishedChanges ? " · 有调整" : ""}`
+                        : "Draft"}
+                    </span>
+                  ) : null}
+                  {item.localCatalog ? (
+                    <span className="af-marketplace-visibility is-local">
+                      <span className="material-symbols-outlined">inventory_2</span>
+                      可用
+                    </span>
+                  ) : (
+                    <span className={`af-marketplace-visibility is-${item.visibility || "public"}`}>
+                      <span className="material-symbols-outlined">{item.visibility === "private" ? "lock" : "public"}</span>
+                      {item.visibility === "private" ? "私有" : "公开"}
+                    </span>
+                  )}
+                </div>
               </div>
               <h2>{item.displayName || item.id}</h2>
               <p>{item.description || "暂无说明"}</p>

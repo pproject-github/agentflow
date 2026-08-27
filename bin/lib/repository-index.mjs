@@ -20,7 +20,7 @@ import {
   workspaceRunPlan,
 } from "./workspace-server.mjs";
 
-const REPOSITORY_INDEX_VERSION = 1;
+const REPOSITORY_INDEX_VERSION = 2;
 const REPOSITORY_INDEX_FILENAME = "repository-index.json";
 const REPOSITORY_INDEX_MAX_AGE_MS = 5 * 60 * 1000;
 const memoryIndexes = new Map();
@@ -167,10 +167,12 @@ function scanProjectFlows(workspaceRoot, usageStats) {
   const appendFlow = (ownerId, flow, flowSource = "user", workspaceId = "") => {
     if (!ownerId || flow.archived || !flow.path) return;
     let stable;
+    let draftGraph;
     let graph;
     try {
+      draftGraph = readWorkspaceGraph(flow.path, workspaceRoot).graph;
       stable = readWorkspaceStableRelease(flow.path, workspaceRoot);
-      graph = stable?.graph || readWorkspaceGraph(flow.path, workspaceRoot).graph;
+      graph = stable?.graph || draftGraph;
     } catch {
       return;
     }
@@ -181,6 +183,13 @@ function scanProjectFlows(workspaceRoot, usageStats) {
       const baseId = projectFlowRepositoryId(ownerId, flowSource, flow.id);
       const id = runnableEntries.length === 1 ? baseId : `${baseId}:${runnable.entryId}`;
       const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
+      const releaseState = stable?.release?.id ? "stable" : "draft";
+      const draftRevision = workspaceDesignRevision(draftGraph);
+      const stableRevisions = new Set([
+        stable?.release?.designRevision || "",
+        stable?.graph ? workspaceDesignRevision(stable.graph) : "",
+      ].filter(Boolean));
+      const hasUnpublishedChanges = Boolean(stable?.release?.id && !stableRevisions.has(draftRevision));
       const rawEntryLabel = String(runnable.entry?.label || "").trim();
       const genericLabel = ["", "Run", "Scheduled Run", "运行", "定时运行"].includes(rawEntryLabel);
       const exactOwner = flowSource === "user" ? ownerId : "";
@@ -200,6 +209,9 @@ function scanProjectFlows(workspaceRoot, usageStats) {
         description: flow.description || "",
         version,
         versionLabel: stable?.release?.id ? `Stable ${stable.release.id}` : "当前版本",
+        releaseState,
+        stableReleaseId: stable?.release?.id || "",
+        hasUnpublishedChanges,
         runMode: runnable.runMode,
         runModeLabel: runnable.runMode === "scheduled" ? "定时运行" : "手动运行",
         ownerUserId: ownerId,

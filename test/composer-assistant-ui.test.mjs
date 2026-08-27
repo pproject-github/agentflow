@@ -10,6 +10,10 @@ const workspacePath = new URL(
   "../builtin/web-ui/src/pages/WorkspacePage.jsx",
   import.meta.url,
 );
+const auditPanelPath = new URL(
+  "../builtin/web-ui/src/components/WorkspaceRunAuditPanel.jsx",
+  import.meta.url,
+);
 const cssPath = new URL("../builtin/web-ui/src/index.css", import.meta.url);
 
 test("AI Composer uses the shared Assistant conversation surface", async () => {
@@ -60,4 +64,22 @@ test("Composer keeps one Runs tab and switches individual runs inside it", async
   assert.match(workspace.slice(switcherStart), /<optgroup label="最近完成">/);
   assert.match(css, /\.af-composer-run-switcher\s*\{/);
   assert.match(css, /\.af-composer-session-count\s*\{/);
+});
+
+test("Runs exposes the shared Turn timeline audit view instead of hiding it in logs", async () => {
+  const [workspace, auditPanel, css] = await Promise.all([
+    readFile(workspacePath, "utf8"),
+    readFile(auditPanelPath, "utf8"),
+    readFile(cssPath, "utf8"),
+  ]);
+
+  assert.match(workspace, /WorkspaceRunAuditPanel/);
+  assert.match(workspace, />\s*结果\s*</);
+  assert.match(workspace, />\s*审核图\s*</);
+  assert.match(workspace, /stripAgentflowReceipt/);
+  assert.match(auditPanel, /<RunInspector/);
+  assert.match(auditPanel, /compact/);
+  assert.match(auditPanel, /api\/workspace\/run-logs/);
+  assert.match(css, /\.af-composer-run-viewbar\s*\{/);
+  assert.match(css, /\.af-run-inspector--compact\s*\{/);
 });

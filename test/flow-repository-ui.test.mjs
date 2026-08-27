@@ -21,6 +21,12 @@ test("主资源入口统一展示为流程仓库", () => {
   assert.doesNotMatch(marketplace, />在流程中使用<\/button>/);
   assert.doesNotMatch(marketplace, /<small>输入<\/small>|<small>安装<\/small>|<small>用户<\/small>/);
   assert.match(marketplace, /<small>使用<\/small>/);
+  assert.match(marketplace, /Stable/);
+  assert.match(marketplace, /Draft/);
+  assert.match(marketplace, /releaseState/);
+  assert.match(marketplace, /hasUnpublishedChanges/);
+  assert.doesNotMatch(marketplace, /已安装 \/ 可用/);
+  assert.doesNotMatch(marketplace, /id: "installed"/);
 });
 
 test("流程仓库节点先预览，再选择目标流程加入调整态", () => {

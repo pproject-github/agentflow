@@ -266,6 +266,10 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
     assert.equal(automaticFlow.displayName, "auto-runnable-flow");
     assert.equal(automaticFlow.visibility, "public");
     assert.equal(automaticFlow.versionLabel, "Stable v1");
+    assert.equal(automaticFlow.releaseState, "stable");
+    assert.equal(automaticFlow.stableReleaseId, "v1");
+    assert.equal(automaticFlow.hasUnpublishedChanges, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(automaticFlow, "flowRoot"), false);
     assert.equal(automaticFlow.useCount, 1, "successful source runs must count as flow usage");
     const sharedAutomaticFlow = body.items.find((item) => item.displayName === "shared-runnable-flow");
     assert.equal(sharedAutomaticFlow.liveFlowSource, "workspace");
@@ -275,6 +279,24 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
     assert.equal(multiFlows.length, 2, "each connected Run entry must become one flow card");
     assert.deepEqual(multiFlows.map((item) => item.nodeCount).sort(), [2, 2]);
     assert.deepEqual(new Set(multiFlows.map((item) => item.runModeLabel)), new Set(["手动运行", "定时运行"]));
+
+    const stableOnlyResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&releaseState=stable`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const stableOnly = await stableOnlyResponse.json();
+    assert.equal(stableOnlyResponse.status, 200, JSON.stringify(stableOnly));
+    assert.equal(stableOnly.releaseState, "stable");
+    assert.equal(stableOnly.items.length > 0, true);
+    assert.equal(stableOnly.items.every((item) => item.releaseState === "stable"), true);
+
+    const draftOnlyResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&releaseState=draft`, {
+      headers: { Authorization: `Bearer ${consumer.token}` },
+    });
+    const draftOnly = await draftOnlyResponse.json();
+    assert.equal(draftOnlyResponse.status, 200, JSON.stringify(draftOnly));
+    assert.equal(draftOnly.releaseState, "draft");
+    assert.equal(draftOnly.items.length > 0, true);
+    assert.equal(draftOnly.items.every((item) => item.releaseState === "draft"), true);
 
     const firstPageResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&limit=1`, {
       headers: { Authorization: `Bearer ${consumer.token}` },
@@ -313,6 +335,7 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
     const workspacePreviewUrl = new URL(workspacePreviewBody.url, `http://127.0.0.1:${server.address().port}`);
     assert.equal(workspacePreviewUrl.pathname, "/workspace");
     assert.equal(workspacePreviewUrl.searchParams.get("marketplacePreview"), "1");
+    assert.equal(workspacePreviewUrl.searchParams.get("focusNodeId"), "run");
     const readonlyGraphResponse = await fetch(`${workspacePreviewUrl.origin}/api/workspace/graph?flowId=${encodeURIComponent(workspacePreviewUrl.searchParams.get("flowId"))}&flowSource=workspace&archived=1`, {
       headers: { Authorization: `Bearer ${consumer.token}` },
     });

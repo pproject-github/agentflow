@@ -6,7 +6,7 @@ const panelPath = new URL("../builtin/web-ui/src/components/AiExplorationPanel.j
 const workspacePath = new URL("../builtin/web-ui/src/pages/WorkspacePage.jsx", import.meta.url);
 const cssPath = new URL("../builtin/web-ui/src/index.css", import.meta.url);
 
-test("Workspace AI exploration separates Plan, dry-run, Actual Trace and DSL materialization", async () => {
+test("Workspace AI exploration remains implemented but hides its unfinished topbar entry", async () => {
   const [panel, workspace, css] = await Promise.all([
     readFile(panelPath, "utf8"),
     readFile(workspacePath, "utf8"),
@@ -14,7 +14,7 @@ test("Workspace AI exploration separates Plan, dry-run, Actual Trace and DSL mat
   ]);
 
   assert.match(workspace, /<AiExplorationPanel/);
-  assert.match(workspace, />\s*探索\s*<\/button>/);
+  assert.doesNotMatch(workspace, />\s*探索\s*<\/button>/);
   assert.match(panel, /生成预计运行图/);
   assert.match(panel, /Dry-run 策略预检/);
   assert.match(panel, /ACTUAL/);
