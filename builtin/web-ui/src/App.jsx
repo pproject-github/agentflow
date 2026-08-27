@@ -230,7 +230,7 @@ function AuthGate({ children }) {
               <span className="material-symbols-outlined">shield_person</span>
               <div><h1>AgentFlow</h1><p>{authError ? "CAS 登录未完成" : "正在前往 CAS 统一认证"}</p></div>
             </div>
-            {authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "当前 CAS 用户没有 AgentFlow 访问权限。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
+            {authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "该账号是 AgentFlow 管理员，请从管理员入口使用密码登录。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
             <button className="af-auth-submit" type="button" onClick={() => {
               const returnTo = `${window.location.pathname}${window.location.hash}`;
               window.location.assign(`${auth.casLoginUrl}?returnTo=${encodeURIComponent(returnTo)}`);

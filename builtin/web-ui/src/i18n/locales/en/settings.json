@@ -75,10 +75,10 @@
     "newValue": "Value (be careful with secrets)"
   },
   "allowlist": {
-    "title": "User Allowlist",
-    "description": "Only controls which usernames may register or sign in. Users set their own password on first sign-in.",
-    "enabled": "Allowlist enabled",
-    "open": "Open registration",
+    "title": "Local Password User Allowlist",
+    "description": "Only controls legacy username/password accounts. CAS users are governed by CAS authorization and bypass this allowlist.",
+    "enabled": "Local allowlist enabled",
+    "open": "Open local registration",
     "refreshing": "Refreshing...",
     "saving": "Saving...",
     "file": "File",
@@ -87,7 +87,7 @@
     "readonly": "Read-only",
     "userCount": "{{count}} users",
     "remove": "Remove {{username}}",
-    "emptyFile": "No file allowlist configured. If env allowlist is also empty, every username can register.",
+    "emptyFile": "No file allowlist configured. If env allowlist is also empty, every local password user can register.",
     "emptyEnv": "AGENTFLOW_USER_WHITELIST / AGENTFLOW_ALLOWED_USERS is not configured",
     "unionHint": "The file allowlist and env allowlist are combined. This only stores usernames, never passwords.",
     "add": "Add"

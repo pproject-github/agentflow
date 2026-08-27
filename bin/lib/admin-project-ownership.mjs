@@ -61,13 +61,19 @@ export function listAdminOwnedProjects() {
   ));
 }
 
+export function listUserOwnedProjects(userId) {
+  const normalizedUserId = sanitizeAgentflowUserId(userId);
+  if (!normalizedUserId) return [];
+  return listAdminOwnedProjects().filter((project) => project.userId === normalizedUserId);
+}
+
 function appendTransferAudit(record) {
   const filePath = path.join(getAgentflowDataRoot(), "admin", "project-owner-transfers.jsonl");
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function reassignAdminProjectOwner({ actorUserId, sourceUserId, targetUserId, flowId, archived = false } = {}) {
+export function reassignAdminProjectOwner({ actorUserId, sourceUserId, targetUserId, flowId, archived = false, dryRun = false, transferKind = "admin" } = {}) {
   const sourceId = sanitizeAgentflowUserId(sourceUserId);
   const targetId = sanitizeAgentflowUserId(targetUserId);
   const projectId = String(flowId || "").trim();
@@ -97,6 +103,15 @@ export function reassignAdminProjectOwner({ actorUserId, sourceUserId, targetUse
     dryRun: true,
   });
   if (scheduleCheck.conflict) return { ok: false, status: 409, error: scheduleCheck.error };
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      project: { userId: targetId, flowId: projectId, archived: archived === true },
+      sourceUserId: sourceId,
+      targetUserId: targetId,
+    };
+  }
 
   fs.mkdirSync(path.dirname(targetDir), { recursive: true });
   fs.renameSync(sourceDir, targetDir);
@@ -126,6 +141,7 @@ export function reassignAdminProjectOwner({ actorUserId, sourceUserId, targetUse
     archived: archived === true,
     collaborationChanged: collaboration.changed === true,
     schedulesChanged: Number(schedules.changed || 0),
+    transferKind: String(transferKind || "admin"),
     transferredAt,
   });
   return {
@@ -136,4 +152,48 @@ export function reassignAdminProjectOwner({ actorUserId, sourceUserId, targetUse
     collaborationChanged: collaboration.changed === true,
     schedulesChanged: Number(schedules.changed || 0),
   };
+}
+
+export function reassignAllUserProjects({ actorUserId, sourceUserId, targetUserId, transferKind = "self_service_legacy_link" } = {}) {
+  const sourceId = sanitizeAgentflowUserId(sourceUserId);
+  const targetId = sanitizeAgentflowUserId(targetUserId);
+  if (!sourceId || !targetId || sourceId === targetId) {
+    return { ok: false, status: 400, error: "旧账号与 CAS 用户无效" };
+  }
+  const projects = listUserOwnedProjects(sourceId);
+  for (const project of projects) {
+    const checked = reassignAdminProjectOwner({
+      actorUserId,
+      sourceUserId: sourceId,
+      targetUserId: targetId,
+      flowId: project.flowId,
+      archived: project.archived,
+      dryRun: true,
+      transferKind,
+    });
+    if (!checked.ok) {
+      return { ...checked, error: `${project.flowId}：${checked.error || "迁移预检失败"}`, project };
+    }
+  }
+  const transferred = [];
+  for (const project of projects) {
+    const result = reassignAdminProjectOwner({
+      actorUserId,
+      sourceUserId: sourceId,
+      targetUserId: targetId,
+      flowId: project.flowId,
+      archived: project.archived,
+      transferKind,
+    });
+    if (!result.ok) {
+      return {
+        ...result,
+        status: 500,
+        error: `${project.flowId}：${result.error || "迁移失败"}`,
+        partial: transferred,
+      };
+    }
+    transferred.push(result.project);
+  }
+  return { ok: true, sourceUserId: sourceId, targetUserId: targetId, projects: transferred, transferredProjects: transferred.length };
 }

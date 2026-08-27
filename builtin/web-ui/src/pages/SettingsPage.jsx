@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SUPPORTED_LANGUAGES, changeLanguage } from "../i18n";
+import LegacyAccountLinkCard from "../components/LegacyAccountLinkCard.jsx";
 
 /** 与服务器 config.json 同步的本地缓存（离线时回退） */
 const OPCODE_PLAN_KEY = "agentflow-settings-opencode-plan-v1";
@@ -970,6 +971,7 @@ export default function SettingsPage({ authUser }) {
 
           <div className="af-settings-layout">
             <div className="af-settings-bento">
+              <LegacyAccountLinkCard authUser={authUser} />
               {authUser?.isAdmin ? (
                 <>
               <section className="af-set-card af-set-card--narrow af-set-card--low af-set-workspace">
@@ -1630,7 +1632,7 @@ export default function SettingsPage({ authUser }) {
                             <span>
                               <code>{user.userId}</code>
                               {user.isAdmin ? <em>{t("settings:accounts.admin")}</em> : null}
-                              {!user.isAdmin ? <em>{user.authProvider === "cas" ? "CAS" : "旧密码"}</em> : null}
+                              {!user.isAdmin ? <em>{user.authProvider === "cas" ? "CAS" : user.authProvider === "linked" ? `已绑定 → ${user.linkedToUserId}` : "旧密码"}</em> : null}
                               {isCurrent ? <em>{t("settings:accounts.current")}</em> : null}
                             </span>
                           </div>
@@ -1638,8 +1640,8 @@ export default function SettingsPage({ authUser }) {
                             type="button"
                             className="af-set-btn-outline af-set-btn-outline--compact"
                             onClick={() => beginPasswordReset(user.userId)}
-                            disabled={isCurrent || user.authProvider === "cas" || passwordResetSaving}
-                            title={user.authProvider === "cas" ? "CAS 用户没有本地密码" : isCurrent ? t("settings:accounts.selfResetDisabled") : t("settings:accounts.reset")}
+                            disabled={isCurrent || user.authProvider === "cas" || user.authProvider === "linked" || passwordResetSaving}
+                            title={user.authProvider === "cas" ? "CAS 用户没有本地密码" : user.authProvider === "linked" ? "旧账号已绑定到 CAS，不能重新启用密码" : isCurrent ? t("settings:accounts.selfResetDisabled") : t("settings:accounts.reset")}
                           >
                             {t("settings:accounts.reset")}
                           </button>

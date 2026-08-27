@@ -189,7 +189,7 @@ For example, tell Codex/Cursor: “Use `agentflow-author-flow` to generate a Flo
 | `AGENTFLOW_LEGACY_PASSWORD_LOGIN` | `0` when CAS is enabled | Temporarily keep the legacy regular-user password API during migration |
 | `AGENTFLOW_PUBLIC_BASE_URL` | request origin | Public Web UI origin used to construct CAS callbacks behind a reverse proxy |
 
-When CAS is enabled, regular users are provisioned on their first successful CAS login. The administrator keeps a local password and signs in through `/admin/login`. In **Admin → Users & Ownership**, old Projects can be reassigned to a provisioned CAS user without rewriting historical run audit records.
+When CAS is enabled, regular users are provisioned on their first successful CAS login and use the authorization scope from the CAS application, bypassing AgentFlow's local user allowlist. Under **Settings → Sync legacy account**, a CAS user can prove ownership with the old password and self-migrate Projects, collaboration ownership, and schedules; the old account is then disabled without rewriting historical run audit records. The administrator keeps a local password and signs in through `/admin/login`, and can still reassign individual Projects under **Admin → Users & Ownership**.
 
 ### Codex Backend
 
