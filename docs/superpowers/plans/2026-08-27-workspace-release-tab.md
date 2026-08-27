@@ -148,4 +148,3 @@
   Run: `git diff --check && npm --prefix builtin/web-ui run lint && npm --prefix builtin/web-ui run build`
 
   Expected: all commands exit 0 and `git diff --check` prints no whitespace errors.
-
