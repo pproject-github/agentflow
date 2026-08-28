@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
 import { createCompletionMetadata, createInitializationNode, createPresetInstance, ensureInitializationFirst, resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
+import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
 function emptyState() {
   return { timeline: [], pending: [], customNodes: [] };
@@ -46,6 +47,12 @@ function normalizeTimelineItem(value, index) {
     message: stringValue(value.message),
     error: stringValue(value.error),
     inputs: safeInputs(value.inputs),
+    output: value.output,
+    logs: Array.isArray(value.logs) ? value.logs : value.log,
+    action: stringValue(value.action),
+    skill: stringValue(value.skill),
+    preview: value.preview,
+    confirmationFingerprint: stringValue(value.confirmationFingerprint),
   };
 }
 
@@ -70,6 +77,12 @@ function normalizePendingItem(value, index) {
     error: stringValue(value.error),
     message: stringValue(value.message),
     inputs: safeInputs(value.inputs),
+    output: value.output,
+    logs: Array.isArray(value.logs) ? value.logs : value.log,
+    action: stringValue(value.action),
+    skill: stringValue(value.skill),
+    preview: value.preview,
+    confirmationFingerprint: stringValue(value.confirmationFingerprint),
   };
 }
 
@@ -216,6 +229,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   const [message, setMessage] = useState("");
   const [selfTestFailure, setSelfTestFailure] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
+  const [remoteCatalog, setRemoteCatalog] = useState([]);
+  const [inspector, setInspector] = useState(null);
   const controllers = useRef(new Map());
   const hydratedKey = useRef("");
   const activeKeyRef = useRef("");
@@ -224,7 +239,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
 
   const key = useMemo(() => storageKey(workspace, context), [workspace, context]);
   activeKeyRef.current = key;
-  const catalogNodes = useMemo(() => getReleaseNodes(context), [context]);
+  const catalogNodes = useMemo(() => remoteCatalog.length > 0 ? remoteCatalog : getReleaseNodes(context), [context, remoteCatalog]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
   const allNodes = useMemo(() => [initializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
@@ -266,6 +281,29 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     }
   }, [key, state]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const query = new URLSearchParams({
+      workspaceId: workspaceIdentity(workspace),
+      workspacePath: workspace?.path || "",
+      businessLine: context.businessLine,
+      platform: context.platform,
+      version: context.version,
+      batch: context.batch || "initial",
+    });
+    Promise.all([
+      fetch(`/api/release/catalog?${query.toString()}`).then((response) => response.ok ? response.json() : null).catch(() => null),
+      fetch(`/api/release/state?${query.toString()}`).then((response) => response.ok ? response.json() : null).catch(() => null),
+    ]).then(([catalogPayload, statePayload]) => {
+      if (cancelled) return;
+      if (Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0) setRemoteCatalog(catalogPayload.nodes);
+      if (statePayload?.state && isRecord(statePayload.state)) {
+        setState((previous) => ensureInitializationFirst({ ...previous, ...statePayload.state }, initializationNode));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [context.businessLine, context.platform, context.version, context.batch, initializationNode, workspace]);
+
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
     const node = nodeById.get(item.nodeId);
@@ -287,7 +325,36 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
     }));
     try {
-      const result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
+      const actionId = node.sourcePresetId || node.id;
+      const requestPayload = {
+        workspaceId: workspaceIdentity(workspace),
+        workspacePath: workspace?.path || "",
+        businessLine: context.businessLine,
+        platform: context.platform,
+        version: context.version,
+        batch: context.batch || "initial",
+        actionId,
+        itemId: item.id,
+        inputs: item.inputs || {},
+        confirmationFingerprint: item.confirmationFingerprint || "",
+      };
+      let result;
+      if (typeof fetch === "function" && node.skill !== "custom") {
+        if (node.requiresConfirmation && !item.confirmationFingerprint) {
+          const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload) });
+          const previewPayload = await previewResponse.json().catch(() => ({}));
+          if (!previewResponse.ok) throw new Error(previewPayload.error || `HTTP ${previewResponse.status}`);
+          setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || entry.runId } : entry) }));
+          setMessage("预览已生成，请在节点详情中确认后执行");
+          controllers.current.delete(item.id);
+          return;
+        }
+        const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        result = { runId: payload.runId, message: payload.result?.output || payload.result?.graph || `${node.title} 已完成`, ...payload };
+      } else {
+        result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
         signal: controller.signal,
         onRunStart: (runId) => {
           if (!isCurrentRun()) return;
@@ -300,7 +367,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           if (!isCurrentRun()) return;
           setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, progress } : entry) }));
         },
-      });
+        });
+      }
       if (!isCurrentRun()) return;
       setState((previous) => {
         const completed = previous.timeline.some((entry) => (entry.nodeId || entry.id) === node.id);
@@ -392,6 +460,31 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     setMessage(`${node.title} 已加入待执行阶段`);
   }, []);
 
+  const openInspector = useCallback((item) => {
+    const node = nodeById.get(item?.nodeId);
+    if (!item || !node) return;
+    setInspector({ item, node, mode: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "pending" });
+  }, [nodeById]);
+
+  const saveInspectorItem = useCallback(async (nextItem) => {
+    if (!nextItem || nextItem.status === "completed") return;
+    const query = new URLSearchParams({ businessLine: context.businessLine, platform: context.platform, version: context.version, batch: context.batch || "initial", workspaceId: workspaceIdentity(workspace) });
+    try {
+      const response = await fetch(`/api/release/pending/${encodeURIComponent(nextItem.id)}?${query.toString()}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputs: nextItem.inputs || {} }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === nextItem.id ? { ...entry, inputs: nextItem.inputs || {} } : entry) }));
+      setInspector((previous) => previous ? { ...previous, item: { ...previous.item, inputs: nextItem.inputs || {} } } : previous);
+      setMessage("节点参数已保存");
+    } catch (error) {
+      setMessage(String(error?.message || error));
+    }
+  }, [context.batch, context.businessLine, context.platform, context.version, workspace]);
+
+  const runInspectorItem = useCallback((nextItem) => {
+    void saveInspectorItem(nextItem).then(() => executeNode(nextItem));
+  }, [executeNode, saveInspectorItem]);
+
   return (
     <section className="af-release-panel">
       <header className="af-release-context">
@@ -408,7 +501,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               <div key={row[0]?.id || rowIndex} className={`af-release-completed-row${rowIndex % 2 === 1 ? " is-reverse" : ""}`}>
                 {row.map((item, itemIndex) => (
                   <div key={item.id} className="af-release-completed-step">
-                    <article className="af-release-timeline-card af-release-node--completed"><div className="af-release-timeline-card__dot" aria-hidden="true" /><div className="af-release-timeline-card__body"><div className="af-release-timeline-card__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel("completed")}</b></div><strong>{item.title}</strong><small>{item.description || "已完成发版阶段"}</small>{renderInitializationContext(item)}<div className="af-release-timeline-card__meta"><span>完成 {formatDateTime(item.completedAt)}</span><span>耗时 {formatDuration(item.durationMs)}</span><span>操作人 {item.operator || "未记录"}</span></div></div></article>
+                    <article className="af-release-timeline-card af-release-node--completed" role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}><div className="af-release-timeline-card__dot" aria-hidden="true" /><div className="af-release-timeline-card__body"><div className="af-release-timeline-card__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel("completed")}</b></div><strong>{item.title}</strong><small>{item.description || "已完成发版阶段"}</small>{renderInitializationContext(item)}<div className="af-release-timeline-card__meta"><span>完成 {formatDateTime(item.completedAt)}</span><span>耗时 {formatDuration(item.durationMs)}</span><span>操作人 {item.operator || "未记录"}</span></div></div></article>
                     {itemIndex < row.length - 1 ? <span className="af-release-completed-arrow material-symbols-outlined" aria-hidden="true">{rowIndex % 2 === 1 ? "arrow_back" : "arrow_forward"}</span> : null}
                   </div>
                 ))}
@@ -423,7 +516,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           <div className="af-release-pending-grid">
             {visibleState.pending.length === 0 ? <div className="af-release-empty">暂无待执行阶段。</div> : visibleState.pending.map((item) => {
               const node = nodeById.get(item.nodeId);
-              return <article key={item.id} className={`af-release-node af-release-node--${item.status}`}>
+              return <article key={item.id} className={`af-release-node af-release-node--${item.status}`} role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}>
                 <div><div className="af-release-node__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
                 <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={() => cancelNode(item)}>取消</button> : item.status === "failed" ? <button type="button" onClick={() => retryNode(item)}>重试</button> : <button type="button" onClick={() => executeNode(item)}>执行</button>}</div>
               </article>;
@@ -435,6 +528,16 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           </div>
         </section>
       </div>
+      {inspector ? <ReleaseNodeInspector
+        item={inspector.item}
+        node={inspector.node}
+        mode={inspector.mode}
+        onClose={() => setInspector(null)}
+        onSave={saveInspectorItem}
+        onPreview={executeNode}
+        onRun={runInspectorItem}
+        onStop={cancelNode}
+      /> : null}
     </section>
   );
 }
