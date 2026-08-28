@@ -76,6 +76,9 @@ import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspa
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
+import { discoverReleaseActions } from "./release-runtime.mjs";
+import { buildReleaseRunGraph, previewReleaseAction, runReleaseAction, stopReleaseAction } from "./release-runtime-executor.mjs";
+import { emptyReleaseState, readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -1147,6 +1150,54 @@ function paginateMarketplaceResources(items, url, defaultLimit = 24) {
   };
 }
 
+function releaseRuntimeRoots(workspacePath = "") {
+  const configured = String(process.env.AGENTFLOW_RELEASE_SKILLS_ROOT || "")
+    .split(path.delimiter).map((item) => item.trim()).filter(Boolean);
+  const roots = [...configured];
+  const base = String(workspacePath || "").trim();
+  if (base) {
+    roots.push(path.join(base, ".workspace", "release-skills"));
+    roots.push(path.join(base, ".workspace", "release-skills-google-play-aab"));
+  }
+  roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills");
+  roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills-google-play-aab");
+  return Array.from(new Set(roots.map((item) => path.resolve(item))));
+}
+
+function releaseContextFromUrl(url) {
+  return {
+    businessLine: String(url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
+    platform: /ios|iphone/i.test(String(url.searchParams.get("platform") || "")) ? "ios" : "android",
+    version: String(url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
+    batch: String(url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+  };
+}
+
+function releaseWorkspaceIdentity(url, payload = {}) {
+  return String(payload.workspaceId || url.searchParams.get("workspaceId") || "release-workspace").trim() || "release-workspace";
+}
+
+function releaseWorkspacePath(url, payload = {}, root) {
+  const requested = String(payload.workspacePath || url.searchParams.get("workspacePath") || "").trim();
+  return requested || root;
+}
+
+const activeReleaseRuns = new Map();
+
+function releaseRunId() {
+  return `release-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function releaseRequestContext(url, payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return {
+    businessLine: String(source.businessLine || url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
+    platform: /ios|iphone/i.test(String(source.platform || url.searchParams.get("platform") || "")) ? "ios" : "android",
+    version: String(source.version || url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
+    batch: String(source.batch || url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+  };
+}
+
 /**
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
@@ -1154,6 +1205,117 @@ function paginateMarketplaceResources(items, url, defaultLimit = 24) {
  */
 async function workspaceRoutes(req, res, ctx) {
   const { url, authUser, userCtx, root, host, MIME, adminWorkspaceRequestedUserContext, broadcastWorkspaceCollaborationEvent, findWorkspaceShareUser, isValidFlowSourceRead, readUserWorkspaces, requestPublicBaseUrl, resolveWorkspaceScopeRoot, teamSummaryWithUsers, listConfiguredWorkspaces } = ctx;
+
+  if (url.pathname.startsWith("/api/release/")) {
+    if (!authUser) {
+      json(res, 401, { error: "Authentication required" });
+      return;
+    }
+    const context = releaseRequestContext(url);
+    const workspaceId = releaseWorkspaceIdentity(url);
+    const workspacePath = releaseWorkspacePath(url, {}, root);
+    const roots = releaseRuntimeRoots(workspacePath);
+    try {
+      if (req.method === "GET" && url.pathname === "/api/release/catalog") {
+        const nodes = await discoverReleaseActions({ roots, ...context });
+        json(res, 200, { ok: true, context, workspaceId, nodes });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/release/state") {
+        const state = readReleaseState(root, context, workspaceId, workspacePath);
+        json(res, 200, { ok: true, context, workspaceId, state });
+        return;
+      }
+      if (req.method === "PATCH" && url.pathname.startsWith("/api/release/pending/")) {
+        const itemId = decodeURIComponent(url.pathname.slice("/api/release/pending/".length));
+        const payload = JSON.parse(await readBody(req));
+        const state = readReleaseState(root, context, workspaceId, workspacePath);
+        const item = state.pending.find((entry) => entry.id === itemId);
+        if (!item) { json(res, 404, { error: "Pending release node not found" }); return; }
+        if (item.nodeId === "release-initialization" || item.status === "completed") { json(res, 409, { error: "Completed initialization cannot be edited" }); return; }
+        item.inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : item.inputs || {};
+        writeReleaseState(root, context, workspaceId, state);
+        json(res, 200, { ok: true, item, state });
+        return;
+      }
+      if (req.method === "POST" && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run")) {
+        const payload = JSON.parse(await readBody(req));
+        const requestContext = releaseRequestContext({ searchParams: new URLSearchParams() }, payload);
+        const actionId = String(payload.actionId || payload.nodeId || "").trim();
+        const nodes = await discoverReleaseActions({ roots, ...requestContext });
+        const action = nodes.find((node) => node.id === actionId);
+        if (!action) { json(res, 404, { error: "Release action not found" }); return; }
+        const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
+        const graph = buildReleaseRunGraph(action, requestContext, inputs);
+        const runId = String(payload.runId || releaseRunId());
+        const controller = new AbortController();
+        const runPromise = runWorkspaceGraph(root, root, {
+          flowId: `release-${workspaceId}`,
+          flowSource: "user",
+          runNodeId: "release_action",
+          graph,
+          inputs: { ...requestContext, ...inputs },
+          ignoreCache: true,
+        }, userCtx, { signal: controller.signal, runId });
+        activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId, action, inputs });
+        if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
+          const result = await runPromise;
+          activeReleaseRuns.delete(runId);
+          const preview = await previewReleaseAction(action, requestContext, inputs);
+          json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
+          return;
+        }
+        const result = await runPromise;
+        activeReleaseRuns.delete(runId);
+        const state = readReleaseState(root, requestContext, workspaceId, workspacePath);
+        const now = Date.now();
+        const completedItem = {
+          id: String(payload.itemId || `${action.id}-${now}`),
+          nodeId: action.id,
+          title: action.title,
+          description: action.description,
+          category: action.category,
+          status: "completed",
+          progress: 100,
+          inputs,
+          runId,
+          operator: authUser.username || userCtx.userId || "未记录",
+          startedAt: now,
+          completedAt: now,
+          durationMs: 0,
+          output: result,
+        };
+        state.timeline = [...state.timeline, completedItem];
+        state.pending = state.pending.filter((item) => item.id !== completedItem.id && item.nodeId !== action.id);
+        state.runs[runId] = { ...completedItem, logs: result?.events || [] };
+        writeReleaseState(root, requestContext, workspaceId, state);
+        json(res, 200, { ok: true, status: "completed", runId, result, state });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/release/runs/stop") {
+        const payload = JSON.parse(await readBody(req));
+        const runId = String(payload.runId || "").trim();
+        const active = activeReleaseRuns.get(runId);
+        if (!active) { json(res, 404, { error: "Release run not found" }); return; }
+        await stopReleaseAction(runId, { stopRun: async () => { active.controller.abort(); return { stopped: true, runId }; } });
+        json(res, 200, { ok: true, stopped: true, runId });
+        return;
+      }
+      const runMatch = url.pathname.match(/^\/api\/release\/runs\/([^/]+)(?:\/logs)?$/);
+      if (req.method === "GET" && runMatch) {
+        const runId = decodeURIComponent(runMatch[1]);
+        const state = readReleaseState(root, context, workspaceId, workspacePath);
+        const run = state.runs[runId];
+        if (!run) { json(res, 404, { error: "Release run not found" }); return; }
+        json(res, 200, { ok: true, run, logs: run.logs || [] });
+        return;
+      }
+      json(res, 404, { error: "Not found" });
+    } catch (error) {
+      json(res, 500, { error: String(error?.message || error) });
+    }
+    return;
+  }
 
     if (req.method === "GET" && url.pathname === "/api/node-packages") {
       try {

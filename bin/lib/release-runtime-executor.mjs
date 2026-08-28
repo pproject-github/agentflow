@@ -17,13 +17,13 @@ export function confirmationFingerprint(action, context = {}, inputs = {}) {
   return crypto.createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
-function wrapperScript(actionName) {
+function wrapperScript(actionName, scriptPath) {
   const python = [
     "import json, os, subprocess",
     "input_values = json.loads(os.environ.get('AGENTFLOW_INPUTS_JSON', '{}'))",
-    `args = [os.environ['AGENTFLOW_SCRIPT_REF'], '--action', ${JSON.stringify(String(actionName || ""))}]`,
-    "for key, value in input_values.items(): args.extend(['--input', f'{key}={value}'])",
-    "raise SystemExit(subprocess.call(args))",
+    `args = ['run', 'python', ${JSON.stringify(String(scriptPath || ""))}, '--action', ${JSON.stringify(String(actionName || ""))}]`,
+    "args.extend(sum(([\"--input\", f\"{key}={value}\"] for key, value in input_values.items()), []))",
+    "raise SystemExit(subprocess.call(['uv', *args]))",
   ].join("; ");
   return [
     "uv run python -c",
@@ -44,8 +44,7 @@ export function buildReleaseRunGraph(action, context = {}, inputs = {}) {
       release_action: {
         definitionId: "tool_nodejs",
         label: action.title || action.action || action.id,
-        scriptRef: action.source.scriptPath,
-        script: wrapperScript(action.action),
+        script: wrapperScript(action.action, action.source.scriptPath),
         input: [{ type: "node", name: "prev", value: "" }],
         output: [{ type: "node", name: "next", value: "" }],
       },
