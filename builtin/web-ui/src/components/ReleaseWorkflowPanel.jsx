@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
+import { createCompletionMetadata, createInitializationNode, createPresetInstance, ensureInitializationFirst, resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
 
 function emptyState() {
   return { timeline: [], pending: [], customNodes: [] };
@@ -39,6 +40,8 @@ function normalizeTimelineItem(value, index) {
     startedAt: timestampValue(value.startedAt),
     completedAt: timestampValue(value.completedAt),
     failedAt: timestampValue(value.failedAt),
+    durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : undefined,
+    operator: stringValue(value.operator, "未记录"),
     runId: stringValue(value.runId),
     message: stringValue(value.message),
     error: stringValue(value.error),
@@ -62,6 +65,7 @@ function normalizePendingItem(value, index) {
     startedAt: timestampValue(value.startedAt),
     completedAt: timestampValue(value.completedAt),
     failedAt: timestampValue(value.failedAt),
+    operator: stringValue(value.operator, "未记录"),
     runId: stringValue(value.runId),
     error: stringValue(value.error),
     message: stringValue(value.message),
@@ -80,9 +84,10 @@ function normalizeCustomNode(value) {
     category: stringValue(value.category, "自定义阶段"),
     businessLines: asStringArray(value.businessLines),
     platforms: asStringArray(value.platforms),
+    sourcePresetId: stringValue(value.sourcePresetId),
     durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : 600,
     nextNodeIds: asStringArray(value.nextNodeIds),
-    inputSchema: [],
+    inputSchema: Array.isArray(value.inputSchema) ? value.inputSchema.filter(isRecord).map((input) => ({ ...input })) : [],
   };
 }
 
@@ -146,10 +151,32 @@ function statusLabel(status) {
   return { completed: "已完成", running: "执行中", failed: "失败", pending: "待执行" }[status] || status;
 }
 
+function formatDateTime(value) {
+  const timestamp = timestampValue(value);
+  if (!timestamp) return "未记录";
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(timestamp);
+}
+
+function formatDuration(value) {
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration < 0) return "未记录";
+  if (duration < 1000) return `${duration}ms`;
+  return `${(duration / 1000).toFixed(duration >= 10000 ? 0 : 1)}s`;
+}
+
+// 用户需求点: 已完成阶段不依赖横向拖动，要按执行顺序蛇形换行并保持连续方向轨迹。
+function groupCompletedTimelineRows(items, rowSize = 3) {
+  const rows = [];
+  for (let index = 0; index < items.length; index += rowSize) {
+    rows.push(items.slice(index, index + rowSize));
+  }
+  return rows;
+}
+
 function makePending(node, inputs = {}) {
   return {
     id: itemId(node.id), nodeId: node.id, title: node.title, description: node.description,
-    category: node.category, status: "pending", progress: 0, createdAt: Date.now(), error: "", inputs: safeInputs(inputs),
+    category: node.category, status: "pending", progress: 0, createdAt: Date.now(), error: "", operator: "未记录", inputs: safeInputs(inputs),
   };
 }
 
@@ -172,31 +199,34 @@ function validateNodeInputs(node, item) {
   return "";
 }
 
-export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
-  const inferred = useMemo(() => inferReleaseContext(workspace || {}), [workspace]);
-  const [context, setContext] = useState(inferred);
-  const [state, setState] = useState(() => readState(
-    storageKey(workspace, inferred),
-    new Set(getReleaseNodes(inferred).map((node) => node.id)),
+export default function ReleaseWorkflowPanel({ workspace, releaseContext: navigationContext, operator = "未记录" }) {
+  const inferred = useMemo(() => navigationContext
+    ? resolveReleaseContext(workspace || {}, navigationContext)
+    : inferReleaseContext(workspace || {}), [navigationContext, workspace]);
+  const initialNode = useMemo(() => createInitializationNode(inferred, workspace), [inferred, workspace]);
+  const context = inferred;
+  const [state, setState] = useState(() => ensureInitializationFirst(
+    readState(
+      storageKey(workspace, inferred),
+      new Set([initialNode.id, ...getReleaseNodes(inferred).map((node) => node.id)]),
+    ),
+    initialNode,
   ));
   const [storageWarning, setStorageWarning] = useState("");
   const [message, setMessage] = useState("");
   const [selfTestFailure, setSelfTestFailure] = useState(false);
-  const [manualNodeId, setManualNodeId] = useState("");
-  const [customTitle, setCustomTitle] = useState("");
-  const [customDescription, setCustomDescription] = useState("");
-  const [customNext, setCustomNext] = useState([]);
+  const [addNodeOpen, setAddNodeOpen] = useState(false);
   const controllers = useRef(new Map());
   const hydratedKey = useRef("");
   const activeKeyRef = useRef("");
   const runGenerationRef = useRef(0);
   const runSequenceRef = useRef(0);
-  const enqueueReservations = useRef(new Map());
 
   const key = useMemo(() => storageKey(workspace, context), [workspace, context]);
   activeKeyRef.current = key;
   const catalogNodes = useMemo(() => getReleaseNodes(context), [context]);
-  const allNodes = useMemo(() => [...catalogNodes, ...state.customNodes], [catalogNodes, state.customNodes]);
+  const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
+  const allNodes = useMemo(() => [initializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
     const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId));
@@ -206,25 +236,20 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
     return { ...state, timeline, pending };
   }, [knownNodeIds, state]);
   const nodeById = useMemo(() => new Map(allNodes.map((node) => [node.id, node])), [allNodes]);
-  const completedIds = useMemo(() => new Set(visibleState.timeline.map((item) => item.nodeId || item.id)), [visibleState.timeline]);
-  const pendingIds = useMemo(() => new Set(visibleState.pending.map((item) => item.nodeId)), [visibleState.pending]);
+  const completedRows = useMemo(() => groupCompletedTimelineRows(visibleState.timeline), [visibleState.timeline]);
   const runningCount = visibleState.pending.filter((item) => item.status === "running").length;
 
   useEffect(() => {
-    setContext(inferred);
-  }, [inferred]);
-
-  useEffect(() => {
     hydratedKey.current = "";
-    setState(readState(key, new Set(catalogNodes.map((node) => node.id))));
+    const loaded = readState(key, new Set([initializationNode.id, ...catalogNodes.map((node) => node.id)]));
+    setState(ensureInitializationFirst(loaded, initializationNode));
     setStorageWarning("");
-  }, [catalogNodes, key]);
+  }, [catalogNodes, initializationNode, key]);
 
   useEffect(() => () => {
     runGenerationRef.current += 1;
     controllers.current.forEach((entry) => entry.controller?.abort());
     controllers.current.clear();
-    enqueueReservations.current.clear();
   }, [key]);
 
   useEffect(() => {
@@ -240,39 +265,6 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
       setStorageWarning("本地状态暂不可保存");
     }
   }, [key, state]);
-
-  const changeContext = useCallback((patch) => {
-    const next = { ...context, ...patch };
-    setContext(next);
-    onContextChange?.(next);
-  }, [context, onContextChange]);
-
-  const enqueueNode = useCallback((nodeId) => {
-    const node = nodeById.get(nodeId);
-    if (!node) return;
-    if (completedIds.has(nodeId) || pendingIds.has(nodeId) || enqueueReservations.current.has(nodeId)) {
-      setMessage(`${node.title} 已在当前流程中`);
-      return;
-    }
-    const reservation = { result: "" };
-    enqueueReservations.current.set(nodeId, reservation);
-    setState((previous) => {
-      const completed = previous.timeline.some((item) => (item.nodeId || item.id) === nodeId);
-      const existing = previous.pending.some((item) => item.nodeId === nodeId);
-      if (completed || existing) {
-        reservation.result = "duplicate";
-        return previous;
-      }
-      reservation.result = "added";
-      return { ...previous, pending: [...previous.pending, makePending(node)] };
-    });
-    setTimeout(() => {
-      if (enqueueReservations.current.get(nodeId) !== reservation) return;
-      enqueueReservations.current.delete(nodeId);
-      if (reservation.result === "added") setMessage(`${node.title} 已加入待执行阶段`);
-      else if (reservation.result === "duplicate") setMessage(`${node.title} 已在当前流程中`);
-    }, 0);
-  }, [completedIds, nodeById, pendingIds]);
 
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
@@ -292,7 +284,7 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
     controllers.current.set(item.id, { controller, token: runToken });
     setState((previous) => ({
       ...previous,
-      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0 } : entry),
+      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
     }));
     try {
       const result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
@@ -313,13 +305,15 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
       setState((previous) => {
         const completed = previous.timeline.some((entry) => (entry.nodeId || entry.id) === node.id);
         const currentItem = previous.pending.find((entry) => entry.id === item.id) || item;
+        const completedAt = Date.now();
+        const currentOperator = currentItem.operator && currentItem.operator !== "未记录" ? currentItem.operator : operator;
         const timeline = completed ? previous.timeline : [...previous.timeline, {
           ...currentItem,
           status: "completed",
-          completedAt: Date.now(),
           progress: 100,
           message: result.message,
           runId: result.runId || currentItem.runId,
+          ...createCompletionMetadata({ operator: currentOperator, startedAt: currentItem.startedAt || startedAt, completedAt }),
         }];
         const pending = previous.pending.filter((entry) => entry.id !== item.id);
         const blocked = new Set([...timeline.map((entry) => entry.nodeId || entry.id), ...pending.map((entry) => entry.nodeId)]);
@@ -329,12 +323,12 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
       if (isCurrentRun()) setMessage(result.message || `${node.title} 已完成`);
     } catch (error) {
       if (error?.name === "AbortError" || !isCurrentRun()) return;
-      setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now() } : entry) }));
+      setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator } : entry) }));
       setMessage(`${node.title} 执行失败`);
     } finally {
       if (controllers.current.get(item.id)?.token === runToken) controllers.current.delete(item.id);
     }
-  }, [context, key, nodeById, selfTestFailure]);
+  }, [context, key, nodeById, operator, selfTestFailure]);
 
   const cancelNode = useCallback((item) => {
     controllers.current.get(item?.id)?.controller?.abort();
@@ -349,20 +343,6 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
     setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? pending : entry) }));
     void executeNode(pending);
   }, [executeNode]);
-
-  const createCustomNode = useCallback((event) => {
-    event.preventDefault();
-    const title = customTitle.trim();
-    if (!title) return;
-    const node = {
-      id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      title, description: customDescription.trim() || "自定义发版阶段", skill: "custom", category: "自定义阶段",
-      businessLines: [context.businessLine], platforms: [context.platform], durationMs: 600, nextNodeIds: [...customNext],
-      inputSchema: [],
-    };
-    setState((previous) => ({ ...previous, customNodes: [...previous.customNodes, node], pending: [...previous.pending, makePending(node)] }));
-    setCustomTitle(""); setCustomDescription(""); setCustomNext([]); setMessage(`${title} 已加入待执行阶段`);
-  }, [context.businessLine, context.platform, customDescription, customNext, customTitle]);
 
   const updateNodeInput = useCallback((itemIdValue, inputKey, value) => {
     setState((previous) => ({
@@ -393,36 +373,68 @@ export default function ReleaseWorkflowPanel({ workspace, onContextChange }) {
     </div>
   ) : null;
 
-  const toggleCustomNext = (id) => setCustomNext((previous) => previous.includes(id) ? previous.filter((value) => value !== id) : [...previous, id]);
-  const availableManualNodes = catalogNodes.filter((node) => !completedIds.has(node.id) && !pendingIds.has(node.id));
+  const renderInitializationContext = (item) => item.nodeId === initializationNode.id ? (
+    <div className="af-release-context-chips">
+      <span>{context.businessLine}</span><span>{context.platform}</span><span>{context.version}</span>
+    </div>
+  ) : null;
 
-  useEffect(() => {
-    const availableIds = new Set(availableManualNodes.map((node) => node.id));
-    setCustomNext((previous) => {
-      const next = previous.filter((id) => availableIds.has(id));
-      return next.length === previous.length ? previous : next;
-    });
-  }, [availableManualNodes]);
+  // 用户需求点: 自定义添加阶段是补充流程的后路，同一预置节点可以反复选择并生成独立待执行卡片。
+  const addPresetNode = useCallback((preset) => {
+    if (!preset) return;
+    const node = createPresetInstance(preset);
+    setState((previous) => ({
+      ...previous,
+      customNodes: [...previous.customNodes, node],
+      pending: [...previous.pending, makePending(node)],
+    }));
+    setAddNodeOpen(false);
+    setMessage(`${node.title} 已加入待执行阶段`);
+  }, []);
 
   return (
     <section className="af-release-panel">
       <header className="af-release-context">
-        <div><span className="af-release-eyebrow">发版流程</span><h2>{workspace?.label || workspace?.name || "当前工作空间"}</h2><small>{workspace?.path || workspace?.repoUrl || "本地发版时间线"}</small></div>
-        <div className="af-release-context__controls">
-          <label>业务线<select value={context.businessLine} onChange={(event) => changeContext({ businessLine: event.target.value })}><option value="likee">Likee</option><option value="bigolive">BigoLive</option><option value="hello">Hello</option></select></label>
-          <label>平台<span className="af-release-toggle"><button type="button" className={context.platform === "android" ? "is-active" : ""} onClick={() => changeContext({ platform: "android" })}>Android</button><button type="button" className={context.platform === "ios" ? "is-active" : ""} onClick={() => changeContext({ platform: "ios" })}>iOS</button></span></label>
-          <label>版本<input value={context.version} onChange={(event) => changeContext({ version: event.target.value })} /></label>
-          <label className="af-release-self-test"><span>本地自测</span><span><input type="checkbox" checked={selfTestFailure} onChange={(event) => setSelfTestFailure(event.target.checked)} />模拟失败模式（重试前关闭）</span></label>
-        </div>
-        <div className="af-release-counts"><span>已完成 {visibleState.timeline.length}</span><span>待执行 {visibleState.pending.filter((item) => item.status === "pending").length}</span><span>执行中 {runningCount}</span></div>
+        <div className="af-release-context__identity"><span className="af-release-eyebrow">发版时间线</span><h2>{workspace?.label || workspace?.name || "当前工作空间"}</h2><small>{workspace?.path || workspace?.repoUrl || "本地发版时间线"}</small><div className="af-release-context-chips"><span>{context.businessLine}</span><span>{context.platform}</span><span>{context.version}</span></div></div>
+        <div className="af-release-counts"><span>已完成 {visibleState.timeline.length}</span><span>待执行 {visibleState.pending.filter((item) => item.status === "pending").length}</span><span>执行中 {runningCount}</span><label className="af-release-self-test"><input type="checkbox" checked={selfTestFailure} onChange={(event) => setSelfTestFailure(event.target.checked)} />模拟失败</label></div>
       </header>
       {storageWarning ? <div className="af-release-notice">{storageWarning}</div> : null}
       {message ? <div className="af-release-message" role="status">{message}</div> : null}
-      <div className="af-release-columns">
-        <div className="af-release-section"><h3>发版时间线</h3>{visibleState.timeline.length === 0 ? <div className="af-release-empty">完成的阶段会按时间顺序出现在这里。</div> : <div className="af-release-timeline">{visibleState.timeline.map((item) => <article key={item.id} className="af-release-node af-release-node--completed"><div><strong>{item.title}</strong><small>{item.category || "发版阶段"}</small></div><span>{statusLabel("completed")}</span></article>)}</div>}</div>
-        <div className="af-release-section"><div className="af-release-section__heading"><h3>待执行阶段</h3><select aria-label="全部阶段" value={manualNodeId} onChange={(event) => setManualNodeId(event.target.value)}><option value="">全部阶段</option>{availableManualNodes.map((node) => <option key={node.id} value={node.id}>{node.title}</option>)}</select>{manualNodeId ? <button type="button" onClick={() => { enqueueNode(manualNodeId); setManualNodeId(""); }}>添加</button> : null}</div>{visibleState.pending.length === 0 ? <div className="af-release-empty">暂无待执行阶段，可从“全部阶段”添加。</div> : <div className="af-release-pending">{visibleState.pending.map((item) => { const node = nodeById.get(item.nodeId); return <article key={item.id} className={`af-release-node af-release-node--${item.status}${item.status === "running" ? " af-release-node--running" : ""}${item.status === "failed" ? " af-release-node--failed" : ""}`}><div><strong>{item.title}</strong><small>{item.description}</small>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div><div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={() => cancelNode(item)}>取消</button> : item.status === "failed" ? <button type="button" onClick={() => retryNode(item)}>重试</button> : <button type="button" onClick={() => executeNode(item)}>执行</button>}</div></article>; })}</div>}</div>
+      <div className="af-release-flow-groups">
+        <section className="af-release-stage-group af-release-stage-group--completed">
+          <div className="af-release-section__heading"><div><h3>已完成阶段</h3><span>{visibleState.timeline.length} 个节点</span></div><small>按执行顺序记录发版轨迹</small></div>
+          <div className="af-release-completed-flow">
+            {completedRows.length === 0 ? <div className="af-release-empty">初始化节点或已完成阶段会从这里开始。</div> : completedRows.map((row, rowIndex) => (
+              <div key={row[0]?.id || rowIndex} className={`af-release-completed-row${rowIndex % 2 === 1 ? " is-reverse" : ""}`}>
+                {row.map((item, itemIndex) => (
+                  <div key={item.id} className="af-release-completed-step">
+                    <article className="af-release-timeline-card af-release-node--completed"><div className="af-release-timeline-card__dot" aria-hidden="true" /><div className="af-release-timeline-card__body"><div className="af-release-timeline-card__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel("completed")}</b></div><strong>{item.title}</strong><small>{item.description || "已完成发版阶段"}</small>{renderInitializationContext(item)}<div className="af-release-timeline-card__meta"><span>完成 {formatDateTime(item.completedAt)}</span><span>耗时 {formatDuration(item.durationMs)}</span><span>操作人 {item.operator || "未记录"}</span></div></div></article>
+                    {itemIndex < row.length - 1 ? <span className="af-release-completed-arrow material-symbols-outlined" aria-hidden="true">{rowIndex % 2 === 1 ? "arrow_back" : "arrow_forward"}</span> : null}
+                  </div>
+                ))}
+                {rowIndex < completedRows.length - 1 ? <span className="af-release-completed-turn" aria-hidden="true"><i className="material-symbols-outlined">{rowIndex % 2 === 0 ? "arrow_back" : "arrow_forward"}</i></span> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+        <div className="af-release-group-bridge" aria-hidden="true"><span>下一阶段</span></div>
+        <section className="af-release-stage-group af-release-stage-group--pending">
+          <div className="af-release-section__heading"><div><h3>添加阶段</h3><span>{visibleState.pending.length} 个节点</span></div><small>平级添加与执行区，可执行、取消或重试</small></div>
+          <div className="af-release-pending-grid">
+            {visibleState.pending.length === 0 ? <div className="af-release-empty">暂无待执行阶段。</div> : visibleState.pending.map((item) => {
+              const node = nodeById.get(item.nodeId);
+              return <article key={item.id} className={`af-release-node af-release-node--${item.status}`}>
+                <div><div className="af-release-node__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
+                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={() => cancelNode(item)}>取消</button> : item.status === "failed" ? <button type="button" onClick={() => retryNode(item)}>重试</button> : <button type="button" onClick={() => executeNode(item)}>执行</button>}</div>
+              </article>;
+            })}
+            <div className="af-release-add-node">
+              <button type="button" className="af-release-add-node__trigger" aria-expanded={addNodeOpen} onClick={() => setAddNodeOpen((open) => !open)} disabled={catalogNodes.length === 0}><span className="af-release-add-node__icon" aria-hidden="true">+</span><span><strong>自定义添加阶段</strong><small>自由选择预置节点，允许重复添加</small></span><span className="material-symbols-outlined" aria-hidden="true">{addNodeOpen ? "expand_less" : "expand_more"}</span></button>
+              {addNodeOpen ? <div className="af-release-add-node__options">{catalogNodes.map((node) => <button key={node.id} type="button" onClick={() => addPresetNode(node)}><span><strong>{node.title}</strong><small>{node.description}</small></span><em>{node.category}</em></button>)}</div> : null}
+            </div>
+          </div>
+        </section>
       </div>
-      <form className="af-release-custom" onSubmit={createCustomNode}><h3>新增自定义阶段</h3><div className="af-release-custom__fields"><input placeholder="阶段名称" value={customTitle} onChange={(event) => setCustomTitle(event.target.value)} /><input placeholder="描述（可选）" value={customDescription} onChange={(event) => setCustomDescription(event.target.value)} /><button type="submit" disabled={!customTitle.trim()}>加入待执行</button></div><fieldset><legend>完成后推理的阶段</legend><div className="af-release-checkboxes">{availableManualNodes.map((node) => <label key={node.id}><input type="checkbox" checked={customNext.includes(node.id)} onChange={() => toggleCustomNext(node.id)} />{node.title}</label>)}</div></fieldset></form>
     </section>
   );
 }

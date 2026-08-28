@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReleaseWorkflowPanel from "../components/ReleaseWorkflowPanel.jsx";
+import { resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
 
 const FALLBACK_WORKSPACE = {
   id: "release-default-workspace",
@@ -10,7 +11,7 @@ const FALLBACK_WORKSPACE = {
   version: "1.0.0",
 };
 
-export default function ReleasePage() {
+export default function ReleasePage({ authUser }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [builtins, setBuiltins] = useState([]);
@@ -37,8 +38,14 @@ export default function ReleasePage() {
   }, [load]);
 
   const releaseWorkspace = useMemo(() => custom[0] || builtins[0] || FALLBACK_WORKSPACE, [builtins, custom]);
-  const workspaceLabel = releaseWorkspace.label || releaseWorkspace.name || "默认发版工作空间";
-  const workspacePath = releaseWorkspace.path || releaseWorkspace.repoUrl || "本地发版时间线";
+  const navigationSearch = typeof window === "undefined" ? "" : window.location.search;
+  const navigationContext = useMemo(() => {
+    const params = new URLSearchParams(navigationSearch);
+    return params.has("businessLine") || params.has("platform") || params.has("version")
+      ? resolveReleaseContext(releaseWorkspace, params)
+      : null;
+  }, [navigationSearch, releaseWorkspace]);
+  const operator = authUser?.username || authUser?.userId || "未记录";
 
   return (
     <div className="af-workspaces-page">
@@ -56,22 +63,10 @@ export default function ReleasePage() {
 
       <main className="af-settings-body">
         <div className="af-workspaces-inner">
-          <header className="af-settings-hero">
-            <h1 className="af-settings-h1">发版</h1>
-            <p className="af-settings-lead">按业务线、平台和版本逐阶段推进发版流程。</p>
-            {error ? <p className="af-err af-settings-api-hint">{error}</p> : null}
-          </header>
+          {error ? <p className="af-err af-settings-api-hint">{error}</p> : null}
 
           <section className="af-workspaces-release-view" aria-label="发版流程">
-            <header className="af-workspaces-release-head">
-              <div>
-                <span className="af-release-eyebrow">发版时间线</span>
-                <h2>发版</h2>
-                <p>当前工作空间：<strong>{workspaceLabel}</strong></p>
-                <small>{workspacePath}</small>
-              </div>
-            </header>
-            <ReleaseWorkflowPanel workspace={releaseWorkspace} />
+            <ReleaseWorkflowPanel workspace={releaseWorkspace} releaseContext={navigationContext} operator={operator} />
           </section>
         </div>
       </main>
