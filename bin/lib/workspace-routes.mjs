@@ -1159,8 +1159,13 @@ function releaseRuntimeRoots(workspacePath = "") {
     roots.push(path.join(base, ".workspace", "release-skills"));
     roots.push(path.join(base, ".workspace", "release-skills-google-play-aab"));
   }
-  roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills");
-  roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills-google-play-aab");
+  // An explicit environment root is an isolated catalog for tests/deployments.
+  // Only fall back to the local development tree when no root was configured;
+  // otherwise unrelated skills would leak into the requested catalog.
+  if (configured.length === 0) {
+    roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills");
+    roots.push("/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills-google-play-aab");
+  }
   return Array.from(new Set(roots.map((item) => path.resolve(item))));
 }
 
