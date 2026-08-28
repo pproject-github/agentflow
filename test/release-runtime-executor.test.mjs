@@ -13,6 +13,8 @@ test("builds an AgentFlow tool graph for a release action without embedding raw 
   assert.equal(instance.definitionId, "tool_nodejs");
   assert.match(instance.script, /uv run python/);
   assert.match(instance.script, /--action/);
+  assert.match(instance.script, /cwd=/);
+  assert.match(instance.script, /tmp\/release-skills/);
   assert.doesNotMatch(instance.script, /rm -rf/);
   assert.equal(graph.meta.releaseActionId, "release-google-play:preview-aab-submission");
 });

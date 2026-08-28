@@ -70,6 +70,10 @@ test("release runtime executes a read-only Action through the AgentFlow graph", 
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.status, "completed");
     assert.ok(payload.state.timeline.some((item) => item.nodeId === "release-demo:inspect"));
+    const logsResponse = await fetch(base + `/api/release/runs/${encodeURIComponent(payload.runId)}/logs?workspaceId=release-run&businessLine=likee&platform=android&version=5.63.2&batch=initial`, { headers });
+    const logsPayload = await logsResponse.json();
+    assert.equal(logsResponse.status, 200, JSON.stringify(logsPayload));
+    assert.equal(logsPayload.run.runId, payload.runId);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;

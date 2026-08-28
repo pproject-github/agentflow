@@ -17,17 +17,18 @@ export function confirmationFingerprint(action, context = {}, inputs = {}) {
   return crypto.createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
-function wrapperScript(skillName, actionName, scriptPath) {
+function wrapperScript(skillName, actionName, scriptPath, skillRoot) {
   const python = [
     "import json, os, subprocess",
     "input_values = json.loads(os.environ.get('AGENTFLOW_INPUTS_JSON', '{}'))",
     `skill = ${JSON.stringify(String(skillName || ""))}`,
     `action = ${JSON.stringify(String(actionName || ""))}`,
+    `repository_root = ${JSON.stringify(String(skillRoot || ""))}`,
     `args = ['run', 'python', ${JSON.stringify(String(scriptPath || ""))}, '--action', action]`,
     "fingerprint = input_values.pop('__release_confirmation_fingerprint', '')",
     "if fingerprint: args.extend(['--confirmation-fingerprint', str(fingerprint)])",
     "if skill == 'release-google-play':\n    if 'config' in input_values: args.extend(['--config', str(input_values['config'])])\n    if 'package_name' in input_values: args.extend(['--package-name', str(input_values['package_name'])])\n    if action == 'submit-aab-internal-testing': args.append('--live')\nelse:\n    args.extend(sum(([\"--input\", f\"{key}={value}\"] for key, value in input_values.items()), []))",
-    "raise SystemExit(subprocess.call(['uv', *args]))",
+    "raise SystemExit(subprocess.call(['uv', *args], cwd=repository_root or None))",
   ].join("\n");
   return [
     "uv run python -c",
@@ -48,7 +49,7 @@ export function buildReleaseRunGraph(action, context = {}, inputs = {}) {
       release_action: {
         definitionId: "tool_nodejs",
         label: action.title || action.action || action.id,
-        script: wrapperScript(action.skill, action.action, action.source.scriptPath),
+        script: wrapperScript(action.skill, action.action, action.source.scriptPath, action.source.skillRoot),
         input: [{ type: "node", name: "prev", value: "" }],
         output: [{ type: "node", name: "next", value: "" }],
       },

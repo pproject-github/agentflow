@@ -1245,6 +1245,7 @@ async function workspaceRoutes(req, res, ctx) {
       }
       if (req.method === "POST" && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run")) {
         const payload = JSON.parse(await readBody(req));
+        const requestWorkspaceId = releaseWorkspaceIdentity(url, payload);
         const requestContext = releaseRequestContext({ searchParams: new URLSearchParams() }, payload);
         const actionId = String(payload.actionId || payload.nodeId || "").trim();
         const nodes = await discoverReleaseActions({ roots, ...requestContext });
@@ -1258,7 +1259,7 @@ async function workspaceRoutes(req, res, ctx) {
           : inputs;
         if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
           const previewResult = await runWorkspaceGraph(root, root, {
-            flowId: `release-${workspaceId}`,
+            flowId: `release-${requestWorkspaceId}`,
             flowSource: "user",
             runNodeId: "release_action",
             graph,
@@ -1275,14 +1276,14 @@ async function workspaceRoutes(req, res, ctx) {
         }
         const controller = new AbortController();
         const runPromise = runWorkspaceGraph(root, root, {
-          flowId: `release-${workspaceId}`,
+          flowId: `release-${requestWorkspaceId}`,
           flowSource: "user",
           runNodeId: "release_action",
           graph,
           inputs: runInputs,
           ignoreCache: true,
         }, userCtx, { signal: controller.signal, runId });
-        activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId, action, inputs });
+        activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, action, inputs });
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
           activeReleaseRuns.delete(runId);
@@ -1292,7 +1293,7 @@ async function workspaceRoutes(req, res, ctx) {
         }
         const result = await runPromise;
         activeReleaseRuns.delete(runId);
-        const state = readReleaseState(root, requestContext, workspaceId, workspacePath);
+        const state = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
         const now = Date.now();
         const timelineNodeId = String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id;
         const completedItem = {
@@ -1314,7 +1315,7 @@ async function workspaceRoutes(req, res, ctx) {
         state.timeline = [...state.timeline, completedItem];
         state.pending = state.pending.filter((item) => item.id !== completedItem.id);
         state.runs[runId] = { ...completedItem, logs: result?.events || [] };
-        writeReleaseState(root, requestContext, workspaceId, state);
+        writeReleaseState(root, requestContext, requestWorkspaceId, state);
         json(res, 200, { ok: true, status: "completed", runId, result, state });
         return;
       }
