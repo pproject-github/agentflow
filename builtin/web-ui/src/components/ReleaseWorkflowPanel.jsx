@@ -129,7 +129,7 @@ function workspaceIdentity(workspace) {
 }
 
 function storageKey(workspace, context) {
-  return ["agentflow-release", workspaceIdentity(workspace), context.businessLine, context.platform, context.version]
+  return ["agentflow-release", workspaceIdentity(workspace), context.businessLine, context.platform, context.version, context.batch || "initial"]
     .map((value) => encodeURIComponent(String(value || "")))
     .join(":");
 }
@@ -241,7 +241,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   activeKeyRef.current = key;
   const catalogNodes = useMemo(() => remoteCatalog.length > 0 ? remoteCatalog : getReleaseNodes(context), [context, remoteCatalog]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
-  const allNodes = useMemo(() => [initializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, state.customNodes]);
+  const effectiveInitializationNode = useMemo(() => catalogNodes.length > 0 ? { ...initializationNode, nextNodeIds: [catalogNodes[0].id] } : initializationNode, [catalogNodes, initializationNode]);
+  const allNodes = useMemo(() => [effectiveInitializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, effectiveInitializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
     const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId));
@@ -256,10 +257,10 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
 
   useEffect(() => {
     hydratedKey.current = "";
-    const loaded = readState(key, new Set([initializationNode.id, ...catalogNodes.map((node) => node.id)]));
-    setState(ensureInitializationFirst(loaded, initializationNode));
+    const loaded = readState(key, new Set([effectiveInitializationNode.id, ...catalogNodes.map((node) => node.id)]));
+    setState(ensureInitializationFirst(loaded, effectiveInitializationNode));
     setStorageWarning("");
-  }, [catalogNodes, initializationNode, key]);
+  }, [catalogNodes, effectiveInitializationNode, key]);
 
   useEffect(() => () => {
     runGenerationRef.current += 1;
@@ -298,11 +299,11 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       if (cancelled) return;
       if (Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0) setRemoteCatalog(catalogPayload.nodes);
       if (statePayload?.state && isRecord(statePayload.state)) {
-        setState((previous) => ensureInitializationFirst({ ...previous, ...statePayload.state }, initializationNode));
+        setState((previous) => ensureInitializationFirst({ ...previous, ...statePayload.state }, effectiveInitializationNode));
       }
     });
     return () => { cancelled = true; };
-  }, [context.businessLine, context.platform, context.version, context.batch, initializationNode, workspace]);
+  }, [context.businessLine, context.platform, context.version, context.batch, effectiveInitializationNode, workspace]);
 
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
@@ -341,15 +342,16 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       let result;
       if (typeof fetch === "function" && node.skill !== "custom") {
         if (node.requiresConfirmation && !item.confirmationFingerprint) {
-          const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload) });
+          const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
           const previewPayload = await previewResponse.json().catch(() => ({}));
           if (!previewResponse.ok) throw new Error(previewPayload.error || `HTTP ${previewResponse.status}`);
           setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || entry.runId } : entry) }));
+          setInspector((previous) => previous?.item?.id === item.id ? { ...previous, item: { ...previous.item, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || previous.item.runId } } : previous);
           setMessage("预览已生成，请在节点详情中确认后执行");
           controllers.current.delete(item.id);
           return;
         }
-        const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload) });
+        const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         result = { runId: payload.runId, message: payload.result?.output || payload.result?.graph || `${node.title} 已完成`, ...payload };
@@ -380,6 +382,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           status: "completed",
           progress: 100,
           message: result.message,
+          output: result.result || result.output || result.graph || result,
+          logs: result.logs || result.events || [],
           runId: result.runId || currentItem.runId,
           ...createCompletionMetadata({ operator: currentOperator, startedAt: currentItem.startedAt || startedAt, completedAt }),
         }];
@@ -400,6 +404,9 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
 
   const cancelNode = useCallback((item) => {
     controllers.current.get(item?.id)?.controller?.abort();
+    if (item?.runId) {
+      void fetch("/api/release/runs/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: item.runId }) }).catch(() => {});
+    }
     if (!item) return;
     setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "" } : entry) }));
     setMessage(`${item.title} 已取消`);
@@ -441,7 +448,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     </div>
   ) : null;
 
-  const renderInitializationContext = (item) => item.nodeId === initializationNode.id ? (
+  const renderInitializationContext = (item) => item.nodeId === effectiveInitializationNode.id ? (
     <div className="af-release-context-chips">
       <span>{context.businessLine}</span><span>{context.platform}</span><span>{context.version}</span>
     </div>

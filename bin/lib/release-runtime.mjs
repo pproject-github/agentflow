@@ -4,6 +4,34 @@ import yaml from "js-yaml";
 
 const DEFAULT_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const DEFAULT_BATCHES = ["initial", "supplemental"];
+const ACTION_ORDER = [
+  "release-setup",
+  "release-management",
+  "release-git",
+  "release-localization",
+  "release-release-notes",
+  "release-approval",
+  "release-metrics",
+  "release-gray-observe",
+  "release-records",
+  "release-channel-packages",
+  "release-google-play",
+  "release-notification",
+];
+const INFERRED_ACTIONS = {
+  "release-management": [
+    ["guide-current-release", ["product", "platform", "minor_version", "target_skill"], false],
+    ["create-active-release", ["product", "platform", "major_version", "publish_date"], true],
+    ["append-release-batch", ["product", "platform", "major_version", "publish_date"], true],
+    ["register-release-branch", ["product", "platform", "major_version", "release_branch"], true],
+    ["update-active-release", ["product", "platform", "major_version", "minor_version", "build_number", "batch", "expected_major_version", "publish_date"], true],
+  ],
+  "release-setup": [
+    ["configure-target", ["product", "platform"], true],
+    ["configure-notification-recipient", ["product", "platform"], true],
+    ["discover-skills", [], false],
+  ],
+};
 
 function normalizeList(value, fallback = []) {
   if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -113,7 +141,14 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
       if (!fs.existsSync(skillPath)) continue;
       let meta;
       try { meta = readFrontmatter(skillPath); } catch { continue; }
-      const actions = Array.isArray(meta.actions) ? meta.actions : [];
+      const actions = Array.isArray(meta.actions) && meta.actions.length > 0
+        ? meta.actions
+        : (INFERRED_ACTIONS[skillName] || []).map(([name, inputs, requiresConfirmation]) => ({
+          name,
+          inputs,
+          platforms: ["ios", "android"],
+          requires_confirmation: requiresConfirmation,
+        }));
       for (const action of actions) {
         if (!action || typeof action !== "object" || !String(action.name || "").trim()) continue;
         const node = actionDefinition({ skillRoot, skillPath, skillName, skillMeta: meta, action });
@@ -124,5 +159,13 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
   }
   const unique = new Map();
   for (const node of nodes) if (!unique.has(node.id)) unique.set(node.id, node);
-  return Array.from(unique.values()).sort((a, b) => a.id.localeCompare(b.id));
+  const ordered = Array.from(unique.values()).sort((a, b) => {
+    const ai = ACTION_ORDER.indexOf(a.skill);
+    const bi = ACTION_ORDER.indexOf(b.skill);
+    return (ai < 0 ? ACTION_ORDER.length : ai) - (bi < 0 ? ACTION_ORDER.length : bi) || a.id.localeCompare(b.id);
+  });
+  return ordered.map((node, index) => ({
+    ...node,
+    nextNodeIds: node.nextNodeIds.length > 0 ? [...node.nextNodeIds] : ordered.slice(index + 1, index + 3).map((item) => item.id),
+  }));
 }

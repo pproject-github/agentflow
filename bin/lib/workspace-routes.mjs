@@ -77,7 +77,7 @@ import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStar
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import { discoverReleaseActions } from "./release-runtime.mjs";
-import { buildReleaseRunGraph, previewReleaseAction, runReleaseAction, stopReleaseAction } from "./release-runtime-executor.mjs";
+import { buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, stopReleaseAction } from "./release-runtime-executor.mjs";
 import { emptyReleaseState, readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
@@ -1248,13 +1248,33 @@ async function workspaceRoutes(req, res, ctx) {
         const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
         const graph = buildReleaseRunGraph(action, requestContext, inputs);
         const runId = String(payload.runId || releaseRunId());
+        const runInputs = action.requiresConfirmation && payload.confirmationFingerprint
+          ? { ...inputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
+          : inputs;
+        if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
+          const previewResult = await runWorkspaceGraph(root, root, {
+            flowId: `release-${workspaceId}`,
+            flowSource: "user",
+            runNodeId: "release_action",
+            graph,
+            inputs: runInputs,
+            ignoreCache: true,
+          }, userCtx, { runId: `${runId}-preview` });
+          const preview = await previewReleaseAction(action, requestContext, inputs);
+          json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
+          return;
+        }
+        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, requestContext, inputs)) {
+          json(res, 409, { error: "确认指纹已失效，请重新预览", code: "RELEASE_CONFIRMATION_MISMATCH" });
+          return;
+        }
         const controller = new AbortController();
         const runPromise = runWorkspaceGraph(root, root, {
           flowId: `release-${workspaceId}`,
           flowSource: "user",
           runNodeId: "release_action",
           graph,
-          inputs: { ...requestContext, ...inputs },
+          inputs: runInputs,
           ignoreCache: true,
         }, userCtx, { signal: controller.signal, runId });
         activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId, action, inputs });
@@ -1269,9 +1289,10 @@ async function workspaceRoutes(req, res, ctx) {
         activeReleaseRuns.delete(runId);
         const state = readReleaseState(root, requestContext, workspaceId, workspacePath);
         const now = Date.now();
+        const timelineNodeId = String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id;
         const completedItem = {
           id: String(payload.itemId || `${action.id}-${now}`),
-          nodeId: action.id,
+          nodeId: timelineNodeId,
           title: action.title,
           description: action.description,
           category: action.category,
@@ -1286,7 +1307,7 @@ async function workspaceRoutes(req, res, ctx) {
           output: result,
         };
         state.timeline = [...state.timeline, completedItem];
-        state.pending = state.pending.filter((item) => item.id !== completedItem.id && item.nodeId !== action.id);
+        state.pending = state.pending.filter((item) => item.id !== completedItem.id);
         state.runs[runId] = { ...completedItem, logs: result?.events || [] };
         writeReleaseState(root, requestContext, workspaceId, state);
         json(res, 200, { ok: true, status: "completed", runId, result, state });

@@ -16,11 +16,14 @@ export function resolveReleaseContext(workspace = {}, params = "") {
   const businessLine = paramValue(params, "businessLine") || workspace?.businessLine || "likee";
   const platformValue = paramValue(params, "platform") || workspace?.platform || "android";
   const version = paramValue(params, "version") || workspace?.version || workspace?.releaseVersion || "1.0.0";
-  return {
+  const explicitBatch = paramValue(params, "batch") || workspace?.batch || "";
+  const result = {
     businessLine: String(businessLine).trim().toLowerCase() || "likee",
     platform: /ios|iphone/i.test(String(platformValue)) ? "ios" : "android",
     version: String(version).trim() || "1.0.0",
   };
+  if (explicitBatch) result.batch = String(explicitBatch).trim().toLowerCase() || "initial";
+  return result;
 }
 
 // 用户需求点: 首次进入业务线、平台、版本组合时，需要把上下文作为初始化状态节点的一部分保留下来。
@@ -28,16 +31,18 @@ export function createInitializationNode(context = {}, workspace) {
   const businessLine = String(context.businessLine || "likee");
   const platform = String(context.platform || "android");
   const version = String(context.version || "1.0.0");
+  const batch = String(context.batch || "initial");
   const inputs = {
     businessLine,
     platform,
     version,
     workspace: workspaceValue(workspace),
   };
+  if (context.batch) inputs.batch = batch;
   return {
     id: "release-initialization",
     title: "初始化状态",
-    description: `初始化发版上下文：${businessLine} / ${platform} / ${version}`,
+    description: `初始化发版上下文：${businessLine} / ${platform} / ${version} / ${batch}`,
     skill: "release-initialization",
     category: "发版初始化",
     businessLines: [businessLine],
