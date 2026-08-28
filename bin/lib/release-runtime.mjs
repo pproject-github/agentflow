@@ -127,7 +127,8 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
   const targetBatch = String(batch || "initial").trim().toLowerCase();
   const nodes = [];
   for (const configuredRoot of roots) {
-    const skillRoot = path.resolve(String(configuredRoot || ""));
+    const configuredPath = path.resolve(String(configuredRoot || ""));
+    const skillRoot = fs.existsSync(path.join(configuredPath, "skills")) ? path.join(configuredPath, "skills") : configuredPath;
     if (!fs.existsSync(skillRoot)) continue;
     let skillDirs = [];
     try {
