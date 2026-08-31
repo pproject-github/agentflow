@@ -2076,7 +2076,17 @@ async function workspaceRoutes(req, res, ctx) {
         }
         const scopedUserCtx = workspaceScopedUserContext(scoped, userCtx);
         const draftGraph = readWorkspaceGraph(scoped.root, root).graph;
-        const stableRelease = readWorkspaceStableRelease(scoped.root, root);
+        const requestedRunNodeId = String(url.searchParams.get("runNodeId") || "").trim();
+        let stableRelease = requestedRunNodeId
+          ? readWorkspaceStableRelease(scoped.root, root, requestedRunNodeId)
+          : null;
+        if (!stableRelease) {
+          stableRelease = (readWorkspaceReleaseStatus(scoped.root, root, draftGraph).entries || [])
+            .filter((entry) => entry.enabled)
+            .map((entry) => readWorkspaceStableRelease(scoped.root, root, entry.entryNodeId))
+            .filter((candidate) => candidate?.graph?.instances?.[nodeId])
+            .sort((left, right) => Number(right.release?.number || 0) - Number(left.release?.number || 0))[0] || null;
+        }
         const draft = workspaceNodeReviewSnapshot(root, scoped.root, draftGraph, nodeId, scopedUserCtx, "Draft");
         const stable = stableRelease
           ? workspaceNodeReviewSnapshot(root, stableRelease.root, stableRelease.graph, nodeId, scopedUserCtx, `Stable ${stableRelease.release.id}`)
@@ -2541,7 +2551,15 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, scoped.status || 400, { error: scoped.error });
           return;
         }
-        json(res, 200, { ok: true, release: readWorkspaceReleaseStatus(scoped.root, root) });
+        json(res, 200, {
+          ok: true,
+          release: readWorkspaceReleaseStatus(
+            scoped.root,
+            root,
+            null,
+            url.searchParams.get("runNodeId") || url.searchParams.get("entryNodeId") || "",
+          ),
+        });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
@@ -2580,6 +2598,7 @@ async function workspaceRoutes(req, res, ctx) {
           expectedRevision: payload.expectedRevision || "",
           createdBy: userCtx.userId || authUser?.userId || "",
           notes: payload.notes || "",
+          runNodeId: payload.runNodeId || payload.entryNodeId || "",
         });
         if (result.error) {
           json(res, result.conflict ? 409 : 400, result);
@@ -2629,7 +2648,12 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 403, { error: "Workspace release rollback permission denied" });
           return;
         }
-        const result = rollbackWorkspaceRelease(scoped.root, payload.releaseId || "", root);
+        const result = rollbackWorkspaceRelease(
+          scoped.root,
+          payload.releaseId || "",
+          root,
+          payload.runNodeId || payload.entryNodeId || "",
+        );
         if (result.error) {
           json(res, 404, result);
           return;

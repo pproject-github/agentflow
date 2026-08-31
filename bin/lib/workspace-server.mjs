@@ -741,15 +741,28 @@ function normalizeWorkspaceReleaseRegistry(value = {}) {
         createdBy: String(release.createdBy || ""),
         notes: String(release.notes || ""),
         baseReleaseId: String(release.baseReleaseId || ""),
+        entryNodeId: String(release.entryNodeId || release.runNodeId || ""),
+        entryDefinitionId: String(release.entryDefinitionId || ""),
+        entryLabel: String(release.entryLabel || ""),
+        workspaceRevision: String(release.workspaceRevision || ""),
       }))
       .sort((a, b) => b.number - a.number)
     : [];
   const stableReleaseId = releases.some((release) => release.id === value?.stableReleaseId)
     ? String(value.stableReleaseId)
     : "";
+  const releaseById = new Map(releases.map((release) => [release.id, release]));
+  const stableReleaseIds = {};
+  for (const [entryNodeId, releaseId] of Object.entries(value?.stableReleaseIds || {})) {
+    const entryId = String(entryNodeId || "").trim();
+    const release = releaseById.get(String(releaseId || ""));
+    if (!entryId || !release || (release.entryNodeId && release.entryNodeId !== entryId)) continue;
+    stableReleaseIds[entryId] = release.id;
+  }
   return {
-    version: 1,
+    version: 2,
     stableReleaseId,
+    stableReleaseIds,
     nextNumber: Math.max(
       Number(value?.nextNumber || 1) || 1,
       releases.reduce((max, release) => Math.max(max, release.number + 1), 1),
@@ -757,6 +770,95 @@ function normalizeWorkspaceReleaseRegistry(value = {}) {
     releases,
     updatedAt: String(value?.updatedAt || ""),
   };
+}
+
+function workspaceReleaseEntryNodes(graph = {}) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  return Object.entries(instances)
+    .filter(([, instance]) => (
+      String(instance?.definitionId || "") === "workspace_run"
+      || String(instance?.definitionId || "") === "workspace_scheduled_run"
+    ))
+    .map(([entryNodeId, instance]) => ({
+      entryNodeId,
+      definitionId: String(instance?.definitionId || ""),
+      label: String(instance?.label || entryNodeId),
+      runMode: String(instance?.definitionId || "") === "workspace_scheduled_run" ? "scheduled" : "manual",
+    }));
+}
+
+function workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot = "") {
+  const entryId = String(entryNodeId || "").trim();
+  if (!entryId) return null;
+  let plan;
+  try {
+    plan = workspaceRunPlan(graph, entryId, workspaceRoot, { ignoreCache: true });
+  } catch {
+    return null;
+  }
+  const includedNodeIds = new Set(workspaceRunPlanNodeIds(entryId, plan));
+  if (!includedNodeIds.size) return null;
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const subflows = graph?.subflows && typeof graph.subflows === "object" ? graph.subflows : {};
+  const includedSubflowIds = new Set();
+  const includeSubflow = (subflowId) => {
+    const id = String(subflowId || "").trim();
+    if (!id || includedSubflowIds.has(id) || !subflows[id]) return;
+    includedSubflowIds.add(id);
+    for (const nodeId of Array.isArray(subflows[id].nodeIds) ? subflows[id].nodeIds : []) {
+      includedNodeIds.add(String(nodeId));
+    }
+  };
+  // A call/loop executes nodes stored outside the top-level DAG. Pull the complete
+  // referenced subflow closure into the Run identity so script edits are auditable.
+  for (let previousSize = -1; previousSize !== includedNodeIds.size;) {
+    previousSize = includedNodeIds.size;
+    for (const nodeId of includedNodeIds) {
+      const instance = instances[nodeId] || {};
+      includeSubflow(instance.subflowId);
+      includeSubflow(instance.conditionSubflowId);
+      includeSubflow(instance.bodySubflowId);
+    }
+  }
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const ui = graph?.ui && typeof graph.ui === "object" ? graph.ui : {};
+  const positions = ui.nodePositions && typeof ui.nodePositions === "object"
+    ? Object.fromEntries(Object.entries(ui.nodePositions).filter(([id]) => includedNodeIds.has(id)))
+    : {};
+  const sizes = ui.nodeSizes && typeof ui.nodeSizes === "object"
+    ? Object.fromEntries(Object.entries(ui.nodeSizes).filter(([id]) => includedNodeIds.has(id)))
+    : {};
+  return {
+    version: Number(graph?.version) || 1,
+    instances: Object.fromEntries(Object.entries(instances).filter(([id]) => includedNodeIds.has(id))),
+    edges: edges.filter((edge) => includedNodeIds.has(String(edge?.source || "")) && includedNodeIds.has(String(edge?.target || ""))),
+    subflows: Object.fromEntries(Object.entries(subflows).filter(([id]) => includedSubflowIds.has(id))),
+    ui: { nodePositions: positions, nodeSizes: sizes },
+  };
+}
+
+function workspaceReleaseEntryRevision(graph, entryNodeId, workspaceRoot = "") {
+  const entryGraph = workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot);
+  return entryGraph ? workspaceDesignRevision(entryGraph) : "";
+}
+
+function workspaceStableReleaseRecord(registry, entryNodeId = "") {
+  const entryId = String(entryNodeId || "").trim();
+  const byId = new Map(registry.releases.map((release) => [release.id, release]));
+  if (entryId && registry.stableReleaseIds?.[entryId]) {
+    const exact = byId.get(registry.stableReleaseIds[entryId]);
+    if (exact) return exact;
+  }
+  const legacy = byId.get(registry.stableReleaseId) || null;
+  if (legacy && (!legacy.entryNodeId || !entryId || legacy.entryNodeId === entryId)) return legacy;
+  if (!entryId) {
+    const activeIds = Array.from(new Set(Object.values(registry.stableReleaseIds || {})));
+    if (activeIds.length === 1) return byId.get(activeIds[0]) || null;
+    if (activeIds.length > 1) {
+      return activeIds.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => b.number - a.number)[0] || null;
+    }
+  }
+  return null;
 }
 
 function readWorkspaceReleaseRegistry(workspaceRoot) {
@@ -841,37 +943,68 @@ function workspaceCopyReleaseSnapshot(sourceRoot, targetRoot, relative = "") {
   }
 }
 
-function workspaceReleaseSummary(workspaceRoot, marketplaceRoot = "", graph = null) {
+function workspaceReleaseSummary(workspaceRoot, marketplaceRoot = "", graph = null, entryNodeId = "") {
   const registry = readWorkspaceReleaseRegistry(workspaceRoot);
   const currentGraph = graph || readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
-  const draftRevision = workspaceDesignRevision(currentGraph);
-  const stable = registry.releases.find((release) => release.id === registry.stableReleaseId) || null;
-  const comparableStableRevisions = new Set([stable?.designRevision || ""].filter(Boolean));
-  const stableRoot = stable ? workspaceReleaseSnapshotRoot(workspaceRoot, stable.id) : "";
-  if (stableRoot && fs.existsSync(stableRoot)) {
-    try {
-      comparableStableRevisions.add(workspaceDesignRevision(readWorkspaceGraph(stableRoot, marketplaceRoot).graph));
-    } catch {
-      // Keep the immutable manifest revision when an old snapshot cannot be normalized.
+  const draftEntries = workspaceReleaseEntryNodes(currentGraph);
+  const draftEntryById = new Map(draftEntries.map((entry) => [entry.entryNodeId, entry]));
+  const allEntryIds = Array.from(new Set([
+    ...draftEntries.map((entry) => entry.entryNodeId),
+    ...registry.releases.map((release) => release.entryNodeId).filter(Boolean),
+  ]));
+  const entries = allEntryIds.map((id) => {
+    const draftEntry = draftEntryById.get(id) || null;
+    const stable = workspaceStableReleaseRecord(registry, id);
+    const stableRoot = stable ? workspaceReleaseSnapshotRoot(workspaceRoot, stable.id) : "";
+    const draftRevision = draftEntry ? workspaceReleaseEntryRevision(currentGraph, id, workspaceRoot) : "";
+    const comparableStableRevisions = new Set([stable?.designRevision || ""].filter(Boolean));
+    let stableEntry = null;
+    if (stableRoot && fs.existsSync(stableRoot)) {
+      try {
+        const stableGraph = readWorkspaceGraph(stableRoot, marketplaceRoot).graph;
+        comparableStableRevisions.add(workspaceReleaseEntryRevision(stableGraph, id, stableRoot));
+        stableEntry = workspaceReleaseEntryNodes(stableGraph).find((entry) => entry.entryNodeId === id) || null;
+      } catch {
+        // Keep manifest metadata when an old snapshot cannot be normalized.
+      }
     }
-  }
+    const releases = registry.releases.filter((release) => !release.entryNodeId || release.entryNodeId === id);
+    return {
+      entryNodeId: id,
+      entryDefinitionId: draftEntry?.definitionId || stable?.entryDefinitionId || stableEntry?.definitionId || "",
+      entryLabel: draftEntry?.label || stable?.entryLabel || stableEntry?.label || id,
+      runMode: draftEntry?.runMode || stableEntry?.runMode || (stable?.entryDefinitionId === "workspace_scheduled_run" ? "scheduled" : "manual"),
+      enabled: Boolean(stable),
+      stableReleaseId: stable?.id || "",
+      stableRevision: stable?.designRevision || "",
+      draftRevision,
+      hasDraftChanges: Boolean(stable && (!draftEntry || !comparableStableRevisions.has(draftRevision))),
+      releases,
+    };
+  }).sort((left, right) => left.entryLabel.localeCompare(right.entryLabel) || left.entryNodeId.localeCompare(right.entryNodeId));
+  const requestedEntryId = String(entryNodeId || "").trim();
+  const selected = entries.find((entry) => entry.entryNodeId === requestedEntryId)
+    || (entries.length === 1 ? entries[0] : null);
   return {
-    enabled: Boolean(stable),
-    stableReleaseId: stable?.id || "",
-    stableRevision: stable?.designRevision || "",
-    draftRevision,
-    hasDraftChanges: Boolean(stable && !comparableStableRevisions.has(draftRevision)),
-    releases: registry.releases,
+    enabled: selected ? selected.enabled : entries.some((entry) => entry.enabled),
+    stableReleaseId: selected?.stableReleaseId || "",
+    stableRevision: selected?.stableRevision || "",
+    draftRevision: selected?.draftRevision || workspaceDesignRevision(currentGraph),
+    hasDraftChanges: selected ? selected.hasDraftChanges : entries.some((entry) => entry.hasDraftChanges),
+    entryNodeId: selected?.entryNodeId || "",
+    entryLabel: selected?.entryLabel || "",
+    releases: selected?.releases || registry.releases,
+    entries,
   };
 }
 
-export function readWorkspaceReleaseStatus(workspaceRoot, marketplaceRoot = "", graph = null) {
-  return workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph);
+export function readWorkspaceReleaseStatus(workspaceRoot, marketplaceRoot = "", graph = null, entryNodeId = "") {
+  return workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph, entryNodeId);
 }
 
-export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "") {
+export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "", entryNodeId = "") {
   const registry = readWorkspaceReleaseRegistry(workspaceRoot);
-  const release = registry.releases.find((item) => item.id === registry.stableReleaseId) || null;
+  const release = workspaceStableReleaseRecord(registry, entryNodeId);
   if (!release) return null;
   const root = workspaceReleaseSnapshotRoot(workspaceRoot, release.id);
   if (!root || !fs.existsSync(root)) return null;
@@ -885,16 +1018,25 @@ export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "") 
 
 export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", options = {}) {
   const graph = readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
-  const designRevision = workspaceDesignRevision(graph);
+  const workspaceRevision = workspaceDesignRevision(graph);
   const expectedRevision = String(options.expectedRevision || "").trim();
-  if (expectedRevision && expectedRevision !== designRevision) {
+  if (expectedRevision && expectedRevision !== workspaceRevision) {
     return {
       error: "Workspace 已更新，请保存并刷新后再发布",
       conflict: "revision-mismatch",
       expectedRevision,
-      currentRevision: designRevision,
+      currentRevision: workspaceRevision,
     };
   }
+  const runnableEntries = workspaceReleaseEntryNodes(graph);
+  const requestedEntryId = String(options.runNodeId || options.entryNodeId || "").trim();
+  const entry = runnableEntries.find((candidate) => candidate.entryNodeId === requestedEntryId)
+    || (!requestedEntryId && runnableEntries.length === 1 ? runnableEntries[0] : null);
+  if (!entry) {
+    return { error: runnableEntries.length > 1 ? "请选择要发布的 Run" : "Workspace 中没有可发布的 Run / Scheduled Run" };
+  }
+  const designRevision = workspaceReleaseEntryRevision(graph, entry.entryNodeId, workspaceRoot);
+  if (!designRevision) return { error: `Run ${entry.entryLabel || entry.entryNodeId} 无法生成执行计划` };
   const registry = readWorkspaceReleaseRegistry(workspaceRoot);
   const number = registry.nextNumber;
   const releaseId = `v${number}`;
@@ -908,10 +1050,14 @@ export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", opt
     id: releaseId,
     number,
     designRevision,
+    workspaceRevision,
     createdAt: now,
     createdBy: String(options.createdBy || ""),
     notes: String(options.notes || "").trim().slice(0, 2000),
-    baseReleaseId: registry.stableReleaseId || "",
+    baseReleaseId: workspaceStableReleaseRecord(registry, entry.entryNodeId)?.id || "",
+    entryNodeId: entry.entryNodeId,
+    entryDefinitionId: entry.definitionId,
+    entryLabel: entry.label,
   };
   let releaseInstalled = false;
   let registryCommitted = false;
@@ -926,7 +1072,7 @@ export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", opt
     releaseInstalled = true;
     const nextRegistry = writeWorkspaceReleaseRegistry(workspaceRoot, {
       ...registry,
-      stableReleaseId: releaseId,
+      stableReleaseIds: { ...(registry.stableReleaseIds || {}), [entry.entryNodeId]: releaseId },
       nextNumber: number + 1,
       releases: [release, ...registry.releases],
     });
@@ -934,7 +1080,7 @@ export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", opt
     return {
       ok: true,
       release,
-      status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph),
+      status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot, graph, entry.entryNodeId),
       registry: nextRegistry,
       snapshotRoot,
     };
@@ -947,18 +1093,27 @@ export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", opt
   }
 }
 
-export function rollbackWorkspaceRelease(workspaceRoot, releaseId, marketplaceRoot = "") {
+export function rollbackWorkspaceRelease(workspaceRoot, releaseId, marketplaceRoot = "", entryNodeId = "") {
   const registry = readWorkspaceReleaseRegistry(workspaceRoot);
   const release = registry.releases.find((item) => item.id === String(releaseId || "").trim()) || null;
   const snapshotRoot = release ? workspaceReleaseSnapshotRoot(workspaceRoot, release.id) : "";
   if (!release || !snapshotRoot || !fs.existsSync(snapshotRoot)) {
     return { error: "Release not found" };
   }
-  writeWorkspaceReleaseRegistry(workspaceRoot, { ...registry, stableReleaseId: release.id });
+  const currentGraph = readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
+  const currentEntries = workspaceReleaseEntryNodes(currentGraph);
+  const requestedEntryId = String(entryNodeId || "").trim();
+  const targetEntryId = requestedEntryId || release.entryNodeId || (currentEntries.length === 1 ? currentEntries[0].entryNodeId : "");
+  if (!targetEntryId) return { error: "请选择要回滚的 Run" };
+  if (release.entryNodeId && release.entryNodeId !== targetEntryId) return { error: "Release 不属于所选 Run" };
+  writeWorkspaceReleaseRegistry(workspaceRoot, {
+    ...registry,
+    stableReleaseIds: { ...(registry.stableReleaseIds || {}), [targetEntryId]: release.id },
+  });
   return {
     ok: true,
     release,
-    status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot),
+    status: workspaceReleaseSummary(workspaceRoot, marketplaceRoot, currentGraph, targetEntryId),
   };
 }
 
@@ -7453,15 +7608,25 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
     const scheduleUserId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId);
     const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
     if (scoped.error || !scoped.root) continue;
-    let graph;
+    let draftGraph;
     try {
-      graph = readWorkspaceStableRelease(scoped.root, root)?.graph
-        || readWorkspaceGraph(scoped.root, root).graph;
+      draftGraph = readWorkspaceGraph(scoped.root, root).graph;
     } catch {
       continue;
     }
-    const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-    for (const [scheduleNodeId, instance] of Object.entries(instances)) {
+    const releaseStatus = readWorkspaceReleaseStatus(scoped.root, root, draftGraph);
+    const scheduleNodeIds = new Set([
+      ...Object.entries(draftGraph?.instances || {})
+        .filter(([, instance]) => String(instance?.definitionId || "") === "workspace_scheduled_run")
+        .map(([nodeId]) => nodeId),
+      ...(releaseStatus.entries || [])
+        .filter((item) => item.runMode === "scheduled")
+        .map((item) => item.entryNodeId),
+    ]);
+    for (const scheduleNodeId of scheduleNodeIds) {
+      const stableRelease = readWorkspaceStableRelease(scoped.root, root, scheduleNodeId);
+      const graph = stableRelease?.graph || draftGraph;
+      const instance = graph?.instances?.[scheduleNodeId];
       if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
       const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
       const key = workspaceScheduleKey(scheduleUserId, flowSource, flowId, scheduleNodeId);
@@ -7552,9 +7717,19 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
     writeWorkspaceScheduleRegistry({ version: 1, schedules });
     return [];
   }
-  const effectiveGraph = readWorkspaceStableRelease(scoped?.root || "", root)?.graph || graph;
-  const instances = effectiveGraph?.instances && typeof effectiveGraph.instances === "object" ? effectiveGraph.instances : {};
-  for (const [scheduleNodeId, instance] of Object.entries(instances)) {
+  const releaseStatus = readWorkspaceReleaseStatus(scoped?.root || "", root, graph);
+  const scheduleNodeIds = new Set([
+    ...Object.entries(graph?.instances || {})
+      .filter(([, instance]) => String(instance?.definitionId || "") === "workspace_scheduled_run")
+      .map(([nodeId]) => nodeId),
+    ...(releaseStatus.entries || [])
+      .filter((item) => item.runMode === "scheduled")
+      .map((item) => item.entryNodeId),
+  ]);
+  for (const scheduleNodeId of scheduleNodeIds) {
+    const stableRelease = readWorkspaceStableRelease(scoped?.root || "", root, scheduleNodeId);
+    const effectiveGraph = stableRelease?.graph || graph;
+    const instance = effectiveGraph?.instances?.[scheduleNodeId];
     if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
     const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
     const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(effectiveGraph, scheduleNodeId, config);
@@ -7711,7 +7886,8 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     });
     return;
   }
-  const stableRelease = readWorkspaceStableRelease(scoped.root, root);
+  const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
+  const stableRelease = readWorkspaceStableRelease(scoped.root, root, scheduleNodeId);
   const executionRoot = stableRelease?.root || scoped.root;
   const executionScoped = stableRelease ? { ...scoped, root: executionRoot } : scoped;
   const graph = hydrateWorkspaceGraphForRuntime(
@@ -7720,7 +7896,6 @@ export async function runWorkspaceScheduledEntry(root, entry) {
     stableRelease?.graph || readWorkspaceGraph(scoped.root, root).graph,
     userCtx,
   );
-  const scheduleNodeId = String(entry.scheduleNodeId || entry.key?.split(":").pop() || "");
   const instance = graph.instances?.[scheduleNodeId];
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
   nextRunAt = computeNext(config);

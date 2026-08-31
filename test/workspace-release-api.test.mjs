@@ -28,6 +28,94 @@ function scheduledGraph({ enabled = true, content = "v1" } = {}) {
   };
 }
 
+function multiRunGraph({ first = "first-v1", second = "second-v1" } = {}) {
+  return {
+    version: 1,
+    instances: {
+      run_first: {
+        definitionId: "workspace_run",
+        label: "First Run",
+        body: "",
+        input: [{ type: "node", name: "prev", value: "" }],
+        output: [{ type: "node", name: "next", value: "" }],
+      },
+      first_result: {
+        definitionId: "display_markdown",
+        label: "First Result",
+        body: first,
+        input: [{ type: "node", name: "prev", value: "" }],
+        output: [{ type: "node", name: "next", value: "" }],
+      },
+      run_second: {
+        definitionId: "workspace_scheduled_run",
+        label: "Second Run",
+        body: JSON.stringify({ enabled: true, cron: "0 9 * * *", timezone: "Asia/Shanghai", overlapPolicy: "skip" }),
+        input: [{ type: "node", name: "prev", value: "" }],
+        output: [{ type: "node", name: "next", value: "" }],
+      },
+      second_result: {
+        definitionId: "display_markdown",
+        label: "Second Result",
+        body: second,
+        input: [{ type: "node", name: "prev", value: "" }],
+        output: [{ type: "node", name: "next", value: "" }],
+      },
+    },
+    edges: [
+      { source: "run_first", sourceHandle: "output-0", target: "first_result", targetHandle: "input-0" },
+      { source: "run_second", sourceHandle: "output-0", target: "second_result", targetHandle: "input-0" },
+    ],
+    ui: { nodePositions: {} },
+  };
+}
+
+test("each Run in one Workspace owns an independent Stable history", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-run-release-")));
+  try {
+    const {
+      publishWorkspaceRelease,
+      readWorkspaceReleaseStatus,
+      readWorkspaceStableRelease,
+      rollbackWorkspaceRelease,
+      writeWorkspaceGraph,
+    } = await import("../bin/lib/workspace-server.mjs");
+    const graphV1 = multiRunGraph();
+    writeWorkspaceGraph(tempRoot, graphV1, tempRoot);
+
+    assert.match(publishWorkspaceRelease(tempRoot, tempRoot).error, /请选择要发布的 Run/);
+
+    const firstV1 = publishWorkspaceRelease(tempRoot, tempRoot, { runNodeId: "run_first", createdBy: "tester" });
+    assert.equal(firstV1.release.id, "v1");
+    assert.equal(firstV1.release.entryNodeId, "run_first");
+    let status = readWorkspaceReleaseStatus(tempRoot, tempRoot);
+    assert.equal(status.entries.find((entry) => entry.entryNodeId === "run_first").stableReleaseId, "v1");
+    assert.equal(status.entries.find((entry) => entry.entryNodeId === "run_second").enabled, false);
+
+    const graphV2 = multiRunGraph({ second: "second-v2" });
+    writeWorkspaceGraph(tempRoot, graphV2, tempRoot);
+    status = readWorkspaceReleaseStatus(tempRoot, tempRoot);
+    assert.equal(status.entries.find((entry) => entry.entryNodeId === "run_first").hasDraftChanges, false);
+
+    const secondV2 = publishWorkspaceRelease(tempRoot, tempRoot, { runNodeId: "run_second", createdBy: "tester" });
+    assert.equal(secondV2.release.id, "v2");
+    assert.equal(readWorkspaceStableRelease(tempRoot, tempRoot, "run_first").release.id, "v1");
+    assert.equal(readWorkspaceStableRelease(tempRoot, tempRoot, "run_second").release.id, "v2");
+
+    writeWorkspaceGraph(tempRoot, multiRunGraph({ first: "first-v3", second: "second-v2" }), tempRoot);
+    status = readWorkspaceReleaseStatus(tempRoot, tempRoot);
+    assert.equal(status.entries.find((entry) => entry.entryNodeId === "run_first").hasDraftChanges, true);
+    assert.equal(status.entries.find((entry) => entry.entryNodeId === "run_second").hasDraftChanges, false);
+    const firstV3 = publishWorkspaceRelease(tempRoot, tempRoot, { runNodeId: "run_first", createdBy: "tester" });
+    assert.equal(firstV3.release.id, "v3");
+
+    const rollback = rollbackWorkspaceRelease(tempRoot, "v1", tempRoot, "run_first");
+    assert.equal(rollback.status.stableReleaseId, "v1");
+    assert.equal(readWorkspaceStableRelease(tempRoot, tempRoot, "run_second").release.id, "v2");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("workspace releases keep stable schedules isolated from draft edits and support rollback", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-workspace-release-")));
   const previousHome = process.env.AGENTFLOW_HOME;

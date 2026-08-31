@@ -65,12 +65,18 @@ export async function run() { return { result: "reviewable" }; }
     const graph = {
       version: 1,
       instances: {
+        run: {
+          definitionId: "workspace_run",
+          label: "Review Run",
+          input: [],
+          output: [{ name: "next", type: "node", value: "" }],
+        },
         worker: {
           definitionId: "tool_nodejs",
           label: "Worker",
           scriptRef: "nodes/worker/script.mjs",
-          input: [],
-          output: [],
+          input: [{ name: "prev", type: "node", value: "" }],
+          output: [{ name: "next", type: "node", value: "" }],
         },
         packaged: {
           definitionId: "marketplace:review_package@1.0.0",
@@ -86,7 +92,7 @@ export async function run() { return { result: "reviewable" }; }
           output: [],
         },
       },
-      edges: [],
+      edges: [{ source: "run", sourceHandle: "output-0", target: "worker", targetHandle: "input-0" }],
       ui: { nodePositions: { worker: { x: 120, y: 120 } } },
     };
     const saved = await request("POST", "/api/workspace/graph", {
