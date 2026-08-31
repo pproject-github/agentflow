@@ -158,7 +158,7 @@ test("discovers only actions referenced by the selected project profile", async 
     assert.deepEqual(nodes.map((node) => node.id), ["release-approval:create-full-rollout-approval"]);
     assert.deepEqual(nodes[0].businessLines, ["likee"]);
     assert.equal(nodes[0].contextSnapshot.version, "5.63.2");
-    assert.equal(nodes[0].processId, "approval-supplemental");
+    assert.equal(nodes[0].processId, "approval");
     assert.equal(nodes[0].processOrder, 20);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

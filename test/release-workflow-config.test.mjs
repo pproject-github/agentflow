@@ -47,6 +47,26 @@ test("resolves process metadata from a caller-supplied workflow config", () => {
   });
 });
 
+test("selects the batch-enabled stage when resolving process metadata", () => {
+  const config = {
+    workflows: [{
+      id: "demo",
+      businessLines: ["demo"],
+      platforms: ["android"],
+      batches: ["initial", "supplemental"],
+      stages: [
+        { id: "initial-stage", title: "首包阶段", batches: ["initial"], nodes: [{ id: "demo:action" }] },
+        { id: "supplemental-stage", title: "补包阶段", batches: ["supplemental"], nodes: [{ id: "demo:action" }] },
+      ],
+    }],
+  };
+  assert.deepEqual(releaseActionProcessMetadata("demo:action", {}, config, { businessLine: "demo", platform: "android", batch: "supplemental" }), {
+    processId: "supplemental-stage",
+    processOrder: 1000,
+    processTitle: "补包阶段",
+  });
+});
+
 test("uses stage nodes as the canonical action references when nodeIds disagree", () => {
   const workflow = {
     businessLines: ["demo"],

@@ -35,7 +35,7 @@ function nodeMatchesContext(node, context) {
     && (!snapshot.batch || normalize(snapshot.batch) === scope.batch);
 }
 
-export function processIdForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG) {
+export function processIdForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG, context = {}) {
   const explicit = normalize(
     node.processId
       || node.process?.id
@@ -44,7 +44,7 @@ export function processIdForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG) {
       || node.phaseId,
   );
   if (explicit) return explicit;
-  return releaseActionProcessMetadata(node.id, node, config).processId;
+  return releaseActionProcessMetadata(node.id, node, config, context).processId;
 }
 
 export function processTitleForId(processId) {
@@ -52,10 +52,10 @@ export function processTitleForId(processId) {
   return PROCESS_TITLES[id] || id;
 }
 
-function processOrderForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG) {
+function processOrderForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG, context = {}) {
   const explicit = Number(node.processOrder ?? node.process?.order ?? node.workflowProcessOrder ?? node.stageOrder);
   if (Number.isFinite(explicit)) return explicit;
-  return releaseActionProcessMetadata(node.id, node, config).processOrder;
+  return releaseActionProcessMetadata(node.id, node, config, context).processOrder;
 }
 
 function processRank(processId) {
@@ -71,9 +71,9 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     .filter((node) => !["release-management:guide-current-release", "release-management:create-active-release"].includes(node.id))
     .map((node) => ({
       ...node,
-      processId: processIdForNode(node, config),
-      processOrder: processOrderForNode(node, config),
-      processTitle: String(node.processTitle || node.process?.title || processTitleForId(processIdForNode(node, config))).trim(),
+      processId: processIdForNode(node, config, scope),
+      processOrder: processOrderForNode(node, config, scope),
+      processTitle: String(node.processTitle || node.process?.title || processTitleForId(processIdForNode(node, config, scope))).trim(),
     }));
   const workflow = selectReleaseWorkflow(scope, config);
   const activeStages = (workflow?.stages || []).filter((stage) => (

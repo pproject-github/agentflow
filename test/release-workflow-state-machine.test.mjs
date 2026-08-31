@@ -137,6 +137,23 @@ test("excludes nodes outside the selected context", () => {
   }).map((node) => node.id), []);
 });
 
+test("uses generic process metadata for an unmatched business line", () => {
+  const stateMachine = createReleaseProcessStateMachine({
+    context: { businessLine: "bigolive", platform: "android", version: "5.63.2", batch: "initial" },
+    nodes: [{
+      id: "release-approval:create-full-rollout-approval",
+      skill: "release-approval",
+      action: "create-full-rollout-approval",
+      businessLines: ["bigolive"],
+      platforms: ["android"],
+      contextSnapshot: { businessLine: "bigolive", platform: "android", version: "5.63.2", batch: "initial" },
+    }],
+  });
+  assert.equal(stateMachine.workflow, null);
+  assert.equal(stateMachine.processes[0].id, "approval");
+  assert.equal(stateMachine.processes[0].title, "发版审核");
+});
+
 test("selects the history-derived workflow for the current platform and batch", () => {
   const stateMachine = createReleaseProcessStateMachine({
     context: { businessLine: "likee", platform: "android", version: "5.63.1", batch: "supplemental" },

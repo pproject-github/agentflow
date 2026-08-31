@@ -188,8 +188,9 @@ export function releaseActionProcessMetadata(actionId, node = {}, config = RELEA
     const workflows = hasContextScope
       ? [selectReleaseWorkflow(context, config)].filter(Boolean)
       : (Array.isArray(config?.workflows) ? config.workflows : []);
+    const scope = hasContextScope ? contextScope(context) : null;
     for (const workflow of workflows) {
-      configuredStage = workflow.stages.find((item) => workflowStageNodeIds(item).includes(id));
+      configuredStage = workflow.stages.find((item) => (!scope || stageEnabled(item, scope)) && workflowStageNodeIds(item).includes(id));
       if (configuredStage) break;
     }
   }
