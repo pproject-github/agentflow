@@ -1,209 +1,247 @@
-# 发版流程与节点状态机 Implementation Plan
+# 配置驱动发版状态机 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task with verification checkpoints.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this plan task-by-task with review checkpoints. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在前端维护由 release-skills Profile/Action 生成的业务平台发版流程状态机，以流程为推荐单位、以 Action 为执行节点，并根据已执行 timeline 推导当前流程和下一推荐。
+**Goal:** 将发版状态机的流程顺序、业务线/平台/批次差异和可执行节点集合抽离到一份共享配置中，让前端推荐、自定义阶段候选、后端执行校验和流程状态推导使用同一份定义。
 
-**Architecture:** 新增纯函数状态机模块，将流程定义、节点归属、状态推导和推荐策略集中维护。ReleaseWorkflowPanel 只负责加载状态、执行节点和渲染；其 timeline/pending 继续作为持久化兼容格式，并通过 processId 映射到流程状态。动态 release catalog 负责提供 Profile 过滤后的 Action 节点及流程元数据，静态 catalog 保留兼容兜底。
+**Architecture:** 新增纯数据模块 `shared/release-workflow-config.js`，集中保存 workflow、stage、Action 引用、可选节点和兼容排序映射，并导出选择、校验和节点白名单函数。前端 `releaseWorkflowStateMachine.js` 与后端 `release-runtime.mjs` 共同读取该模块；release-skill catalog 仍提供脚本、输入 schema 和确认事实，只有“动态 catalog ∩ 当前 workflow 配置”才可推荐、自定义添加或执行。
 
-**Tech Stack:** Node.js ESM、React 18、Node test runner、js-yaml。
+**Tech Stack:** Node.js ESM、React 18、Vite、Node test runner、纯 JavaScript 配置对象。
 
 **Spec:** `docs/superpowers/specs/2026-08-31-release-workflow-state-machine-design.md`
 
 ## Global Constraints
 
-- 推荐单位是流程/阶段，不是任意跨流程的单个 Action。
-- 流程内 Action 必须按顺序完成；未完成流程不能推荐下一流程。
-- 只允许当前 businessLine、platform、version、batch 和 Profile 范围内节点。
-- 保留旧 timeline/pending 数据兼容；无法映射的历史节点只展示，不参与新推荐。
-- 不运行 Android Gradle 编译任务；使用 Node 测试和 Web UI 静态语法检查。
-- 不清理或回滚工作区中已有的无关改动和生成文件。
+- 状态机配置同时决定流程流转和当前业务线、平台、批次的可执行节点集合。
+- 前端与后端必须读取同一份配置；不得复制两套 workflow/stage 定义。
+- release-skill catalog 只提供 Action 的执行事实；运行节点必须同时满足 catalog 和 workflow 配置白名单。
+- 同一 Action 可以在不同 workflow 或 stage 出现，但同一 workflow 内不得重复。
+- 保留 Likee Android 首包/补包和 Likee iOS 首包/补包现有行为；不恢复 `Configure Target`、`Guide Current Release` 或 `Create Active Release`。
+- 旧 timeline/pending 数据继续可读；无法映射到当前 workflow 的历史节点只展示，不参与新推荐或自定义候选。
+- 不删除或回滚工作区已有的无关改动、生成文件和历史记录；不执行真实远端发版操作。
 
-### Task 1: 定义流程状态机纯函数接口
+### Task 1: 创建共享 workflow 配置与校验器
 
 **Files:**
-- Create: `builtin/web-ui/src/lib/releaseWorkflowStateMachine.js`
-- Test: `test/release-workflow-state-machine.test.mjs`
+- Create: `shared/release-workflow-config.js`
+- Create: `test/release-workflow-config.test.mjs`
 
 **Interfaces:**
-- `createReleaseProcessStateMachine({ nodes, context }) -> { processes, nodeToProcess, context }`
-- `deriveProcessStates({ machine, timeline, pending }) -> Map<processId, state>`
-- `recommendNextProcessNodes({ machine, timeline, pending }) -> node[]`
-- `processIdForNode(node) -> string`
+- `RELEASE_WORKFLOW_CONFIG`：包含 `workflows`、`processOrder`、`processTitles`、`skillProcessMap`、`actionOrder`。
+- `selectReleaseWorkflow(context, config = RELEASE_WORKFLOW_CONFIG) -> workflow | null`
+- `workflowActionIds(workflow, context) -> Set<string>`
+- `validateReleaseWorkflowConfig(config) -> { valid: boolean, errors: string[] }`
+- `releaseActionProcessMetadata(actionId, node) -> { processId, processOrder, processTitle }`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write the failing tests**
 
-  Cover:
-  - Likee Android process definitions group multiple Action nodes into one process.
-  - An incomplete process recommends only its next ordered node.
-  - A completed process recommends the first node of the next process.
-  - Failed/running nodes keep the process active and do not advance.
-  - Nodes outside the current context are excluded.
-  - No legal next process produces an empty recommendation.
+  在 `test/release-workflow-config.test.mjs` 中写真实配置行为断言：
 
-- [ ] **Step 2: Run tests and verify expected failure**
+  ```js
+  test("selects the Likee Android workflow and filters initial batch nodes", () => {
+    const workflow = selectReleaseWorkflow({ businessLine: "likee", platform: "android", batch: "initial" });
+    assert.equal(workflow.id, "likee-android-release");
+    assert.equal(workflowActionIds(workflow, { batch: "initial" }).has("release-git:create-release-branch"), true);
+    assert.equal(workflowActionIds(workflow, { batch: "initial" }).has("release-management:append-release-batch"), false);
+  });
 
-  Run:
-
-  ```bash
-  npx -y node@20 --test test/release-workflow-state-machine.test.mjs
+  test("rejects duplicate Action references inside one workflow", () => {
+    const result = validateReleaseWorkflowConfig({ workflows: [{ id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "x" }, { id: "x" }] }] }] });
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join("\\n"), /duplicate|重复/i);
+  });
   ```
 
-  Expected: failure because the state-machine module and exported functions do not exist.
+- [ ] **Step 2: Run tests to verify RED**
 
-- [ ] **Step 3: Implement the minimal state-machine module**
+  Run: `node --test test/release-workflow-config.test.mjs`
 
-  - Define process metadata for the release flow (`preparation`, `localization`, `approval`, `metrics`, `records`, `notification`, plus platform-specific branches).
-  - Resolve Action membership using explicit node `processId`/`processOrder` first, then Skill/Action fallback mappings.
-  - Build ordered node lists per process and process transition edges from the filtered node catalog.
-  - Calculate process state from completed/running/failed/pending node records.
-  - Recommend only the next incomplete node in the active process; after process completion, recommend the first node in the next legal process.
+  Expected: FAIL because `shared/release-workflow-config.js` and its exports do not exist.
 
-- [ ] **Step 4: Run state-machine tests**
+- [ ] **Step 3: Implement the configuration and validator**
+
+  Move the current Likee Android and Likee iOS workflow definitions into `RELEASE_WORKFLOW_CONFIG.workflows`, preserving every stage, batch filter, node order, optional node and evidence field. Move the process order/title and Skill/Action fallback mappings into the same config object. Implement deterministic context normalization, workflow selection, batch-filtered Action ID collection, and validation for empty scope, duplicate workflow/stage/Action IDs, invalid optional references, and malformed node entries.
+
+  Add the requirement comment above the config selector: `// 用户需求点: 同一份配置同时决定状态流转和自定义阶段可执行节点集合，前后端必须按同一上下文选择 workflow。`
+
+- [ ] **Step 4: Run tests to verify GREEN**
+
+  Run: `node --test test/release-workflow-config.test.mjs`
+
+  Expected: PASS with selection, batch filtering, optional-node and validation assertions.
+
+- [ ] **Step 5: Commit**
 
   ```bash
-  npx -y node@20 --test test/release-workflow-state-machine.test.mjs
+  git add shared/release-workflow-config.js test/release-workflow-config.test.mjs
+  git commit -m "feat(release): add shared workflow configuration"
   ```
 
-  Expected: PASS.
+### Task 2: Make the frontend state machine consume shared configuration
 
-### Task 2: Add process metadata to dynamic and static catalogs
+**Files:**
+- Modify: `builtin/web-ui/src/lib/releaseWorkflowStateMachine.js`
+- Modify: `test/release-workflow-state-machine.test.mjs`
+- Modify: `test/release-workflow-model.test.mjs`
+
+**Interfaces:**
+- Existing exports from `releaseWorkflowStateMachine.js` keep their names and return shapes.
+- `createReleaseProcessStateMachine({ nodes, context })` uses `selectReleaseWorkflow()` and `workflowActionIds()` from shared config.
+- `selectWorkflowProcessNodes({ machine, nodes })` returns only nodes present in the selected workflow/stage configuration and current batch.
+
+- [ ] **Step 1: Write the failing tests**
+
+  Add tests that pass a cloned config with `release-git:create-release-branch` removed to `selectReleaseWorkflow()` and assert both recommendations and custom candidate nodes omit it; add a test that an Android-only node is absent from the iOS candidate set even when the dynamic catalog contains it. Add a parity assertion that the machine’s `workflow.id`, ordered process IDs, and candidate Action IDs match the shared config.
+
+- [ ] **Step 2: Run focused tests to verify RED**
+
+  Run: `node --test test/release-workflow-state-machine.test.mjs test/release-workflow-model.test.mjs`
+
+  Expected: the new config mutation/parity assertions fail because the state machine still owns hardcoded definitions and does not expose a config-driven candidate filter.
+
+- [ ] **Step 3: Replace hardcoded definitions with shared config adapters**
+
+  Remove the duplicated workflow array from `releaseWorkflowStateMachine.js`. Keep only generic normalization, status derivation and recommendation algorithms. Build processes by reading the selected config stages, resolving each configured Action ID against the filtered dynamic/static node catalog, preserving configured order and optional flags. Keep the compatibility fallback for contexts with no matching workflow. Ensure `selectWorkflowProcessNodes()` does not fall back to the entire catalog when a matching workflow exists.
+
+  Add the requirement comment above the process builder: `// 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。`
+
+- [ ] **Step 4: Run focused tests to verify GREEN**
+
+  Run: `node --test test/release-workflow-state-machine.test.mjs test/release-workflow-model.test.mjs`
+
+  Expected: PASS, including existing Android/iOS, initial/supplemental, failure and legacy-state tests.
+
+- [ ] **Step 5: Commit**
+
+  ```bash
+  git add builtin/web-ui/src/lib/releaseWorkflowStateMachine.js test/release-workflow-state-machine.test.mjs test/release-workflow-model.test.mjs
+  git commit -m "refactor(release): drive frontend state machine from config"
+  ```
+
+### Task 3: Make the backend catalog and execution enforce the same node whitelist
 
 **Files:**
 - Modify: `bin/lib/release-runtime.mjs`
-- Modify: `builtin/web-ui/src/lib/releaseNodeCatalog.js`
+- Modify: `bin/lib/workspace-routes.mjs`
 - Modify: `test/release-runtime-catalog.test.mjs`
-- Modify: `test/release-workflow-state-machine.test.mjs`
+- Modify: `test/release-runtime-api.test.mjs`
 
 **Interfaces:**
-- Every discovered/static node exposes `processId` and `processOrder` where the process mapping is known.
-- Existing `scopeKey`, `contextSnapshot`, Profile filtering, and `nextNodeIds` remain available for compatibility.
+- `discoverReleaseActions()` keeps discovering release-skill Actions and enriching them with input/runtime facts, but process metadata comes from `releaseActionProcessMetadata()`.
+- Add `filterReleaseActionsForWorkflow(nodes, context) -> nodes` in `bin/lib/release-runtime.mjs`; when a workflow matches, it returns only configured Action IDs while preserving configured stage and Action order metadata.
+- `/api/release/catalog` returns the filtered executable node collection.
+- `/api/release/nodes/preview` and `/api/release/nodes/run` reject an Action not present in the selected workflow with `RELEASE_WORKFLOW_NODE_NOT_ALLOWED`.
 
-- [ ] **Step 1: Add failing catalog assertions**
+- [ ] **Step 1: Write the failing API/catalog tests**
 
-  Assert that selected Likee Android Actions contain the expected process metadata and that an unreferenced extension Action has no eligible process membership.
+  Add a temporary catalog containing one configured ID (`release-git:create-release-branch`) and one unconfigured ID (`release-demo:extra`). Assert catalog filtering returns only the configured node. Add an execution request for `release-demo:extra` and assert HTTP 409 with code `RELEASE_WORKFLOW_NODE_NOT_ALLOWED`. Add a parity test that filtered server nodes and frontend `selectWorkflowProcessNodes()` expose the same IDs for Likee Android initial.
 
-- [ ] **Step 2: Run the focused catalog tests**
+- [ ] **Step 2: Run focused tests to verify RED**
+
+  Run: `node --test test/release-runtime-catalog.test.mjs test/release-runtime-api.test.mjs`
+
+  Expected: FAIL because runtime catalog currently returns all discovered Profile Actions and route validation only checks scope/process metadata.
+
+- [ ] **Step 3: Implement shared-config filtering and route validation**
+
+  Import the shared config adapter from the backend runtime. Keep Profile filtering first, then intersect with the selected workflow configuration. Sort returned nodes by configured stage order and Action order while retaining all existing `inputSchema`, `source`, `scopeKey`, `requiresConfirmation` and `nextNodeIds` fields. In preview/run routes, resolve the workflow from the request context before accepting `actionId`; reject unknown configured membership before building or running an AgentFlow graph.
+
+  Add the requirement comment above the route guard: `// 用户需求点: 状态机配置不仅用于推荐，也必须阻止未纳入当前业务/平台流程的节点被执行。`
+
+- [ ] **Step 4: Run focused tests to verify GREEN**
+
+  Run: `node --test test/release-runtime-catalog.test.mjs test/release-runtime-api.test.mjs`
+
+  Expected: PASS, with existing scope/process/confirmation behavior unchanged.
+
+- [ ] **Step 5: Commit**
 
   ```bash
-  npx -y node@20 --test test/release-runtime-catalog.test.mjs test/release-workflow-state-machine.test.mjs
+  git add bin/lib/release-runtime.mjs bin/lib/workspace-routes.mjs test/release-runtime-catalog.test.mjs test/release-runtime-api.test.mjs
+  git commit -m "feat(release): enforce workflow node allowlist in runtime"
   ```
 
-  Expected: metadata assertions fail.
-
-- [ ] **Step 3: Implement metadata enrichment**
-
-  Add a single mapping table in the runtime catalog loader and mirror the same mapping in the static fallback catalog. Preserve explicit metadata supplied by future Skill definitions, then use the fallback mapping only when absent.
-
-- [ ] **Step 4: Run focused tests**
-
-  ```bash
-  npx -y node@20 --test test/release-runtime-catalog.test.mjs test/release-workflow-state-machine.test.mjs
-  ```
-
-  Expected: PASS.
-
-### Task 3: Integrate state-machine recommendation into ReleaseWorkflowPanel
+### Task 4: Keep UI recommendations, custom candidates and persisted records aligned
 
 **Files:**
 - Modify: `builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx`
 - Modify: `builtin/web-ui/src/lib/releaseWorkflowModel.js`
-- Modify: `test/release-workflow-model.test.mjs`
+- Modify: `bin/lib/release-runtime-store.mjs`
 - Modify: `test/release-runtime-integration.test.mjs`
+- Modify: `test/release-workflow-panel-contract.test.mjs`
 
 **Interfaces:**
-- `ReleaseWorkflowPanel` calls `recommendNextProcessNodes()` after initialization, API hydration, catalog refresh, and successful node completion.
-- Pending entries retain `processId` and `processOrder` for rendering, persistence, and legacy migration.
+- `seedNextRecommendations()` and `selectWorkflowProcessNodes()` use the same machine-selected node set.
+- Generated pending/timeline records retain `workflowId`, `processId`, `processOrder` and `scopeKey` where available.
+- Custom node creation copies only a node returned by `selectWorkflowProcessNodes()`; repeated selection remains allowed.
 
-- [ ] **Step 1: Add failing integration/model assertions**
+- [ ] **Step 1: Write the failing integration/contract tests**
 
-  Cover initialization → first process node, process-internal continuation, process completion → next process, and failed/aborted node not advancing the process.
+  Assert that the add-stage groups contain only configured IDs for the selected business/platform/batch, that removing an Action from a workflow config removes it from both recommendations and the add-stage picker, and that a persisted pending/completed record keeps `workflowId` after a state round trip.
 
-- [ ] **Step 2: Run focused tests**
+- [ ] **Step 2: Run focused tests to verify RED**
 
-  ```bash
-  npx -y node@20 --test test/release-workflow-model.test.mjs test/release-runtime-integration.test.mjs
-  ```
+  Run: `node --test test/release-runtime-integration.test.mjs test/release-workflow-panel-contract.test.mjs`
 
-  Expected: failures because the panel still uses direct `nextNodeIds` recommendation.
+  Expected: FAIL because generated records currently store process metadata but not workflow identity, and the panel does not assert configuration membership at persistence boundaries.
 
-- [ ] **Step 3: Replace direct recommendation calls**
+- [ ] **Step 3: Implement alignment and migration**
 
-  - Keep `nextNodeIds` as catalog compatibility data but route recommendation decisions through the state-machine module.
-  - Store `processId`/`processOrder` on generated pending and completed records.
-  - On completion, recompute process states from the updated timeline/pending state and append only state-machine recommendations.
-  - Preserve custom node behavior while requiring its source preset to belong to the current context.
+  Add `workflowId` and `workflowVersion` to the machine snapshot and generated records without changing existing timeline/pending field names. During legacy hydration, infer the current matching workflow from context; retain unknown historical nodes for display but exclude them from recommendations and custom candidates. Ensure all panel add-stage options are produced from the machine, not the raw remote catalog.
+
+  Add the requirement comment above legacy hydration: `// 用户需求点: 历史记录可继续查看，但不能让不属于当前状态机的节点重新进入可执行候选集合。`
 
 - [ ] **Step 4: Run focused tests and JSX static check**
 
   ```bash
-  npx -y node@20 --test test/release-workflow-model.test.mjs test/release-runtime-integration.test.mjs
+  node --test test/release-runtime-integration.test.mjs test/release-workflow-panel-contract.test.mjs
   node_modules/.bin/esbuild builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx --loader:.jsx=jsx --outfile=/tmp/ReleaseWorkflowPanel.js
   ```
 
-  Expected: PASS and successful JSX transform.
+  Expected: PASS and successful JSX transformation.
 
-### Task 4: Persist and validate process metadata without breaking old state
-
-**Files:**
-- Modify: `bin/lib/release-runtime-store.mjs`
-- Modify: `bin/lib/workspace-routes.mjs`
-- Modify: `test/release-runtime-api.test.mjs`
-
-**Interfaces:**
-- API state keeps existing `timeline`/`pending` shape and accepts optional `processId`/`processOrder` fields.
-- Existing clients without `scopeKey` remain compatible; supplied scope and process metadata are validated.
-
-- [ ] **Step 1: Add failing API/state assertions**
-
-  Assert process metadata survives state round-trip and an execution request cannot submit a node from another process/context.
-
-- [ ] **Step 2: Run API tests**
+- [ ] **Step 5: Commit**
 
   ```bash
-  npx -y node@20 --test test/release-runtime-api.test.mjs
+  git add builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx builtin/web-ui/src/lib/releaseWorkflowModel.js bin/lib/release-runtime-store.mjs test/release-runtime-integration.test.mjs test/release-workflow-panel-contract.test.mjs
+  git commit -m "refactor(release): align candidates and persisted workflow state"
   ```
 
-  Expected: new assertions fail.
-
-- [ ] **Step 3: Implement minimal persistence/validation**
-
-  - Preserve process metadata during initialization normalization and state writes.
-  - Keep backend scope validation already added.
-  - Reject a supplied process ID that does not match the discovered Action’s process metadata.
-
-- [ ] **Step 4: Run API tests**
-
-  ```bash
-  npx -y node@20 --test test/release-runtime-api.test.mjs
-  ```
-
-  Expected: PASS.
-
-### Task 5: Full verification and cleanup review
+### Task 5: Full verification and handoff
 
 **Files:**
-- Test only: existing release workflow tests.
+- Test only: existing release workflow and runtime tests.
+- Build output: generated files from `npm run build:web-ui` are inspected but not independently staged over unrelated user changes.
 
-- [ ] **Step 1: Run all related tests**
+- [ ] **Step 1: Run all release tests**
 
   ```bash
-  npx -y node@20 --test \
+  node --test \
+    test/release-workflow-config.test.mjs \
     test/release-workflow-state-machine.test.mjs \
     test/release-workflow-model.test.mjs \
+    test/release-workflow-panel-contract.test.mjs \
     test/release-runtime-catalog.test.mjs \
     test/release-runtime-api.test.mjs \
     test/release-runtime-integration.test.mjs \
     test/release-runtime-executor.test.mjs
   ```
 
-- [ ] **Step 2: Run static checks**
+  Expected: all tests pass with zero failures.
+
+- [ ] **Step 2: Run frontend build and diff checks**
 
   ```bash
+  npm run build:web-ui
   git diff --check
-  node_modules/.bin/esbuild builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx --loader:.jsx=jsx --outfile=/tmp/ReleaseWorkflowPanel.js
   ```
 
-- [ ] **Step 3: Review the diff**
+  Expected: Vite exits 0; `git diff --check` emits no whitespace errors.
 
-  Verify no generated dist files, diagnostics, docs checkouts, or unrelated pre-existing changes are staged or modified by this implementation.
+- [ ] **Step 3: Verify runtime/frontend parity without executing a release**
+
+  Query the local catalog for `businessLine=likee&platform=android&version=1.1.0&batch=initial`, compare its Action IDs with the machine-selected candidates, and verify `release-git:create-release-branch` remains present while unconfigured Actions are absent. Do not confirm or run a real branch-creation request.
+
+- [ ] **Step 4: Review the diff and commit only implementation files**
+
+  Confirm existing unrelated dirty files and generated assets remain untouched by staging. Commit only files listed in completed tasks, then report commit IDs, test counts, build result, and files intentionally left uncommitted because they predated this change.
