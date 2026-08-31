@@ -43,6 +43,30 @@ test("discovers action-level release nodes and filters by platform and batch", a
   }
 });
 
+test("dynamic catalog applies Android supplemental gray_percent schema override", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-records-gray-schema-"));
+  try {
+    const records = path.join(root, "release-records");
+    fs.mkdirSync(path.join(records, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(records, "SKILL.md"), `---\nname: release-records\nactions:\n  - name: append-release-wiki-row\n    inputs: [gray_percent]\n    platforms: [android, ios]\n---\n`);
+    fs.writeFileSync(path.join(records, "scripts", "run.py"), "print('ok')\n");
+    const { discoverReleaseActions } = await import(`../bin/lib/release-runtime.mjs?gray-schema=${Date.now()}`);
+    const android = await discoverReleaseActions({ roots: [root], businessLine: "likee", platform: "android", version: "5.63.2", batch: "supplemental" });
+    const ios = await discoverReleaseActions({ roots: [root], businessLine: "likee", platform: "ios", version: "5.63.2", batch: "supplemental" });
+    const androidInput = android.find((node) => node.id === "release-records:append-release-wiki-row").inputSchema[0];
+    const iosInput = ios.find((node) => node.id === "release-records:append-release-wiki-row").inputSchema[0];
+    assert.equal(androidInput.type, "number");
+    assert.equal(androidInput.required, true);
+    assert.equal(androidInput.min, 1);
+    assert.equal(androidInput.max, 100);
+    assert.equal(androidInput.integer, true);
+    assert.equal(iosInput.type, "text");
+    assert.equal(iosInput.required, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("does not infer configure-target after release initialization", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-setup-catalog-"));
   try {

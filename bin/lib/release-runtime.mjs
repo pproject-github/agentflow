@@ -140,9 +140,15 @@ function inputDefinitionsForAction(skillName, actionName, declaredInputs, contex
     const majorVersion = version.split(".").slice(0, 2).join(".");
     return { ...definition, ...(majorVersion ? { defaultValue: `release/v${majorVersion}` } : {}) };
   });
-  if (metadata.length === 0) return definitions;
+  const grayPercentOverride = actionKey === "release-records:append-release-wiki-row"
+    && String(context.platform || "").trim().toLowerCase() === "android"
+    && String(context.batch || "initial").trim().toLowerCase() === "supplemental"
+    ? [{ key: "gray_percent", label: "灰度百分比 (%)", type: "number", required: true, min: 1, max: 100, integer: true, step: 1, placeholder: "例如 10" }]
+    : [];
+  const overrides = [...metadata, ...grayPercentOverride];
+  if (overrides.length === 0) return definitions;
   const byKey = new Map(definitions.map((definition) => [definition.key, definition]));
-  for (const definition of metadata) byKey.set(definition.key, { ...(byKey.get(definition.key) || {}), ...definition });
+  for (const definition of overrides) byKey.set(definition.key, { ...(byKey.get(definition.key) || {}), ...definition });
   return [...byKey.values()];
 }
 
