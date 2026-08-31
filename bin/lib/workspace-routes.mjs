@@ -76,9 +76,9 @@ import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspa
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
-import { discoverReleaseActions } from "./release-runtime.mjs";
-import { buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, stopReleaseAction } from "./release-runtime-executor.mjs";
-import { emptyReleaseState, readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
+import { discoverReleaseActions, filterReleaseActionsForWorkflow, releaseContextKey } from "./release-runtime.mjs";
+import { buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releaseTimingFromResult, stopReleaseAction } from "./release-runtime-executor.mjs";
+import { readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -1222,7 +1222,8 @@ async function workspaceRoutes(req, res, ctx) {
     const roots = releaseRuntimeRoots(workspacePath);
     try {
       if (req.method === "GET" && url.pathname === "/api/release/catalog") {
-        const nodes = await discoverReleaseActions({ roots, ...context });
+        const discoveredNodes = await discoverReleaseActions({ roots, ...context });
+        const nodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
         json(res, 200, { ok: true, context, workspaceId, nodes });
         return;
       }
@@ -1247,16 +1248,42 @@ async function workspaceRoutes(req, res, ctx) {
         const payload = JSON.parse(await readBody(req));
         const requestWorkspaceId = releaseWorkspaceIdentity(url, payload);
         const requestContext = releaseRequestContext({ searchParams: new URLSearchParams() }, payload);
+        const expectedScopeKey = releaseContextKey(requestContext);
+        const requestedScopeKey = String(payload.scopeKey || "").trim();
+        // 用户需求点: 前端传入的节点范围必须与初始化上下文一致，避免跨业务/平台/版本执行。
+        if (requestedScopeKey && requestedScopeKey !== expectedScopeKey) {
+          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
+          return;
+        }
         const actionId = String(payload.actionId || payload.nodeId || "").trim();
-        const nodes = await discoverReleaseActions({ roots, ...requestContext });
+        const discoveredNodes = await discoverReleaseActions({ roots, ...requestContext });
+        const nodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
         const action = nodes.find((node) => node.id === actionId);
-        if (!action) { json(res, 404, { error: "Release action not found" }); return; }
+        // 用户需求点: 状态机配置不仅用于推荐，也必须阻止未纳入当前业务/平台流程的节点被执行。
+        if (!action) {
+          if (discoveredNodes.some((node) => node.id === actionId) && nodes.length !== discoveredNodes.length) {
+            json(res, 409, { error: "节点未纳入当前业务、平台和批次的发版流程", code: "RELEASE_WORKFLOW_NODE_NOT_ALLOWED" });
+            return;
+          }
+          json(res, 404, { error: "Release action not found" });
+          return;
+        }
+        if (action.scopeKey && action.scopeKey !== expectedScopeKey) {
+          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
+          return;
+        }
+        const requestedProcessId = String(payload.processId || "").trim().toLowerCase();
+        if (requestedProcessId && requestedProcessId !== String(action.processId || "other").trim().toLowerCase()) {
+          json(res, 409, { error: "节点不属于请求的发版流程", code: "RELEASE_PROCESS_MISMATCH" });
+          return;
+        }
         const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
-        const graph = buildReleaseRunGraph(action, requestContext, inputs);
+        const executionInputs = releaseExecutionInputs(action, requestContext, inputs);
         const runId = String(payload.runId || releaseRunId());
         const runInputs = action.requiresConfirmation && payload.confirmationFingerprint
-          ? { ...inputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
-          : inputs;
+          ? { ...executionInputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
+          : executionInputs;
+        const graph = buildReleaseRunGraph(action, requestContext, runInputs);
         if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
           const previewResult = await runWorkspaceGraph(root, root, {
             flowId: `release-${requestWorkspaceId}`,
@@ -1266,11 +1293,11 @@ async function workspaceRoutes(req, res, ctx) {
             inputs: runInputs,
             ignoreCache: true,
           }, userCtx, { runId: `${runId}-preview` });
-          const preview = await previewReleaseAction(action, requestContext, inputs);
+          const preview = await previewReleaseAction(action, requestContext, executionInputs);
           json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
-        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, requestContext, inputs)) {
+        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, requestContext, executionInputs)) {
           json(res, 409, { error: "确认指纹已失效，请重新预览", code: "RELEASE_CONFIRMATION_MISMATCH" });
           return;
         }
@@ -1287,29 +1314,61 @@ async function workspaceRoutes(req, res, ctx) {
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
           activeReleaseRuns.delete(runId);
-          const preview = await previewReleaseAction(action, requestContext, inputs);
+          const preview = await previewReleaseAction(action, requestContext, executionInputs);
           json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
         const result = await runPromise;
         activeReleaseRuns.delete(runId);
         const state = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
-        const now = Date.now();
+        const timing = releaseTimingFromResult(result);
         const timelineNodeId = String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id;
+        const failure = releaseFailureFromResult(result);
+        if (failure) {
+          const existing = state.pending.find((item) => item.id === payload.itemId) || {};
+          const failedItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: timelineNodeId,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: action.processId || "other",
+            processOrder: action.processOrder,
+            processTitle: action.processTitle || action.processId || "other",
+            status: "failed",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...timing,
+            failedAt: timing.completedAt,
+            error: failure,
+            output: result,
+          };
+          state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
+          state.runs[runId] = { ...failedItem, logs: result?.events || [] };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          json(res, 422, { ok: false, status: "failed", code: "RELEASE_PREFLIGHT_FAILED", error: failure, runId, result, state });
+          return;
+        }
         const completedItem = {
-          id: String(payload.itemId || `${action.id}-${now}`),
+          id: String(payload.itemId || `${action.id}-${timing.completedAt}`),
           nodeId: timelineNodeId,
           title: action.title,
           description: action.description,
           category: action.category,
+          processId: action.processId || "other",
+          processOrder: action.processOrder,
+          processTitle: action.processTitle || action.processId || "other",
           status: "completed",
           progress: 100,
           inputs,
           runId,
           operator: authUser.username || userCtx.userId || "未记录",
-          startedAt: now,
-          completedAt: now,
-          durationMs: 0,
+          startedAt: timing.startedAt,
+          completedAt: timing.completedAt,
+          durationMs: timing.durationMs,
           output: result,
         };
         state.timeline = [...state.timeline, completedItem];

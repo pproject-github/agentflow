@@ -7,9 +7,9 @@ import test from "node:test";
 test("release runtime API exposes filtered catalog and initialization state", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-api-")));
   const skillsRoot = path.join(tempRoot, "release-skills");
-  const skillDir = path.join(skillsRoot, "release-demo", "scripts");
+  const skillDir = path.join(skillsRoot, "release-git", "scripts");
   fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(path.join(skillsRoot, "release-demo", "SKILL.md"), `---\nname: release-demo\ndescription: Demo release action\nactions:\n  - name: inspect\n    inputs: [version]\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+  fs.writeFileSync(path.join(skillsRoot, "release-git", "SKILL.md"), `---\nname: release-git\ndescription: Demo release action\nactions:\n  - name: create-release-branch\n    inputs: [version]\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
   fs.writeFileSync(path.join(skillDir, "run.py"), "print('ok')\n");
   const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
   process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
@@ -33,10 +33,12 @@ test("release runtime API exposes filtered catalog and initialization state", as
     };
     const catalog = await request("GET", "/api/release/catalog?businessLine=likee&platform=android&batch=initial&workspaceId=release-api");
     assert.equal(catalog.status, 200, catalog.text);
-    assert.equal(catalog.body.nodes[0].id, "release-demo:inspect");
+    assert.equal(catalog.body.nodes[0].id, "release-git:create-release-branch");
     const state = await request("GET", "/api/release/state?businessLine=likee&platform=android&batch=initial&version=5.63.2&workspaceId=release-api");
     assert.equal(state.status, 200, state.text);
-    assert.equal(state.body.state.pending[0].nodeId, "release-initialization");
+    assert.equal(state.body.state.timeline[0].nodeId, "release-initialization");
+    assert.equal(state.body.state.timeline[0].status, "completed");
+    assert.equal(state.body.state.pending.length, 0);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
@@ -48,9 +50,9 @@ test("release runtime API exposes filtered catalog and initialization state", as
 test("release runtime executes a read-only Action through the AgentFlow graph", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-run-")));
   const skillsRoot = path.join(tempRoot, "release-skills");
-  const skillDir = path.join(skillsRoot, "release-demo", "scripts");
+  const skillDir = path.join(skillsRoot, "release-git", "scripts");
   fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(path.join(skillsRoot, "release-demo", "SKILL.md"), `---\nname: release-demo\ndescription: Demo release action\nactions:\n  - name: inspect\n    inputs: [version]\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+  fs.writeFileSync(path.join(skillsRoot, "release-git", "SKILL.md"), `---\nname: release-git\ndescription: Demo release action\nactions:\n  - name: create-release-branch\n    inputs: [version]\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
   fs.writeFileSync(path.join(skillDir, "run.py"), "import argparse\np=argparse.ArgumentParser(); p.add_argument('--action'); p.add_argument('--input', action='append', default=[]); a=p.parse_args(); print(a.action + ':' + ','.join(a.input))\n");
   const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
   process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
@@ -65,15 +67,138 @@ test("release runtime executes a read-only Action through the AgentFlow graph", 
     server = await startUiServer({ workspaceRoot: path.join(tempRoot, "workspace"), host: "127.0.0.1", port: 0, staticDir: path.join(tempRoot, "static"), enableWorkspaceScheduler: false });
     const base = `http://127.0.0.1:${server.address().port}`;
     const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
-    const response = await fetch(base + "/api/release/nodes/run", { method: "POST", headers, body: JSON.stringify({ workspaceId: "release-run", businessLine: "likee", platform: "android", version: "5.63.2", actionId: "release-demo:inspect", inputs: { version: "5.63.2" } }) });
+    const response = await fetch(base + "/api/release/nodes/run", { method: "POST", headers, body: JSON.stringify({ workspaceId: "release-run", businessLine: "likee", platform: "android", version: "5.63.2", actionId: "release-git:create-release-branch", inputs: { version: "5.63.2" } }) });
     const payload = await response.json();
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.status, "completed");
-    assert.ok(payload.state.timeline.some((item) => item.nodeId === "release-demo:inspect"));
+    assert.ok(payload.state.timeline.some((item) => item.nodeId === "release-git:create-release-branch"));
+    const completedAction = payload.state.timeline.find((item) => item.nodeId === "release-git:create-release-branch");
+    assert.equal(completedAction.processId, "preparation-initial");
+    assert.ok(completedAction.durationMs > 0);
+    assert.ok(completedAction.completedAt >= completedAction.startedAt);
+    const scriptFinish = payload.result.events.find((event) => event.type === "script-finish");
+    assert.match(scriptFinish.stdout, /product=likee/);
+    assert.match(scriptFinish.stdout, /platform=android/);
+    const scopeMismatch = await fetch(base + "/api/release/nodes/run", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspaceId: "release-run",
+        businessLine: "likee",
+        platform: "android",
+        version: "5.63.2",
+        actionId: "release-git:create-release-branch",
+        scopeKey: "likee/ios/5.63.2/initial",
+      }),
+    });
+    const scopeMismatchPayload = await scopeMismatch.json();
+    assert.equal(scopeMismatch.status, 409, JSON.stringify(scopeMismatchPayload));
+    assert.equal(scopeMismatchPayload.code, "RELEASE_SCOPE_MISMATCH");
+    const processMismatch = await fetch(base + "/api/release/nodes/run", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspaceId: "release-run",
+        businessLine: "likee",
+        platform: "android",
+        version: "5.63.2",
+        actionId: "release-git:create-release-branch",
+        processId: "approval",
+      }),
+    });
+    const processMismatchPayload = await processMismatch.json();
+    assert.equal(processMismatch.status, 409, JSON.stringify(processMismatchPayload));
+    assert.equal(processMismatchPayload.code, "RELEASE_PROCESS_MISMATCH");
     const logsResponse = await fetch(base + `/api/release/runs/${encodeURIComponent(payload.runId)}/logs?workspaceId=release-run&businessLine=likee&platform=android&version=5.63.2&batch=initial`, { headers });
     const logsPayload = await logsResponse.json();
     assert.equal(logsResponse.status, 200, JSON.stringify(logsPayload));
     assert.equal(logsPayload.run.runId, payload.runId);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+    else process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = previousRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("release runtime treats a zero-exit preflight_failed result as a failed pending node", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-preflight-")));
+  const skillsRoot = path.join(tempRoot, "release-skills");
+  const skillDir = path.join(skillsRoot, "release-metrics", "scripts");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillsRoot, "release-metrics", "SKILL.md"), `---\nname: release-metrics\ndescription: Demo release action\nactions:\n  - name: query-version-metrics\n    inputs: []\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+  fs.writeFileSync(path.join(skillDir, "run.py"), "print('status: preflight_failed\\nerror: platform_selection_required')\n");
+  const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+  process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
+  let server;
+  try {
+    const nonce = Date.now();
+    const [{ loginOrCreateUser }, { startUiServer }] = await Promise.all([
+      import(`../bin/lib/auth.mjs?release-preflight=${nonce}`),
+      import(`../bin/lib/ui-server.mjs?release-preflight=${nonce}`),
+    ]);
+    const user = loginOrCreateUser("release-preflight-owner", "release-password");
+    server = await startUiServer({ workspaceRoot: path.join(tempRoot, "workspace"), host: "127.0.0.1", port: 0, staticDir: path.join(tempRoot, "static"), enableWorkspaceScheduler: false });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
+    const response = await fetch(base + "/api/release/nodes/run", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspaceId: "release-preflight", businessLine: "likee", platform: "android", version: "5.63.2", actionId: "release-metrics:query-version-metrics" }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 422, JSON.stringify(payload));
+    assert.equal(payload.code, "RELEASE_PREFLIGHT_FAILED");
+    assert.equal(payload.state.timeline.some((item) => item.nodeId === "release-metrics:query-version-metrics"), false);
+    const failed = payload.state.pending.find((item) => item.nodeId === "release-metrics:query-version-metrics");
+    assert.equal(failed.status, "failed");
+    assert.match(failed.error, /platform_selection_required/);
+    assert.ok(failed.durationMs >= 0);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+    else process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = previousRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("release runtime catalog and execution reject actions outside the selected workflow", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-allowlist-api-")));
+  const skillsRoot = path.join(tempRoot, "release-skills");
+  const configuredDir = path.join(skillsRoot, "release-git", "scripts");
+  const extraDir = path.join(skillsRoot, "release-demo", "scripts");
+  fs.mkdirSync(configuredDir, { recursive: true });
+  fs.mkdirSync(extraDir, { recursive: true });
+  fs.writeFileSync(path.join(skillsRoot, "release-git", "SKILL.md"), `---\nname: release-git\ndescription: Git\nactions:\n  - name: create-release-branch\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+  fs.writeFileSync(path.join(skillsRoot, "release-demo", "SKILL.md"), `---\nname: release-demo\ndescription: Extra\nactions:\n  - name: extra\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+  fs.writeFileSync(path.join(configuredDir, "run.py"), "print('configured')\n");
+  fs.writeFileSync(path.join(extraDir, "run.py"), "print('extra')\n");
+  const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+  process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
+  let server;
+  try {
+    const nonce = Date.now();
+    const [{ loginOrCreateUser }, { startUiServer }] = await Promise.all([
+      import(`../bin/lib/auth.mjs?release-allowlist=${nonce}`),
+      import(`../bin/lib/ui-server.mjs?release-allowlist=${nonce}`),
+    ]);
+    const user = loginOrCreateUser("release-allowlist-owner", "release-password");
+    server = await startUiServer({ workspaceRoot: path.join(tempRoot, "workspace"), host: "127.0.0.1", port: 0, staticDir: path.join(tempRoot, "static"), enableWorkspaceScheduler: false });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
+    const catalogResponse = await fetch(`${base}/api/release/catalog?businessLine=likee&platform=android&version=5.63.2&batch=initial&workspaceId=release-allowlist`, { headers });
+    const catalog = await catalogResponse.json();
+    assert.equal(catalogResponse.status, 200, JSON.stringify(catalog));
+    assert.deepEqual(catalog.nodes.map((node) => node.id), ["release-git:create-release-branch"]);
+
+    const runResponse = await fetch(`${base}/api/release/nodes/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspaceId: "release-allowlist", businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial", actionId: "release-demo:extra" }),
+    });
+    const run = await runResponse.json();
+    assert.equal(runResponse.status, 409, JSON.stringify(run));
+    assert.equal(run.code, "RELEASE_WORKFLOW_NODE_NOT_ALLOWED");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
