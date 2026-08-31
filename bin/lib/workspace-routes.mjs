@@ -1189,6 +1189,49 @@ function releaseWorkspacePath(url, payload = {}, root) {
 
 const activeReleaseRuns = new Map();
 
+function releaseCompositeDetails(action, result) {
+  if (action?.kind !== "composite" || !Array.isArray(action.actions)) return undefined;
+  const runResult = result && typeof result === "object" ? result : {};
+  const graph = runResult.graph || runResult.result?.graph || null;
+  const events = Array.isArray(runResult.events) ? runResult.events : Array.isArray(runResult.result?.events) ? runResult.result.events : [];
+  const steps = action.actions.map((entry, index) => {
+    const stepId = String(entry?.stepId || `step-${index + 1}`);
+    const nodeId = `composite_${stepId}`;
+    const stepEvents = events.filter((event) => String(event?.nodeId || "") === nodeId);
+    const started = stepEvents.find((event) => event?.type === "node-start" || event?.type === "script-start");
+    const finished = [...stepEvents].reverse().find((event) => event?.type === "node-done" || event?.type === "script-finish");
+    const scriptFinish = [...stepEvents].reverse().find((event) => event?.type === "script-finish");
+    const stdout = String(scriptFinish?.stdout || "");
+    const preflightFailed = /(?:^|\n)status:\s*(?:preflight_failed|failed|error)\b/m.test(stdout);
+    const failed = preflightFailed || scriptFinish?.status === "error" || scriptFinish?.status === "cancelled";
+    const completed = !failed && stepEvents.some((event) => event?.type === "node-done");
+    const instance = graph?.instances?.[nodeId] || {};
+    const output = Array.isArray(instance.output)
+      ? Object.fromEntries(instance.output
+        .filter((slot) => slot?.type !== "node" && slot?.name)
+        .map((slot) => [String(slot.name), slot.value ?? slot.default ?? ""]))
+      : undefined;
+    const error = failed
+      ? (String(scriptFinish?.stderr || "").trim() || (stdout.match(/(?:^|\n)error:\s*(.+?)(?:\n|$)/m)?.[1] || "执行失败").trim())
+      : "";
+    const startedAt = Number(started?.ts || started?.startedAt);
+    const completedAt = Number(finished?.ts || finished?.completedAt);
+    return {
+      stepId,
+      actionId: String(entry?.id || ""),
+      title: entry?.title || entry?.atomic?.title || entry?.id || stepId,
+      status: failed ? "failed" : completed ? "completed" : "pending",
+      ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+      ...(Number.isFinite(completedAt) ? { completedAt } : {}),
+      ...(Number.isFinite(startedAt) && Number.isFinite(completedAt) ? { durationMs: Math.max(0, completedAt - startedAt) } : {}),
+      ...(output && Object.keys(output).length ? { output } : {}),
+      ...(error ? { error } : { error: "" }),
+      logs: stepEvents,
+    };
+  });
+  return { steps };
+}
+
 function releaseRunId() {
   return `release-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
 }
@@ -1333,6 +1376,7 @@ async function workspaceRoutes(req, res, ctx) {
         const timing = releaseTimingFromResult(result);
         const timelineNodeId = String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id;
         const failure = releaseFailureFromResult(result);
+        const details = releaseCompositeDetails(action, result);
         if (failure) {
           const existing = state.pending.find((item) => item.id === payload.itemId) || {};
           const failedItem = {
@@ -1346,6 +1390,8 @@ async function workspaceRoutes(req, res, ctx) {
             processOrder: action.processOrder,
             processTitle: action.processTitle || action.processId || "other",
             workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "failed",
@@ -1357,11 +1403,12 @@ async function workspaceRoutes(req, res, ctx) {
             failedAt: timing.completedAt,
             error: failure,
             output: result,
+            ...(details ? { details } : {}),
           };
           state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
           state.runs[runId] = { ...failedItem, logs: result?.events || [] };
           writeReleaseState(root, requestContext, requestWorkspaceId, state);
-          json(res, 422, { ok: false, status: "failed", code: "RELEASE_PREFLIGHT_FAILED", error: failure, runId, result, state });
+          json(res, 422, { ok: false, status: "failed", code: "RELEASE_PREFLIGHT_FAILED", error: failure, runId, result, ...(details ? { details } : {}), state });
           return;
         }
         const completedItem = {
@@ -1374,6 +1421,8 @@ async function workspaceRoutes(req, res, ctx) {
           processOrder: action.processOrder,
           processTitle: action.processTitle || action.processId || "other",
           workflowId: action.workflowId || "",
+          kind: action.kind || "",
+          compositeId: action.compositeId || "",
           scopeKey: requestedScopeKey || expectedScopeKey,
           contextSnapshot: { ...requestContext },
           status: "completed",
@@ -1385,12 +1434,13 @@ async function workspaceRoutes(req, res, ctx) {
           completedAt: timing.completedAt,
           durationMs: timing.durationMs,
           output: result,
+          ...(details ? { details } : {}),
         };
         state.timeline = [...state.timeline, completedItem];
         state.pending = state.pending.filter((item) => item.id !== completedItem.id);
         state.runs[runId] = { ...completedItem, logs: result?.events || [] };
         writeReleaseState(root, requestContext, requestWorkspaceId, state);
-        json(res, 200, { ok: true, status: "completed", runId, result, state });
+        json(res, 200, { ok: true, status: "completed", runId, result, ...(details ? { details } : {}), state });
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/release/runs/stop") {

@@ -4,7 +4,7 @@
  * without changing the node lifecycle model.
  */
 
-import { selectReleaseWorkflow, workflowStageNodeIds } from "../../../../shared/release-workflow-config.js";
+import { selectReleaseWorkflow, selectReleaseCompositeWorkflow, workflowStageNodeIds } from "../../../../shared/release-workflow-config.js";
 
 const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
@@ -225,11 +225,82 @@ function configuredFallbackNodes(context = {}) {
   return nodes;
 }
 
-export function getReleaseNodes({ businessLine, platform, batch = "initial" } = {}) {
+// 用户需求点: API 暂不可用时，静态目录也要保持复合流程默认推荐与线上 catalog 一致。
+function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
+  const workflow = selectReleaseWorkflow(context);
+  if (!workflow) return [];
+  const byId = new Map(atomicNodes.map((node) => [node.id, node]));
+  const result = [];
+  const seen = new Set();
+  for (const stage of workflow.stages || []) {
+    if (Array.isArray(stage.batches) && !stage.batches.includes(normalize(context.batch || "initial"))) continue;
+    for (const compositeId of stage.compositeIds || []) {
+      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id });
+      if (!composite || seen.has(composite.id)) continue;
+      const actions = (composite.actions || []).map((entry, index) => {
+        const atomic = byId.get(entry.id);
+        return {
+          ...entry,
+          stepId: entry.stepId || `step-${index + 1}`,
+          id: entry.id,
+          title: atomic?.title || fallbackActionTitle(entry.id),
+          description: atomic?.description || "",
+          inputSchema: atomic?.inputSchema || [],
+        };
+      });
+      if (actions.some((entry) => !byId.has(entry.id))) continue;
+      const internalKeys = new Set(actions.flatMap((entry) => Object.entries(entry.inputs || {})
+        .filter(([, mapping]) => mapping && typeof mapping === "object" && mapping.fromStep)
+        .map(([key]) => key)));
+      const inputSchema = [];
+      const keys = new Set();
+      for (const action of actions) {
+        for (const schema of action.inputSchema) {
+          const key = String(schema?.key || schema?.name || "").trim();
+          if (!key || internalKeys.has(key) || keys.has(key)) continue;
+          keys.add(key);
+          inputSchema.push({ ...schema, key });
+        }
+        for (const [key, mapping] of Object.entries(action.inputs || {})) {
+          if (!key || keys.has(key) || !mapping || typeof mapping !== "object" || !mapping.context) continue;
+          keys.add(key);
+          inputSchema.push({ key, label: key.replace(/[_-]+/g, " "), type: "text", required: false });
+        }
+      }
+      result.push({
+        id: `composite:${composite.id}`,
+        kind: "composite",
+        compositeId: composite.id,
+        title: composite.title,
+        description: composite.description,
+        skill: "release-composite",
+        action: composite.id,
+        category: stage.title || "发版阶段",
+        processId: stage.id,
+        processOrder: -1,
+        processTitle: stage.title,
+        workflowId: workflow.id,
+        businessLines: [...workflow.businessLines],
+        platforms: [...workflow.platforms],
+        actions,
+        inputSchema,
+        requiresConfirmation: actions.some((entry) => entry.requiresConfirmation === true),
+        nextNodeIds: [],
+        scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+      });
+      seen.add(composite.id);
+    }
+  }
+  return result;
+}
+
+export function getReleaseNodes({ businessLine, platform, version = "1.0.0", batch = "initial" } = {}) {
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
   if (!selectReleaseWorkflow({ businessLine: line, platform: targetPlatform, batch })) return [];
-  const catalog = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, batch });
+  const catalog = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, version, batch });
+  const composites = configuredFallbackCompositeNodes({ businessLine: line, platform: targetPlatform, version, batch }, catalog);
+  catalog.push(...composites);
   const allIds = new Set(catalog.map((item) => item.id));
   return catalog
     .map((item) => {

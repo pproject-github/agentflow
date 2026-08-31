@@ -262,6 +262,11 @@ test("release catalog exposes composites and rejects composites with invalid int
     assert.equal(runResponse.status, 200, JSON.stringify(runPayload));
     assert.equal(runPayload.status, "completed");
     assert.deepEqual(runPayload.result.order, ["composite_upload", "composite_notify"]);
+    assert.deepEqual(runPayload.details.steps.map((step) => step.actionId), [
+      "release-localization:upload-source-file",
+      "release-notification:send-notification",
+    ]);
+    assert.ok(runPayload.state.timeline.find((item) => item.nodeId === composite.id)?.details?.steps?.length >= 2);
     const invalid = await fetch(`${base}/api/release/nodes/run`, {
       method: "POST",
       headers,
