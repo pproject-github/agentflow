@@ -4,6 +4,8 @@
  * without changing the node lifecycle model.
  */
 
+import { selectReleaseWorkflow, workflowStageNodeIds } from "../../../../shared/release-workflow-config.js";
+
 const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
 
@@ -30,6 +32,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "发现并接入当前业务线与平台的本地工程及发版 Skill。",
     skill: "release-setup",
     category: "发版准备",
+    processId: "preparation",
+    processOrder: 10,
     nextNodeIds: ["release-management"],
   }),
   node({
@@ -38,6 +42,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "创建或选择活动发版，登记批次、版本和共享 release 分支。",
     skill: "release-management",
     category: "发版准备",
+    processId: "preparation",
+    processOrder: 20,
     nextNodeIds: ["release-git", "release-localization"],
   }),
   node({
@@ -46,6 +52,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "创建或复用 release 分支，处理受管理提交及合主干 MR。",
     skill: "release-git",
     category: "发版准备",
+    processId: "preparation",
+    processOrder: 60,
     nextNodeIds: ["release-localization", "release-approval", "release-release-notes"],
   }),
   node({
@@ -54,6 +62,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "上传源多语言并同步翻译回仓，核对工程 Git 差异。",
     skill: "release-localization",
     category: "发版准备",
+    processId: "localization",
+    processOrder: 10,
     nextNodeIds: ["release-approval", "release-release-notes"],
   }),
   node({
@@ -62,6 +72,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "为首包创建首次发版审核草稿并等待人工确认。",
     skill: "release-approval",
     category: "版本发布",
+    processId: "approval",
+    processOrder: 10,
     platforms: ["ios"],
     nextNodeIds: ["release-approval", "release-records"],
   }),
@@ -71,6 +83,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "为首包或补包创建全量发布审核草稿。",
     skill: "release-approval",
     category: "版本全量",
+    processId: "approval",
+    processOrder: 20,
     nextNodeIds: ["release-metrics", "release-gray-observe"],
   }),
   node({
@@ -79,6 +93,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "预览并上传 iOS 多语言版本更新说明。",
     skill: "release-release-notes",
     category: "版本发布",
+    processId: "store",
+    processOrder: 10,
     platforms: ["ios"],
     nextNodeIds: ["release-approval-initial", "release-records"],
   }),
@@ -88,6 +104,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "查询目标构建指标并保存可复用的指标快照。",
     skill: "release-metrics",
     category: "指标检查",
+    processId: "metrics",
+    processOrder: 10,
     nextNodeIds: ["release-gray-observe", "release-records"],
   }),
   node({
@@ -96,6 +114,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "观察灰度指标并对可疑面板进行下钻分析。",
     skill: "release-gray-observe",
     category: "指标检查",
+    processId: "gray-observe",
+    processOrder: 10,
     nextNodeIds: ["release-records", "release-notification"],
   }),
   node({
@@ -104,6 +124,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "整理发版摘要，并在确认后追加平台发版记录。",
     skill: "release-records",
     category: "版本全量",
+    processId: "records",
+    processOrder: 10,
     nextNodeIds: ["release-records-supplement", "release-channel-packages", "release-notification"],
   }),
   node({
@@ -112,6 +134,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "记录 Android 补包批次、灰度比例和补包原因。",
     skill: "release-records",
     category: "版本全量",
+    processId: "records",
+    processOrder: 20,
     platforms: ["android"],
     inputSchema: [
       {
@@ -134,6 +158,8 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "全量后按清单生成通用 Walle 渠道包与支付渠道包。",
     skill: "release-channel-packages",
     category: "版本全量",
+    processId: "channel-packages",
+    processOrder: 10,
     platforms: ["android"],
     nextNodeIds: ["release-notification"],
   }),
@@ -143,22 +169,68 @@ export const RELEASE_NODE_CATALOG = Object.freeze([
     description: "预览并独立确认后发送发版阶段的脱敏事件通知。",
     skill: "release-notification",
     category: "协作通知",
+    processId: "notification",
+    processOrder: 10,
     nextNodeIds: [],
   }),
 ].map((definition) => definition));
 
 const normalize = (value) => String(value ?? "").trim().toLowerCase();
 
-export function getReleaseNodes({ businessLine, platform } = {}) {
+function fallbackActionTitle(actionId) {
+  const action = String(actionId || "").split(":")[1] || actionId;
+  return action.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+// 用户需求点: API 不可用时，静态目录也必须提供共享 workflow 引用的 action-level 节点。
+function configuredFallbackNodes(context = {}) {
+  const workflow = selectReleaseWorkflow(context);
+  if (!workflow) return [];
+  const baseBySkill = new Map(RELEASE_NODE_CATALOG.map((item) => [item.skill, item]));
+  const nodes = [];
+  for (const stage of workflow.stages || []) {
+    if (Array.isArray(stage.batches) && !stage.batches.includes(normalize(context.batch || "initial"))) continue;
+    workflowStageNodeIds(stage).forEach((id, index) => {
+      const [skill] = String(id).split(":");
+      const base = baseBySkill.get(skill) || {};
+      const inputSchema = id === "release-git:create-release-branch"
+        ? [{ key: "release_branch", label: "Release 分支名", type: "text", required: false, placeholder: "例如 release/v1.1" }]
+        : (id === "release-records:record-store-approved" ? base.inputSchema || [] : []);
+      nodes.push({
+        ...base,
+        id,
+        title: fallbackActionTitle(id),
+        description: base.description || `${fallbackActionTitle(id)} 发版动作。`,
+        skill,
+        action: String(id).slice(skill.length + 1),
+        category: base.category || stage.title,
+        processId: stage.id,
+        processOrder: index,
+        processTitle: stage.title,
+        workflowId: workflow.id,
+        businessLines: [...workflow.businessLines],
+        platforms: [...workflow.platforms],
+        inputSchema,
+        nextNodeIds: [],
+      });
+    });
+  }
+  return nodes;
+}
+
+export function getReleaseNodes({ businessLine, platform, batch = "initial" } = {}) {
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
   const matchingIds = new Set(RELEASE_NODE_CATALOG
     .filter((item) => item.businessLines.includes(line) && item.platforms.includes(targetPlatform))
     .map((item) => item.id));
-  return RELEASE_NODE_CATALOG
-    .filter((item) => matchingIds.has(item.id))
+  const catalog = [...RELEASE_NODE_CATALOG, ...configuredFallbackNodes({ businessLine: line, platform: targetPlatform, batch })];
+  const unique = new Map(catalog.map((item) => [item.id, item]));
+  const allIds = new Set(unique.keys());
+  return [...unique.values()]
+    .filter((item) => matchingIds.has(item.id) || (item.businessLines || []).map(normalize).includes(line) && (item.platforms || []).map(normalize).includes(targetPlatform))
     .map((item) => {
-      const nextNodeIds = item.nextNodeIds.filter((nextId) => matchingIds.has(nextId));
+      const nextNodeIds = item.nextNodeIds.filter((nextId) => allIds.has(nextId));
       return {
         ...item,
         businessLines: [...item.businessLines],

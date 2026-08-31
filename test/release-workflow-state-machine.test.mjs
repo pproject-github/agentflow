@@ -137,7 +137,7 @@ test("excludes nodes outside the selected context", () => {
   }).map((node) => node.id), []);
 });
 
-test("uses generic process metadata for an unmatched business line", () => {
+test("does not expose executable processes for an unmatched business line", () => {
   const stateMachine = createReleaseProcessStateMachine({
     context: { businessLine: "bigolive", platform: "android", version: "5.63.2", batch: "initial" },
     nodes: [{
@@ -150,8 +150,8 @@ test("uses generic process metadata for an unmatched business line", () => {
     }],
   });
   assert.equal(stateMachine.workflow, null);
-  assert.equal(stateMachine.processes[0].id, "approval");
-  assert.equal(stateMachine.processes[0].title, "发版审核");
+  assert.deepEqual(stateMachine.processes, []);
+  assert.deepEqual(stateMachine.nodes, []);
 });
 
 test("selects the history-derived workflow for the current platform and batch", () => {

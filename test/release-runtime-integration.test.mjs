@@ -19,6 +19,15 @@ test("release context keeps batch in the immutable initialization snapshot", asy
   assert.equal(node.inputs.batch, "supplemental");
 });
 
+test("runtime store initial state preserves workflow identity and scope", async () => {
+  const { emptyReleaseState } = await import("../bin/lib/release-runtime-store.mjs");
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  const state = emptyReleaseState(context, "/workspace/likee");
+  assert.equal(state.timeline[0].workflowId, "likee-android-release");
+  assert.equal(state.timeline[0].scopeKey, "likee/android/5.63.2/initial");
+  assert.deepEqual(state.timeline[0].contextSnapshot, context);
+});
+
 test("workflow recommendations and custom candidates only expose configured actions", async () => {
   const { seedNextRecommendations } = await import("../builtin/web-ui/src/lib/releaseWorkflowModel.js");
   const { createReleaseProcessStateMachine, selectWorkflowProcessNodes } = await import("../builtin/web-ui/src/lib/releaseWorkflowStateMachine.js");

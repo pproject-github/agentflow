@@ -39,6 +39,9 @@ test("creates an initialization node with the active release context", () => {
   assert.match(node.description, /likee/);
   assert.match(node.description, /android/);
   assert.match(node.description, /6\.2\.1/);
+  assert.equal(node.workflowId, "likee-android-release");
+  assert.equal(node.scopeKey, "likee/android/6.2.1/initial");
+  assert.deepEqual(node.contextSnapshot, node.inputs);
 });
 
 test("seeds initialization as completed when the release context has no state", () => {
@@ -55,6 +58,9 @@ test("seeds initialization as completed when the release context has no state", 
   assert.equal(seeded.timeline[0].nodeId, node.id);
   assert.equal(seeded.timeline[0].status, "completed");
   assert.deepEqual(seeded.timeline[0].inputs, node.inputs);
+  assert.equal(seeded.timeline[0].workflowId, "");
+  assert.equal(seeded.timeline[0].scopeKey, "hello/ios/1.0.0/initial");
+  assert.deepEqual(seeded.timeline[0].contextSnapshot, node.contextSnapshot);
   assert.equal(seeded.pending.length, 0);
 
   const unchanged = seedInitializationState(seeded, node);

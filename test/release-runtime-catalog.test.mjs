@@ -175,6 +175,18 @@ test("static release fallback nodes carry process metadata", async () => {
   assert.equal(approval.processOrder, 20);
 });
 
+test("static fallback catalog contains configured action-level nodes for workflow parity", async () => {
+  const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?fallback-parity=${Date.now()}`);
+  const { createReleaseProcessStateMachine } = await import(`../builtin/web-ui/src/lib/releaseWorkflowStateMachine.js?fallback-parity=${Date.now()}`);
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  const nodes = getReleaseNodes(context);
+  assert.ok(nodes.some((node) => node.id === "release-git:create-release-branch"));
+  assert.ok(nodes.some((node) => node.id === "release-management:register-release-branch"));
+  const machine = createReleaseProcessStateMachine({ context, nodes });
+  assert.ok(machine.processes.length > 0);
+  assert.ok(machine.nodes.some((node) => node.id === "release-git:create-release-branch"));
+});
+
 test("applies the selected profile to extension skill roots as well", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-profile-extension-"));
   const extensionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-profile-extension-extra-"));

@@ -98,6 +98,7 @@ export function seedInitializationState(state, node) {
       completedAt: timestamp,
       durationMs: 0,
       operator: "系统初始化",
+      workflowId: node.workflowId || "",
       error: "",
       inputs: { ...node.inputs },
       contextSnapshot: { ...node.contextSnapshot },
@@ -193,6 +194,7 @@ export function ensureInitializationFirst(state, node) {
       ...timeline[timelineIndex],
       inputs: { ...node.inputs, ...(timeline[timelineIndex]?.inputs || {}) },
       contextSnapshot: { ...node.contextSnapshot, ...(timeline[timelineIndex]?.contextSnapshot || {}) },
+      workflowId: timeline[timelineIndex]?.workflowId || node.workflowId || "",
       scopeKey: timeline[timelineIndex]?.scopeKey || node.scopeKey,
     };
     const reordered = [initialization, ...timeline.slice(0, timelineIndex), ...timeline.slice(timelineIndex + 1)];
@@ -200,7 +202,13 @@ export function ensureInitializationFirst(state, node) {
   }
   const pendingIndex = pending.findIndex((item) => item?.nodeId === node.id);
   if (pendingIndex >= 0) {
-    const initialization = { ...node, ...pending[pendingIndex] };
+    const initialization = {
+      ...node,
+      ...pending[pendingIndex],
+      workflowId: pending[pendingIndex]?.workflowId || node.workflowId || "",
+      scopeKey: pending[pendingIndex]?.scopeKey || node.scopeKey,
+      contextSnapshot: { ...node.contextSnapshot, ...(pending[pendingIndex]?.contextSnapshot || {}) },
+    };
     const first = timeline[0];
     const timestamp = Number(initialization?.createdAt || first?.createdAt || first?.startedAt || first?.completedAt) || Date.now();
     return {

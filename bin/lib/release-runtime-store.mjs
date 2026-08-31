@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { selectReleaseWorkflow } from "../../shared/release-workflow-config.js";
 
 function safePart(value, fallback = "unknown") {
   const text = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -20,6 +21,8 @@ export function createReleaseInitialization(context = {}, workspacePath = "") {
   const platform = String(context.platform || "android");
   const version = String(context.version || "1.0.0");
   const timestamp = Date.now();
+  const workflow = selectReleaseWorkflow(context);
+  const scopeKey = `${String(context.businessLine || businessLine).toLowerCase()}/${String(context.platform || platform).toLowerCase()}/${version}/${String(context.batch || "initial").toLowerCase()}`;
   return {
     id: "release-initialization",
     nodeId: "release-initialization",
@@ -33,6 +36,9 @@ export function createReleaseInitialization(context = {}, workspacePath = "") {
     completedAt: timestamp,
     durationMs: 0,
     operator: "系统初始化",
+    workflowId: workflow?.id || "",
+    scopeKey,
+    contextSnapshot: { ...context, businessLine, platform, version, batch: context.batch || "initial" },
     inputs: { businessLine, platform, version, workspace: workspacePath },
   };
 }
