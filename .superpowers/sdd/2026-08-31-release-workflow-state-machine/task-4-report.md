@@ -12,6 +12,8 @@ Status: DONE
 - Runtime completion persistence keeps the matching `workflowId` plus process/scope metadata on failed and completed records.
 - Unmatched workflows expose no executable machine, catalog filter results, or custom candidates.
 - Static fallback catalog now materializes action-level nodes referenced by the selected shared workflow.
+- Static fallback now returns only configured action-level IDs; aggregate `release-setup`/`release-git` nodes are no longer exposed.
+- Removed stale `release-localization:send-upload-notification`; Android/iOS approval stages are batch-scoped, and Android supplemental wiki records retain required `gray_percent` input.
 - Added integration and panel contract coverage for configured candidate filtering, config removal behavior, and persistence round trips.
 
 ## Verification
@@ -26,7 +28,7 @@ success
 
 ## Commit
 
-`7fae0d4 fix(release): preserve initialization scope and fallback parity`
+`896fe04 fix(release): align static catalog with workflow actions`
 
 ## Cross-file adaptation
 
