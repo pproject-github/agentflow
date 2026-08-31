@@ -17,7 +17,7 @@
 - release-skill catalog 只提供 Action 的执行事实；运行节点必须同时满足 catalog 和 workflow 配置白名单。
 - 同一 Action 可以在不同 workflow 或 stage 出现，但同一 workflow 内不得重复。
 - 保留 Likee Android 首包/补包和 Likee iOS 首包/补包现有行为；不恢复 `Configure Target`、`Guide Current Release` 或 `Create Active Release`。
-- 旧 timeline/pending 数据继续可读；无法映射到当前 workflow 的历史节点只展示，不参与新推荐或自定义候选。
+- 当前仍处于开发阶段，本次不新增旧 timeline/pending 迁移、workflowVersion 或历史数据兼容分支；已有读取逻辑可保留但不作为验收重点。
 - 不删除或回滚工作区已有的无关改动、生成文件和历史记录；不执行真实远端发版操作。
 
 ### Task 1: 创建共享 workflow 配置与校验器
@@ -187,7 +187,7 @@
 
 - [ ] **Step 3: Implement alignment and migration**
 
-  Add `workflowId` and `workflowVersion` to the machine snapshot and generated records without changing existing timeline/pending field names. During legacy hydration, infer the current matching workflow from context; retain unknown historical nodes for display but exclude them from recommendations and custom candidates. Ensure all panel add-stage options are produced from the machine, not the raw remote catalog.
+  Add `workflowId` to the machine snapshot and generated records without changing existing timeline/pending field names. Do not add migration/version branches for legacy data in this development-stage change. Ensure all panel add-stage options are produced from the machine, not the raw remote catalog.
 
   Add the requirement comment above legacy hydration: `// 用户需求点: 历史记录可继续查看，但不能让不属于当前状态机的节点重新进入可执行候选集合。`
 

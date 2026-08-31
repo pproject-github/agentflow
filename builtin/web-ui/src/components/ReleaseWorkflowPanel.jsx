@@ -170,8 +170,8 @@ function readState(key, catalogNodeIds = null) {
     if (!isRecord(value)) return emptyState();
     const customNodes = uniqueById(Array.isArray(value.customNodes) ? value.customNodes.map(normalizeCustomNode).filter(Boolean) : []);
     const knownNodeIds = catalogNodeIds ? new Set([...catalogNodeIds, ...customNodes.map((item) => item.id)]) : null;
-    const timeline = uniqueByNodeId(Array.isArray(value.timeline) ? value.timeline.map(normalizeTimelineItem).filter(Boolean) : [])
-      .filter((item) => !knownNodeIds || knownNodeIds.has(item.nodeId));
+    // 用户需求点: 历史节点即使已从当前 workflow 配置移除，也必须保留在时间线中供查看。
+    const timeline = uniqueByNodeId(Array.isArray(value.timeline) ? value.timeline.map(normalizeTimelineItem).filter(Boolean) : []);
     const completedIds = new Set(timeline.map((item) => item.nodeId));
     const pending = uniqueByNodeId(Array.isArray(value.pending) ? value.pending.map(normalizePendingItem).filter(Boolean) : [])
       .filter((item) => !completedIds.has(item.nodeId) && (!knownNodeIds || knownNodeIds.has(item.nodeId)));
@@ -396,7 +396,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             const remoteTimeline = (Array.isArray(remoteState.timeline) ? remoteState.timeline : [])
               .map(normalizeTimelineItem)
               .filter(Boolean)
-              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context));
+              .filter((item) => itemMatchesContext(item, context));
             const completedIds = new Set(remoteTimeline.map((item) => item.nodeId));
             const remotePending = (Array.isArray(remoteState.pending) ? remoteState.pending : [])
               .map(normalizePendingItem)

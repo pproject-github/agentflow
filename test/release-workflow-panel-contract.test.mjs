@@ -63,6 +63,7 @@ test("release records preserve workflow identity and picker derives from machine
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /workflowId:\s*stringValue\(value\.workflowId\)/);
   assert.match(source, /workflowVersion:\s*stringValue\(value\.workflowVersion\)/);
+  assert.match(source, /历史节点即使已从当前 workflow 配置移除/);
   assert.match(source, /selectWorkflowProcessNodes\(\{ machine: workflowMachine, nodes: catalogNodes \}\)/);
   assert.match(source, /customNodeOptions\.map|customNodeGroups\.map/);
 });
