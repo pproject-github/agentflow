@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { defaultInputsForNode, externalInputSchemaForNode } from "../lib/releaseWorkflowModel.js";
 
 function displayValue(value) {
   if (value == null || value === "") return "未记录";
@@ -18,14 +19,15 @@ export default function ReleaseNodeInspector({
   onStop,
 }) {
   const [maximized, setMaximized] = useState(false);
-  const [inputs, setInputs] = useState(() => ({ ...(item?.inputs || {}) }));
+  const [inputs, setInputs] = useState(() => defaultInputsForNode(node, item?.inputs));
   const readOnly = mode === "completed";
   const title = item?.title || node?.title || "发版阶段";
-  const schemas = useMemo(() => Array.isArray(node?.inputSchema) ? node.inputSchema : [], [node]);
+  const schemas = useMemo(() => externalInputSchemaForNode(node), [node]);
+  const compositeSteps = Array.isArray(item?.details?.steps) ? item.details.steps : [];
 
   useEffect(() => {
-    setInputs({ ...(item?.inputs || {}) });
-  }, [item]);
+    setInputs(defaultInputsForNode(node, item?.inputs));
+  }, [item, node]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -83,6 +85,7 @@ export default function ReleaseNodeInspector({
             ))}
           </section>
           <section className="af-release-inspector__section"><div className="af-release-inspector__section-title"><h3>运行信息</h3><em>{item.operator || "未记录"}</em></div><div className="af-release-inspector__metadata"><span>开始：{displayValue(item.startedAt)}</span><span>完成：{displayValue(item.completedAt)}</span><span>耗时：{displayValue(item.durationMs)}</span></div></section>
+          {node?.kind === "composite" || item?.kind === "composite" ? <section className="af-release-inspector__section af-release-inspector__composite-steps"><div className="af-release-inspector__section-title"><h3>内部执行步骤</h3><em>{compositeSteps.length} 步</em></div>{compositeSteps.length === 0 ? <p className="af-release-inspector__empty">尚未产生内部步骤记录。</p> : <ol>{compositeSteps.map((step, index) => <li key={`${step.stepId || step.actionId || "step"}-${index}`} className={`is-${step.status || "pending"}`}><div><strong>{step.title || step.stepId || step.actionId || `步骤 ${index + 1}`}</strong><small>{step.actionId || ""}</small></div><span>{step.status || "pending"}</span>{step.error ? <pre>{step.error}</pre> : null}</li>)}</ol>}</section> : null}
           {item.error ? <section className="af-release-inspector__section is-error"><h3>失败原因</h3><pre>{item.error}</pre></section> : null}
           <section className="af-release-inspector__section"><div className="af-release-inspector__section-title"><h3>输出</h3><button type="button" onClick={() => navigator.clipboard?.writeText(displayValue(item.output || item.message))}>复制</button></div><pre className="af-release-inspector__code">{displayValue(item.output || item.message)}</pre></section>
           <section className="af-release-inspector__section"><div className="af-release-inspector__section-title"><h3>日志</h3></div><pre className="af-release-inspector__code">{displayValue(item.logs || item.log || "暂无运行日志")}</pre></section>

@@ -10,6 +10,8 @@ import {
   seedNextRecommendations,
   createPresetInstance,
   selectPresetNodes,
+  normalizeCompositeSteps,
+  externalInputSchemaForNode,
 } from "../builtin/web-ui/src/lib/releaseWorkflowModel.js";
 import { RELEASE_WORKFLOW_CONFIG } from "../shared/release-workflow-config.js";
 
@@ -272,4 +274,39 @@ test("creates repeatable custom instances from one preset definition", () => {
   assert.deepEqual(first.inputSchema, preset.inputSchema);
   assert.equal(first.templateId, preset.templateId);
   assert.equal(first.templateStepId, preset.templateStepId);
+});
+
+test("normalizes composite internal step details for timeline persistence", () => {
+  const steps = normalizeCompositeSteps([
+    { stepId: "upload", actionId: "release-localization:upload-source-file", status: "succeeded", startedAt: 10, completedAt: 25, output: { record_id: "r1" } },
+    { stepId: "notify", actionId: "release-notification:send-notification", status: "failed", error: "webhook timeout" },
+  ]);
+  assert.equal(steps.length, 2);
+  assert.deepEqual(steps[0], {
+    stepId: "upload",
+    actionId: "release-localization:upload-source-file",
+    status: "succeeded",
+    startedAt: 10,
+    completedAt: 25,
+    durationMs: 15,
+    output: { record_id: "r1" },
+    error: "",
+  });
+  assert.equal(steps[1].status, "failed");
+  assert.equal(steps[1].error, "webhook timeout");
+});
+
+test("composite input schema hides internal step mappings", () => {
+  const node = {
+    kind: "composite",
+    inputSchema: [
+      { key: "source_path", label: "源文件" },
+      { key: "record_id", label: "内部记录" },
+      { key: "event", label: "事件" },
+    ],
+    actions: [
+      { inputs: { source_path: { context: "source_path" }, record_id: { fromStep: "upload", output: "record_id" }, event: "localization-uploaded" } },
+    ],
+  };
+  assert.deepEqual(externalInputSchemaForNode(node).map((entry) => entry.key), ["source_path"]);
 });

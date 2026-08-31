@@ -253,6 +253,72 @@ test("removes create-active-release after initialization", () => {
     .some((item) => item.id === "release-management:create-active-release"), false);
 });
 
+test("collapses default composite actions into one stage node while keeping atomic fallback nodes", () => {
+  const composite = {
+    id: "composite:demo-flow",
+    kind: "composite",
+    compositeId: "demo-flow",
+    title: "复合流程",
+    description: "多个原子能力",
+    processId: "localization",
+    processOrder: 10,
+    businessLines: ["likee"],
+    platforms: ["android"],
+    contextSnapshot: { ...context },
+  };
+  const stateMachine = createReleaseProcessStateMachine({
+    context,
+    config: {
+      ...RELEASE_WORKFLOW_CONFIG,
+      workflows: [{
+        id: "demo",
+        title: "Demo",
+        businessLines: ["likee"],
+        platforms: ["android"],
+        batches: ["initial"],
+        stages: [{
+          id: "localization",
+          title: "多语言处理",
+          nodes: [{ id: "demo:upload" }, { id: "demo:notify" }],
+          compositeIds: ["demo-flow"],
+          defaultCompositeIds: ["demo-flow"],
+        }],
+      }],
+      compositeWorkflows: [{
+        id: "demo-flow",
+        businessLines: ["likee"],
+        platforms: ["android"],
+        batches: ["initial"],
+        stageIds: ["localization"],
+        actions: [{ id: "demo:upload" }, { id: "demo:notify" }],
+        default: true,
+      }],
+    },
+    nodes: [
+      composite,
+      node("demo:upload", "localization", 10),
+      node("demo:notify", "localization", 20),
+    ],
+  });
+
+  assert.deepEqual(stateMachine.processes[0].nodeIds, ["composite:demo-flow"]);
+  assert.deepEqual(recommendNextProcessNodes({ machine: stateMachine, timeline: [], pending: [] }).map((entry) => entry.id), ["composite:demo-flow"]);
+  assert.equal(selectWorkflowProcessNodes({ machine: stateMachine, nodes: stateMachine.nodes }).some((entry) => entry.id === "demo:upload"), true);
+});
+
+test("retains atomic actions as explicit fallback when no materialized composite is available", () => {
+  const stateMachine = createReleaseProcessStateMachine({
+    context,
+    config: {
+      ...RELEASE_WORKFLOW_CONFIG,
+      workflows: [{ id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "localization", title: "多语言处理", nodes: [{ id: "demo:upload" }], compositeIds: ["missing"] }] }],
+      compositeWorkflows: [{ id: "missing", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stageIds: ["localization"], actions: [{ id: "demo:upload" }] }],
+    },
+    nodes: [node("demo:upload", "localization", 10)],
+  });
+  assert.deepEqual(stateMachine.processes[0].nodeIds, ["demo:upload"]);
+});
+
 test("does not recommend optional supplemental metrics before the observed gray stage", () => {
   const context = androidSupplementalContext;
   const stateMachine = createReleaseProcessStateMachine({

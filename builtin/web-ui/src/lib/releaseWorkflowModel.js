@@ -14,6 +14,46 @@ function paramValue(params, key) {
   return "";
 }
 
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const timestampValue = (value) => {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
+};
+
+// 用户需求点: 复合节点只在一个时间线卡片下保存内部步骤，便于查看真实执行进度与失败原因。
+export function normalizeCompositeSteps(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((step) => {
+    const result = {};
+    for (const key of ["stepId", "actionId", "title", "status", "startedAt", "completedAt", "failedAt", "runId", "output", "error", "message", "inputs", "logs"]) {
+      if (step[key] === undefined || step[key] === null || step[key] === "") continue;
+      if (["startedAt", "completedAt", "failedAt"].includes(key)) {
+        const timestamp = timestampValue(step[key]);
+        if (timestamp !== undefined) result[key] = timestamp;
+      } else if (key === "inputs" && isRecord(step[key])) result[key] = { ...step[key] };
+      else if (key === "logs" && Array.isArray(step[key])) result[key] = step[key];
+      else result[key] = step[key];
+    }
+    if (result.startedAt !== undefined && result.completedAt !== undefined) result.durationMs = Math.max(0, result.completedAt - result.startedAt);
+    if (result.error === undefined) result.error = "";
+    return result;
+  });
+}
+
+// 用户需求点: 复合流程内部映射由 AgentFlow 自动串联，用户只填写上下文映射的外部输入。
+export function externalInputSchemaForNode(node) {
+  const schemas = Array.isArray(node?.inputSchema) ? node.inputSchema : [];
+  if (node?.kind !== "composite" || !Array.isArray(node.actions)) return schemas;
+  const externalKeys = new Set();
+  for (const action of node.actions) {
+    for (const [key, mapping] of Object.entries(action?.inputs || {})) {
+      if (mapping && typeof mapping === "object" && mapping.fromStep) continue;
+      if (mapping && typeof mapping === "object" && mapping.context) externalKeys.add(key);
+    }
+  }
+  return schemas.filter((schema) => externalKeys.has(schema.key));
+}
+
 // 用户需求点: 节点进入下一阶段时，标准参数应根据节点定义自动填充，同时保留操作员后来修改的值。
 export function defaultInputsForNode(node, inputs = {}) {
   const result = inputs && typeof inputs === "object" && !Array.isArray(inputs) ? { ...inputs } : {};
@@ -175,6 +215,9 @@ export function seedNextRecommendations(state, nodes = [], config) {
         createdAt: now,
         operator: "未记录",
         inputs: defaultInputsForNode(node),
+        kind: node.kind || "",
+        compositeId: node.compositeId || "",
+        details: node.kind === "composite" ? { steps: [] } : undefined,
         scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
         contextSnapshot: { ...context },
       };

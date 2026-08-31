@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
-import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, resolveReleaseContext, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, resolveReleaseContext, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
 import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
@@ -62,6 +62,9 @@ function normalizeTimelineItem(value, index) {
     workflowId: stringValue(value.workflowId),
     templateId: stringValue(value.templateId),
     templateStepId: stringValue(value.templateStepId),
+    kind: stringValue(value.kind),
+    compositeId: stringValue(value.compositeId),
+    details: isRecord(value.details) ? { ...value.details, steps: normalizeCompositeSteps(value.details.steps) } : undefined,
   };
 }
 
@@ -100,6 +103,9 @@ function normalizePendingItem(value, index) {
     workflowId: stringValue(value.workflowId),
     templateId: stringValue(value.templateId),
     templateStepId: stringValue(value.templateStepId),
+    kind: stringValue(value.kind),
+    compositeId: stringValue(value.compositeId),
+    details: isRecord(value.details) ? { ...value.details, steps: normalizeCompositeSteps(value.details.steps) } : undefined,
   };
 }
 
@@ -205,6 +211,28 @@ function formatDuration(value) {
   return `${(duration / 1000).toFixed(duration >= 10000 ? 0 : 1)}s`;
 }
 
+function compositeDetailsFromResult(result, node, existing = {}) {
+  if (node?.kind !== "composite" && existing?.steps?.length) return existing;
+  const explicit = result?.details?.steps || result?.result?.details?.steps || result?.result?.steps || result?.steps;
+  if (Array.isArray(explicit)) return { ...existing, steps: normalizeCompositeSteps(explicit) };
+  const graph = result?.result?.graph || result?.graph;
+  const instances = graph?.instances;
+  if (!instances || !Array.isArray(node?.actions)) return existing;
+  const steps = node.actions.map((action, index) => {
+    const instance = instances[`composite_${action.stepId || index}`] || {};
+    return {
+      stepId: action.stepId,
+      actionId: action.id,
+      title: action.title,
+      status: instance.status || "completed",
+      runId: instance.runId,
+      output: instance.output,
+      error: instance.error || "",
+    };
+  });
+  return { ...existing, steps: normalizeCompositeSteps(steps) };
+}
+
 // 用户需求点: 已完成阶段不依赖横向拖动，要按执行顺序蛇形换行并保持连续方向轨迹。
 function groupCompletedTimelineRows(items, rowSize = 3) {
   const rows = [];
@@ -227,6 +255,9 @@ function makePending(node, inputs = {}, context = {}) {
     workflowId: node.workflowId || "",
     templateId: node.templateId || "",
     templateStepId: node.templateStepId || "",
+    kind: node.kind || "",
+    compositeId: node.compositeId || "",
+    details: node.kind === "composite" ? { steps: [] } : undefined,
   };
 }
 
@@ -491,6 +522,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           runId: payload.runId,
           message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
           output: payload.result?.output || payload.result?.graph || payload.result,
+          details: compositeDetailsFromResult(payload, node, payload.details || payload.result?.details || {}),
         };
       } else {
         result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
@@ -516,6 +548,11 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         const currentOperator = currentItem.operator && currentItem.operator !== "未记录" ? currentItem.operator : operator;
         const timeline = completed ? previous.timeline : [...previous.timeline, {
           ...currentItem,
+          kind: currentItem.kind || node.kind || "",
+          compositeId: currentItem.compositeId || node.compositeId || "",
+          details: currentItem.kind === "composite" || node.kind === "composite"
+            ? compositeDetailsFromResult(result, node, { ...(currentItem.details || {}), ...(result.details || {}) })
+            : currentItem.details,
           processId: currentItem.processId || node.processId || "",
           processOrder: currentItem.processOrder ?? node.processOrder,
           processTitle: currentItem.processTitle || node.processTitle || processTitleForId(node.processId),
@@ -540,7 +577,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       if (error?.name === "AbortError" || !isCurrentRun()) return;
       setState((previous) => seedNextRecommendations({
         ...previous,
-        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator } : entry),
+        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? { ...(entry.details || {}), steps: normalizeCompositeSteps(entry.details?.steps) } : entry.details } : entry),
       }, [effectiveInitializationNode, ...catalogNodes]));
       setMessage(`${node.title} 执行失败`);
     } finally {
@@ -583,9 +620,9 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     }));
   }, []);
 
-  const renderNodeInputs = (node, item) => (node?.inputSchema || []).length > 0 ? (
+  const renderNodeInputs = (node, item) => externalInputSchemaForNode(node).length > 0 ? (
     <div className="af-release-node__inputs">
-      {node.inputSchema.map((schema) => (
+      {externalInputSchemaForNode(node).map((schema) => (
         <label key={schema.key}>
           <span>{schema.label}{schema.required ? " *" : ""}</span>
           <input

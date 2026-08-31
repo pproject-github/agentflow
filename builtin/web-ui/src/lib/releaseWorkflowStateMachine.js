@@ -4,6 +4,8 @@ import {
   selectReleaseWorkflow,
   workflowStageNodeIds,
   workflowActionIds,
+  selectReleaseCompositeWorkflow,
+  compositeActionIds,
 } from "../../../../shared/release-workflow-config.js";
 
 const PROCESS_ORDER = RELEASE_WORKFLOW_CONFIG.processOrder;
@@ -82,12 +84,42 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
   const configuredActionIds = workflowActionIds(workflow, scope);
   if (workflow) {
     // 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。
+    const configuredCompositeNodes = eligibleNodes.filter((node) => node.kind === "composite" && node.compositeId);
+    const configuredCompositeIds = new Set(configuredCompositeNodes
+      .filter((node) => {
+        const composite = selectReleaseCompositeWorkflow({ ...scope, compositeId: node.compositeId }, config);
+        return composite && compositeActionIds(composite, scope).size > 0;
+      })
+      .map((node) => node.id));
+    const consumedByDefaultComposite = new Set();
+    for (const stage of workflow.stages || []) {
+      if (Array.isArray(stage.batches) && !stage.batches.map(normalize).includes(scope.batch)) continue;
+      const defaults = Array.isArray(stage.defaultCompositeIds) ? stage.defaultCompositeIds : [];
+      for (const compositeId of defaults) {
+        const compositeNode = configuredCompositeNodes.find((node) => node.compositeId === compositeId);
+        if (!compositeNode || !configuredCompositeIds.has(compositeNode.id)) continue;
+        const composite = selectReleaseCompositeWorkflow({ ...scope, compositeId, stageId: stage.id }, config);
+        for (const actionId of compositeActionIds(composite, scope)) consumedByDefaultComposite.add(actionId);
+      }
+    }
     const workflowNodes = eligibleNodes
-      .filter((node) => configuredActionIds.has(node.id))
+      .filter((node) => configuredActionIds.has(node.id) || configuredCompositeIds.has(node.id))
       .map((node) => ({ ...node, workflowId: workflow.id }));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
-      const stageNodes = workflowStageNodeIds(stage).map((id) => byId.get(id)).filter(Boolean);
+      const stageCompositeIds = Array.isArray(stage.compositeIds) ? stage.compositeIds : [];
+      const stageCompositeNodes = stageCompositeIds
+        .map((id) => configuredCompositeNodes.find((node) => node.compositeId === id))
+        .filter((node) => node && byId.has(node.id))
+        .map((node) => byId.get(node.id));
+      const stageNodes = [
+        ...stageCompositeNodes,
+        ...workflowStageNodeIds(stage).map((id) => byId.get(id)).filter((node) => node && !consumedByDefaultComposite.has(node.id)),
+      ]
+        .filter((node, nodeIndex, list) => list.findIndex((entry) => entry.id === node.id) === nodeIndex)
+        .map((node) => stageCompositeNodes.some((entry) => entry.id === node.id)
+          ? { ...node, processId: stage.id, processOrder: -1, processTitle: stage.title }
+          : node);
       return {
         id: stage.id,
         title: stage.title,
@@ -112,6 +144,7 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
       },
       processes,
       nodeToProcess,
+      fallbackNodes: workflowNodes.filter((node) => consumedByDefaultComposite.has(node.id)),
     };
   }
   const groups = new Map();
@@ -158,6 +191,18 @@ export function selectWorkflowProcessNodes({ machine, nodes = [] } = {}) {
         workflowProcessOrder: process.order,
       });
     }
+  }
+  for (const fallbackNode of machine.fallbackNodes || []) {
+    const node = byId.get(fallbackNode.id) || fallbackNode;
+    if (!node?.id || seen.has(node.id)) continue;
+    seen.add(node.id);
+    selected.push({
+      ...node,
+      workflowId: node.workflowId || machine.workflowId || machine.workflow?.id || "",
+      workflowProcessId: processIdForNode(node, undefined, machine.context),
+      workflowProcessTitle: node.processTitle || processTitleForId(node.processId),
+      workflowProcessOrder: node.processOrder,
+    });
   }
   return selected;
 }

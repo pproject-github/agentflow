@@ -67,6 +67,23 @@ test("release records preserve workflow identity and picker derives from machine
   assert.match(source, /customNodeOptions\.map|customNodeGroups\.map/);
 });
 
+test("composite nodes are sent by composite identity and persist internal step details", async () => {
+  const [panel, inspector, model] = await Promise.all([
+    readFile(panelPath, "utf8"),
+    readFile(new URL("../builtin/web-ui/src/components/ReleaseNodeInspector.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../builtin/web-ui/src/lib/releaseWorkflowModel.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(panel, /kind: currentItem\.kind \|\| node\.kind/);
+  assert.match(panel, /compositeId: currentItem\.compositeId \|\| node\.compositeId/);
+  assert.match(panel, /details:[\s\S]*normalizeCompositeSteps/);
+  assert.match(panel, /actionId = node\.sourcePresetId \|\| node\.id/);
+  assert.match(inspector, /内部执行步骤/);
+  assert.match(inspector, /compositeSteps\.map/);
+  assert.match(inspector, /externalInputSchemaForNode/);
+  assert.match(model, /export function normalizeCompositeSteps/);
+  assert.match(model, /export function externalInputSchemaForNode/);
+});
+
 test("release runtime completion persistence keeps workflow and scope metadata", async () => {
   const routes = await readFile(new URL("../bin/lib/workspace-routes.mjs", import.meta.url), "utf8");
   assert.match(routes, /const failedItem = \{/);
