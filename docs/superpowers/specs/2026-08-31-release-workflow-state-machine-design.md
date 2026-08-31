@@ -2,7 +2,7 @@
 
 ## 目标
 
-将发版页当前按单个节点 `nextNodeIds` 推荐的逻辑，升级为按业务线与平台维护的“流程/阶段状态机”。一个流程由多个有序操作节点组成；只有流程内节点全部完成后，才进入下一个流程并推荐该流程的第一个待执行节点。
+将发版页当前按单个节点 `nextNodeIds` 推荐的逻辑，升级为按业务线与平台维护的“流程/阶段状态机”。一个流程由多个有序操作节点组成；只有流程内节点全部完成后，才进入下一个流程并推荐该流程的第一个待执行节点。状态机配置同时是当前上下文的可执行节点集合，自定义阶段只能从该集合中选择。
 
 ## 核心概念
 
@@ -29,16 +29,60 @@
 - `failed`：流程内存在失败节点；
 - `completed`：流程内所有必需节点完成。
 
-## 状态机来源
+## 状态机配置来源
 
-状态机由最新 `release-skills` 的以下信息生成：
+状态机的业务配置集中保存在一份纯数据配置中，由前端状态机和服务端目录编排共同读取。建议路径为：
+
+```text
+shared/release-workflow-config.js
+```
+
+配置以 workflow 列表表达业务线、平台和批次的差异；每个 workflow 包含有序 stages，每个 stage 包含有序 Action 引用及可选节点标记。配置只保存流程语义，不重复保存 release-skill 的标题、输入 schema、执行脚本或确认策略。
+
+配置至少包含以下字段：
+
+- `id`、`title`：流程标识和展示名称；
+- `businessLines`、`platforms`、`batches`：适用范围；
+- `stages[]`：阶段顺序；
+- `stages[].nodes[]`：当前阶段允许执行的 Action ID 顺序；
+- `stages[].optionalNodeIds` 或节点级 `optional`：可选节点；
+- `processOrder`、`skillProcessMap`、`actionOrder`：无显式流程元数据时的兼容排序。
+
+配置的节点集合具有双重作用：
+
+1. 状态机只对配置引用的节点计算状态和推荐；
+2. “自定义添加阶段”只展示当前 workflow、当前批次筛选后的配置节点，不能从整个 release-skill catalog 任意挑选。
+
+动态 release-skill catalog 仍负责发现节点的可执行事实（脚本路径、输入 schema、平台限制、确认要求）。状态机配置负责决定节点是否属于当前业务/平台/批次流程；两者取交集后才是可执行集合。
+
+配置加载必须经过校验：workflow 范围不能为空、stage/node ID 不能重复、同一 workflow 内 Action 不能重复、optional 节点必须属于所属 stage。未找到配置引用的 Action 时记录可读诊断并跳过该节点，不得让其他合法节点消失。
+
+## 状态机与 release-skill 的关系
+
+状态机配置的初始内容由最新 `release-skills` 的以下信息归纳生成：
 
 1. 当前业务线与平台的 Profile；
 2. Profile 的 `profile_refs`，决定可用 Skill 集合；
 3. Skill Action 的顺序、平台、批次和前置条件；
 4. 已执行流程记录，用于识别当前流程状态。
 
-没有匹配 Profile 时继续使用现有兼容目录逻辑，但仍执行业务线、平台、版本和批次过滤。
+配置生成后，运行时以配置为权威来源；release-skill 目录只提供执行事实和输入定义。没有匹配 workflow 配置时，才继续使用现有兼容目录逻辑，但仍执行业务线、平台、版本和批次过滤。
+
+### 历史执行归纳
+
+当前状态机的 Likee Android 首包、补包/放量顺序来自本地
+`.workspace/release-skills/.release-skill/executions/*.yaml` 的成功记录归并：
+重复 Action 合并为一个状态，失败或 `external_result_unknown` 不产生状态转移；补包指标检查和
+Android 渠道包属于可选分支。历史记录只用于生成或人工调整配置中的状态顺序和可选分支，不会在运行时修改或删除状态机配置。
+
+状态机定义按 `businessLine + platform + batch` 选择，当前覆盖 Likee Android 发版和 Likee iOS
+首包/补包；Android 首包与补包共用同一个 `likee-android-release` 状态机，`batch` 只筛选启用的阶段；未匹配的业务线或平台继续走兼容的目录分组逻辑。
+
+当前 `release-skills` 的 Likee Android Profile 仅声明 `profile_refs`，尚未绑定已发布的
+`workflow_id/workflow_version`，各 Skill Action 也尚未声明流程字段。因此前端状态机的
+`processId/processOrder` 目前属于推荐层兼容映射：优先使用目录或未来 Workflow 定义提供的
+显式字段，否则按 Skill/Action 兜底。它不替代 release-runtime 的 WorkflowDefinition、edges、
+条件依赖和 ready 节点计算；接入正式 Workflow 实例后，应以实例状态和依赖结果覆盖本地线性推荐。
 
 ## 推荐策略
 
@@ -110,11 +154,23 @@
   → 不迁移流程
 ```
 
+## 统一执行与节点集合
+
+推荐、状态推导、候选节点过滤和 AgentFlow 执行使用同一套节点身份：`skill:action`。执行前后端都必须验证：
+
+- 节点属于当前业务线、平台、版本和批次 scope；
+- 节点被当前选中的 workflow/stage 配置引用；
+- 请求中的 `processId` 与配置计算结果一致；
+- 自定义节点只能复制配置中已有节点定义，不能创建新的执行脚本或绕过配置白名单。
+
+这样不同业务线和平台只需新增或调整配置项，执行代码、状态迁移代码和 UI 候选节点代码保持不变。
+
 ## 兼容性
 
 - 保留旧状态中没有 `processId` 的节点，通过 Skill/Action 映射到当前状态机；无法映射的历史节点只展示，不参与新流程推荐。
 - 保留静态 `releaseNodeCatalog` 作为 API 不可用时的兜底，但推荐逻辑同样经过流程状态机过滤。
 - 后端继续负责目录发现、执行范围校验和状态持久化；前端负责根据状态机计算当前流程和推荐节点。
+- 旧状态没有配置版本时按当前匹配 workflow 解释；无法映射的历史节点只展示，不进入新的可执行候选集合。
 
 ## 测试要求
 
@@ -126,3 +182,4 @@
 - 不同业务线、平台、版本、批次和 Profile 的节点不会被推荐；
 - 已有旧 timeline 数据可以映射并继续推荐；
 - 没有合法下一流程时保持终态。
+- 配置新增、删除、调整节点后，状态机选择和自定义节点候选集合同步变化；前端与服务端读取同一配置得到相同节点集合。
