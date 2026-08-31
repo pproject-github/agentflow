@@ -2,12 +2,12 @@ import {
   RELEASE_WORKFLOW_CONFIG,
   releaseActionProcessMetadata,
   selectReleaseWorkflow,
+  workflowStageNodeIds,
   workflowActionIds,
 } from "../../../../shared/release-workflow-config.js";
 
 const PROCESS_ORDER = RELEASE_WORKFLOW_CONFIG.processOrder;
 const PROCESS_TITLES = RELEASE_WORKFLOW_CONFIG.processTitles;
-const RELEASE_WORKFLOW_DEFINITIONS = RELEASE_WORKFLOW_CONFIG.workflows;
 
 function normalize(value) {
   return String(value || "").trim().toLowerCase();
@@ -35,7 +35,7 @@ function nodeMatchesContext(node, context) {
     && (!snapshot.batch || normalize(snapshot.batch) === scope.batch);
 }
 
-export function processIdForNode(node = {}) {
+export function processIdForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const explicit = normalize(
     node.processId
       || node.process?.id
@@ -44,7 +44,7 @@ export function processIdForNode(node = {}) {
       || node.phaseId,
   );
   if (explicit) return explicit;
-  return releaseActionProcessMetadata(node.id, node).processId;
+  return releaseActionProcessMetadata(node.id, node, config).processId;
 }
 
 export function processTitleForId(processId) {
@@ -52,10 +52,10 @@ export function processTitleForId(processId) {
   return PROCESS_TITLES[id] || id;
 }
 
-function processOrderForNode(node = {}) {
+function processOrderForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const explicit = Number(node.processOrder ?? node.process?.order ?? node.workflowProcessOrder ?? node.stageOrder);
   if (Number.isFinite(explicit)) return explicit;
-  return releaseActionProcessMetadata(node.id, node).processOrder;
+  return releaseActionProcessMetadata(node.id, node, config).processOrder;
 }
 
 function processRank(processId) {
@@ -71,9 +71,9 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     .filter((node) => !["release-management:guide-current-release", "release-management:create-active-release"].includes(node.id))
     .map((node) => ({
       ...node,
-      processId: processIdForNode(node),
-      processOrder: processOrderForNode(node),
-      processTitle: String(node.processTitle || node.process?.title || processTitleForId(processIdForNode(node))).trim(),
+      processId: processIdForNode(node, config),
+      processOrder: processOrderForNode(node, config),
+      processTitle: String(node.processTitle || node.process?.title || processTitleForId(processIdForNode(node, config))).trim(),
     }));
   const workflow = selectReleaseWorkflow(scope, config);
   const activeStages = (workflow?.stages || []).filter((stage) => (
@@ -85,7 +85,7 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     const workflowNodes = eligibleNodes.filter((node) => configuredActionIds.has(node.id));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
-      const stageNodes = stage.nodeIds.map((id) => byId.get(id)).filter(Boolean);
+      const stageNodes = workflowStageNodeIds(stage).map((id) => byId.get(id)).filter(Boolean);
       return {
         id: stage.id,
         title: stage.title,

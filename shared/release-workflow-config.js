@@ -153,6 +153,11 @@ function nodeId(node) {
   return typeof node === "string" ? node : String(node?.id || "").trim();
 }
 
+export function workflowStageNodeIds(stage) {
+  const entries = Array.isArray(stage?.nodes) ? stage.nodes : (Array.isArray(stage?.nodeIds) ? stage.nodeIds : []);
+  return entries.map(nodeId).filter(Boolean);
+}
+
 // 用户需求点: 同一份配置同时决定状态流转和自定义阶段可执行节点集合，前后端必须按同一上下文选择 workflow。
 export function selectReleaseWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const scope = contextScope(context);
@@ -168,22 +173,19 @@ export function workflowActionIds(workflow, context = {}) {
   const ids = new Set();
   for (const item of Array.isArray(workflow?.stages) ? workflow.stages : []) {
     if (!stageEnabled(item, scope)) continue;
-    for (const node of Array.isArray(item.nodes) ? item.nodes : (item.nodeIds || [])) {
-      const id = nodeId(node);
-      if (id) ids.add(id);
-    }
+    for (const id of workflowStageNodeIds(item)) ids.add(id);
   }
   return ids;
 }
 
-export function releaseActionProcessMetadata(actionId, node = {}) {
+export function releaseActionProcessMetadata(actionId, node = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const id = String(actionId || node?.id || "").trim();
   const skill = normalize(node.skill || id.split(":")[0]);
   const configuredProcess = String(node.processId || node.process?.id || "").trim();
   let configuredStage;
   if (!configuredProcess) {
-    for (const workflow of RELEASE_WORKFLOW_CONFIG.workflows) {
-      configuredStage = workflow.stages.find((item) => (item.nodes || item.nodeIds || []).some((entry) => nodeId(entry) === id));
+    for (const workflow of Array.isArray(config?.workflows) ? config.workflows : []) {
+      configuredStage = workflow.stages.find((item) => workflowStageNodeIds(item).includes(id));
       if (configuredStage) break;
     }
   }

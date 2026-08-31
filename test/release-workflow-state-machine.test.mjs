@@ -350,3 +350,28 @@ test("matches machine process and candidate action order with shared config", ()
   assert.deepEqual(machineIds, configuredIds.filter((id) => machineIds.includes(id)));
   assert.deepEqual(selectWorkflowProcessNodes({ machine: stateMachine, nodes: stateMachine.nodes }).map((item) => item.id), machineIds);
 });
+
+test("uses the same canonical stage references as workflowActionIds", () => {
+  const config = {
+    ...RELEASE_WORKFLOW_CONFIG,
+    workflows: [{
+      ...RELEASE_WORKFLOW_CONFIG.workflows[0],
+      stages: [{
+        id: "canonical-stage",
+        title: "Canonical",
+        nodes: [{ id: "canonical:action" }],
+        nodeIds: ["legacy:action"],
+      }],
+    }],
+  };
+  const stateMachine = createReleaseProcessStateMachine({
+    context,
+    config,
+    nodes: [
+      node("canonical:action", "other", 10),
+      node("legacy:action", "other", 20),
+    ],
+  });
+  assert.deepEqual([...workflowActionIds(config.workflows[0], context)], ["canonical:action"]);
+  assert.deepEqual(stateMachine.processes[0].nodeIds, ["canonical:action"]);
+});

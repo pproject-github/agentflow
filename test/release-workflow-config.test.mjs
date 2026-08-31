@@ -30,6 +30,33 @@ test("returns process metadata from configured stage and action fallback", () =>
   assert.deepEqual(metadata, { processId: "preparation-initial", processOrder: 60, processTitle: "首包准备" });
 });
 
+test("resolves process metadata from a caller-supplied workflow config", () => {
+  const config = {
+    workflows: [{
+      id: "custom",
+      businessLines: ["demo"],
+      platforms: ["android"],
+      batches: ["initial"],
+      stages: [{ id: "custom-stage", title: "自定义阶段", nodes: [{ id: "demo:action" }] }],
+    }],
+  };
+  assert.deepEqual(releaseActionProcessMetadata("demo:action", {}, config), {
+    processId: "custom-stage",
+    processOrder: 1000,
+    processTitle: "自定义阶段",
+  });
+});
+
+test("uses stage nodes as the canonical action references when nodeIds disagree", () => {
+  const workflow = {
+    businessLines: ["demo"],
+    platforms: ["android"],
+    batches: ["initial"],
+    stages: [{ id: "stage", title: "阶段", nodes: [{ id: "canonical:action" }], nodeIds: ["legacy:action"] }],
+  };
+  assert.deepEqual([...workflowActionIds(workflow, { batch: "initial" })], ["canonical:action"]);
+});
+
 test("rejects duplicate Action references inside one workflow", () => {
   const result = validateReleaseWorkflowConfig({ workflows: [{ id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "x" }, { id: "x" }] }] }] });
   assert.equal(result.valid, false);
