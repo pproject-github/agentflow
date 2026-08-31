@@ -5644,6 +5644,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     for (const nodeId of order) plannedFingerprints.set(nodeId, workspaceNodeInputFingerprint(graph, nodeId, memo));
   }
   const signal = opts.signal || null;
+  const execution = { unattended: opts.execution?.unattended === true };
   const throwIfAborted = () => {
     if (signal?.aborted) {
       const err = new Error("Workspace run stopped");
@@ -6855,6 +6856,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           prompt,
           modelKey: nodeModelKey,
           agentflowUserId: userCtx.userId || "",
+          execution,
           detached: process.platform !== "win32",
           onChild: opts.onActiveChild,
           extraEnv: runtimeEnv({
@@ -7722,7 +7724,7 @@ export async function runWorkspaceScheduledEntry(root, entry) {
   const instance = graph.instances?.[scheduleNodeId];
   const config = normalizeWorkspaceScheduledRunConfig(instance?.body || "");
   nextRunAt = computeNext(config);
-  if (!instance || String(instance.definitionId || "") !== "workspace_scheduled_run" || !config.enabled) {
+  if (entry.enabled !== true || !instance || String(instance.definitionId || "") !== "workspace_scheduled_run" || !config.enabled) {
     appendWorkspaceRunLogEvent(runLog.runId, { type: "disabled", scheduleNodeId });
     finishWorkspaceRunLogSession(runLog.runId, "disabled");
     updateWorkspaceScheduleEntry(entry.key, {
@@ -7838,6 +7840,9 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       graph,
     }, userCtx, {
       runtimeRoot: scoped.root,
+      execution: {
+        unattended: Boolean(stableRelease?.release?.id) && entry.enabled === true && config.enabled === true,
+      },
       signal: controller.signal,
       onActiveChild: setActiveChild,
       onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
@@ -7992,6 +7997,7 @@ async function runWorkspaceDeferredEntry(root, claimed) {
       graph,
     }, userCtx, {
       runtimeRoot: scoped.root,
+      execution: { unattended: claimed.scheduled === true && Boolean(claimed.releaseId) },
       signal: controller.signal,
       onActiveChild: (child, options = {}) => runControl.setChild(child, options),
       onEvent: (event) => appendWorkspaceRunLogEvent(claimed.runId, event),

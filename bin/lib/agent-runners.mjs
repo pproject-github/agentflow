@@ -93,6 +93,65 @@ function cursorResultErrorText(event) {
   return "";
 }
 
+function cursorToolResultErrorText(value) {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object") return "";
+  const candidates = [value.message, value.error, value.reason, value.detail];
+  for (const candidate of candidates) {
+    const text = cursorToolResultErrorText(candidate);
+    if (text) return text;
+  }
+  return "";
+}
+
+function cursorRejectedStatus(value) {
+  return typeof value === "string" && /^rejected$/i.test(value.trim());
+}
+
+function cursorInteractionQueryRejected(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  for (const [key, nested] of Object.entries(value)) {
+    const normalizedKey = String(key || "").replace(/[-_]/g, "").toLowerCase();
+    if (["result", "status", "state", "outcome", "decision"].includes(normalizedKey) && cursorRejectedStatus(nested)) {
+      return true;
+    }
+    if (nested && typeof nested === "object" && cursorInteractionQueryRejected(nested, seen)) return true;
+  }
+  return false;
+}
+
+function cursorRequiredToolFailure(event) {
+  if (!event || event.type !== "tool_call" || !event.tool_call || typeof event.tool_call !== "object") return null;
+  const [toolName = "unknown", toolPayload] = Object.entries(event.tool_call)[0] || [];
+  const normalizedToolName = String(toolName).replace(/[-_]/g, "").toLowerCase();
+  const queue = [toolPayload];
+  const seen = new Set();
+  while (queue.length) {
+    const value = queue.shift();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    for (const [key, nested] of Object.entries(value)) {
+      if (key === "result" && nested && typeof nested === "object") {
+        if (nested.rejected === true || cursorRejectedStatus(nested.status) || cursorRejectedStatus(nested.state)) {
+          return { toolName, reason: "rejected" };
+        }
+        if (nested.error) {
+          return { toolName, reason: cursorToolResultErrorText(nested.error) || "error" };
+        }
+      }
+      if (nested && typeof nested === "object") queue.push(nested);
+    }
+  }
+  if (
+    normalizedToolName === "interactionquery"
+    && (cursorRejectedStatus(event.subtype) || cursorInteractionQueryRejected(toolPayload))
+  ) {
+    return { toolName, reason: "rejected" };
+  }
+  return null;
+}
+
 export function isCursorAgentLoopingError(error = "") {
   const text = String(error?.message || error || "");
   return /agent looping detected|got stuck in a repeating response pattern/i.test(text);
@@ -456,7 +515,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       || { lane: "auto", modelId: "auto", modelName: "Auto" };
   const model = hasExplicitModel ? requestedModel : cursorModelSelection.modelId;
   if (cursorSelection) recordCursorApiKeyUsage(cursorSelection, cursorModelSelection);
-  // Web UI Composer 需要能无交互执行本机 curl 等命令来刷新画布。
+  // --force 只接受服务器内部的无人值守执行上下文，普通 Prompt/交互调用不能自行开启。
   const args = ["--print", "--output-format", "stream-json"];
   if (options.mode) args.push("--mode", String(options.mode));
   args.push("--trust");
@@ -464,7 +523,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   args.push("--workspace", ws);
   const approveMcps = options.approveMcps ?? (process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false");
   if (approveMcps) args.push("--approve-mcps");
-  if (options.force !== false) args.push("--force");
+  if (options.execution?.unattended === true) args.push("--force");
   if (shouldPassCursorModelArg(model)) args.push("--model", model);
   args.push(promptText);
 
@@ -482,6 +541,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   let hadError = false;
   let hadToolActivity = false;
   let hadMutatingToolActivity = false;
+  let requiredToolFailure = null;
   const annotateFailure = (error) => {
     const failure = annotateCursorFailure(error, { hadToolActivity, hadMutatingToolActivity });
     failure.cursorModelLane = cursorModelSelection.lane;
@@ -578,6 +638,15 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
             event.tool_call && typeof event.tool_call === "object" ? Object.keys(event.tool_call)[0] ?? "?" : "?";
           if (!isCursorReadOnlyToolCall(toolName)) hadMutatingToolActivity = true;
           const subtype = event.subtype ?? "";
+          const toolFailure = cursorRequiredToolFailure(event);
+          if (toolFailure && !requiredToolFailure) {
+            requiredToolFailure = toolFailure;
+            emit({
+              type: "natural",
+              kind: "error",
+              text: `Required tool ${toolFailure.toolName} ${toolFailure.reason}.`,
+            });
+          }
           const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
           emit({ type: "status", line: statusLine });
           if (options.onToolCall) options.onToolCall(subtype, toolName);
@@ -767,6 +836,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
         err.cursorStderrTail = stderrTail;
         emit({ type: "status", line: truncateComposerLine(err.message) });
         reject(err);
+        return;
+      }
+      if (requiredToolFailure) {
+        const message = `Required tool ${requiredToolFailure.toolName} ${requiredToolFailure.reason}.`;
+        emit({ type: "status", line: truncateComposerLine(message) });
+        reject(annotateFailure(new Error(message)));
         return;
       }
       if (hadError || (lastResult && lastResult.is_error)) {
