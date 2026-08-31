@@ -522,6 +522,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         const currentOperator = currentItem.operator && currentItem.operator !== "未记录" ? currentItem.operator : operator;
         const timeline = completed ? previous.timeline : [...previous.timeline, {
           ...currentItem,
+          processId: currentItem.processId || node.processId || "",
+          processOrder: currentItem.processOrder ?? node.processOrder,
+          processTitle: currentItem.processTitle || node.processTitle || processTitleForId(node.processId),
+          workflowId: currentItem.workflowId || node.workflowId || previous.workflowId || "",
+          workflowVersion: currentItem.workflowVersion || node.workflowVersion || previous.workflowVersion || "",
+          scopeKey: currentItem.scopeKey || node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
           status: "completed",
           progress: 100,
           message: result.message,
