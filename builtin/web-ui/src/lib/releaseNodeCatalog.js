@@ -221,6 +221,7 @@ function configuredFallbackNodes(context = {}) {
 export function getReleaseNodes({ businessLine, platform, batch = "initial" } = {}) {
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
+  if (!selectReleaseWorkflow({ businessLine: line, platform: targetPlatform, batch })) return [];
   const matchingIds = new Set(RELEASE_NODE_CATALOG
     .filter((item) => item.businessLines.includes(line) && item.platforms.includes(targetPlatform))
     .map((item) => item.id));

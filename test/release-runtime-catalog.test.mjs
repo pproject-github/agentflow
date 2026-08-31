@@ -187,6 +187,13 @@ test("static fallback catalog contains configured action-level nodes for workflo
   assert.ok(machine.nodes.some((node) => node.id === "release-git:create-release-branch"));
 });
 
+test("static fallback catalog is empty when no workflow matches the requested scope", async () => {
+  const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?fallback-empty=${Date.now()}`);
+  assert.deepEqual(getReleaseNodes({ businessLine: "bigolive", platform: "android", batch: "initial" }), []);
+  assert.deepEqual(getReleaseNodes({ businessLine: "likee", platform: "web", batch: "initial" }), []);
+  assert.deepEqual(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "unknown" }), []);
+});
+
 test("applies the selected profile to extension skill roots as well", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-profile-extension-"));
   const extensionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-profile-extension-extra-"));
