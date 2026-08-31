@@ -112,7 +112,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
       stages: [
         stage("preparation", "发版准备", ["release-git:create-release-branch", "release-management:register-release-branch"]),
         stage("localization", "多语言处理", ["release-localization:upload-source-file", "release-localization:send-upload-notification", "release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes"]),
-        stage("store", "商店版本说明", ["release-release-notes:upload-ios-release-notes", "release-google-play:preview-aab-submission", "release-google-play:submit-aab-internal-testing"], { optionalNodeIds: ["release-google-play:preview-aab-submission", "release-google-play:submit-aab-internal-testing"] }),
+        stage("store", "商店版本说明", ["release-release-notes:upload-ios-release-notes"]),
         stage("records-summary", "更新摘要", ["release-records:compose-update-summary"]),
         stage("approval", "发版审核", ["release-approval:create-initial-release-approval", "release-approval:create-full-rollout-approval"]),
         stage("metrics", "指标检查", ["release-metrics:query-version-metrics", "release-metrics:save-metrics-snapshot"]),
@@ -127,7 +127,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     platforms: freeze([...workflow.platforms]),
     batches: freeze([...workflow.batches]),
     evidence: freeze({ ...workflow.evidence, versions: freeze([...(workflow.evidence?.versions || [])]) }),
-    stages: freeze(workflow.stages.map((item) => ({
+    stages: freeze(workflow.stages.map((item) => freeze({
       ...item,
       batches: item.batches ? freeze([...item.batches]) : item.batches,
       nodes: freeze(item.nodes.map((node) => freeze({ ...node }))),
@@ -223,8 +223,12 @@ export function validateReleaseWorkflowConfig(config) {
         else if (actionIds.has(id)) errors.push(`duplicate Action reference: ${workflowId}/${id}`);
         actionIds.add(id);
       }
-      for (const optionalId of item.optionalNodeIds || []) {
-        if (!nodes.some((node) => nodeId(node) === nodeId(optionalId))) errors.push(`invalid optional reference: ${workflowId}/${optionalId}`);
+      if (item.optionalNodeIds != null && !Array.isArray(item.optionalNodeIds)) {
+        errors.push(`optionalNodeIds must be an array: ${workflowId}/${stageId || "stage"}`);
+      } else {
+        for (const optionalId of item.optionalNodeIds || []) {
+          if (!nodes.some((node) => nodeId(node) === nodeId(optionalId))) errors.push(`invalid optional reference: ${workflowId}/${optionalId}`);
+        }
       }
     }
   }

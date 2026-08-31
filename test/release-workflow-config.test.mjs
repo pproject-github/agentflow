@@ -21,7 +21,8 @@ test("selects iOS workflow and retains optional nodes", () => {
   assert.equal(workflow.id, "likee-ios-release");
   const ids = workflowActionIds(workflow, { batch: "initial" });
   assert.equal(ids.has("release-release-notes:upload-ios-release-notes"), true);
-  assert.equal(ids.has("release-google-play:submit-aab-internal-testing"), true);
+  assert.equal(ids.has("release-google-play:submit-aab-internal-testing"), false);
+  assert.equal(ids.has("release-google-play:preview-aab-submission"), false);
 });
 
 test("returns process metadata from configured stage and action fallback", () => {
@@ -48,4 +49,32 @@ test("ships a valid shared configuration with workflow maps", () => {
   assert.ok(RELEASE_WORKFLOW_CONFIG.processTitles.preparation);
   assert.ok(RELEASE_WORKFLOW_CONFIG.skillProcessMap["release-git"]);
   assert.equal(typeof RELEASE_WORKFLOW_CONFIG.actionOrder, "object");
+  assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows), true);
+  assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows[0].stages), true);
+  assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows[0].stages[0].nodes), true);
+});
+
+test("rejects non-array optional node references without throwing", () => {
+  const result = validateReleaseWorkflowConfig({
+    workflows: [{ id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "x" }], optionalNodeIds: 42 }] }],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /optional|可选/i);
+});
+
+test("rejects duplicate workflow IDs and malformed node entries", () => {
+  const result = validateReleaseWorkflowConfig({
+    workflows: [
+      { id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "x" }, null] }] },
+      { id: "demo", businessLines: ["likee"], platforms: ["ios"], batches: ["initial"], stages: [{ id: "two", nodes: [{ id: "y" }] }] },
+    ],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /duplicate workflow|重复.*workflow/i);
+  assert.match(result.errors.join("\n"), /malformed node|节点/i);
+});
+
+test("returns null for an unmatched business line or platform", () => {
+  assert.equal(selectReleaseWorkflow({ businessLine: "bigolive", platform: "android", batch: "initial" }), null);
+  assert.equal(selectReleaseWorkflow({ businessLine: "likee", platform: "windows", batch: "initial" }), null);
 });
