@@ -85,6 +85,23 @@ test("compiles composite release workflow into ordered AgentFlow tool nodes with
   assert.equal(graph.instances.composite_notify.compositeStep.waitFor.statuses[0], "completed");
 });
 
+test("propagates hidden composite confirmation fingerprint to every internal step", async () => {
+  const { buildCompositeReleaseRunGraph } = await import("../bin/lib/release-runtime-executor.mjs?composite-confirmation-input");
+  const graph = buildCompositeReleaseRunGraph({
+    id: "demo",
+    actions: [
+      { stepId: "one", id: "release-git:create-release-branch", inputs: {} },
+      { stepId: "two", id: "release-git:commit-managed-changes", inputs: {} },
+    ],
+  }, [
+    { id: "release-git:create-release-branch", skill: "release-git", action: "create-release-branch", source: { skillRoot: "/tmp", scriptPath: "/tmp/one.py" } },
+    { id: "release-git:commit-managed-changes", skill: "release-git", action: "commit-managed-changes", source: { skillRoot: "/tmp", scriptPath: "/tmp/two.py" } },
+  ], { businessLine: "likee", platform: "android", version: "1.0.0", batch: "initial" }, { __release_confirmation_fingerprint: "fp-123" });
+  for (const instance of Object.values(graph.instances)) {
+    assert.equal(instance.input.find((slot) => slot.name === "__release_confirmation_fingerprint")?.value, "fp-123");
+  }
+});
+
 test("composite confirmation fingerprint changes when internal action order changes", async () => {
   const { confirmationFingerprint } = await import("../bin/lib/release-runtime-executor.mjs?composite-fingerprint");
   const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };

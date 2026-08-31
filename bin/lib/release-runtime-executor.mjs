@@ -108,6 +108,7 @@ export function buildCompositeReleaseRunGraph(composite, atomicNodes = [], conte
       ...((Array.isArray(entry.atomic.inputSchema) ? entry.atomic.inputSchema : []).map((item) => String(item?.key || item?.name || "").trim()).filter(Boolean)),
       ...Object.keys(mappedInputs).map((name) => String(name || "").trim()).filter(Boolean),
       ...Object.keys(stepExecutionInputs).filter((name) => !String(name).startsWith("__")),
+      ...(Object.prototype.hasOwnProperty.call(stepExecutionInputs, "__release_confirmation_fingerprint") ? ["__release_confirmation_fingerprint"] : []),
     ]);
     const input = [{ type: "node", name: "prev", value: "" }];
     for (const name of inputNames) {
