@@ -74,6 +74,76 @@ const stage = (id, title, nodeIds, extra = {}) => ({
   id, title, nodes: nodeIds.map(action), ...extra,
 });
 
+const composite = (id, title, description, businessLines, platforms, batches, actions, extra = {}) => ({
+  id,
+  title,
+  description,
+  businessLines,
+  platforms,
+  batches,
+  actions,
+  ...extra,
+});
+
+// 用户需求点: 复合节点把多个 release-skill 原子能力收敛为一个可执行发版阶段，默认推荐以减少人工逐步操作。
+const compositeDefinitions = [
+  composite(
+    "localization-upload-notify",
+    "多语言上传 & 通知",
+    "上传源多语言文件，成功后发送多语言上传通知。",
+    ["likee"],
+    ["android", "ios"],
+    ["initial", "supplemental"],
+    [
+      { id: "release-localization:upload-source-file", continueOn: ["completed"] },
+      { id: "release-notification:send-notification", inputs: { event: "localization-uploaded" } },
+    ],
+    { default: true },
+  ),
+  composite(
+    "localization-download-merge-notify",
+    "多语言下载 & 合入 & 通知",
+    "准备翻译归档，应用翻译并提交多语言变更，随后发送回仓通知。",
+    ["likee"],
+    ["android", "ios"],
+    ["initial", "supplemental"],
+    [
+      { id: "release-localization:prepare-translation-archive", continueOn: ["completed"] },
+      { id: "release-localization:apply-translations", continueOn: ["completed"] },
+      { id: "release-localization:commit-localization-changes", continueOn: ["completed"] },
+      { id: "release-notification:send-notification", inputs: { event: "localization-applied" } },
+    ],
+    { default: true },
+  ),
+  composite(
+    "release-summary-record",
+    "更新摘要 & 登记发版记录",
+    "整理本次发版更新摘要并登记到发版 Wiki。",
+    ["likee"],
+    ["android", "ios"],
+    ["initial", "supplemental"],
+    [
+      { id: "release-records:compose-update-summary", continueOn: ["completed"] },
+      { id: "release-records:append-release-wiki-row" },
+    ],
+    { default: true },
+  ),
+  composite(
+    "android-channel-packages",
+    "Android 渠道包批量构建",
+    "规划渠道包、批量触发构建并刷新构建状态。",
+    ["likee"],
+    ["android"],
+    ["initial", "supplemental"],
+    [
+      { id: "release-channel-packages:plan-channel-packages", continueOn: ["completed"] },
+      { id: "release-channel-packages:trigger-channel-packages-batch", continueOn: ["completed"] },
+      { id: "release-channel-packages:refresh-channel-package-build" },
+    ],
+    { default: true },
+  ),
+];
+
 export const RELEASE_WORKFLOW_CONFIG = freeze({
   processOrder: freeze([...processOrder]),
   processTitles: freeze({ ...processTitles }),
@@ -90,15 +160,15 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
       stages: [
         stage("preparation-initial", "首包准备", ["release-setup:configure-notification-recipient", "release-setup:discover-skills", "release-git:create-release-branch", "release-management:register-release-branch", "release-git:commit-managed-changes", "release-git:merge-release-to-main", "release-git:merge-release-to-develop", "release-git:enable-mr-auto-merge"], { batches: ["initial"], optionalNodeIds: ["release-setup:configure-notification-recipient", "release-setup:discover-skills", "release-git:commit-managed-changes", "release-git:merge-release-to-main", "release-git:merge-release-to-develop", "release-git:enable-mr-auto-merge"] }),
         stage("preparation-supplemental", "补包准备", ["release-management:append-release-batch", "release-management:update-active-release"], { batches: ["supplemental"] }),
-        stage("localization", "多语言处理", ["release-localization:upload-source-file", "release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes"], { batches: ["initial"] }),
+        stage("localization", "多语言处理", ["release-localization:upload-source-file", "release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes"], { batches: ["initial"], compositeIds: ["localization-upload-notify", "localization-download-merge-notify"], defaultCompositeIds: ["localization-upload-notify", "localization-download-merge-notify"] }),
         stage("records-summary", "更新摘要", ["release-records:compose-update-summary"]),
         stage("approval-initial", "首次发版审核", ["release-approval:create-initial-release-approval"], { batches: ["initial"] }),
         stage("approval-full", "全量发布审核", ["release-approval:create-full-rollout-approval"]),
         stage("metrics", "指标检查", ["release-metrics:query-version-metrics", "release-metrics:save-metrics-snapshot"], { optional: true }),
         stage("gray-observe", "灰度观察", ["release-gray-observe:observe-gray-dashboard"]),
-        stage("records", "发版记录", ["release-records:append-release-wiki-row", "release-records:record-store-approved"]),
+        stage("records", "发版记录", ["release-records:append-release-wiki-row", "release-records:record-store-approved"], { compositeIds: ["release-summary-record"], defaultCompositeIds: ["release-summary-record"] }),
         stage("notification", "发版通知", ["release-notification:send-notification", "release-notification:send-rollout-notification"]),
-        stage("channel-packages", "Android 渠道包", ["release-channel-packages:plan-channel-packages", "release-channel-packages:trigger-channel-packages-batch", "release-channel-packages:refresh-channel-package-build"], { optional: true }),
+        stage("channel-packages", "Android 渠道包", ["release-channel-packages:plan-channel-packages", "release-channel-packages:trigger-channel-packages-batch", "release-channel-packages:refresh-channel-package-build"], { optional: true, compositeIds: ["android-channel-packages"], defaultCompositeIds: ["android-channel-packages"] }),
       ],
     },
     {
@@ -110,14 +180,14 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
       evidence: { records: 0, succeeded: 0, failed: 0, unknown: 0, versions: [] },
       stages: [
         stage("preparation", "发版准备", ["release-git:create-release-branch", "release-management:register-release-branch"]),
-        stage("localization", "多语言处理", ["release-localization:upload-source-file", "release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes"]),
+        stage("localization", "多语言处理", ["release-localization:upload-source-file", "release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes"], { compositeIds: ["localization-upload-notify", "localization-download-merge-notify"], defaultCompositeIds: ["localization-upload-notify", "localization-download-merge-notify"] }),
         stage("store", "商店版本说明", ["release-release-notes:upload-ios-release-notes"]),
         stage("records-summary", "更新摘要", ["release-records:compose-update-summary"]),
         stage("approval-initial", "首次发版审核", ["release-approval:create-initial-release-approval"], { batches: ["initial"] }),
         stage("approval-full", "全量发布审核", ["release-approval:create-full-rollout-approval"]),
         stage("metrics", "指标检查", ["release-metrics:query-version-metrics", "release-metrics:save-metrics-snapshot"]),
         stage("gray-observe", "灰度观察", ["release-gray-observe:observe-gray-dashboard"]),
-        stage("records", "发版记录", ["release-records:append-release-wiki-row", "release-records:record-store-approved", "release-records:record-full-rollout-time"], { optionalNodeIds: ["release-records:record-full-rollout-time"] }),
+        stage("records", "发版记录", ["release-records:append-release-wiki-row", "release-records:record-store-approved", "release-records:record-full-rollout-time"], { optionalNodeIds: ["release-records:record-full-rollout-time"], compositeIds: ["release-summary-record"], defaultCompositeIds: ["release-summary-record"] }),
         stage("notification", "发版通知", ["release-notification:send-notification", "release-notification:send-rollout-notification"]),
       ],
     },
@@ -133,9 +203,24 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
       nodes: freeze(item.nodes.map((node) => freeze({ ...node }))),
       nodeIds: freeze(item.nodes.map((node) => node.id)),
       optionalNodeIds: freeze([...(item.optionalNodeIds || [])]),
+      ...(item.compositeIds != null ? { compositeIds: freeze([...item.compositeIds]) } : {}),
+      ...(item.defaultCompositeIds != null ? { defaultCompositeIds: freeze([...item.defaultCompositeIds]) } : {}),
+    }))),
+  }))),
+  compositeWorkflows: freeze(compositeDefinitions.map((item) => freeze({
+    ...item,
+    businessLines: freeze([...item.businessLines]),
+    platforms: freeze([...item.platforms]),
+    batches: freeze([...item.batches]),
+    actions: freeze(item.actions.map((entry) => freeze({
+      ...entry,
+      ...(entry.inputs && typeof entry.inputs === "object" ? { inputs: freeze({ ...entry.inputs }) } : {}),
+      ...(entry.continueOn ? { continueOn: freeze([...entry.continueOn]) } : {}),
     }))),
   }))),
 });
+
+export const compositeWorkflows = RELEASE_WORKFLOW_CONFIG.compositeWorkflows;
 
 function contextScope(context = {}) {
   return {
@@ -151,6 +236,45 @@ function stageEnabled(item, scope) {
 
 function nodeId(node) {
   return typeof node === "string" ? node : String(node?.id || "").trim();
+}
+
+function compositeActionEntries(composite) {
+  return Array.isArray(composite?.actions) ? composite.actions : [];
+}
+
+function scopeMatches(value, scope) {
+  return Array.isArray(value) && value.map(normalize).includes(scope);
+}
+
+function actionScopeMatches(value, scope) {
+  return !Array.isArray(value) || value.map(normalize).includes(scope);
+}
+
+// 用户需求点: 复合节点和原子节点共用业务线、平台、批次作用域，避免跨平台暴露不可执行流程。
+export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG) {
+  const scope = contextScope(context);
+  const requestedId = String(context.compositeId || context.id || "").trim();
+  const matches = (Array.isArray(config?.compositeWorkflows) ? config.compositeWorkflows : []).filter((item) => (
+    scopeMatches(item?.businessLines, scope.businessLine)
+      && scopeMatches(item?.platforms, scope.platform)
+      && scopeMatches(item?.batches, scope.batch)
+  ));
+  if (requestedId) return matches.find((item) => String(item?.id || "").trim() === requestedId) || null;
+  return matches.find((item) => item?.default === true) || matches[0] || null;
+}
+
+export function compositeActionIds(composite, context = {}) {
+  const scope = contextScope(context);
+  const ids = new Set();
+  for (const entry of compositeActionEntries(composite)) {
+    const id = nodeId(entry);
+    if (!id) continue;
+    if (!actionScopeMatches(entry?.businessLines, scope.businessLine)
+      || !actionScopeMatches(entry?.platforms, scope.platform)
+      || !actionScopeMatches(entry?.batches, scope.batch)) continue;
+    ids.add(id);
+  }
+  return ids;
 }
 
 export function workflowStageNodeIds(stage) {
@@ -204,7 +328,12 @@ export function releaseActionProcessMetadata(actionId, node = {}, config = RELEA
 export function validateReleaseWorkflowConfig(config) {
   const errors = [];
   if (!config || !Array.isArray(config.workflows)) return { valid: false, errors: ["workflows must be an array"] };
+  if (config.compositeWorkflows != null && !Array.isArray(config.compositeWorkflows)) {
+    errors.push("compositeWorkflows must be an array");
+  }
   const workflowIds = new Set();
+  const configuredActionIds = new Set();
+  const compositeIds = new Set();
   for (const workflow of config.workflows) {
     if (!workflow || typeof workflow !== "object") { errors.push("malformed workflow entry"); continue; }
     const workflowId = String(workflow.id || "").trim();
@@ -232,12 +361,66 @@ export function validateReleaseWorkflowConfig(config) {
         if (!id) errors.push(`malformed node entry: ${workflowId}/${stageId}`);
         else if (actionIds.has(id)) errors.push(`duplicate Action reference: ${workflowId}/${id}`);
         actionIds.add(id);
+        configuredActionIds.add(id);
       }
       if (item.optionalNodeIds != null && !Array.isArray(item.optionalNodeIds)) {
         errors.push(`optionalNodeIds must be an array: ${workflowId}/${stageId || "stage"}`);
       } else {
         for (const optionalId of item.optionalNodeIds || []) {
           if (!nodes.some((node) => nodeId(node) === nodeId(optionalId))) errors.push(`invalid optional reference: ${workflowId}/${optionalId}`);
+        }
+      }
+      for (const key of ["compositeIds", "defaultCompositeIds"]) {
+        if (item[key] != null && !Array.isArray(item[key])) {
+          errors.push(`${key} must be an array: ${workflowId}/${stageId || "stage"}`);
+        }
+      }
+    }
+  }
+
+  for (const item of Array.isArray(config.compositeWorkflows) ? config.compositeWorkflows : []) {
+    if (!item || typeof item !== "object") { errors.push("malformed composite workflow entry"); continue; }
+    const id = String(item.id || "").trim();
+    if (!id) errors.push("composite workflow id is required");
+    else if (compositeIds.has(id)) errors.push(`duplicate composite workflow id: ${id}`);
+    compositeIds.add(id);
+    for (const [key, label] of [["businessLines", "business line scope"], ["platforms", "platform scope"], ["batches", "batch scope"]]) {
+      const values = item[key];
+      if (!Array.isArray(values) || values.length === 0 || values.some((value) => !normalize(value))) {
+        errors.push(`${id || "composite workflow"} has empty ${label}`);
+      }
+    }
+    const actions = item.actions;
+    if (!Array.isArray(actions) || actions.length === 0) {
+      errors.push(`${id || "composite workflow"} actions must be a non-empty array`);
+      continue;
+    }
+    const internalIds = new Set();
+    for (const entry of actions) {
+      const actionId = nodeId(entry);
+      if (!actionId) {
+        errors.push(`malformed composite Action entry: ${id || "composite workflow"}`);
+        continue;
+      }
+      if (internalIds.has(actionId)) errors.push(`duplicate internal Action reference: ${id}/${actionId}`);
+      internalIds.add(actionId);
+      if (!configuredActionIds.has(actionId)) errors.push(`unknown composite Action reference: ${id}/${actionId}`);
+    }
+  }
+
+  for (const workflow of config.workflows) {
+    const workflowId = String(workflow?.id || "").trim();
+    for (const item of Array.isArray(workflow?.stages) ? workflow.stages : []) {
+      const stageId = String(item?.id || "").trim();
+      const composites = Array.isArray(item?.compositeIds) ? item.compositeIds : [];
+      const defaults = Array.isArray(item?.defaultCompositeIds) ? item.defaultCompositeIds : [];
+      for (const compositeId of [...composites, ...defaults]) {
+        const normalizedId = String(compositeId || "").trim();
+        if (!compositeIds.has(normalizedId)) errors.push(`invalid composite reference: ${workflowId}/${stageId}/${compositeId}`);
+      }
+      for (const compositeId of defaults) {
+        if (!composites.some((candidate) => String(candidate || "").trim() === String(compositeId || "").trim())) {
+          errors.push(`default composite must be listed in compositeIds: ${workflowId}/${stageId}/${compositeId}`);
         }
       }
     }
