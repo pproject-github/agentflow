@@ -501,6 +501,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         processId: node.processId || item.processId || "",
       };
       let result;
+      let runDetails;
       if (typeof fetch === "function" && node.skill !== "custom") {
         if (node.requiresConfirmation && !item.confirmationFingerprint) {
           const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
@@ -514,7 +515,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         }
         const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        runDetails = payload.details || payload.result?.details || (Array.isArray(payload.result?.steps) ? { steps: payload.result.steps } : undefined);
+        if (!response.ok) {
+          const error = new Error(payload.error || `HTTP ${response.status}`);
+          error.details = runDetails;
+          throw error;
+        }
         // 用户需求点: AgentFlow 返回的 graph 是对象，页面提示和时间线消息必须始终是可渲染文本，不能把运行图对象直接交给 React。
         const rawMessage = payload.message || payload.result?.output || payload.result?.message;
         result = {
@@ -522,7 +528,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           runId: payload.runId,
           message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
           output: payload.result?.output || payload.result?.graph || payload.result,
-          details: compositeDetailsFromResult(payload, node, payload.details || payload.result?.details || {}),
+          details: compositeDetailsFromResult(payload, node, runDetails || {}),
         };
       } else {
         result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
@@ -577,7 +583,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       if (error?.name === "AbortError" || !isCurrentRun()) return;
       setState((previous) => seedNextRecommendations({
         ...previous,
-        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? { ...(entry.details || {}), steps: normalizeCompositeSteps(entry.details?.steps) } : entry.details } : entry),
+        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? compositeDetailsFromResult({ details: error?.details }, node, entry.details || {}) : entry.details } : entry),
       }, [effectiveInitializationNode, ...catalogNodes]));
       setMessage(`${node.title} 执行失败`);
     } finally {
