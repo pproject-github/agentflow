@@ -77,6 +77,7 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(panel, /compositeId: currentItem\.compositeId \|\| node\.compositeId/);
   assert.match(panel, /details:[\s\S]*normalizeCompositeSteps/);
   assert.match(panel, /actionId = node\.sourcePresetId \|\| node\.id/);
+  assert.match(panel, /resumeFromStep: item\.details\?\.steps\?\.find/);
   assert.match(inspector, /内部执行步骤/);
   assert.match(inspector, /compositeSteps\.map/);
   assert.match(inspector, /externalInputSchemaForNode/);

@@ -499,6 +499,9 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         confirmationFingerprint: item.confirmationFingerprint || "",
         scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
         processId: node.processId || item.processId || "",
+        ...(node.kind === "composite" && item.status === "failed"
+          ? { resumeFromStep: item.details?.steps?.find((step) => step.status === "failed")?.stepId || "" }
+          : {}),
       };
       let result;
       let runDetails;
