@@ -23,7 +23,7 @@ success
 
 ## Commit
 
-`2654ede fix(release): constrain workflows and persist action metadata`
+`732b227 fix(release): stamp initialization workflow identity` (含前置 `2654ede` 状态机/路由修复)
 
 ## Cross-file adaptation
 
