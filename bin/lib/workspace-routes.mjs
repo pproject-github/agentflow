@@ -76,8 +76,8 @@ import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspa
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
-import { discoverReleaseActions, filterReleaseActionsForWorkflow, releaseContextKey } from "./release-runtime.mjs";
-import { buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releaseTimingFromResult, stopReleaseAction } from "./release-runtime-executor.mjs";
+import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, releaseContextKey } from "./release-runtime.mjs";
+import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releaseTimingFromResult, stopReleaseAction } from "./release-runtime-executor.mjs";
 import { readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
@@ -1223,7 +1223,9 @@ async function workspaceRoutes(req, res, ctx) {
     try {
       if (req.method === "GET" && url.pathname === "/api/release/catalog") {
         const discoveredNodes = await discoverReleaseActions({ roots, ...context });
-        const nodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
+        const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
+        const compositeNodes = discoverReleaseCompositeActions(context, atomicNodes);
+        const nodes = [...atomicNodes, ...compositeNodes];
         json(res, 200, { ok: true, context, workspaceId, nodes });
         return;
       }
@@ -1257,11 +1259,13 @@ async function workspaceRoutes(req, res, ctx) {
         }
         const actionId = String(payload.actionId || payload.nodeId || "").trim();
         const discoveredNodes = await discoverReleaseActions({ roots, ...requestContext });
-        const nodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
+        const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
+        const compositeNodes = discoverReleaseCompositeActions(requestContext, atomicNodes);
+        const nodes = [...atomicNodes, ...compositeNodes];
         const action = nodes.find((node) => node.id === actionId);
         // 用户需求点: 状态机配置不仅用于推荐，也必须阻止未纳入当前业务/平台流程的节点被执行。
         if (!action) {
-          if (discoveredNodes.some((node) => node.id === actionId) && nodes.length !== discoveredNodes.length) {
+          if (actionId.startsWith("composite:") || (discoveredNodes.some((node) => node.id === actionId) && nodes.length !== discoveredNodes.length)) {
             json(res, 409, { error: "节点未纳入当前业务、平台和批次的发版流程", code: "RELEASE_WORKFLOW_NODE_NOT_ALLOWED" });
             return;
           }
@@ -1283,17 +1287,22 @@ async function workspaceRoutes(req, res, ctx) {
         const runInputs = action.requiresConfirmation && payload.confirmationFingerprint
           ? { ...executionInputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
           : executionInputs;
-        const graph = buildReleaseRunGraph(action, requestContext, runInputs);
+        const graph = action.kind === "composite"
+          ? buildCompositeReleaseRunGraph(action, atomicNodes, requestContext, runInputs)
+          : buildReleaseRunGraph(action, requestContext, runInputs);
+        const graphRunNodeId = action.kind === "composite" ? Object.keys(graph.instances || {})[0] : "release_action";
         if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
-          const previewResult = await runWorkspaceGraph(root, root, {
-            flowId: `release-${requestWorkspaceId}`,
-            flowSource: "user",
-            runNodeId: "release_action",
-            graph,
-            inputs: runInputs,
-            ignoreCache: true,
-          }, userCtx, { runId: `${runId}-preview` });
-          const preview = await previewReleaseAction(action, requestContext, executionInputs);
+          const previewResult = action.kind === "composite"
+            ? { status: "preview", graph }
+            : await runWorkspaceGraph(root, root, {
+              flowId: `release-${requestWorkspaceId}`,
+              flowSource: "user",
+              runNodeId: graphRunNodeId,
+              graph,
+              inputs: runInputs,
+              ignoreCache: true,
+            }, userCtx, { runId: `${runId}-preview` });
+          const preview = await previewReleaseAction(action, requestContext, executionInputs, { atomicNodes });
           json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
@@ -1305,7 +1314,7 @@ async function workspaceRoutes(req, res, ctx) {
         const runPromise = runWorkspaceGraph(root, root, {
           flowId: `release-${requestWorkspaceId}`,
           flowSource: "user",
-          runNodeId: "release_action",
+          runNodeId: graphRunNodeId,
           graph,
           inputs: runInputs,
           ignoreCache: true,
@@ -1314,7 +1323,7 @@ async function workspaceRoutes(req, res, ctx) {
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
           activeReleaseRuns.delete(runId);
-          const preview = await previewReleaseAction(action, requestContext, executionInputs);
+          const preview = await previewReleaseAction(action, requestContext, executionInputs, { atomicNodes });
           json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }

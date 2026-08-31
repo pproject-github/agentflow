@@ -221,3 +221,59 @@ test("release runtime catalog and execution reject actions outside the selected 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("release catalog exposes composites and rejects composites with invalid internal membership", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-composite-api-")));
+  const skillsRoot = path.join(tempRoot, "release-skills");
+  const writeSkill = (skill, action) => {
+    const dir = path.join(skillsRoot, skill, "scripts");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(skillsRoot, skill, "SKILL.md"), `---\nname: ${skill}\nactions:\n  - name: ${action}\n    platforms: [android]\n    requires_confirmation: false\n---\n`);
+    fs.writeFileSync(path.join(dir, "run.py"), "print('ok')\n");
+  };
+  writeSkill("release-localization", "upload-source-file");
+  writeSkill("release-notification", "send-notification");
+  const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+  process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
+  let server;
+  try {
+    const nonce = Date.now();
+    const [{ loginOrCreateUser }, { startUiServer }] = await Promise.all([
+      import(`../bin/lib/auth.mjs?release-composite-api=${nonce}`),
+      import(`../bin/lib/ui-server.mjs?release-composite-api=${nonce}`),
+    ]);
+    const user = loginOrCreateUser("release-composite-owner", "release-password");
+    server = await startUiServer({ workspaceRoot: path.join(tempRoot, "workspace"), host: "127.0.0.1", port: 0, staticDir: path.join(tempRoot, "static"), enableWorkspaceScheduler: false });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
+    const response = await fetch(`${base}/api/release/catalog?businessLine=likee&platform=android&version=5.63.2&batch=initial&workspaceId=release-composite`, { headers });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    const composite = payload.nodes.find((node) => node.id === "composite:localization-upload-notify");
+    assert.ok(composite);
+    assert.equal(composite.kind, "composite");
+    assert.equal(composite.actions.length, 2);
+    const runResponse = await fetch(`${base}/api/release/nodes/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspaceId: "release-composite", businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial", actionId: composite.id, inputs: { source_path: "translations.yml" } }),
+    });
+    const runPayload = await runResponse.json();
+    assert.equal(runResponse.status, 200, JSON.stringify(runPayload));
+    assert.equal(runPayload.status, "completed");
+    assert.deepEqual(runPayload.result.order, ["composite_upload", "composite_notify"]);
+    const invalid = await fetch(`${base}/api/release/nodes/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspaceId: "release-composite", businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial", actionId: "composite:android-channel-packages" }),
+    });
+    const invalidPayload = await invalid.json();
+    assert.equal(invalid.status, 409, JSON.stringify(invalidPayload));
+    assert.equal(invalidPayload.code, "RELEASE_WORKFLOW_NODE_NOT_ALLOWED");
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+    else process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = previousRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

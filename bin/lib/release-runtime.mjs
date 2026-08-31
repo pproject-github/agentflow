@@ -7,6 +7,7 @@ import {
   selectReleaseWorkflow,
   workflowActionIds,
   workflowStageNodeIds,
+  selectReleaseCompositeWorkflow,
 } from "../../shared/release-workflow-config.js";
 
 const DEFAULT_BUSINESS_LINES = ["likee", "bigolive", "hello"];
@@ -385,4 +386,98 @@ export function filterReleaseActionsForWorkflow(nodes = [], context = {}, config
         || Number(a.processOrder || 1000) - Number(b.processOrder || 1000)
         || String(a.id).localeCompare(String(b.id));
     });
+}
+
+// 用户需求点: 复合节点由当前 workflow 配置 materialize，内部每个原子 Action 必须同时存在且受同一业务/平台/批次白名单约束。
+export function discoverReleaseCompositeActions(context = {}, nodes = [], config = RELEASE_WORKFLOW_CONFIG) {
+  const workflow = selectReleaseWorkflow(context, config);
+  if (!workflow) return [];
+  const atomicById = new Map((Array.isArray(nodes) ? nodes : []).filter((node) => node?.id).map((node) => [String(node.id), node]));
+  const result = [];
+  const seen = new Set();
+  const batch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
+  for (const stage of Array.isArray(workflow.stages) ? workflow.stages : []) {
+    if (Array.isArray(stage.batches) && !stage.batches.map((value) => String(value || "").trim().toLowerCase()).includes(batch)) continue;
+    const ids = Array.isArray(stage.compositeIds) ? stage.compositeIds : [];
+    for (const compositeId of ids) {
+      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id }, config);
+      if (!composite || seen.has(composite.id)) continue;
+      const actionEntries = Array.isArray(composite.actions) ? composite.actions : [];
+      const actions = actionEntries.map((entry, index) => {
+        const id = String(entry?.id || entry?.actionId || "").trim();
+        const atomic = atomicById.get(id);
+        return atomic ? {
+          ...atomic,
+          stepId: String(entry.stepId || `step-${index + 1}`),
+          order: index,
+          inputs: entry.inputs && typeof entry.inputs === "object" ? { ...entry.inputs } : {},
+          continueOn: Array.isArray(entry.continueOn) ? [...entry.continueOn] : [],
+          waitFor: entry.waitFor && typeof entry.waitFor === "object" ? { ...entry.waitFor, statuses: Array.isArray(entry.waitFor.statuses) ? [...entry.waitFor.statuses] : [] } : null,
+          forEach: entry.forEach && typeof entry.forEach === "object" ? { ...entry.forEach } : null,
+          requiresConfirmation: entry.requiresConfirmation === true || atomic.requiresConfirmation === true,
+        } : null;
+      });
+      if (actions.some((action) => !action)) continue;
+      const inputSchema = [];
+      const inputKeys = new Set();
+      const internalInputKeys = new Set(actions.flatMap((action) => Object.entries(action.inputs && typeof action.inputs === "object" ? action.inputs : {})
+        .filter(([, mapping]) => mapping && typeof mapping === "object" && String(mapping.fromStep || "").trim())
+        .map(([key]) => key)));
+      for (const action of actions) {
+        for (const input of Array.isArray(action.inputSchema) ? action.inputSchema : []) {
+          const key = String(input?.key || input?.name || "").trim();
+          if (!key || internalInputKeys.has(key) || inputKeys.has(key)) continue;
+          inputKeys.add(key);
+          inputSchema.push({ ...input, key });
+        }
+        const configured = action.inputs && typeof action.inputs === "object" ? action.inputs : {};
+        for (const [key, mapping] of Object.entries(configured)) {
+          if (!key || internalInputKeys.has(key) || inputKeys.has(key)) continue;
+          inputKeys.add(key);
+          const descriptor = { key, label: key.replace(/[_-]+/g, " "), type: "text", required: false };
+          if (mapping && typeof mapping === "object") {
+            if (mapping.context) descriptor.context = String(mapping.context);
+            if (mapping.fromStep) descriptor.fromStep = String(mapping.fromStep);
+          } else if (mapping != null) descriptor.defaultValue = String(mapping);
+          inputSchema.push(descriptor);
+        }
+      }
+      const first = actions[0];
+      const requiresConfirmation = actions.some((action) => action.requiresConfirmation === true);
+      result.push({
+        id: `composite:${composite.id}`,
+        kind: "composite",
+        compositeId: composite.id,
+        title: composite.title,
+        description: composite.description,
+        skill: "release-composite",
+        action: composite.id,
+        category: first.category || "发版阶段",
+        businessLines: [...(composite.businessLines || [])],
+        platforms: [...(composite.platforms || [])],
+        allowedBatches: [...(composite.batches || [])],
+        requiresConfirmation,
+        statusAliases: { ...(config.statusAliases || {}) },
+        acceptsCurrentRelease: actions.every((action) => action.acceptsCurrentRelease !== false),
+        inputSchema,
+        actions,
+        nextNodeIds: [],
+        workflowId: workflow.id,
+        processId: stage.id,
+        processTitle: stage.title,
+        processOrder: Number.isFinite(Number(stage.order)) ? Number(stage.order) : workflow.stages.indexOf(stage),
+        workflowStageId: stage.id,
+        workflowStageTitle: stage.title,
+        workflowStageOrder: workflow.stages.indexOf(stage),
+        workflowActionOrder: 0,
+        contextSnapshot: { ...context },
+        scopeKey: releaseContextKey(context),
+        runnable: actions.every((action) => action.runnable !== false),
+        error: actions.find((action) => action.error)?.error || "",
+        source: { compositeId: composite.id },
+      });
+      seen.add(composite.id);
+    }
+  }
+  return result;
 }

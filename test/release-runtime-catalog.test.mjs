@@ -311,3 +311,30 @@ test("uses generic process metadata when no workflow matches the business line",
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("materializes configured composite nodes with ordered atomic action metadata", async () => {
+  const { discoverReleaseCompositeActions } = await import(`../bin/lib/release-runtime.mjs?composite-catalog=${Date.now()}`);
+  const atomicNodes = [
+    { id: "release-localization:upload-source-file", title: "Upload", inputSchema: [{ key: "source_path", type: "text" }], runnable: true, source: { scriptPath: "/tmp/upload.py" } },
+    { id: "release-notification:send-notification", title: "Notify", inputSchema: [{ key: "event", type: "text" }], runnable: true, source: { scriptPath: "/tmp/notify.py" } },
+  ];
+  const composites = discoverReleaseCompositeActions({ businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" }, atomicNodes);
+  const upload = composites.find((node) => node.id === "composite:localization-upload-notify");
+  assert.ok(upload);
+  assert.equal(upload.kind, "composite");
+  assert.equal(upload.compositeId, "localization-upload-notify");
+  assert.deepEqual(upload.actions.map((step) => step.id), [
+    "release-localization:upload-source-file",
+    "release-notification:send-notification",
+  ]);
+  assert.deepEqual(upload.inputSchema.map((input) => input.key), ["source_path", "event"]);
+  assert.equal(upload.scopeKey, "likee/android/5.63.2/initial");
+});
+
+test("omits a composite from catalog when an internal Action is missing", async () => {
+  const { discoverReleaseCompositeActions } = await import(`../bin/lib/release-runtime.mjs?composite-missing=${Date.now()}`);
+  const composites = discoverReleaseCompositeActions({ businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" }, [
+    { id: "release-localization:upload-source-file", title: "Upload", inputSchema: [], runnable: true, source: { scriptPath: "/tmp/upload.py" } },
+  ]);
+  assert.equal(composites.some((node) => node.id === "composite:localization-upload-notify"), false);
+});
