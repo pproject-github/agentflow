@@ -38,3 +38,9 @@ The brief listed panel/model/store/tests. The shared workflow config and state-m
 
 - Existing dirty changes in other files and generated frontend assets were left untouched.
 - Legacy migration and historical-data compatibility are intentionally deferred while the workflow feature is still under development.
+
+## Final scoped re-review
+
+- Dynamic release catalog now overrides `release-records:append-release-wiki-row` with Android supplemental `gray_percent` validation (`number`, required, integer, 1–100); iOS retains its declared skill schema.
+- Full release test suite: 82 passed, 0 failed.
+- Latest fix commit: `2539801 fix(release): apply supplemental gray input schema`.
