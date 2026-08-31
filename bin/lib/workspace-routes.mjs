@@ -1232,6 +1232,36 @@ function releaseCompositeDetails(action, result) {
   return { steps };
 }
 
+function resumeCompositeReleaseGraph(graph, action, previousSteps = [], resumeFromStep = "") {
+  const start = String(resumeFromStep || "").trim();
+  if (!start || !graph || action?.kind !== "composite" || !Array.isArray(action.actions)) return graph;
+  const startIndex = action.actions.findIndex((entry) => String(entry?.stepId || "") === start);
+  if (startIndex <= 0) return graph;
+  const completed = new Map((Array.isArray(previousSteps) ? previousSteps : [])
+    .filter((step) => step?.stepId && step.status === "completed" && step.output && typeof step.output === "object")
+    .map((step) => [String(step.stepId), step.output]));
+  if (!completed.size) return graph;
+  const skippedIds = new Set(action.actions.slice(0, startIndex).map((entry) => `composite_${entry.stepId}`));
+  const instances = { ...(graph.instances || {}) };
+  for (const id of skippedIds) delete instances[id];
+  for (const entry of action.actions.slice(startIndex)) {
+    const nodeId = `composite_${entry.stepId}`;
+    const instance = instances[nodeId];
+    if (!instance) continue;
+    const input = (Array.isArray(instance.input) ? instance.input : []).map((slot) => ({ ...slot }));
+    for (const [name, mapping] of Object.entries(entry.inputs || {})) {
+      if (!mapping || typeof mapping !== "object" || !skippedIds.has(`composite_${mapping.fromStep}`)) continue;
+      const value = completed.get(String(mapping.fromStep))?.[String(mapping.output || "result")];
+      if (value === undefined) continue;
+      const slot = input.find((item) => String(item?.name || "") === name);
+      if (slot) { slot.value = typeof value === "string" ? value : JSON.stringify(value); slot.default = slot.value; }
+    }
+    instances[nodeId] = { ...instance, input };
+  }
+  const edges = (Array.isArray(graph.edges) ? graph.edges : []).filter((edge) => !skippedIds.has(String(edge?.source || "")) && !skippedIds.has(String(edge?.target || "")));
+  return { ...graph, instances, edges, meta: { ...(graph.meta || {}), resumeFromStep: start } };
+}
+
 function releaseRunId() {
   return `release-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
 }
@@ -1333,6 +1363,14 @@ async function workspaceRoutes(req, res, ctx) {
         const graph = action.kind === "composite"
           ? buildCompositeReleaseRunGraph(action, atomicNodes, requestContext, runInputs)
           : buildReleaseRunGraph(action, requestContext, runInputs);
+        if (action.kind === "composite" && payload.resumeFromStep) {
+          const previousState = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
+          const previousItem = previousState.pending.find((item) => item.id === payload.itemId)
+            || previousState.runs?.[String(payload.runId || "")]
+            || {};
+          const resumedGraph = resumeCompositeReleaseGraph(graph, action, previousItem.details?.steps, payload.resumeFromStep);
+          Object.assign(graph, resumedGraph);
+        }
         const graphRunNodeId = action.kind === "composite" ? Object.keys(graph.instances || {})[0] : "release_action";
         if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
           const previewResult = action.kind === "composite"
