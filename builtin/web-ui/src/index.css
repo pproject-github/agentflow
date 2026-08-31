@@ -29892,6 +29892,27 @@ body:has(.af-public-display-page--canvas) {
 .af-marketplace-preview-project-modal { width: min(520px, calc(100vw - 36px)); }
 .af-marketplace-preview-project-hint { margin: 0 0 14px; color: #91899a; font-size: 11px; line-height: 1.55; }
 
+.af-releases-page { max-width: 1240px; margin: 0 auto; padding: 52px 52px 72px; color: #eeeaf5; }
+.af-releases-header { display:flex; justify-content:space-between; align-items:flex-end; gap:36px; margin-bottom:28px; }
+.af-releases-header h1 { margin:7px 0 8px; font-size:36px; letter-spacing:-.03em; }.af-releases-header p:last-child { margin:0; color:#918b9e; font-size:13px; }
+.af-page-eyebrow { margin:0; color:#9278df; font:700 11px ui-monospace,monospace; letter-spacing:.14em; }
+.af-releases-actions { display:flex; gap:10px; }.af-releases-actions button { display:inline-flex; align-items:center; gap:7px; padding:11px 15px; border-radius:9px; cursor:pointer; transition:transform .15s,background .15s; }.af-releases-actions button:hover { transform:translateY(-1px); }.af-secondary-btn { color:#d4ccdf; border:1px solid #464051; background:#292631; }.af-primary-btn { color:white; border:1px solid #7659c5; background:#6046a5; box-shadow:0 5px 18px rgba(96,70,165,.2); }
+.af-release-select { display:flex; align-items:center; gap:7px; min-height:42px; padding:0 11px; color:#d4ccdf; border:1px solid #464051; border-radius:9px; background:#292631; font-size:12px; }.af-release-select > span:nth-child(2) { color:#898294; }.af-release-select .material-symbols-outlined { font-size:18px; }.af-release-select select { min-width:82px; padding:8px 24px 8px 5px; color:#eeeaf5; border:0; outline:0; background:transparent; font:inherit; cursor:pointer; }
+.af-release-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:30px; }.af-release-summary div { display:flex; flex-direction:column; gap:9px; padding:16px 18px; border:1px solid #373341; border-radius:11px; background:linear-gradient(145deg,#27242e,#211f27); }.af-release-summary span { color:#898294; font-size:11px; }.af-release-summary strong { font-size:22px; letter-spacing:-.02em; }.af-releases-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }.af-releases-toolbar small { color:#898294; font-size:12px; font-weight:400; }.af-releases-toolbar label { display:flex; align-items:center; gap:8px; padding:9px 12px; border:1px solid #3d3848; border-radius:8px; background:#211f27; }.af-releases-toolbar input { width:170px; color:#eee; border:0; outline:0; background:transparent; }.af-release-table { overflow:hidden; border:1px solid #393443; border-radius:12px; background:#211f27; }.af-release-row { display:grid; grid-template-columns:1.2fr 1fr 2fr 1fr; align-items:center; gap:20px; min-height:76px; padding:0 22px; border-top:1px solid #35313e; transition:background .15s; width:100%; box-sizing:border-box; text-align:left; color:inherit; font:inherit; }.af-release-row:not(.af-release-row--head):hover { background:#292631; }.af-release-row--head { min-height:42px; color:#817a8e; border-top:0; font-size:11px; }.af-release-row strong { font-size:17px; }.af-release-progress { display:flex; align-items:center; gap:12px; }.af-release-progress > div { height:7px; flex:1; overflow:hidden; border-radius:99px; background:#3b3546; }.af-release-progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#7759ce,#a48ae9); }.af-release-progress b { width:38px; color:#c7b9ec; font-size:12px; }.af-release-status { justify-self:start; padding:5px 10px; border-radius:99px; font-size:11px; }.af-release-status.is-green { color:#9ce0bf; background:#193d32; }.af-release-status.is-blue { color:#a9caff; background:#1c3150; }.af-release-status.is-purple { color:#cebdf4; background:#33264e; }.af-release-empty { padding:48px; color:#8f899d; text-align:center; }
+button.af-release-row { appearance:none; border-left:0; border-right:0; border-bottom:0; background:transparent; cursor:pointer; }
+.af-settings-crumb-link { appearance: none; border: 0; background: transparent; color: var(--af-on-surface-variant, #918b9e); font: inherit; cursor: pointer; padding: 0; }
+.af-settings-crumb-link:hover { color: var(--af-on-surface, #e5e2e1); }
+@media (max-width: 800px) { .af-releases-page { padding:28px 20px; } .af-releases-header { align-items:flex-start; flex-direction:column; } .af-release-summary { grid-template-columns:repeat(2,1fr); } .af-release-row { grid-template-columns:1fr 1fr; gap:8px 16px; padding:14px 16px; } .af-release-row--head { display:none; } .af-release-progress { grid-column:1 / -1; } }
+.af-release-create-modal { width:min(420px,calc(100vw - 36px)); padding:24px; border:1px solid #4a405e; border-radius:14px; background:#24212c; box-shadow:0 24px 80px #0008; }.af-release-create-modal h2 { margin:0 0 5px; }.af-release-create-modal p { margin:0 0 20px; color:#918b9e; }.af-release-create-modal label { display:grid; gap:7px; margin-top:14px; color:#b9b1c7; font-size:12px; }.af-release-create-modal input { padding:11px; color:#eee; border:1px solid #484052; border-radius:8px; background:#1d1a23; outline:0; }.af-release-create-modal footer { display:flex; justify-content:flex-end; gap:9px; margin-top:24px; }
+.af-modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(8, 7, 11, .72); backdrop-filter: blur(3px); box-sizing: border-box; }
+@media (max-width: 800px) { .af-release-table { overflow-x: auto; } .af-release-row { min-width: 680px; } .af-release-row--head { min-width: 680px; } }
+
+/* Release page uses the full content canvas on wide screens. */
+@media (min-width: 801px) {
+  .af-releases-page { width: 100%; max-width: none; margin: 0; padding-left: clamp(28px, 4vw, 72px); padding-right: clamp(28px, 4vw, 72px); box-sizing: border-box; }
+  .af-release-row { grid-template-columns: minmax(180px, 1.1fr) minmax(150px, .9fr) minmax(280px, 2.4fr) minmax(120px, .7fr); gap: 28px; padding-left: 28px; padding-right: 28px; }
+}
+
 @media (max-width: 760px) {
   .af-marketplace-hero { align-items: stretch; flex-direction: column; }
   .af-marketplace-search { width: auto; }
@@ -30484,6 +30505,7 @@ body:has(.af-public-display-page--canvas) {
   .af-release-completed-row.is-reverse .af-release-completed-turn { display: none; }
   .af-release-group-bridge { min-height: 4.5rem; }
   .af-release-group-bridge span { left: calc(50% + 1.8rem); }
+}
 
 .af-legacy-link-card { gap: 18px; }
 .af-legacy-link-linked,

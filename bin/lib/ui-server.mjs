@@ -156,6 +156,7 @@ import {
 } from "./prd-workflow-server.mjs";
 import { handlePrdWorkflowRoutes } from "./prd-workflow-routes.mjs";
 import { json, readBody } from "./http-util.mjs";
+import { createReleaseQueued, listReleases, PROJECTS as RELEASE_PROJECTS, PLATFORMS as RELEASE_PLATFORMS } from "./release-registry.mjs";
 
 // 从 ui-server 拆出去的 Workspace 子系统；路由仍在下面的 startUiServer 里
 import {
@@ -2991,6 +2992,44 @@ export function startUiServer({
         }
         markRepositoryIndexDirty(root);
         json(res, 200, { ...linked, transferredProjects: reassigned.transferredProjects, projects: reassigned.projects });
+        return;
+      }
+      json(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    // 用户需求点: 发版页面必须使用后端持久化数据，并支持固定项目/平台筛选和新建版本。
+    if (url.pathname === "/api/releases" || url.pathname === "/api/release/projects") {
+      if (req.method === "GET") {
+        if (url.pathname === "/api/release/projects") {
+          json(res, 200, { projects: RELEASE_PROJECTS, platforms: RELEASE_PLATFORMS });
+          return;
+        }
+        json(res, 200, {
+          releases: listReleases({
+            project: url.searchParams.get("project"),
+            platform: url.searchParams.get("platform"),
+            query: url.searchParams.get("query"),
+            userId: userCtx.userId,
+            isAdmin: Boolean(authUser?.isAdmin),
+          }),
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/releases") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const result = await createReleaseQueued({ ...(payload || {}), ownerId: userCtx.userId });
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        json(res, 201, { ok: true, release: result.release });
         return;
       }
       json(res, 405, { error: "Method not allowed" });

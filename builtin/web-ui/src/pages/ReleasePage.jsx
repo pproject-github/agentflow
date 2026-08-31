@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReleaseWorkflowPanel from "../components/ReleaseWorkflowPanel.jsx";
 import { resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
+import { useRoute } from "../routeContext.jsx";
 
 function readSearch() {
   return typeof window === "undefined" ? "" : window.location.search;
@@ -22,6 +23,7 @@ function buildReleaseSearch({ businessLine, platform, version, batch, workspaceI
 }
 
 export default function ReleasePage({ authUser }) {
+  const { navigate } = useRoute();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [builtins, setBuiltins] = useState([]);
@@ -171,7 +173,11 @@ export default function ReleasePage({ authUser }) {
         <div className="af-settings-crumb" aria-label="发版">
           <span className="af-settings-crumb-muted">AgentFlow</span>
           <span className="af-settings-crumb-sep" aria-hidden>/</span>
-          <span className="af-settings-crumb-active">发版</span>
+          <button type="button" className="af-settings-crumb-link" onClick={() => navigate("/releases")}>
+            发版
+          </button>
+          <span className="af-settings-crumb-sep" aria-hidden>/</span>
+          <span className="af-settings-crumb-active">流程</span>
         </div>
         <form className="af-release-version-switcher" onSubmit={commitVersionNavigation}>
           <label>

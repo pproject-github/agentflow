@@ -18,6 +18,7 @@ import NodeStudioPage from "./pages/NodeStudioPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import ReleasePage from "./pages/ReleasePage.jsx";
 import WorkflowsPage from "./pages/WorkflowsPage.jsx";
+import ReleasesPage from "./pages/ReleasesPage.jsx";
 import WorkflowReportGuidePage from "./pages/WorkflowReportGuidePage.jsx";
 import WorkflowChecklistPage from "./pages/WorkflowChecklistPage.jsx";
 import LikeeContextPage from "./pages/LikeeContextPage.jsx";
@@ -73,6 +74,23 @@ function RedirectLegacyResourceToMarketplace({ kind, scope }) {
   return null;
 }
 
+/** 旧深链 `/releases?businessLine&platform&version` 转到流程页；列表页本身不带这些参数。 */
+function ReleasesEntry({ authUser }) {
+  const { navigate } = useRoute();
+  const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+  const hasWorkflowContext = Boolean(
+    params.get("businessLine") || params.get("platform") || params.get("version") || params.get("batch") || params.get("workspaceId"),
+  );
+
+  useEffect(() => {
+    if (!hasWorkflowContext) return;
+    navigate(`/releases/run${window.location.search || ""}`);
+  }, [hasWorkflowContext, navigate]);
+
+  if (hasWorkflowContext) return null;
+  return <ReleasesPage authUser={authUser} />;
+}
+
 class UiErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -120,7 +138,8 @@ function RoutedContent({ authUser }) {
   if (path === "/my-flows") return <RedirectLegacyResourceToMarketplace kind="flow" scope="owned" />;
   if (path === "/skills") return <ProjectsPage authUser={authUser} resourceKind="skills" />;
   if (path === "/workspaces") return <WorkspacesPage authUser={authUser} />;
-  if (path === "/releases") return <ReleasePage authUser={authUser} />;
+  if (path === "/releases") return <ReleasesEntry authUser={authUser} />;
+  if (path === "/releases/run") return <ReleasePage authUser={authUser} />;
   if (path === "/workflows") return <WorkflowsPage authUser={authUser} />;
   if (path === "/workflow-report") return <WorkflowReportGuidePage />;
   if (path === "/workflow-checklist") return <WorkflowChecklistPage />;
