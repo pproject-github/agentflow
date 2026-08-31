@@ -1,4 +1,5 @@
 import { createReleaseProcessStateMachine, deriveProcessStates, deriveWorkflowCursor, processTitleForId, recommendNextProcessNodes } from "./releaseWorkflowStateMachine.js";
+import { selectReleaseWorkflow } from "../../../../shared/release-workflow-config.js";
 
 function workspaceValue(workspace) {
   if (typeof workspace === "string") return workspace;
@@ -55,6 +56,7 @@ export function createInitializationNode(context = {}, workspace) {
     version,
     workspace: workspaceValue(workspace),
   };
+  const workflow = selectReleaseWorkflow(context);
   if (context.batch) inputs.batch = batch;
   return {
     id: "release-initialization",
@@ -70,7 +72,7 @@ export function createInitializationNode(context = {}, workspace) {
     inputs,
     contextSnapshot: { ...inputs },
     scopeKey: `${businessLine}/${platform}/${version}/${batch}`,
-    workflowId: "",
+    workflowId: workflow?.id || "",
   };
 }
 
