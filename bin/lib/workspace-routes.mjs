@@ -1354,6 +1354,8 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         const controller = new AbortController();
+        const executionStartedAt = Date.now();
+        const runEvents = [];
         const runPromise = runWorkspaceGraph(root, root, {
           flowId: `release-${requestWorkspaceId}`,
           flowSource: "user",
@@ -1361,7 +1363,7 @@ async function workspaceRoutes(req, res, ctx) {
           graph,
           inputs: runInputs,
           ignoreCache: true,
-        }, userCtx, { signal: controller.signal, runId });
+        }, userCtx, { signal: controller.signal, runId, onEvent: (event) => runEvents.push(event) });
         activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, action, inputs });
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
@@ -1370,7 +1372,47 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
-        const result = await runPromise;
+        let result;
+        try {
+          result = await runPromise;
+        } catch (error) {
+          activeReleaseRuns.delete(runId);
+          const failedState = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
+          const failedTiming = releaseTimingFromResult({ events: runEvents }, executionStartedAt);
+          const failedDetails = releaseCompositeDetails(action, { events: runEvents, graph });
+          const existing = failedState.pending.find((item) => item.id === payload.itemId) || {};
+          const failedItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: action.processId || "other",
+            processOrder: action.processOrder,
+            processTitle: action.processTitle || action.processId || "other",
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "failed",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...failedTiming,
+            failedAt: failedTiming.completedAt,
+            error: String(error?.message || error || "执行失败"),
+            output: { events: runEvents },
+            ...(failedDetails ? { details: failedDetails } : {}),
+          };
+          failedState.pending = [...failedState.pending.filter((item) => item.id !== failedItem.id), failedItem];
+          failedState.runs[runId] = { ...failedItem, logs: runEvents };
+          writeReleaseState(root, requestContext, requestWorkspaceId, failedState);
+          json(res, 422, { ok: false, status: "failed", code: "RELEASE_EXECUTION_FAILED", error: failedItem.error, runId, result: failedItem.output, ...(failedDetails ? { details: failedDetails } : {}), state: failedState });
+          return;
+        }
         activeReleaseRuns.delete(runId);
         const state = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
         const timing = releaseTimingFromResult(result);
