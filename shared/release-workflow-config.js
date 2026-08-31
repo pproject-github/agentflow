@@ -95,10 +95,10 @@ const compositeDefinitions = [
     ["android", "ios"],
     ["initial", "supplemental"],
     [
-      { id: "release-localization:upload-source-file", continueOn: ["completed"] },
-      { id: "release-notification:send-notification", inputs: { event: "localization-uploaded" } },
+      { stepId: "upload", id: "release-localization:upload-source-file", inputs: { source_path: { context: "source_path" } }, continueOn: ["completed"] },
+      { stepId: "notify", id: "release-notification:send-notification", inputs: { event: "localization-uploaded", source_record_id: { fromStep: "upload", output: "record_id" } }, waitFor: { step: "upload", statuses: ["completed", "confirmed"] } },
     ],
-    { default: true },
+    { default: true, stageIds: ["localization"], intent: "upload", consumesAtomicActionIds: ["release-localization:upload-source-file", "release-notification:send-notification"] },
   ),
   composite(
     "localization-download-merge-notify",
@@ -108,12 +108,12 @@ const compositeDefinitions = [
     ["android", "ios"],
     ["initial", "supplemental"],
     [
-      { id: "release-localization:prepare-translation-archive", continueOn: ["completed"] },
-      { id: "release-localization:apply-translations", continueOn: ["completed"] },
-      { id: "release-localization:commit-localization-changes", continueOn: ["completed"] },
-      { id: "release-notification:send-notification", inputs: { event: "localization-applied" } },
+      { stepId: "prepare", id: "release-localization:prepare-translation-archive", inputs: {}, continueOn: ["completed"] },
+      { stepId: "apply", id: "release-localization:apply-translations", inputs: { prepare_record_id: { fromStep: "prepare", output: "record_id" } }, requiresConfirmation: true, waitFor: { step: "prepare", statuses: ["completed", "confirmed"] }, continueOn: ["completed", "confirmed"] },
+      { stepId: "commit", id: "release-localization:commit-localization-changes", inputs: { apply_record_id: { fromStep: "apply", output: "record_id" } }, requiresConfirmation: true, continueOn: ["merged", "confirmed"] },
+      { stepId: "notify", id: "release-notification:send-notification", inputs: { event: "localization-applied", source_record_id: { fromStep: "commit", output: "record_id" }, merge_request_url: { fromStep: "commit", output: "operator_url" } }, waitFor: { step: "commit", statuses: ["merged", "confirmed"] }, requiresConfirmation: true },
     ],
-    { default: true },
+    { default: true, stageIds: ["localization"], intent: "download", consumesAtomicActionIds: ["release-localization:prepare-translation-archive", "release-localization:apply-translations", "release-localization:commit-localization-changes", "release-notification:send-notification"] },
   ),
   composite(
     "release-summary-record",
@@ -123,10 +123,10 @@ const compositeDefinitions = [
     ["android", "ios"],
     ["initial", "supplemental"],
     [
-      { id: "release-records:compose-update-summary", continueOn: ["completed"] },
-      { id: "release-records:append-release-wiki-row" },
+      { stepId: "summary", id: "release-records:compose-update-summary", inputs: { as_of_date: { context: "as_of_date" }, include_git_summary: { context: "include_git_summary" } }, continueOn: ["completed", "confirmed"] },
+      { stepId: "wiki", id: "release-records:append-release-wiki-row", inputs: { updates_text: { fromStep: "summary", output: "updates_text" } }, requiresConfirmation: true, waitFor: { step: "summary", statuses: ["confirmed"] } },
     ],
-    { default: true },
+    { default: true, stageIds: ["records"], intent: "summary", consumesAtomicActionIds: ["release-records:compose-update-summary", "release-records:append-release-wiki-row"] },
   ),
   composite(
     "android-channel-packages",
@@ -136,11 +136,11 @@ const compositeDefinitions = [
     ["android"],
     ["initial", "supplemental"],
     [
-      { id: "release-channel-packages:plan-channel-packages", continueOn: ["completed"] },
-      { id: "release-channel-packages:trigger-channel-packages-batch", continueOn: ["completed"] },
-      { id: "release-channel-packages:refresh-channel-package-build" },
+      { stepId: "plan", id: "release-channel-packages:plan-channel-packages", inputs: { build_number: { context: "build_number" } }, continueOn: ["completed"] },
+      { stepId: "trigger", id: "release-channel-packages:trigger-channel-packages-batch", inputs: {}, requiresConfirmation: true, continueOn: ["completed"] },
+      { stepId: "refresh", id: "release-channel-packages:refresh-channel-package-build", inputs: {}, forEach: { source: "planned_items", expectedCount: 6, itemInput: "item_id" } },
     ],
-    { default: true },
+    { default: true, stageIds: ["channel-packages"], intent: "channel-packages", expectedCount: 6, consumesAtomicActionIds: ["release-channel-packages:plan-channel-packages", "release-channel-packages:trigger-channel-packages-batch", "release-channel-packages:refresh-channel-package-build"] },
   ),
 ];
 
@@ -149,6 +149,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
   processTitles: freeze({ ...processTitles }),
   skillProcessMap: freeze({ ...skillProcessMap }),
   actionOrder: freeze({ ...actionOrder }),
+  statusAliases: freeze({ succeeded: "completed", managed_mr_merged: "merged" }),
   workflows: freeze([
     {
       id: "likee-android-release",
@@ -214,9 +215,13 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     batches: freeze([...item.batches]),
     actions: freeze(item.actions.map((entry) => freeze({
       ...entry,
-      ...(entry.inputs && typeof entry.inputs === "object" ? { inputs: freeze({ ...entry.inputs }) } : {}),
+      ...(entry.inputs && typeof entry.inputs === "object" ? { inputs: freeze(Object.fromEntries(Object.entries(entry.inputs).map(([key, value]) => [key, value && typeof value === "object" ? freeze({ ...value }) : value]))) } : {}),
       ...(entry.continueOn ? { continueOn: freeze([...entry.continueOn]) } : {}),
+      ...(entry.waitFor && typeof entry.waitFor === "object" ? { waitFor: freeze({ ...entry.waitFor, statuses: freeze([...(entry.waitFor.statuses || [])]) }) } : {}),
+      ...(entry.forEach && typeof entry.forEach === "object" ? { forEach: freeze({ ...entry.forEach }) } : {}),
     }))),
+    ...(item.stageIds ? { stageIds: freeze([...item.stageIds]) } : {}),
+    ...(item.consumesAtomicActionIds ? { consumesAtomicActionIds: freeze([...item.consumesAtomicActionIds]) } : {}),
   }))),
 });
 
@@ -254,18 +259,37 @@ function actionScopeMatches(value, scope) {
 export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const scope = contextScope(context);
   const requestedId = String(context.compositeId || context.id || "").trim();
+  const stageId = String(context.stageId || "").trim();
+  const intent = String(context.intent || "").trim().toLowerCase();
   const matches = (Array.isArray(config?.compositeWorkflows) ? config.compositeWorkflows : []).filter((item) => (
     scopeMatches(item?.businessLines, scope.businessLine)
       && scopeMatches(item?.platforms, scope.platform)
       && scopeMatches(item?.batches, scope.batch)
+      && (!stageId || (Array.isArray(item?.stageIds) && item.stageIds.includes(stageId)))
+      && (!intent || normalize(item?.intent) === intent)
   ));
   if (requestedId) return matches.find((item) => String(item?.id || "").trim() === requestedId) || null;
-  return matches.find((item) => item?.default === true) || matches[0] || null;
+  const defaults = matches.filter((item) => item?.default === true);
+  return defaults.length === 1 ? defaults[0] : (matches.length === 1 ? matches[0] : null);
+}
+
+// 用户需求点: 阶段有多个默认复合流程时必须由阶段引用和操作意图消歧，不能静默执行错误流程。
+export function selectReleaseCompositeForStage(context = {}, stage = {}, config = RELEASE_WORKFLOW_CONFIG) {
+  const ids = Array.isArray(stage?.defaultCompositeIds) ? stage.defaultCompositeIds : (Array.isArray(stage?.compositeIds) ? stage.compositeIds : []);
+  const candidates = ids
+    .map((id) => selectReleaseCompositeWorkflow({ ...context, compositeId: id, stageId: stage?.id }, config))
+    .filter(Boolean);
+  const intent = String(context.intent || "").trim().toLowerCase();
+  const matching = intent ? candidates.filter((item) => normalize(item.intent) === intent) : candidates;
+  return matching.length === 1 ? matching[0] : null;
 }
 
 export function compositeActionIds(composite, context = {}) {
   const scope = contextScope(context);
   const ids = new Set();
+  if (!scopeMatches(composite?.businessLines, scope.businessLine)
+    || !scopeMatches(composite?.platforms, scope.platform)
+    || !scopeMatches(composite?.batches, scope.batch)) return ids;
   for (const entry of compositeActionEntries(composite)) {
     const id = nodeId(entry);
     if (!id) continue;
@@ -396,6 +420,7 @@ export function validateReleaseWorkflowConfig(config) {
       continue;
     }
     const internalIds = new Set();
+    const stepIds = new Set();
     for (const entry of actions) {
       const actionId = nodeId(entry);
       if (!actionId) {
@@ -405,7 +430,57 @@ export function validateReleaseWorkflowConfig(config) {
       if (internalIds.has(actionId)) errors.push(`duplicate internal Action reference: ${id}/${actionId}`);
       internalIds.add(actionId);
       if (!configuredActionIds.has(actionId)) errors.push(`unknown composite Action reference: ${id}/${actionId}`);
+      const compatibleWorkflow = config.workflows.some((workflow) => {
+        const workflowActions = new Set((Array.isArray(workflow?.stages) ? workflow.stages : []).flatMap((candidateStage) => {
+          const candidateNodes = Array.isArray(candidateStage?.nodes) ? candidateStage.nodes : candidateStage?.nodeIds;
+          return Array.isArray(candidateNodes) ? candidateNodes.map(nodeId) : [];
+        }));
+        const businessOverlap = Array.isArray(item.businessLines) && Array.isArray(workflow.businessLines)
+          && item.businessLines.some((value) => workflow.businessLines.map(normalize).includes(normalize(value)));
+        const platformOverlap = Array.isArray(item.platforms) && Array.isArray(workflow.platforms)
+          && item.platforms.some((value) => workflow.platforms.map(normalize).includes(normalize(value)));
+        const batchCoverage = Array.isArray(item.batches) && Array.isArray(workflow.batches)
+          && item.batches.every((value) => workflow.batches.map(normalize).includes(normalize(value)));
+        return workflowActions.has(actionId) && businessOverlap && platformOverlap && batchCoverage;
+      });
+      if (!compatibleWorkflow) errors.push(`composite Action workflow scope mismatch: ${id}/${actionId}`);
+      const stepId = String(entry?.stepId || "").trim();
+      if (!stepId) errors.push(`composite Action stepId is required: ${id}/${actionId}`);
+      else if (stepIds.has(stepId)) errors.push(`duplicate composite stepId: ${id}/${stepId}`);
+      stepIds.add(stepId);
+      if (!entry?.inputs || typeof entry.inputs !== "object" || Array.isArray(entry.inputs)) {
+        errors.push(`composite Action inputs must be an object: ${id}/${stepId || actionId}`);
+      } else {
+        for (const [inputName, mapping] of Object.entries(entry.inputs)) {
+          if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) continue;
+          const fromStep = String(mapping.fromStep || "").trim();
+          const contextKey = String(mapping.context || "").trim();
+          if (fromStep && !actions.some((candidate) => String(candidate?.stepId || "").trim() === fromStep)) {
+            errors.push(`unknown input source step: ${id}/${stepId}/${inputName}/${fromStep}`);
+          }
+          if (!fromStep && !contextKey && Object.keys(mapping).length > 0) {
+            errors.push(`invalid input mapping: ${id}/${stepId}/${inputName}`);
+          }
+        }
+      }
+      if (entry?.continueOn != null && (!Array.isArray(entry.continueOn) || entry.continueOn.length === 0)) {
+        errors.push(`continueOn must be a non-empty array: ${id}/${stepId || actionId}`);
+      }
+      if (entry?.waitFor != null) {
+        const waitFor = entry.waitFor;
+        const waitStep = String(waitFor?.step || "").trim();
+        if (!waitStep || !actions.some((candidate) => String(candidate?.stepId || "").trim() === waitStep)) errors.push(`unknown waitFor step: ${id}/${stepId || actionId}/${waitStep}`);
+        if (!Array.isArray(waitFor?.statuses) || waitFor.statuses.length === 0) errors.push(`waitFor statuses must be a non-empty array: ${id}/${stepId || actionId}`);
+      }
+      if (entry?.forEach != null) {
+        if (!entry.forEach || typeof entry.forEach !== "object" || !String(entry.forEach.source || "").trim()) errors.push(`forEach source is required: ${id}/${stepId || actionId}`);
+        if (!Number.isInteger(Number(entry.forEach.expectedCount)) || Number(entry.forEach.expectedCount) < 1) errors.push(`forEach expectedCount must be positive: ${id}/${stepId || actionId}`);
+        if (!String(entry.forEach.itemInput || "").trim()) errors.push(`forEach itemInput is required: ${id}/${stepId || actionId}`);
+      }
     }
+    if (item.expectedCount != null && (!Number.isInteger(Number(item.expectedCount)) || Number(item.expectedCount) < 1)) errors.push(`expectedCount must be positive: ${id}`);
+    if (item.stageIds != null && (!Array.isArray(item.stageIds) || item.stageIds.length === 0)) errors.push(`stageIds must be a non-empty array: ${id}`);
+    if (item.consumesAtomicActionIds != null && !Array.isArray(item.consumesAtomicActionIds)) errors.push(`consumesAtomicActionIds must be an array: ${id}`);
   }
 
   for (const workflow of config.workflows) {
@@ -417,6 +492,24 @@ export function validateReleaseWorkflowConfig(config) {
       for (const compositeId of [...composites, ...defaults]) {
         const normalizedId = String(compositeId || "").trim();
         if (!compositeIds.has(normalizedId)) errors.push(`invalid composite reference: ${workflowId}/${stageId}/${compositeId}`);
+        const composite = (Array.isArray(config.compositeWorkflows) ? config.compositeWorkflows : []).find((candidate) => String(candidate?.id || "").trim() === normalizedId);
+        if (composite) {
+          const workflowScope = { businessLines: workflow.businessLines, platforms: workflow.platforms, batches: workflow.batches };
+          const stageBatches = Array.isArray(item.batches) ? item.batches : workflow.batches;
+          const intersects = [
+            [composite.businessLines, workflowScope.businessLines],
+            [composite.platforms, workflowScope.platforms],
+            [composite.batches, stageBatches],
+          ].every(([left, right]) => Array.isArray(left) && Array.isArray(right) && left.some((value) => right.map(normalize).includes(normalize(value))));
+          if (!intersects) errors.push(`composite scope does not intersect workflow/stage: ${workflowId}/${stageId}/${normalizedId}`);
+          if (!Array.isArray(composite.stageIds) || !composite.stageIds.includes(stageId)) errors.push(`composite stageIds must include referenced stage: ${workflowId}/${stageId}/${normalizedId}`);
+          const consumed = Array.isArray(composite.consumesAtomicActionIds) ? composite.consumesAtomicActionIds : [];
+          const workflowNodes = new Set((Array.isArray(workflow.stages) ? workflow.stages : []).flatMap((candidateStage) => {
+            const candidateNodes = Array.isArray(candidateStage?.nodes) ? candidateStage.nodes : candidateStage?.nodeIds;
+            return Array.isArray(candidateNodes) ? candidateNodes.map(nodeId) : [];
+          }));
+          for (const consumedId of consumed) if (!workflowNodes.has(nodeId(consumedId))) errors.push(`composite replacement must reference workflow Action: ${workflowId}/${stageId}/${normalizedId}/${consumedId}`);
+        }
       }
       for (const compositeId of defaults) {
         if (!composites.some((candidate) => String(candidate || "").trim() === String(compositeId || "").trim())) {

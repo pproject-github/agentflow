@@ -7,6 +7,7 @@ import {
   workflowActionIds,
   compositeWorkflows,
   selectReleaseCompositeWorkflow,
+  selectReleaseCompositeForStage,
   compositeActionIds,
   validateReleaseWorkflowConfig,
   releaseActionProcessMetadata,
@@ -114,7 +115,7 @@ test("selects a scoped composite workflow and preserves ordered internal Actions
   });
   assert.equal(composite.id, "localization-download-merge-notify");
   assert.equal(composite.default, true);
-  assert.deepEqual([...compositeActionIds(composite, { platform: "android", batch: "initial" })], [
+  assert.deepEqual([...compositeActionIds(composite, { businessLine: "likee", platform: "android", batch: "initial" })], [
     "release-localization:prepare-translation-archive",
     "release-localization:apply-translations",
     "release-localization:commit-localization-changes",
@@ -141,6 +142,12 @@ test("filters composite workflows by platform and batch scope", () => {
     batch: "initial",
     compositeId: "localization-upload-notify",
   }), null);
+});
+
+test("compositeActionIds returns no Actions when the composite scope does not match context", () => {
+  const androidComposite = compositeWorkflows.find((item) => item.id === "android-channel-packages");
+  assert.deepEqual([...compositeActionIds(androidComposite, { businessLine: "likee", platform: "ios", batch: "initial" })], []);
+  assert.ok(compositeActionIds(androidComposite, { businessLine: "likee", platform: "android", batch: "initial" }).size > 0);
 });
 
 test("rejects duplicate and unknown internal composite Actions", () => {
@@ -180,6 +187,111 @@ test("references default composites from Android and iOS localization and channe
   assert.deepEqual(channel.defaultCompositeIds, ["android-channel-packages"]);
   assert.deepEqual(channel.compositeIds, channel.defaultCompositeIds);
   assert.equal(ios.stages.some((stage) => stage.defaultCompositeIds?.includes("android-channel-packages")), false);
+});
+
+test("selects a default composite by stage and intent without guessing between multiple defaults", () => {
+  const stage = RELEASE_WORKFLOW_CONFIG.workflows.find((workflow) => workflow.id === "likee-android-release")
+    .stages.find((item) => item.id === "localization");
+  assert.equal(selectReleaseCompositeWorkflow({ businessLine: "likee", platform: "android", batch: "initial" }), null);
+  assert.equal(selectReleaseCompositeForStage({ businessLine: "likee", platform: "android", batch: "initial", intent: "upload" }, stage)?.id, "localization-upload-notify");
+  assert.equal(selectReleaseCompositeForStage({ businessLine: "likee", platform: "android", batch: "initial", intent: "download" }, stage)?.id, "localization-download-merge-notify");
+});
+
+test("declares consumed atomic Actions and validates replacement references against the stage", () => {
+  const localization = RELEASE_WORKFLOW_CONFIG.workflows.find((workflow) => workflow.id === "likee-ios-release")
+    .stages.find((item) => item.id === "localization");
+  const upload = compositeWorkflows.find((item) => item.id === "localization-upload-notify");
+  assert.deepEqual(upload.consumesAtomicActionIds, ["release-localization:upload-source-file", "release-notification:send-notification"]);
+  assert.deepEqual(compositeWorkflows.find((item) => item.id === "localization-download-merge-notify").consumesAtomicActionIds, [
+    "release-localization:prepare-translation-archive",
+    "release-localization:apply-translations",
+    "release-localization:commit-localization-changes",
+    "release-notification:send-notification",
+  ]);
+  assert.deepEqual(compositeWorkflows.find((item) => item.id === "release-summary-record").consumesAtomicActionIds, [
+    "release-records:compose-update-summary",
+    "release-records:append-release-wiki-row",
+  ]);
+  assert.deepEqual(compositeWorkflows.find((item) => item.id === "android-channel-packages").consumesAtomicActionIds, [
+    "release-channel-packages:plan-channel-packages",
+    "release-channel-packages:trigger-channel-packages-batch",
+    "release-channel-packages:refresh-channel-package-build",
+  ]);
+  assert.equal(localization.defaultCompositeIds.includes(upload.id), true);
+  const result = validateReleaseWorkflowConfig({
+    workflows: [{ id: "demo", businessLines: ["demo"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "demo:known" }], compositeIds: ["bad"] }] }],
+    compositeWorkflows: [{ id: "bad", businessLines: ["demo"], platforms: ["android"], batches: ["initial"], actions: [{ stepId: "known", id: "demo:known", inputs: {} }], consumesAtomicActionIds: ["missing:action"] }],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /replacement|consumes|stage|阶段/i);
+});
+
+test("declares step input mappings and explicit confirmation/wait boundaries", () => {
+  const upload = compositeWorkflows.find((item) => item.id === "localization-upload-notify");
+  const uploadStep = upload.actions[0];
+  const uploadNotify = upload.actions[1];
+  assert.deepEqual(uploadStep.inputs.source_path, { context: "source_path" });
+  assert.deepEqual(uploadNotify.inputs.source_record_id, { fromStep: "upload", output: "record_id" });
+  assert.deepEqual(uploadNotify.waitFor, { step: "upload", statuses: ["completed", "confirmed"] });
+  const download = compositeWorkflows.find((item) => item.id === "localization-download-merge-notify");
+  const apply = download.actions.find((item) => item.stepId === "apply");
+  assert.equal(apply.requiresConfirmation, true);
+  assert.deepEqual(apply.continueOn, ["completed", "confirmed"]);
+  assert.deepEqual(apply.waitFor, { step: "prepare", statuses: ["completed", "confirmed"] });
+  assert.deepEqual(apply.inputs.prepare_record_id, { fromStep: "prepare", output: "record_id" });
+  const commit = download.actions.find((item) => item.stepId === "commit");
+  assert.deepEqual(commit.inputs.apply_record_id, { fromStep: "apply", output: "record_id" });
+  assert.equal(commit.requiresConfirmation, true);
+  assert.deepEqual(commit.continueOn, ["merged", "confirmed"]);
+  const notify = download.actions.at(-1);
+  assert.deepEqual(notify.inputs.merge_request_url, { fromStep: "commit", output: "operator_url" });
+  assert.deepEqual(notify.waitFor, { step: "commit", statuses: ["merged", "confirmed"] });
+  const summary = compositeWorkflows.find((item) => item.id === "release-summary-record");
+  assert.equal(summary.actions.at(-1).requiresConfirmation, true);
+  assert.deepEqual(summary.actions.at(-1).inputs.updates_text, { fromStep: "summary", output: "updates_text" });
+  assert.equal(Object.hasOwn(summary.actions.at(-1).inputs, "digest_record_id"), false);
+  assert.deepEqual(summary.actions.at(-1).waitFor, { step: "summary", statuses: ["confirmed"] });
+});
+
+test("declares the six-item Android channel package fan-out", () => {
+  const channels = compositeWorkflows.find((item) => item.id === "android-channel-packages");
+  assert.equal(channels.expectedCount, 6);
+  assert.equal(channels.actions.find((item) => item.stepId === "trigger").requiresConfirmation, true);
+  assert.deepEqual(channels.actions.at(-1).forEach, { source: "planned_items", expectedCount: 6, itemInput: "item_id" });
+});
+
+test("rejects composites whose scope does not intersect the referenced workflow stage", () => {
+  const result = validateReleaseWorkflowConfig({
+    workflows: [{ id: "demo", businessLines: ["demo"], platforms: ["ios"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "demo:known" }], compositeIds: ["android-only"] }] }],
+    compositeWorkflows: [{ id: "android-only", businessLines: ["demo"], platforms: ["android"], batches: ["initial"], actions: [{ id: "demo:known", inputs: {} }] }],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /scope|范围|intersect|交集/i);
+});
+
+test("rejects a composite Action whose workflow scope does not cover the composite scope", () => {
+  const result = validateReleaseWorkflowConfig({
+    workflows: [{ id: "other-android", businessLines: ["other"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "other:action" }], compositeIds: ["likee-ios"] }] }],
+    compositeWorkflows: [{ id: "likee-ios", businessLines: ["likee"], platforms: ["ios"], batches: ["initial"], stageIds: ["one"], actions: [{ stepId: "action", id: "other:action", inputs: {} }] }],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /Action.*scope|作用域|workflow/i);
+});
+
+test("rejects a stage composite reference when composite stageIds omit the current stage", () => {
+  const result = validateReleaseWorkflowConfig({
+    workflows: [{ id: "demo", businessLines: ["demo"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "demo:action" }], compositeIds: ["composite"] }] }],
+    compositeWorkflows: [{ id: "composite", businessLines: ["demo"], platforms: ["android"], batches: ["initial"], stageIds: ["two"], actions: [{ stepId: "action", id: "demo:action", inputs: {} }] }],
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join("\n"), /stageIds|stage|阶段/i);
+});
+
+test("exposes normalized internal status aliases for composite waits", () => {
+  assert.deepEqual(RELEASE_WORKFLOW_CONFIG.statusAliases, {
+    succeeded: "completed",
+    managed_mr_merged: "merged",
+  });
 });
 
 test("rejects scope arrays containing blank entries", () => {
