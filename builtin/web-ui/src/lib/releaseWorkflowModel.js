@@ -1,3 +1,5 @@
+import { createReleaseProcessStateMachine, deriveProcessStates, deriveWorkflowCursor, processTitleForId, recommendNextProcessNodes } from "./releaseWorkflowStateMachine.js";
+
 function workspaceValue(workspace) {
   if (typeof workspace === "string") return workspace;
   if (!workspace || typeof workspace !== "object") return "";
@@ -9,6 +11,21 @@ function paramValue(params, key) {
   if (typeof params === "string") return new URLSearchParams(params).get(key) || "";
   if (params && typeof params === "object") return String(params[key] || "");
   return "";
+}
+
+// 用户需求点: 节点进入下一阶段时，标准参数应根据节点定义自动填充，同时保留操作员后来修改的值。
+export function defaultInputsForNode(node, inputs = {}) {
+  const result = inputs && typeof inputs === "object" && !Array.isArray(inputs) ? { ...inputs } : {};
+  for (const schema of Array.isArray(node?.inputSchema) ? node.inputSchema : []) {
+    const key = String(schema?.key || "").trim();
+    if (!key) continue;
+    const current = result[key];
+    if ((current === undefined || current === null || (typeof current === "string" && current.trim() === ""))
+      && schema.defaultValue !== undefined && schema.defaultValue !== null) {
+      result[key] = schema.defaultValue;
+    }
+  }
+  return result;
 }
 
 // 用户需求点: 后续页面携带的业务线、平台、版本参数是发版流程的唯一上下文来源，进入后不能再被页面控件改写。
@@ -52,29 +69,109 @@ export function createInitializationNode(context = {}, workspace) {
     inputSchema: [],
     inputs,
     contextSnapshot: { ...inputs },
+    scopeKey: `${businessLine}/${platform}/${version}/${batch}`,
   };
 }
 
-// 用户需求点: 初始化节点只在当前版本还没有任何发版状态时自动加入，避免切换页面或刷新后重复插入。
+// 用户需求点: 进入发版页即代表业务线、平台、版本已声明，初始化节点必须直接落在已完成时间线，不应再触发执行。
 export function seedInitializationState(state, node) {
   if (!state || !node) return state;
   const timeline = Array.isArray(state.timeline) ? state.timeline : [];
   const pending = Array.isArray(state.pending) ? state.pending : [];
   if (timeline.length > 0 || pending.length > 0) return state;
+  const timestamp = Date.now();
   return {
     ...state,
-    pending: [{
-      id: "release-initialization-pending",
+    timeline: [{
+      id: "release-initialization",
       nodeId: node.id,
       title: node.title,
       description: node.description,
       category: node.category,
-      status: "pending",
-      progress: 0,
-      createdAt: Date.now(),
+      status: "completed",
+      progress: 100,
+      createdAt: timestamp,
+      startedAt: timestamp,
+      completedAt: timestamp,
+      durationMs: 0,
+      operator: "系统初始化",
       error: "",
       inputs: { ...node.inputs },
+      contextSnapshot: { ...node.contextSnapshot },
+      scopeKey: node.scopeKey,
     }],
+    pending: [],
+  };
+}
+
+// 用户需求点: 初始化后只能选择、推荐和运行当前业务、平台、版本（及批次）集合内的节点。
+export function nodeMatchesContext(node, context) {
+  if (!node || !context) return false;
+  const businessLine = String(context.businessLine || "").toLowerCase();
+  const platform = String(context.platform || "").toLowerCase();
+  const snapshot = node.contextSnapshot || {};
+  return (!Array.isArray(node.businessLines) || node.businessLines.length === 0 || node.businessLines.includes(businessLine))
+    && (!Array.isArray(node.platforms) || node.platforms.length === 0 || node.platforms.includes(platform))
+    && (!snapshot.businessLine || String(snapshot.businessLine).toLowerCase() === businessLine)
+    && (!snapshot.platform || String(snapshot.platform).toLowerCase() === platform)
+    && (!snapshot.version || String(snapshot.version) === String(context.version))
+    && (!snapshot.batch || String(snapshot.batch).toLowerCase() === String(context.batch || "initial").toLowerCase());
+}
+
+// 用户需求点: 前端推荐节点与自定义候选必须使用当前业务线、平台和批次的共享状态机配置。
+export function seedNextRecommendations(state, nodes = [], config) {
+  if (!state || !Array.isArray(nodes) || nodes.length === 0) return state;
+  const timeline = Array.isArray(state.timeline) ? state.timeline : [];
+  const pending = Array.isArray(state.pending) ? state.pending : [];
+  if (timeline.length === 0) return state;
+  const initialization = timeline.find((item) => item?.nodeId === "release-initialization") || timeline[0];
+  const context = state.context || initialization?.contextSnapshot || initialization?.inputs || {};
+  const machine = createReleaseProcessStateMachine({
+    context,
+    config,
+    nodes: nodes.filter((node) => node?.id !== "release-initialization"),
+  });
+  // 服务端旧快照可能残留其他业务/版本的待执行节点；这些节点在当前上下文不可见，不能阻塞本次流程推荐。
+  const currentScope = `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
+  const eligiblePending = pending.filter((item) => {
+    if (!item?.nodeId) return false;
+    if (item.scopeKey && item.scopeKey !== currentScope) return false;
+    const snapshot = item.contextSnapshot || {};
+    return (!snapshot.businessLine || String(snapshot.businessLine).toLowerCase() === String(context.businessLine).toLowerCase())
+      && (!snapshot.platform || String(snapshot.platform).toLowerCase() === String(context.platform).toLowerCase())
+      && (!snapshot.version || String(snapshot.version) === String(context.version))
+      && (!snapshot.batch || String(snapshot.batch).toLowerCase() === String(context.batch || "initial").toLowerCase());
+  });
+  const recommendations = eligiblePending.length > 0
+    ? []
+    : recommendNextProcessNodes({ machine, timeline, pending: eligiblePending });
+  const processStates = Object.fromEntries(deriveProcessStates({ machine, timeline, pending: eligiblePending }));
+  const workflowCursor = deriveWorkflowCursor({ machine, timeline, pending: eligiblePending });
+  if (recommendations.length === 0) return { ...state, processStates, workflowCursor };
+  const now = Date.now();
+  return {
+    ...state,
+    processStates,
+    workflowCursor,
+    pending: [...pending, ...recommendations.map((node, index) => {
+      return {
+        id: `${node.id}-recommended-${now}-${index}`,
+        nodeId: node.id,
+        title: node.title,
+        description: node.description,
+        category: node.category,
+        processId: node.processId,
+        processOrder: node.processOrder,
+        processTitle: node.processTitle || processTitleForId(node.processId),
+        status: "pending",
+        progress: 0,
+        createdAt: now,
+        operator: "未记录",
+        inputs: defaultInputsForNode(node),
+        scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
+        contextSnapshot: { ...context },
+      };
+    })],
   };
 }
 
@@ -85,33 +182,39 @@ export function ensureInitializationFirst(state, node) {
   const pending = Array.isArray(state.pending) ? state.pending : [];
   const timelineIndex = timeline.findIndex((item) => item?.nodeId === node.id);
   if (timelineIndex >= 0) {
-    if (timelineIndex === 0) return state;
-    const initialization = timeline[timelineIndex];
-    return { ...state, timeline: [initialization, ...timeline.slice(0, timelineIndex), ...timeline.slice(timelineIndex + 1)] };
+    const initialization = {
+      ...node,
+      ...timeline[timelineIndex],
+      inputs: { ...node.inputs, ...(timeline[timelineIndex]?.inputs || {}) },
+      contextSnapshot: { ...node.contextSnapshot, ...(timeline[timelineIndex]?.contextSnapshot || {}) },
+      scopeKey: timeline[timelineIndex]?.scopeKey || node.scopeKey,
+    };
+    const reordered = [initialization, ...timeline.slice(0, timelineIndex), ...timeline.slice(timelineIndex + 1)];
+    return { ...state, timeline: reordered };
   }
   const pendingIndex = pending.findIndex((item) => item?.nodeId === node.id);
   if (pendingIndex >= 0) {
-    const initialization = pending[pendingIndex];
-    if (timeline.length > 0) {
-      const first = timeline[0];
-      const timestamp = Number(first?.createdAt || first?.startedAt || first?.completedAt) || Date.now();
-      return {
-        ...state,
-        timeline: [{
-          ...initialization,
-          status: "completed",
-          progress: 100,
-          createdAt: initialization.createdAt || timestamp,
-          startedAt: initialization.startedAt || timestamp,
-          completedAt: initialization.completedAt || timestamp,
-          durationMs: initialization.durationMs ?? 0,
-          operator: initialization.operator || "历史数据",
-        }, ...timeline],
-        pending: [...pending.slice(0, pendingIndex), ...pending.slice(pendingIndex + 1)],
-      };
-    }
-    if (pendingIndex === 0) return state;
-    return { ...state, pending: [initialization, ...pending.slice(0, pendingIndex), ...pending.slice(pendingIndex + 1)] };
+    const initialization = { ...node, ...pending[pendingIndex] };
+    const first = timeline[0];
+    const timestamp = Number(initialization?.createdAt || first?.createdAt || first?.startedAt || first?.completedAt) || Date.now();
+    return {
+      ...state,
+      timeline: [{
+        ...initialization,
+        id: initialization.id || "release-initialization",
+        status: "completed",
+        progress: 100,
+        createdAt: initialization.createdAt || timestamp,
+        startedAt: initialization.startedAt || timestamp,
+        completedAt: initialization.completedAt || timestamp,
+        durationMs: initialization.durationMs ?? 0,
+        operator: initialization.operator && initialization.operator !== "未记录" ? initialization.operator : "历史数据",
+        inputs: { ...node.inputs, ...(initialization.inputs || {}) },
+        contextSnapshot: { ...node.contextSnapshot, ...(initialization.contextSnapshot || {}) },
+        scopeKey: initialization.scopeKey || node.scopeKey,
+      }, ...timeline],
+      pending: [...pending.slice(0, pendingIndex), ...pending.slice(pendingIndex + 1)],
+    };
   }
   if (timeline.length > 0) {
     const first = timeline[0];
@@ -132,24 +235,32 @@ export function ensureInitializationFirst(state, node) {
         durationMs: 0,
         operator: "历史数据",
         inputs: { ...node.inputs },
+        contextSnapshot: { ...node.contextSnapshot },
+        scopeKey: node.scopeKey,
       }, ...timeline],
     };
   }
   if (pending.length > 0) {
+    const timestamp = Number(pending[0]?.createdAt) || Date.now();
     return {
       ...state,
-      pending: [{
-        id: `${node.id}-legacy-pending`,
+      timeline: [{
+        id: `${node.id}-legacy`,
         nodeId: node.id,
         title: node.title,
         description: node.description,
         category: node.category,
-        status: "pending",
-        progress: 0,
-        createdAt: Date.now(),
-        operator: "未记录",
+        status: "completed",
+        progress: 100,
+        createdAt: timestamp,
+        startedAt: timestamp,
+        completedAt: timestamp,
+        durationMs: 0,
+        operator: "历史数据",
         inputs: { ...node.inputs },
-      }, ...pending],
+        contextSnapshot: { ...node.contextSnapshot },
+        scopeKey: node.scopeKey,
+      }, ...timeline],
     };
   }
   return seedInitializationState(state, node);
