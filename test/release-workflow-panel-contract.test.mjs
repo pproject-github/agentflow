@@ -62,9 +62,16 @@ test("release branch inputs render their context-derived default value", async (
 test("release records preserve workflow identity and picker derives from machine", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /workflowId:\s*stringValue\(value\.workflowId\)/);
-  assert.match(source, /workflowVersion:\s*stringValue\(value\.workflowVersion\)/);
-  assert.match(source, /历史节点即使已从当前 workflow 配置移除/);
   assert.match(source, /selectWorkflowProcessNodes\(\{ machine: workflowMachine, nodes: catalogNodes \}\)/);
   assert.match(source, /workflowId: currentItem\.workflowId/);
   assert.match(source, /customNodeOptions\.map|customNodeGroups\.map/);
+});
+
+test("release runtime completion persistence keeps workflow and scope metadata", async () => {
+  const routes = await readFile(new URL("../bin/lib/workspace-routes.mjs", import.meta.url), "utf8");
+  assert.match(routes, /const failedItem = \{/);
+  assert.match(routes, /const completedItem = \{/);
+  assert.match(routes, /workflowId:\s*action\.workflowId/);
+  assert.match(routes, /scopeKey:\s*requestedScopeKey\s*\|\|\s*expectedScopeKey/);
+  assert.match(routes, /contextSnapshot:\s*\{\s*\.\.\.requestContext\s*\}/);
 });

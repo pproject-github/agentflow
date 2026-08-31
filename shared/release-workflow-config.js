@@ -76,7 +76,6 @@ const stage = (id, title, nodeIds, extra = {}) => ({
 });
 
 export const RELEASE_WORKFLOW_CONFIG = freeze({
-  version: "1",
   processOrder: freeze([...processOrder]),
   processTitles: freeze({ ...processTitles }),
   skillProcessMap: freeze({ ...skillProcessMap }),

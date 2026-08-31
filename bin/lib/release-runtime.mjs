@@ -405,7 +405,7 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
 export function filterReleaseActionsForWorkflow(nodes = [], context = {}, config = RELEASE_WORKFLOW_CONFIG) {
   const discovered = Array.isArray(nodes) ? nodes.filter((node) => node && node.id) : [];
   const workflow = selectReleaseWorkflow(context, config);
-  if (!workflow) return discovered;
+  if (!workflow) return [];
   const allowedIds = workflowActionIds(workflow, context);
   const stageOrderById = new Map();
   const normalizedBatch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
@@ -422,6 +422,7 @@ export function filterReleaseActionsForWorkflow(nodes = [], context = {}, config
       const metadata = releaseActionProcessMetadata(node.id, node, config, context);
       return {
         ...node,
+        workflowId: workflow.id,
         ...metadata,
         ...(configured ? {
           processId: configured.stageId,

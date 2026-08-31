@@ -1,5 +1,4 @@
 import { createReleaseProcessStateMachine, deriveProcessStates, deriveWorkflowCursor, processTitleForId, recommendNextProcessNodes } from "./releaseWorkflowStateMachine.js";
-import { selectReleaseWorkflow, RELEASE_WORKFLOW_CONFIG } from "../../../../shared/release-workflow-config.js";
 
 function workspaceValue(workspace) {
   if (typeof workspace === "string") return workspace;
@@ -56,7 +55,6 @@ export function createInitializationNode(context = {}, workspace) {
     version,
     workspace: workspaceValue(workspace),
   };
-  const workflow = selectReleaseWorkflow(context, RELEASE_WORKFLOW_CONFIG);
   if (context.batch) inputs.batch = batch;
   return {
     id: "release-initialization",
@@ -72,8 +70,7 @@ export function createInitializationNode(context = {}, workspace) {
     inputs,
     contextSnapshot: { ...inputs },
     scopeKey: `${businessLine}/${platform}/${version}/${batch}`,
-    workflowId: workflow?.id || "",
-    workflowVersion: String(RELEASE_WORKFLOW_CONFIG.version || "1"),
+    workflowId: "",
   };
 }
 
@@ -152,15 +149,13 @@ export function seedNextRecommendations(state, nodes = [], config) {
   const processStates = Object.fromEntries(deriveProcessStates({ machine, timeline, pending: eligiblePending }));
   const workflowCursor = deriveWorkflowCursor({ machine, timeline, pending: eligiblePending });
   const workflowId = machine.workflowId || machine.workflow?.id || "";
-  const workflowVersion = machine.workflowVersion || machine.workflow?.version || "";
-  if (recommendations.length === 0) return { ...state, processStates, workflowCursor, workflowId, workflowVersion };
+  if (recommendations.length === 0) return { ...state, processStates, workflowCursor, workflowId };
   const now = Date.now();
   return {
     ...state,
     processStates,
     workflowCursor,
     workflowId,
-    workflowVersion,
     pending: [...pending, ...recommendations.map((node, index) => {
       return {
         id: `${node.id}-recommended-${now}-${index}`,
@@ -172,7 +167,6 @@ export function seedNextRecommendations(state, nodes = [], config) {
         processOrder: node.processOrder,
         processTitle: node.processTitle || processTitleForId(node.processId),
         workflowId: node.workflowId || workflowId,
-        workflowVersion: node.workflowVersion || workflowVersion,
         status: "pending",
         progress: 0,
         createdAt: now,

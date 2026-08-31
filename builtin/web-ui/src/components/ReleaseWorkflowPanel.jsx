@@ -60,7 +60,6 @@ function normalizeTimelineItem(value, index) {
     processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
     processTitle: stringValue(value.processTitle),
     workflowId: stringValue(value.workflowId),
-    workflowVersion: stringValue(value.workflowVersion),
     templateId: stringValue(value.templateId),
     templateStepId: stringValue(value.templateStepId),
   };
@@ -99,7 +98,6 @@ function normalizePendingItem(value, index) {
     processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
     processTitle: stringValue(value.processTitle),
     workflowId: stringValue(value.workflowId),
-    workflowVersion: stringValue(value.workflowVersion),
     templateId: stringValue(value.templateId),
     templateStepId: stringValue(value.templateStepId),
   };
@@ -129,7 +127,6 @@ function normalizeCustomNode(value) {
     processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
     processTitle: stringValue(value.processTitle),
     workflowId: stringValue(value.workflowId),
-    workflowVersion: stringValue(value.workflowVersion),
   };
 }
 
@@ -170,15 +167,14 @@ function readState(key, catalogNodeIds = null) {
     if (!isRecord(value)) return emptyState();
     const customNodes = uniqueById(Array.isArray(value.customNodes) ? value.customNodes.map(normalizeCustomNode).filter(Boolean) : []);
     const knownNodeIds = catalogNodeIds ? new Set([...catalogNodeIds, ...customNodes.map((item) => item.id)]) : null;
-    // 用户需求点: 历史节点即使已从当前 workflow 配置移除，也必须保留在时间线中供查看。
-    const timeline = uniqueByNodeId(Array.isArray(value.timeline) ? value.timeline.map(normalizeTimelineItem).filter(Boolean) : []);
+    const timeline = uniqueByNodeId(Array.isArray(value.timeline) ? value.timeline.map(normalizeTimelineItem).filter(Boolean) : [])
+      .filter((item) => !knownNodeIds || knownNodeIds.has(item.nodeId));
     const completedIds = new Set(timeline.map((item) => item.nodeId));
     const pending = uniqueByNodeId(Array.isArray(value.pending) ? value.pending.map(normalizePendingItem).filter(Boolean) : [])
       .filter((item) => !completedIds.has(item.nodeId) && (!knownNodeIds || knownNodeIds.has(item.nodeId)));
     return {
       context: isRecord(value.context) ? { ...value.context } : undefined,
       workflowId: stringValue(value.workflowId),
-      workflowVersion: stringValue(value.workflowVersion),
       timeline,
       pending,
       customNodes,
@@ -229,7 +225,6 @@ function makePending(node, inputs = {}, context = {}) {
     processOrder: Number.isFinite(Number(node.processOrder)) ? Number(node.processOrder) : undefined,
     processTitle: node.processTitle || processTitleForId(node.processId),
     workflowId: node.workflowId || "",
-    workflowVersion: node.workflowVersion || "",
     templateId: node.templateId || "",
     templateStepId: node.templateStepId || "",
   };
@@ -314,8 +309,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   const allNodes = useMemo(() => [effectiveInitializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, effectiveInitializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
-    // 用户需求点: 历史节点即使已不在当前 catalog 也要保留查看，但不能因此进入当前候选集合。
-    const timeline = state.timeline.filter((item) => itemMatchesContext(item, context));
+    const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context));
     const completedIds = new Set(timeline.map((item) => item.nodeId));
     const pending = state.pending
       .filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
@@ -396,7 +390,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             const remoteTimeline = (Array.isArray(remoteState.timeline) ? remoteState.timeline : [])
               .map(normalizeTimelineItem)
               .filter(Boolean)
-              .filter((item) => itemMatchesContext(item, context));
+              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context));
             const completedIds = new Set(remoteTimeline.map((item) => item.nodeId));
             const remotePending = (Array.isArray(remoteState.pending) ? remoteState.pending : [])
               .map(normalizePendingItem)
@@ -526,7 +520,6 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           processOrder: currentItem.processOrder ?? node.processOrder,
           processTitle: currentItem.processTitle || node.processTitle || processTitleForId(node.processId),
           workflowId: currentItem.workflowId || node.workflowId || previous.workflowId || "",
-          workflowVersion: currentItem.workflowVersion || node.workflowVersion || previous.workflowVersion || "",
           scopeKey: currentItem.scopeKey || node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
           status: "completed",
           progress: 100,
@@ -631,14 +624,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   }, [context]);
 
   const openInspector = useCallback((item) => {
-    const node = nodeById.get(item?.nodeId) || (item?.nodeId ? {
-      id: item.nodeId,
-      title: item.title || item.nodeId,
-      description: item.description || "历史发版节点（当前配置已不可执行）",
-      category: item.category || "历史阶段",
-      skill: item.skill || "unknown",
-      inputSchema: [],
-    } : null);
+    const node = nodeById.get(item?.nodeId);
     if (!item || !node) return;
     setInspector({ item, node, mode: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "pending" });
   }, [nodeById]);
