@@ -8,7 +8,7 @@ Status: DONE
 - The shared state machine exposes workflow identity at both snapshot and workflow metadata levels; configured nodes inherit the same identity.
 - `selectWorkflowProcessNodes()` returns only nodes in the selected business/platform/batch workflow, while repeated custom selection remains supported.
 - Panel hydration preserves workflow/process/scope metadata for timeline, pending, and custom records. Historical timeline nodes remain viewable with a read-only fallback inspector, while they are not used as current candidates.
-- Runtime store hydration infers the matching workflow for legacy records and fills missing workflow identity without removing historical records.
+- Runtime completion persistence keeps the matching `workflowId` plus process/scope metadata on failed and completed records.
 - Added integration and panel contract coverage for configured candidate filtering, config removal behavior, and persistence round trips.
 
 ## Verification
@@ -23,7 +23,7 @@ success
 
 ## Commit
 
-`abfad42 refactor(release): align candidates and persisted workflow state`
+`2654ede fix(release): constrain workflows and persist action metadata`
 
 ## Cross-file adaptation
 
@@ -32,4 +32,4 @@ The brief listed panel/model/store/tests. The shared workflow config and state-m
 ## Concerns
 
 - Existing dirty changes in other files and generated frontend assets were left untouched.
-- The workflow config currently uses version `"1"`; future config revisions should bump this value for migration/audit visibility.
+- Legacy migration and `workflowVersion` persistence are intentionally deferred while the workflow feature is still under development.
