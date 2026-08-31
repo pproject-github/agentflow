@@ -50,8 +50,21 @@ test("ships a valid shared configuration with workflow maps", () => {
   assert.ok(RELEASE_WORKFLOW_CONFIG.skillProcessMap["release-git"]);
   assert.equal(typeof RELEASE_WORKFLOW_CONFIG.actionOrder, "object");
   assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows), true);
+  assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows[0]), true);
   assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows[0].stages), true);
   assert.equal(Object.isFrozen(RELEASE_WORKFLOW_CONFIG.workflows[0].stages[0].nodes), true);
+});
+
+test("rejects scope arrays containing blank entries", () => {
+  for (const key of ["businessLines", "platforms", "batches"]) {
+    const config = {
+      workflows: [{ id: "demo", businessLines: ["likee"], platforms: ["android"], batches: ["initial"], stages: [{ id: "one", nodes: [{ id: "x" }] }] }],
+    };
+    config.workflows[0][key] = [" "];
+    const result = validateReleaseWorkflowConfig(config);
+    assert.equal(result.valid, false, `${key} blank scope should be rejected`);
+    assert.match(result.errors.join("\n"), /scope|范围/i);
+  }
 });
 
 test("rejects non-array optional node references without throwing", () => {

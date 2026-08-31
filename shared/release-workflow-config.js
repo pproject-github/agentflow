@@ -121,7 +121,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
         stage("notification", "发版通知", ["release-notification:send-notification", "release-notification:send-rollout-notification"]),
       ],
     },
-  ].map((workflow) => ({
+  ].map((workflow) => freeze({
     ...workflow,
     businessLines: freeze([...workflow.businessLines]),
     platforms: freeze([...workflow.platforms]),
@@ -205,7 +205,10 @@ export function validateReleaseWorkflowConfig(config) {
     else if (workflowIds.has(workflowId)) errors.push(`duplicate workflow id: ${workflowId}`);
     workflowIds.add(workflowId);
     for (const [key, label] of [["businessLines", "business line scope"], ["platforms", "platform scope"], ["batches", "batch scope"]]) {
-      if (!Array.isArray(workflow[key]) || workflow[key].length === 0) errors.push(`${workflowId || "workflow"} has empty ${label}`);
+      const values = workflow[key];
+      if (!Array.isArray(values) || values.length === 0 || values.some((value) => !normalize(value))) {
+        errors.push(`${workflowId || "workflow"} has empty ${label}`);
+      }
     }
     if (!Array.isArray(workflow.stages) || workflow.stages.length === 0) { errors.push(`${workflowId || "workflow"} stages must be a non-empty array`); continue; }
     const stageIds = new Set();
