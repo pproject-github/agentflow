@@ -193,9 +193,16 @@ function configuredFallbackNodes(context = {}) {
     workflowStageNodeIds(stage).forEach((id, index) => {
       const [skill] = String(id).split(":");
       const base = baseBySkill.get(skill) || {};
-      const inputSchema = id === "release-git:create-release-branch"
-        ? [{ key: "release_branch", label: "Release 分支名", type: "text", required: false, placeholder: "例如 release/v1.1" }]
-        : (id === "release-records:record-store-approved" ? base.inputSchema || [] : []);
+      let inputSchema = [];
+      if (id === "release-git:create-release-branch") {
+        inputSchema = [{ key: "release_branch", label: "Release 分支名", type: "text", required: false, placeholder: "例如 release/v1.1" }];
+      } else if (id === "release-records:append-release-wiki-row"
+        && normalize(context.platform) === "android"
+        && normalize(context.batch || "initial") === "supplemental") {
+        inputSchema = [{ key: "gray_percent", label: "灰度百分比 (%)", type: "number", required: true, min: 1, max: 100, integer: true, step: 1, placeholder: "例如 10" }];
+      } else if (id === "release-records:record-store-approved") {
+        inputSchema = base.inputSchema || [];
+      }
       nodes.push({
         ...base,
         id,
@@ -222,14 +229,9 @@ export function getReleaseNodes({ businessLine, platform, batch = "initial" } = 
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
   if (!selectReleaseWorkflow({ businessLine: line, platform: targetPlatform, batch })) return [];
-  const matchingIds = new Set(RELEASE_NODE_CATALOG
-    .filter((item) => item.businessLines.includes(line) && item.platforms.includes(targetPlatform))
-    .map((item) => item.id));
-  const catalog = [...RELEASE_NODE_CATALOG, ...configuredFallbackNodes({ businessLine: line, platform: targetPlatform, batch })];
-  const unique = new Map(catalog.map((item) => [item.id, item]));
-  const allIds = new Set(unique.keys());
-  return [...unique.values()]
-    .filter((item) => matchingIds.has(item.id) || (item.businessLines || []).map(normalize).includes(line) && (item.platforms || []).map(normalize).includes(targetPlatform))
+  const catalog = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, batch });
+  const allIds = new Set(catalog.map((item) => item.id));
+  return catalog
     .map((item) => {
       const nextNodeIds = item.nextNodeIds.filter((nextId) => allIds.has(nextId));
       return {

@@ -42,7 +42,7 @@ function machine() {
     context,
     nodes: [
       node("release-localization:upload-source-file", "localization", 10),
-      node("release-localization:send-upload-notification", "localization", 20),
+      node("release-localization:prepare-translation-archive", "localization", 20),
       node("release-approval:create-initial-release-approval", "approval", 10),
     ],
   });
@@ -54,7 +54,7 @@ test("groups release actions into ordered process stages", () => {
   assert.deepEqual(stateMachine.processes.map((process) => process.id), ["localization", "approval-initial"]);
   assert.deepEqual(stateMachine.processes[0].nodeIds, [
     "release-localization:upload-source-file",
-    "release-localization:send-upload-notification",
+    "release-localization:prepare-translation-archive",
   ]);
   assert.equal(stateMachine.nodeToProcess.get("release-approval:create-initial-release-approval"), "approval-initial");
 });
@@ -67,7 +67,7 @@ test("recommends the next node within an incomplete process", () => {
     pending: [],
   });
 
-  assert.deepEqual(recommendations.map((node) => node.id), ["release-localization:send-upload-notification"]);
+  assert.deepEqual(recommendations.map((node) => node.id), ["release-localization:prepare-translation-archive"]);
 });
 
 test("moves to the next process only after every node in the current process completes", () => {
@@ -76,7 +76,7 @@ test("moves to the next process only after every node in the current process com
     machine: stateMachine,
     timeline: [
       { nodeId: "release-localization:upload-source-file", status: "completed" },
-      { nodeId: "release-localization:send-upload-notification", status: "completed" },
+      { nodeId: "release-localization:prepare-translation-archive", status: "completed" },
     ],
     pending: [],
   });
@@ -90,7 +90,7 @@ test("does not advance a process while a node is running or failed", () => {
   assert.deepEqual(recommendNextProcessNodes({
     machine: stateMachine,
     timeline: [{ nodeId: "release-localization:upload-source-file", status: "completed" }],
-    pending: [{ nodeId: "release-localization:send-upload-notification", status: "running" }],
+    pending: [{ nodeId: "release-localization:prepare-translation-archive", status: "running" }],
   }), []);
 
   const states = deriveProcessStates({
@@ -113,7 +113,7 @@ test("treats runtime terminal statuses as completed and keeps completed timeline
     machine: stateMachine,
     timeline: [
       { nodeId: "release-localization:upload-source-file", status: "succeeded" },
-      { nodeId: "release-localization:send-upload-notification", status: "skipped" },
+      { nodeId: "release-localization:prepare-translation-archive", status: "skipped" },
     ],
     pending: [],
   }).map((node) => node.id), ["release-approval:create-initial-release-approval"]);
@@ -166,7 +166,7 @@ test("selects the history-derived workflow for the current platform and batch", 
   });
 
   assert.equal(stateMachine.workflow.id, "likee-android-release");
-  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["preparation-supplemental", "records-summary", "approval-supplemental", "channel-packages"]);
+  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["preparation-supplemental", "records-summary", "approval-full", "channel-packages"]);
   assert.equal(stateMachine.processes.find((process) => process.id === "metrics"), undefined);
 });
 
@@ -182,9 +182,8 @@ test("uses one Android workflow while selecting only the initial batch stages", 
   });
 
   assert.equal(stateMachine.workflow.id, "likee-android-release");
-  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["localization", "approval-initial"]);
+  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["localization", "approval-initial", "approval-full"]);
   assert.equal(stateMachine.processes.find((process) => process.id === "preparation-supplemental"), undefined);
-  assert.equal(stateMachine.processes.find((process) => process.id === "approval-supplemental"), undefined);
 });
 
 test("uses one Android workflow while selecting only the supplemental batch stages", () => {
@@ -198,7 +197,7 @@ test("uses one Android workflow while selecting only the supplemental batch stag
   });
 
   assert.equal(stateMachine.workflow.id, "likee-android-release");
-  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["preparation-supplemental", "approval-supplemental"]);
+  assert.deepEqual(stateMachine.processes.map((process) => process.id), ["preparation-supplemental", "approval-full"]);
   assert.equal(stateMachine.processes.find((process) => process.id === "localization"), undefined);
   assert.equal(stateMachine.processes.find((process) => process.id === "approval-initial"), undefined);
 });
@@ -284,7 +283,7 @@ test("exposes the current workflow stage and transition cursor", () => {
     context,
     nodes: [
       node("release-localization:upload-source-file", "localization", 10),
-      node("release-localization:send-upload-notification", "localization", 20),
+      node("release-localization:prepare-translation-archive", "localization", 20),
       node("release-approval:create-initial-release-approval", "approval", 10),
     ],
   });

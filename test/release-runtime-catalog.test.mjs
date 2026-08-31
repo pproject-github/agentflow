@@ -158,21 +158,21 @@ test("discovers only actions referenced by the selected project profile", async 
     assert.deepEqual(nodes.map((node) => node.id), ["release-approval:create-full-rollout-approval"]);
     assert.deepEqual(nodes[0].businessLines, ["likee"]);
     assert.equal(nodes[0].contextSnapshot.version, "5.63.2");
-    assert.equal(nodes[0].processId, "approval");
+    assert.equal(nodes[0].processId, "approval-full");
     assert.equal(nodes[0].processOrder, 20);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("static release fallback nodes carry process metadata", async () => {
+test("static release fallback only exposes configured action-level process metadata", async () => {
   const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?process-metadata=${Date.now()}`);
   const nodes = getReleaseNodes({ businessLine: "likee", platform: "android" });
-  const setup = nodes.find((node) => node.id === "release-setup");
-  const approval = nodes.find((node) => node.id === "release-approval");
-  assert.equal(setup.processId, "preparation");
-  assert.equal(approval.processId, "approval");
-  assert.equal(approval.processOrder, 20);
+  const setup = nodes.find((node) => node.id === "release-setup:configure-notification-recipient");
+  const approval = nodes.find((node) => node.id === "release-approval:create-initial-release-approval");
+  assert.equal(setup.processId, "preparation-initial");
+  assert.equal(approval.processId, "approval-initial");
+  assert.equal(nodes.some((node) => ["release-setup", "release-git", "release-approval"].includes(node.id)), false);
 });
 
 test("static fallback catalog contains configured action-level nodes for workflow parity", async () => {
@@ -185,6 +185,26 @@ test("static fallback catalog contains configured action-level nodes for workflo
   const machine = createReleaseProcessStateMachine({ context, nodes });
   assert.ok(machine.processes.length > 0);
   assert.ok(machine.nodes.some((node) => node.id === "release-git:create-release-branch"));
+});
+
+test("static fallback honors approval batch scopes and Android gray input differences", async () => {
+  const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?approval-batches=${Date.now()}`);
+  const initialAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "initial" }).map((node) => [node.id, node]));
+  const supplementalAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "supplemental" }).map((node) => [node.id, node]));
+  const initialIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "initial" }).map((node) => [node.id, node]));
+  const supplementalIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "supplemental" }).map((node) => [node.id, node]));
+  assert.equal(initialAndroid.has("release-approval:create-initial-release-approval"), true);
+  assert.equal(initialAndroid.has("release-approval:create-full-rollout-approval"), true);
+  assert.equal(supplementalAndroid.has("release-approval:create-initial-release-approval"), false);
+  assert.equal(supplementalAndroid.has("release-approval:create-full-rollout-approval"), true);
+  assert.equal(initialIos.has("release-approval:create-initial-release-approval"), true);
+  assert.equal(initialIos.has("release-approval:create-full-rollout-approval"), true);
+  assert.equal(supplementalIos.has("release-approval:create-initial-release-approval"), false);
+  assert.equal(supplementalIos.has("release-approval:create-full-rollout-approval"), true);
+  const gray = supplementalAndroid.get("release-records:append-release-wiki-row")?.inputSchema?.[0];
+  assert.equal(gray?.key, "gray_percent");
+  assert.equal(gray?.required, true);
+  assert.equal(supplementalIos.get("release-records:append-release-wiki-row")?.inputSchema?.some((item) => item.key === "gray_percent"), false);
 });
 
 test("static fallback catalog is empty when no workflow matches the requested scope", async () => {

@@ -138,3 +138,18 @@ test("returns null for an unmatched business line or platform", () => {
   assert.equal(selectReleaseWorkflow({ businessLine: "bigolive", platform: "android", batch: "initial" }), null);
   assert.equal(selectReleaseWorkflow({ businessLine: "likee", platform: "windows", batch: "initial" }), null);
 });
+
+test("every configured action has a static catalog definition for its workflow scope", async () => {
+  const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?config-parity=${Date.now()}`);
+  for (const workflow of RELEASE_WORKFLOW_CONFIG.workflows) {
+    for (const platform of workflow.platforms) {
+      const nodes = getReleaseNodes({ businessLine: workflow.businessLines[0], platform, batch: workflow.batches[0] });
+      const ids = new Set(nodes.map((node) => node.id));
+      assert.equal(ids.has("release-localization:send-upload-notification"), false);
+      for (const stage of workflow.stages) {
+        if (stage.batches && !stage.batches.includes(workflow.batches[0])) continue;
+        for (const node of stage.nodes) assert.ok(ids.has(node.id), `${workflow.id} missing ${node.id}`);
+      }
+    }
+  }
+});
