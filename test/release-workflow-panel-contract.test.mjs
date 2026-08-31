@@ -17,6 +17,9 @@ test("release stages stack vertically with a directional dashed handoff into 添
   assert.match(source, /<span>下一阶段<\/span>/);
   assert.doesNotMatch(source, /<span>进入添加阶段<\/span>/);
   assert.doesNotMatch(source, /<h3>待执行阶段<\/h3>/);
+  assert.match(source, /selectWorkflowProcessNodes/);
+  assert.match(source, /af-release-add-node__group/);
+  assert.match(css, /\.af-release-add-node__group\s*\{/);
   assert.match(css, /\.af-release-flow-groups\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(css, /\.af-release-stage-group--completed\s*\{[^}]*border:\s*1px solid/s);
   assert.match(css, /\.af-release-stage-group--pending\s*\{[^}]*border:\s*1px dashed/s);
@@ -45,4 +48,21 @@ test("completed stages use a wrapping snake track instead of disconnected grid a
   assert.match(css, /\.af-release-completed-turn::before\s*\{/);
   assert.match(css, /\.af-release-completed-turn::after\s*\{/);
   assert.match(css, /\.af-release-completed-flow \.af-release-timeline-card::after\s*\{[^}]*display:\s*none/s);
+});
+
+test("release branch inputs render their context-derived default value", async () => {
+  const [panel, inspector] = await Promise.all([
+    readFile(panelPath, "utf8"),
+    readFile(new URL("../builtin/web-ui/src/components/ReleaseNodeInspector.jsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(panel, /item\.inputs\?\.\[schema\.key\] \?\? schema\.defaultValue \?\? ""/);
+  assert.match(inspector, /defaultInputsForNode\(node, item\?\.inputs\)/);
+});
+
+test("release records preserve workflow identity and picker derives from machine", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /workflowId:\s*stringValue\(value\.workflowId\)/);
+  assert.match(source, /workflowVersion:\s*stringValue\(value\.workflowVersion\)/);
+  assert.match(source, /selectWorkflowProcessNodes\(\{ machine: workflowMachine, nodes: catalogNodes \}\)/);
+  assert.match(source, /customNodeOptions\.map|customNodeGroups\.map/);
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
-import { createCompletionMetadata, createInitializationNode, createPresetInstance, ensureInitializationFirst, resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
+import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, resolveReleaseContext, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
 function emptyState() {
@@ -53,6 +54,15 @@ function normalizeTimelineItem(value, index) {
     skill: stringValue(value.skill),
     preview: value.preview,
     confirmationFingerprint: stringValue(value.confirmationFingerprint),
+    scopeKey: stringValue(value.scopeKey),
+    contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
+    processId: stringValue(value.processId),
+    processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
+    processTitle: stringValue(value.processTitle),
+    workflowId: stringValue(value.workflowId),
+    workflowVersion: stringValue(value.workflowVersion),
+    templateId: stringValue(value.templateId),
+    templateStepId: stringValue(value.templateStepId),
   };
 }
 
@@ -83,6 +93,15 @@ function normalizePendingItem(value, index) {
     skill: stringValue(value.skill),
     preview: value.preview,
     confirmationFingerprint: stringValue(value.confirmationFingerprint),
+    scopeKey: stringValue(value.scopeKey),
+    contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
+    processId: stringValue(value.processId),
+    processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
+    processTitle: stringValue(value.processTitle),
+    workflowId: stringValue(value.workflowId),
+    workflowVersion: stringValue(value.workflowVersion),
+    templateId: stringValue(value.templateId),
+    templateStepId: stringValue(value.templateStepId),
   };
 }
 
@@ -93,14 +112,24 @@ function normalizeCustomNode(value) {
     id: value.id,
     title: value.title,
     description: stringValue(value.description, "自定义发版阶段"),
-    skill: "custom",
+    skill: stringValue(value.skill, "custom"),
     category: stringValue(value.category, "自定义阶段"),
     businessLines: asStringArray(value.businessLines),
     platforms: asStringArray(value.platforms),
     sourcePresetId: stringValue(value.sourcePresetId),
+    templateId: stringValue(value.templateId),
+    templateStepId: stringValue(value.templateStepId),
+    templateStepIndex: Number.isFinite(Number(value.templateStepIndex)) ? Number(value.templateStepIndex) : undefined,
     durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : 600,
     nextNodeIds: asStringArray(value.nextNodeIds),
     inputSchema: Array.isArray(value.inputSchema) ? value.inputSchema.filter(isRecord).map((input) => ({ ...input })) : [],
+    scopeKey: stringValue(value.scopeKey),
+    contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
+    processId: stringValue(value.processId),
+    processOrder: Number.isFinite(Number(value.processOrder)) ? Number(value.processOrder) : undefined,
+    processTitle: stringValue(value.processTitle),
+    workflowId: stringValue(value.workflowId),
+    workflowVersion: stringValue(value.workflowVersion),
   };
 }
 
@@ -147,6 +176,9 @@ function readState(key, catalogNodeIds = null) {
     const pending = uniqueByNodeId(Array.isArray(value.pending) ? value.pending.map(normalizePendingItem).filter(Boolean) : [])
       .filter((item) => !completedIds.has(item.nodeId) && (!knownNodeIds || knownNodeIds.has(item.nodeId)));
     return {
+      context: isRecord(value.context) ? { ...value.context } : undefined,
+      workflowId: stringValue(value.workflowId),
+      workflowVersion: stringValue(value.workflowVersion),
       timeline,
       pending,
       customNodes,
@@ -186,11 +218,26 @@ function groupCompletedTimelineRows(items, rowSize = 3) {
   return rows;
 }
 
-function makePending(node, inputs = {}) {
+// 用户需求点: 新增或推荐的 Create Release Branch 节点要直接带上标准分支名，操作员仍可在输入框中覆盖它。
+function makePending(node, inputs = {}, context = {}) {
   return {
     id: itemId(node.id), nodeId: node.id, title: node.title, description: node.description,
-    category: node.category, status: "pending", progress: 0, createdAt: Date.now(), error: "", operator: "未记录", inputs: safeInputs(inputs),
+    category: node.category, status: "pending", progress: 0, createdAt: Date.now(), error: "", operator: "未记录", inputs: defaultInputsForNode(node, safeInputs(inputs)),
+    scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
+    contextSnapshot: { ...context },
+    processId: node.processId || "",
+    processOrder: Number.isFinite(Number(node.processOrder)) ? Number(node.processOrder) : undefined,
+    processTitle: node.processTitle || processTitleForId(node.processId),
+    workflowId: node.workflowId || "",
+    workflowVersion: node.workflowVersion || "",
+    templateId: node.templateId || "",
+    templateStepId: node.templateStepId || "",
   };
+}
+
+function itemMatchesContext(item, context) {
+  if (!item?.scopeKey) return true;
+  return item.scopeKey === `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
 }
 
 function validateNodeInputs(node, item) {
@@ -218,12 +265,15 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     : inferReleaseContext(workspace || {}), [navigationContext, workspace]);
   const initialNode = useMemo(() => createInitializationNode(inferred, workspace), [inferred, workspace]);
   const context = inferred;
-  const [state, setState] = useState(() => ensureInitializationFirst(
-    readState(
-      storageKey(workspace, inferred),
-      new Set([initialNode.id, ...getReleaseNodes(inferred).map((node) => node.id)]),
+  const [state, setState] = useState(() => seedNextRecommendations(
+    ensureInitializationFirst(
+      readState(
+        storageKey(workspace, inferred),
+        new Set([initialNode.id, ...getReleaseNodes(inferred).map((node) => node.id)]),
+      ),
+      initialNode,
     ),
-    initialNode,
+    [initialNode, ...getReleaseNodes(inferred)],
   ));
   const [storageWarning, setStorageWarning] = useState("");
   const [message, setMessage] = useState("");
@@ -236,21 +286,41 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   const activeKeyRef = useRef("");
   const runGenerationRef = useRef(0);
   const runSequenceRef = useRef(0);
+  // 用户需求点: 本地新增或执行阶段后，迟到的远程旧状态不能覆盖当前发版操作结果。
+  const localMutationRef = useRef(false);
 
   const key = useMemo(() => storageKey(workspace, context), [workspace, context]);
   activeKeyRef.current = key;
   const catalogNodes = useMemo(() => remoteCatalog.length > 0 ? remoteCatalog : getReleaseNodes(context), [context, remoteCatalog]);
+  const workflowMachine = useMemo(() => createReleaseProcessStateMachine({ context, nodes: catalogNodes }), [catalogNodes, context]);
+  const customNodeOptions = useMemo(() => selectWorkflowProcessNodes({ machine: workflowMachine, nodes: catalogNodes }), [catalogNodes, workflowMachine]);
+  const customNodeGroups = useMemo(() => {
+    const groups = [];
+    const byProcess = new Map();
+    for (const node of customNodeOptions) {
+      const processId = node.workflowProcessId || node.processId || "other";
+      let group = byProcess.get(processId);
+      if (!group) {
+        group = { id: processId, title: node.workflowProcessTitle || node.processTitle || processTitleForId(processId), nodes: [] };
+        byProcess.set(processId, group);
+        groups.push(group);
+      }
+      group.nodes.push(node);
+    }
+    return groups;
+  }, [customNodeOptions]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
   const effectiveInitializationNode = useMemo(() => catalogNodes.length > 0 ? { ...initializationNode, nextNodeIds: [catalogNodes[0].id] } : initializationNode, [catalogNodes, initializationNode]);
   const allNodes = useMemo(() => [effectiveInitializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, effectiveInitializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
-    const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId));
+    // 用户需求点: 历史节点即使已不在当前 catalog 也要保留查看，但不能因此进入当前候选集合。
+    const timeline = state.timeline.filter((item) => itemMatchesContext(item, context));
     const completedIds = new Set(timeline.map((item) => item.nodeId));
     const pending = state.pending
-      .filter((item) => knownNodeIds.has(item.nodeId) && !completedIds.has(item.nodeId));
+      .filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
     return { ...state, timeline, pending };
-  }, [knownNodeIds, state]);
+  }, [context, knownNodeIds, state]);
   const nodeById = useMemo(() => new Map(allNodes.map((node) => [node.id, node])), [allNodes]);
   const completedRows = useMemo(() => groupCompletedTimelineRows(visibleState.timeline), [visibleState.timeline]);
   const runningCount = visibleState.pending.filter((item) => item.status === "running").length;
@@ -258,9 +328,22 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   useEffect(() => {
     hydratedKey.current = "";
     const loaded = readState(key, new Set([effectiveInitializationNode.id, ...catalogNodes.map((node) => node.id)]));
-    setState(ensureInitializationFirst(loaded, effectiveInitializationNode));
+    if (!localMutationRef.current) {
+      setState(seedNextRecommendations(ensureInitializationFirst(loaded, effectiveInitializationNode), [effectiveInitializationNode, ...catalogNodes]));
+    }
     setStorageWarning("");
   }, [catalogNodes, effectiveInitializationNode, key]);
+
+  useEffect(() => {
+    localMutationRef.current = false;
+  }, [key]);
+
+  useEffect(() => {
+    setState((previous) => seedNextRecommendations(
+      { ...previous, context: { ...context } },
+      [effectiveInitializationNode, ...catalogNodes],
+    ));
+  }, [catalogNodes, context, effectiveInitializationNode]);
 
   useEffect(() => () => {
     runGenerationRef.current += 1;
@@ -299,16 +382,66 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       if (cancelled) return;
       if (Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0) setRemoteCatalog(catalogPayload.nodes);
       if (statePayload?.state && isRecord(statePayload.state)) {
-        setState((previous) => ensureInitializationFirst({ ...previous, ...statePayload.state }, effectiveInitializationNode));
+        setState((previous) => seedNextRecommendations(
+          // 用户需求点: 用户操作优先，避免网络较慢时服务端旧快照抹掉刚添加或正在执行的节点。
+          localMutationRef.current ? previous :
+          ensureInitializationFirst((() => {
+            const remoteState = statePayload.state;
+            const sourceNodes = Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0 ? catalogPayload.nodes : catalogNodes;
+            const knownIds = new Set([
+              effectiveInitializationNode.id,
+              ...sourceNodes.map((node) => node.id),
+              ...(Array.isArray(previous.customNodes) ? previous.customNodes : []).map((node) => node.id),
+            ]);
+            const remoteTimeline = (Array.isArray(remoteState.timeline) ? remoteState.timeline : [])
+              .map(normalizeTimelineItem)
+              .filter(Boolean)
+              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context));
+            const completedIds = new Set(remoteTimeline.map((item) => item.nodeId));
+            const remotePending = (Array.isArray(remoteState.pending) ? remoteState.pending : [])
+              .map(normalizePendingItem)
+              .filter(Boolean)
+              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
+            // customNodes 尚未由后端持久化，保留本地自定义节点及其待执行实例。
+            const localCustomNodes = Array.isArray(previous.customNodes) ? previous.customNodes : [];
+            const localCustomPending = (Array.isArray(previous.pending) ? previous.pending : [])
+              .filter((item) => localCustomNodes.some((node) => node.id === item.nodeId));
+            return {
+              ...previous,
+              ...remoteState,
+              timeline: remoteTimeline,
+              pending: uniqueByNodeId([...remotePending, ...localCustomPending]),
+              customNodes: localCustomNodes,
+              context: { ...context },
+            };
+          })(), effectiveInitializationNode),
+          [effectiveInitializationNode, ...(Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0 ? catalogPayload.nodes : catalogNodes)],
+        ));
       }
     });
     return () => { cancelled = true; };
-  }, [context.businessLine, context.platform, context.version, context.batch, effectiveInitializationNode, workspace]);
+  }, [catalogNodes, context, effectiveInitializationNode, workspace]);
+
+  // 用户需求点: 节点详情必须反映最新运行态，完成后立即切换为只读，不能继续显示执行按钮。
+  useEffect(() => {
+    setInspector((previous) => {
+      if (!previous?.item?.id) return previous;
+      const latest = [...(Array.isArray(state.timeline) ? state.timeline : []), ...(Array.isArray(state.pending) ? state.pending : [])]
+        .find((entry) => entry.id === previous.item.id);
+      if (!latest) return previous;
+      const mode = latest.status === "completed" ? "completed" : latest.status === "failed" ? "failed" : "pending";
+      return previous.item === latest && previous.mode === mode ? previous : { ...previous, item: latest, mode };
+    });
+  }, [state]);
 
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
     const node = nodeById.get(item.nodeId);
     if (!node) return;
+    if (!itemMatchesContext(item, context) || (node.scopeKey && node.scopeKey !== `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`)) {
+      setMessage("节点不属于当前业务、平台和版本上下文");
+      return;
+    }
     const inputError = validateNodeInputs(node, item);
     if (inputError) {
       setMessage(inputError);
@@ -320,11 +453,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     const isCurrentRun = () => runKey === activeKeyRef.current && runGeneration === runGenerationRef.current;
     const controller = new AbortController();
     const startedAt = Date.now();
+    localMutationRef.current = true;
     controllers.current.set(item.id, { controller, token: runToken });
-    setState((previous) => ({
+    setState((previous) => seedNextRecommendations({
       ...previous,
       pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
-    }));
+    }, [effectiveInitializationNode, ...catalogNodes]));
     try {
       const actionId = node.sourcePresetId || node.id;
       const requestPayload = {
@@ -338,6 +472,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         itemId: item.id,
         inputs: item.inputs || {},
         confirmationFingerprint: item.confirmationFingerprint || "",
+        scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
+        processId: node.processId || item.processId || "",
       };
       let result;
       if (typeof fetch === "function" && node.skill !== "custom") {
@@ -354,7 +490,14 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-        result = { runId: payload.runId, message: payload.result?.output || payload.result?.graph || `${node.title} 已完成`, ...payload };
+        // 用户需求点: AgentFlow 返回的 graph 是对象，页面提示和时间线消息必须始终是可渲染文本，不能把运行图对象直接交给 React。
+        const rawMessage = payload.message || payload.result?.output || payload.result?.message;
+        result = {
+          ...payload,
+          runId: payload.runId,
+          message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
+          output: payload.result?.output || payload.result?.graph || payload.result,
+        };
       } else {
         result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
         signal: controller.signal,
@@ -388,38 +531,51 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           ...createCompletionMetadata({ operator: currentOperator, startedAt: currentItem.startedAt || startedAt, completedAt }),
         }];
         const pending = previous.pending.filter((entry) => entry.id !== item.id);
-        const blocked = new Set([...timeline.map((entry) => entry.nodeId || entry.id), ...pending.map((entry) => entry.nodeId)]);
-        const inferredIds = (node.nextNodeIds || []).slice(0, 2).filter((id) => !blocked.has(id) && nodeById.has(id));
-        return { ...previous, timeline, pending: [...pending, ...inferredIds.map((id) => makePending(nodeById.get(id)))] };
+        return seedNextRecommendations(
+          { ...previous, timeline, pending, context: { ...context } },
+          [effectiveInitializationNode, ...catalogNodes],
+        );
       });
       if (isCurrentRun()) setMessage(result.message || `${node.title} 已完成`);
     } catch (error) {
       if (error?.name === "AbortError" || !isCurrentRun()) return;
-      setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator } : entry) }));
+      setState((previous) => seedNextRecommendations({
+        ...previous,
+        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator } : entry),
+      }, [effectiveInitializationNode, ...catalogNodes]));
       setMessage(`${node.title} 执行失败`);
     } finally {
       if (controllers.current.get(item.id)?.token === runToken) controllers.current.delete(item.id);
     }
-  }, [context, key, nodeById, operator, selfTestFailure]);
+  }, [catalogNodes, context, effectiveInitializationNode, key, nodeById, operator, selfTestFailure]);
 
   const cancelNode = useCallback((item) => {
+    localMutationRef.current = true;
     controllers.current.get(item?.id)?.controller?.abort();
     if (item?.runId) {
       void fetch("/api/release/runs/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: item.runId }) }).catch(() => {});
     }
     if (!item) return;
-    setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "" } : entry) }));
+    setState((previous) => seedNextRecommendations({
+      ...previous,
+      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "" } : entry),
+    }, [effectiveInitializationNode, ...catalogNodes]));
     setMessage(`${item.title} 已取消`);
-  }, []);
+  }, [catalogNodes, effectiveInitializationNode]);
 
   const retryNode = useCallback((item) => {
     if (!item || item.status !== "failed") return;
+    localMutationRef.current = true;
     const pending = { ...item, status: "pending", error: "", failedAt: undefined, progress: 0 };
-    setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? pending : entry) }));
+    setState((previous) => seedNextRecommendations({
+      ...previous,
+      pending: previous.pending.map((entry) => entry.id === item.id ? pending : entry),
+    }, [effectiveInitializationNode, ...catalogNodes]));
     void executeNode(pending);
-  }, [executeNode]);
+  }, [catalogNodes, effectiveInitializationNode, executeNode]);
 
   const updateNodeInput = useCallback((itemIdValue, inputKey, value) => {
+    localMutationRef.current = true;
     setState((previous) => ({
       ...previous,
       pending: previous.pending.map((entry) => entry.id === itemIdValue
@@ -439,7 +595,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             max={schema.max}
             step={schema.step}
             placeholder={schema.placeholder}
-            value={item.inputs?.[schema.key] ?? ""}
+            value={item.inputs?.[schema.key] ?? schema.defaultValue ?? ""}
             disabled={item.status === "running"}
             onChange={(event) => updateNodeInput(item.id, schema.key, event.target.value)}
           />
@@ -457,18 +613,26 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   // 用户需求点: 自定义添加阶段是补充流程的后路，同一预置节点可以反复选择并生成独立待执行卡片。
   const addPresetNode = useCallback((preset) => {
     if (!preset) return;
+    localMutationRef.current = true;
     const node = createPresetInstance(preset);
     setState((previous) => ({
       ...previous,
       customNodes: [...previous.customNodes, node],
-      pending: [...previous.pending, makePending(node)],
+      pending: [...previous.pending, makePending(node, {}, context)],
     }));
     setAddNodeOpen(false);
     setMessage(`${node.title} 已加入待执行阶段`);
-  }, []);
+  }, [context]);
 
   const openInspector = useCallback((item) => {
-    const node = nodeById.get(item?.nodeId);
+    const node = nodeById.get(item?.nodeId) || (item?.nodeId ? {
+      id: item.nodeId,
+      title: item.title || item.nodeId,
+      description: item.description || "历史发版节点（当前配置已不可执行）",
+      category: item.category || "历史阶段",
+      skill: item.skill || "unknown",
+      inputSchema: [],
+    } : null);
     if (!item || !node) return;
     setInspector({ item, node, mode: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "pending" });
   }, [nodeById]);
@@ -524,13 +688,13 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             {visibleState.pending.length === 0 ? <div className="af-release-empty">暂无待执行阶段。</div> : visibleState.pending.map((item) => {
               const node = nodeById.get(item.nodeId);
               return <article key={item.id} className={`af-release-node af-release-node--${item.status}`} role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}>
-                <div><div className="af-release-node__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
+                <div><div className="af-release-node__topline"><span>{item.processTitle || item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
                 <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={() => cancelNode(item)}>取消</button> : item.status === "failed" ? <button type="button" onClick={() => retryNode(item)}>重试</button> : <button type="button" onClick={() => executeNode(item)}>执行</button>}</div>
               </article>;
             })}
             <div className="af-release-add-node">
-              <button type="button" className="af-release-add-node__trigger" aria-expanded={addNodeOpen} onClick={() => setAddNodeOpen((open) => !open)} disabled={catalogNodes.length === 0}><span className="af-release-add-node__icon" aria-hidden="true">+</span><span><strong>自定义添加阶段</strong><small>自由选择预置节点，允许重复添加</small></span><span className="material-symbols-outlined" aria-hidden="true">{addNodeOpen ? "expand_less" : "expand_more"}</span></button>
-              {addNodeOpen ? <div className="af-release-add-node__options">{catalogNodes.map((node) => <button key={node.id} type="button" onClick={() => addPresetNode(node)}><span><strong>{node.title}</strong><small>{node.description}</small></span><em>{node.category}</em></button>)}</div> : null}
+              <button type="button" className="af-release-add-node__trigger" aria-expanded={addNodeOpen} onClick={() => setAddNodeOpen((open) => !open)} disabled={customNodeOptions.length === 0}><span className="af-release-add-node__icon" aria-hidden="true">+</span><span><strong>自定义添加阶段</strong><small>从当前业务线、平台和批次的流程节点中选择，可重复添加</small></span><span className="material-symbols-outlined" aria-hidden="true">{addNodeOpen ? "expand_less" : "expand_more"}</span></button>
+              {addNodeOpen ? <div className="af-release-add-node__options">{customNodeGroups.map((group) => <section key={group.id} className="af-release-add-node__group"><h4>{group.title}</h4>{group.nodes.map((node) => <button key={node.id} type="button" onClick={() => addPresetNode(node)}><span><strong>{node.title}</strong><small>{node.description}</small></span><em>{node.category}</em></button>)}</section>)}</div> : null}
             </div>
           </div>
         </section>

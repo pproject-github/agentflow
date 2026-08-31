@@ -82,7 +82,10 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
   const configuredActionIds = workflowActionIds(workflow, scope);
   if (workflow) {
     // 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。
-    const workflowNodes = eligibleNodes.filter((node) => configuredActionIds.has(node.id));
+    const workflowVersion = String(config?.version || "1");
+    const workflowNodes = eligibleNodes
+      .filter((node) => configuredActionIds.has(node.id))
+      .map((node) => ({ ...node, workflowId: workflow.id, workflowVersion }));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
       const stageNodes = workflowStageNodeIds(stage).map((id) => byId.get(id)).filter(Boolean);
@@ -101,9 +104,12 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     for (const process of processes) for (const nodeId of process.nodeIds) nodeToProcess.set(nodeId, process.id);
     return {
       context: scope,
+      workflowId: workflow.id,
+      workflowVersion,
       nodes: workflowNodes,
       workflow: {
         id: workflow.id,
+        version: workflowVersion,
         title: workflow.title,
         evidence: { ...workflow.evidence },
       },
@@ -132,7 +138,7 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const nodeToProcess = new Map();
   for (const process of processes) for (const nodeId of process.nodeIds) nodeToProcess.set(nodeId, process.id);
-  return { context: scope, nodes: eligibleNodes, workflow: null, processes, nodeToProcess };
+  return { context: scope, workflowId: "", workflowVersion: String(config?.version || "1"), nodes: eligibleNodes, workflow: null, processes, nodeToProcess };
 }
 
 // 用户需求点: 自定义阶段只能从当前业务线、平台和批次对应的流程节点中选择，
@@ -149,6 +155,8 @@ export function selectWorkflowProcessNodes({ machine, nodes = [] } = {}) {
       seen.add(node.id);
       selected.push({
         ...node,
+        workflowId: node.workflowId || machine.workflowId || machine.workflow?.id || "",
+        workflowVersion: node.workflowVersion || machine.workflowVersion || machine.workflow?.version || "",
         workflowProcessId: process.id,
         workflowProcessTitle: process.title,
         workflowProcessOrder: process.order,
