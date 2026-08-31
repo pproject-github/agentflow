@@ -222,6 +222,55 @@ test("release runtime catalog and execution reject actions outside the selected 
   }
 });
 
+test("initialization preparation reuses an existing active release without running create", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-initialization-api-")));
+  const skillsRoot = path.join(tempRoot, "release-skills");
+  const managementDir = path.join(skillsRoot, "skills", "release-management");
+  fs.mkdirSync(path.join(managementDir, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(managementDir, "SKILL.md"), "---\nname: release-management\ndescription: Management\n---\n");
+  fs.writeFileSync(path.join(managementDir, "scripts", "run.py"), "raise SystemExit('must not execute')\n");
+  const manifest = path.join(skillsRoot, "release-data", "likee", "active", "android", "1.1.0.yaml");
+  fs.mkdirSync(path.dirname(manifest), { recursive: true });
+  fs.writeFileSync(manifest, "product: likee\nplatform: android\nmajor_version: '1.1'\nminor_version: '1.1.0'\nbatch: initial\n");
+  const previousRoot = process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+  process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = skillsRoot;
+  let server;
+  try {
+    const nonce = Date.now();
+    const [{ loginOrCreateUser }, { startUiServer }] = await Promise.all([
+      import(`../bin/lib/auth.mjs?release-initialization-api=${nonce}`),
+      import(`../bin/lib/ui-server.mjs?release-initialization-api=${nonce}`),
+    ]);
+    const user = loginOrCreateUser("release-initialization-owner", "release-password");
+    server = await startUiServer({ workspaceRoot: path.join(tempRoot, "workspace"), host: "127.0.0.1", port: 0, staticDir: path.join(tempRoot, "static"), enableWorkspaceScheduler: false });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const response = await fetch(`${base}/api/release/nodes/run`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: "release-initialization",
+        businessLine: "likee",
+        platform: "android",
+        version: "1.1.0",
+        batch: "initial",
+        actionId: "release-initialization:prepare-context",
+        itemId: "release-initialization:prepare-context-item",
+        inputs: {},
+      }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.result.reused, true);
+    assert.equal(payload.state.timeline.some((item) => item.nodeId === "release-initialization:prepare-context"), true);
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;
+    else process.env.AGENTFLOW_RELEASE_SKILLS_ROOT = previousRoot;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("release catalog exposes composites and rejects composites with invalid internal membership", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-composite-api-")));
   const skillsRoot = path.join(tempRoot, "release-skills");

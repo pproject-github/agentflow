@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   createInitializationNode,
+  createInitializationPreparationNode,
+  seedInitializationPreparationState,
   createCompletionMetadata,
   resolveReleaseContext,
   seedInitializationState,
@@ -44,6 +46,49 @@ test("creates an initialization node with the active release context", () => {
   assert.equal(node.workflowId, "likee-android-release");
   assert.equal(node.scopeKey, "likee/android/6.2.1/initial");
   assert.deepEqual(node.contextSnapshot, node.inputs);
+  assert.deepEqual(node.nextNodeIds, []);
+});
+
+test("initialization exposes a configurable activity preparation step", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  const node = createInitializationNode(context, { path: "/workspace/likee" });
+  const preparation = createInitializationPreparationNode(context, { path: "/workspace/likee" });
+
+  assert.equal(preparation.nodeId, undefined);
+  assert.equal(preparation.id, "release-initialization:prepare-context");
+  assert.equal(preparation.initializationActionId, "release-management:create-active-release");
+  assert.equal(preparation.inputSchema.some((input) => input.key === "publish_date"), true);
+  assert.match(preparation.inputs.publish_date, /^\d{4}-\d{2}-\d{2}$/);
+  const seeded = seedInitializationPreparationState({ timeline: [], pending: [], customNodes: [] }, node, preparation);
+  assert.equal(seeded.timeline[0].nodeId, "release-initialization");
+  assert.deepEqual(seeded.pending.map((item) => item.nodeId), [preparation.id]);
+  assert.equal(seeded.initialization.status, "pending");
+  const blocked = seedNextRecommendations(seeded, [node, {
+    id: "release-git:create-release-branch",
+    title: "Create Release Branch",
+    businessLines: ["likee"],
+    platforms: ["android"],
+  }]);
+  assert.deepEqual(blocked.pending.map((item) => item.nodeId), [preparation.id]);
+  const ready = seedNextRecommendations({
+    ...seeded,
+    initialization: { status: "completed", preparationNodeId: preparation.id },
+    timeline: [...seeded.timeline, { nodeId: preparation.id, status: "completed" }],
+    pending: [],
+  }, [node, {
+    id: "release-git:create-release-branch",
+    title: "Create Release Branch",
+    businessLines: ["likee"],
+    platforms: ["android"],
+  }]);
+  assert.equal(ready.pending.length, 1);
+
+  const legacyEmptyInput = seedInitializationPreparationState({
+    timeline: [seeded.timeline[0]],
+    pending: [{ id: "legacy", nodeId: preparation.id, status: "pending", inputs: { publish_date: "" } }],
+    customNodes: [],
+  }, node, preparation);
+  assert.match(legacyEmptyInput.pending[0].inputs.publish_date, /^\d{4}-\d{2}-\d{2}$/);
 });
 
 test("seeds initialization as completed when the release context has no state", () => {
@@ -67,6 +112,19 @@ test("seeds initialization as completed when the release context has no state", 
 
   const unchanged = seedInitializationState(seeded, node);
   assert.equal(unchanged, seeded);
+});
+
+test("does not re-block a legacy timeline that already has release actions", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  const node = createInitializationNode(context);
+  const preparation = createInitializationPreparationNode(context);
+  const state = seedInitializationPreparationState({
+    timeline: [{ nodeId: node.id, status: "completed" }, { nodeId: "release-git:create-release-branch", status: "completed" }],
+    pending: [],
+    customNodes: [],
+  }, node, preparation);
+  assert.equal(state.initialization.status, "completed");
+  assert.deepEqual(state.pending, []);
 });
 
 test("recommends the first available node after completed initialization", () => {

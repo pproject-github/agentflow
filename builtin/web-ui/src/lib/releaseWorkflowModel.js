@@ -107,7 +107,8 @@ export function createInitializationNode(context = {}, workspace) {
     businessLines: [businessLine],
     platforms: [platform],
     durationMs: 300,
-    nextNodeIds: ["release-setup"],
+    // 后续流程由共享状态机的 entryStageIds/流程状态决定，不在初始化节点上硬编码。
+    nextNodeIds: [],
     inputSchema: [],
     inputs,
     contextSnapshot: { ...inputs },
@@ -116,7 +117,44 @@ export function createInitializationNode(context = {}, workspace) {
   };
 }
 
-// 用户需求点: 进入发版页即代表业务线、平台、版本已声明，初始化节点必须直接落在已完成时间线，不应再触发执行。
+// 用户需求点: 活动发版上下文是初始化阶段的前置准备，不能把后续推荐流程固定为创建分支。
+export function createInitializationPreparationNode(context = {}, workspace) {
+  const businessLine = String(context.businessLine || "likee").trim().toLowerCase() || "likee";
+  const platform = String(context.platform || "android").trim().toLowerCase() || "android";
+  const version = String(context.version || "1.0.0").trim() || "1.0.0";
+  const batch = String(context.batch || "initial").trim().toLowerCase() || "initial";
+  const majorVersion = version.split(".").slice(0, 2).join(".");
+  const today = new Date();
+  const defaultPublishDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  return {
+    id: "release-initialization:prepare-context",
+    title: "准备活动发版上下文",
+    description: "复用已有活动发版；不存在时创建首包活动发版。",
+    skill: "release-initialization",
+    action: "prepare-context",
+    category: "发版初始化",
+    requiresConfirmation: true,
+    businessLines: [businessLine],
+    platforms: [platform],
+    durationMs: 300,
+    nextNodeIds: [],
+    inputSchema: [{
+      key: "publish_date",
+      label: "发布日期",
+      type: "date",
+      required: false,
+      defaultValue: defaultPublishDate,
+      placeholder: "活动发版不存在时必填",
+    }],
+    inputs: { publish_date: defaultPublishDate },
+    initializationActionId: "release-management:create-active-release",
+    contextSnapshot: { businessLine, platform, version, batch, major_version: majorVersion },
+    scopeKey: `${businessLine}/${platform}/${version}/${batch}`,
+    workspace: workspaceValue(workspace),
+  };
+}
+
+// 用户需求点: 进入发版页即代表业务线、平台、版本已声明；活动发版写入由独立的初始化前置步骤负责。
 export function seedInitializationState(state, node) {
   if (!state || !node) return state;
   const timeline = Array.isArray(state.timeline) ? state.timeline : [];
@@ -148,6 +186,62 @@ export function seedInitializationState(state, node) {
   };
 }
 
+// 用户需求点: 初始化声明和活动发版准备分为一个可恢复的前置步骤，准备完成后才进入状态机推荐。
+export function seedInitializationPreparationState(state, node, preparationNode) {
+  if (!state || !node || !preparationNode) return state;
+  const seeded = seedInitializationState(state, node);
+  const timeline = Array.isArray(seeded.timeline) ? seeded.timeline : [];
+  const pending = Array.isArray(seeded.pending) ? seeded.pending : [];
+  const preparationCompleted = timeline.some((item) => item?.nodeId === preparationNode.id
+    && ["completed", "succeeded", "skipped"].includes(String(item.status || "").toLowerCase()));
+  if (preparationCompleted) {
+    return {
+      ...seeded,
+      initialization: { status: "completed", preparationNodeId: preparationNode.id },
+    };
+  }
+  // 历史时间线已有实际发版动作时，说明旧版本已经完成活动发版上下文准备，避免回放时重新阻断流程。
+  if (timeline.some((item) => item?.nodeId && item.nodeId !== node.id && !String(item.nodeId).startsWith("release-initialization:"))) {
+    return {
+      ...seeded,
+      initialization: { status: "completed", preparationNodeId: preparationNode.id },
+    };
+  }
+  if (pending.some((item) => item?.nodeId === preparationNode.id)) {
+    return {
+      ...seeded,
+      initialization: { status: "pending", preparationNodeId: preparationNode.id },
+      pending: pending.map((item) => item?.nodeId === preparationNode.id
+        ? { ...item, inputs: defaultInputsForNode(preparationNode, item.inputs || {}) }
+        : item),
+    };
+  }
+  const timestamp = Date.now();
+  return {
+    ...seeded,
+    initialization: { status: "pending", preparationNodeId: preparationNode.id },
+    pending: [{
+      id: `${preparationNode.id}-${timestamp}`,
+      nodeId: preparationNode.id,
+      title: preparationNode.title,
+      description: preparationNode.description,
+      category: preparationNode.category,
+      status: "pending",
+      progress: 0,
+      createdAt: timestamp,
+      operator: "未记录",
+      inputs: { ...preparationNode.inputs },
+      scopeKey: preparationNode.scopeKey,
+      contextSnapshot: { ...preparationNode.contextSnapshot },
+      processId: "initialization",
+      processOrder: 0,
+      processTitle: "发版初始化",
+      workflowId: node.workflowId || "",
+      initializationActionId: preparationNode.initializationActionId,
+    }, ...pending],
+  };
+}
+
 // 用户需求点: 初始化后只能选择、推荐和运行当前业务、平台、版本（及批次）集合内的节点。
 export function nodeMatchesContext(node, context) {
   if (!node || !context) return false;
@@ -168,8 +262,14 @@ export function seedNextRecommendations(state, nodes = [], config) {
   const timeline = Array.isArray(state.timeline) ? state.timeline : [];
   const pending = Array.isArray(state.pending) ? state.pending : [];
   if (timeline.length === 0) return state;
-  const initialization = timeline.find((item) => item?.nodeId === "release-initialization") || timeline[0];
-  const context = state.context || initialization?.contextSnapshot || initialization?.inputs || {};
+  const initialization = state.initialization;
+  if (initialization?.status === "pending") {
+    const preparationDone = timeline.some((item) => item?.nodeId === initialization.preparationNodeId
+      && ["completed", "succeeded", "skipped"].includes(String(item.status || "").toLowerCase()));
+    if (!preparationDone) return state;
+  }
+  const initializationTimeline = timeline.find((item) => item?.nodeId === "release-initialization") || timeline[0];
+  const context = state.context || initializationTimeline?.contextSnapshot || initializationTimeline?.inputs || {};
   const machine = createReleaseProcessStateMachine({
     context,
     config,

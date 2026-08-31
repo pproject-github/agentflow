@@ -18,6 +18,9 @@ test("release stages stack vertically with a directional dashed handoff into 添
   assert.doesNotMatch(source, /<span>进入添加阶段<\/span>/);
   assert.doesNotMatch(source, /<h3>待执行阶段<\/h3>/);
   assert.match(source, /selectWorkflowProcessNodes/);
+  assert.match(source, /createInitializationPreparationNode/);
+  assert.match(source, /seedInitializationPreparationState/);
+  assert.doesNotMatch(source, /nextNodeIds:\s*\[catalogNodes\[0\]\.id\]/);
   assert.match(source, /af-release-add-node__group/);
   assert.match(css, /\.af-release-add-node__group\s*\{/);
   assert.match(css, /\.af-release-flow-groups\s*\{[^}]*grid-template-columns:\s*1fr/s);
@@ -59,6 +62,21 @@ test("release branch inputs render their context-derived default value", async (
   assert.match(inspector, /defaultInputsForNode\(node, item\?\.inputs\)/);
 });
 
+test("execution validates and sends schema defaults when a remote snapshot omitted inputs", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /const value = item\?\.inputs\?\.\[schema\.key\] \?\? schema\.defaultValue/);
+  assert.match(source, /const normalizedInputs = defaultInputsForNode\(node, item\.inputs \|\| \{\}\)/);
+  assert.match(source, /inputs: normalizedInputs/);
+});
+
+test("idempotent initialization preview completion is committed to the timeline", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /if \(previewPayload\.status !== "completed"\)/);
+  assert.match(source, /const rawMessage = previewPayload\.message/);
+  assert.match(source, /result = \{[\s\S]*\.\.\.previewPayload,[\s\S]*message: typeof rawMessage/);
+  assert.match(source, /if \(!result\) \{/);
+});
+
 test("release records preserve workflow identity and picker derives from machine", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /workflowId:\s*stringValue\(value\.workflowId\)/);
@@ -83,6 +101,14 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(inspector, /externalInputSchemaForNode/);
   assert.match(model, /export function normalizeCompositeSteps/);
   assert.match(model, /export function externalInputSchemaForNode/);
+});
+
+test("retry keeps failed execution context and does not bubble into card navigation", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /const retryItem = \{ \.\.\.item, status: "failed", retrying: true/);
+  assert.match(source, /item\.status === "failed" \|\| item\.retrying/);
+  assert.match(source, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); retryNode\(item\); \}\}/);
+  assert.match(source, /setMessage\(`\$\{item\.title \|\| item\.nodeId \|\| "发版节点"\} 定义已失效/);
 });
 
 test("release runtime completion persistence keeps workflow and scope metadata", async () => {

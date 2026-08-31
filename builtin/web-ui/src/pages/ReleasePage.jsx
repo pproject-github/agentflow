@@ -37,8 +37,28 @@ export default function ReleasePage({ authUser }) {
     void load();
   }, [load]);
 
-  const releaseWorkspace = useMemo(() => custom[0] || builtins[0] || FALLBACK_WORKSPACE, [builtins, custom]);
   const navigationSearch = typeof window === "undefined" ? "" : window.location.search;
+  const releaseWorkspace = useMemo(() => {
+    const params = new URLSearchParams(navigationSearch);
+    const requestedPath = String(params.get("workspacePath") || "").trim();
+    const requestedId = String(params.get("workspaceId") || "").trim();
+    const candidates = [...custom, ...builtins].filter(Boolean);
+    if (requestedPath || requestedId) {
+      const matched = candidates.find((item) => (
+        (requestedId && String(item.id || "") === requestedId)
+        || (requestedPath && String(item.path || "") === requestedPath)
+      ));
+      if (matched) return matched;
+      return { ...FALLBACK_WORKSPACE, ...(requestedId ? { id: requestedId } : {}), ...(requestedPath ? { path: requestedPath } : {}) };
+    }
+    // 带业务线/平台/版本参数的发版深链必须保持稳定工作空间。
+    // /api/workspaces 是异步加载的，不能让首屏 fallback 在请求过程中切换到任意第一个工作空间，
+    // 否则 executeNode 的 scope key 会变化并丢弃已经发起的执行结果。
+    if (params.has("businessLine") || params.has("platform") || params.has("version") || params.has("batch")) {
+      return FALLBACK_WORKSPACE;
+    }
+    return candidates[0] || FALLBACK_WORKSPACE;
+  }, [builtins, custom, navigationSearch]);
   const navigationContext = useMemo(() => {
     const params = new URLSearchParams(navigationSearch);
     return params.has("businessLine") || params.has("platform") || params.has("version")

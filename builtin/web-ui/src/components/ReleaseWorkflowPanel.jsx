@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
-import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, resolveReleaseContext, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
 import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
@@ -268,7 +268,9 @@ function itemMatchesContext(item, context) {
 
 function validateNodeInputs(node, item) {
   for (const schema of node?.inputSchema || []) {
-    const value = item?.inputs?.[schema.key];
+    // 服务端旧快照或异步回填可能暂时没有保存输入；执行时应使用节点定义的默认值，
+    // 否则页面虽显示默认参数，校验却仍会把它当成空值并提前返回，用户看起来像点击无反应。
+    const value = item?.inputs?.[schema.key] ?? schema.defaultValue;
     if (schema.required && (value === undefined || value === null || String(value).trim() === "")) {
       return `请填写${schema.label}`;
     }
@@ -290,16 +292,21 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     ? resolveReleaseContext(workspace || {}, navigationContext)
     : inferReleaseContext(workspace || {}), [navigationContext, workspace]);
   const initialNode = useMemo(() => createInitializationNode(inferred, workspace), [inferred, workspace]);
+  const initialPreparationNode = useMemo(() => createInitializationPreparationNode(inferred, workspace), [inferred, workspace]);
   const context = inferred;
   const [state, setState] = useState(() => seedNextRecommendations(
-    ensureInitializationFirst(
-      readState(
-        storageKey(workspace, inferred),
-        new Set([initialNode.id, ...getReleaseNodes(inferred).map((node) => node.id)]),
+    seedInitializationPreparationState(
+      ensureInitializationFirst(
+        readState(
+          storageKey(workspace, inferred),
+          new Set([initialNode.id, initialPreparationNode.id, ...getReleaseNodes(inferred).map((node) => node.id)]),
+        ),
+        initialNode,
       ),
       initialNode,
+      initialPreparationNode,
     ),
-    [initialNode, ...getReleaseNodes(inferred)],
+    [initialNode, initialPreparationNode, ...getReleaseNodes(inferred)],
   ));
   const [storageWarning, setStorageWarning] = useState("");
   const [message, setMessage] = useState("");
@@ -336,8 +343,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     return groups;
   }, [customNodeOptions]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
-  const effectiveInitializationNode = useMemo(() => catalogNodes.length > 0 ? { ...initializationNode, nextNodeIds: [catalogNodes[0].id] } : initializationNode, [catalogNodes, initializationNode]);
-  const allNodes = useMemo(() => [effectiveInitializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, effectiveInitializationNode, state.customNodes]);
+  const initializationPreparationNode = useMemo(() => createInitializationPreparationNode(context, workspace), [context, workspace]);
+  const allNodes = useMemo(() => [initializationNode, initializationPreparationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, initializationPreparationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
     const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context));
@@ -352,12 +359,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
 
   useEffect(() => {
     hydratedKey.current = "";
-    const loaded = readState(key, new Set([effectiveInitializationNode.id, ...catalogNodes.map((node) => node.id)]));
+    const loaded = readState(key, new Set([initializationNode.id, initializationPreparationNode.id, ...catalogNodes.map((node) => node.id)]));
     if (!localMutationRef.current) {
-      setState(seedNextRecommendations(ensureInitializationFirst(loaded, effectiveInitializationNode), [effectiveInitializationNode, ...catalogNodes]));
+      setState(seedNextRecommendations(seedInitializationPreparationState(ensureInitializationFirst(loaded, initializationNode), initializationNode, initializationPreparationNode), [initializationNode, initializationPreparationNode, ...catalogNodes]));
     }
     setStorageWarning("");
-  }, [catalogNodes, effectiveInitializationNode, key]);
+  }, [catalogNodes, initializationNode, initializationPreparationNode, key]);
 
   useEffect(() => {
     localMutationRef.current = false;
@@ -366,9 +373,9 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   useEffect(() => {
     setState((previous) => seedNextRecommendations(
       { ...previous, context: { ...context } },
-      [effectiveInitializationNode, ...catalogNodes],
+      [initializationNode, initializationPreparationNode, ...catalogNodes],
     ));
-  }, [catalogNodes, context, effectiveInitializationNode]);
+  }, [catalogNodes, context, initializationNode, initializationPreparationNode]);
 
   useEffect(() => () => {
     runGenerationRef.current += 1;
@@ -410,11 +417,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         setState((previous) => seedNextRecommendations(
           // 用户需求点: 用户操作优先，避免网络较慢时服务端旧快照抹掉刚添加或正在执行的节点。
           localMutationRef.current ? previous :
-          ensureInitializationFirst((() => {
+          seedInitializationPreparationState(ensureInitializationFirst((() => {
             const remoteState = statePayload.state;
             const sourceNodes = Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0 ? catalogPayload.nodes : catalogNodes;
             const knownIds = new Set([
-              effectiveInitializationNode.id,
+              initializationNode.id,
+              initializationPreparationNode.id,
               ...sourceNodes.map((node) => node.id),
               ...(Array.isArray(previous.customNodes) ? previous.customNodes : []).map((node) => node.id),
             ]);
@@ -439,13 +447,13 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               customNodes: localCustomNodes,
               context: { ...context },
             };
-          })(), effectiveInitializationNode),
-          [effectiveInitializationNode, ...(Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0 ? catalogPayload.nodes : catalogNodes)],
+          })(), initializationNode), initializationNode, initializationPreparationNode),
+          [initializationNode, initializationPreparationNode, ...(Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0 ? catalogPayload.nodes : catalogNodes)],
         ));
       }
     });
     return () => { cancelled = true; };
-  }, [catalogNodes, context, effectiveInitializationNode, workspace]);
+  }, [catalogNodes, context, initializationNode, initializationPreparationNode, workspace]);
 
   // 用户需求点: 节点详情必须反映最新运行态，完成后立即切换为只读，不能继续显示执行按钮。
   useEffect(() => {
@@ -462,12 +470,17 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
     const node = nodeById.get(item.nodeId);
-    if (!node) return;
+    if (!node) {
+      setMessage(`${item.title || item.nodeId || "发版节点"} 定义已失效，请刷新节点列表后重试`);
+      return;
+    }
     if (!itemMatchesContext(item, context) || (node.scopeKey && node.scopeKey !== `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`)) {
       setMessage("节点不属于当前业务、平台和版本上下文");
       return;
     }
-    const inputError = validateNodeInputs(node, item);
+    const normalizedInputs = defaultInputsForNode(node, item.inputs || {});
+    const executionItem = normalizedInputs === item.inputs ? item : { ...item, inputs: normalizedInputs };
+    const inputError = validateNodeInputs(node, executionItem);
     if (inputError) {
       setMessage(inputError);
       return;
@@ -482,8 +495,8 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     controllers.current.set(item.id, { controller, token: runToken });
     setState((previous) => seedNextRecommendations({
       ...previous,
-      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
-    }, [effectiveInitializationNode, ...catalogNodes]));
+      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, inputs: normalizedInputs, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
+    }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
     try {
       const actionId = node.sourcePresetId || node.id;
       const requestPayload = {
@@ -495,11 +508,11 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         batch: context.batch || "initial",
         actionId,
         itemId: item.id,
-        inputs: item.inputs || {},
+        inputs: normalizedInputs,
         confirmationFingerprint: item.confirmationFingerprint || "",
         scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
         processId: node.processId || item.processId || "",
-        ...(node.kind === "composite" && item.status === "failed"
+        ...(node.kind === "composite" && (item.status === "failed" || item.retrying)
           ? { resumeFromStep: item.details?.steps?.find((step) => step.status === "failed")?.stepId || "" }
           : {}),
       };
@@ -510,29 +523,43 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
           const previewPayload = await previewResponse.json().catch(() => ({}));
           if (!previewResponse.ok) throw new Error(previewPayload.error || `HTTP ${previewResponse.status}`);
-          setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || entry.runId } : entry) }));
-          setInspector((previous) => previous?.item?.id === item.id ? { ...previous, item: { ...previous.item, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || previous.item.runId } } : previous);
-          setMessage("预览已生成，请在节点详情中确认后执行");
-          controllers.current.delete(item.id);
-          return;
+          // 活动发版已存在时，服务端会在 preview 请求中直接幂等复用并返回 completed。
+          // 不能把这个完成结果误当成普通预览，否则节点会一直停留在待执行，看起来像点击无反应。
+          if (previewPayload.status !== "completed") {
+            setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || entry.runId } : entry) }));
+            setInspector((previous) => previous?.item?.id === item.id ? { ...previous, item: { ...previous.item, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || previous.item.runId } } : previous);
+            setMessage("预览已生成，请在节点详情中确认后执行");
+            controllers.current.delete(item.id);
+            return;
+          }
+          const rawMessage = previewPayload.message || previewPayload.result?.output || previewPayload.result?.message;
+          result = {
+            ...previewPayload,
+            runId: previewPayload.runId,
+            message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
+            output: previewPayload.result?.output || previewPayload.result,
+            details: compositeDetailsFromResult(previewPayload, node, previewPayload.details || {}),
+          };
         }
-        const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
-        const payload = await response.json().catch(() => ({}));
-        runDetails = payload.details || payload.result?.details || (Array.isArray(payload.result?.steps) ? { steps: payload.result.steps } : undefined);
-        if (!response.ok) {
-          const error = new Error(payload.error || `HTTP ${response.status}`);
-          error.details = runDetails;
-          throw error;
+        if (!result) {
+          const response = await fetch("/api/release/nodes/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
+          const payload = await response.json().catch(() => ({}));
+          runDetails = payload.details || payload.result?.details || (Array.isArray(payload.result?.steps) ? { steps: payload.result.steps } : undefined);
+          if (!response.ok) {
+            const error = new Error(payload.error || `HTTP ${response.status}`);
+            error.details = runDetails;
+            throw error;
+          }
+          // 用户需求点: AgentFlow 返回的 graph 是对象，页面提示和时间线消息必须始终是可渲染文本，不能把运行图对象直接交给 React。
+          const rawMessage = payload.message || payload.result?.output || payload.result?.message;
+          result = {
+            ...payload,
+            runId: payload.runId,
+            message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
+            output: payload.result?.output || payload.result?.graph || payload.result,
+            details: compositeDetailsFromResult(payload, node, runDetails || {}),
+          };
         }
-        // 用户需求点: AgentFlow 返回的 graph 是对象，页面提示和时间线消息必须始终是可渲染文本，不能把运行图对象直接交给 React。
-        const rawMessage = payload.message || payload.result?.output || payload.result?.message;
-        result = {
-          ...payload,
-          runId: payload.runId,
-          message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
-          output: payload.result?.output || payload.result?.graph || payload.result,
-          details: compositeDetailsFromResult(payload, node, runDetails || {}),
-        };
       } else {
         result = await runReleaseNode(node, { ...context, inputs: item.inputs, simulateFailure: selfTestFailure }, {
         signal: controller.signal,
@@ -549,14 +576,17 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         },
         });
       }
-      if (!isCurrentRun()) return;
+      // 工作空间列表异步回填时可能只改变了前端 storage key；只要本次请求没有被取消，
+      // 仍应提交 AgentFlow 已返回的结果，不能静默丢弃导致节点看起来没有反应。
+      if (controller.signal.aborted) return;
       setState((previous) => {
         const completed = previous.timeline.some((entry) => (entry.nodeId || entry.id) === node.id);
         const currentItem = previous.pending.find((entry) => entry.id === item.id) || item;
+        const persistedItem = { ...currentItem, retrying: undefined };
         const completedAt = Date.now();
         const currentOperator = currentItem.operator && currentItem.operator !== "未记录" ? currentItem.operator : operator;
         const timeline = completed ? previous.timeline : [...previous.timeline, {
-          ...currentItem,
+          ...persistedItem,
           kind: currentItem.kind || node.kind || "",
           compositeId: currentItem.compositeId || node.compositeId || "",
           details: currentItem.kind === "composite" || node.kind === "composite"
@@ -577,22 +607,30 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         }];
         const pending = previous.pending.filter((entry) => entry.id !== item.id);
         return seedNextRecommendations(
-          { ...previous, timeline, pending, context: { ...context } },
-          [effectiveInitializationNode, ...catalogNodes],
+          {
+            ...previous,
+            timeline,
+            pending,
+            context: { ...context },
+            ...(node.id === initializationPreparationNode.id
+              ? { initialization: { status: "completed", preparationNodeId: initializationPreparationNode.id } }
+              : {}),
+          },
+          [initializationNode, initializationPreparationNode, ...catalogNodes],
         );
       });
-      if (isCurrentRun()) setMessage(result.message || `${node.title} 已完成`);
+      setMessage(result.message || `${node.title} 已完成`);
     } catch (error) {
-      if (error?.name === "AbortError" || !isCurrentRun()) return;
+      if (error?.name === "AbortError") return;
       setState((previous) => seedNextRecommendations({
         ...previous,
         pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? compositeDetailsFromResult({ details: error?.details }, node, entry.details || {}) : entry.details } : entry),
-      }, [effectiveInitializationNode, ...catalogNodes]));
+      }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
       setMessage(`${node.title} 执行失败`);
     } finally {
       if (controllers.current.get(item.id)?.token === runToken) controllers.current.delete(item.id);
     }
-  }, [catalogNodes, context, effectiveInitializationNode, key, nodeById, operator, selfTestFailure]);
+  }, [catalogNodes, context, initializationNode, initializationPreparationNode, key, nodeById, operator, selfTestFailure]);
 
   const cancelNode = useCallback((item) => {
     localMutationRef.current = true;
@@ -604,20 +642,23 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     setState((previous) => seedNextRecommendations({
       ...previous,
       pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "" } : entry),
-    }, [effectiveInitializationNode, ...catalogNodes]));
+    }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
     setMessage(`${item.title} 已取消`);
-  }, [catalogNodes, effectiveInitializationNode]);
+  }, [catalogNodes, initializationNode, initializationPreparationNode]);
 
   const retryNode = useCallback((item) => {
     if (!item || item.status !== "failed") return;
     localMutationRef.current = true;
-    const pending = { ...item, status: "pending", error: "", failedAt: undefined, progress: 0 };
+    // 保留 failed 标记传给 executeNode，使复合流程可以携带 resumeFromStep；
+    // UI 状态仍立即切换为 pending，避免用户重复点击。
+    const retryItem = { ...item, status: "failed", retrying: true, error: "", failedAt: undefined, progress: 0 };
+    const pending = { ...retryItem, status: "pending" };
     setState((previous) => seedNextRecommendations({
       ...previous,
       pending: previous.pending.map((entry) => entry.id === item.id ? pending : entry),
-    }, [effectiveInitializationNode, ...catalogNodes]));
-    void executeNode(pending);
-  }, [catalogNodes, effectiveInitializationNode, executeNode]);
+    }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
+    void executeNode(retryItem);
+  }, [catalogNodes, initializationNode, initializationPreparationNode, executeNode]);
 
   const updateNodeInput = useCallback((itemIdValue, inputKey, value) => {
     localMutationRef.current = true;
@@ -649,7 +690,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     </div>
   ) : null;
 
-  const renderInitializationContext = (item) => item.nodeId === effectiveInitializationNode.id ? (
+  const renderInitializationContext = (item) => item.nodeId === initializationNode.id || item.nodeId === initializationPreparationNode.id ? (
     <div className="af-release-context-chips">
       <span>{context.businessLine}</span><span>{context.platform}</span><span>{context.version}</span>
     </div>
@@ -727,7 +768,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               const node = nodeById.get(item.nodeId);
               return <article key={item.id} className={`af-release-node af-release-node--${item.status}`} role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}>
                 <div><div className="af-release-node__topline"><span>{item.processTitle || item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
-                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={() => cancelNode(item)}>取消</button> : item.status === "failed" ? <button type="button" onClick={() => retryNode(item)}>重试</button> : <button type="button" onClick={() => executeNode(item)}>执行</button>}</div>
+                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelNode(item); }}>取消</button> : item.status === "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); retryNode(item); }}>重试</button> : <button type="button" onClick={(event) => { event.stopPropagation(); executeNode(item); }}>执行</button>}</div>
               </article>;
             })}
             <div className="af-release-add-node">
