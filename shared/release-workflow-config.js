@@ -178,13 +178,17 @@ export function workflowActionIds(workflow, context = {}) {
   return ids;
 }
 
-export function releaseActionProcessMetadata(actionId, node = {}, config = RELEASE_WORKFLOW_CONFIG) {
+export function releaseActionProcessMetadata(actionId, node = {}, config = RELEASE_WORKFLOW_CONFIG, context = {}) {
   const id = String(actionId || node?.id || "").trim();
   const skill = normalize(node.skill || id.split(":")[0]);
   const configuredProcess = String(node.processId || node.process?.id || "").trim();
   let configuredStage;
   if (!configuredProcess) {
-    for (const workflow of Array.isArray(config?.workflows) ? config.workflows : []) {
+    const hasContextScope = Boolean(String(context?.businessLine || "").trim() || String(context?.platform || "").trim());
+    const workflows = hasContextScope
+      ? [selectReleaseWorkflow(context, config)].filter(Boolean)
+      : (Array.isArray(config?.workflows) ? config.workflows : []);
+    for (const workflow of workflows) {
       configuredStage = workflow.stages.find((item) => workflowStageNodeIds(item).includes(id));
       if (configuredStage) break;
     }

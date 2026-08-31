@@ -190,6 +190,12 @@ test("release runtime catalog and execution reject actions outside the selected 
     const catalog = await catalogResponse.json();
     assert.equal(catalogResponse.status, 200, JSON.stringify(catalog));
     assert.deepEqual(catalog.nodes.map((node) => node.id), ["release-git:create-release-branch"]);
+    const configured = catalog.nodes[0];
+    assert.ok(Array.isArray(configured.inputSchema));
+    assert.equal(configured.source.scriptPath, path.join(configuredDir, "run.py"));
+    assert.equal(configured.scopeKey, "likee/android/5.63.2/initial");
+    assert.equal(configured.requiresConfirmation, false);
+    assert.ok(Array.isArray(configured.nextNodeIds));
 
     const runResponse = await fetch(`${base}/api/release/nodes/run`, {
       method: "POST",
@@ -199,6 +205,15 @@ test("release runtime catalog and execution reject actions outside the selected 
     const run = await runResponse.json();
     assert.equal(runResponse.status, 409, JSON.stringify(run));
     assert.equal(run.code, "RELEASE_WORKFLOW_NODE_NOT_ALLOWED");
+
+    const previewResponse = await fetch(`${base}/api/release/nodes/preview`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspaceId: "release-allowlist", businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial", actionId: "release-demo:extra" }),
+    });
+    const preview = await previewResponse.json();
+    assert.equal(previewResponse.status, 409, JSON.stringify(preview));
+    assert.equal(preview.code, "RELEASE_WORKFLOW_NODE_NOT_ALLOWED");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousRoot === undefined) delete process.env.AGENTFLOW_RELEASE_SKILLS_ROOT;

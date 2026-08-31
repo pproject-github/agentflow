@@ -240,7 +240,7 @@ function actionDefinition({ skillRoot, skillPath, skillName, skillMeta, action, 
     processId: action?.process_id || action?.processId || action?.process?.id || action?.workflow_process_id || action?.stage_id,
     processOrder: action?.process_order ?? action?.processOrder ?? action?.process?.order ?? action?.workflow_process_order ?? action?.stage_order,
     processTitle: action?.process_title || action?.processTitle || action?.process?.title,
-  }, RELEASE_WORKFLOW_CONFIG);
+  }, RELEASE_WORKFLOW_CONFIG, context);
   const skillDir = path.dirname(skillPath);
   const scriptCandidates = [
     path.join(skillDir, "scripts", "run.py"),
@@ -419,7 +419,7 @@ export function filterReleaseActionsForWorkflow(nodes = [], context = {}, config
     .filter((node) => allowedIds.has(node.id))
     .map((node) => {
       const configured = stageOrderById.get(node.id);
-      const metadata = releaseActionProcessMetadata(node.id, node, config);
+      const metadata = releaseActionProcessMetadata(node.id, node, config, context);
       return {
         ...node,
         ...metadata,

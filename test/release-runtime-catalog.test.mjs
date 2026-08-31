@@ -232,3 +232,19 @@ test("filters discovered actions to the selected workflow and keeps frontend par
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("uses generic process metadata when no workflow matches the business line", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-workflow-no-match-"));
+  try {
+    const approval = path.join(root, "release-approval");
+    fs.mkdirSync(path.join(approval, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(approval, "SKILL.md"), "---\nname: release-approval\nactions:\n  - name: create-full-rollout-approval\n    platforms: [android]\n---\n");
+    fs.writeFileSync(path.join(approval, "scripts", "run.py"), "print('ok')\n");
+    const { discoverReleaseActions } = await import(`../bin/lib/release-runtime.mjs?workflow-no-match=${Date.now()}`);
+    const [node] = await discoverReleaseActions({ roots: [root], businessLine: "bigolive", platform: "android", version: "5.63.2", batch: "initial" });
+    assert.equal(node.processId, "approval");
+    assert.equal(node.processTitle, "发版审核");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
