@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
-import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, removePendingNode, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
 import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
 function emptyState() {
-  return { timeline: [], pending: [], customNodes: [] };
+  return { timeline: [], pending: [], dismissedNodeIds: [], customNodes: [] };
 }
 
 function isRecord(value) {
@@ -78,7 +78,8 @@ function normalizePendingItem(value, index) {
     title: stringValue(value.title, nodeId),
     description: stringValue(value.description),
     category: stringValue(value.category, "发版阶段"),
-    status: status === "running" ? "pending" : status,
+    // 正在执行的节点必须保持运行态；否则刷新后会被误判为待执行并暴露删除操作。
+    status,
     progress: Math.min(Math.max(Number(value.progress) || 0, 0), 100),
     createdAt: timestampValue(value.createdAt) || Date.now(),
     startedAt: timestampValue(value.startedAt),
@@ -183,6 +184,9 @@ function readState(key, catalogNodeIds = null) {
       workflowId: stringValue(value.workflowId),
       timeline,
       pending,
+      dismissedNodeIds: Array.isArray(value.dismissedNodeIds)
+        ? [...new Set(value.dismissedNodeIds.map((item) => String(item || "").trim()).filter(Boolean))]
+        : [],
       customNodes,
     };
   } catch {
@@ -478,7 +482,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       setMessage("节点不属于当前业务、平台和版本上下文");
       return;
     }
-    const normalizedInputs = defaultInputsForNode(node, item.inputs || {});
+    const normalizedInputs = defaultInputsForNode(node, item.inputs || {}, context);
     const executionItem = normalizedInputs === item.inputs ? item : { ...item, inputs: normalizedInputs };
     const inputError = validateNodeInputs(node, executionItem);
     if (inputError) {
@@ -660,6 +664,31 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     void executeNode(retryItem);
   }, [catalogNodes, initializationNode, initializationPreparationNode, executeNode]);
 
+  const deleteNode = useCallback(async (item) => {
+    if (!item || item.status === "running" || String(item.nodeId || "").startsWith("custom-")) return;
+    const query = new URLSearchParams({
+      businessLine: context.businessLine,
+      platform: context.platform,
+      version: context.version,
+      batch: context.batch || "initial",
+      workspaceId: workspaceIdentity(workspace),
+    });
+    localMutationRef.current = true;
+    try {
+      const response = await fetch(`/api/release/pending/${encodeURIComponent(item.id)}?${query.toString()}`, { method: "DELETE" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setState((previous) => seedNextRecommendations(
+        removePendingNode(previous, item),
+        [initializationNode, initializationPreparationNode, ...catalogNodes],
+      ));
+      setInspector((previous) => previous?.item?.id === item.id ? null : previous);
+      setMessage(`${item.title} 已删除`);
+    } catch (error) {
+      setMessage(String(error?.message || error));
+    }
+  }, [catalogNodes, context.batch, context.businessLine, context.platform, context.version, initializationNode, initializationPreparationNode, workspace]);
+
   const updateNodeInput = useCallback((itemIdValue, inputKey, value) => {
     localMutationRef.current = true;
     setState((previous) => ({
@@ -670,8 +699,10 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     }));
   }, []);
 
-  const renderNodeInputs = (node, item) => externalInputSchemaForNode(node).length > 0 ? (
-    <div className="af-release-node__inputs">
+  const renderNodeInputs = (node, item) => externalInputSchemaForNode(node).length > 0 ? (() => {
+    // 历史状态可能保存了工程绝对路径；卡片展示必须与执行前归一化保持一致，避免用户继续提交旧值。
+    const renderedInputs = defaultInputsForNode(node, item.inputs || {}, context);
+    return <div className="af-release-node__inputs">
       {externalInputSchemaForNode(node).map((schema) => (
         <label key={schema.key}>
           <span>{schema.label}{schema.required ? " *" : ""}</span>
@@ -681,14 +712,14 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             max={schema.max}
             step={schema.step}
             placeholder={schema.placeholder}
-            value={item.inputs?.[schema.key] ?? schema.defaultValue ?? ""}
+            value={renderedInputs?.[schema.key] ?? schema.defaultValue ?? ""}
             disabled={item.status === "running"}
             onChange={(event) => updateNodeInput(item.id, schema.key, event.target.value)}
           />
         </label>
       ))}
-    </div>
-  ) : null;
+    </div>;
+  })() : null;
 
   const renderInitializationContext = (item) => item.nodeId === initializationNode.id || item.nodeId === initializationPreparationNode.id ? (
     <div className="af-release-context-chips">
@@ -732,8 +763,10 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   }, [context.batch, context.businessLine, context.platform, context.version, workspace]);
 
   const runInspectorItem = useCallback((nextItem) => {
-    void saveInspectorItem(nextItem).then(() => executeNode(nextItem));
-  }, [executeNode, saveInspectorItem]);
+    const localOnly = nextItem?.nodeId === initializationPreparationNode.id
+      || String(nextItem?.nodeId || "").startsWith("custom-");
+    void (localOnly ? Promise.resolve() : saveInspectorItem(nextItem)).then(() => executeNode(nextItem));
+  }, [executeNode, initializationPreparationNode.id, saveInspectorItem]);
 
   return (
     <section className="af-release-panel">
@@ -768,7 +801,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               const node = nodeById.get(item.nodeId);
               return <article key={item.id} className={`af-release-node af-release-node--${item.status}`} role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}>
                 <div><div className="af-release-node__topline"><span>{item.processTitle || item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
-                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelNode(item); }}>取消</button> : item.status === "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); retryNode(item); }}>重试</button> : <button type="button" onClick={(event) => { event.stopPropagation(); executeNode(item); }}>执行</button>}</div>
+                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelNode(item); }}>取消</button> : item.status === "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); retryNode(item); }}>重试</button> : <button type="button" onClick={(event) => { event.stopPropagation(); executeNode(item); }}>执行</button>}{item.status !== "running" && !String(item.nodeId || "").startsWith("custom-") ? <button type="button" className="af-release-node__delete" aria-label={`删除${item.title}`} onClick={(event) => { event.stopPropagation(); void deleteNode(item); }}>删除</button> : null}</div>
               </article>;
             })}
             <div className="af-release-add-node">
@@ -787,6 +820,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         onPreview={executeNode}
         onRun={runInspectorItem}
         onStop={cancelNode}
+        context={context}
       /> : null}
     </section>
   );
