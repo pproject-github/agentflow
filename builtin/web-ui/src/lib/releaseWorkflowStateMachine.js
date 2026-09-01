@@ -65,6 +65,29 @@ function processRank(processId) {
   return index < 0 ? PROCESS_ORDER.length : index;
 }
 
+// 用户需求点: 初始化后的入口流程由 workflow.entryStageIds 决定；入口流程执行到一半时，
+// 仍需继续当前入口流程，不能因为已有进度就退回 stages 数组的第一个流程。
+function orderedWorkflowProcesses(machine) {
+  const processes = Array.isArray(machine?.processes) ? machine.processes : [];
+  const entryIds = Array.isArray(machine?.entryProcessIds) ? machine.entryProcessIds : [];
+  if (entryIds.length === 0) return processes;
+  const byId = new Map(processes.map((process) => [process.id, process]));
+  const ordered = [];
+  const seen = new Set();
+  for (const id of entryIds) {
+    const process = byId.get(id);
+    if (!process || seen.has(process.id)) continue;
+    seen.add(process.id);
+    ordered.push(process);
+  }
+  for (const process of processes) {
+    if (seen.has(process.id)) continue;
+    seen.add(process.id);
+    ordered.push(process);
+  }
+  return ordered;
+}
+
 // 用户需求点: 流程是推荐和状态判断的业务单位，Action 只是流程内有序操作节点。
 export function createReleaseProcessStateMachine({ nodes = [], context = {}, config = RELEASE_WORKFLOW_CONFIG } = {}) {
   const scope = contextScope(context);
@@ -81,14 +104,14 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
   const activeStages = (workflow?.stages || []).filter((stage) => (
     !Array.isArray(stage.batches) || stage.batches.includes(scope.batch)
   ));
-  const configuredActionIds = workflowActionIds(workflow, scope);
+  const configuredActionIds = workflowActionIds(workflow, scope, config);
   if (workflow) {
     // 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。
     const configuredCompositeNodes = eligibleNodes.filter((node) => node.kind === "composite" && node.compositeId);
     const configuredCompositeIds = new Set(configuredCompositeNodes
       .filter((node) => {
         const composite = selectReleaseCompositeWorkflow({ ...scope, compositeId: node.compositeId }, config);
-        return composite && compositeActionIds(composite, scope).size > 0;
+        return composite && (compositeActionIds(composite, scope).size > 0 || composite.promptTemplate || !Array.isArray(composite.actions));
       })
       .map((node) => node.id));
     const consumedByDefaultComposite = new Set();
@@ -107,9 +130,9 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
       .map((node) => ({ ...node, workflowId: workflow.id }));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
-      const stageCompositeIds = Array.isArray(stage.compositeIds) ? stage.compositeIds : [];
+      const stageCompositeIds = Array.isArray(stage.compositeIds) ? stage.compositeIds : (Array.isArray(stage.capabilityIds) ? stage.capabilityIds : workflowStageNodeIds(stage));
       const stageCompositeNodes = stageCompositeIds
-        .map((id) => configuredCompositeNodes.find((node) => node.compositeId === id))
+        .map((id) => configuredCompositeNodes.find((node) => node.compositeId === id || node.id === `composite:${id}` || node.id === id))
         .filter((node) => node && byId.has(node.id))
         .map((node) => byId.get(node.id));
       const stageNodes = [
@@ -133,6 +156,7 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     }).filter((process) => process.nodes.length > 0);
     const nodeToProcess = new Map();
     for (const process of processes) for (const nodeId of process.nodeIds) nodeToProcess.set(nodeId, process.id);
+    const processIds = new Set(processes.map((process) => process.id));
     return {
       context: scope,
       workflowId: workflow.id,
@@ -141,8 +165,12 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
         id: workflow.id,
         title: workflow.title,
         evidence: { ...workflow.evidence },
+        transitions: [...(workflow.transitions || [])],
       },
+      transitions: [...(workflow.transitions || [])],
       processes,
+      entryProcessIds: (Array.isArray(workflow.entryStageIds) ? workflow.entryStageIds : [])
+        .filter((id) => processIds.has(id)),
       nodeToProcess,
       fallbackNodes: workflowNodes.filter((node) => consumedByDefaultComposite.has(node.id)),
     };
@@ -168,7 +196,7 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const nodeToProcess = new Map();
   for (const process of processes) for (const nodeId of process.nodeIds) nodeToProcess.set(nodeId, process.id);
-  return { context: scope, workflowId: "", nodes: [], workflow: null, processes: [], nodeToProcess: new Map() };
+  return { context: scope, workflowId: "", nodes: [], workflow: null, processes: [], entryProcessIds: [], nodeToProcess: new Map() };
 }
 
 // 用户需求点: 自定义阶段只能从当前业务线、平台和批次对应的流程节点中选择，
@@ -252,7 +280,8 @@ export function deriveProcessStates({ machine, timeline = [], pending = [] } = {
 // concrete Action recommended inside that stage.
 export function deriveWorkflowCursor({ machine, timeline = [], pending = [] } = {}) {
   const processStates = deriveProcessStates({ machine, timeline, pending });
-  const active = (machine?.processes || []).find((process) => {
+  const orderedProcesses = orderedWorkflowProcesses(machine);
+  const active = orderedProcesses.find((process) => {
     const state = processStates.get(process.id);
     return state === "running" || state === "failed" || state === "pending";
   });
@@ -267,7 +296,7 @@ export function deriveWorkflowCursor({ machine, timeline = [], pending = [] } = 
       terminal: true,
     };
   }
-  const index = machine.processes.indexOf(active);
+  const index = orderedProcesses.indexOf(active);
   const state = processStates.get(active.id) || "pending";
   return {
     workflowId: machine?.workflow?.id || "",
@@ -275,7 +304,7 @@ export function deriveWorkflowCursor({ machine, timeline = [], pending = [] } = 
     currentProcessId: active.id,
     currentProcessTitle: active.title,
     currentState: state,
-    nextProcessId: machine.processes[index + 1]?.id || "",
+    nextProcessId: orderedProcesses[index + 1]?.id || "",
     terminal: false,
   };
 }
@@ -287,17 +316,22 @@ function completedNodeIds(timeline) {
 }
 
 // 用户需求点: 流程未完成时只推荐本流程的下一个节点，只有流程全部完成后才推荐下一流程的首个节点。
-export function recommendNextProcessNodes({ machine, timeline = [], pending = [] } = {}) {
+export function recommendNextProcessNodes({ machine, timeline = [], pending = [], excludedNodeIds = [] } = {}) {
   if (!machine) return [];
   const processStates = deriveProcessStates({ machine, timeline, pending });
   const completed = completedNodeIds(timeline);
   const pendingIds = new Set((Array.isArray(pending) ? pending : []).map((item) => item?.nodeId).filter(Boolean));
-  for (const process of machine.processes || []) {
+  const excluded = excludedNodeIds instanceof Set
+    ? excludedNodeIds
+    : new Set(Array.isArray(excludedNodeIds) ? excludedNodeIds : []);
+  for (const process of orderedWorkflowProcesses(machine)) {
     const state = processStates.get(process.id);
     if (state === "failed" || state === "running") return [];
     if (state !== "completed") {
       const optionalIds = new Set(process.optionalNodeIds || []);
-      const next = process.nodes.find((node) => !optionalIds.has(node.id) && !completed.has(node.id));
+      const next = process.nodes.find((node) => !optionalIds.has(node.id)
+        && !completed.has(node.id)
+        && !excluded.has(node.id));
       if (!next || pendingIds.has(next.id)) return [];
       return [next];
     }
@@ -306,3 +340,21 @@ export function recommendNextProcessNodes({ machine, timeline = [], pending = []
 }
 
 export { PROCESS_ORDER, PROCESS_TITLES };
+
+// 创建补包批次时生成独立状态容器，保留旧批次历史供只读查看。
+export function createSupplementalBatch(previous = {}) {
+  const batchIndex = Number(previous.batchIndex ?? previous.context?.batchIndex ?? 0) + 1;
+  const context = { ...(previous.context || {}), batch: "supplemental", batchIndex };
+  return {
+    context,
+    state: {
+      ...previous,
+      context,
+      batch: "supplemental",
+      batchIndex,
+      timeline: [],
+      pending: [],
+      runs: {},
+    },
+  };
+}

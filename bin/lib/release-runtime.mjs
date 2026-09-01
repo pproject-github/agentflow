@@ -28,6 +28,7 @@ const ACTION_ORDER = [
 ];
 const INFERRED_ACTIONS = {
   "release-management": [
+    ["create-active-release", ["product", "platform", "major_version", "publish_date"], true],
     ["append-release-batch", ["product", "platform", "major_version", "publish_date"], true],
     ["register-release-branch", ["product", "platform", "major_version", "release_branch"], true],
     ["update-active-release", ["product", "platform", "major_version", "minor_version", "build_number", "batch", "expected_major_version", "publish_date"], true],
@@ -89,6 +90,83 @@ export function releaseContextKey(context = {}) {
   return [snapshot.businessLine, snapshot.platform, snapshot.version, snapshot.batch].join("/");
 }
 
+const RELEASE_SECRET_KEY = /(token|secret|password|passwd|webhook|authorization|cookie|api[-_]?key)/i;
+function sanitizeReleaseValue(value, key = "") {
+  if (RELEASE_SECRET_KEY.test(String(key || ""))) return "[REDACTED]";
+  if (Array.isArray(value)) return value.map((item) => sanitizeReleaseValue(item, key));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, sanitizeReleaseValue(item, name)]));
+  return value;
+}
+
+export function normalizeReleaseAgentResult(raw) {
+  const envelopeStatus = raw && typeof raw === "object" ? raw.status : undefined;
+  let value = raw;
+  if (raw && typeof raw === "object" && raw.result !== undefined) value = raw.result;
+  if (typeof value === "string") {
+    const text = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    try { value = JSON.parse(text); } catch { value = { status: /\b(fail|error|失败)\b/i.test(text) ? "failed" : "completed", summary: text }; }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) value = { status: "failed", summary: "Agent 未返回结构化结果" };
+  const statusValue = String(envelopeStatus || value.status || "").trim().toLowerCase();
+  const status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
+  return sanitizeReleaseValue({
+    ...value,
+    status,
+    summary: String(value.summary || value.message || value.error || "").trim(),
+    steps: Array.isArray(value.steps) ? value.steps : [],
+    records: Array.isArray(value.records) ? value.records : [],
+    artifacts: Array.isArray(value.artifacts) ? value.artifacts : [],
+    ...(value.waiting && typeof value.waiting === "object" ? { waiting: value.waiting } : {}),
+    ...(value.next_action ? { next_action: String(value.next_action) } : {}),
+  });
+}
+
+export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
+  const state = {
+    ...(stateInput && typeof stateInput === "object" ? stateInput : {}),
+    timeline: Array.isArray(stateInput?.timeline) ? [...stateInput.timeline] : [],
+    pending: Array.isArray(stateInput?.pending) ? [...stateInput.pending] : [],
+  };
+  const result = normalizeReleaseAgentResult(rawResult);
+  const index = state.pending.findIndex((item) => item?.nodeId === nodeId || item?.id === nodeId);
+  const current = index >= 0 ? { ...state.pending[index] } : { id: nodeId, nodeId };
+  const details = { ...(current.details || {}), steps: result.steps, records: result.records, artifacts: result.artifacts, summary: result.summary };
+  if (result.status === "completed") {
+    const completed = { ...current, nodeId, status: "completed", progress: 100, details, output: result, completedAt: Date.now() };
+    state.pending = state.pending.filter((_item, itemIndex) => itemIndex !== index);
+    state.timeline = [...state.timeline.filter((item) => item.id !== completed.id && item.nodeId !== nodeId), completed];
+    return { state, advance: true, retryable: false, result };
+  }
+  const pending = {
+    ...current,
+    nodeId,
+    status: result.status,
+    progress: 0,
+    details,
+    ...(result.status === "waiting" ? { waiting: result.waiting || { reason: result.summary || "等待人工确认" } } : {}),
+    ...(result.status === "failed" ? { error: result.summary || "发版 Agent 执行失败", failedAt: Date.now() } : {}),
+  };
+  if (index >= 0) state.pending[index] = pending; else state.pending.push(pending);
+  return { state, advance: false, retryable: result.status === "failed", result };
+}
+
+export function createSupplementalBatch(stateInput = {}) {
+  const source = stateInput && typeof stateInput === "object" ? stateInput : {};
+  const context = { ...(source.context || {}), batch: "supplemental", batchIndex: Number(source.context?.batchIndex ?? source.batchIndex ?? 0) + 1 };
+  return {
+    context,
+    state: {
+      ...source,
+      context,
+      batch: "supplemental",
+      batchIndex: context.batchIndex,
+      timeline: [],
+      pending: [],
+      runs: {},
+    },
+  };
+}
+
 function normalizeList(value, fallback = []) {
   if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
   if (value == null || value === "") return [...fallback];
@@ -121,11 +199,18 @@ const ACTION_INPUT_METADATA = Object.freeze({
   })]),
 });
 
+function defaultLocalizationSourcePath(context = {}) {
+  // 用户需求点: 多语言上传默认使用当前工程内受审源文件，不能把工程根目录当成 source_path。
+  return String(context?.platform || "").trim().toLowerCase() === "ios"
+    ? "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings"
+    : "iHeima/res/values/strings.xml";
+}
+
 // 用户需求点: Create Release Branch 必须允许操作员输入完整分支名，留空时仍沿用 release-skill 的标准命名规则。
 function inputDefinitionsForAction(skillName, actionName, declaredInputs, context = {}) {
   const actionKey = `${skillName}:${actionName}`;
   const declared = Array.isArray(declaredInputs) ? declaredInputs : [];
-  const definitions = declared
+  let definitions = declared
     .map((input) => {
       if (input && typeof input === "object") {
         const key = String(input.key || input.name || "").trim();
@@ -135,6 +220,12 @@ function inputDefinitionsForAction(skillName, actionName, declaredInputs, contex
       return key ? { key, label: key.replace(/[_-]+/g, " "), type: "text", required: false } : null;
     })
     .filter(Boolean);
+  if (actionKey === "release-localization:upload-source-file") {
+    const defaultValue = defaultLocalizationSourcePath(context);
+    definitions = definitions.map((definition) => definition.key === "source_path"
+      ? { ...definition, ...(definition.defaultValue ? {} : { defaultValue }) }
+      : definition);
+  }
   const metadata = (ACTION_INPUT_METADATA[actionKey] || []).map((definition) => {
     if (definition.key !== "release_branch") return { ...definition };
     const version = String(context?.version || "").trim();
@@ -175,6 +266,28 @@ function readYamlObject(filePath) {
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 }
 
+function reviewedLocalizationSourceFiles(skillRoot, context = {}) {
+  const skillDir = path.join(path.resolve(skillRoot), "release-localization");
+  const runtimePath = path.join(skillDir, ".runtime.yaml");
+  let useTestProject = false;
+  try {
+    const runtime = fs.existsSync(runtimePath) ? readYamlObject(runtimePath) : {};
+    useTestProject = runtime?.crowdin?.use_test_project === true;
+  } catch {
+    useTestProject = false;
+  }
+  const profileName = `${String(context.businessLine || "likee").trim().toLowerCase()}-${String(context.platform || "android").trim().toLowerCase()}.${useTestProject ? "test" : "production"}.yaml`;
+  const profilePath = path.join(skillDir, "presets", profileName);
+  try {
+    const profile = readYamlObject(profilePath);
+    return [...new Set((Array.isArray(profile.source_files) ? profile.source_files : [])
+      .map((entry) => String(entry?.source_path || "").trim())
+      .filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
 function actionDefinition({ skillRoot, skillPath, skillName, skillMeta, action, context, profileIds = [] }) {
   const actionName = String(action?.name || "").trim();
   const actionKey = `${skillName}:${actionName}`;
@@ -206,6 +319,9 @@ function actionDefinition({ skillRoot, skillPath, skillName, skillMeta, action, 
     requiresConfirmation: action?.requires_confirmation === true,
     acceptsCurrentRelease: skillMeta.accepts_current_release !== false,
     inputSchema: inputs,
+    ...(actionKey === "release-localization:upload-source-file"
+      ? { sourceFiles: reviewedLocalizationSourceFiles(skillRoot, context) }
+      : {}),
     nextNodeIds: [],
     processId: processMetadata.processId,
     processOrder: processMetadata.processOrder,
@@ -286,7 +402,7 @@ function profileSupportsSkill(profile, skillName) {
   return Object.values(profile?.refs || {}).some((value) => String(value || "").split("/", 1)[0] === skillName);
 }
 
-export async function discoverReleaseActions({ roots = [], businessLine = "likee", platform = "android", version = "1.0.0", batch = "initial" } = {}) {
+export async function discoverReleaseActions({ roots = [], businessLine = "likee", platform = "android", version = "1.0.0", batch = "initial", includeInitializationActions = false } = {}) {
   const context = contextSnapshot({ businessLine, platform, version, batch });
   const line = context.businessLine;
   const targetPlatform = context.platform;
@@ -326,7 +442,7 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
       for (const action of actions) {
         if (!action || typeof action !== "object" || !String(action.name || "").trim()) continue;
         const node = actionDefinition({ skillRoot, skillPath, skillName, skillMeta: meta, action, context, profileIds });
-        if (["release-management:guide-current-release", "release-management:create-active-release"].includes(node.id)) continue;
+        if (!includeInitializationActions && ["release-management:guide-current-release", "release-management:create-active-release"].includes(node.id)) continue;
         if (!node.businessLines.includes(line) || !node.platforms.includes(targetPlatform) || !node.allowedBatches.includes(targetBatch)) continue;
         nodes.push(node);
       }
@@ -343,6 +459,26 @@ export async function discoverReleaseActions({ roots = [], businessLine = "likee
     ...node,
     nextNodeIds: node.nextNodeIds.length > 0 ? [...node.nextNodeIds] : ordered.slice(index + 1, index + 3).map((item) => item.id),
   }));
+}
+
+// 用户需求点: 初始化节点内部可以复用 release-management 的活动发版创建能力，但该动作不能作为普通流程候选暴露。
+export async function discoverReleaseInitializationAction(context = {}, roots = []) {
+  const nodes = await discoverReleaseActions({ roots, ...context, includeInitializationActions: true });
+  const action = nodes.find((node) => node.id === "release-management:create-active-release");
+  if (!action) return null;
+  return {
+    ...action,
+    id: "release-initialization:prepare-context",
+    title: "准备活动发版上下文",
+    description: "复用已有活动发版；不存在时创建首包活动发版。",
+    skill: "release-management",
+    action: "create-active-release",
+    category: "发版初始化",
+    processId: "initialization",
+    processOrder: 0,
+    processTitle: "发版初始化",
+    initializationActionId: "release-management:create-active-release",
+  };
 }
 
 // 用户需求点: 状态机配置不仅决定推荐顺序，也必须限制当前业务线、平台和批次可执行的节点集合。
@@ -398,10 +534,48 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
   const batch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
   for (const stage of Array.isArray(workflow.stages) ? workflow.stages : []) {
     if (Array.isArray(stage.batches) && !stage.batches.map((value) => String(value || "").trim().toLowerCase()).includes(batch)) continue;
-    const ids = Array.isArray(stage.compositeIds) ? stage.compositeIds : [];
+    const ids = Array.isArray(stage.compositeIds) ? stage.compositeIds : (Array.isArray(stage.capabilityIds) ? stage.capabilityIds : workflowStageNodeIds(stage));
     for (const compositeId of ids) {
       const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id }, config);
       if (!composite || seen.has(composite.id)) continue;
+      if (composite.promptTemplate || !Array.isArray(composite.actions)) {
+        const capabilityId = String(composite.id || compositeId).trim();
+        result.push({
+          id: `composite:${capabilityId}`,
+          kind: "composite",
+          compositeId: capabilityId,
+          title: composite.title || capabilityId,
+          description: composite.description || "",
+          skill: "release-composite",
+          action: capabilityId,
+          category: "发版阶段",
+          businessLines: [...(composite.businessLines || [])],
+          platforms: [...(composite.platforms || [])],
+          allowedBatches: [...(composite.batches || [])],
+          requiresConfirmation: composite.requiresConfirmation === true,
+          skillHints: [...(composite.skillHints || [])],
+          promptTemplate: String(composite.promptTemplate || composite.description || composite.title || ""),
+          inputs: Array.isArray(composite.inputs) ? composite.inputs : [],
+          outputs: Array.isArray(composite.outputs) ? composite.outputs : [],
+          inputSchema: Array.isArray(composite.inputs) ? composite.inputs : [],
+          nextNodeIds: [],
+          workflowId: workflow.id,
+          processId: composite.stageId || stage.id,
+          processTitle: stage.title,
+          processOrder: Number.isFinite(Number(stage.order)) ? Number(stage.order) : workflow.stages.indexOf(stage),
+          workflowStageId: stage.id,
+          workflowStageTitle: stage.title,
+          workflowStageOrder: workflow.stages.indexOf(stage),
+          workflowActionOrder: 0,
+          contextSnapshot: { ...context },
+          scopeKey: releaseContextKey(context),
+          runnable: true,
+          error: "",
+          source: { compositeId: capabilityId },
+        });
+        seen.add(composite.id);
+        continue;
+      }
       const actionEntries = Array.isArray(composite.actions) ? composite.actions : [];
       const actions = actionEntries.map((entry, index) => {
         const id = String(entry?.id || entry?.actionId || "").trim();
@@ -426,6 +600,7 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
       for (const action of actions) {
         for (const input of Array.isArray(action.inputSchema) ? action.inputSchema : []) {
           const key = String(input?.key || input?.name || "").trim();
+          if (composite.expandSourceFiles === true && action.id === "release-localization:upload-source-file" && key === "source_path") continue;
           if (!key || internalInputKeys.has(key) || inputKeys.has(key)) continue;
           inputKeys.add(key);
           inputSchema.push({ ...input, key });
@@ -456,6 +631,7 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
         businessLines: [...(composite.businessLines || [])],
         platforms: [...(composite.platforms || [])],
         allowedBatches: [...(composite.batches || [])],
+        ...(composite.expandSourceFiles === true ? { expandSourceFiles: true } : {}),
         requiresConfirmation,
         statusAliases: { ...(config.statusAliases || {}) },
         acceptsCurrentRelease: actions.every((action) => action.acceptsCurrentRelease !== false),

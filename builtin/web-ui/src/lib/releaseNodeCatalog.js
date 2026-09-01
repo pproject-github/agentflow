@@ -8,6 +8,30 @@ import { selectReleaseWorkflow, selectReleaseCompositeWorkflow, workflowStageNod
 
 const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
+const FALLBACK_LOCALIZATION_SOURCE_FILES = Object.freeze({
+  android: Object.freeze([
+    "iHeima/res/values/strings.xml",
+    "iHeima/src/samsung/res/values/strings_samsung.xml",
+    "iHeima/src/xiaomi/res/values/strings_xiaomi.xml",
+    "iHeima/src/rustore/res/values/strings_rustore.xml",
+    "iHeima/reslive/values/livestrings.xml",
+    "modules/common/res/values/lib_strings.xml",
+    "modules/common/res/values/countries_strings.xml",
+    "effectone_modules/editor/editor-ui/src/main/res/values/eo_editor_ui_strings.xml",
+    "effectone_modules/record/recorder-ui/src/main/res/values/eo_recorder_ui_strings.xml",
+    "effectone_modules/base/base-ui/src/main/res/values/eo_base_ui_strings.xml",
+  ]),
+  ios: Object.freeze([
+    "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/countries.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/InfoPlist.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/Localizable.stringsdict",
+    "yymeet/Resources/MultiLanguage/en.lproj/PushExtensionLocalizable.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/TodayExtensionLocalizable.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/WidgetExtensionLocalizable.strings",
+    "yymeet/Resources/MultiLanguage/en.lproj/xib.strings",
+  ]),
+});
 
 function node(definition) {
   const result = {
@@ -182,6 +206,13 @@ function fallbackActionTitle(actionId) {
   return action.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function defaultLocalizationSourcePath(platform) {
+  // 用户需求点: 静态目录也要给多语言上传填入当前平台工程内的受审源文件相对路径。
+  return normalize(platform) === "ios"
+    ? "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings"
+    : "iHeima/res/values/strings.xml";
+}
+
 // 用户需求点: API 不可用时，静态目录也必须提供共享 workflow 引用的 action-level 节点。
 function configuredFallbackNodes(context = {}) {
   const workflow = selectReleaseWorkflow(context);
@@ -196,12 +227,15 @@ function configuredFallbackNodes(context = {}) {
       let inputSchema = [];
       if (id === "release-git:create-release-branch") {
         inputSchema = [{ key: "release_branch", label: "Release 分支名", type: "text", required: false, placeholder: "例如 release/v1.1" }];
+      } else if (id === "release-localization:upload-source-file") {
+        inputSchema = [{ key: "source_path", label: "源文件", type: "text", required: true, defaultValue: defaultLocalizationSourcePath(context.platform) }];
       } else if (id === "release-records:append-release-wiki-row"
         && normalize(context.platform) === "android"
         && normalize(context.batch || "initial") === "supplemental") {
         inputSchema = [{ key: "gray_percent", label: "灰度百分比 (%)", type: "number", required: true, min: 1, max: 100, integer: true, step: 1, placeholder: "例如 10" }];
       } else if (id === "release-records:record-store-approved") {
-        inputSchema = base.inputSchema || [];
+        // 过审登记使用 observe_record_id / dau 等可选输入，不能复用补包节点的灰度百分比字段。
+        inputSchema = [];
       }
       nodes.push({
         ...base,
@@ -217,6 +251,9 @@ function configuredFallbackNodes(context = {}) {
         workflowId: workflow.id,
         businessLines: [...workflow.businessLines],
         platforms: [...workflow.platforms],
+        ...(id === "release-localization:upload-source-file"
+          ? { sourceFiles: [...(FALLBACK_LOCALIZATION_SOURCE_FILES[normalize(context.platform)] || [defaultLocalizationSourcePath(context.platform)])] }
+          : {}),
         inputSchema,
         nextNodeIds: [],
       });
@@ -234,9 +271,23 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
   const seen = new Set();
   for (const stage of workflow.stages || []) {
     if (Array.isArray(stage.batches) && !stage.batches.includes(normalize(context.batch || "initial"))) continue;
-    for (const compositeId of stage.compositeIds || []) {
+    for (const compositeId of (stage.compositeIds || stage.capabilityIds || workflowStageNodeIds(stage))) {
       const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id });
       if (!composite || seen.has(composite.id)) continue;
+      if (!Array.isArray(composite.actions)) {
+        result.push({
+          id: `composite:${composite.id}`, kind: "composite", compositeId: composite.id,
+          title: composite.title, description: composite.description, skill: "release-composite",
+          action: composite.id, category: stage.title || "发版阶段", processId: stage.id, processOrder: -1,
+          processTitle: stage.title, workflowId: workflow.id, businessLines: [...workflow.businessLines], platforms: [...workflow.platforms],
+          skillHints: [...(composite.skillHints || [])], promptTemplate: composite.promptTemplate || "",
+          inputSchema: (composite.inputs || []).map((input) => ({ ...input })), outputs: (composite.outputs || []).map((output) => ({ ...output })),
+          requiresConfirmation: composite.requiresConfirmation === true, actions: undefined, nextNodeIds: [],
+          scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+        });
+        seen.add(composite.id);
+        continue;
+      }
       const actions = (composite.actions || []).map((entry, index) => {
         const atomic = byId.get(entry.id);
         return {
@@ -257,6 +308,7 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
       for (const action of actions) {
         for (const schema of action.inputSchema) {
           const key = String(schema?.key || schema?.name || "").trim();
+          if (composite.expandSourceFiles === true && action.id === "release-localization:upload-source-file" && key === "source_path") continue;
           if (!key || internalKeys.has(key) || keys.has(key)) continue;
           keys.add(key);
           inputSchema.push({ ...schema, key });
@@ -282,6 +334,7 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
         workflowId: workflow.id,
         businessLines: [...workflow.businessLines],
         platforms: [...workflow.platforms],
+        ...(composite.expandSourceFiles === true ? { expandSourceFiles: true } : {}),
         actions,
         inputSchema,
         requiresConfirmation: actions.some((entry) => entry.requiresConfirmation === true),

@@ -76,7 +76,7 @@ import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspa
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
-import { discoverReleaseActions, discoverReleaseCompositeActions, discoverReleaseInitializationAction, filterReleaseActionsForWorkflow, releaseContextKey } from "./release-runtime.mjs";
+import { discoverReleaseActions, discoverReleaseCompositeActions, discoverReleaseInitializationAction, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseContextKey } from "./release-runtime.mjs";
 import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releaseTimingFromResult, stopReleaseAction } from "./release-runtime-executor.mjs";
 import { readReleaseState, writeReleaseState } from "./release-runtime-store.mjs";
 import busboy from "busboy";
@@ -1205,7 +1205,11 @@ function initializationExistingRelease(action, context = {}) {
 const activeReleaseRuns = new Map();
 
 function releaseCompositeDetails(action, result) {
-  if (action?.kind !== "composite" || !Array.isArray(action.actions)) return undefined;
+  if (action?.kind !== "composite") return undefined;
+  if (!Array.isArray(action.actions)) {
+    const normalized = normalizeReleaseAgentResult(result?.result ?? result);
+    return { steps: normalized.steps, records: normalized.records, artifacts: normalized.artifacts, summary: normalized.summary, status: normalized.status, ...(normalized.waiting ? { waiting: normalized.waiting } : {}) };
+  }
   const runResult = result && typeof result === "object" ? result : {};
   const graph = runResult.graph || runResult.result?.graph || null;
   const events = Array.isArray(runResult.events) ? runResult.events : Array.isArray(runResult.result?.events) ? runResult.result.events : [];
@@ -1227,7 +1231,7 @@ function releaseCompositeDetails(action, result) {
         .map((slot) => [String(slot.name), slot.value ?? slot.default ?? ""]))
       : undefined;
     const error = failed
-      ? (String(scriptFinish?.stderr || "").trim() || (stdout.match(/(?:^|\n)error:\s*(.+?)(?:\n|$)/m)?.[1] || "执行失败").trim())
+      ? (String(scriptFinish?.stderr || "").trim() || (stdout.match(/(?:^|\n)\s*error:\s*(.+?)(?:\n|$)/m)?.[1] || "执行失败").trim())
       : "";
     const startedAt = Number(started?.ts || started?.startedAt);
     const completedAt = Number(finished?.ts || finished?.completedAt);
@@ -1288,6 +1292,7 @@ function releaseRequestContext(url, payload = {}) {
     platform: /ios|iphone/i.test(String(source.platform || url.searchParams.get("platform") || "")) ? "ios" : "android",
     version: String(source.version || url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
     batch: String(source.batch || url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+    ...(source.batchIndex != null || url.searchParams.get("batchIndex") != null ? { batchIndex: Number(source.batchIndex ?? url.searchParams.get("batchIndex") ?? 0) || 0 } : {}),
   };
 }
 
@@ -1313,7 +1318,8 @@ async function workspaceRoutes(req, res, ctx) {
         const discoveredNodes = await discoverReleaseActions({ roots, ...context });
         const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
         const compositeNodes = discoverReleaseCompositeActions(context, atomicNodes);
-        const nodes = [...atomicNodes, ...compositeNodes];
+        // 复合能力是默认发版入口；原子 Action 仅在没有能力配置时作为兼容回退，避免自定义阶段暴露冗余原子节点。
+        const nodes = compositeNodes.length ? compositeNodes : atomicNodes;
         json(res, 200, { ok: true, context, workspaceId, nodes });
         return;
       }
@@ -1334,6 +1340,32 @@ async function workspaceRoutes(req, res, ctx) {
         json(res, 200, { ok: true, item, state });
         return;
       }
+      if (req.method === "DELETE" && url.pathname.startsWith("/api/release/pending/")) {
+        const itemId = decodeURIComponent(url.pathname.slice("/api/release/pending/".length));
+        const state = readReleaseState(root, context, workspaceId, workspacePath);
+        const item = state.pending.find((entry) => entry.id === itemId);
+        if (!item) { json(res, 404, { error: "Pending release node not found" }); return; }
+        const activeRun = [...activeReleaseRuns.values()].find((run) => (
+          run?.itemId === itemId
+          && run?.workspaceId === workspaceId
+          && releaseContextKey(run.context || {}) === releaseContextKey(context)
+        ));
+        if (activeRun || ["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(String(item.status || "").toLowerCase())) {
+          json(res, 409, { error: "正在执行的节点不可删除，请先取消执行", code: "RELEASE_NODE_RUNNING" });
+          return;
+        }
+        if (String(item.nodeId || "").startsWith("custom-")) {
+          json(res, 409, { error: "自定义阶段节点不可删除", code: "RELEASE_CUSTOM_NODE_UNDELETABLE" });
+          return;
+        }
+        const dismissed = new Set(Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : []);
+        dismissed.add(String(item.nodeId || "").trim());
+        state.dismissedNodeIds = [...dismissed].filter(Boolean);
+        state.pending = state.pending.filter((entry) => entry.id !== itemId);
+        writeReleaseState(root, context, workspaceId, state);
+        json(res, 200, { ok: true, removed: item, state });
+        return;
+      }
       if (req.method === "POST" && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run")) {
         const payload = JSON.parse(await readBody(req));
         const requestWorkspaceId = releaseWorkspaceIdentity(url, payload);
@@ -1349,7 +1381,7 @@ async function workspaceRoutes(req, res, ctx) {
         const discoveredNodes = await discoverReleaseActions({ roots, ...requestContext });
         const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
         const compositeNodes = discoverReleaseCompositeActions(requestContext, atomicNodes);
-        const nodes = [...atomicNodes, ...compositeNodes];
+        const nodes = compositeNodes.length ? [...compositeNodes, ...atomicNodes] : atomicNodes;
         const initializationAction = actionId === "release-initialization:prepare-context"
           ? await discoverReleaseInitializationAction(requestContext, roots)
           : null;
@@ -1416,16 +1448,24 @@ async function workspaceRoutes(req, res, ctx) {
         const runInputs = action.requiresConfirmation && payload.confirmationFingerprint
           ? { ...executionInputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
           : executionInputs;
+        const priorStateForAgent = action.kind === "composite" && payload.itemId
+          ? readReleaseState(root, requestContext, requestWorkspaceId, workspacePath)
+          : null;
+        const priorItemForAgent = priorStateForAgent?.pending?.find((item) => item.id === payload.itemId)
+          || priorStateForAgent?.runs?.[String(payload.runId || "")]
+          || null;
         const graph = action.kind === "composite"
-          ? buildCompositeReleaseRunGraph(action, atomicNodes, requestContext, runInputs)
+          ? buildCompositeReleaseRunGraph(action, atomicNodes, { ...requestContext, repositoryRoot: workspacePath, skillRoots: roots }, runInputs, { skillRoots: roots, previousResult: priorItemForAgent?.output || priorItemForAgent?.details || null })
           : buildReleaseRunGraph(action, requestContext, runInputs);
         if (action.kind === "composite" && payload.resumeFromStep) {
           const previousState = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
           const previousItem = previousState.pending.find((item) => item.id === payload.itemId)
             || previousState.runs?.[String(payload.runId || "")]
             || {};
-          const resumedGraph = resumeCompositeReleaseGraph(graph, action, previousItem.details?.steps, payload.resumeFromStep);
-          Object.assign(graph, resumedGraph);
+          if (Array.isArray(action.actions)) {
+            const resumedGraph = resumeCompositeReleaseGraph(graph, action, previousItem.details?.steps, payload.resumeFromStep);
+            Object.assign(graph, resumedGraph);
+          }
         }
         const graphRunNodeId = action.kind === "composite" ? Object.keys(graph.instances || {})[0] : "release_action";
         if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
@@ -1439,7 +1479,7 @@ async function workspaceRoutes(req, res, ctx) {
               inputs: runInputs,
               ignoreCache: true,
             }, userCtx, { runId: `${runId}-preview` });
-          const preview = await previewReleaseAction(action, requestContext, executionInputs, { atomicNodes });
+          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: workspacePath, skillRoots: roots }, executionInputs, { atomicNodes, skillRoots: roots });
           json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
@@ -1458,11 +1498,11 @@ async function workspaceRoutes(req, res, ctx) {
           inputs: runInputs,
           ignoreCache: true,
         }, userCtx, { signal: controller.signal, runId, onEvent: (event) => runEvents.push(event) });
-        activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, action, inputs });
+        activeReleaseRuns.set(runId, { controller, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, itemId: String(payload.itemId || ""), action, inputs });
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
           activeReleaseRuns.delete(runId);
-          const preview = await previewReleaseAction(action, requestContext, executionInputs, { atomicNodes });
+          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: workspacePath, skillRoots: roots }, executionInputs, { atomicNodes, skillRoots: roots });
           json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
@@ -1475,6 +1515,8 @@ async function workspaceRoutes(req, res, ctx) {
           const failedTiming = releaseTimingFromResult({ events: runEvents }, executionStartedAt);
           const failedDetails = releaseCompositeDetails(action, { events: runEvents, graph });
           const existing = failedState.pending.find((item) => item.id === payload.itemId) || {};
+          const scriptFailure = releaseFailureFromResult({ events: runEvents });
+          const failureCode = scriptFailure ? "RELEASE_PREFLIGHT_FAILED" : "RELEASE_EXECUTION_FAILED";
           const failedItem = {
             ...existing,
             id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
@@ -1497,22 +1539,56 @@ async function workspaceRoutes(req, res, ctx) {
             operator: authUser.username || userCtx.userId || "未记录",
             ...failedTiming,
             failedAt: failedTiming.completedAt,
-            error: String(error?.message || error || "执行失败"),
+            error: scriptFailure || String(error?.message || error || "执行失败"),
             output: { events: runEvents },
             ...(failedDetails ? { details: failedDetails } : {}),
           };
           failedState.pending = [...failedState.pending.filter((item) => item.id !== failedItem.id), failedItem];
           failedState.runs[runId] = { ...failedItem, logs: runEvents };
           writeReleaseState(root, requestContext, requestWorkspaceId, failedState);
-          json(res, 422, { ok: false, status: "failed", code: "RELEASE_EXECUTION_FAILED", error: failedItem.error, runId, result: failedItem.output, ...(failedDetails ? { details: failedDetails } : {}), state: failedState });
+          json(res, 422, { ok: false, status: "failed", code: failureCode, error: failedItem.error, runId, result: failedItem.output, ...(failedDetails ? { details: failedDetails } : {}), state: failedState });
           return;
         }
         activeReleaseRuns.delete(runId);
         const state = readReleaseState(root, requestContext, requestWorkspaceId, workspacePath);
         const timing = releaseTimingFromResult(result);
         const timelineNodeId = String(payload.itemId || "").startsWith("custom-") ? String(payload.itemId) : action.id;
-        const failure = releaseFailureFromResult(result);
+        const agentResult = action.kind === "composite" ? normalizeReleaseAgentResult(result?.result ?? result) : null;
+        const failure = releaseFailureFromResult(result) || (agentResult?.status === "failed" ? (agentResult.summary || "发版 Agent 执行失败") : "");
         const details = releaseCompositeDetails(action, result);
+        if (agentResult?.status === "waiting") {
+          const existing = state.pending.find((item) => item.id === payload.itemId) || {};
+          const waitingItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: timelineNodeId,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: action.processId || "other",
+            processOrder: action.processOrder,
+            processTitle: action.processTitle || action.processId || "other",
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "waiting",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...timing,
+            waiting: agentResult.waiting || { reason: agentResult.summary || "等待人工确认" },
+            output: result,
+            ...(details ? { details } : {}),
+          };
+          state.pending = [...state.pending.filter((item) => item.id !== waitingItem.id), waitingItem];
+          state.runs[runId] = { ...waitingItem, logs: result?.events || [] };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          json(res, 200, { ok: true, status: "waiting", runId, result, ...(details ? { details } : {}), state });
+          return;
+        }
         if (failure) {
           const existing = state.pending.find((item) => item.id === payload.itemId) || {};
           const failedItem = {
