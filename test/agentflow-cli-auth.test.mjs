@@ -19,7 +19,7 @@ test("CLI browser authorization issues a separate saved credential and revokes i
       import(`../bin/lib/auth.mjs?cli-auth=${nonce}`),
       import(`../bin/lib/ui-server.mjs?cli-auth=${nonce}`),
     ]);
-    loginOrCreateUser("browser-cli-user", "browser-cli-password");
+    const browserUser = loginOrCreateUser("browser-cli-user", "browser-cli-password");
     server = await startUiServer({
       workspaceRoot: path.join(tempRoot, "workspace"),
       host: "127.0.0.1",
@@ -63,6 +63,8 @@ test("CLI browser authorization issues a separate saved credential and revokes i
     const loginPage = await loginPageResponse.text();
     assert.equal(loginPageResponse.status, 200);
     assert.match(loginPage, /登录后授权 AgentFlow CLI/);
+    assert.match(loginPage, /使用 CAS 登录/);
+    assert.doesNotMatch(loginPage, /name="password"/);
     assert.doesNotMatch(loginPage, new RegExp(pending.deviceCode));
 
     const loginResponse = await fetch(`${baseUrl}/cli/authorize/login`, {
@@ -75,11 +77,10 @@ test("CLI browser authorization issues a separate saved credential and revokes i
         password: "browser-cli-password",
       }),
     });
-    assert.equal(loginResponse.status, 303);
-    const cookie = String(loginResponse.headers.get("set-cookie") || "").split(";")[0];
-    assert.match(cookie, /^af_session=/);
+    assert.equal(loginResponse.status, 410);
+    const cookie = `af_session=${encodeURIComponent(browserUser.token)}`;
 
-    const approvalPageResponse = await fetch(new URL(loginResponse.headers.get("location"), baseUrl), {
+    const approvalPageResponse = await fetch(started.verificationUrl, {
       headers: { Cookie: cookie },
     });
     const approvalPage = await approvalPageResponse.text();

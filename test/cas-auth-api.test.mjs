@@ -41,7 +41,8 @@ test("CAS users bypass the local allowlist while admin keeps a separate password
     process.env.AGENTFLOW_CAS_ENABLED = "true";
     process.env.AGENTFLOW_CAS_BASE_URL = `http://127.0.0.1:${casServer.address().port}/cas/`;
     delete process.env.AGENTFLOW_CAS_SERVICE_URL;
-    process.env.AGENTFLOW_LEGACY_PASSWORD_LOGIN = "false";
+    // The removed migration switch must not be able to reopen password login.
+    process.env.AGENTFLOW_LEGACY_PASSWORD_LOGIN = "true";
     process.env.AGENTFLOW_USER_WHITELIST = "some-other-local-user";
 
     const { startUiServer } = await import(`../bin/lib/ui-server.mjs?cas-auth-api=${Date.now()}`);

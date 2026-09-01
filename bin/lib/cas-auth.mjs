@@ -91,7 +91,6 @@ export function readCasAuthConfig(publicBaseUrl = "") {
     enabled,
     baseUrl,
     serviceUrl,
-    legacyPasswordLoginEnabled: enabledFlag(process.env.AGENTFLOW_LEGACY_PASSWORD_LOGIN, !enabled),
   };
 }
 

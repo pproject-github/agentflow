@@ -20,6 +20,7 @@ test("regular users enter through CAS while admin password login and Project own
   assert.match(app, /\/api\/auth\/cas\/login/);
   assert.match(app, /\/api\/admin\/auth\/login/);
   assert.match(app, /管理员登录/);
+  assert.doesNotMatch(app, /fetch\("\/api\/auth\/login"/);
   assert.match(sidebar, /用户与归属/);
   assert.match(users, /\/api\/admin\/projects\/reassign/);
   assert.match(users, /目标 CAS 用户/);
