@@ -33,7 +33,7 @@ function scheduledAgentGraph() {
   };
 }
 
-test("only a published enabled Scheduled Run launches Cursor with --force", async () => {
+test("all Workspace runs launch Cursor with --force", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-scheduled-cursor-")));
   const previousHome = process.env.AGENTFLOW_HOME;
   const previousCursorAgentCommand = process.env.CURSOR_AGENT_CMD;
@@ -114,7 +114,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     const calls = fs.readFileSync(mockCallsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(calls.length, 2);
     assert.equal(calls[0].includes("--force"), true, "published enabled Scheduled Run must be unattended");
-    assert.equal(calls[1].includes("--force"), false, "manual execution must preserve the permission boundary");
+    assert.equal(calls[1].includes("--force"), true, "manual Workspace execution must also be unattended");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

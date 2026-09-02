@@ -5799,7 +5799,10 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     for (const nodeId of order) plannedFingerprints.set(nodeId, workspaceNodeInputFingerprint(graph, nodeId, memo));
   }
   const signal = opts.signal || null;
-  const execution = { unattended: opts.execution?.unattended === true };
+  // Workspace 节点运行统一走服务器托管的无人值守执行上下文：手动运行与定时运行
+  // 都需要能够调用流程声明的 shell / 网络 / MCP 工具。调用方仍可显式传 false
+  // 保留受限模式，供特殊的只读场景使用。
+  const execution = { unattended: opts.execution?.unattended !== false };
   const throwIfAborted = () => {
     if (signal?.aborted) {
       const err = new Error("Workspace run stopped");
