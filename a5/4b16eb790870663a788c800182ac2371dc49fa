@@ -1,0 +1,88 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BUNmXax-.js
+  s_396df33d432b0f::t_71763900d9b3ae 1
+bin/lib/ui-server.mjs
+  s_396df33d432b0f::t_f6decc71f9b3cc 84-85,95-105,1594-1600,2311-2349,2351-2358,2360-2365,2367-2379,2381-2386,2391,2399-2402,2467-2479,2505-2508,2566-2568,2574-2579,2581-2596,2604
+  s_396df33d432b0f::t_618f934ed92a3f 2301-2304
+  s_396df33d432b0f::t_fa4eacbacc9fa4 1602-1605,1607,2350,2359,2366,2380,2518,2580,2616
+  s_396df33d432b0f::t_b4752ad762c78e 2564-2565,3199,3205-3208,3230-3240,3252-3253,3255,3257-3267
+  s_396df33d432b0f::t_6e547903947154 2603
+  s_396df33d432b0f::t_5cc3ccaf7dfbb8 3241-3251,3254,3256
+  s_0919cd80b18bfc::t_7560ae6493e5e1 1601
+builtin/web-ui/src/pages/AdminUsersPage.jsx
+  s_396df33d432b0f::t_8a2aa485c28e19 1-131
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_8a2aa485c28e19 338-348,350-354
+  s_396df33d432b0f::t_63f2d2baaeb966 300-304
+  s_396df33d432b0f::t_25d592a0bb93d4 336,6238,6240-6428,6430
+  s_0919cd80b18bfc::t_fcc053217dd309 337,6239
+README.zh-CN.md
+  s_396df33d432b0f::t_2b8cdf6e9a5a9a 178-184
+bin/lib/auth.mjs
+  s_396df33d432b0f::t_fa4eacbacc9fa4 374,380,386-387
+  s_396df33d432b0f::t_618f934ed92a3f 15,693
+  s_396df33d432b0f::t_7988567544f3c2 101-106,180-181,197-199,232,413,590,609-657,661,663-692,694-698
+  s_396df33d432b0f::t_6e547903947154 383
+bin/lib/workspace-server.mjs
+  s_396df33d432b0f::t_db49dece5edee2 7630-7646,7648-7661
+  s_396df33d432b0f::t_83e001c3574091 7629,7647
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_396df33d432b0f::t_95e58c0ea30219 1633,1641-1642
+builtin/web-ui/dist/assets/index-C1GFqU3a.css
+  s_396df33d432b0f::t_71763900d9b3ae 1
+bin/lib/cas-auth.mjs
+  s_396df33d432b0f::t_618f934ed92a3f 10,80-86,114,125-129,156,209
+  s_396df33d432b0f::t_c3aa3aeacd31f2 1-9,11-79,87-113,115-124,130-155,157-208,211
+  s_396df33d432b0f::t_63f2d2baaeb966 210
+test/admin-project-ownership.test.mjs
+  s_396df33d432b0f::t_b9aebf9f4d05c9 1-76,80-87,98-104
+  s_396df33d432b0f::t_5cc3ccaf7dfbb8 88-97
+  s_396df33d432b0f::t_aae3e053db2cd2 77-79
+README.md
+  s_396df33d432b0f::t_2b8cdf6e9a5a9a 186-192
+bin/lib/admin-project-ownership.mjs
+  s_396df33d432b0f::t_83e001c3574091 1-139
+test/cas-auth-ui.test.mjs
+  s_396df33d432b0f::t_9b269f0253e4bc 1-26
+builtin/web-ui/src/App.jsx
+  s_396df33d432b0f::t_da07ecda59f22a 13,135,142-152,167-169,173,182-193,199,224-232,234-242,250,278,280,287-292
+  s_396df33d432b0f::t_63f2d2baaeb966 233
+bin/lib/workspace-collaboration.mjs
+  s_396df33d432b0f::t_db49dece5edee2 369-398
+builtin/web-ui/dist/assets/index-BO7u_Pxq.js
+  s_396df33d432b0f::t_71763900d9b3ae 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-204,206,210-211,214,226-227,230-237,241-246,250,252,255,299-300,304,306,308,310-314,318-319,321-323,325,329,337,339,343,351-358,361-362,369,383,394-395,398,416,425,461,479,506,542,558,582,626,645,657,672,683,715,728,748,779,794,805,821,835,843,852,856,882
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_396df33d432b0f::t_da07ecda59f22a 18
+test/cas-auth-api.test.mjs
+  s_396df33d432b0f::t_5cc3ccaf7dfbb8 96-102
+  s_396df33d432b0f::t_f33457296475a8 106-109
+  s_396df33d432b0f::t_b9aebf9f4d05c9 1-95,103-105,110-124
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_71763900d9b3ae 33-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a54b16eb790870663a788c800182ac2371dc49fa",
+  "prompts": {},
+  "logical_commit_id": "a54b16eb790870663a788c800182ac2371dc49fa",
+  "sessions": {
+    "s_0919cd80b18bfc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "809fa90c-0261-43d8-8528-7237a4af9ecb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    },
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 51729,
+      "total_deletions": 3573
+    }
+  }
+}

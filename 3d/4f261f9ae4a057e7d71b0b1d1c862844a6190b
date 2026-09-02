@@ -1,0 +1,71 @@
+README.md
+  s_396df33d432b0f::t_1934b9fd4ab4c4 192
+bin/lib/admin-project-ownership.mjs
+  s_396df33d432b0f::t_dcb516171e53aa 64-69,76,106-114,144,155-198
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_61fd05ea5a8c73 29820-29821,29825-29826
+  s_396df33d432b0f::t_568e12b31f9257 29817-29819,29822-29824,29827-29832
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_f3ef0624bd81b2 33-34
+builtin/web-ui/src/App.jsx
+  s_396df33d432b0f::t_6e49a645a742ea 233
+builtin/web-ui/dist/assets/index-Bc7DF52C.css
+  s_396df33d432b0f::t_f3ef0624bd81b2 1
+test/cas-auth-ui.test.mjs
+  s_396df33d432b0f::t_f508364fb35e2d 17,27-28
+builtin/web-ui/src/pages/AdminUsersPage.jsx
+  s_396df33d432b0f::t_97960bf8eacba2 121,123
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_396df33d432b0f::t_28181c9c7e7600 4,974
+  s_396df33d432b0f::t_97960bf8eacba2 1635,1643-1644
+builtin/web-ui/src/components/LegacyAccountLinkCard.jsx
+  s_396df33d432b0f::t_28181c9c7e7600 1-3,5-13,15-25,27-29,31-75
+  s_396df33d432b0f::t_f508364fb35e2d 4,14,26,30
+test/cas-legacy-account-link.test.mjs
+  s_396df33d432b0f::t_310a92c00a3d5e 33-35,63-72
+  s_396df33d432b0f::t_445a14964da154 23-24,45-54
+  s_396df33d432b0f::t_77f1386a954b87 31
+  s_396df33d432b0f::t_a6f931ec430a7e 103-105
+  s_396df33d432b0f::t_310bf49aae865c 1-22,25-30,32,36-44,55-62,73-102,106-112
+README.zh-CN.md
+  s_396df33d432b0f::t_1934b9fd4ab4c4 184
+test/cas-auth-api.test.mjs
+  s_396df33d432b0f::t_2b5729fa1ed50e 14
+  s_396df33d432b0f::t_6e49a645a742ea 22,45
+builtin/web-ui/src/i18n/locales/zh/settings.json
+  s_396df33d432b0f::t_6e49a645a742ea 78-81,90
+bin/lib/auth.mjs
+  s_396df33d432b0f::t_f508364fb35e2d 356-362
+  s_396df33d432b0f::t_9a75dbaf7e1aa6 188-189,205-207,239-250,272,275-276,284-290,295,298-299,303-304,306-335,339-344,346-355,363,715-720,820-823,831
+  s_396df33d432b0f::t_0780270d2f4fee 336-338
+  s_396df33d432b0f::t_5fdecaf6fa728d 437
+  s_396df33d432b0f::t_a5cb362c1158eb 16-17,49-52,251-271,273-274,277-283,291-294,296-297,300-302,305
+builtin/web-ui/src/i18n/locales/en/settings.json
+  s_396df33d432b0f::t_6e49a645a742ea 78-81,90
+builtin/web-ui/dist/assets/index-C6bjbv5W.js
+  s_396df33d432b0f::t_f3ef0624bd81b2 9,25,37-38,40,42,44,65-67,69,73,75,79,195,201-204,206,210-211,214,226,230-233,236-237,241-246,300,304,310-311,318-319,321-323,325,339,351-360,364,371,385,396-397,400,418,560,628,647,659,674,685,717,730,781,796,807,823,837,845,854,858,884
+bin/lib/ui-server.mjs
+  s_396df33d432b0f::t_28c79ab06f8c05 2991-2994
+  s_396df33d432b0f::t_06e02d5c45619b 76,84,94,108-113,2964-2990,2995-3034
+builtin/web-ui/dist/assets/WorkflowAssistantThread-m_jP6DVx.js
+  s_396df33d432b0f::t_f3ef0624bd81b2 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3d4f261f9ae4a057e7d71b0b1d1c862844a6190b",
+  "prompts": {},
+  "logical_commit_id": "3d4f261f9ae4a057e7d71b0b1d1c862844a6190b",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 54044,
+      "total_deletions": 3617
+    }
+  }
+}

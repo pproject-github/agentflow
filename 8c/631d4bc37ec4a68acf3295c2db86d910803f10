@@ -1,0 +1,44 @@
+bin/lib/ui-server.mjs
+  s_cf1648291e3a49::t_10468887d9e550 2408,2505,2543
+README.zh-CN.md
+  s_cf1648291e3a49::t_11450c70e7fd52 178,183
+builtin/web-ui/dist/index.html
+  s_cf1648291e3a49::t_737f3de24bb276 33
+builtin/web-ui/dist/assets/WorkflowAssistantThread-zGxkmczw.js
+  s_cf1648291e3a49::t_737f3de24bb276 1
+bin/lib/cli-auth-page.mjs
+  s_cf1648291e3a49::t_9f50065513bb41 32-34,64-65,71-73
+builtin/web-ui/dist/assets/index-q0nS2eGJ.js
+  s_cf1648291e3a49::t_737f3de24bb276 242,884
+test/cas-auth-api.test.mjs
+  s_cf1648291e3a49::t_e845e4fc45497b 44-45
+builtin/web-ui/src/App.jsx
+  s_cf1648291e3a49::t_8455d506d79108 171,197,223,229,231-232,235,248,276,278
+README.md
+  s_cf1648291e3a49::t_11450c70e7fd52 186,191
+test/agentflow-cli-auth.test.mjs
+  s_cf1648291e3a49::t_e845e4fc45497b 22,66-67,80-81,83
+test/cas-auth-ui.test.mjs
+  s_cf1648291e3a49::t_e845e4fc45497b 23
+test/admin-password-reset.test.mjs
+  s_cf1648291e3a49::t_e845e4fc45497b 7,80,87-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8c631d4bc37ec4a68acf3295c2db86d910803f10",
+  "prompts": {},
+  "logical_commit_id": "8c631d4bc37ec4a68acf3295c2db86d910803f10",
+  "sessions": {
+    "s_cf1648291e3a49": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ac5-a3e2-7861-92cb-07546f18f72e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 929,
+      "total_deletions": 89
+    }
+  }
+}

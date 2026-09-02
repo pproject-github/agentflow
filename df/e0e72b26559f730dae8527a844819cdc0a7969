@@ -1,0 +1,24 @@
+test/repository-index.test.mjs
+  s_67ed3c57d7ffe6::t_8c887d726f9d97 102-137
+bin/lib/repository-index.mjs
+  s_67ed3c57d7ffe6::t_8b6034193a0de5 518-522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dfe0e72b26559f730dae8527a844819cdc0a7969",
+  "prompts": {},
+  "logical_commit_id": "dfe0e72b26559f730dae8527a844819cdc0a7969",
+  "sessions": {
+    "s_67ed3c57d7ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05fd3-610d-73b2-80f5-4e93219a2745",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 41,
+      "total_deletions": 2
+    }
+  }
+}

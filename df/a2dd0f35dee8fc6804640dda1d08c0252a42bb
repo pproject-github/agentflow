@@ -1,0 +1,32 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BtTzowiN.js
+  s_67ed3c57d7ffe6::t_837c1c85f54c4c 1
+builtin/web-ui/dist/assets/index-C7P48FOg.js
+  s_67ed3c57d7ffe6::t_b4e53ef648334f 242,884
+builtin/web-ui/dist/index.html
+  s_67ed3c57d7ffe6::t_e599d17edc3eb7 33
+package-lock.json
+  s_67ed3c57d7ffe6::t_d3379a91042dc0 3,9
+package.json
+  s_67ed3c57d7ffe6::t_b2dc63c3913f74 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_67ed3c57d7ffe6::t_02790676835285 1
+skills/agentflow-cli/runtime/package.json
+  s_67ed3c57d7ffe6::t_2c7a99108f8275 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dfa2dd0f35dee8fc6804640dda1d08c0252a42bb",
+  "prompts": {},
+  "logical_commit_id": "dfa2dd0f35dee8fc6804640dda1d08c0252a42bb",
+  "sessions": {
+    "s_67ed3c57d7ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05fd3-610d-73b2-80f5-4e93219a2745",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

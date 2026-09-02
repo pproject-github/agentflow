@@ -1,0 +1,71 @@
+builtin/web-ui/src/App.jsx
+  s_396df33d432b0f::t_0ae833c8afee81 6,116,249
+test/admin-workspace-readonly.test.mjs
+  s_396df33d432b0f::t_8f3a286009ae8c 99,166-183
+  s_396df33d432b0f::t_142c7a85d2da60 22-23,28,69-98,100-106,153-165
+builtin/web-ui/src/pages/MarketplacePage.jsx
+  s_396df33d432b0f::t_2f3bab4befad39 85,94-101,122-127,230
+  s_396df33d432b0f::t_e4d81fbad290b4 304
+  s_396df33d432b0f::t_79c25267261fd1 288-294
+  s_396df33d432b0f::t_b6752d67a2c290 265-280
+  s_396df33d432b0f::t_f762bb75e87e19 238-242
+  s_396df33d432b0f::t_3d44fff3414c6e 237
+builtin/web-ui/src/pages/MarketplaceSnippetPreviewPage.jsx
+  s_396df33d432b0f::t_435ab45c8b66c1 190
+  s_396df33d432b0f::t_489653c767efc2 1-189,191-252
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_dad999e202da0e 33
+  s_396df33d432b0f::t_dfde031d83d99d 34
+bin/lib/workspace-server.mjs
+  s_396df33d432b0f::t_1a2fd81cfec159 1754-1755,1757-1760,1764-1782,1786,1788,1790,1792
+builtin/web-ui/dist/assets/index-BQeq5tdj.css
+  s_396df33d432b0f::t_dfde031d83d99d 1
+bin/lib/marketplace-usage.mjs
+  s_396df33d432b0f::t_f91990e28092a1 158,160,173-174
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_396df33d432b0f::t_06c110de170a6a 9003-9010,13797-13804,13806-13825
+builtin/web-ui/dist/assets/index-DD7GD_j1.js
+  s_396df33d432b0f::t_dad999e202da0e 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,200-215,217-227,230-238,242,244,247,291-292,294,296,298-300,302-306,310-311,313-315,317,321,329,331,335,343-353,360,374,385-386,389,407,416,452,470,497,533,549,573,617,636,648,663,674,706,719,739,770,785,796,812,826,834,843,847,873
+test/marketplace-resources.test.mjs
+  s_396df33d432b0f::t_18ab8dc02b9754 126-129,131-132,135,165-180,230,234-236
+  s_396df33d432b0f::t_50f5ed47f3fa3c 130,136,155-156,233
+  s_396df33d432b0f::t_3ec4733b056ac3 223-226
+  s_396df33d432b0f::t_8951f6c4f1b778 308-335
+  s_396df33d432b0f::t_f1e421537ae80c 269-285
+  s_396df33d432b0f::t_469baa2bfd125b 134,143-154,157-164,231-232,237-267
+  s_396df33d432b0f::t_c95b8ff7a19e90 307
+builtin/web-ui/dist/assets/WorkflowAssistantThread-tzgS9GVJ.js
+  s_396df33d432b0f::t_dad999e202da0e 1
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_eaf6ea6b96f012 28201-28210
+  s_396df33d432b0f::t_48bcdec57ba569 28211-28242,28249-28252
+  s_396df33d432b0f::t_50c7e9b9b2ffc2 28147,28182
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_77a0f8f34a6e24 991,994
+  s_396df33d432b0f::t_c33cb284adbf68 1237-1244,1248,1349-1350,1362-1383,1386,1388,1390,1395,1423-1434
+  s_396df33d432b0f::t_0a2efdbcd17233 48,987-990,992-993,995-1026,1031,1033-1039,1256
+  s_396df33d432b0f::t_79769b81caf175 931-986,1027-1030,1032,1040-1048,1257
+  s_396df33d432b0f::t_5d6b2f5a9494c7 1255,1259-1289,1295
+  s_396df33d432b0f::t_6bc430e4bc0662 14,33-34,43,54
+  s_396df33d432b0f::t_c5d433cc63629e 1253-1254
+  s_396df33d432b0f::t_dbc19c29cac226 1258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "456af5ba89e707e397ffa48aa0b544f65a011982",
+  "prompts": {},
+  "logical_commit_id": "456af5ba89e707e397ffa48aa0b544f65a011982",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 14379,
+      "total_deletions": 485
+    }
+  }
+}

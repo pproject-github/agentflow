@@ -1,0 +1,32 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-x1JCQpVD.js
+  s_396df33d432b0f::t_69ea5f8d0a8f56 1
+builtin/web-ui/dist/assets/index-Y3sCNmlY.js
+  s_396df33d432b0f::t_bb0f0c0e2c4b71 242,880
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_28451007f819eb 33
+package-lock.json
+  s_396df33d432b0f::t_4076a99c90706c 3,9
+package.json
+  s_396df33d432b0f::t_48005437218a88 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_396df33d432b0f::t_1687df9af97992 1
+skills/agentflow-cli/runtime/package.json
+  s_396df33d432b0f::t_40c352b4a9f37a 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ea96405a59568c3a963f1107b6d5078a3581e3e2",
+  "prompts": {},
+  "logical_commit_id": "ea96405a59568c3a963f1107b6d5078a3581e3e2",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

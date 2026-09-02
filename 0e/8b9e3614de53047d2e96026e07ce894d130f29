@@ -1,0 +1,23 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CTrXOZ00.js
+  h_36b743b61da42c 1
+builtin/web-ui/dist/assets/index-BeUfNQRL.js
+  h_36b743b61da42c 213,873
+builtin/web-ui/dist/index.html
+  h_36b743b61da42c 33
+package-lock.json
+  h_36b743b61da42c 3,9
+package.json
+  h_36b743b61da42c 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0e8b9e3614de53047d2e96026e07ce894d130f29",
+  "prompts": {},
+  "logical_commit_id": "0e8b9e3614de53047d2e96026e07ce894d130f29",
+  "humans": {
+    "h_36b743b61da42c": {
+      "author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-DKdBGu3q.js
+  h_36b743b61da42c 1
+builtin/web-ui/dist/assets/index-BUljbvrW.js
+  h_36b743b61da42c 238,877
+builtin/web-ui/dist/index.html
+  h_36b743b61da42c 33
+package-lock.json
+  h_36b743b61da42c 3,9
+package.json
+  h_36b743b61da42c 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  h_36b743b61da42c 1
+skills/agentflow-cli/runtime/package.json
+  h_36b743b61da42c 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c94c364169ec6439314adeaceb69cee62bc11475",
+  "prompts": {},
+  "logical_commit_id": "c94c364169ec6439314adeaceb69cee62bc11475",
+  "humans": {
+    "h_36b743b61da42c": {
+      "author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

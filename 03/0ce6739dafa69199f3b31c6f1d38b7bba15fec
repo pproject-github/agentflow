@@ -1,0 +1,34 @@
+builtin/web-ui/dist/index.html
+  s_cf1648291e3a49::t_192884e0b112b0 33
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_cf1648291e3a49::t_05890752a82492 1
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BYZ_6sIa.js
+  s_cf1648291e3a49::t_192884e0b112b0 1
+skills/agentflow-cli/runtime/package.json
+  s_cf1648291e3a49::t_05890752a82492 3
+builtin/web-ui/dist/assets/index-BEvsJDhX.js
+  s_cf1648291e3a49::t_192884e0b112b0 242,884
+package.json
+  s_cf1648291e3a49::t_05890752a82492 3
+package-lock.json
+  s_cf1648291e3a49::t_18f2a7936c0a75 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "030ce6739dafa69199f3b31c6f1d38b7bba15fec",
+  "prompts": {},
+  "logical_commit_id": "030ce6739dafa69199f3b31c6f1d38b7bba15fec",
+  "sessions": {
+    "s_cf1648291e3a49": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ac5-a3e2-7861-92cb-07546f18f72e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 894,
+      "total_deletions": 4
+    }
+  }
+}

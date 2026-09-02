@@ -1,0 +1,50 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_396df33d432b0f::t_c70f8cc15cc820 9801-9804,9819,9828,9834,9852,9859,9865
+  s_396df33d432b0f::t_23bf6da457f606 15822,15825-15831,15834,15836-15840,15917,15922-15923,15932-15936
+  s_396df33d432b0f::t_2aee97488fea35 9596,9609
+  s_396df33d432b0f::t_f8716f1f19c6f8 9542-9548
+  s_396df33d432b0f::t_ce4a7f458135ce 9199
+  s_396df33d432b0f::t_db05ac640d56af 17193,17199,17205,17218-17237,17239,17243-17247,17250-17254,17259,17276,17278,17280-17281,17317,17324
+  s_396df33d432b0f::t_72eea0dda8ba98 9500-9531
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BpfVm8k5.js
+  s_396df33d432b0f::t_b749726bf6a72d 1
+test/workspace-node-review-api.test.mjs
+  s_396df33d432b0f::t_b59d74aa19d9f1 68-73,78-79,95
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_b749726bf6a72d 33
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_6ff9d799c4890b 2554-2562,2601,2651-2656
+  s_396df33d432b0f::t_cf250bbcd396a4 2079-2089
+builtin/web-ui/dist/assets/index-IWiYZtY1.js
+  s_396df33d432b0f::t_b749726bf6a72d 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-204,210-211,214,225-227,230-237,241-246,250,252,255,299-300,304,306,308,310-314,318-319,321-323,325,329,337,339,343,351,353-354,356-360,364,371,385,396-397,400,418,427,463,481,508,544,560,584,628,647,659,674,685,717,730,750,781,796,807,823,837,845,854,858,884
+bin/lib/repository-index.mjs
+  s_396df33d432b0f::t_62f4ce725b6872 24
+  s_396df33d432b0f::t_72d477ecac23fd 18,171,174,178-184,187-188,191,193,510
+bin/lib/workspace-server.mjs
+  s_396df33d432b0f::t_d426f9a0574cff 7611,7613,7617-7629,7720-7732,7889-7890
+  s_396df33d432b0f::t_110a3a5da326b8 744-747,754-761,763,765,772-801,823-831,833-834,838-861,863,946,949-969,971-987,989-997,1001-1002,1005,1007,1021,1023,1028,1031-1039,1053,1057-1060,1075,1083,1096,1103-1112,1116
+  s_396df33d432b0f::t_556abe2030ecf9 802-822,832,835-836
+test/marketplace-resources.test.mjs
+  s_396df33d432b0f::t_62cc093f7c8bee 204-208,287-288
+test/workspace-release-api.test.mjs
+  s_396df33d432b0f::t_a7edfd4ddc0d9f 31-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ff26b7af85e6aeb7ecc1a2d7178e820e9f32f486",
+  "prompts": {},
+  "logical_commit_id": "ff26b7af85e6aeb7ecc1a2d7178e820e9f32f486",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 55415,
+      "total_deletions": 3743
+    }
+  }
+}

@@ -1,0 +1,99 @@
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_c77dd483a0fd29 30,397-398
+  s_396df33d432b0f::t_4676eab5ce90ba 3361,3397
+  s_a2a276350b2430::t_82b77cc4a3349d 399-400
+bin/lib/workspace-run-logs.mjs
+  s_396df33d432b0f::t_3b03c12fd163c5 10-14,42-47,50
+bin/lib/workspace-server.mjs
+  s_396df33d432b0f::t_460a3c5f61de5c 6910,6913,6936,6939
+  s_396df33d432b0f::t_724a81ec78ec39 6834,6902-6909,6911-6912,6914-6935,6937-6938,6940-6947
+  s_396df33d432b0f::t_9a2e8fd6bcb5e9 5412-5422
+  s_396df33d432b0f::t_5eb470396fd7af 2790-2843
+  s_396df33d432b0f::t_73d40f3c2070af 3154,3177-3178,3192-3193,3208-3218,3229,3629,4824
+  s_396df33d432b0f::t_b3a7e78adbd4dd 3194-3205
+  s_396df33d432b0f::t_3b03c12fd163c5 5308-5319,5379-5391,5394-5407,5434-5447,5451-5461
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_396df33d432b0f::t_a133dfc86f47a7 482-497,16872,16878
+  s_396df33d432b0f::t_eab2ccae2159f6 16850
+  s_396df33d432b0f::t_1e532bb1aca7dd 15570-15580,16827,16830-16831,16838-16840,16842-16843,16846-16847,16849,16851,16853-16858,16860-16871,16873-16877,16879-16894
+builtin/web-ui/src/components/RunInspector.jsx
+  s_396df33d432b0f::t_5952ffe83c4091 70-74,131
+  s_396df33d432b0f::t_81111f9f1b6c98 129
+  s_396df33d432b0f::t_5bcbe2133f1601 1-69,75-128,130,132-143
+test/run-inspector-model.test.mjs
+  s_396df33d432b0f::t_b6fa050fc45008 1-46
+  s_396df33d432b0f::t_460a3c5f61de5c 47-73
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_5952ffe83c4091 13694-13717
+  s_396df33d432b0f::t_5717aea14cf338 1584,1720-1722,13421-13422,13455,13549-13550,13643-13693,13718-13903,13910-13946
+  s_396df33d432b0f::t_1e532bb1aca7dd 20431,20433-20487,20489-20508
+  s_396df33d432b0f::t_9a2e8fd6bcb5e9 13904-13909
+  s_396df33d432b0f::t_6e092a67682fa6 20432
+builtin/web-ui/src/components/WorkspaceRunLogsDrawer.jsx
+  s_396df33d432b0f::t_11417977a8e47c 86,173-181
+  s_396df33d432b0f::t_eec37126c5c2ef 1-2,129
+  s_396df33d432b0f::t_4676eab5ce90ba 56,78,92,103
+builtin/web-ui/src/lib/runInspectorModel.js
+  s_396df33d432b0f::t_460a3c5f61de5c 103-104
+  s_396df33d432b0f::t_5bcbe2133f1601 1-102,105-133,135-147,149,151-152,154-174,178,180,185-234
+  s_396df33d432b0f::t_81111f9f1b6c98 134,175-176,179,181-184
+  s_396df33d432b0f::t_7600884bc01c24 148,150,153,177
+test/workspace-output-materialization.test.mjs
+  s_396df33d432b0f::t_5bd5ebfe1e65e2 9,11,187-251
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BSJXIYm1.js
+  s_396df33d432b0f::t_bb721e5ce4c77c 1
+test/workspace-node-review-api.test.mjs
+  s_396df33d432b0f::t_c77dd483a0fd29 82-87,123-135
+bin/lib/builtin-node-review.mjs
+  s_396df33d432b0f::t_c77dd483a0fd29 1-101
+builtin/web-ui/src/pages/SchedulesPage.jsx
+  s_396df33d432b0f::t_4676eab5ce90ba 5,39,178-188,218-234
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_2860b24a6213f4 34
+  s_396df33d432b0f::t_bb721e5ce4c77c 33
+builtin/web-ui/src/components/AdminRunDetailDrawer.jsx
+  s_396df33d432b0f::t_eec37126c5c2ef 1-2,105
+test/admin-run-detail.test.mjs
+  s_396df33d432b0f::t_5952ffe83c4091 85,136
+bin/lib/agent-runners.mjs
+  s_396df33d432b0f::t_a63349827f183f 485-491,756,766,776
+  s_396df33d432b0f::t_70993b22a00af1 96-117,484,579,617,620-623,628,663-670,686-690,700-702,727,764,774
+  s_396df33d432b0f::t_3a807b9947ca36 671-683,695-697,705,711
+builtin/web-ui/dist/assets/index-DuO1PZuT.js
+  s_396df33d432b0f::t_bb721e5ce4c77c 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,200-208,210-211,214,225-227,230-233,237-242,246,248,251,295-296,298,300,304,306-310,314-315,317-319,321,325,333,335,339,347-352,355-356,363,377,388-389,392,410,419,455,473,500,536,552,576,620,639,651,666,677,709,722,742,773,788,799,815,829,837,846,850,876
+test/cursor-composer-fallback.test.mjs
+  s_396df33d432b0f::t_0574663b6ba92c 7,208-265,315-324
+  s_396df33d432b0f::t_3a807b9947ca36 150-181
+  s_396df33d432b0f::t_54dd12525b5dab 182-207,309-313
+test/composer-assistant-ui.test.mjs
+  s_396df33d432b0f::t_68d95c65198ad4 44-63
+builtin/web-ui/dist/assets/index-DW-_kqjR.css
+  s_396df33d432b0f::t_2860b24a6213f4 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "97b594d32ec50b94b1df62a8e053287c9ec9cac7",
+  "prompts": {},
+  "logical_commit_id": "97b594d32ec50b94b1df62a8e053287c9ec9cac7",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 42797,
+      "total_deletions": 3246
+    },
+    "s_a2a276350b2430": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a012a1-2de3-7503-b86d-76c22def3fc8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

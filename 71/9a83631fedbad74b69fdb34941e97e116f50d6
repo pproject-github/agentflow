@@ -1,0 +1,23 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-pVdrZ-Rl.js
+  h_36b743b61da42c 1
+builtin/web-ui/dist/assets/index-Czutb6ai.js
+  h_36b743b61da42c 234,873
+builtin/web-ui/dist/index.html
+  h_36b743b61da42c 33
+package-lock.json
+  h_36b743b61da42c 3,9
+package.json
+  h_36b743b61da42c 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "719a83631fedbad74b69fdb34941e97e116f50d6",
+  "prompts": {},
+  "logical_commit_id": "719a83631fedbad74b69fdb34941e97e116f50d6",
+  "humans": {
+    "h_36b743b61da42c": {
+      "author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+builtin/web-ui/src/index.css
+  s_d2b977c6069372::t_ba23b4786c7583 29815
+  s_d2b977c6069372::t_f2facbc340047c 29813,29821
+  s_d2b977c6069372::t_2cc767ba836e1f 29818
+  s_d2b977c6069372::t_9e71f32cc1ec88 29819-29820
+  s_d2b977c6069372::t_21b113e419b753 29810-29812,29814,29816-29817
+  s_d2b977c6069372::t_441580bc6359ab 29822-29827
+builtin/web-ui/src/pages/ReleasesPage.jsx
+  s_d2b977c6069372::t_73bca30012da91 32-39
+  s_d2b977c6069372::t_e9457e631700e1 1-3,5-15,17-19,21-22,26-27,29,31,40-45,47-51
+  s_d2b977c6069372::t_8d6ae09b9bd569 28
+  s_d2b977c6069372::t_6f197fa0d21793 20,23-25,30
+  s_d2b977c6069372::t_7ac876f26df77d 4,16,46
+bin/lib/ui-server.mjs
+  s_d2b977c6069372::t_e1c84efbe6579b 2958-2963,2965-2967,2969-2971
+  s_d2b977c6069372::t_6f197fa0d21793 151,2968
+  s_d2b977c6069372::t_0a3de80fd087f1 2964
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_d2b977c6069372::t_f2facbc340047c 12
+builtin/web-ui/src/App.jsx
+  s_d2b977c6069372::t_f2facbc340047c 20,124
+builtin/web-ui/dist/index.html
+  s_d2b977c6069372::t_143ce8a5029ee0 33
+  s_d2b977c6069372::t_18816a95ad12fa 34
+builtin/web-ui/dist/assets/index-BAijhZyy.css
+  s_d2b977c6069372::t_18816a95ad12fa 1
+bin/lib/release-registry.mjs
+  s_d2b977c6069372::t_6f197fa0d21793 8,14-19,44-45,51-57
+  s_d2b977c6069372::t_0a3de80fd087f1 32,34,49
+  s_d2b977c6069372::t_e1c84efbe6579b 1-7,9-13,20-31,33,35-43,46-48,50,58-60
+builtin/web-ui/dist/assets/index-Bj2mtVJR.js
+  s_d2b977c6069372::t_143ce8a5029ee0 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-204,210-211,213-214,225-227,230-237,241-246,250,252,255,299-300,304,308,310-311,313-314,318-319,321-323,325,329,337,339,343,351-358,361-362,369,383,394-395,398,416,425,461,479,542,558,582,626,645,657,672,683,715,728,748,779,794,805,821,835,843,852,856,882
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Bp_BpCmb.js
+  s_d2b977c6069372::t_143ce8a5029ee0 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fe8a2af41f4fb76af6018c187b852d323c00a0a3",
+  "prompts": {},
+  "logical_commit_id": "fe8a2af41f4fb76af6018c187b852d323c00a0a3",
+  "sessions": {
+    "s_d2b977c6069372": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0463d-3bb2-79a2-868c-173321770d2b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null,
+      "total_additions": 8224,
+      "total_deletions": 79
+    }
+  }
+}

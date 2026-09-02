@@ -1,0 +1,21 @@
+bin/lib/workspace-routes.mjs
+  s_111c82bfe7562e::t_37cad3f93fae36 1106-1109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7cd65f79900a9ea05f5331acf3ec91d9ada8328c",
+  "prompts": {},
+  "logical_commit_id": "7cd65f79900a9ea05f5331acf3ec91d9ada8328c",
+  "sessions": {
+    "s_111c82bfe7562e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05cbf-bb25-7223-9422-2d190f953931",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 4
+    }
+  }
+}

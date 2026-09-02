@@ -1,0 +1,99 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-sdvvX16N.js
+  s_396df33d432b0f::t_56c93e2c2aece5 1
+test/agentflow-ai-exploration-skill.test.mjs
+  s_396df33d432b0f::t_45acce42932c91 13-14,43-45,73,79,82,86,91,96
+  s_396df33d432b0f::t_1c92b18a7bbd16 1-12,15-29,31-42,46-72,74-78,80-81,83-85,87-90,92-95,97-105
+  s_396df33d432b0f::t_80b7e4f94f9965 30
+skills/agentflow-ai-exploration/scripts/agentflow-ai-exploration.mjs
+  s_396df33d432b0f::t_d5ffb875bc32ac 1-308
+builtin/web-ui/src/components/AiExplorationPanel.jsx
+  s_396df33d432b0f::t_d93cb0a0d4dad7 1-165,167-170,172-177,179-181,183-186,190-317
+  s_396df33d432b0f::t_e6e7e120a297d4 178,182
+  s_396df33d432b0f::t_88f4e261298634 166,171,187-189
+skills/agentflow-ai-exploration/agents/openai.yaml
+  s_396df33d432b0f::t_1bfb1aef6629d1 1-4
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_f15aba90b40540 19553-19958
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_56c93e2c2aece5 33
+  s_396df33d432b0f::t_709dd88a631664 34
+bin/lib/composer-agent.mjs
+  s_396df33d432b0f::t_dee94d2d84dc23 326
+  s_396df33d432b0f::t_6de7afc814a14b 322-324,351-353
+  s_396df33d432b0f::t_5eadeefc89967c 325,354-355
+  s_396df33d432b0f::t_078247a0e8026f 356
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_396df33d432b0f::t_d1c5d02ad3d966 45,9392,15987,16019,16775-16786
+  s_396df33d432b0f::t_64d9a559bbc977 15961-15976
+skills/agentflow-ai-exploration/references/protocol.md
+  s_396df33d432b0f::t_c40378fae2f589 1-120
+builtin/web-ui/dist/assets/index-yplDmRpj.css
+  s_396df33d432b0f::t_709dd88a631664 1
+test/ai-exploration-api.test.mjs
+  s_396df33d432b0f::t_0445460f5bd134 30-32
+  s_396df33d432b0f::t_97378f55d6a6fb 1-12,14-22,46-101,133-136,139-141
+  s_396df33d432b0f::t_29a334e4c025e7 131
+  s_396df33d432b0f::t_88f4e261298634 103-108
+  s_396df33d432b0f::t_2724167c153f53 24,26,29,122
+  s_396df33d432b0f::t_ce14bb10036fc3 27,33-41,123-130,132
+  s_396df33d432b0f::t_fbf8c417effd54 109-110,121
+  s_396df33d432b0f::t_07f89963951b78 13,23,25,28,42-45,102,111-120,137-138
+skills/agentflow-ai-exploration/scripts/auth-store.mjs
+  s_396df33d432b0f::t_d5ffb875bc32ac 1-102
+test/ai-exploration.test.mjs
+  s_396df33d432b0f::t_86628a7b9dc452 9,49-55
+  s_396df33d432b0f::t_88f4e261298634 12,74,76
+  s_396df33d432b0f::t_f49f4ebbca87e7 1-8,10-11,13-48,56-73,75,77-87
+skills/agentflow-ai-exploration/SKILL.md
+  s_396df33d432b0f::t_c40378fae2f589 3,6,8,10-12,14,16,18,20-22,24,26-29,31,33,35-38,40,42,44-48,50,52,54-58,60,62,64,66-71,73,75-81,83,85-125,127
+  s_396df33d432b0f::t_1bfb1aef6629d1 1-2,4-5,7,9,13,15,17,19,23,25,30,32,34,39,41,43,49,51,53,59,61,63,65,72,74,82,84,126
+builtin/web-ui/dist/assets/index-wpNHgitp.js
+  s_396df33d432b0f::t_56c93e2c2aece5 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-204,210-211,214,221-227,230-233,237-242,246,248,251,295-296,298,300,302,304,306-310,314-315,317-319,321,325,333,335,339,347-353,356-357,364,378,389-390,393,411,420,456,474,501,537,553,577,621,640,652,667,678,710,723,743,774,789,800,816,830,838,847,851,877
+docs/wiki/ai-exploration-trace.zh-CN.md
+  s_396df33d432b0f::t_4f909c7204daec 1-59
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_88f4e261298634 23,3942,3961,4231-4243,4253-4263,4265,4273-4279,4284-4287,4289-4290,4292,4294-4298,4306-4316
+  s_396df33d432b0f::t_c0f5c6e2e38314 4009-4014
+  s_396df33d432b0f::t_4a32f3f7d74f29 4088-4089,4246-4247,4317-4318
+  s_396df33d432b0f::t_86628a7b9dc452 21,4280-4283,4288,4291,4293
+  s_396df33d432b0f::t_23bea76420b5df 27
+  s_396df33d432b0f::t_a0d82c14ddb290 4210-4212,4214,4228,4252,4344-4361
+  s_396df33d432b0f::t_5c6baedfdd9dd3 3933,3937-3941,3943-3960,3962-4008,4015-4087,4090-4111,4113-4137,4204-4209,4213,4215-4227,4229-4230,4244-4245,4264,4266-4272,4299-4305,4324-4343,4362,4366
+  s_396df33d432b0f::t_22bbd739d65d72 4248-4251,4319-4323
+  s_396df33d432b0f::t_151f94ebf04a78 16-20,22,24-26,28
+  s_396df33d432b0f::t_078247a0e8026f 4112
+  s_396df33d432b0f::t_6f20e5810415e7 3934-3935,4138-4203
+  s_396df33d432b0f::t_f6887c6e204f76 3936
+bin/lib/ai-exploration.mjs
+  s_396df33d432b0f::t_01e11d6e428193 1-231,247-259,261-279
+  s_396df33d432b0f::t_86628a7b9dc452 239-240,244-246
+  s_396df33d432b0f::t_88f4e261298634 232-238,260
+  s_396df33d432b0f::t_3d760bfd46ef6d 241-243
+  s_396df33d432b0f::t_0cf39e2da6c318 287
+  s_396df33d432b0f::t_54487167fdfd38 280-286,288-293
+bin/lib/agent-runners.mjs
+  s_396df33d432b0f::t_5eadeefc89967c 127,141,144,1052-1053
+  s_396df33d432b0f::t_078247a0e8026f 560-562,569-571
+  s_396df33d432b0f::t_4d797b8a31fae6 858
+test/ai-exploration-ui.test.mjs
+  s_396df33d432b0f::t_5d3d37ca1574a4 1-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f69ca88a1f521d34debf946b25fcd823249eb647",
+  "prompts": {},
+  "logical_commit_id": "f69ca88a1f521d34debf946b25fcd823249eb647",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 35086,
+      "total_deletions": 2234
+    }
+  }
+}

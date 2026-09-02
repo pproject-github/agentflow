@@ -1,0 +1,24 @@
+.npmrc
+  s_396df33d432b0f::t_fba638b0332536 1
+package.json
+  s_396df33d432b0f::t_fba638b0332536 37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3798b521130031fd28d8f73487fa8495495e4c6f",
+  "prompts": {},
+  "logical_commit_id": "3798b521130031fd28d8f73487fa8495495e4c6f",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 51731,
+      "total_deletions": 3575
+    }
+  }
+}

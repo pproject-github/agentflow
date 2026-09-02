@@ -1,0 +1,71 @@
+skills/agentflow-cli/runtime/package.json
+  s_396df33d432b0f::t_9809ffe453f54e 3
+test/marketplace-resources.test.mjs
+  s_396df33d432b0f::t_b7ec96318f8ecd 446
+  s_396df33d432b0f::t_13d4ff6dcc7240 119,143-147,263-264,362,380,393,429-445,447-453
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_396df33d432b0f::t_9809ffe453f54e 1,1844-1845,2036-2037,4813-4814,11953-12047,12049,12053,12067,12069,12076,12078,12105,12108,12114,12131,12157-12162,12168-12169,12173,12177-12179,12184,12187,12193,12200,12202-12203,12206,12208,12210,12230,12266,12269-12271,12273,12279,12304-12306,12308,12310,12321,12342,12344-12346,12348-12350,12352,12354-12355,12375,12392-12394,12401,12403,12414,12418,12586-12587,12589,13564,13566,13587,13623,13647-13648,13651,13658-13659,13673,13743-13744,13750,13847-13848,13938,13941,13947,14051,14053,14062,14064-14065,14069,14090,14093,14099,14173-14174,14181-14182,14196,14204-14205,14215,14217,14240-14241,14243-14246,14275,14288,14299,14301,14305,14309,14315-14317,14319,14327,14329,14332-14333,14428-14430,14453-14455,14912-14913,14916,14938,14942-14943,14950,14953-14954,14956,14958-14960,14963
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_77c965ae4e23fc 33
+builtin/web-ui/src/i18n/locales/en/project.json
+  s_396df33d432b0f::t_813935582fa0dd 14-15,34,124,131
+builtin/web-ui/dist/assets/index-CXDJrBxI.js
+  s_396df33d432b0f::t_77c965ae4e23fc 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,71,73,75,78-80,86,89,91,93,178,180,195,197,200-208,210-212,214-215,217-227,230-233,237-242,246,248,251,295-296,298,300,303-310,314-315,317-319,321,333,335,347-357,420,456,474,501,537,577,743,847,851,877
+builtin/web-ui/src/pages/NodeStudioPage.jsx
+  s_396df33d432b0f::t_813935582fa0dd 214
+builtin/web-ui/src/i18n/locales/en/flow.json
+  s_396df33d432b0f::t_813935582fa0dd 93,95-96,367,371,375-378,401
+package.json
+  s_396df33d432b0f::t_0250b69888bd4d 59
+builtin/web-ui/src/pages/MarketplacePage.jsx
+  s_396df33d432b0f::t_b5fa265e57607c 221-223
+  s_396df33d432b0f::t_e0c58b52d1a6fb 156-158,185,246
+  s_396df33d432b0f::t_46251c8aabf2be 89
+  s_396df33d432b0f::t_813935582fa0dd 32
+builtin/web-ui/src/i18n/locales/en/common.json
+  s_396df33d432b0f::t_e0c58b52d1a6fb 8
+builtin/web-ui/src/i18n/locales/zh/flow.json
+  s_396df33d432b0f::t_813935582fa0dd 93,95-96,367,371,375-378,401
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_396df33d432b0f::t_5b9dd11ee35af1 9033-9039
+  s_396df33d432b0f::t_8c21e6bad1cacd 14880
+  s_396df33d432b0f::t_e0c58b52d1a6fb 13897
+  s_396df33d432b0f::t_a14088b07ded3d 15768-15770,15775,15780-15781,15783,17753,17755,17761
+  s_396df33d432b0f::t_8ee9c7f4289495 15595,15657-15665,15667,15677
+  s_396df33d432b0f::t_e7906221b259df 14872-14879,14881-14894
+  s_396df33d432b0f::t_21a7bbd4bbeb47 14871
+builtin/web-ui/dist/assets/WorkflowAssistantThread-7sFNnfqn.js
+  s_396df33d432b0f::t_77c965ae4e23fc 1
+builtin/web-ui/src/i18n/locales/zh/common.json
+  s_396df33d432b0f::t_e0c58b52d1a6fb 8
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_46251c8aabf2be 1576,1586-1612,1673-1675
+  s_396df33d432b0f::t_813935582fa0dd 1692
+  s_396df33d432b0f::t_e0c58b52d1a6fb 1463
+test/flow-repository-ui.test.mjs
+  s_396df33d432b0f::t_b7ec96318f8ecd 22-23
+  s_396df33d432b0f::t_49b29233781f88 1-21,24-35
+builtin/web-ui/src/pages/ProjectsPage.jsx
+  s_396df33d432b0f::t_e0c58b52d1a6fb 750,1580
+builtin/web-ui/src/i18n/locales/zh/project.json
+  s_396df33d432b0f::t_813935582fa0dd 14-15,34,90,124,131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7cea084271030e2b4471cad07b53edd57922aa4d",
+  "prompts": {},
+  "logical_commit_id": "7cea084271030e2b4471cad07b53edd57922aa4d",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 24935,
+      "total_deletions": 1325
+    }
+  }
+}

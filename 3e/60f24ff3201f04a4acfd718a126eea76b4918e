@@ -1,0 +1,33 @@
+bin/lib/composer-agent.mjs
+  s_1b866fd3e8ba66::t_1e49449f0cedd1 321-322,352
+bin/lib/agent-runners.mjs
+  s_1b866fd3e8ba66::t_1e49449f0cedd1 96-115,117-154,526,544,641-649,839-844
+  s_1b866fd3e8ba66::t_7d2383b8954fab 116
+  s_1b866fd3e8ba66::t_924e77ff36a4bd 518
+test/cursor-composer-fallback.test.mjs
+  s_1b866fd3e8ba66::t_516299946ed9c9 295-346,382-394
+  s_1b866fd3e8ba66::t_dedcc2c0bc3bd0 395
+test/workspace-scheduled-cursor-permissions.test.mjs
+  s_1b866fd3e8ba66::t_a5fc0886dfc631 1-126
+bin/lib/workspace-server.mjs
+  s_1b866fd3e8ba66::t_6b32948cfa9132 5647,6859,7727,7843-7845,8000
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3e60f24ff3201f04a4acfd718a126eea76b4918e",
+  "prompts": {},
+  "logical_commit_id": "3e60f24ff3201f04a4acfd718a126eea76b4918e",
+  "sessions": {
+    "s_1b866fd3e8ba66": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05742-50f7-7a60-b77c-7cc06ac4b629",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 282,
+      "total_deletions": 7
+    }
+  }
+}

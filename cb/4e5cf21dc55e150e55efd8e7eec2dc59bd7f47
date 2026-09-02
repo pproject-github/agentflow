@@ -1,0 +1,93 @@
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_396df33d432b0f::t_2176090f53c02c 9,13,169-179,190-217
+  s_396df33d432b0f::t_f989b2e5f1c33b 702-704,709-728,730,769,772,775-776,778-820
+  s_396df33d432b0f::t_49cfe505bc5d7e 180-189,705-707,1071,1121
+  s_396df33d432b0f::t_e004c5e3b2090d 729
+  s_396df33d432b0f::t_6386a05c475469 1067-1070,1072,1095,1100,1104-1113,1118-1120,1122-1175,1177-1178,1182-1184,1211
+  s_396df33d432b0f::t_80ed6f103181a6 271-275
+  s_396df33d432b0f::t_322f535b299ea7 218
+  s_396df33d432b0f::t_bd0ab5799f4ca5 708
+bin/lib/ui-server.mjs
+  s_396df33d432b0f::t_ab1cb10ac43075 2270-2272
+  s_396df33d432b0f::t_02e83df484cddf 258-261
+  s_396df33d432b0f::t_7167104f5cd2f3 70,4087,4128
+  s_396df33d432b0f::t_83ac6ece33461f 3764-3768,3770-3838,3842-3843,3847
+  s_396df33d432b0f::t_5e1604ab190fcc 97,99-104,219,222-257,262-296
+  s_396df33d432b0f::t_d236fff2a335d5 3763
+  s_396df33d432b0f::t_6d30f41899d2db 3769
+test/cursor-composer-fallback.test.mjs
+  s_396df33d432b0f::t_825b81964fb245 10,12,14,75-116
+bin/lib/agent-runners.mjs
+  s_396df33d432b0f::t_fbe985c710ea45 20,436,628,634-638
+  s_396df33d432b0f::t_02e83df484cddf 438-443,445
+test/repository-index.test.mjs
+  s_396df33d432b0f::t_283da7234aeeff 1-65
+builtin/web-ui/dist/assets/index-kxiqlzBy.css
+  s_396df33d432b0f::t_ac9ec2be16da97 1
+bin/lib/workspace-routes.mjs
+  s_396df33d432b0f::t_b4e6d2034853e4 1384-1389,1398,1447,1490-1495,1498,1657-1662,1665,1687,1723
+  s_396df33d432b0f::t_def569e1dc8202 44,1727-1730,1733-1736,1739-1743
+  s_396df33d432b0f::t_bff9b497533edb 38,1118-1131,1251,1282-1291,1312-1321
+  s_396df33d432b0f::t_7735d97cd74a35 36-37,40-43,45-46,62
+  s_396df33d432b0f::t_30644839bbfb2f 1194,1227,1615,4370
+  s_396df33d432b0f::t_ba241604aad218 2278,2562,2611
+  s_396df33d432b0f::t_17223847739ad3 2739,2851
+  s_396df33d432b0f::t_78f7ab77acb645 14,51,56
+  s_396df33d432b0f::t_5cce09daa365a5 39,1298,1374,1443
+  s_396df33d432b0f::t_39ff66027f97e7 1088
+builtin/web-ui/src/index.css
+  s_396df33d432b0f::t_49cfe505bc5d7e 6012-6016
+  s_396df33d432b0f::t_62294858dd29e1 28607-28609
+  s_396df33d432b0f::t_a593a0cc9358e1 5887-5898,5931,5963-5964,5967,5971-6011,6017-6090,6120-6121
+test/marketplace-resources.test.mjs
+  s_396df33d432b0f::t_ccb78e111f4b35 279-288
+bin/lib/cursor-api-key-pool.mjs
+  s_396df33d432b0f::t_fbe985c710ea45 21,93,102-110,116,118,130-195,197,241-244,262-284
+bin/lib/workspace-server.mjs
+  s_396df33d432b0f::t_3a544c567b2669 38,1174
+builtin/web-ui/dist/index.html
+  s_396df33d432b0f::t_ac9ec2be16da97 33-34
+builtin/web-ui/dist/assets/index-SZDr5yj6.js
+  s_396df33d432b0f::t_ac9ec2be16da97 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,200-214,218-227,230-233,237-242,246,248,251,295-296,298,300,302,304,306-310,314-315,317-319,321,325,333,335,339,347-357,364,378,389-390,393,411,420,456,474,501,537,553,577,621,640,652,667,678,710,723,743,774,789,800,816,830,838,847,851,877
+bin/lib/repository-index.mjs
+  s_396df33d432b0f::t_5beaf7b188feec 14,457-460
+  s_396df33d432b0f::t_32349c67e9ff0d 9,35-37,313-318,331
+  s_396df33d432b0f::t_def569e1dc8202 391-406
+  s_396df33d432b0f::t_ccb86c79d3f70b 28,297-309,454
+  s_396df33d432b0f::t_85fdcfebd08035 1-6,8,10-13,15-27,29-34,38-271,289-296,310-312,320-330,332-334,336-390,462-478,490-510,522
+  s_396df33d432b0f::t_5cce09daa365a5 7,272-288,319,335,479-489
+  s_396df33d432b0f::t_c3474bd2e725d9 407-408,415-418,420-422,424-428,441-446,453,455-456,461
+  s_396df33d432b0f::t_40091cfa780e5f 409-414
+  s_396df33d432b0f::t_5b8d2310423e0c 419,423,437-440,447-452
+  s_396df33d432b0f::t_c9c253ffda5b26 429-436
+  s_396df33d432b0f::t_501f63d378c0bc 511-521
+builtin/web-ui/dist/assets/WorkflowAssistantThread-B39BTdLn.js
+  s_396df33d432b0f::t_ac9ec2be16da97 1
+test/settings-infrastructure-permissions.test.mjs
+  s_396df33d432b0f::t_4c8813e6b97b92 131-135
+  s_396df33d432b0f::t_825b81964fb245 19,22,31-38,110-127
+  s_396df33d432b0f::t_9a465836f505e4 14,128-130,136-148,153-154
+bin/lib/repository-index-events.mjs
+  s_396df33d432b0f::t_5beaf7b188feec 1-17
+builtin/web-ui/src/pages/MarketplacePage.jsx
+  s_396df33d432b0f::t_e9ded0e93d8f15 1,46-47,51,58-61,65-66,68,71-74,76-77,80-83,88-92,202,279-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cb4e5cf21dc55e150e55efd8e7eec2dc59bd7f47",
+  "prompts": {},
+  "logical_commit_id": "cb4e5cf21dc55e150e55efd8e7eec2dc59bd7f47",
+  "sessions": {
+    "s_396df33d432b0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01d62-7668-7941-aecc-3a1db7e3bead",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 29110,
+      "total_deletions": 1616
+    }
+  }
+}
