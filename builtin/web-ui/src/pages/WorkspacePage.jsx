@@ -15862,17 +15862,10 @@ function WorkspacePageInner() {
             </button>
             <button
               type="button"
-              className={workspaceMode === "display" ? "af-view-switch__active" : ""}
-              onClick={() => switchWorkspaceMode("display")}
+              className={workspaceRunLogsTarget ? "af-view-switch__active" : ""}
+              onClick={() => openWorkspaceRunLogs({ label: workspaceProjectTitle })}
             >
-              Display
-            </button>
-            <button
-              type="button"
-              className={workspaceMode === "workflow" ? "af-view-switch__active" : ""}
-              onClick={() => switchWorkspaceMode("workflow")}
-            >
-              Workflow
+              工作台
             </button>
           </div>
         </div>
@@ -15916,15 +15909,6 @@ function WorkspacePageInner() {
           ) : null}
           {!isWorkflowMode && !workspaceIsTransientDraft && workspaceReleaseView ? (
             <>
-              <button
-                type="button"
-                className="af-workspace-display-share-btn"
-                onClick={openWorkspaceReleaseDialog}
-                title="查看所选 Run 的 Stable 与版本历史"
-              >
-                <span className="material-symbols-outlined" aria-hidden>history</span>
-                版本
-              </button>
               {canManageCurrentFlow ? (
                 <button
                   type="button"
@@ -15941,135 +15925,65 @@ function WorkspacePageInner() {
               ) : null}
             </>
           ) : null}
-          {!isWorkflowMode && workspaceConflict ? (
-            <button
-              type="button"
-              className="af-workspace-display-share-btn"
-              onClick={() => {
-                if (workspaceConflict.conflictItems?.length) {
-                  setWorkspaceConflictOpen(true);
-                } else {
-                  void backupDraftAndReloadWorkspace();
-                }
-              }}
-              title={[
-                "先下载当前本地草稿，再载入远端最新版本",
-                ...(workspaceConflict.conflictPaths || []),
-              ].join("\n")}
-            >
-              <span className="material-symbols-outlined" aria-hidden>difference</span>
-              处理冲突
-            </button>
-          ) : null}
-          {isDisplayMode && !flowParams.marketplacePreview ? (
-            <>
-              <button
-                type="button"
-                className="af-workspace-display-share-btn"
-                disabled={!workspaceWritable || displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)}
-                onClick={() => {
-                  setDisplayLinkCopyState("");
-                  setDisplayLinkOpen(true);
-                }}
-                title={displayShareResult?.absoluteUrl ? "查看展示链接" : displayPage.nodeIds.length === 0 ? "先添加展示节点" : "生成展示链接"}
-              >
-                <span className="material-symbols-outlined" aria-hidden>{displayShareBusy ? "hourglass_empty" : "ios_share"}</span>
-                {displayShareBusy ? "生成中" : displayShareResult?.absoluteUrl ? "展示链接" : "生成链接"}
+          <details className="af-workspace-more-menu">
+            <summary className="af-workspace-display-share-btn af-workspace-more-trigger" aria-label="更多操作" title="版本、协作、分享及其他操作">
+              <span className="material-symbols-outlined" aria-hidden>more_horiz</span>
+              更多
+            </summary>
+            <div className="af-workspace-more-panel">
+              {!isWorkflowMode && !workspaceIsTransientDraft && workspaceReleaseView ? (
+                <button type="button" className="af-workspace-more-item" onClick={openWorkspaceReleaseDialog}>
+                  <span className="material-symbols-outlined" aria-hidden>history</span>版本
+                </button>
+              ) : null}
+              {!isWorkflowMode && workspaceConflict ? (
+                <button type="button" className="af-workspace-more-item" onClick={() => {
+                  if (workspaceConflict.conflictItems?.length) setWorkspaceConflictOpen(true);
+                  else void backupDraftAndReloadWorkspace();
+                }}>
+                  <span className="material-symbols-outlined" aria-hidden>difference</span>处理冲突
+                </button>
+              ) : null}
+              {isDisplayMode && !flowParams.marketplacePreview ? (
+                <>
+                  <button type="button" className="af-workspace-more-item" disabled={!workspaceWritable || displayShareBusy || (!displayShareResult?.absoluteUrl && displayPage.nodeIds.length === 0)} onClick={() => { setDisplayLinkCopyState(""); setDisplayLinkOpen(true); }}>
+                    <span className="material-symbols-outlined" aria-hidden>ios_share</span>{displayShareResult?.absoluteUrl ? "展示链接" : "生成链接"}
+                  </button>
+                  <button type="button" className="af-workspace-more-item" disabled={!workspaceWritable || availableDisplayNodes.length === 0} onClick={() => setDisplayPickerOpen(true)}>
+                    <span className="material-symbols-outlined" aria-hidden>add_to_photos</span>添加展示
+                  </button>
+                </>
+              ) : null}
+              {!flowParams.marketplacePreview ? (
+                <button type="button" className="af-workspace-more-item" disabled={isWorkflowMode ? !workflowTapdId : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")} onClick={() => isWorkflowMode ? setWorkflowCollaborationOpenRequest((request) => request + 1) : openWorkspaceShareDialog()}>
+                  <span className="material-symbols-outlined" aria-hidden>group_add</span>协作
+                </button>
+              ) : null}
+              {!adminReview && !isWorkflowMode && !flowParams.marketplacePreview ? (
+                <button type="button" className="af-workspace-more-item" onClick={openDisplaySharesPanel}>
+                  <span className="material-symbols-outlined" aria-hidden>folder_shared</span>我的分享
+                </button>
+              ) : null}
+              {!isWorkflowMode && !flowParams.marketplacePreview ? (
+                <>
+                  <button type="button" className="af-workspace-more-item" disabled={!canManageCurrentFlow} onClick={() => setArchiveModalOpen(true)}>
+                    <span className="material-symbols-outlined" aria-hidden>archive</span>归档
+                  </button>
+                  <button type="button" className="af-workspace-more-item af-workspace-more-item--danger" disabled={!canManageCurrentFlow && !canLeaveSharedFlow} onClick={() => setDeleteModalOpen(true)}>
+                    <span className="material-symbols-outlined" aria-hidden>{canLeaveSharedFlow ? "logout" : "delete_forever"}</span>{canLeaveSharedFlow ? "退出共享" : "删除"}
+                  </button>
+                </>
+              ) : null}
+              {isWorkflowMode && authUser?.isAdmin === true && !flowParams.workflowShare && !flowParams.workflowDemo ? (
+                <button type="button" className="af-workspace-more-item af-workspace-more-item--danger" disabled={!workflowTapdId || workflowDeleteBusy} onClick={() => void deleteWorkflowAsAdmin()}>
+                  <span className="material-symbols-outlined" aria-hidden>delete_forever</span>{workflowDeleteBusy ? "清理中" : "清理 Workflow"}
+                </button>
+              ) : null}
+              <button type="button" className="af-workspace-more-item" onClick={() => setShortcutsOpen(true)}>
+                <span className="material-symbols-outlined" aria-hidden>help</span>快捷键
               </button>
-              <button
-                type="button"
-                className="af-workspace-display-share-btn"
-                disabled={!workspaceWritable || availableDisplayNodes.length === 0}
-                onClick={() => setDisplayPickerOpen(true)}
-                title={availableDisplayNodes.length === 0 ? "当前 workspace 没有 display 节点" : "选择展示节点 (A)"}
-              >
-                <span className="material-symbols-outlined" aria-hidden>add_to_photos</span>
-                添加展示
-              </button>
-            </>
-          ) : null}
-          {!flowParams.marketplacePreview ? (
-            <button
-              type="button"
-              className="af-workspace-display-share-btn"
-              disabled={isWorkflowMode
-                ? !workflowTapdId
-                : !workspaceWritable || Boolean(workspaceCollaboration?.role && workspaceCollaboration.role !== "owner")}
-              onClick={() => {
-                if (isWorkflowMode) {
-                  setWorkflowCollaborationOpenRequest((request) => request + 1);
-                } else {
-                  openWorkspaceShareDialog();
-                }
-              }}
-              title={isWorkflowMode
-                ? !workflowTapdId
-                  ? "先读取一个 TAPD 需求"
-                  : "管理当前需求的成员权限和只读链接"
-                : workspaceCollaboration?.role && workspaceCollaboration.role !== "owner"
-                  ? "仅 Workspace 所有者可以管理项目协作"
-                  : "管理项目的团队和成员协作"}
-            >
-              <span className="material-symbols-outlined" aria-hidden>group_add</span>
-              协作
-            </button>
-          ) : null}
-          {isWorkflowMode && authUser?.isAdmin === true && !flowParams.workflowShare && !flowParams.workflowDemo ? (
-            <button
-              type="button"
-              className="af-workspace-display-share-btn af-workspace-display-share-btn--danger"
-              disabled={!workflowTapdId || workflowDeleteBusy}
-              onClick={() => void deleteWorkflowAsAdmin()}
-              title="清理测试 Workflow 及其运行快照"
-            >
-              <span className="material-symbols-outlined" aria-hidden>{workflowDeleteBusy ? "hourglass_empty" : "delete_forever"}</span>
-              {workflowDeleteBusy ? "清理中" : "清理 Workflow"}
-            </button>
-          ) : null}
-          {!adminReview && !isWorkflowMode && !flowParams.marketplacePreview ? (
-            <button
-              type="button"
-              className="af-workspace-display-share-btn"
-              onClick={openDisplaySharesPanel}
-              title="查看我的展示分享"
-            >
-              <span className="material-symbols-outlined" aria-hidden>folder_shared</span>
-              我的分享
-            </button>
-          ) : null}
-          {!isWorkflowMode && !flowParams.marketplacePreview ? (
-            <>
-              <button
-                type="button"
-                className="af-icon-btn"
-                disabled={!canManageCurrentFlow}
-                onClick={() => setArchiveModalOpen(true)}
-                aria-label={t("project:archiveModal.title")}
-                title={t("project:archiveModal.title")}
-              >
-                <span className="material-symbols-outlined">archive</span>
-              </button>
-              <button
-                type="button"
-                className="af-icon-btn af-icon-btn--danger"
-                disabled={!canManageCurrentFlow && !canLeaveSharedFlow}
-                onClick={() => setDeleteModalOpen(true)}
-                aria-label={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
-                title={canLeaveSharedFlow ? "退出共享 Workspace" : t("flow:topbar.deletePipeline")}
-              >
-                <span className="material-symbols-outlined">{canLeaveSharedFlow ? "logout" : "delete_forever"}</span>
-              </button>
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="af-icon-btn"
-            onClick={() => setShortcutsOpen(true)}
-            aria-label="快捷键"
-            title="快捷键 (?)"
-          >
-            <span className="material-symbols-outlined">help</span>
-          </button>
+            </div>
+          </details>
           <button
             type="button"
             className={"af-composer-topbar-btn" + (isWorkflowMode ? " af-composer-topbar-btn--workflow" : "") + (composerSidebarOpen ? " af-composer-topbar-btn--active" : "") + (composerRunning ? " af-composer-topbar-btn--running" : "")}
@@ -16470,19 +16384,18 @@ function WorkspacePageInner() {
                 setSelectedNodeId("");
                 return;
               }
-              if (event.detail >= 3) {
-                setComposerSidebarOpen(false);
-                setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
-                setEdges((list) => list.map((item) => ({ ...item, selected: false })));
-                setSelectedNodeId(node.id);
-                return;
-              }
               // React Flow handles selection on click. If the properties drawer is already open,
-              // keep it in sync with the clicked node; otherwise opening requires triple click.
+              // keep it in sync with the clicked node; editing opens on double click.
               if (selectedNodeId) setSelectedNodeId(node.id);
             }}
-            onNodeDoubleClick={(event) => {
+            onNodeDoubleClick={(event, node) => {
               event.preventDefault();
+              event.stopPropagation();
+              if (isDisplayMode || node?.data?.isWorkspaceGroup) return;
+              setComposerSidebarOpen(false);
+              setNodes((list) => list.map((item) => ({ ...item, selected: item.id === node.id })));
+              setEdges((list) => list.map((item) => ({ ...item, selected: false })));
+              setSelectedNodeId(node.id);
             }}
             onPaneClick={() => {
               if (isDisplayMode) setSelectedDisplayNodeIds([]);
@@ -17040,13 +16953,17 @@ function WorkspacePageInner() {
         ) : null}
         {!isDisplayMode && !isWorkflowMode && workspaceRunLogsTarget ? createPortal(
           <div className="af-workspace-run-logs-overlay" role="presentation" onMouseDown={() => setWorkspaceRunLogsTarget(null)}>
-            <aside className="af-workspace-run-logs-drawer" aria-label="Workspace Run Logs" onMouseDown={(event) => event.stopPropagation()}>
+            <aside className="af-workspace-run-logs-drawer" aria-label="工作台" onMouseDown={(event) => event.stopPropagation()}>
               <WorkspaceRunLogsDrawer
                 flowParams={flowParams}
                 scheduleNodeId={workspaceRunLogsTarget.scheduleNodeId}
                 runNodeId={workspaceRunLogsTarget.runNodeId}
                 lastRunId={workspaceRunLogsTarget.lastRunId}
                 label={workspaceRunLogsTarget.label}
+                flowNodes={canvasNodes}
+                flowEdges={canvasEdges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onClose={() => setWorkspaceRunLogsTarget(null)}
               />
             </aside>

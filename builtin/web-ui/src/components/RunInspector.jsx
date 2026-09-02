@@ -47,6 +47,15 @@ function shortened(value, size = 10) {
   return `${text.slice(0, size)}…${text.slice(-size)}`;
 }
 
+function reportStatusLabel(status) {
+  const value = String(status || "").toLowerCase();
+  if (value.includes("success")) return "执行成功";
+  if (value.includes("fail") || value.includes("error")) return "执行失败";
+  if (value.includes("running")) return "执行中";
+  if (value.includes("cancel") || value.includes("stop")) return "已停止";
+  return status || "未知状态";
+}
+
 function spanSearchText(span) {
   return [
     span.label,
@@ -123,7 +132,7 @@ function SpanInspector({ span }) {
   );
 }
 
-export default function RunInspector({ run, events = [], rawLines = [], loading = false, compact = false }) {
+export default function RunInspector({ run, events = [], rawLines = [], loading = false, compact = false, report = null, waterfallOnly = false }) {
   const [selectedSpanId, setSelectedSpanId] = useState("");
   const [tab, setTab] = useState("trace");
   const [search, setSearch] = useState("");
@@ -143,11 +152,12 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
   if (!events.length) return <div className="af-run-inspector__empty">这个 Run 暂无可审计事件。</div>;
 
   return (
-    <section className={`af-run-inspector${compact ? " af-run-inspector--compact" : ""}`} aria-label="Run Inspector">
+    <section className={`af-run-inspector${compact ? " af-run-inspector--compact" : ""}${waterfallOnly ? " af-run-inspector--waterfall-only" : ""}`} aria-label="Run Inspector">
       <header className="af-run-inspector__toolbar">
         <div className="af-run-inspector__tabs">
           <button type="button" className={tab === "trace" ? "is-active" : ""} onClick={() => setTab("trace")}>Trace <span>{trace.spans.length}</span></button>
           <button type="button" className={tab === "raw" ? "is-active" : ""} onClick={() => setTab("raw")}>Raw <span>{rawLines.length || events.length}</span></button>
+          {report ? <button type="button" className={tab === "report" ? "is-active" : ""} onClick={() => setTab("report")}>报告</button> : null}
         </div>
         <div className="af-run-inspector__evidence" aria-label="运行证据版本">
           <span>{run?.scheduled || run?.trigger === "scheduled" ? "SCHEDULE" : "MANUAL"}</span>
@@ -160,7 +170,42 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
         </label>
       </header>
 
-      {tab === "raw" ? (
+      {tab === "report" ? (
+        <div className="af-run-report">
+          <section className="af-run-report__hero">
+            <div>
+              <span className="af-run-report__eyebrow">执行报告</span>
+              <h2>{report.label || run?.label || run?.runNodeId || "Workspace Run"}</h2>
+              <code>{run?.runId || "-"}</code>
+            </div>
+            <span className={`af-work-run-logs__status af-work-run-logs__status--${String(run?.status || "").toLowerCase()}`}>{reportStatusLabel(run?.status)}</span>
+          </section>
+          <div className="af-run-report__facts">
+            <div><span>触发方式</span><strong>{run?.scheduled || run?.trigger === "scheduled" ? "Scheduled Run" : "手动执行"}</strong></div>
+            <div><span>开始时间</span><strong>{clock(run?.startedAt)}</strong></div>
+            <div><span>耗时</span><strong>{formatRunInspectorDuration(run?.durationMs)}</strong></div>
+            <div><span>事件数</span><strong>{report.eventCount ?? events.length}</strong></div>
+          </div>
+          <section className="af-run-report__section">
+            <h3>执行结论</h3>
+            <p>{report.summary || (run?.error ? run.error : reportStatusLabel(run?.status))}</p>
+          </section>
+          <section className="af-run-report__section">
+            <h3>阶段产物</h3>
+            {report.stages?.length ? report.stages.map((stage) => (
+              <div className="af-run-report__stage" key={stage.id || stage.label}>
+                <div className="af-run-report__stage-head"><strong>{stage.label}</strong><span>{stage.status || "unknown"}</span></div>
+                {stage.artifacts?.length ? stage.artifacts.map((artifact, index) => (
+                  <div className="af-run-report__artifact" key={`${artifact.name || artifact.path || "artifact"}-${index}`}>
+                    <span className="material-symbols-outlined" aria-hidden>description</span>
+                    {artifact.href ? <a href={artifact.href} target="_blank" rel="noreferrer">{artifact.name || artifact.path}</a> : <span>{artifact.name || artifact.path}</span>}
+                  </div>
+                )) : <p>该阶段没有产物。</p>}
+              </div>
+            )) : <p>本次执行没有可识别的阶段产物。</p>}
+          </section>
+        </div>
+      ) : tab === "raw" ? (
         <pre className="af-run-inspector__raw">{(rawLines.length ? rawLines : events.map((event) => JSON.stringify(event))).join("\n")}</pre>
       ) : (
         <>
@@ -172,7 +217,7 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
             <span className={trace.gaps.length ? "is-warning" : "is-ok"}><strong>{trace.gaps.length}</strong> Audit Gaps</span>
           </div>
           <div className="af-run-inspector__layout">
-            <div className="af-run-inspector__turns">
+            {!waterfallOnly ? <div className="af-run-inspector__turns">
               <div className="af-run-inspector__pane-head">
                 <div><span>{trace.turns.length ? "MODEL TURNS" : "RUN STEPS"}</span><strong>{run?.scheduled || run?.trigger === "scheduled" ? "ScheduleRun" : "Run"}</strong></div>
                 <small>{primaryRows.length} {trace.turns.length ? "turns" : "steps"}</small>
@@ -207,7 +252,7 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
                   );
                 })}
               </div>
-            </div>
+            </div> : null}
 
             <div className="af-run-inspector__execution">
               <div className="af-run-inspector__pane-head">
