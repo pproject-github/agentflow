@@ -344,6 +344,23 @@ test("Cursor rejects a final success after a required tool was rejected or error
   }
 });
 
+test("Cursor keeps a final success after an optional read-only tool errors", async () => {
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  const previousMode = process.env.MOCK_CURSOR_MODE;
+  const fixture = createMockCursorAgent();
+  try {
+    process.env.CURSOR_AGENT_CMD = fixture.command;
+    process.env.MOCK_CURSOR_MODE = "read-only-tool-error";
+    const handle = runCursorAgentWithPrompt(fixture.directory, "Read optional context and produce the result.", {
+      env: { MOCK_CURSOR_MODE: "read-only-tool-error", MOCK_CURSOR_LOG: fixture.logPath },
+    });
+    await assert.doesNotReject(handle.finished);
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+    restoreEnv("MOCK_CURSOR_MODE", previousMode);
+  }
+});
+
 function createMockCursorAgent() {
   const directory = mkdtempSync(path.join(tmpdir(), "agentflow-cursor-fallback-"));
   const command = path.join(directory, "mock-cursor-agent.mjs");
@@ -390,6 +407,9 @@ if (mode === "tool-rejected") {
 }
 if (mode === "tool-error") {
   console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { mcpToolCall: { result: { error: { message: "denied" } } } } }));
+}
+if (mode === "read-only-tool-error") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { readToolCall: { result: { error: { message: "not found" } } } } }));
 }
 if (mode === "interaction-rejected") {
   console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { interaction_query: { result: "rejected" } } }));

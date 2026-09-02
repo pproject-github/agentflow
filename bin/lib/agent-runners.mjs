@@ -139,6 +139,9 @@ function cursorRequiredToolFailure(event) {
         if (nested.error) {
           return { toolName, reason: cursorToolResultErrorText(nested.error) || "error" };
         }
+        if (nested.failure) {
+          return { toolName, reason: cursorToolResultErrorText(nested.failure) || "error" };
+        }
       }
       if (nested && typeof nested === "object") queue.push(nested);
     }
@@ -158,9 +161,9 @@ export function isCursorAgentLoopingError(error = "") {
 }
 
 function isCursorReadOnlyToolCall(toolName = "") {
-  const name = String(toolName || "").trim();
+  const name = String(toolName || "").trim().replace(/[-_]/g, "");
   if (!name) return false;
-  return /^(read|glob|grep|search|semanticSearch|list|find|fetch|webSearch|view|inspect)/i.test(name);
+  return /^(read|glob|grep|search|semanticsearch|list|find|fetch|websearch|webfetch|view|inspect)/i.test(name);
 }
 
 function annotateCursorFailure(error, { hadToolActivity = false, hadMutatingToolActivity = false } = {}) {
@@ -641,10 +644,13 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           const toolFailure = cursorRequiredToolFailure(event);
           if (toolFailure && !requiredToolFailure) {
             requiredToolFailure = toolFailure;
+            const readOnlyToolFailure = isCursorReadOnlyToolCall(toolFailure.toolName);
             emit({
               type: "natural",
-              kind: "error",
-              text: `Required tool ${toolFailure.toolName} ${toolFailure.reason}.`,
+              kind: readOnlyToolFailure ? "warning" : "error",
+              text: readOnlyToolFailure
+                ? `Optional read-only tool ${toolFailure.toolName} ${toolFailure.reason}; continuing.`
+                : `Required tool ${toolFailure.toolName} ${toolFailure.reason}.`,
             });
           }
           const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
@@ -840,9 +846,16 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       }
       if (requiredToolFailure) {
         const message = `Required tool ${requiredToolFailure.toolName} ${requiredToolFailure.reason}.`;
-        emit({ type: "status", line: truncateComposerLine(message) });
-        reject(annotateFailure(new Error(message)));
-        return;
+        const readOnlyToolFailure = isCursorReadOnlyToolCall(requiredToolFailure.toolName);
+        if (!readOnlyToolFailure || !lastResult) {
+          emit({ type: "status", line: truncateComposerLine(message) });
+          reject(annotateFailure(new Error(message)));
+          return;
+        }
+        emit({
+          type: "status",
+          line: truncateComposerLine(`${message} Continuing because the Agent returned a final result.`),
+        });
       }
       if (hadError || (lastResult && lastResult.is_error)) {
         const msg = cursorResultErrorText(lastResult) || "Agent reported error.";
