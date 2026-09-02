@@ -1103,6 +1103,10 @@ function workspaceBufferLooksLikeZip(buf) {
 }
 
 function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope = "all") {
+  // 预览必须基于磁盘上的最新流程版本。仓库索引为了普通列表请求会缓存，
+  // 但这里若继续使用旧索引会把正常预览误判成 revision 冲突；强制重建只影响
+  // 这个需要版本一致性的入口。
+  getRepositoryIndex(workspaceRoot, { force: true });
   return listIndexedProjectFlows(workspaceRoot, userCtx, scope);
 }
 
