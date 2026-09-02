@@ -135,3 +135,35 @@ test("多入口流程预览按入口子图校验版本，不会误判整图变�
     else process.env.AGENTFLOW_HOME = previousHome;
   }
 });
+
+test("流程预览版本计算包含入口引用的 subflow，避免索引与预览哈希不一致", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-repository-index-subflow-")));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  process.env.AGENTFLOW_HOME = path.join(root, "data");
+  try {
+    const flowRoot = path.join(process.env.AGENTFLOW_HOME, "users", "owner-1", "pipelines", "subflow-flow");
+    fs.mkdirSync(flowRoot, { recursive: true });
+    const graph = {
+      version: 1,
+      instances: {
+        run: { instanceId: "run", definitionId: "workspace_run", label: "Run", input: [], output: [{ name: "next", type: "node" }] },
+        call: { instanceId: "call", definitionId: "workspace_call_subflow", label: "Call", input: [{ name: "prev", type: "node" }], output: [], subflowId: "child" },
+        childWork: { instanceId: "childWork", definitionId: "provide_text", label: "Child", input: [], output: [] },
+      },
+      edges: [{ source: "run", sourceHandle: "output-0", target: "call", targetHandle: "input-0" }],
+      subflows: { child: { id: "child", nodeIds: ["childWork"], entryNodeId: "childWork" } },
+    };
+    fs.writeFileSync(path.join(flowRoot, "workspace.graph.json"), `${JSON.stringify(graph, null, 2)}\n`, "utf-8");
+
+    const index = rebuildRepositoryIndex(root);
+    assert.equal(index.flows.length, 1);
+    const preview = indexedProjectFlowPreview(root, index.flows[0]);
+    assert.equal(preview?.stale, undefined);
+    assert.ok(preview?.graph?.subflows?.child);
+    assert.ok(preview?.graph?.instances?.childWork);
+  } finally {
+    clearRepositoryIndexMemoryForTest(root);
+    if (previousHome == null) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+  }
+});

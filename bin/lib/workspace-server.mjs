@@ -787,7 +787,7 @@ function workspaceReleaseEntryNodes(graph = {}) {
     }));
 }
 
-function workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot = "") {
+export function workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot = "") {
   const entryId = String(entryNodeId || "").trim();
   if (!entryId) return null;
   let plan;
@@ -837,7 +837,7 @@ function workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot = "") {
   };
 }
 
-function workspaceReleaseEntryRevision(graph, entryNodeId, workspaceRoot = "") {
+export function workspaceReleaseEntryRevision(graph, entryNodeId, workspaceRoot = "") {
   const entryGraph = workspaceReleaseEntryGraph(graph, entryNodeId, workspaceRoot);
   return entryGraph ? workspaceDesignRevision(entryGraph) : "";
 }

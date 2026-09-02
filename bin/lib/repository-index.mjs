@@ -15,6 +15,7 @@ import { onRepositoryRunFinished } from "./repository-index-events.mjs";
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
 import {
   readWorkspaceGraph,
+  workspaceReleaseEntryGraph,
   readWorkspaceReleaseStatus,
   readWorkspaceRunUsageRecords,
   readWorkspaceStableRelease,
@@ -512,15 +513,15 @@ export function indexedProjectFlowPreview(workspaceRoot, indexedFlow) {
   } catch {
     return null;
   }
-  const runnable = runnableProjectFlowEntries(graph, indexedFlow.flowRoot, { includeGraph: true })
-    .find((item) => item.entryId === indexedFlow.liveEntryId);
-  if (!runnable) return null;
+  const entryId = String(indexedFlow.liveEntryId || "").trim();
+  const entryGraph = workspaceReleaseEntryGraph(graph, entryId, stable?.root || indexedFlow.flowRoot);
+  if (!entryGraph) return null;
   // Marketplace entries are versioned per runnable entry. Comparing against the
   // full workspace graph makes every multi-entry flow look stale because edits
   // belonging to a different Run entry change the full-graph revision too.
-  const version = stable?.release?.id || `current-${workspaceDesignRevision(runnable.graph).slice(0, 12)}`;
+  const version = stable?.release?.id || `current-${workspaceDesignRevision(entryGraph).slice(0, 12)}`;
   if (version !== indexedFlow.version) return { stale: true, version };
-  return { graph: runnable.graph, version };
+  return { graph: entryGraph, version };
 }
 
 export function clearRepositoryIndexMemoryForTest(workspaceRoot = "") {
