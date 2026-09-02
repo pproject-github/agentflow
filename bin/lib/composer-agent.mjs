@@ -318,7 +318,8 @@ function runCursorAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
  * @param {string} opts.prompt
  * @param {string} [opts.modelKey]
  * @param {Record<string, string>} [opts.extraEnv]
- * @param {boolean} [opts.force]
+ * @param {boolean} [opts.force] Legacy non-Cursor backend permission switch.
+ * @param {{unattended?: boolean}} [opts.execution] Trusted server-side execution context.
  * @param {"ask" | "plan"} [opts.mode]
  * @param {boolean} [opts.sandboxDisabled]
  * @param {boolean} [opts.approveMcps]
@@ -348,6 +349,7 @@ export function startComposerAgent(opts) {
     onChild: opts.onChild,
     detached: Boolean(opts.detached),
     force: Boolean(opts.force),
+    execution: { unattended: opts.execution?.unattended === true },
     ...(opts.mode ? { mode: String(opts.mode) } : {}),
     ...(opts.sandboxDisabled === false ? { sandboxDisabled: false } : {}),
     ...(typeof opts.approveMcps === "boolean" ? { approveMcps: opts.approveMcps } : {}),

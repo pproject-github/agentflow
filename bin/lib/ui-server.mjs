@@ -73,6 +73,7 @@ import {
   authSetupRequired,
   buildClearSessionCookie,
   buildSessionCookie,
+  completeLegacyAccountLink,
   createCliAuthorization,
   decideCliAuthorization,
   exchangeCliAuthorization,
@@ -80,15 +81,16 @@ import {
   getCliAuthorization,
   getSessionTokenFromRequest,
   isAuthUserAllowed,
+  legacyAccountLinkStatus,
   listAuthUsers,
   loginAdminUser,
   loginCasUser,
-  loginOrCreateUser,
   logoutRequest,
   readAuthUsers,
   readUserAllowlist,
   resetAuthUserPassword,
   revokeSessionToken,
+  verifyLegacyAccountLink,
   writeUserAllowlist,
 } from "./auth.mjs";
 import {
@@ -101,7 +103,12 @@ import {
   sanitizeCasReturnTo,
   validateCasTicket,
 } from "./cas-auth.mjs";
-import { listAdminOwnedProjects, reassignAdminProjectOwner } from "./admin-project-ownership.mjs";
+import {
+  listAdminOwnedProjects,
+  listUserOwnedProjects,
+  reassignAdminProjectOwner,
+  reassignAllUserProjects,
+} from "./admin-project-ownership.mjs";
 import {
   renderCliAuthorizationPage,
   renderCliAuthorizationResult,
@@ -2398,7 +2405,7 @@ export function startUiServer({
         error: user && !allowed ? "用户不在白名单中，请联系管理员开通访问权限" : "",
         casEnabled: cas.enabled,
         casLoginUrl: "/api/auth/cas/login",
-        legacyPasswordLoginEnabled: cas.legacyPasswordLoginEnabled,
+        legacyPasswordLoginEnabled: false,
         adminLoginPath: "/admin/login",
       });
       return;
@@ -2495,30 +2502,7 @@ export function startUiServer({
     }
 
     if (url.pathname === "/cli/authorize/login" && req.method === "POST") {
-      const form = await readUrlEncodedBody(req);
-      const requestId = String(form.get("request") || "").trim();
-      const pending = getCliAuthorization(requestId);
-      if (!pending.ok) {
-        html(res, pending.status || 404, renderCliAuthorizationPage({ error: pending.error }));
-        return;
-      }
-      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
-      const result = cas.legacyPasswordLoginEnabled
-        ? loginOrCreateUser(form.get("username"), form.get("password"))
-        : { ok: false, status: 410, error: "普通用户密码登录已停用，请返回授权页使用 CAS 登录" };
-      if (!result.ok) {
-        html(res, result.forbidden ? 403 : 401, renderCliAuthorizationPage({
-          authorization: pending.authorization,
-          error: result.error || "Login failed",
-        }));
-        return;
-      }
-      res.writeHead(303, {
-        Location: `/cli/authorize?request=${encodeURIComponent(requestId)}`,
-        "Set-Cookie": buildSessionCookie(result.token, { secure: requestUsesHttps(req) }),
-        "Cache-Control": "no-store, max-age=0",
-      });
-      res.end();
+      html(res, 410, renderCliAuthorizationPage({ error: "普通用户密码登录已停用，请返回授权页使用 CAS 登录。" }));
       return;
     }
 
@@ -2556,30 +2540,7 @@ export function startUiServer({
     }
 
     if (url.pathname === "/api/auth/login" && req.method === "POST") {
-      let payload;
-      try {
-        payload = JSON.parse(await readBody(req));
-      } catch {
-        json(res, 400, { error: "Invalid JSON body" });
-        return;
-      }
-      const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
-      if (!cas.legacyPasswordLoginEnabled) {
-        json(res, 410, { error: "普通用户密码登录已停用，请使用 CAS 登录", code: "legacy_password_login_disabled" });
-        return;
-      }
-      const result = loginOrCreateUser(payload?.username, payload?.password);
-      if (!result.ok) {
-        json(res, result.forbidden ? 403 : 401, { error: result.error || "Login failed", setupRequired: authSetupRequired() });
-        return;
-      }
-      const body = JSON.stringify({ authenticated: true, user: result.user, setupRequired: false, migration: result.migration || null });
-      res.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": Buffer.byteLength(body),
-        "Set-Cookie": buildSessionCookie(result.token, { secure: requestUsesHttps(req) }),
-      });
-      res.end(body);
+      json(res, 410, { error: "普通用户密码登录已停用，请使用 CAS 登录", code: "password_login_disabled" });
       return;
     }
 
@@ -2953,6 +2914,77 @@ export function startUiServer({
     }
     if (url.pathname.startsWith("/api/") && authUser && !isAuthUserAllowed(authUser)) {
       json(res, 403, { error: "用户不在白名单中，请联系管理员开通访问权限" });
+      return;
+    }
+
+    if (url.pathname === "/api/auth/legacy-account-link") {
+      if (authUser?.isAdmin || String(authUser?.authProvider || "") !== "cas") {
+        json(res, 403, { error: "只有 CAS 普通用户可以同步旧账号" });
+        return;
+      }
+      if (req.method === "GET") {
+        const status = legacyAccountLinkStatus(authUser.userId);
+        json(res, status.ok ? 200 : status.status || 400, status.ok ? status : { error: status.error });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const verified = verifyLegacyAccountLink({
+          targetUserId: authUser.userId,
+          legacyUsername: payload?.username,
+          password: payload?.password,
+        });
+        if (!verified.ok) {
+          json(res, verified.status || 400, {
+            error: verified.error || "旧账号验证失败",
+            ...(verified.retryAfterSeconds ? { retryAfterSeconds: verified.retryAfterSeconds } : {}),
+          });
+          return;
+        }
+        if (verified.alreadyLinked) {
+          json(res, 200, { ...verified, transferredProjects: 0, legacyUserIds: legacyAccountLinkStatus(authUser.userId).legacyUserIds || [] });
+          return;
+        }
+        const projects = listUserOwnedProjects(verified.sourceUserId);
+        const projectIds = new Set(projects.filter((project) => !project.archived).map((project) => project.flowId));
+        const activeProject = activeWorkspaceRunUsageRecords().find((run) => (
+          String(run?.userId || "") === verified.sourceUserId
+          && String(run?.flowSource || "user") === "user"
+          && projectIds.has(String(run?.flowId || ""))
+        ));
+        if (activeProject) {
+          json(res, 409, { error: `Project ${activeProject.flowId} 正在运行，结束后才能同步旧账号` });
+          return;
+        }
+        const reassigned = reassignAllUserProjects({
+          actorUserId: authUser.userId,
+          sourceUserId: verified.sourceUserId,
+          targetUserId: authUser.userId,
+          transferKind: "self_service_legacy_link",
+        });
+        if (!reassigned.ok) {
+          json(res, reassigned.status || 400, { error: reassigned.error || "旧账号 Project 同步失败" });
+          return;
+        }
+        const linked = completeLegacyAccountLink({
+          sourceUserId: verified.sourceUserId,
+          targetUserId: authUser.userId,
+        });
+        if (!linked.ok) {
+          json(res, linked.status || 500, { error: linked.error || "旧账号绑定失败" });
+          return;
+        }
+        markRepositoryIndexDirty(root);
+        json(res, 200, { ...linked, transferredProjects: reassigned.transferredProjects, projects: reassigned.projects });
+        return;
+      }
+      json(res, 405, { error: "Method not allowed" });
       return;
     }
 

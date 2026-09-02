@@ -13,6 +13,8 @@ const SESSION_COOKIE = "af_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CLI_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CAS_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const LEGACY_LINK_FAILURE_LIMIT = 5;
+const LEGACY_LINK_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const CLI_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 const CLI_AUTHORIZATION_SCOPES = [
   "workspace:read",
@@ -42,6 +44,10 @@ function cliAuthorizationsPath() {
 
 function userAllowlistPath() {
   return path.join(authRoot(), "user-allowlist.json");
+}
+
+function legacyLinkAttemptsPath() {
+  return path.join(authRoot(), "legacy-link-attempts.json");
 }
 
 function readJsonObject(filePath) {
@@ -179,6 +185,8 @@ export function listAuthUsers() {
       isAdmin: Boolean(user?.isAdmin),
       authProvider: String(user?.authProvider || (user?.salt && user?.hash ? "password" : "cas")),
       casUsername: String(user?.casUsername || ""),
+      linkedToUserId: String(user?.linkedToUserId || ""),
+      legacyUserIds: Array.isArray(user?.legacyUserIds) ? user.legacyUserIds.map(String).filter(Boolean) : [],
       createdAt: String(user?.createdAt || ""),
       updatedAt: String(user?.updatedAt || user?.createdAt || ""),
     }))
@@ -194,6 +202,9 @@ export function resetAuthUserPassword(userId, password) {
   const users = readAuthUsers();
   const user = users[normalizedUserId];
   if (!user) return { ok: false, status: 404, error: "用户不存在" };
+  if (user.linkedToUserId) {
+    return { ok: false, status: 409, error: "该旧账号已绑定到 CAS 用户，不能重新启用本地密码" };
+  }
   if (String(user.authProvider || "") === "cas" && !user.isAdmin) {
     return { ok: false, status: 409, error: "CAS 用户不使用 AgentFlow 本地密码" };
   }
@@ -226,6 +237,130 @@ export function resetAuthUserPassword(userId, password) {
     },
     revokedSessions,
   };
+}
+
+export function legacyAccountLinkStatus(targetUserId) {
+  const targetId = sanitizeAgentflowUserId(targetUserId);
+  const user = targetId ? readAuthUsers()[targetId] : null;
+  if (!user || user.isAdmin || String(user.authProvider || "") !== "cas") {
+    return { ok: false, status: 403, error: "只有 CAS 普通用户可以同步旧账号" };
+  }
+  return {
+    ok: true,
+    legacyUserIds: Array.isArray(user.legacyUserIds) ? user.legacyUserIds.map(String).filter(Boolean) : [],
+  };
+}
+
+function legacyLinkThrottle(targetUserId) {
+  const attempts = readJsonObject(legacyLinkAttemptsPath());
+  const now = Date.now();
+  const record = attempts[targetUserId];
+  if (!record || now - Number(record.windowStartedAt || 0) >= LEGACY_LINK_FAILURE_WINDOW_MS) return null;
+  if (Number(record.failures || 0) < LEGACY_LINK_FAILURE_LIMIT) return null;
+  return Math.max(1, Math.ceil((Number(record.windowStartedAt) + LEGACY_LINK_FAILURE_WINDOW_MS - now) / 1000));
+}
+
+function recordLegacyLinkFailure(targetUserId) {
+  const attempts = readJsonObject(legacyLinkAttemptsPath());
+  const now = Date.now();
+  const current = attempts[targetUserId];
+  const active = current && now - Number(current.windowStartedAt || 0) < LEGACY_LINK_FAILURE_WINDOW_MS;
+  attempts[targetUserId] = {
+    windowStartedAt: active ? Number(current.windowStartedAt) : now,
+    failures: active ? Number(current.failures || 0) + 1 : 1,
+    updatedAt: now,
+  };
+  writeJsonObject(legacyLinkAttemptsPath(), attempts);
+  return legacyLinkThrottle(targetUserId);
+}
+
+function clearLegacyLinkFailures(targetUserId) {
+  const attempts = readJsonObject(legacyLinkAttemptsPath());
+  if (!(targetUserId in attempts)) return;
+  delete attempts[targetUserId];
+  writeJsonObject(legacyLinkAttemptsPath(), attempts);
+}
+
+export function verifyLegacyAccountLink({ targetUserId, legacyUsername, password } = {}) {
+  const targetId = sanitizeAgentflowUserId(targetUserId);
+  const sourceId = sanitizeAgentflowUserId(legacyUsername);
+  const users = readAuthUsers();
+  const targetUser = targetId ? users[targetId] : null;
+  if (!targetUser || targetUser.isAdmin || String(targetUser.authProvider || "") !== "cas") {
+    return { ok: false, status: 403, error: "只有 CAS 普通用户可以同步旧账号" };
+  }
+  const retryAfterSeconds = legacyLinkThrottle(targetId);
+  if (retryAfterSeconds) {
+    return { ok: false, status: 429, retryAfterSeconds, error: `旧账号验证失败次数过多，请在 ${retryAfterSeconds} 秒后重试` };
+  }
+  if (sourceId === targetId) {
+    return { ok: false, status: 400, error: "同名旧账号已在首次 CAS 登录时自动关联" };
+  }
+  const sourceUser = users[sourceId];
+  if (!sourceId || !sourceUser || !verifyPassword(String(password || ""), sourceUser)) {
+    const blockedFor = recordLegacyLinkFailure(targetId);
+    if (blockedFor) return { ok: false, status: 429, retryAfterSeconds: blockedFor, error: `旧账号验证失败次数过多，请在 ${blockedFor} 秒后重试` };
+    return { ok: false, status: 401, error: "旧账号用户名或密码错误" };
+  }
+  clearLegacyLinkFailures(targetId);
+  if (sourceUser.isAdmin) return { ok: false, status: 403, error: "管理员账号不能绑定到 CAS 用户" };
+  if (sourceUser.linkedToUserId) {
+    return sourceUser.linkedToUserId === targetId
+      ? { ok: true, sourceUserId: sourceId, targetUserId: targetId, alreadyLinked: true }
+      : { ok: false, status: 409, error: "该旧账号已经绑定到其他 CAS 用户" };
+  }
+  if (String(sourceUser.authProvider || "password") !== "password") {
+    return { ok: false, status: 400, error: "只能同步旧用户名密码账号" };
+  }
+  return { ok: true, sourceUserId: sourceId, targetUserId: targetId, alreadyLinked: false };
+}
+
+export function completeLegacyAccountLink({ sourceUserId, targetUserId } = {}) {
+  const sourceId = sanitizeAgentflowUserId(sourceUserId);
+  const targetId = sanitizeAgentflowUserId(targetUserId);
+  const users = readAuthUsers();
+  const sourceUser = sourceId ? users[sourceId] : null;
+  const targetUser = targetId ? users[targetId] : null;
+  if (!sourceUser || !targetUser || sourceId === targetId) {
+    return { ok: false, status: 400, error: "旧账号绑定状态无效" };
+  }
+  if (sourceUser.linkedToUserId && sourceUser.linkedToUserId !== targetId) {
+    return { ok: false, status: 409, error: "该旧账号已经绑定到其他 CAS 用户" };
+  }
+  const linkedAt = new Date().toISOString();
+  const legacyUserIds = Array.from(new Set([
+    ...(Array.isArray(targetUser.legacyUserIds) ? targetUser.legacyUserIds : []),
+    sourceId,
+  ].map(String).filter(Boolean)));
+  users[targetId] = { ...targetUser, legacyUserIds, updatedAt: linkedAt };
+  const sourceWithoutCredentials = { ...sourceUser };
+  delete sourceWithoutCredentials.salt;
+  delete sourceWithoutCredentials.hash;
+  users[sourceId] = {
+    ...sourceWithoutCredentials,
+    authProvider: "linked",
+    linkedToUserId: targetId,
+    linkedAt,
+    updatedAt: linkedAt,
+  };
+  writeJsonObject(usersPath(), users);
+
+  const sessions = readJsonObject(sessionsPath());
+  let revokedSessions = 0;
+  for (const [sessionKey, session] of Object.entries(sessions)) {
+    if (session?.userId !== sourceId) continue;
+    delete sessions[sessionKey];
+    revokedSessions += 1;
+  }
+  writeJsonObject(sessionsPath(), sessions);
+  fs.appendFileSync(path.join(authRoot(), "legacy-account-links.jsonl"), `${JSON.stringify({
+    action: "legacy_account_linked",
+    sourceUserId: sourceId,
+    targetUserId: targetId,
+    linkedAt,
+    revokedSessions,
+  })}\n`, "utf8");
+  return { ok: true, sourceUserId: sourceId, targetUserId: targetId, legacyUserIds, linkedAt, revokedSessions };
 }
 
 export function authSetupRequired() {
@@ -299,6 +434,7 @@ function userAllowlistMatchSet(users) {
 
 export function isAuthUserAllowed(user) {
   if (user?.isAdmin) return true;
+  if (String(user?.authProvider || "").toLowerCase() === "cas") return true;
   const allowlist = readUserAllowlist();
   if (!allowlist.enabled) return true;
   const allowed = userAllowlistMatchSet(allowlist.users);
@@ -576,6 +712,12 @@ export function loginOrCreateUser(username, password) {
   const users = readAuthUsers();
   const firstUser = Object.keys(users).length === 0;
   let user = users[userId];
+  if (user?.linkedToUserId) {
+    return { ok: false, status: 409, error: `该旧账号已绑定到 CAS 用户 ${user.linkedToUserId}，请使用 CAS 登录` };
+  }
+  if (String(user?.authProvider || "") === "cas" && !user?.isAdmin) {
+    return { ok: false, status: 409, error: "该账号已切换为 CAS 登录" };
+  }
   if (!isAuthUserAllowed({ userId, username: String(username || "").trim(), isAdmin: Boolean(user?.isAdmin) })) {
     return { ok: false, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
   }
@@ -672,13 +814,13 @@ export function loginCasUser(identity = {}) {
   if (existing?.isAdmin) {
     return { ok: false, status: 403, error: "管理员账号请从 /admin/login 使用密码登录" };
   }
-  const candidate = { userId, username: casUsername, isAdmin: false };
-  if (!isAuthUserAllowed(candidate)) {
-    return { ok: false, status: 403, forbidden: true, error: "用户不在白名单中，请联系管理员开通访问权限" };
-  }
   const attributes = identity?.attributes && typeof identity.attributes === "object" ? identity.attributes : {};
   const displayName = String(attributes.displayName || attributes.name || attributes.cn || casUsername).trim().slice(0, 128) || casUsername;
   const now = new Date().toISOString();
+  const legacyUserIds = Array.from(new Set([
+    ...(Array.isArray(existing?.legacyUserIds) ? existing.legacyUserIds : []),
+    ...(existing?.salt && existing?.hash ? [userId] : []),
+  ].map(String).filter(Boolean)));
   users[userId] = {
     ...(existing || {}),
     userId,
@@ -686,6 +828,7 @@ export function loginCasUser(identity = {}) {
     isAdmin: false,
     authProvider: "cas",
     casUsername,
+    legacyUserIds,
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };

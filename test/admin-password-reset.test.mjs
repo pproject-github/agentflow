@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-test("admin may assign a new password while preserving user data and revoking old sessions", async () => {
+test("admin password reset preserves legacy user data and sessions while regular password login stays disabled", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-password-reset-")));
   const dataRoot = path.join(tempRoot, "data");
   const workspaceRoot = path.join(tempRoot, "workspace");
@@ -77,15 +77,15 @@ test("admin may assign a new password while preserving user data and revoking ol
       method: "POST",
       body: JSON.stringify({ username: "forgotten-user", password: "old-password" }),
     });
-    assert.equal(oldPassword.status, 401);
+    assert.equal(oldPassword.status, 410);
 
     const newPassword = await request("", "/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ username: "forgotten-user", password: "new-password" }),
     });
     const newPasswordPayload = await newPassword.json();
-    assert.equal(newPassword.status, 200, JSON.stringify(newPasswordPayload));
-    assert.equal(newPasswordPayload.user.userId, ordinary.user.userId);
+    assert.equal(newPassword.status, 410, JSON.stringify(newPasswordPayload));
+    assert.equal(newPasswordPayload.code, "password_login_disabled");
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;

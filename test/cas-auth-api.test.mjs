@@ -11,7 +11,7 @@ function cookieValue(response, name) {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
-test("CAS users use ticket validation while admin keeps a separate password login path", async () => {
+test("CAS users bypass the local allowlist while admin keeps a separate password login path", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-cas-auth-")));
   const previous = Object.fromEntries([
     "AGENTFLOW_HOME",
@@ -19,6 +19,7 @@ test("CAS users use ticket validation while admin keeps a separate password logi
     "AGENTFLOW_CAS_BASE_URL",
     "AGENTFLOW_CAS_SERVICE_URL",
     "AGENTFLOW_LEGACY_PASSWORD_LOGIN",
+    "AGENTFLOW_USER_WHITELIST",
   ].map((key) => [key, process.env[key]]));
   let casServer;
   let appServer;
@@ -40,7 +41,9 @@ test("CAS users use ticket validation while admin keeps a separate password logi
     process.env.AGENTFLOW_CAS_ENABLED = "true";
     process.env.AGENTFLOW_CAS_BASE_URL = `http://127.0.0.1:${casServer.address().port}/cas/`;
     delete process.env.AGENTFLOW_CAS_SERVICE_URL;
-    process.env.AGENTFLOW_LEGACY_PASSWORD_LOGIN = "false";
+    // The removed migration switch must not be able to reopen password login.
+    process.env.AGENTFLOW_LEGACY_PASSWORD_LOGIN = "true";
+    process.env.AGENTFLOW_USER_WHITELIST = "some-other-local-user";
 
     const { startUiServer } = await import(`../bin/lib/ui-server.mjs?cas-auth-api=${Date.now()}`);
     appServer = await startUiServer({

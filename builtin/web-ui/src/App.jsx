@@ -148,7 +148,6 @@ function AuthGate({ children }) {
     setupRequired: false,
     casEnabled: false,
     casLoginUrl: "/api/auth/cas/login",
-    legacyPasswordLoginEnabled: true,
   });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -166,11 +165,10 @@ function AuthGate({ children }) {
         setupRequired: Boolean(j.setupRequired),
         casEnabled: Boolean(j.casEnabled),
         casLoginUrl: String(j.casLoginUrl || "/api/auth/cas/login"),
-        legacyPasswordLoginEnabled: j.legacyPasswordLoginEnabled !== false,
       });
       setError(j.error ? String(j.error) : "");
     } catch (e) {
-      setAuth({ loading: false, authenticated: false, user: null, setupRequired: false, casEnabled: false, casLoginUrl: "/api/auth/cas/login", legacyPasswordLoginEnabled: true });
+      setAuth({ loading: false, authenticated: false, user: null, setupRequired: false, casEnabled: false, casLoginUrl: "/api/auth/cas/login" });
       setError(String(e.message || e));
     }
   };
@@ -196,7 +194,7 @@ function AuthGate({ children }) {
     setSubmitting(true);
     setError("");
     try {
-      const r = await fetch(adminLogin ? "/api/admin/auth/login" : "/api/auth/login", {
+      const r = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -222,19 +220,19 @@ function AuthGate({ children }) {
   }
   if (!auth.authenticated) {
     const authError = new URLSearchParams(window.location.search).get("authError") || "";
-    if (!adminLogin && auth.casEnabled) {
+    if (!adminLogin) {
       return (
         <div className="af-auth-screen">
           <div className="af-auth-panel af-auth-panel--cas">
             <div className="af-auth-brand">
               <span className="material-symbols-outlined">shield_person</span>
-              <div><h1>AgentFlow</h1><p>{authError ? "CAS 登录未完成" : "正在前往 CAS 统一认证"}</p></div>
+              <div><h1>AgentFlow</h1><p>{!auth.casEnabled ? "CAS 登录尚未配置" : authError ? "CAS 登录未完成" : "正在前往 CAS 统一认证"}</p></div>
             </div>
-            {authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "当前 CAS 用户没有 AgentFlow 访问权限。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
-            <button className="af-auth-submit" type="button" onClick={() => {
+            {!auth.casEnabled ? <p className="af-auth-error">普通用户仅支持 CAS 登录，请联系管理员启用 CAS。</p> : authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "该账号是 AgentFlow 管理员，请从管理员入口使用密码登录。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
+            <button className="af-auth-submit" type="button" disabled={!auth.casEnabled} onClick={() => {
               const returnTo = `${window.location.pathname}${window.location.hash}`;
               window.location.assign(`${auth.casLoginUrl}?returnTo=${encodeURIComponent(returnTo)}`);
-            }}>{authError ? "重新使用 CAS 登录" : "进入 CAS"}</button>
+            }}>{authError ? "重新使用 CAS 登录" : "使用 CAS 登录"}</button>
             <a className="af-auth-admin-link" href="/admin/login">管理员登录</a>
           </div>
         </div>
@@ -247,7 +245,7 @@ function AuthGate({ children }) {
             <span className="material-symbols-outlined">account_circle</span>
             <div>
               <h1>AgentFlow</h1>
-              <p>{adminLogin ? auth.setupRequired ? "初始化管理员账号" : "管理员登录" : auth.setupRequired ? "初始化管理员账号" : "登录或创建用户"}</p>
+              <p>{auth.setupRequired ? "初始化管理员账号" : "管理员登录"}</p>
             </div>
           </div>
           <label className="af-auth-field">
@@ -275,9 +273,9 @@ function AuthGate({ children }) {
           </label>
           {error ? <p className="af-auth-error">{error}</p> : null}
           <button className="af-auth-submit" type="submit" disabled={submitting || !username.trim() || password.length < 4}>
-            {submitting ? "处理中..." : auth.setupRequired ? "创建管理员并登录" : adminLogin ? "管理员登录" : "登录"}
+            {submitting ? "处理中..." : auth.setupRequired ? "创建管理员并登录" : "管理员登录"}
           </button>
-          {adminLogin && auth.casEnabled ? <a className="af-auth-admin-link" href="/projects">返回 CAS 用户入口</a> : null}
+          <a className="af-auth-admin-link" href="/projects">返回 CAS 用户入口</a>
         </form>
       </div>
     );

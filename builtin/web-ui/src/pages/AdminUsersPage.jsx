@@ -118,9 +118,9 @@ export default function AdminUsersPage({ authUser }) {
         <div className="af-admin-user-directory__head"><div><h2>用户目录</h2><p>CAS 用户首次登录后会出现在这里，才能作为 Project 的目标归属人。</p></div><strong>{users.length} 用户</strong></div>
         <div className="af-admin-user-grid">
           {users.map((user) => <article key={user.userId}>
-            <span className="material-symbols-outlined">{user.isAdmin ? "admin_panel_settings" : user.authProvider === "cas" ? "badge" : "person"}</span>
+            <span className="material-symbols-outlined">{user.isAdmin ? "admin_panel_settings" : user.authProvider === "cas" ? "badge" : user.authProvider === "linked" ? "link" : "person"}</span>
             <div><strong>{user.username || user.userId}</strong><code>{user.userId}</code></div>
-            <em className={`is-${user.isAdmin ? "admin" : user.authProvider === "cas" ? "cas" : "legacy"}`}>{user.isAdmin ? "Admin 密码" : user.authProvider === "cas" ? "CAS" : "旧密码"}</em>
+            <em className={`is-${user.isAdmin ? "admin" : user.authProvider === "cas" ? "cas" : "legacy"}`}>{user.isAdmin ? "Admin 密码" : user.authProvider === "cas" ? "CAS" : user.authProvider === "linked" ? `已绑定 → ${user.linkedToUserId}` : "旧密码"}</em>
             <small>{projectCounts.get(user.userId) || 0} Projects</small>
           </article>)}
           {!loading && users.length === 0 ? <p>暂无用户。</p> : null}
