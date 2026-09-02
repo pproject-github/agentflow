@@ -512,11 +512,14 @@ export function indexedProjectFlowPreview(workspaceRoot, indexedFlow) {
   } catch {
     return null;
   }
-  const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
-  if (version !== indexedFlow.version) return { stale: true, version };
   const runnable = runnableProjectFlowEntries(graph, indexedFlow.flowRoot, { includeGraph: true })
     .find((item) => item.entryId === indexedFlow.liveEntryId);
   if (!runnable) return null;
+  // Marketplace entries are versioned per runnable entry. Comparing against the
+  // full workspace graph makes every multi-entry flow look stale because edits
+  // belonging to a different Run entry change the full-graph revision too.
+  const version = stable?.release?.id || `current-${workspaceDesignRevision(runnable.graph).slice(0, 12)}`;
+  if (version !== indexedFlow.version) return { stale: true, version };
   return { graph: runnable.graph, version };
 }
 
