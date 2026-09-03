@@ -58,14 +58,22 @@ test("release branch inputs render their context-derived default value", async (
     readFile(panelPath, "utf8"),
     readFile(new URL("../builtin/web-ui/src/components/ReleaseNodeInspector.jsx", import.meta.url), "utf8"),
   ]);
-  assert.match(panel, /item\.inputs\?\.\[schema\.key\] \?\? schema\.defaultValue \?\? ""/);
-  assert.match(inspector, /defaultInputsForNode\(node, item\?\.inputs\)/);
+  assert.match(panel, /const rawValue = renderedInputs\?\.\[schema\.key\] \?\? schema\.defaultValue \?\? ""/);
+  assert.match(panel, /value=\{rawValue\}/);
+  assert.match(inspector, /defaultInputsForNode\(node, item\?\.inputs, context\)/);
+});
+
+test("persisted localization inputs are normalized before card rendering", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /const renderedInputs = defaultInputsForNode\(node, item\.inputs \|\| \{\}, context\)/);
+  assert.match(source, /const rawValue = renderedInputs\?\.\[schema\.key\] \?\? schema\.defaultValue \?\? ""/);
+  assert.match(source, /value=\{rawValue\}/);
 });
 
 test("execution validates and sends schema defaults when a remote snapshot omitted inputs", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /const value = item\?\.inputs\?\.\[schema\.key\] \?\? schema\.defaultValue/);
-  assert.match(source, /const normalizedInputs = defaultInputsForNode\(node, item\.inputs \|\| \{\}\)/);
+  assert.match(source, /const normalizedInputs = defaultInputsForNode\(node, item\.inputs \|\| \{\}, context\)/);
   assert.match(source, /inputs: normalizedInputs/);
 });
 
@@ -75,6 +83,13 @@ test("idempotent initialization preview completion is committed to the timeline"
   assert.match(source, /const rawMessage = previewPayload\.message/);
   assert.match(source, /result = \{[\s\S]*\.\.\.previewPayload,[\s\S]*message: typeof rawMessage/);
   assert.match(source, /if \(!result\) \{/);
+});
+
+test("confirmation-required execution opens the node inspector after preview", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /const previewItem = \{/);
+  assert.match(source, /confirmationFingerprint: previewPayload\.confirmationFingerprint/);
+  assert.match(source, /setInspector\(\{ item: previewItem, node, mode: "pending" \}\);/);
 });
 
 test("release records preserve workflow identity and picker derives from machine", async () => {
@@ -94,13 +109,64 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(panel, /kind: currentItem\.kind \|\| node\.kind/);
   assert.match(panel, /compositeId: currentItem\.compositeId \|\| node\.compositeId/);
   assert.match(panel, /details:[\s\S]*normalizeCompositeSteps/);
-  assert.match(panel, /actionId = node\.sourcePresetId \|\| node\.id/);
+  assert.match(panel, /actionId = item\.sourcePresetId \|\| node\.sourcePresetId \|\| node\.id/);
   assert.match(panel, /resumeFromStep: item\.details\?\.steps\?\.find/);
   assert.match(inspector, /内部执行步骤/);
   assert.match(inspector, /compositeSteps\.map/);
   assert.match(inspector, /externalInputSchemaForNode/);
   assert.match(model, /export function normalizeCompositeSteps/);
   assert.match(model, /export function externalInputSchemaForNode/);
+});
+
+test("client sanitizes graph output and keeps waiting nodes pending", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /function sanitizeReleaseNodeOutput/);
+  assert.match(source, /sanitizeReleaseNodeOutput\(/);
+  assert.match(source, /hydrateReleaseOutputEnvelope/);
+  assert.match(source, /parseLeadingJsonValue/);
+  assert.match(source, /af-release-node__checkbox/);
+  assert.match(source, /type === "checkbox"/);
+  assert.match(source, /String\(result\.status \|\| ""\)\.toLowerCase\(\) === "waiting"/);
+  assert.match(source, /status: "waiting"/);
+  assert.match(source, /insertableInAnyStage/);
+  assert.match(source, /free-prompt-agent/);
+});
+
+test("hydrates hollow timeline entries from runs", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /hydrateTimelineFromRuns|function hydrateReleaseItemFromRuns/);
+  assert.match(source, /hydrateReleaseItemFromRuns\(/);
+});
+
+test("openInspector hydrates item from runs", async () => {
+  const panel = await readFile(panelPath, "utf8");
+  assert.match(panel, /const openInspector = |function openInspector|openInspector\s*=/);
+  // hydrate must be used when opening inspector
+  assert.match(panel, /const openInspector = useCallback\(\(item\) => \{[\s\S]*?hydrateReleaseItemFromRuns\(item,\s*state\.runs/);
+});
+
+test("stage outcome strip renders summary and artifact chips on cards", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /function renderStageOutcome/);
+  assert.match(source, /renderStageOutcome\(item\)/);
+  assert.match(source, /af-release-stage-outcome/);
+  assert.match(source, /af-release-artifact-chip/);
+});
+
+test("write actions require canWrite and surface readonly state", async () => {
+  const [panel, inspector] = await Promise.all([
+    readFile(panelPath, "utf8"),
+    readFile(new URL("../builtin/web-ui/src/components/ReleaseNodeInspector.jsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(panel, /canWrite = true/);
+  assert.match(panel, /if \(!canWrite\)/);
+  assert.match(panel, /无发版操作权限/);
+  assert.match(panel, /canWrite && item\.status/);
+  // 用户需求点: 自由 Agent 与聊天助手最终都走同一写 API；无权限时前后端都要给出明确文案。
+  assert.match(panel, /RELEASE_OPERATOR_FORBIDDEN/);
+  assert.match(panel, /页面与助手都不能触发发版运行/);
+  assert.match(inspector, /canWrite = true/);
+  assert.match(inspector, /mode === "completed" \|\| !canWrite/);
 });
 
 test("retry keeps failed execution context and does not bubble into card navigation", async () => {
@@ -111,11 +177,75 @@ test("retry keeps failed execution context and does not bubble into card navigat
   assert.match(source, /setMessage\(`\$\{item\.title \|\| item\.nodeId \|\| "发版节点"\} 定义已失效/);
 });
 
+test("pending stage cards delete through the server and stay removed during sync", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /const deleteNode = useCallback/);
+  assert.match(source, /method: "DELETE"/);
+  assert.match(source, /item\.status !== "running"/);
+  assert.match(source, /applyServerState\(payload\.state\)/);
+  assert.match(source, /filterDismissedPending/);
+  assert.match(source, /mergeRemotePending/);
+  assert.match(source, /response\.status === 404/);
+  assert.match(source, /removePendingNode\(previous, item\)/);
+  assert.match(source, /item\.sourcePresetId \|\| node\.sourcePresetId \|\| node\.id/);
+  assert.match(source, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); void deleteNode\(item\); \}\}/);
+  assert.match(source, /aria-label=\{`删除\$\{item\.title\}`\}/);
+});
+
+test("release runtime heartbeats preserve custom pending node identity", async () => {
+  const routes = await readFile(new URL("../bin/lib/workspace-routes.mjs", import.meta.url), "utf8");
+  assert.match(routes, /releasePendingNodeId\(/);
+  assert.match(routes, /nodeId:\s*releasePendingNodeId\(/);
+  assert.doesNotMatch(routes, /const runningItem = \{[\s\S]*?nodeId:\s*action\.id,/);
+});
+
+test("local-only initialization and custom nodes execute without a server-side pending PATCH", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /localOnly.*initializationPreparationNode/);
+  assert.match(source, /localOnly \? Promise\.resolve\(\) : saveInspectorItem\(nextItem\)/);
+});
+
 test("release runtime completion persistence keeps workflow and scope metadata", async () => {
   const routes = await readFile(new URL("../bin/lib/workspace-routes.mjs", import.meta.url), "utf8");
   assert.match(routes, /const failedItem = \{/);
   assert.match(routes, /const completedItem = \{/);
+  assert.match(routes, /\[\.\.\.activeReleaseRuns\.values\(\)\]\.find/);
+  assert.match(routes, /itemId: String\(payload\.itemId \|\| ""\)/);
   assert.match(routes, /workflowId:\s*action\.workflowId/);
   assert.match(routes, /scopeKey:\s*requestedScopeKey\s*\|\|\s*expectedScopeKey/);
   assert.match(routes, /contextSnapshot:\s*\{\s*\.\.\.requestContext\s*\}/);
+});
+
+test("release runtime uses a bounded controller and binds the active Agent child", async () => {
+  const routes = await readFile(new URL("../bin/lib/workspace-routes.mjs", import.meta.url), "utf8");
+  const server = await readFile(new URL("../bin/lib/workspace-server.mjs", import.meta.url), "utf8");
+  const composer = await readFile(new URL("../bin/lib/composer-agent.mjs", import.meta.url), "utf8");
+  assert.match(routes, /createWorkspaceRunController/);
+  assert.match(routes, /timeoutMs:\s*releaseRunTimeoutMs/);
+  assert.match(routes, /onActiveChild:\s*\(child\)/);
+  assert.match(server, /disableMcp:\s*Boolean\(opts\.releaseRuntime\)/);
+  assert.match(server, /workspaceReleaseHistoryNodeId|releaseAgent\?\.capabilityId/);
+  assert.match(composer, /disableMcp/);
+  assert.match(composer, /materializeHomeCursorHermeticIsolation/);
+  assert.match(composer, /mcpServers:\s*\{\}/);
+});
+
+test("release panel polls server state while an Agent node is running", async () => {
+  const panel = await readFile(new URL("../builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx", import.meta.url), "utf8");
+  assert.match(panel, /setInterval\(/);
+  assert.match(panel, /lastEventAt/);
+});
+
+test("unchanged remote catalogs keep their reference to avoid refetch loops", async () => {
+  const { mergeRemoteCatalog } = await import("../builtin/web-ui/src/lib/releaseWorkflowModel.js?catalog-reference");
+  const previous = [{ id: "release-git:create-release-branch", title: "创建发版分支" }];
+  assert.strictEqual(mergeRemoteCatalog(previous, [{ id: "release-git:create-release-branch", title: "创建发版分支" }]), previous);
+  assert.notStrictEqual(mergeRemoteCatalog(previous, [{ id: "release-git:create-release-branch", title: "创建发版分支（更新）" }]), previous);
+});
+
+test("release panel preserves local recommendations across remote sync and uses stable effect keys", async () => {
+  const panel = await readFile(new URL("../builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx", import.meta.url), "utf8");
+  assert.match(panel, /localRecommendedPending/);
+  assert.match(panel, /catalogSignature/);
+  assert.match(panel, /contextKey/);
 });

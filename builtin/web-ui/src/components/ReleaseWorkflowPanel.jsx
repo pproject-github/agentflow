@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/releaseNodeCatalog.js";
-import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, normalizeCompositeSteps, removePendingNode, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import {
+  artifactHref,
+  artifactLabel,
+  resolveStageArtifacts,
+  resolveStageSummary,
+  resolveWaitingInfo,
+  truncateSummary,
+} from "../lib/releaseStageOutcome.js";
+import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, filterDismissedPending, mergeRemoteCatalog, normalizeCompositeSteps, removePendingNode, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
 import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
 
@@ -42,6 +50,8 @@ function normalizeTimelineItem(value, index) {
     startedAt: timestampValue(value.startedAt),
     completedAt: timestampValue(value.completedAt),
     failedAt: timestampValue(value.failedAt),
+    lastEventAt: timestampValue(value.lastEventAt),
+    lastEvent: stringValue(value.lastEvent),
     durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : undefined,
     operator: stringValue(value.operator, "未记录"),
     runId: stringValue(value.runId),
@@ -64,6 +74,7 @@ function normalizeTimelineItem(value, index) {
     templateStepId: stringValue(value.templateStepId),
     kind: stringValue(value.kind),
     compositeId: stringValue(value.compositeId),
+    sourcePresetId: stringValue(value.sourcePresetId),
     details: isRecord(value.details) ? { ...value.details, steps: normalizeCompositeSteps(value.details.steps) } : undefined,
   };
 }
@@ -71,7 +82,8 @@ function normalizeTimelineItem(value, index) {
 function normalizePendingItem(value, index) {
   if (!isRecord(value) || typeof value.nodeId !== "string" || !value.nodeId.trim()) return null;
   const nodeId = value.nodeId.trim();
-  const status = ["pending", "running", "failed"].includes(value.status) ? value.status : "pending";
+  // waiting 必须保留：远端/本地确认态不能在同步时被压成 pending，否则 hollow completed 会把它从待执行挤掉。
+  const status = ["pending", "running", "failed", "waiting"].includes(value.status) ? value.status : "pending";
   return {
     id: stringValue(value.id).trim() || `${nodeId}-pending-${index}`,
     nodeId,
@@ -85,10 +97,13 @@ function normalizePendingItem(value, index) {
     startedAt: timestampValue(value.startedAt),
     completedAt: timestampValue(value.completedAt),
     failedAt: timestampValue(value.failedAt),
+    lastEventAt: timestampValue(value.lastEventAt),
+    lastEvent: stringValue(value.lastEvent),
     operator: stringValue(value.operator, "未记录"),
     runId: stringValue(value.runId),
     error: stringValue(value.error),
     message: stringValue(value.message),
+    waiting: isRecord(value.waiting) ? { ...value.waiting } : value.waiting,
     inputs: safeInputs(value.inputs),
     output: value.output,
     logs: Array.isArray(value.logs) ? value.logs : value.log,
@@ -106,6 +121,7 @@ function normalizePendingItem(value, index) {
     templateStepId: stringValue(value.templateStepId),
     kind: stringValue(value.kind),
     compositeId: stringValue(value.compositeId),
+    sourcePresetId: stringValue(value.sourcePresetId),
     details: isRecord(value.details) ? { ...value.details, steps: normalizeCompositeSteps(value.details.steps) } : undefined,
   };
 }
@@ -128,6 +144,12 @@ function normalizeCustomNode(value) {
     durationMs: Number.isFinite(Number(value.durationMs)) ? Number(value.durationMs) : 600,
     nextNodeIds: asStringArray(value.nextNodeIds),
     inputSchema: Array.isArray(value.inputSchema) ? value.inputSchema.filter(isRecord).map((input) => ({ ...input })) : [],
+    kind: stringValue(value.kind),
+    compositeId: stringValue(value.compositeId),
+    promptTemplate: stringValue(value.promptTemplate),
+    skillHints: asStringArray(value.skillHints),
+    requiresConfirmation: value.requiresConfirmation === true,
+    insertableInAnyStage: value.insertableInAnyStage === true,
     scopeKey: stringValue(value.scopeKey),
     contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
     processId: stringValue(value.processId),
@@ -167,6 +189,140 @@ function storageKey(workspace, context) {
     .join(":");
 }
 
+function mergeDismissedNodeIds(...lists) {
+  return [...new Set(lists.flatMap((list) => (Array.isArray(list) ? list : []))
+    .map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function releaseItemHasSummary(item) {
+  return Boolean(
+    (item?.output && typeof item.output === "object" && item.output.summary)
+    || item?.details?.summary
+    || item?.message,
+  );
+}
+
+function isHollowCompletedReleaseItem(item) {
+  return String(item?.status || "").toLowerCase() === "completed" && !releaseItemHasSummary(item);
+}
+
+function hydrateReleaseItemFromRuns(item, runs = {}) {
+  const runId = String(item?.runId || "").trim();
+  const run = runId && runs[runId] && typeof runs[runId] === "object" ? runs[runId] : null;
+  if (!run) return item;
+  const hasSummary = releaseItemHasSummary(item);
+  if (hasSummary && item.status && item.status !== "completed") return item;
+  const runStatus = String(run.status || run.output?.status || "").toLowerCase();
+  const next = { ...item };
+  if (!hasSummary) {
+    if (run.output) next.output = run.output;
+    if (run.details) next.details = { ...(item.details || {}), ...run.details };
+    if (run.waiting) next.waiting = run.waiting;
+    if (run.message) next.message = run.message;
+  }
+  if (runStatus === "waiting" && String(item.status).toLowerCase() === "completed" && !hasSummary) {
+    next.status = "waiting";
+  }
+  return next;
+}
+
+function runSaysWaitingForNode(nodeId, runId, runs = {}) {
+  const directId = String(runId || "").trim();
+  const direct = directId && runs[directId] && typeof runs[directId] === "object" ? runs[directId] : null;
+  if (direct && String(direct.status || direct.output?.status || "").toLowerCase() === "waiting") return true;
+  const target = String(nodeId || "").trim();
+  if (!target) return false;
+  return Object.values(runs).some((run) => (
+    run && typeof run === "object"
+    && String(run.nodeId || "").trim() === target
+    && String(run.status || run.output?.status || "").toLowerCase() === "waiting"
+  ));
+}
+
+function mergeRemotePending(previous, remoteState, context, knownIds, localCustomPending = []) {
+  const dismissedNodeIds = mergeDismissedNodeIds(previous.dismissedNodeIds, remoteState.dismissedNodeIds);
+  const runs = isRecord(remoteState.runs) ? remoteState.runs : {};
+  const hydratedTimeline = (Array.isArray(remoteState.timeline) ? remoteState.timeline : [])
+    .map(normalizeTimelineItem)
+    .filter(Boolean)
+    .filter((item) => knownIds.has(item.nodeId) || knownIds.has(item.sourcePresetId))
+    .map((item) => hydrateReleaseItemFromRuns(item, runs));
+  const hydratedRemotePending = (Array.isArray(remoteState.pending) ? remoteState.pending : [])
+    .map(normalizePendingItem)
+    .filter(Boolean)
+    .map((item) => hydrateReleaseItemFromRuns(item, runs));
+  const waitingNodeIds = new Set(
+    hydratedRemotePending
+      .filter((item) => String(item.status || "").toLowerCase() === "waiting")
+      .map((item) => item.nodeId),
+  );
+  for (const item of [...hydratedTimeline, ...hydratedRemotePending]) {
+    if (String(item.status || "").toLowerCase() === "waiting"
+      || runSaysWaitingForNode(item.nodeId, item.runId, runs)) {
+      waitingNodeIds.add(item.nodeId);
+    }
+  }
+  // hollow completed + waiting → 从时间线挪回待执行（已有 waiting pending 时直接丢掉 hollow）。
+  const movedWaitingFromTimeline = [];
+  const remoteTimeline = [];
+  const pendingNodeIds = new Set(hydratedRemotePending.map((item) => item.nodeId));
+  for (const item of hydratedTimeline) {
+    const status = String(item.status || "").toLowerCase();
+    const preferWaiting = status === "waiting"
+      || (isHollowCompletedReleaseItem(item) && waitingNodeIds.has(item.nodeId));
+    if (preferWaiting) {
+      if (!pendingNodeIds.has(item.nodeId)) {
+        movedWaitingFromTimeline.push({
+          ...item,
+          status: "waiting",
+          progress: Math.min(Math.max(Number(item.progress) || 0, 0), 100),
+          createdAt: item.createdAt || Date.now(),
+        });
+        pendingNodeIds.add(item.nodeId);
+      }
+      continue;
+    }
+    remoteTimeline.push(item);
+  }
+  // hollow completed 不能靠 completedIds 挤掉同 node 的 waiting pending。
+  const completedIds = new Set(
+    remoteTimeline
+      .filter((item) => !(isHollowCompletedReleaseItem(item) && waitingNodeIds.has(item.nodeId)))
+      .map((item) => item.nodeId),
+  );
+  const remotePending = filterDismissedPending(
+    [...hydratedRemotePending, ...movedWaitingFromTimeline]
+      .filter((item) => (knownIds.has(item.nodeId) || knownIds.has(item.sourcePresetId)) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId)),
+    dismissedNodeIds,
+  );
+  const remotePendingIds = new Set(remotePending.map((item) => item.id));
+  const remotePendingNodeIds = new Set(remotePending.map((item) => item.nodeId));
+  // 推荐节点只存在于浏览器；远端快照 pending 为空时不能每次同步都清掉再重建，否则卡片 key 抖动会整页闪烁。
+  const localRecommendedPending = filterDismissedPending(
+    (Array.isArray(previous.pending) ? previous.pending : [])
+      .map(normalizePendingItem)
+      .filter(Boolean)
+      .map((item) => hydrateReleaseItemFromRuns(item, runs))
+      .filter((item) => itemMatchesContext(item, context)
+        && !completedIds.has(item.nodeId)
+        && !remotePendingIds.has(item.id)
+        && !remotePendingNodeIds.has(item.nodeId)
+        && (knownIds.has(item.nodeId) || knownIds.has(item.sourcePresetId))
+        && !String(item.nodeId || "").startsWith("custom-")
+        && !localCustomPending.some((entry) => entry.id === item.id || entry.nodeId === item.nodeId)),
+    dismissedNodeIds,
+  );
+  return {
+    dismissedNodeIds,
+    timeline: uniqueByNodeId(remoteTimeline.filter((item) => itemMatchesContext(item, context))),
+    pending: uniqueById([
+      ...remotePending,
+      ...filterDismissedPending(localCustomPending, dismissedNodeIds),
+      ...localRecommendedPending,
+    ]),
+  };
+}
+
 function readState(key, catalogNodeIds = null) {
   if (typeof window === "undefined" || !window.localStorage) return emptyState();
   try {
@@ -175,10 +331,10 @@ function readState(key, catalogNodeIds = null) {
     const customNodes = uniqueById(Array.isArray(value.customNodes) ? value.customNodes.map(normalizeCustomNode).filter(Boolean) : []);
     const knownNodeIds = catalogNodeIds ? new Set([...catalogNodeIds, ...customNodes.map((item) => item.id)]) : null;
     const timeline = uniqueByNodeId(Array.isArray(value.timeline) ? value.timeline.map(normalizeTimelineItem).filter(Boolean) : [])
-      .filter((item) => !knownNodeIds || knownNodeIds.has(item.nodeId));
+      .filter((item) => !knownNodeIds || knownNodeIds.has(item.nodeId) || knownNodeIds.has(item.sourcePresetId));
     const completedIds = new Set(timeline.map((item) => item.nodeId));
-    const pending = uniqueByNodeId(Array.isArray(value.pending) ? value.pending.map(normalizePendingItem).filter(Boolean) : [])
-      .filter((item) => !completedIds.has(item.nodeId) && (!knownNodeIds || knownNodeIds.has(item.nodeId)));
+    const pending = uniqueById(Array.isArray(value.pending) ? value.pending.map(normalizePendingItem).filter(Boolean) : [])
+      .filter((item) => !completedIds.has(item.nodeId) && (!knownNodeIds || knownNodeIds.has(item.nodeId) || knownNodeIds.has(item.sourcePresetId)));
     return {
       context: isRecord(value.context) ? { ...value.context } : undefined,
       workflowId: stringValue(value.workflowId),
@@ -199,7 +355,50 @@ function itemId(nodeId) {
 }
 
 function statusLabel(status) {
-  return { completed: "已完成", running: "执行中", failed: "失败", pending: "待执行" }[status] || status;
+  return { completed: "已完成", running: "执行中", failed: "失败", pending: "待执行", waiting: "等待中" }[status] || status;
+}
+
+/** Compact summary + artifact chips for timeline/pending cards (Inspector keeps full detail). */
+function renderStageOutcome(item) {
+  const summary = truncateSummary(resolveStageSummary(item));
+  const linkedArtifacts = resolveStageArtifacts(item).filter((artifact) => artifactHref(artifact));
+  const waiting = resolveWaitingInfo(item);
+  if (!summary && linkedArtifacts.length === 0 && !waiting) return null;
+  const shown = linkedArtifacts.slice(0, 3);
+  const rest = linkedArtifacts.length - shown.length;
+  return (
+    <div className="af-release-stage-outcome">
+      {waiting ? (
+        <div className="af-release-stage-outcome__waiting">
+          <span>{waiting.reason}</span>
+          {waiting.operatorUrl ? (
+            <a href={waiting.operatorUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>打开</a>
+          ) : null}
+        </div>
+      ) : null}
+      {summary ? <p className="af-release-stage-outcome__summary">{summary}</p> : null}
+      {shown.length > 0 ? (
+        <div className="af-release-stage-outcome__artifacts">
+          {shown.map((artifact, index) => {
+            const href = artifactHref(artifact);
+            return (
+              <a
+                key={`${href}-${index}`}
+                className="af-release-artifact-chip"
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {artifactLabel(artifact)}
+              </a>
+            );
+          })}
+          {rest > 0 ? <span className="af-release-artifact-chip af-release-artifact-chip--more">+{rest}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function formatDateTime(value) {
@@ -215,13 +414,139 @@ function formatDuration(value) {
   return `${(duration / 1000).toFixed(duration >= 10000 ? 0 : 1)}s`;
 }
 
+// 用户需求点: 页面只持久化可读结论，不能把 AgentFlow graph/instances 整棵写进 output。
+function parseLeadingJsonValue(text) {
+  const source = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  if (!source.startsWith("{") && !source.startsWith("[")) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (char === "\\") { escape = true; continue; }
+      if (char === "\"") inString = false;
+      continue;
+    }
+    if (char === "\"") { inString = true; continue; }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return { value: JSON.parse(source.slice(0, index + 1)), rest: source.slice(index + 1).trim() };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function hydrateReleaseOutputEnvelope(candidate) {
+  if (typeof candidate === "string") {
+    const parsed = parseLeadingJsonValue(candidate);
+    if (parsed?.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)) {
+      const trailing = String(parsed.rest || "").trim();
+      const nestedSummary = String(parsed.value.summary || parsed.value.message || "").trim();
+      const preferTrailing = trailing && (trailing.includes("**") || /\[[^\]]+\]\(https?:\/\//.test(trailing) || trailing.includes("\n"));
+      return {
+        ...parsed.value,
+        summary: preferTrailing ? trailing : (nestedSummary || trailing || candidate),
+      };
+    }
+    return candidate;
+  }
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+  const summaryText = typeof candidate.summary === "string" ? candidate.summary.trim() : "";
+  const nested = parseLeadingJsonValue(summaryText);
+  if (!nested?.value || typeof nested.value !== "object" || Array.isArray(nested.value)) return candidate;
+  const trailing = String(nested.rest || "").trim();
+  const nestedSummary = String(nested.value.summary || nested.value.message || "").trim();
+  const preferTrailing = trailing && (trailing.includes("**") || /\[[^\]]+\]\(https?:\/\//.test(trailing) || trailing.includes("\n"));
+  return {
+    ...candidate,
+    ...nested.value,
+    status: nested.value.status || candidate.status,
+    summary: preferTrailing ? trailing : (nestedSummary || trailing || candidate.summary),
+    steps: Array.isArray(nested.value.steps) && nested.value.steps.length ? nested.value.steps : candidate.steps,
+    records: Array.isArray(nested.value.records) && nested.value.records.length ? nested.value.records : candidate.records,
+    artifacts: Array.isArray(nested.value.artifacts) && nested.value.artifacts.length ? nested.value.artifacts : candidate.artifacts,
+  };
+}
+
+function sanitizeReleaseNodeOutput(payload = {}) {
+  const candidates = [
+    payload?.result?.output,
+    payload?.output,
+    payload?.result && typeof payload.result === "object" && !payload.result.graph && !payload.result.instances ? payload.result : null,
+    payload?.details && typeof payload.details === "object" ? {
+      status: payload.status || payload.details.status,
+      summary: payload.details.summary || payload.message,
+      steps: payload.details.steps,
+      records: payload.details.records,
+      artifacts: payload.details.artifacts,
+      waiting: payload.details.waiting || payload.waiting,
+    } : null,
+  ];
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    if (typeof candidate === "string") {
+      const hydrated = hydrateReleaseOutputEnvelope(candidate);
+      if (hydrated && typeof hydrated === "object") return hydrated;
+      const text = candidate.trim();
+      if (text) return text;
+      continue;
+    }
+    if (typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    if (candidate.graph || candidate.instances || candidate.edges || candidate.ui) {
+      const { graph, instances, edges, ui, version, meta, ...rest } = candidate;
+      if (rest.summary || rest.status || rest.steps || rest.records || rest.artifacts || rest.waiting) {
+        return hydrateReleaseOutputEnvelope(rest);
+      }
+      continue;
+    }
+    return hydrateReleaseOutputEnvelope(candidate);
+  }
+  if (typeof payload?.message === "string" && payload.message.trim()) {
+    return { status: payload.status || "completed", summary: payload.message.trim() };
+  }
+  return { status: payload.status || "completed", summary: "已完成" };
+}
+
+function releaseResultMessage(payload = {}, fallback = "已完成") {
+  const raw = payload.message || payload.result?.summary || payload.details?.summary
+    || (typeof payload.result?.output === "string" ? payload.result.output : "")
+    || (typeof payload.output === "string" ? payload.output : "")
+    || payload.output?.summary;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : fallback;
+}
+
 function compositeDetailsFromResult(result, node, existing = {}) {
   if (node?.kind !== "composite" && existing?.steps?.length) return existing;
-  const explicit = result?.details?.steps || result?.result?.details?.steps || result?.result?.steps || result?.steps;
-  if (Array.isArray(explicit)) return { ...existing, steps: normalizeCompositeSteps(explicit) };
+  const output = result?.output && typeof result.output === "object" && !Array.isArray(result.output) ? result.output : null;
+  const payload = result?.result && typeof result.result === "object" && !Array.isArray(result.result) ? result.result : null;
+  const details = {
+    ...existing,
+    ...(result?.details && typeof result.details === "object" ? result.details : {}),
+    ...(output?.summary ? { summary: output.summary } : {}),
+    ...(payload?.summary ? { summary: payload.summary } : {}),
+    ...(result?.summary ? { summary: result.summary } : {}),
+    ...(output?.records ? { records: output.records } : {}),
+    ...(payload?.records ? { records: payload.records } : {}),
+    ...(result?.details?.records ? { records: result.details.records } : {}),
+    ...(output?.artifacts ? { artifacts: output.artifacts } : {}),
+    ...(payload?.artifacts ? { artifacts: payload.artifacts } : {}),
+    ...(result?.waiting ? { waiting: result.waiting } : {}),
+    ...(output?.waiting ? { waiting: output.waiting } : {}),
+  };
+  const explicit = result?.details?.steps || result?.result?.details?.steps || result?.result?.steps || result?.steps || output?.steps;
+  if (Array.isArray(explicit)) return { ...details, steps: normalizeCompositeSteps(explicit) };
   const graph = result?.result?.graph || result?.graph;
   const instances = graph?.instances;
-  if (!instances || !Array.isArray(node?.actions)) return existing;
+  if (!instances || !Array.isArray(node?.actions)) return details;
   const steps = node.actions.map((action, index) => {
     const instance = instances[`composite_${action.stepId || index}`] || {};
     return {
@@ -234,7 +559,7 @@ function compositeDetailsFromResult(result, node, existing = {}) {
       error: instance.error || "",
     };
   });
-  return { ...existing, steps: normalizeCompositeSteps(steps) };
+  return { ...details, steps: normalizeCompositeSteps(steps) };
 }
 
 // 用户需求点: 已完成阶段不依赖横向拖动，要按执行顺序蛇形换行并保持连续方向轨迹。
@@ -261,6 +586,7 @@ function makePending(node, inputs = {}, context = {}) {
     templateStepId: node.templateStepId || "",
     kind: node.kind || "",
     compositeId: node.compositeId || "",
+    sourcePresetId: node.sourcePresetId || "",
     details: node.kind === "composite" ? { steps: [] } : undefined,
   };
 }
@@ -291,7 +617,14 @@ function validateNodeInputs(node, item) {
   return "";
 }
 
-export default function ReleaseWorkflowPanel({ workspace, releaseContext: navigationContext, operator = "未记录" }) {
+export default function ReleaseWorkflowPanel({
+  workspace,
+  releaseContext: navigationContext,
+  operator = "未记录",
+  canWrite = true,
+  releaseAccess = null,
+  onReleaseAccess,
+}) {
   const inferred = useMemo(() => navigationContext
     ? resolveReleaseContext(workspace || {}, navigationContext)
     : inferReleaseContext(workspace || {}), [navigationContext, workspace]);
@@ -344,22 +677,47 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       }
       group.nodes.push(node);
     }
+    // 用户需求点: 自由 Agent 可插入任意发版阶段；每个流程分组都挂一份同能力入口。
+    const freePrompt = catalogNodes.find((node) => node.insertableInAnyStage === true || node.compositeId === "free-prompt-agent");
+    if (freePrompt) {
+      for (const group of groups) {
+        if (group.nodes.some((node) => node.compositeId === freePrompt.compositeId || node.id === freePrompt.id)) continue;
+        group.nodes.push({
+          ...freePrompt,
+          processId: group.id,
+          processTitle: group.title,
+          workflowProcessId: group.id,
+          workflowProcessTitle: group.title,
+          category: group.title,
+        });
+      }
+      if (groups.length === 0) {
+        groups.push({
+          id: freePrompt.processId || "entry",
+          title: freePrompt.processTitle || "助手驱动",
+          nodes: [freePrompt],
+        });
+      }
+    }
     return groups;
-  }, [customNodeOptions]);
+  }, [catalogNodes, customNodeOptions]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
   const initializationPreparationNode = useMemo(() => createInitializationPreparationNode(context, workspace), [context, workspace]);
   const allNodes = useMemo(() => [initializationNode, initializationPreparationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, initializationPreparationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
-    const timeline = state.timeline.filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context));
+    const timeline = state.timeline.filter((item) => (knownNodeIds.has(item.nodeId) || knownNodeIds.has(item.sourcePresetId)) && itemMatchesContext(item, context));
     const completedIds = new Set(timeline.map((item) => item.nodeId));
     const pending = state.pending
-      .filter((item) => knownNodeIds.has(item.nodeId) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
+      .filter((item) => (knownNodeIds.has(item.nodeId) || knownNodeIds.has(item.sourcePresetId)) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
     return { ...state, timeline, pending };
   }, [context, knownNodeIds, state]);
   const nodeById = useMemo(() => new Map(allNodes.map((node) => [node.id, node])), [allNodes]);
   const completedRows = useMemo(() => groupCompletedTimelineRows(visibleState.timeline), [visibleState.timeline]);
   const runningCount = visibleState.pending.filter((item) => item.status === "running").length;
+
+  const contextKey = `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
+  const catalogSignature = catalogNodes.map((node) => node.id).join("|");
 
   useEffect(() => {
     hydratedKey.current = "";
@@ -368,7 +726,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       setState(seedNextRecommendations(seedInitializationPreparationState(ensureInitializationFirst(loaded, initializationNode), initializationNode, initializationPreparationNode), [initializationNode, initializationPreparationNode, ...catalogNodes]));
     }
     setStorageWarning("");
-  }, [catalogNodes, initializationNode, initializationPreparationNode, key]);
+  }, [catalogSignature, contextKey, initializationNode, initializationPreparationNode, key]);
 
   useEffect(() => {
     localMutationRef.current = false;
@@ -379,7 +737,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       { ...previous, context: { ...context } },
       [initializationNode, initializationPreparationNode, ...catalogNodes],
     ));
-  }, [catalogNodes, context, initializationNode, initializationPreparationNode]);
+  }, [catalogSignature, contextKey, initializationNode, initializationPreparationNode]);
 
   useEffect(() => () => {
     runGenerationRef.current += 1;
@@ -405,7 +763,6 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     let cancelled = false;
     const query = new URLSearchParams({
       workspaceId: workspaceIdentity(workspace),
-      workspacePath: workspace?.path || "",
       businessLine: context.businessLine,
       platform: context.platform,
       version: context.version,
@@ -416,7 +773,11 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       fetch(`/api/release/state?${query.toString()}`).then((response) => response.ok ? response.json() : null).catch(() => null),
     ]).then(([catalogPayload, statePayload]) => {
       if (cancelled) return;
-      if (Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0) setRemoteCatalog(catalogPayload.nodes);
+      const access = statePayload?.releaseAccess || catalogPayload?.releaseAccess;
+      if (access && typeof access === "object") onReleaseAccess?.(access);
+      if (Array.isArray(catalogPayload?.nodes) && catalogPayload.nodes.length > 0) {
+        setRemoteCatalog((previous) => mergeRemoteCatalog(previous, catalogPayload.nodes));
+      }
       if (statePayload?.state && isRecord(statePayload.state)) {
         setState((previous) => seedNextRecommendations(
           // 用户需求点: 用户操作优先，避免网络较慢时服务端旧快照抹掉刚添加或正在执行的节点。
@@ -430,24 +791,16 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               ...sourceNodes.map((node) => node.id),
               ...(Array.isArray(previous.customNodes) ? previous.customNodes : []).map((node) => node.id),
             ]);
-            const remoteTimeline = (Array.isArray(remoteState.timeline) ? remoteState.timeline : [])
-              .map(normalizeTimelineItem)
-              .filter(Boolean)
-              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context));
-            const completedIds = new Set(remoteTimeline.map((item) => item.nodeId));
-            const remotePending = (Array.isArray(remoteState.pending) ? remoteState.pending : [])
-              .map(normalizePendingItem)
-              .filter(Boolean)
-              .filter((item) => knownIds.has(item.nodeId) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId));
-            // customNodes 尚未由后端持久化，保留本地自定义节点及其待执行实例。
             const localCustomNodes = Array.isArray(previous.customNodes) ? previous.customNodes : [];
             const localCustomPending = (Array.isArray(previous.pending) ? previous.pending : [])
-              .filter((item) => localCustomNodes.some((node) => node.id === item.nodeId));
+              .filter((item) => localCustomNodes.some((node) => node.id === item.nodeId || node.id === item.id));
+            const merged = mergeRemotePending(previous, remoteState, context, knownIds, localCustomPending);
             return {
               ...previous,
               ...remoteState,
-              timeline: remoteTimeline,
-              pending: uniqueByNodeId([...remotePending, ...localCustomPending]),
+              timeline: merged.timeline,
+              pending: merged.pending,
+              dismissedNodeIds: merged.dismissedNodeIds,
               customNodes: localCustomNodes,
               context: { ...context },
             };
@@ -457,7 +810,76 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       }
     });
     return () => { cancelled = true; };
-  }, [catalogNodes, context, initializationNode, initializationPreparationNode, workspace]);
+    // catalogNodes / context 用签名依赖，避免远端 catalog 引用抖动反复拉 state 重建推荐卡片。
+  }, [catalogSignature, contextKey, initializationNode, initializationPreparationNode, workspace]);
+
+  // 用户需求点: Agent 执行期间页面不能只等待最终 HTTP 响应，需同步服务端心跳和失败状态。
+  useEffect(() => {
+    if (runningCount <= 0 || typeof window === "undefined") return undefined;
+    let cancelled = false;
+    const query = new URLSearchParams({
+      workspaceId: workspaceIdentity(workspace),
+      businessLine: context.businessLine,
+      platform: context.platform,
+      version: context.version,
+      batch: context.batch || "initial",
+    });
+    const syncRunningState = async () => {
+      const payload = await fetch(`/api/release/state?${query.toString()}`).then((response) => response.ok ? response.json() : null).catch(() => null);
+      if (cancelled || !payload?.state || !isRecord(payload.state)) return;
+      const sourceNodes = remoteCatalog.length ? remoteCatalog : catalogNodes;
+      const knownIds = new Set([
+        initializationNode.id,
+        initializationPreparationNode.id,
+        ...sourceNodes.map((node) => node.id),
+        ...(Array.isArray(state.customNodes) ? state.customNodes : []).map((node) => node.id),
+      ]);
+      const merged = mergeRemotePending(state, payload.state, context, knownIds);
+      setState((previous) => {
+        const dismissedNodeIds = mergeDismissedNodeIds(previous.dismissedNodeIds, merged.dismissedNodeIds);
+        const remoteById = new Map(merged.pending.map((item) => [item.id, item]));
+        const waitingNodeIds = new Set(
+          merged.pending
+            .filter((item) => String(item.status || "").toLowerCase() === "waiting")
+            .map((item) => item.nodeId),
+        );
+        const timelineCompletedIds = new Set(merged.timeline.map((entry) => entry.nodeId));
+        // 轮询合并时不能让本地 hollow completed 盖住已挪回 pending 的 waiting。
+        const timeline = uniqueByNodeId([
+          ...previous.timeline.filter((item) => !waitingNodeIds.has(item.nodeId)),
+          ...merged.timeline,
+        ]);
+        const pending = uniqueById(filterDismissedPending([
+          ...previous.pending
+            .filter((item) => !timelineCompletedIds.has(item.nodeId))
+            .map((item) => {
+              if (!remoteById.has(item.id)) return item;
+              const remote = remoteById.get(item.id);
+              const mergedItem = { ...item, ...remote };
+              if (String(mergedItem.status || "").toLowerCase() === "running") {
+                mergedItem.error = "";
+                mergedItem.failedAt = undefined;
+              }
+              return mergedItem;
+            }),
+          ...merged.pending.filter((item) => !previous.pending.some((entry) => entry.id === item.id)),
+        ], dismissedNodeIds));
+        return {
+          ...previous,
+          timeline,
+          pending,
+          dismissedNodeIds,
+          ...(isRecord(payload.state.runs) ? { runs: payload.state.runs } : {}),
+        };
+      });
+    };
+    void syncRunningState();
+    const timer = window.setInterval(() => { void syncRunningState(); }, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [catalogNodes, contextKey, initializationNode, initializationPreparationNode, remoteCatalog, runningCount, state.customNodes, workspace]);
 
   // 用户需求点: 节点详情必须反映最新运行态，完成后立即切换为只读，不能继续显示执行按钮。
   useEffect(() => {
@@ -473,7 +895,13 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
 
   const executeNode = useCallback(async (item) => {
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
-    const node = nodeById.get(item.nodeId);
+    if (!canWrite) {
+      setMessage("当前账号无发版操作权限");
+      return;
+    }
+    const node = nodeById.get(item.nodeId)
+      || nodeById.get(item.sourcePresetId)
+      || (item.sourcePresetId ? null : [...nodeById.values()].find((entry) => entry.sourcePresetId && entry.id === item.nodeId));
     if (!node) {
       setMessage(`${item.title || item.nodeId || "发版节点"} 定义已失效，请刷新节点列表后重试`);
       return;
@@ -497,15 +925,17 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     const startedAt = Date.now();
     localMutationRef.current = true;
     controllers.current.set(item.id, { controller, token: runToken });
+    setMessage(`${item.title} 正在启动 AgentFlow…`);
     setState((previous) => seedNextRecommendations({
       ...previous,
       pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, inputs: normalizedInputs, status: "running", startedAt, completedAt: undefined, failedAt: undefined, error: "", progress: 0, operator } : entry),
     }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
     try {
-      const actionId = node.sourcePresetId || node.id;
+      // 自定义实例卡片用 sourcePresetId 定位 catalog 能力；优先 item 上的预置 id，避免误把 custom-composite:* 当 actionId。
+      const actionId = item.sourcePresetId || node.sourcePresetId || node.id;
+      // 用户需求点: 浏览器只提交 workspaceId；产品工程绝对路径由服务端按业务线+平台 allowlist 解析。
       const requestPayload = {
         workspaceId: workspaceIdentity(workspace),
-        workspacePath: workspace?.path || "",
         businessLine: context.businessLine,
         platform: context.platform,
         version: context.version,
@@ -516,6 +946,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         confirmationFingerprint: item.confirmationFingerprint || "",
         scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
         processId: node.processId || item.processId || "",
+        processTitle: node.processTitle || item.processTitle || "",
         ...(node.kind === "composite" && (item.status === "failed" || item.retrying)
           ? { resumeFromStep: item.details?.steps?.find((step) => step.status === "failed")?.stepId || "" }
           : {}),
@@ -526,12 +957,27 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         if (node.requiresConfirmation && !item.confirmationFingerprint) {
           const previewResponse = await fetch("/api/release/nodes/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestPayload), signal: controller.signal });
           const previewPayload = await previewResponse.json().catch(() => ({}));
-          if (!previewResponse.ok) throw new Error(previewPayload.error || `HTTP ${previewResponse.status}`);
+          if (!previewResponse.ok) {
+            if (previewPayload?.releaseAccess) onReleaseAccess?.(previewPayload.releaseAccess);
+            if (previewPayload?.code === "RELEASE_OPERATOR_FORBIDDEN") {
+              throw new Error(previewPayload.error || "无发版操作权限：页面与助手都不能触发发版运行");
+            }
+            throw new Error(previewPayload.error || `HTTP ${previewResponse.status}`);
+          }
           // 活动发版已存在时，服务端会在 preview 请求中直接幂等复用并返回 completed。
           // 不能把这个完成结果误当成普通预览，否则节点会一直停留在待执行，看起来像点击无反应。
           if (previewPayload.status !== "completed") {
-            setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || entry.runId } : entry) }));
-            setInspector((previous) => previous?.item?.id === item.id ? { ...previous, item: { ...previous.item, status: "pending", preview: previewPayload.preview, confirmationFingerprint: previewPayload.confirmationFingerprint, runId: previewPayload.runId || previous.item.runId } } : previous);
+            const previewItem = {
+              ...item,
+              inputs: normalizedInputs,
+              status: "pending",
+              preview: previewPayload.preview,
+              confirmationFingerprint: previewPayload.confirmationFingerprint,
+              runId: previewPayload.runId || item.runId,
+            };
+            setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, ...previewItem } : entry) }));
+            // 用户需求点: 需要确认的节点点击“执行”后必须立刻展示详情弹框，否则预览成功但用户看起来像没有反应。
+            setInspector({ item: previewItem, node, mode: "pending" });
             setMessage("预览已生成，请在节点详情中确认后执行");
             controllers.current.delete(item.id);
             return;
@@ -541,7 +987,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             ...previewPayload,
             runId: previewPayload.runId,
             message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
-            output: previewPayload.result?.output || previewPayload.result,
+            output: sanitizeReleaseNodeOutput(previewPayload),
             details: compositeDetailsFromResult(previewPayload, node, previewPayload.details || {}),
           };
         }
@@ -550,18 +996,25 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           const payload = await response.json().catch(() => ({}));
           runDetails = payload.details || payload.result?.details || (Array.isArray(payload.result?.steps) ? { steps: payload.result.steps } : undefined);
           if (!response.ok) {
-            const error = new Error(payload.error || `HTTP ${response.status}`);
+            if (payload?.releaseAccess) onReleaseAccess?.(payload.releaseAccess);
+            const error = new Error(
+              payload?.code === "RELEASE_OPERATOR_FORBIDDEN"
+                ? (payload.error || "无发版操作权限：页面与助手都不能触发发版运行")
+                : (payload.error || `HTTP ${response.status}`),
+            );
             error.details = runDetails;
+            error.code = payload?.code || "";
             throw error;
           }
           // 用户需求点: AgentFlow 返回的 graph 是对象，页面提示和时间线消息必须始终是可渲染文本，不能把运行图对象直接交给 React。
-          const rawMessage = payload.message || payload.result?.output || payload.result?.message;
           result = {
             ...payload,
             runId: payload.runId,
-            message: typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : `${node.title} 已完成`,
-            output: payload.result?.output || payload.result?.graph || payload.result,
+            message: releaseResultMessage(payload, `${node.title} 已完成`),
+            output: sanitizeReleaseNodeOutput(payload),
             details: compositeDetailsFromResult(payload, node, runDetails || {}),
+            status: payload.status || payload.result?.status || "completed",
+            waiting: payload.waiting || payload.result?.waiting || payload.details?.waiting,
           };
         }
       } else {
@@ -583,6 +1036,30 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       // 工作空间列表异步回填时可能只改变了前端 storage key；只要本次请求没有被取消，
       // 仍应提交 AgentFlow 已返回的结果，不能静默丢弃导致节点看起来没有反应。
       if (controller.signal.aborted) return;
+      // 用户需求点: waiting 必须留在待执行并展示原因，不能误标为已完成推进状态机。
+      if (String(result.status || "").toLowerCase() === "waiting") {
+        const waitingItem = {
+          ...executionItem,
+          inputs: normalizedInputs,
+          status: "waiting",
+          progress: 0,
+          message: result.message || `${node.title} 等待确认`,
+          output: sanitizeReleaseNodeOutput(result),
+          waiting: result.waiting || result.output?.waiting || { reason: result.message || "等待人工确认" },
+          details: compositeDetailsFromResult(result, node, { ...(executionItem.details || {}), ...(result.details || {}) }),
+          runId: result.runId || executionItem.runId,
+          operator: operator,
+          kind: executionItem.kind || node.kind || "",
+          compositeId: executionItem.compositeId || node.compositeId || "",
+        };
+        setState((previous) => seedNextRecommendations({
+          ...previous,
+          pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, ...waitingItem, retrying: undefined } : entry),
+        }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
+        setInspector({ item: waitingItem, node, mode: "pending" });
+        setMessage(waitingItem.message);
+        return;
+      }
       setState((previous) => {
         const completed = previous.timeline.some((entry) => (entry.nodeId || entry.id) === node.id);
         const currentItem = previous.pending.find((entry) => entry.id === item.id) || item;
@@ -604,7 +1081,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
           status: "completed",
           progress: 100,
           message: result.message,
-          output: result.result || result.output || result.graph || result,
+          output: sanitizeReleaseNodeOutput(result),
           logs: result.logs || result.events || [],
           runId: result.runId || currentItem.runId,
           ...createCompletionMetadata({ operator: currentOperator, startedAt: currentItem.startedAt || startedAt, completedAt }),
@@ -626,15 +1103,35 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       setMessage(result.message || `${node.title} 已完成`);
     } catch (error) {
       if (error?.name === "AbortError") return;
+      let nextError = String(error?.message || error || "执行失败");
+      let nextDetails = error?.details;
+      // 长连接被服务重启/网络中断时，浏览器只报 Failed to fetch；回读服务端状态拿到真实失败原因。
+      if (/failed to fetch|networkerror|load failed/i.test(nextError)) {
+        try {
+          const query = new URLSearchParams({
+            workspaceId: workspaceIdentity(workspace),
+            businessLine: context.businessLine,
+            platform: context.platform,
+            version: context.version,
+            batch: context.batch || "initial",
+          });
+          const payload = await fetch(`/api/release/state?${query.toString()}`).then((response) => response.ok ? response.json() : null).catch(() => null);
+          const remoteItem = (Array.isArray(payload?.state?.pending) ? payload.state.pending : []).find((entry) => entry?.id === item.id);
+          if (remoteItem?.error) nextError = String(remoteItem.error);
+          if (remoteItem?.details) nextDetails = remoteItem.details;
+        } catch {
+          // keep browser network error
+        }
+      }
       setState((previous) => seedNextRecommendations({
         ...previous,
-        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: String(error?.message || error || "执行失败"), failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? compositeDetailsFromResult({ details: error?.details }, node, entry.details || {}) : entry.details } : entry),
+        pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "failed", error: nextError, failedAt: Date.now(), operator: entry.operator || operator, details: entry.kind === "composite" ? compositeDetailsFromResult({ details: nextDetails }, node, entry.details || {}) : entry.details } : entry),
       }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
       setMessage(`${node.title} 执行失败`);
     } finally {
       if (controllers.current.get(item.id)?.token === runToken) controllers.current.delete(item.id);
     }
-  }, [catalogNodes, context, initializationNode, initializationPreparationNode, key, nodeById, operator, selfTestFailure]);
+  }, [canWrite, catalogNodes, context, initializationNode, initializationPreparationNode, key, nodeById, onReleaseAccess, operator, selfTestFailure, workspace]);
 
   const cancelNode = useCallback((item) => {
     localMutationRef.current = true;
@@ -645,7 +1142,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     if (!item) return;
     setState((previous) => seedNextRecommendations({
       ...previous,
-      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "" } : entry),
+      pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, status: "pending", progress: 0, error: "", failedAt: undefined, completedAt: undefined } : entry),
     }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
     setMessage(`${item.title} 已取消`);
   }, [catalogNodes, initializationNode, initializationPreparationNode]);
@@ -665,7 +1162,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   }, [catalogNodes, initializationNode, initializationPreparationNode, executeNode]);
 
   const deleteNode = useCallback(async (item) => {
-    if (!item || item.status === "running" || String(item.nodeId || "").startsWith("custom-")) return;
+    if (!item || item.status === "running") return;
     const query = new URLSearchParams({
       businessLine: context.businessLine,
       platform: context.platform,
@@ -674,20 +1171,49 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
       workspaceId: workspaceIdentity(workspace),
     });
     localMutationRef.current = true;
-    try {
-      const response = await fetch(`/api/release/pending/${encodeURIComponent(item.id)}?${query.toString()}`, { method: "DELETE" });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const applyLocalRemoval = () => {
       setState((previous) => seedNextRecommendations(
         removePendingNode(previous, item),
         [initializationNode, initializationPreparationNode, ...catalogNodes],
       ));
       setInspector((previous) => previous?.item?.id === item.id ? null : previous);
       setMessage(`${item.title} 已删除`);
+    };
+    const applyServerState = (remoteState) => {
+      const sourceNodes = remoteCatalog.length ? remoteCatalog : catalogNodes;
+      const knownIds = new Set([
+        initializationNode.id,
+        initializationPreparationNode.id,
+        ...sourceNodes.map((node) => node.id),
+      ]);
+      setState((previous) => seedNextRecommendations(
+        ensureInitializationFirst({
+          ...previous,
+          ...remoteState,
+          ...mergeRemotePending(previous, remoteState, context, knownIds),
+          context: { ...context },
+        }, initializationNode),
+        [initializationNode, initializationPreparationNode, ...catalogNodes],
+      ));
+      setInspector((previous) => previous?.item?.id === item.id ? null : previous);
+      setMessage(`${item.title} 已删除`);
+    };
+    try {
+      const response = await fetch(`/api/release/pending/${encodeURIComponent(item.id)}?${query.toString()}`, { method: "DELETE" });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 404) {
+        applyLocalRemoval();
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (isRecord(payload.state)) applyServerState(payload.state);
+      else applyLocalRemoval();
     } catch (error) {
       setMessage(String(error?.message || error));
+    } finally {
+      window.setTimeout(() => { localMutationRef.current = false; }, 1_500);
     }
-  }, [catalogNodes, context.batch, context.businessLine, context.platform, context.version, initializationNode, initializationPreparationNode, workspace]);
+  }, [catalogNodes, context, initializationNode, initializationPreparationNode, remoteCatalog, workspace]);
 
   const updateNodeInput = useCallback((itemIdValue, inputKey, value) => {
     localMutationRef.current = true;
@@ -703,21 +1229,49 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     // 历史状态可能保存了工程绝对路径；卡片展示必须与执行前归一化保持一致，避免用户继续提交旧值。
     const renderedInputs = defaultInputsForNode(node, item.inputs || {}, context);
     return <div className="af-release-node__inputs">
-      {externalInputSchemaForNode(node).map((schema) => (
-        <label key={schema.key}>
-          <span>{schema.label}{schema.required ? " *" : ""}</span>
-          <input
-            type={schema.type || "text"}
-            min={schema.min}
-            max={schema.max}
-            step={schema.step}
-            placeholder={schema.placeholder}
-            value={renderedInputs?.[schema.key] ?? schema.defaultValue ?? ""}
-            disabled={item.status === "running"}
-            onChange={(event) => updateNodeInput(item.id, schema.key, event.target.value)}
-          />
-        </label>
-      ))}
+      {externalInputSchemaForNode(node).map((schema) => {
+        const rawValue = renderedInputs?.[schema.key] ?? schema.defaultValue ?? "";
+        const checked = rawValue === true || ["1", "true", "yes", "on"].includes(String(rawValue).trim().toLowerCase());
+        if (schema.type === "checkbox" || schema.type === "bool") {
+          return (
+            <label key={schema.key} className="af-release-node__checkbox">
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={item.status === "running"}
+                onChange={(event) => updateNodeInput(item.id, schema.key, event.target.checked)}
+              />
+              <span>{schema.label}{schema.required ? " *" : ""}</span>
+              {schema.placeholder ? <small>{schema.placeholder}</small> : null}
+            </label>
+          );
+        }
+        return (
+          <label key={schema.key}>
+            <span>{schema.label}{schema.required ? " *" : ""}</span>
+            {schema.type === "textarea" ? (
+              <textarea
+                rows={3}
+                placeholder={schema.placeholder}
+                value={rawValue}
+                disabled={item.status === "running"}
+                onChange={(event) => updateNodeInput(item.id, schema.key, event.target.value)}
+              />
+            ) : (
+              <input
+                type={schema.type || "text"}
+                min={schema.min}
+                max={schema.max}
+                step={schema.step}
+                placeholder={schema.placeholder}
+                value={rawValue}
+                disabled={item.status === "running"}
+                onChange={(event) => updateNodeInput(item.id, schema.key, event.target.value)}
+              />
+            )}
+          </label>
+        );
+      })}
     </div>;
   })() : null;
 
@@ -742,10 +1296,15 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
   }, [context]);
 
   const openInspector = useCallback((item) => {
-    const node = nodeById.get(item?.nodeId);
+    const node = nodeById.get(item?.nodeId) || nodeById.get(item?.sourcePresetId);
     if (!item || !node) return;
-    setInspector({ item, node, mode: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "pending" });
-  }, [nodeById]);
+    const hydrated = hydrateReleaseItemFromRuns(item, state.runs || {});
+    setInspector({
+      item: hydrated,
+      node,
+      mode: hydrated.status === "completed" ? "completed" : hydrated.status === "failed" ? "failed" : "pending",
+    });
+  }, [nodeById, state.runs]);
 
   const saveInspectorItem = useCallback(async (nextItem) => {
     if (!nextItem || nextItem.status === "completed") return;
@@ -753,7 +1312,11 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     try {
       const response = await fetch(`/api/release/pending/${encodeURIComponent(nextItem.id)}?${query.toString()}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputs: nextItem.inputs || {} }) });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        // 推荐节点可能只存在于本地状态，服务端尚未持久化时 PATCH 返回 404；执行仍应继续交给 AgentFlow。
+        if (response.status === 404) return;
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
       setState((previous) => ({ ...previous, pending: previous.pending.map((entry) => entry.id === nextItem.id ? { ...entry, inputs: nextItem.inputs || {} } : entry) }));
       setInspector((previous) => previous ? { ...previous, item: { ...previous.item, inputs: nextItem.inputs || {} } } : previous);
       setMessage("节点参数已保存");
@@ -772,7 +1335,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
     <section className="af-release-panel">
       <header className="af-release-context">
         <div className="af-release-context__identity"><span className="af-release-eyebrow">发版时间线</span><h2>{workspace?.label || workspace?.name || "当前工作空间"}</h2><small>{workspace?.path || workspace?.repoUrl || "本地发版时间线"}</small><div className="af-release-context-chips"><span>{context.businessLine}</span><span>{context.platform}</span><span>{context.version}</span></div></div>
-        <div className="af-release-counts"><span>已完成 {visibleState.timeline.length}</span><span>待执行 {visibleState.pending.filter((item) => item.status === "pending").length}</span><span>执行中 {runningCount}</span><label className="af-release-self-test"><input type="checkbox" checked={selfTestFailure} onChange={(event) => setSelfTestFailure(event.target.checked)} />模拟失败</label></div>
+        <div className="af-release-counts"><span>已完成 {visibleState.timeline.length}</span><span>待执行 {visibleState.pending.filter((item) => item.status === "pending").length}</span><span>执行中 {runningCount}</span>{canWrite ? <label className="af-release-self-test"><input type="checkbox" checked={selfTestFailure} onChange={(event) => setSelfTestFailure(event.target.checked)} />模拟失败</label> : null}</div>
       </header>
       {storageWarning ? <div className="af-release-notice">{storageWarning}</div> : null}
       {message ? <div className="af-release-message" role="status">{message}</div> : null}
@@ -784,7 +1347,7 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
               <div key={row[0]?.id || rowIndex} className={`af-release-completed-row${rowIndex % 2 === 1 ? " is-reverse" : ""}`}>
                 {row.map((item, itemIndex) => (
                   <div key={item.id} className="af-release-completed-step">
-                    <article className="af-release-timeline-card af-release-node--completed" role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}><div className="af-release-timeline-card__dot" aria-hidden="true" /><div className="af-release-timeline-card__body"><div className="af-release-timeline-card__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel("completed")}</b></div><strong>{item.title}</strong><small>{item.description || "已完成发版阶段"}</small>{renderInitializationContext(item)}<div className="af-release-timeline-card__meta"><span>完成 {formatDateTime(item.completedAt)}</span><span>耗时 {formatDuration(item.durationMs)}</span><span>操作人 {item.operator || "未记录"}</span></div></div></article>
+                    <article className="af-release-timeline-card af-release-node--completed" role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}><div className="af-release-timeline-card__dot" aria-hidden="true" /><div className="af-release-timeline-card__body"><div className="af-release-timeline-card__topline"><span>{item.category || "发版阶段"}</span><b>{statusLabel(item.status === "waiting" ? "waiting" : "completed")}</b></div><strong>{item.title}</strong><small>{item.description || "已完成发版阶段"}</small>{renderInitializationContext(item)}{renderStageOutcome(item)}<div className="af-release-timeline-card__meta"><span>完成 {formatDateTime(item.completedAt)}</span><span>耗时 {formatDuration(item.durationMs)}</span><span>操作人 {item.operator || "未记录"}</span></div></div></article>
                     {itemIndex < row.length - 1 ? <span className="af-release-completed-arrow material-symbols-outlined" aria-hidden="true">{rowIndex % 2 === 1 ? "arrow_back" : "arrow_forward"}</span> : null}
                   </div>
                 ))}
@@ -800,13 +1363,13 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
             {visibleState.pending.length === 0 ? <div className="af-release-empty">暂无待执行阶段。</div> : visibleState.pending.map((item) => {
               const node = nodeById.get(item.nodeId);
               return <article key={item.id} className={`af-release-node af-release-node--${item.status}`} role="button" tabIndex="0" onClick={() => openInspector(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openInspector(item); }}>
-                <div><div className="af-release-node__topline"><span>{item.processTitle || item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
-                <div className="af-release-node__actions">{item.status === "running" ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelNode(item); }}>取消</button> : item.status === "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); retryNode(item); }}>重试</button> : <button type="button" onClick={(event) => { event.stopPropagation(); executeNode(item); }}>执行</button>}{item.status !== "running" && !String(item.nodeId || "").startsWith("custom-") ? <button type="button" className="af-release-node__delete" aria-label={`删除${item.title}`} onClick={(event) => { event.stopPropagation(); void deleteNode(item); }}>删除</button> : null}</div>
+                <div><div className="af-release-node__topline"><span>{item.processTitle || item.category || "发版阶段"}</span><b>{statusLabel(item.status)}</b></div><strong>{item.title}</strong><small>{item.description}</small>{renderInitializationContext(item)}<div className="af-release-node__meta"><span>操作人 {item.operator || "未记录"}</span>{item.startedAt ? <span>开始 {formatDateTime(item.startedAt)}</span> : null}{item.status === "running" && item.lastEventAt ? <span>最近响应 {formatDateTime(item.lastEventAt)}</span> : null}{item.failedAt ? <span>失败 {formatDateTime(item.failedAt)}</span> : null}</div>{renderStageOutcome(item)}{renderNodeInputs(node, item)}{item.status === "failed" ? <em>{item.error}</em> : null}{item.status === "running" ? <progress aria-label={`${item.title} 执行进度`} max="100" value={item.progress || 0} /> : null}</div>
+                <div className="af-release-node__actions">{canWrite && item.status === "running" ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelNode(item); }}>取消</button> : null}{canWrite && item.status === "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); retryNode(item); }}>重试</button> : null}{canWrite && item.status !== "running" && item.status !== "failed" ? <button type="button" onClick={(event) => { event.stopPropagation(); executeNode(item); }}>执行</button> : null}{canWrite && item.status !== "running" ? <button type="button" className="af-release-node__delete" aria-label={`删除${item.title}`} onClick={(event) => { event.stopPropagation(); void deleteNode(item); }}>删除</button> : null}{!canWrite ? <span className="af-release-node__readonly">只读</span> : null}</div>
               </article>;
             })}
             <div className="af-release-add-node">
-              <button type="button" className="af-release-add-node__trigger" aria-expanded={addNodeOpen} onClick={() => setAddNodeOpen((open) => !open)} disabled={customNodeOptions.length === 0}><span className="af-release-add-node__icon" aria-hidden="true">+</span><span><strong>自定义添加阶段</strong><small>从当前业务线、平台和批次的流程节点中选择，可重复添加</small></span><span className="material-symbols-outlined" aria-hidden="true">{addNodeOpen ? "expand_less" : "expand_more"}</span></button>
-              {addNodeOpen ? <div className="af-release-add-node__options">{customNodeGroups.map((group) => <section key={group.id} className="af-release-add-node__group"><h4>{group.title}</h4>{group.nodes.map((node) => <button key={node.id} type="button" onClick={() => addPresetNode(node)}><span><strong>{node.title}</strong><small>{node.description}</small></span><em>{node.category}</em></button>)}</section>)}</div> : null}
+              {canWrite ? <button type="button" className="af-release-add-node__trigger" aria-expanded={addNodeOpen} onClick={() => setAddNodeOpen((open) => !open)} disabled={customNodeOptions.length === 0}><span className="af-release-add-node__icon" aria-hidden="true">+</span><span><strong>自定义添加阶段</strong><small>从当前业务线、平台和批次的流程节点中选择，可重复添加</small></span><span className="material-symbols-outlined" aria-hidden="true">{addNodeOpen ? "expand_less" : "expand_more"}</span></button> : <p className="af-release-readonly-hint">无操作权限，无法添加阶段</p>}
+              {canWrite && addNodeOpen ? <div className="af-release-add-node__options">{customNodeGroups.map((group) => <section key={group.id} className="af-release-add-node__group"><h4>{group.title}</h4>{group.nodes.map((node) => <button key={node.id} type="button" onClick={() => addPresetNode(node)}><span><strong>{node.title}</strong><small>{node.description}</small></span><em>{node.category}</em></button>)}</section>)}</div> : null}
             </div>
           </div>
         </section>
@@ -815,11 +1378,12 @@ export default function ReleaseWorkflowPanel({ workspace, releaseContext: naviga
         item={inspector.item}
         node={inspector.node}
         mode={inspector.mode}
+        canWrite={canWrite}
         onClose={() => setInspector(null)}
-        onSave={saveInspectorItem}
-        onPreview={executeNode}
-        onRun={runInspectorItem}
-        onStop={cancelNode}
+        onSave={canWrite ? saveInspectorItem : undefined}
+        onPreview={canWrite ? executeNode : undefined}
+        onRun={canWrite ? runInspectorItem : undefined}
+        onStop={canWrite ? cancelNode : undefined}
         context={context}
       /> : null}
     </section>

@@ -50,6 +50,7 @@ export function emptyReleaseState(context = {}, workspacePath = "") {
     // 用户需求点: 首次进入页面时上下文已完成声明，初始化节点直接作为已完成时间线的起点。
     timeline: [initialization],
     pending: [],
+    dismissedNodeIds: [],
     customNodes: [],
     runs: {},
   };
@@ -66,6 +67,9 @@ export function readReleaseState(workspaceRoot, context = {}, workspaceId = "wor
       context: { ...context, ...(parsed.context || {}) },
       timeline: Array.isArray(parsed.timeline) ? parsed.timeline : [],
       pending: Array.isArray(parsed.pending) ? parsed.pending : [],
+      dismissedNodeIds: Array.isArray(parsed.dismissedNodeIds)
+        ? [...new Set(parsed.dismissedNodeIds.map((value) => String(value || "").trim()).filter(Boolean))]
+        : [],
       customNodes: Array.isArray(parsed.customNodes) ? parsed.customNodes : [],
       runs: parsed.runs && typeof parsed.runs === "object" ? parsed.runs : {},
     };
@@ -73,6 +77,250 @@ export function readReleaseState(workspaceRoot, context = {}, workspaceId = "wor
   } catch {
     return emptyReleaseState(context, workspacePath);
   }
+}
+
+function releaseRunManifestPath(workspaceRoot, runId) {
+  const id = String(runId || "").trim();
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) return "";
+  return path.join(path.resolve(workspaceRoot), ".workspace", "agentflow", "run-manifests", `${id}.json`);
+}
+
+function readReleaseRunManifest(workspaceRoot, runId) {
+  const filePath = releaseRunManifestPath(workspaceRoot, runId);
+  if (!filePath) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function terminalReleaseManifestStatus(manifest) {
+  const status = String(manifest?.status || "").trim().toLowerCase();
+  if (["completed", "success", "succeeded", "done"].includes(status)) return "completed";
+  if (["failed", "error", "cancelled", "canceled", "stopped", "timeout", "timed_out"].includes(status)) return "failed";
+  return "";
+}
+
+/**
+ * Prefer an Agent-authored run status over a bare Workspace run-manifest
+ * terminal status. Force/capability runs often leave the manifest as
+ * `completed` while the Agent result is still `waiting` (e.g. open MR).
+ */
+function preferredAgentReleaseStatus(runRecord) {
+  if (!runRecord || typeof runRecord !== "object") return "";
+  const status = String(runRecord.status || "").trim().toLowerCase();
+  const outputStatus = String(runRecord.output?.status || "").trim().toLowerCase();
+  if (status === "waiting" || outputStatus === "waiting") return "waiting";
+  if ((status === "completed" || status === "failed") && runRecord.output !== undefined) return status;
+  if ((outputStatus === "completed" || outputStatus === "failed") && runRecord.output !== undefined) return outputStatus;
+  return "";
+}
+
+function agentReleaseFields(runRecord) {
+  if (!runRecord || typeof runRecord !== "object") return {};
+  return {
+    ...(runRecord.output !== undefined ? { output: runRecord.output } : {}),
+    ...(runRecord.details !== undefined ? { details: runRecord.details } : {}),
+    ...(runRecord.waiting !== undefined ? { waiting: runRecord.waiting } : {}),
+  };
+}
+
+/**
+ * Reconcile persisted release cards with AgentFlow run manifests.
+ *
+ * A release page can outlive the server process that launched an AgentFlow
+ * run. In that case the JSON state still says `running` forever even though
+ * the manifest has completed, or no worker is left to finish it. The active
+ * run IDs are supplied by the route layer so a live run is never treated as
+ * stale merely because this function is called while it is executing.
+ */
+export function releasePendingDismissalKey(item) {
+  if (!item) return "";
+  if (isCustomReleasePendingItem(item)) {
+    return String(item.id || item.nodeId || "").trim();
+  }
+  return String(item?.sourcePresetId || "").trim() || String(item?.nodeId || "").trim();
+}
+
+export function isCustomReleasePendingItem(item) {
+  const id = String(item?.id || "");
+  const nodeId = String(item?.nodeId || "");
+  return id.startsWith("custom-") || nodeId.startsWith("custom-");
+}
+
+export function filterDismissedReleasePending(stateInput = {}) {
+  const dismissed = new Set((Array.isArray(stateInput?.dismissedNodeIds) ? stateInput.dismissedNodeIds : [])
+    .map((value) => String(value || "").trim()).filter(Boolean));
+  if (!dismissed.size) return { pending: Array.isArray(stateInput?.pending) ? [...stateInput.pending] : [], changed: false };
+  const runningStatuses = new Set(["running", "previewing", "awaiting_confirmation", "ready", "blocked"]);
+  const pending = (Array.isArray(stateInput?.pending) ? stateInput.pending : [])
+    .filter((item) => {
+      if (runningStatuses.has(String(item?.status || "").toLowerCase())) return true;
+      const key = releasePendingDismissalKey(item);
+      return !key || !dismissed.has(key);
+    });
+  const changed = pending.length !== (Array.isArray(stateInput?.pending) ? stateInput.pending.length : 0);
+  return { pending, changed };
+}
+
+export function reconcileReleaseState(workspaceRoot, context = {}, workspaceId = "workspace", stateInput = {}, options = {}) {
+  const state = {
+    ...(stateInput && typeof stateInput === "object" ? stateInput : {}),
+    context: { ...context, ...((stateInput && typeof stateInput.context === "object") ? stateInput.context : {}) },
+    timeline: Array.isArray(stateInput?.timeline) ? [...stateInput.timeline] : [],
+    pending: Array.isArray(stateInput?.pending) ? [...stateInput.pending] : [],
+    runs: stateInput?.runs && typeof stateInput.runs === "object" ? { ...stateInput.runs } : {},
+  };
+  const activeRunIds = new Set((Array.isArray(options.activeRunIds) ? options.activeRunIds : options.activeRunIds instanceof Set ? [...options.activeRunIds] : [])
+    .map((value) => String(value || "").trim()).filter(Boolean));
+  const now = Number(options.now) || Date.now();
+  const staleAfterMs = Math.max(30_000, Number(options.staleAfterMs) || 5 * 60 * 1000);
+  let changed = false;
+  const pending = [];
+  for (const originalItem of state.pending) {
+    const item = originalItem && typeof originalItem === "object" ? { ...originalItem } : originalItem;
+    if (!item || String(item.status || "").toLowerCase() !== "running" || !item.runId) {
+      pending.push(item);
+      continue;
+    }
+    const runId = String(item.runId);
+    if (activeRunIds.has(runId)) {
+      pending.push(item);
+      continue;
+    }
+    const manifest = readReleaseRunManifest(workspaceRoot, runId);
+    const manifestStatus = terminalReleaseManifestStatus(manifest);
+    const manifestTime = Date.parse(String(manifest?.updatedAt || manifest?.finishedAt || ""));
+    const stale = !manifest || (String(manifest?.status || "").toLowerCase() === "running"
+      && (!Number.isFinite(manifestTime) || now - manifestTime >= staleAfterMs));
+    if (!manifestStatus && !stale) {
+      pending.push(item);
+      continue;
+    }
+    const runRecord = state.runs[runId] && typeof state.runs[runId] === "object" ? state.runs[runId] : {};
+    const agentStatus = preferredAgentReleaseStatus(runRecord);
+    if (agentStatus === "waiting") {
+      const agentFields = agentReleaseFields(runRecord);
+      const reconciled = {
+        ...item,
+        status: "waiting",
+        ...agentFields,
+      };
+      state.runs[runId] = { ...runRecord, ...reconciled, status: "waiting", ...agentFields };
+      pending.push(reconciled);
+      changed = true;
+      continue;
+    }
+    const startedAt = Number(item.startedAt || runRecord.startedAt || (Number.isFinite(Date.parse(String(manifest?.startedAt || ""))) ? Date.parse(String(manifest.startedAt)) : 0));
+    const finishedAt = Number.isFinite(Date.parse(String(manifest?.finishedAt || manifest?.updatedAt || "")))
+      ? Date.parse(String(manifest.finishedAt || manifest.updatedAt))
+      : now;
+    const timing = {
+      ...(startedAt > 0 ? { startedAt } : {}),
+      completedAt: finishedAt,
+      ...(startedAt > 0 ? { durationMs: Math.max(0, finishedAt - startedAt) } : {}),
+    };
+    const status = agentStatus || manifestStatus || "failed";
+    const agentFields = agentStatus ? agentReleaseFields(runRecord) : {};
+    const error = status === "failed"
+      ? String(runRecord.error || manifest?.error || "AgentFlow 运行在服务重启后失联，未能完成").trim()
+      : "";
+    const reconciled = {
+      ...item,
+      status,
+      progress: status === "completed" ? 100 : 0,
+      ...timing,
+      ...(status === "completed" ? { error: "", failedAt: undefined } : { failedAt: finishedAt, error }),
+      ...(agentStatus
+        ? agentFields
+        : (manifest?.output !== undefined ? { output: manifest.output } : {})),
+    };
+    state.runs[runId] = { ...runRecord, ...reconciled, status, ...timing, ...(status === "failed" ? { error } : {}), ...agentFields };
+    if (status === "completed") {
+      state.timeline = [...state.timeline.filter((entry) => (
+        (entry?.id !== reconciled.id && entry?.nodeId !== reconciled.nodeId) || entry?.runId !== runId
+      )), reconciled];
+    } else {
+      pending.push(reconciled);
+    }
+    changed = true;
+  }
+  if (changed) state.pending = pending;
+
+  // Keep historical run records consistent as well. They are not rendered as
+  // cards today, but stale `running` records otherwise make diagnostics look
+  // like work is still active after the owning server has gone away.
+  const pendingRunIds = new Set(state.pending.map((item) => String(item?.runId || "").trim()).filter(Boolean));
+  for (const [runId, originalRun] of Object.entries(state.runs)) {
+    if (!originalRun || String(originalRun.status || "").toLowerCase() !== "running" || pendingRunIds.has(runId) || activeRunIds.has(runId)) continue;
+    const agentStatus = preferredAgentReleaseStatus(originalRun);
+    if (agentStatus === "waiting") {
+      const agentFields = agentReleaseFields(originalRun);
+      state.runs[runId] = { ...originalRun, status: "waiting", ...agentFields };
+      changed = true;
+      continue;
+    }
+    const manifest = readReleaseRunManifest(workspaceRoot, runId);
+    const manifestStatus = terminalReleaseManifestStatus(manifest);
+    const manifestTime = Date.parse(String(manifest?.updatedAt || manifest?.finishedAt || ""));
+    const stale = !manifest || (String(manifest?.status || "").toLowerCase() === "running"
+      && (!Number.isFinite(manifestTime) || now - manifestTime >= staleAfterMs));
+    if (!manifestStatus && !stale) continue;
+    const finishedAt = Number.isFinite(Date.parse(String(manifest?.finishedAt || manifest?.updatedAt || "")))
+      ? Date.parse(String(manifest.finishedAt || manifest.updatedAt))
+      : now;
+    const startedAt = Number(originalRun.startedAt || (Number.isFinite(Date.parse(String(manifest?.startedAt || ""))) ? Date.parse(String(manifest.startedAt)) : 0));
+    const status = agentStatus || manifestStatus || "failed";
+    const agentFields = agentStatus ? agentReleaseFields(originalRun) : {};
+    const error = status === "failed"
+      ? String(originalRun.error || manifest?.error || "AgentFlow 运行在服务重启后失联，未能完成").trim()
+      : "";
+    state.runs[runId] = {
+      ...originalRun,
+      status,
+      ...(startedAt > 0 ? { startedAt } : {}),
+      completedAt: finishedAt,
+      ...(startedAt > 0 ? { durationMs: Math.max(0, finishedAt - startedAt) } : {}),
+      ...(status === "completed" ? { progress: 100, error: "", failedAt: undefined } : { progress: 0, error, failedAt: finishedAt }),
+      ...agentFields,
+    };
+    changed = true;
+  }
+
+  // A previous read may already have moved a run into the timeline before a
+  // later refresh discovers the terminal manifest. Normalize that projection
+  // too (notably clear an old failure message on a run that ultimately
+  // completed after a retry).
+  state.timeline = state.timeline.map((entry) => {
+    const runId = String(entry?.runId || "").trim();
+    if (!runId || activeRunIds.has(runId)) return entry;
+    const manifest = readReleaseRunManifest(workspaceRoot, runId);
+    const manifestStatus = terminalReleaseManifestStatus(manifest);
+    if (!manifestStatus) return entry;
+    const finishedAt = Number.isFinite(Date.parse(String(manifest?.finishedAt || manifest?.updatedAt || "")))
+      ? Date.parse(String(manifest.finishedAt || manifest.updatedAt))
+      : Number(entry.completedAt) || now;
+    const startedAt = Number(entry.startedAt) || (Number.isFinite(Date.parse(String(manifest?.startedAt || ""))) ? Date.parse(String(manifest.startedAt)) : 0);
+    const next = {
+      ...entry,
+      status: manifestStatus,
+      progress: manifestStatus === "completed" ? 100 : 0,
+      ...(startedAt > 0 ? { startedAt } : {}),
+      completedAt: finishedAt,
+      ...(startedAt > 0 ? { durationMs: Math.max(0, finishedAt - startedAt) } : {}),
+      ...(manifestStatus === "completed" ? { error: "", failedAt: undefined } : { failedAt: finishedAt, error: String(manifest?.error || entry.error || "发版 Agent 执行失败") }),
+    };
+    if (JSON.stringify(next) !== JSON.stringify(entry)) changed = true;
+    return next;
+  });
+  const dismissedPending = filterDismissedReleasePending(state);
+  if (dismissedPending.changed) {
+    state.pending = dismissedPending.pending;
+    changed = true;
+  }
+  return { state, changed };
 }
 
 export function writeReleaseState(workspaceRoot, context, workspaceId, state) {
