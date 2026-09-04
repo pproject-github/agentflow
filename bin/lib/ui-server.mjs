@@ -106,6 +106,7 @@ import {
   updateAdminBuiltinPipelineConfig,
 } from "./admin-builtin-pipelines.mjs";
 import { readAdminStorageConfig, writeAdminStorageConfig } from "./admin-storage-config.mjs";
+import { ensureReleaseProjectsFileSeeded, readAdminReleaseProjectsConfig, writeAdminReleaseProjectsConfig } from "./admin-release-projects.mjs";
 import { readAdminRunDetail } from "./admin-run-detail.mjs";
 import {
   deleteWorkspaceCollaborationById,
@@ -2267,6 +2268,14 @@ export function startUiServer({
     for (const item of summary.needsDecision) log.warn(`[storage-migration] needs decision: ${item}`);
     for (const item of summary.failed) log.warn(`[storage-migration] failed: ${item}`);
   }
+  // 用户需求点: 线上首次启动自动种子 release-projects.json；已有文件不覆盖。
+  try {
+    const seeded = ensureReleaseProjectsFileSeeded(process.env);
+    if (seeded.created) log.info(`[release-projects] seeded ${seeded.path}`);
+    else if (seeded.path) log.info(`[release-projects] ${seeded.reason}: ${seeded.path}`);
+  } catch (error) {
+    log.warn(`[release-projects] seed failed: ${error?.message || String(error)}`);
+  }
   // Repository discovery is derived data. Reconcile it off the request path so a missing or stale
   // index delays startup work, not the first person opening the repository page.
   markRepositoryIndexDirty(root);
@@ -2936,6 +2945,33 @@ export function startUiServer({
         try {
           const config = writeAdminStorageConfig(payload?.config || payload || {});
           clearSkillRegistryCache();
+          json(res, 200, { ok: true, config });
+        } catch (e) {
+          json(res, 400, { error: (e && e.message) || String(e) });
+        }
+        return;
+      }
+    }
+
+    if (url.pathname === "/api/admin/release-projects") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        json(res, 200, { config: readAdminReleaseProjectsConfig() });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        try {
+          const config = writeAdminReleaseProjectsConfig(payload?.config || payload || {});
           json(res, 200, { ok: true, config });
         } catch (e) {
           json(res, 400, { error: (e && e.message) || String(e) });

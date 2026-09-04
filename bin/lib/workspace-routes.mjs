@@ -80,7 +80,8 @@ import { getWorkspaceTree } from "./workspace-tree.mjs";
 import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseAgentResultFromWorkspaceRun, releaseContextKey } from "./release-runtime.mjs";
 import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, bootstrapReleasePrepareContext, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releasePreviousResultForAgent, releaseTimingFromResult, resolveReleaseApprovalOperator, stopReleaseAction } from "./release-runtime-executor.mjs";
 import { filterDismissedReleasePending, isCustomReleasePendingItem, readReleaseState, reconcileReleaseState, releasePendingDismissalKey, writeReleaseState } from "./release-runtime-store.mjs";
-import { readReleaseDeploymentConfig, releaseSkillRoots, resolveReleaseWorkspace, assertReleaseSkillRootsConfigured, assertReleaseWriteAccess, buildReleaseAccessPayload } from "../../shared/release-deployment-config.js";
+import { releaseSkillRoots, resolveReleaseWorkspace, assertReleaseSkillRootsConfigured, assertReleaseWriteAccess, buildReleaseAccessPayload } from "../../shared/release-deployment-config.js";
+import { readReleaseDeploymentConfigWithDataRoot } from "./admin-release-projects.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -1171,13 +1172,13 @@ function releaseWorkspaceIdentity(url, payload = {}) {
 }
 
 function releaseWriteGate(authUser, context = {}) {
-  const deployment = readReleaseDeploymentConfig();
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
   const username = authUser?.username || authUser?.userId || "";
   return assertReleaseWriteAccess(username, context, deployment);
 }
 
 function releaseAccessForRequest(authUser, context = {}) {
-  const deployment = readReleaseDeploymentConfig();
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
   const username = authUser?.username || authUser?.userId || "";
   return buildReleaseAccessPayload(username, context, deployment);
 }
@@ -1186,7 +1187,7 @@ function releaseAccessForRequest(authUser, context = {}) {
  * 用户需求点: 发版工程和 Skill 根目录必须由服务端统一解析；请求中的 workspacePath 不能绕过业务线+平台 allowlist。
  */
 function resolveReleaseRequestWorkspace(url, payload = {}, root, userWorkspaces = []) {
-  const deployment = readReleaseDeploymentConfig();
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
   const localProjects = !deployment.production && !deployment.projects.length
     ? (Array.isArray(userWorkspaces) ? userWorkspaces.map((entry) => ({
       id: String(entry?.id || entry?.path || "").trim(),
@@ -1229,7 +1230,7 @@ function resolveReleaseRequestWorkspace(url, payload = {}, root, userWorkspaces 
 
 // 用户需求点: 发版页需要按业务线+平台选择服务端配置的项目，但不能把 Skill 根目录等内部配置泄露给浏览器。
 function releaseConfiguredWorkspaceEntries() {
-  const deployment = readReleaseDeploymentConfig();
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
   return deployment.projects.map((entry) => ({
     id: entry.id,
     label: `${entry.businessLine} ${entry.platform} 发版工程`,

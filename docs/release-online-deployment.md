@@ -9,7 +9,7 @@
 
 ## 最小配置
 
-线上必须设置 `NODE_ENV=production`，并通过 `AGENTFLOW_RELEASE_PROJECTS_JSON` 配置业务线+平台到产品工程的 allowlist，以及发版写权限名单 `operators`：
+线上必须设置 `NODE_ENV=production`。发版工程 allowlist 与写权限 `operators` 推荐由管理员在 **设置 → 发版工程** 保存；也可通过 `AGENTFLOW_RELEASE_PROJECTS_JSON` / `AGENTFLOW_RELEASE_PROJECTS_FILE` 注入：
 
 ```json
 {
@@ -49,11 +49,22 @@
 
 如果所有项目共用同一个 Skill 版本，也可以用 `AGENTFLOW_RELEASE_SKILLS_ROOT`（多个路径用系统 path delimiter 分隔）指定公共根目录。项目级 `skillRoots` 优先。未配置 `skillRoots` / `AGENTFLOW_RELEASE_SKILLS_ROOT` 时接口返回 `RELEASE_SKILLS_NOT_CONFIGURED`，**不会**再静默回退到产品工程下的 `.workspace/release-skills`。线上应固定挂载知识库中的 `release-skills` 发布目录。浏览器只能提交 `workspaceId`；服务端不会接受未列入 allowlist 的绝对路径。
 
-完整示例见仓库内 `docs/release-projects.example.json`。线上也可改为文件挂载：
+线上优先在 **设置 → 发版工程**（管理员）写入 Data Root 下的 `release-projects.json`（与 `workspaces.json` 同级）。
 
-```bash
-export AGENTFLOW_RELEASE_PROJECTS_FILE=/etc/agentflow/release-projects.json
-```
+**首次启动自动种子：** 当 Data Root 下还没有该文件，且满足以下任一条件时，会写入一份默认 Likee Android/iOS 配置（含 mengmai 路径与 operators），**已有文件永不覆盖**：
+
+- `NODE_ENV=production`
+- Data Root 路径包含 `/mengmai/agentflow`
+- 显式 `AGENTFLOW_RELEASE_SEED_PROJECTS=1`
+
+可用 `AGENTFLOW_RELEASE_SEED_PROJECTS=0` 关闭自动种子。也可用环境变量覆盖整份配置：
+
+- `AGENTFLOW_RELEASE_PROJECTS_FILE=/path/to/release-projects.json`
+- 或 `AGENTFLOW_RELEASE_PROJECTS_JSON='{...}'`
+
+设置了上述 env 时，设置页会显示 Env locked，且不会自动种子。
+
+完整示例见仓库内 `docs/release-projects.example.json`。
 
 本地开发使用 `npm run dev`（`AGENTFLOW_DEV=1` + `AGENTFLOW_RELEASE_TEST_MODE=1`）时，会注入默认 likee Android 工程及其已挂载的 release-skills；生产环境不要设置 `AGENTFLOW_RELEASE_ALLOW_SERVER_WORKSPACE=1`。若深链误带了知识库工作区 id（`ws_*`），服务端会在仅有一个业务线工程时自动映射到发版工程。
 

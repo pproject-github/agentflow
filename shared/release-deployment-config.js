@@ -231,19 +231,163 @@ export function buildReleaseAccessPayload(username, context = {}, config = {}) {
   };
 }
 
+export const RELEASE_PROJECTS_FILENAME = "release-projects.json";
+
+/** 用户需求点: 发版工程配置默认落在 AgentFlow 数据根，与 workspaces.json 同级，设置页可改。 */
+export function resolveReleaseProjectsFilePath(dataRoot = "") {
+  const root = text(dataRoot);
+  if (!root) return "";
+  return path.join(path.resolve(root), RELEASE_PROJECTS_FILENAME);
+}
+
+export function emptyReleaseProjectsDocument() {
+  return {
+    projects: [
+      {
+        id: "likee-android-prod",
+        businessLine: "likee",
+        platform: "android",
+        workspaceRoot: "",
+        skillRoots: [],
+      },
+      {
+        id: "likee-ios-prod",
+        businessLine: "likee",
+        platform: "ios",
+        workspaceRoot: "",
+        skillRoots: [],
+      },
+    ],
+    operators: {
+      likee: { android: [], ios: [] },
+      bigolive: { android: [], ios: [] },
+      hello: { android: [], ios: [] },
+    },
+  };
+}
+
+/** 用户需求点: 线上首次启动缺文件时种子写入 mengmai 发版工程路径；已有文件永不覆盖。 */
+export function defaultReleaseProjectsSeedDocument() {
+  return {
+    projects: [
+      {
+        id: "likee-android-prod",
+        businessLine: "likee",
+        platform: "android",
+        workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_android",
+        skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+      },
+      {
+        id: "likee-ios-prod",
+        businessLine: "likee",
+        platform: "ios",
+        workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_ios",
+        skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+      },
+    ],
+    operators: {
+      likee: {
+        android: ["duanfengyuan", "suruijia", "wangfang"],
+        ios: ["liangjiajian", "yangcaimu"],
+      },
+      bigolive: { android: [], ios: [] },
+      hello: { android: [], ios: [] },
+    },
+  };
+}
+
+/** 是否应在缺文件时自动种子（生产、显式开关、或 mengmai AgentFlow 数据根）。 */
+export function shouldSeedReleaseProjectsFile(dataRoot = "", env = process.env) {
+  if (text(env.AGENTFLOW_RELEASE_SEED_PROJECTS) === "0") return false;
+  if (text(env.AGENTFLOW_RELEASE_SEED_PROJECTS) === "1") return true;
+  if (normalized(env.NODE_ENV) === "production") return true;
+  return /\/mengmai\/agentflow(?:\/|$)/i.test(text(dataRoot));
+}
+
+export function normalizeReleaseProjectsDocument(raw = {}) {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const projects = projectsFromJson(source).filter((entry) => entry.enabled !== false);
+  const operators = normalizeReleaseOperators(source.operators);
+  const operatorValidation = validateReleaseOperators(operators);
+  const skillRoots = Array.isArray(source.skillRoots)
+    ? [...new Set(source.skillRoots.map((item) => text(item)).filter(Boolean).map((item) => path.resolve(item)))]
+    : [];
+  return {
+    document: {
+      projects: projects.map((entry) => ({
+        id: entry.id,
+        businessLine: entry.businessLine,
+        platform: entry.platform,
+        workspaceRoot: entry.workspaceRoot,
+        ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+        ...(entry.enabled === false ? { enabled: false } : {}),
+      })),
+      operators,
+      ...(skillRoots.length ? { skillRoots } : {}),
+      ...(source.allowWorkspaceSkillRoots === true ? { allowWorkspaceSkillRoots: true } : {}),
+    },
+    valid: operatorValidation.valid && !source.configError,
+    errors: [
+      ...(text(source.configError) ? [text(source.configError)] : []),
+      ...operatorValidation.errors,
+    ],
+  };
+}
+
+export function writeReleaseProjectsDocument(filePath, raw = {}) {
+  const target = path.resolve(text(filePath));
+  if (!target) throw new Error("release-projects file path is required");
+  const normalized = normalizeReleaseProjectsDocument(raw);
+  if (!normalized.valid) throw new Error(normalized.errors.join("; ") || "invalid release-projects document");
+  for (const project of normalized.document.projects) {
+    if (!project.workspaceRoot || !path.isAbsolute(project.workspaceRoot)) {
+      throw new Error(`project ${project.id || "(missing id)"} workspaceRoot must be an absolute path`);
+    }
+    for (const skillRoot of project.skillRoots || []) {
+      if (!path.isAbsolute(skillRoot)) {
+        throw new Error(`project ${project.id} skillRoots must be absolute paths`);
+      }
+    }
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(normalized.document, null, 2)}\n`, "utf8");
+  return normalized.document;
+}
+
 /**
  * 用户需求点: 线上发版的工程与 Skill 根目录必须由服务端配置拥有，不能依赖开发机路径或浏览器输入。
  * @param {NodeJS.ProcessEnv|object} env
- * @returns {{projects: object[], skillRoots: string[], allowWorkspaceSkillRoots: boolean, allowServerWorkspace: boolean, configError: string, operators: object}}
+ * @param {{ defaultFilePath?: string }} [options]
+ * @returns {{projects: object[], skillRoots: string[], allowWorkspaceSkillRoots: boolean, allowServerWorkspace: boolean, configError: string, operators: object, projectsFilePath: string, projectsSource: string}}
  */
-export function readReleaseDeploymentConfig(env = process.env) {
+export function readReleaseDeploymentConfig(env = process.env, options = {}) {
   const envObject = env && typeof env === "object" ? env : {};
+  let projectsSource = "none";
+  let projectsFilePath = "";
   let raw = parseJson(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON, "AGENTFLOW_RELEASE_PROJECTS_JSON");
+  if (text(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON) && !raw.configError) projectsSource = "env-json";
   if (!raw.configError && !text(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON) && text(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE)) {
+    projectsFilePath = path.resolve(String(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE));
     try {
-      raw = parseJson(fs.readFileSync(path.resolve(String(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE)), "utf8"), "AGENTFLOW_RELEASE_PROJECTS_FILE");
+      raw = parseJson(fs.readFileSync(projectsFilePath, "utf8"), "AGENTFLOW_RELEASE_PROJECTS_FILE");
+      if (!raw.configError) projectsSource = "env-file";
     } catch (error) {
       raw = { configError: `AGENTFLOW_RELEASE_PROJECTS_FILE cannot be read: ${error?.message || String(error)}` };
+    }
+  }
+  // 用户需求点: 未设 env 时读取数据根下的 release-projects.json（设置页写入）；文件不存在不算错误。
+  if (!raw.configError && !text(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON) && !text(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE)) {
+    const defaultFile = text(options?.defaultFilePath);
+    if (defaultFile) {
+      projectsFilePath = path.resolve(defaultFile);
+      if (fs.existsSync(projectsFilePath)) {
+        try {
+          raw = parseJson(fs.readFileSync(projectsFilePath, "utf8"), RELEASE_PROJECTS_FILENAME);
+          if (!raw.configError) projectsSource = "data-root-file";
+        } catch (error) {
+          raw = { configError: `${RELEASE_PROJECTS_FILENAME} cannot be read: ${error?.message || String(error)}` };
+        }
+      }
     }
   }
   let projects = projectsFromJson(raw).filter((entry) => entry.enabled !== false);
@@ -279,6 +423,8 @@ export function readReleaseDeploymentConfig(env = process.env) {
     allowServerWorkspace: text(envObject.AGENTFLOW_RELEASE_ALLOW_SERVER_WORKSPACE) === "1" || (!isProduction && projects.length === 0),
     configError: text(raw.configError) || (operatorValidation.valid ? "" : operatorValidation.errors.join("; ")),
     production: isProduction,
+    projectsFilePath,
+    projectsSource,
   };
 }
 

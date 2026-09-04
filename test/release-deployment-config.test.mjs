@@ -69,6 +69,37 @@ test("dev release config maps likee android to the local migration project", asy
   assert.equal(resolved.workspaceRoot, path.resolve(workspaceRoot));
 });
 
+test("reads release-projects.json from the default data-root file when env is unset", async () => {
+  const { readReleaseDeploymentConfig, resolveReleaseProjectsFilePath, writeReleaseProjectsDocument } = await import("../shared/release-deployment-config.js?config-default-file");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-projects-default-"));
+  const filePath = resolveReleaseProjectsFilePath(root);
+  writeReleaseProjectsDocument(filePath, {
+    projects: [{
+      id: "likee-ios-prod",
+      businessLine: "likee",
+      platform: "ios",
+      workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_ios",
+      skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_skills"],
+    }],
+    operators: { likee: { ios: ["yangcaimu"], android: [] } },
+  });
+  const config = readReleaseDeploymentConfig({ NODE_ENV: "production" }, { defaultFilePath: filePath });
+  assert.equal(config.projectsSource, "data-root-file");
+  assert.equal(config.projects[0]?.id, "likee-ios-prod");
+  assert.equal(config.projects[0]?.workspaceRoot, path.resolve("/data1/services/mengmai/workspace/repos/likee_ios"));
+  assert.deepEqual(config.operators.likee.ios, ["yangcaimu"]);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("missing default release-projects file is not a config error", async () => {
+  const { readReleaseDeploymentConfig } = await import("../shared/release-deployment-config.js?config-missing-default");
+  const missing = path.join(os.tmpdir(), `release-projects-missing-${Date.now()}.json`);
+  const config = readReleaseDeploymentConfig({ NODE_ENV: "production" }, { defaultFilePath: missing });
+  assert.equal(config.configError, "");
+  assert.equal(config.projectsSource, "none");
+  assert.deepEqual(config.projects, []);
+});
+
 test("release operators parse membership and authorize writes per business line and platform", async () => {
   const {
     readReleaseDeploymentConfig,
