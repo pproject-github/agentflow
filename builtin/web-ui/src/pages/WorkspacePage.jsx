@@ -2775,7 +2775,7 @@ function workspacePortRailIntrinsicHeight(rail) {
   return rowsHeight + (gap * Math.max(0, rows.length - 1)) + workspaceElementVerticalInsets(rail);
 }
 
-function workspaceWhileIntrinsicHeight(card) {
+function workspaceNodeUiIntrinsicHeight(card) {
   if (!card) return 0;
   const chrome = card.querySelector(":scope > .af-flow-node__chrome");
   const body = card.querySelector(":scope > .af-flow-node__body");
@@ -5996,6 +5996,7 @@ function WorkspaceFlowNode(props) {
   const readOnly = Boolean(props.data?.readOnly);
   const isSubflowCall = props.data?.definitionId === "control_subflow_call";
   const isWhileNode = props.data?.definitionId === "control_while";
+  const hasNodeUiKit = Boolean(props.data?.nodeUi?.card && Array.isArray(props.data.nodeUi.card.sections));
   const flowNodeShellRef = useRef(null);
   const [resizingFlowNode, setResizingFlowNode] = useState(false);
   const persistedNodeSize = props.data?.nodeSize && Number(props.data.nodeSize.width) > 0 && Number(props.data.nodeSize.height) > 0
@@ -6007,22 +6008,21 @@ function WorkspaceFlowNode(props) {
     persistedSize: persistedNodeSize,
   });
   useEffect(() => {
-    if (!isWhileNode || resizingFlowNode) return undefined;
+    if ((!isWhileNode && !hasNodeUiKit) || resizingFlowNode) return undefined;
     const frame = window.requestAnimationFrame(() => {
       const shell = flowNodeShellRef.current;
       const card = shell?.querySelector?.(":scope > .af-flow-node");
       if (!card) return;
       const currentHeight = Math.round(Number(nodeSize?.height || card.clientHeight || 0));
       // The card itself is height:100%, so card.scrollHeight includes the persisted
-      // node height. Measuring it made every render add two pixels until the 900px
-      // cap. Measure the UI kit's intrinsic content instead, and fit in both
-      // directions so stale oversized While cards heal themselves.
-      const intrinsicHeight = workspaceWhileIntrinsicHeight(card);
-      const requiredHeight = clampNumber(
-        intrinsicHeight,
-        MIN_WORKSPACE_NODE_HEIGHT,
-        MAX_WORKSPACE_NODE_HEIGHT,
-      );
+      // node height. Measure the UI kit's intrinsic content instead. While cards
+      // may shrink stale persisted heights; other NodeKit cards only grow so an
+      // intentional user resize is preserved.
+      const intrinsicHeight = workspaceNodeUiIntrinsicHeight(card);
+      const measuredHeight = clampNumber(intrinsicHeight, MIN_WORKSPACE_NODE_HEIGHT, MAX_WORKSPACE_NODE_HEIGHT);
+      const requiredHeight = isWhileNode
+        ? measuredHeight
+        : Math.max(currentHeight, measuredHeight);
       if (!currentHeight || !requiredHeight || Math.abs(requiredHeight - currentHeight) <= 2) return;
       setNodes((list) => list.map((node) => {
         if (node.id !== props.id) return node;
@@ -6040,7 +6040,7 @@ function WorkspaceFlowNode(props) {
       props.data?.onRefreshNodeInternals?.(props.id);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [isWhileNode, nodeSize?.height, nodeSize?.width, props.data?.nodeStatus, props.data?.outputs, props.data?.onRefreshNodeInternals, props.id, resizingFlowNode, setNodes]);
+  }, [hasNodeUiKit, isWhileNode, nodeSize?.height, nodeSize?.width, props.data?.nodeStatus, props.data?.outputs, props.data?.nodeUi, props.data?.onRefreshNodeInternals, props.id, resizingFlowNode, setNodes]);
   const deleteNode = useCallback((nodeId) => {
     if (readOnly) return;
     props.data?.onCleanupWorkspaceNodeOutputs?.(nodeId, props.data);
