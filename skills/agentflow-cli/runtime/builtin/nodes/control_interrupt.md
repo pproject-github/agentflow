@@ -30,10 +30,12 @@ input:
     name: approvers
     description: 可选。审批人 userId/用户名，支持 JSON 数组或逗号分隔；为空表示仅外部审核链接
     default: "[]"
+    showOnNode: true
   - type: text
     name: approvalMode
     description: 审批模式：any 任一审批人通过（当前支持）
     default: "any"
+    showOnNode: true
 output:
   - type: node
     name: next
@@ -54,6 +56,12 @@ ui:
       - type: binding
         label: 等待确认内容
         input: value
+      - type: binding
+        label: 审批人
+        input: approvers
+      - type: binding
+        label: 审批模式
+        input: approvalMode
       - type: decision
         label: 人工审批结果
         output: resume
