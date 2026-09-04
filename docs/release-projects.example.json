@@ -1,0 +1,36 @@
+{
+  "projects": [
+    {
+      "id": "likee-android-prod",
+      "businessLine": "likee",
+      "platform": "android",
+      "workspaceRoot": "/data1/services/mengmai/workspace/repos/likee_android",
+      "skillRoots": [
+        "/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"
+      ]
+    },
+    {
+      "id": "likee-ios-prod",
+      "businessLine": "likee",
+      "platform": "ios",
+      "workspaceRoot": "/data1/services/mengmai/workspace/repos/likee_ios",
+      "skillRoots": [
+        "/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"
+      ]
+    }
+  ],
+  "operators": {
+    "likee": {
+      "android": ["duanfengyuan", "suruijia", "wangfang"],
+      "ios": ["liangjiajian", "yangcaimu"]
+    },
+    "bigolive": {
+      "android": [],
+      "ios": []
+    },
+    "hello": {
+      "android": [],
+      "ios": []
+    }
+  }
+}

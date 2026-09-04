@@ -52,7 +52,7 @@
     "build:web-ui": "cd builtin/web-ui && npm install && npm run build",
     "build:agentflow-cli-skill-runtime": "node scripts/build-agentflow-cli-skill-runtime.mjs",
     "build:website": "cd website && npm install && npm run build",
-    "dev": "AGENTFLOW_DEV=1 node bin/agentflow.mjs ui",
+    "dev": "AGENTFLOW_DEV=1 AGENTFLOW_RELEASE_TEST_MODE=1 AGENTFLOW_RELEASE_RUN_TIMEOUT_MS=${AGENTFLOW_RELEASE_RUN_TIMEOUT_MS:-7200000} AGENTFLOW_RELEASE_AGENT_MODEL=${AGENTFLOW_RELEASE_AGENT_MODEL:-cursor:Auto} node bin/agentflow.mjs ui",
     "dev:web": "cd builtin/web-ui && npm run dev",
     "dev:website": "cd website && npm run dev",
     "preview:website": "cd website && npm run preview",

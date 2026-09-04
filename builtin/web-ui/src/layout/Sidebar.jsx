@@ -9,6 +9,7 @@ const ITEMS = [
   { to: "/marketplace", labelKey: "common:nav.marketplace", icon: "storefront" },
   { to: "/spaces", label: "空间", icon: "library_books", hidden: !SPACES_UI_ENABLED },
   { to: "/workflows", label: "迭代", icon: "timeline" },
+  { to: "/releases", label: "发版", icon: "rocket_launch" },
   { to: "/workspaces", label: "知识库", icon: "folder_managed" },
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },

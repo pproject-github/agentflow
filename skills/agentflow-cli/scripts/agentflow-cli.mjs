@@ -105,6 +105,13 @@ Commands:
   schedule-disable --flow-id <id> --schedule-node-id <id>
   schedule-run-now --flow-id <id> --schedule-node-id <id> [--input k=v]
   sync-workspace --workspace <id>
+  release-access
+  release-projects
+  release-state --business-line <id> --platform android|ios --version <ver> [--batch initial|supplemental] [--workspace-id <id>]
+  release-catalog --business-line <id> --platform android|ios --version <ver> [--batch initial|supplemental] [--workspace-id <id>]
+  release-run --action-id <id> --business-line <id> --platform android|ios --version <ver> [--batch initial|supplemental] [--workspace-id <id>] [--process-id <stage>] [--item-id <id>] [--input k=v]
+  release-stop --run-id <id> [--business-line <id>] [--platform android|ios] [--version <ver>] [--batch initial|supplemental]
+  release-run-logs --run-id <id> --business-line <id> --platform android|ios --version <ver> [--batch initial|supplemental] [--workspace-id <id>]
   workflow-get --workflow tapd:<id> [--flow-id <id>] [--runtime-only] [--admin-operation repair-version-membership]
   workflow-access-sync --workflow tapd:<id> --file <access.json>
   workflow-report --workflow tapd:<id> --file <report.json> [--source <adapter>] [--expected-revision <revision>] [--idempotency-key <key>] [--admin-operation repair-version-membership]
@@ -791,6 +798,46 @@ function requireFlowId(args) {
   const flowId = option(args, "flow-id") || option(args, "flow");
   if (!flowId) throw new Error("Missing --flow-id.");
   return flowId;
+}
+
+function releaseContextFromArgs(args, { requireScope = false, requireVersion = false } = {}) {
+  const businessLine = option(args, "business-line") || option(args, "businessLine") || "";
+  const platformRaw = option(args, "platform") || "";
+  const platform = /ios|iphone/i.test(platformRaw) ? "ios" : (platformRaw ? "android" : "");
+  const version = option(args, "version") || "";
+  const batch = (option(args, "batch") || "initial").trim().toLowerCase() || "initial";
+  const batchIndex = option(args, "batch-index") || option(args, "batchIndex") || "";
+  const workspaceId = option(args, "workspace-id") || option(args, "workspaceId") || "";
+  if (requireScope && (!businessLine || !platform)) {
+    throw new Error("Missing --business-line and/or --platform. Run release-access first.");
+  }
+  if (requireVersion && !version) throw new Error("Missing --version.");
+  return {
+    businessLine,
+    platform,
+    version,
+    batch,
+    ...(batchIndex !== "" ? { batchIndex: Number(batchIndex) || 0 } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+  };
+}
+
+function releaseQuery(context = {}) {
+  return query({
+    businessLine: context.businessLine,
+    platform: context.platform,
+    version: context.version,
+    batch: context.batch,
+    batchIndex: context.batchIndex,
+    workspaceId: context.workspaceId,
+  });
+}
+
+function normalizeReleaseActionId(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.includes(":")) return text;
+  return `composite:${text}`;
 }
 
 function parseWorkflowReference(value) {
@@ -1577,6 +1624,88 @@ async function main() {
     const scheduleNodeId = option(args, "schedule-node-id");
     if (!scheduleNodeId) throw new Error("schedule-run-now requires --schedule-node-id <id>.");
     printJson(await runRemoteWorkspace(args, { flowId, flowSource, runNodeId: scheduleNodeId }));
+    return;
+  }
+
+  if (command === "release-access") {
+    const data = await httpJson(args, "/api/release/access");
+    printJson(data);
+    if (!data?.releaseAccess?.operable) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "release-projects") {
+    printJson(await httpJson(args, "/api/release/projects"));
+    return;
+  }
+
+  if (command === "release-state") {
+    const context = releaseContextFromArgs(args, { requireScope: true, requireVersion: true });
+    printJson(await httpJson(args, `/api/release/state${releaseQuery(context)}`));
+    return;
+  }
+
+  if (command === "release-catalog") {
+    const context = releaseContextFromArgs(args, { requireScope: true, requireVersion: true });
+    printJson(await httpJson(args, `/api/release/catalog${releaseQuery(context)}`));
+    return;
+  }
+
+  if (command === "release-run") {
+    const context = releaseContextFromArgs(args, { requireScope: true, requireVersion: true });
+    const actionId = normalizeReleaseActionId(option(args, "action-id") || option(args, "node-id") || option(args, "capability-id"));
+    if (!actionId) throw new Error("Missing --action-id.");
+    let workspaceId = context.workspaceId || "";
+    if (!workspaceId) {
+      const access = await httpJson(args, "/api/release/access");
+      if (!access?.releaseAccess?.operable) {
+        printJson(access);
+        process.exitCode = 1;
+        return;
+      }
+      const membership = access.releaseAccess.membership || {};
+      if (membership.businessLine && membership.businessLine !== context.businessLine) {
+        throw new Error(`业务线不匹配：operators 归属为 ${membership.businessLine}，请求为 ${context.businessLine}`);
+      }
+      if (membership.platform && membership.platform !== context.platform) {
+        throw new Error(`平台不匹配：operators 归属为 ${membership.platform}，请求为 ${context.platform}`);
+      }
+      workspaceId = String(access.projects?.[0]?.id || "").trim();
+    }
+    const itemId = option(args, "item-id") || option(args, "itemId") || "";
+    const body = {
+      ...context,
+      ...(workspaceId ? { workspaceId } : {}),
+      actionId,
+      inputs: parseInputs(args),
+    };
+    const processId = option(args, "process-id") || option(args, "processId") || "";
+    const processTitle = option(args, "process-title") || option(args, "processTitle") || "";
+    const confirmationFingerprint = option(args, "confirmation-fingerprint") || "";
+    if (processId) body.processId = processId;
+    if (processTitle) body.processTitle = processTitle;
+    if (itemId) body.itemId = itemId;
+    if (confirmationFingerprint) body.confirmationFingerprint = confirmationFingerprint;
+    printJson(await httpJson(args, "/api/release/nodes/run", { method: "POST", body }));
+    return;
+  }
+
+  if (command === "release-stop") {
+    const runId = option(args, "run-id");
+    if (!runId) throw new Error("Missing --run-id.");
+    const context = releaseContextFromArgs(args);
+    printJson(await httpJson(args, "/api/release/runs/stop", {
+      method: "POST",
+      body: { runId, ...context },
+    }));
+    return;
+  }
+
+  if (command === "release-run-logs") {
+    const runId = option(args, "run-id");
+    if (!runId) throw new Error("Missing --run-id.");
+    const context = releaseContextFromArgs(args, { requireScope: true, requireVersion: true });
+    printJson(await httpJson(args, `/api/release/runs/${encodeURIComponent(runId)}${releaseQuery(context)}`));
     return;
   }
 

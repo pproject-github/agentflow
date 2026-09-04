@@ -2,6 +2,18 @@ function childHasExited(child) {
   return !child || child.exitCode != null || child.signalCode != null;
 }
 
+/**
+ * Normalize the long-running release execution timeout while keeping an
+ * explicit environment override available for local diagnostics/tests.
+ */
+export function resolveWorkspaceRunTimeoutMs(value, fallbackMs = 40 * 60 * 1000) {
+  const configured = Number(value);
+  const fallback = Math.max(30_000, Number(fallbackMs) || 0);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.max(30_000, configured)
+    : fallback;
+}
+
 function waitForPromise(promise, timeoutMs) {
   const ms = Math.max(0, Number(timeoutMs) || 0);
   if (ms === 0) return Promise.resolve({ timedOut: true });
@@ -45,13 +57,16 @@ export function createWorkspaceRunController(options = {}) {
   const abortController = options.abortController || new AbortController();
   const gracefulTimeoutMs = Math.max(0, Number(options.gracefulTimeoutMs ?? 3_000));
   const forceTimeoutMs = Math.max(0, Number(options.forceTimeoutMs ?? 1_000));
+  const executionTimeoutMs = Math.max(0, Number(options.timeoutMs ?? 0));
   let activeChild = null;
   let activeChildProcessGroup = false;
   let state = "running";
   let finished = false;
+  let timedOut = false;
   let finishResult = null;
   let resolveDone;
   let stopPromise = null;
+  let executionTimer = null;
   const done = new Promise((resolve) => {
     resolveDone = resolve;
   });
@@ -70,8 +85,12 @@ export function createWorkspaceRunController(options = {}) {
   const finish = (status = "finished") => {
     if (finished) return finishResult;
     finished = true;
+    if (executionTimer) {
+      clearTimeout(executionTimer);
+      executionTimer = null;
+    }
     state = state === "stopping" ? "stopped" : String(status || "finished");
-    finishResult = { status: state };
+    finishResult = { status: state, timedOut };
     activeChild = null;
     activeChildProcessGroup = false;
     resolveDone(finishResult);
@@ -106,6 +125,22 @@ export function createWorkspaceRunController(options = {}) {
     return stopPromise;
   };
 
+  if (executionTimeoutMs > 0) {
+    executionTimer = setTimeout(() => {
+      if (finished || state !== "running") return;
+      timedOut = true;
+      // Abort the graph first so cooperative runners stop, then terminate the
+      // active process group through stop() if the runner does not cooperate.
+      try {
+        abortController.abort();
+      } catch {
+        // Best effort; stop() below remains authoritative.
+      }
+      void stop().catch(() => {});
+    }, executionTimeoutMs);
+    executionTimer.unref?.();
+  }
+
   return {
     abortController,
     done,
@@ -117,6 +152,9 @@ export function createWorkspaceRunController(options = {}) {
     },
     get state() {
       return state;
+    },
+    get timedOut() {
+      return timedOut;
     },
     get finished() {
       return finished;
