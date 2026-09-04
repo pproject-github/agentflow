@@ -202,14 +202,30 @@ export function reconcileReleaseState(workspaceRoot, context = {}, workspaceId =
     const runRecord = state.runs[runId] && typeof state.runs[runId] === "object" ? state.runs[runId] : {};
     const agentStatus = preferredAgentReleaseStatus(runRecord);
     if (agentStatus === "waiting") {
+      // waiting 无续跑：按成功入时间线，保留 waiting 待办；runs 仍记 waiting 便于诊断。
       const agentFields = agentReleaseFields(runRecord);
+      const startedAt = Number(item.startedAt || runRecord.startedAt || (Number.isFinite(Date.parse(String(manifest?.startedAt || ""))) ? Date.parse(String(manifest.startedAt)) : 0));
+      const finishedAt = Number.isFinite(Date.parse(String(manifest?.finishedAt || manifest?.updatedAt || "")))
+        ? Date.parse(String(manifest.finishedAt || manifest.updatedAt))
+        : now;
+      const timing = {
+        ...(startedAt > 0 ? { startedAt } : {}),
+        completedAt: finishedAt,
+        ...(startedAt > 0 ? { durationMs: Math.max(0, finishedAt - startedAt) } : {}),
+      };
       const reconciled = {
         ...item,
-        status: "waiting",
+        status: "completed",
+        progress: 100,
+        error: "",
+        failedAt: undefined,
+        ...timing,
         ...agentFields,
       };
-      state.runs[runId] = { ...runRecord, ...reconciled, status: "waiting", ...agentFields };
-      pending.push(reconciled);
+      state.runs[runId] = { ...runRecord, ...reconciled, status: "waiting", ...timing, ...agentFields };
+      state.timeline = [...state.timeline.filter((entry) => (
+        (entry?.id !== reconciled.id && entry?.nodeId !== reconciled.nodeId) || entry?.runId !== runId
+      )), reconciled];
       changed = true;
       continue;
     }

@@ -20,19 +20,64 @@ const timestampValue = (value) => {
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 };
 
+// 用户需求点: 远程 catalog 轮询返回相同内容时保持原数组引用，避免 React 依赖项变化后重复发起请求。
+export function mergeRemoteCatalog(previous, next) {
+  if (!Array.isArray(next) || next.length === 0) return previous;
+  if (Array.isArray(previous) && JSON.stringify(previous) === JSON.stringify(next)) return previous;
+  return next;
+}
+
+// Agent 步骤常写 action / note，缺少 title；展示层需要可读中文名。
+const RELEASE_ACTION_TITLES = Object.freeze({
+  "prepare-translation-archive": "准备翻译归档",
+  "apply-translations": "应用翻译到工程",
+  "commit-localization-changes": "提交多语言变更并创建 MR",
+  "commit-managed-changes": "确认 MR 合入并清理分支",
+  "send-notification": "发送发版通知",
+  "guide-current-release": "读取活动发版上下文",
+  "create-active-release": "创建活动发版清单",
+  "create-release-branch": "创建/复用发版分支",
+  "upload-source-file": "上传源多语言",
+  "merge-release-to-master": "发版分支合回 master",
+  "build-package": "构建发版包",
+  "submit-approval": "提交发版审核单",
+  "publish-and-notify": "商店发布并通知",
+  "rollout": "推进放量",
+  "full-rollout": "全量发布",
+});
+
+export function releaseActionTitle(actionOrId) {
+  const raw = String(actionOrId || "").trim();
+  if (!raw) return "";
+  if (RELEASE_ACTION_TITLES[raw]) return RELEASE_ACTION_TITLES[raw];
+  const short = raw.includes(":") ? raw.slice(raw.lastIndexOf(":") + 1) : raw;
+  if (RELEASE_ACTION_TITLES[short]) return RELEASE_ACTION_TITLES[short];
+  return raw;
+}
+
 // 用户需求点: 复合节点只在一个时间线卡片下保存内部步骤，便于查看真实执行进度与失败原因。
 export function normalizeCompositeSteps(value) {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).map((step) => {
     const result = {};
-    for (const key of ["stepId", "actionId", "title", "status", "startedAt", "completedAt", "failedAt", "runId", "output", "error", "message", "inputs", "logs"]) {
+    for (const key of [
+      "stepId", "actionId", "action", "title", "status", "startedAt", "completedAt", "failedAt",
+      "runId", "output", "error", "message", "note", "detail", "result_status", "record_id", "event",
+      "cleanup", "inputs", "logs",
+    ]) {
       if (step[key] === undefined || step[key] === null || step[key] === "") continue;
       if (["startedAt", "completedAt", "failedAt"].includes(key)) {
         const timestamp = timestampValue(step[key]);
         if (timestamp !== undefined) result[key] = timestamp;
       } else if (key === "inputs" && isRecord(step[key])) result[key] = { ...step[key] };
+      else if (key === "cleanup" && isRecord(step[key])) result[key] = { ...step[key] };
       else if (key === "logs" && Array.isArray(step[key])) result[key] = step[key];
       else result[key] = step[key];
+    }
+    if (!result.actionId && result.action) result.actionId = result.action;
+    if (!result.title) {
+      const title = releaseActionTitle(result.action || result.actionId || result.stepId);
+      if (title) result.title = title;
     }
     if (result.startedAt !== undefined && result.completedAt !== undefined) result.durationMs = Math.max(0, result.completedAt - result.startedAt);
     if (result.error === undefined) result.error = "";
@@ -40,7 +85,7 @@ export function normalizeCompositeSteps(value) {
   });
 }
 
-// 用户需求点: 复合流程内部映射由 AgentFlow 自动串联，用户只填写上下文映射的外部输入。
+// 用户需求点: 复合流程若声明了 actions，则只暴露外部映射输入；Agent 驱动能力没有 actions，展示全部 inputSchema。
 export function externalInputSchemaForNode(node) {
   const schemas = Array.isArray(node?.inputSchema) ? node.inputSchema : [];
   if (node?.kind !== "composite" || !Array.isArray(node.actions)) return schemas;
@@ -55,11 +100,16 @@ export function externalInputSchemaForNode(node) {
 }
 
 // 用户需求点: 节点进入下一阶段时，标准参数应根据节点定义自动填充，同时保留操作员后来修改的值。
-export function defaultInputsForNode(node, inputs = {}) {
+export function defaultInputsForNode(node, inputs = {}, context = {}) {
   const result = inputs && typeof inputs === "object" && !Array.isArray(inputs) ? { ...inputs } : {};
+  const nodeId = String(node?.id || node?.compositeId || "").trim();
+  const localizationUpload = nodeId.includes("localization-upload-notify") || nodeId.includes("release-localization:upload-source-file");
+  // 多语言文件集合由 release-localization Skill 按当前工程配置自行发现，历史状态里的旧路径不能再进入 Agent 输入。
+  if (localizationUpload) delete result.source_path;
   for (const schema of Array.isArray(node?.inputSchema) ? node.inputSchema : []) {
     const key = String(schema?.key || "").trim();
     if (!key) continue;
+    if (localizationUpload && key === "source_path") continue;
     const current = result[key];
     if ((current === undefined || current === null || (typeof current === "string" && current.trim() === ""))
       && schema.defaultValue !== undefined && schema.defaultValue !== null) {
@@ -123,34 +173,39 @@ export function createInitializationPreparationNode(context = {}, workspace) {
   const platform = String(context.platform || "android").trim().toLowerCase() || "android";
   const version = String(context.version || "1.0.0").trim() || "1.0.0";
   const batch = String(context.batch || "initial").trim().toLowerCase() || "initial";
-  const majorVersion = version.split(".").slice(0, 2).join(".");
-  const today = new Date();
-  const defaultPublishDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const workflow = selectReleaseWorkflow({ businessLine, platform, version, batch });
+  const capability = workflow
+    ? (workflow.stages || []).flatMap((stage) => Array.isArray(stage.nodes) ? stage.nodes : [])
+      .map((entry) => entry?.id)
+      .find((id) => id === "release-initialization:prepare-context")
+    : "release-initialization:prepare-context";
   return {
     id: "release-initialization:prepare-context",
+    kind: "composite",
+    compositeId: capability || "release-initialization:prepare-context",
     title: "准备活动发版上下文",
-    description: "复用已有活动发版；不存在时创建首包活动发版。",
-    skill: "release-initialization",
-    action: "prepare-context",
+    description: "读取并准备当前业务线、平台、版本和批次的活动发版上下文；已有活动发版时复用，否则按 Skill 安全流程创建。",
+    skill: "release-composite",
+    action: "release-initialization:prepare-context",
     category: "发版初始化",
-    requiresConfirmation: true,
+    requiresConfirmation: false,
+    skillHints: ["release-management", "release-runtime"],
+    promptTemplate: "${businessLine}/${platform}/${version}/${batch}: 准备活动发版上下文",
     businessLines: [businessLine],
     platforms: [platform],
-    durationMs: 300,
+    allowedBatches: ["initial", "supplemental"],
     nextNodeIds: [],
-    inputSchema: [{
-      key: "publish_date",
-      label: "发布日期",
-      type: "date",
-      required: false,
-      defaultValue: defaultPublishDate,
-      placeholder: "活动发版不存在时必填",
-    }],
-    inputs: { publish_date: defaultPublishDate },
+    inputSchema: [{ key: "publish_date", label: "发布日期", type: "text", required: false, placeholder: "YYYY-MM-DD" }],
+    inputs: {},
     initializationActionId: "release-management:create-active-release",
-    contextSnapshot: { businessLine, platform, version, batch, major_version: majorVersion },
+    workflowId: workflow?.id || "",
+    processId: "entry",
+    processTitle: "发版入口",
+    processOrder: 0,
+    contextSnapshot: { businessLine, platform, version, batch },
     scopeKey: `${businessLine}/${platform}/${version}/${batch}`,
     workspace: workspaceValue(workspace),
+    source: { compositeId: capability || "release-initialization:prepare-context" },
   };
 }
 
@@ -186,12 +241,26 @@ export function seedInitializationState(state, node) {
   };
 }
 
-// 用户需求点: 初始化声明和活动发版准备分为一个可恢复的前置步骤，准备完成后才进入状态机推荐。
+// 用户需求点: 初始化声明和活动发版准备分为一个可恢复的前置步骤；服务端 bootstrap 已完成时不再插入冗余 pending。
 export function seedInitializationPreparationState(state, node, preparationNode) {
   if (!state || !node || !preparationNode) return state;
   const seeded = seedInitializationState(state, node);
   const timeline = Array.isArray(seeded.timeline) ? seeded.timeline : [];
   const pending = Array.isArray(seeded.pending) ? seeded.pending : [];
+  const dismissedNodeIds = new Set(Array.isArray(seeded.dismissedNodeIds) ? seeded.dismissedNodeIds : []);
+  if (seeded.initialization?.status === "completed" && seeded.initialization?.preparationNodeId === preparationNode.id) {
+    return {
+      ...seeded,
+      pending: pending.filter((item) => item?.nodeId !== preparationNode.id),
+    };
+  }
+  if (dismissedNodeIds.has(preparationNode.id)) {
+    return {
+      ...seeded,
+      initialization: { status: "completed", preparationNodeId: preparationNode.id },
+      pending: pending.filter((item) => item?.nodeId !== preparationNode.id),
+    };
+  }
   const preparationCompleted = timeline.some((item) => item?.nodeId === preparationNode.id
     && ["completed", "succeeded", "skipped"].includes(String(item.status || "").toLowerCase()));
   if (preparationCompleted) {
@@ -286,22 +355,27 @@ export function seedNextRecommendations(state, nodes = [], config) {
       && (!snapshot.version || String(snapshot.version) === String(context.version))
       && (!snapshot.batch || String(snapshot.batch).toLowerCase() === String(context.batch || "initial").toLowerCase());
   });
-  const recommendations = eligiblePending.length > 0
+  const systemPending = eligiblePending.filter((item) => !String(item.nodeId || "").startsWith("custom-"));
+  const dismissedNodeIds = Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : [];
+  const recommendations = systemPending.length > 0
     ? []
-    : recommendNextProcessNodes({ machine, timeline, pending: eligiblePending });
+    : recommendNextProcessNodes({ machine, timeline, pending: eligiblePending, excludedNodeIds: dismissedNodeIds });
   const processStates = Object.fromEntries(deriveProcessStates({ machine, timeline, pending: eligiblePending }));
   const workflowCursor = deriveWorkflowCursor({ machine, timeline, pending: eligiblePending });
   const workflowId = machine.workflowId || machine.workflow?.id || "";
   if (recommendations.length === 0) return { ...state, processStates, workflowCursor, workflowId };
-  const now = Date.now();
+  const existingNodeIds = new Set(pending.map((item) => item.nodeId));
+  const fresh = recommendations.filter((node) => node?.id && !existingNodeIds.has(node.id));
+  if (fresh.length === 0) return { ...state, processStates, workflowCursor, workflowId };
   return {
     ...state,
     processStates,
     workflowCursor,
     workflowId,
-    pending: [...pending, ...recommendations.map((node, index) => {
+    pending: [...pending, ...fresh.map((node) => {
       return {
-        id: `${node.id}-recommended-${now}-${index}`,
+        // 稳定 id：避免每次远端同步重建推荐卡片导致 React 卸载/挂载闪烁。
+        id: `${node.id}-recommended`,
         nodeId: node.id,
         title: node.title,
         description: node.description,
@@ -312,7 +386,7 @@ export function seedNextRecommendations(state, nodes = [], config) {
         workflowId: node.workflowId || workflowId,
         status: "pending",
         progress: 0,
-        createdAt: now,
+        createdAt: Date.now(),
         operator: "未记录",
         inputs: defaultInputsForNode(node),
         kind: node.kind || "",
@@ -323,6 +397,57 @@ export function seedNextRecommendations(state, nodes = [], config) {
       };
     })],
   };
+}
+
+function isCustomReleasePendingItem(item) {
+  const id = String(item?.id || "");
+  const nodeId = String(item?.nodeId || "");
+  return id.startsWith("custom-") || nodeId.startsWith("custom-");
+}
+
+// 用户需求点: 删除/忽略卡片时用稳定键避免轮询把同一节点重新塞回 pending；自定义实例只 dismiss 自身。
+export function releasePendingDismissalKey(item) {
+  if (!item) return "";
+  if (isCustomReleasePendingItem(item)) {
+    return String(item.id || item.nodeId || "").trim();
+  }
+  return String(item.sourcePresetId || "").trim() || String(item.nodeId || "").trim();
+}
+
+export function isPendingDismissed(item, dismissedNodeIds = []) {
+  if (["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(String(item?.status || "").toLowerCase())) {
+    return false;
+  }
+  const key = releasePendingDismissalKey(item);
+  if (!key) return false;
+  const dismissed = new Set((Array.isArray(dismissedNodeIds) ? dismissedNodeIds : [])
+    .map((value) => String(value || "").trim()).filter(Boolean));
+  return dismissed.has(key);
+}
+
+export function filterDismissedPending(pending, dismissedNodeIds = []) {
+  return (Array.isArray(pending) ? pending : []).filter((item) => !isPendingDismissed(item, dismissedNodeIds));
+}
+
+// 用户需求点: 添加阶段中的系统推荐与自定义预置实例都可以明确移除；只有执行中的节点必须保留。
+export function removePendingNode(state, item) {
+  if (!state || !item || !item.id || !item.nodeId) return state;
+  if (item.status === "running") return state;
+  const pending = Array.isArray(state.pending) ? state.pending : [];
+  if (!pending.some((entry) => entry?.id === item.id)) return state;
+  const dismissed = new Set(Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : []);
+  const dismissalId = releasePendingDismissalKey(item);
+  if (dismissalId) dismissed.add(dismissalId);
+  const next = {
+    ...state,
+    pending: pending.filter((entry) => entry?.id !== item.id),
+    dismissedNodeIds: [...dismissed],
+    customNodes: (Array.isArray(state.customNodes) ? state.customNodes : []).filter((node) => node?.id !== item.nodeId && node?.id !== item.id),
+  };
+  if (item.nodeId === "release-initialization:prepare-context" || dismissalId === "release-initialization:prepare-context") {
+    next.initialization = { ...(state.initialization || {}), status: "completed", preparationNodeId: "release-initialization:prepare-context" };
+  }
+  return next;
 }
 
 // 用户需求点: 历史发版记录也必须以初始化状态作为第一节点，但不能删除或覆盖已有时间线。

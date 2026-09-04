@@ -8,6 +8,7 @@ import {
   workflowActionIds,
   workflowStageNodeIds,
   selectReleaseCompositeWorkflow,
+  insertableReleaseCapabilities,
 } from "../../shared/release-workflow-config.js";
 
 const DEFAULT_BUSINESS_LINES = ["likee", "bigolive", "hello"];
@@ -98,15 +99,76 @@ function sanitizeReleaseValue(value, key = "") {
   return value;
 }
 
+// Agent 常把整段结果 JSON 与尾随 Markdown 粘在同一字符串；只认「整段都是 JSON」会丢掉 steps/artifacts。
+function parseLeadingJsonValue(text) {
+  const source = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  if (!source.startsWith("{") && !source.startsWith("[")) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (char === "\\") { escape = true; continue; }
+      if (char === "\"") inString = false;
+      continue;
+    }
+    if (char === "\"") { inString = true; continue; }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return { value: JSON.parse(source.slice(0, index + 1)), rest: source.slice(index + 1).trim() };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function mergeNestedReleaseResult(value, nested, trailingText = "") {
+  if (!nested || typeof nested !== "object" || Array.isArray(nested)) return value;
+  if (!(nested.summary || nested.status || nested.artifacts || nested.records || nested.steps || nested.waiting)) return value;
+  const trailing = String(trailingText || "").trim();
+  const nestedSummary = String(nested.summary || nested.message || "").trim();
+  const preferTrailing = trailing && (trailing.includes("**") || /\[[^\]]+\]\(https?:\/\//.test(trailing) || trailing.includes("\n"));
+  return {
+    ...value,
+    ...nested,
+    status: nested.status || value.status,
+    summary: preferTrailing ? trailing : (nestedSummary || trailing || value.summary),
+    steps: Array.isArray(nested.steps) && nested.steps.length ? nested.steps : value.steps,
+    records: Array.isArray(nested.records) && nested.records.length ? nested.records : value.records,
+    artifacts: Array.isArray(nested.artifacts) && nested.artifacts.length ? nested.artifacts : value.artifacts,
+    waiting: nested.waiting !== undefined ? nested.waiting : value.waiting,
+    next_action: nested.next_action || value.next_action,
+  };
+}
+
 export function normalizeReleaseAgentResult(raw) {
   const envelopeStatus = raw && typeof raw === "object" ? raw.status : undefined;
   let value = raw;
   if (raw && typeof raw === "object" && raw.result !== undefined) value = raw.result;
   if (typeof value === "string") {
-    const text = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-    try { value = JSON.parse(text); } catch { value = { status: /\b(fail|error|失败)\b/i.test(text) ? "failed" : "completed", summary: text }; }
+    const parsed = parseLeadingJsonValue(value);
+    if (parsed && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)) {
+      value = mergeNestedReleaseResult({ status: "completed" }, parsed.value, parsed.rest);
+    } else {
+      const text = String(value || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+      try { value = JSON.parse(text); } catch { value = { status: /\b(fail|error|失败)\b/i.test(text) ? "failed" : "completed", summary: text }; }
+    }
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) value = { status: "failed", summary: "Agent 未返回结构化结果" };
+  // Agent 偶发把整段 JSON 再次塞进 summary（可能还粘着尾随 Markdown）；拆开以免页面只剩一坨字符串。
+  const nestedSummary = String(value.summary || "").trim();
+  const nestedParsed = parseLeadingJsonValue(nestedSummary);
+  if (nestedParsed?.value) {
+    value = mergeNestedReleaseResult(value, nestedParsed.value, nestedParsed.rest);
+  }
   const statusValue = String(envelopeStatus || value.status || "").trim().toLowerCase();
   const status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
   return sanitizeReleaseValue({
@@ -121,6 +183,50 @@ export function normalizeReleaseAgentResult(raw) {
   });
 }
 
+// AgentFlow runWorkspaceGraph 返回的是 graph/events 包装对象；发版 Agent 的最终 JSON
+// 通常位于 release_agent 的 result 文本输出槽，不能只读取顶层 result。
+export function releaseAgentResultFromWorkspaceRun(runResult, fallbackContext = {}) {
+  if (runResult == null) return null;
+  if (runResult?.result !== undefined && runResult?.result !== null && runResult?.result !== "") {
+    return normalizeReleaseAgentResult(runResult.result);
+  }
+  const instances = runResult?.graph?.instances && typeof runResult.graph.instances === "object"
+    ? runResult.graph.instances
+    : {};
+  const agentEntry = instances.release_agent || Object.values(instances).find((instance) => instance?.releaseAgent);
+  const output = Array.isArray(agentEntry?.output) ? agentEntry.output : [];
+  const resultSlot = output.find((slot) => String(slot?.name || "").trim() === "result");
+  const value = resultSlot?.value ?? resultSlot?.default;
+  if (value !== undefined && value !== null && String(value).trim() !== "") {
+    const rawValue = String(value).trim();
+    // agent_subAgent 的持久化输出槽可能只返回相对产物路径（例如
+    // outputs/release_agent/result.txt），真正的结构化结果在该文件中。
+    // 优先按发版工程根目录解析，避免把路径文本误记为 completed summary。
+    const roots = [
+      runResult?.graph?.meta?.context?.repositoryRoot,
+      runResult?.graph?.meta?.context?.workspacePath,
+      runResult?.runtimeRoot,
+      fallbackContext?.repositoryRoot,
+      fallbackContext?.workspacePath,
+    ].map((root) => String(root || "").trim()).filter(Boolean);
+    const candidates = [
+      path.isAbsolute(rawValue) ? rawValue : "",
+      ...roots.map((root) => path.resolve(root, rawValue)),
+    ].filter((candidate, index, list) => candidate && list.indexOf(candidate) === index);
+    for (const candidate of candidates) {
+      try {
+        if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) continue;
+        const content = fs.readFileSync(candidate, "utf8").trim();
+        if (content) return normalizeReleaseAgentResult(content);
+      } catch {
+        // Fall through to the inline value when the artifact is unavailable.
+      }
+    }
+    return normalizeReleaseAgentResult(value);
+  }
+  return null;
+}
+
 export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
   const state = {
     ...(stateInput && typeof stateInput === "object" ? stateInput : {}),
@@ -131,8 +237,22 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
   const index = state.pending.findIndex((item) => item?.nodeId === nodeId || item?.id === nodeId);
   const current = index >= 0 ? { ...state.pending[index] } : { id: nodeId, nodeId };
   const details = { ...(current.details || {}), steps: result.steps, records: result.records, artifacts: result.artifacts, summary: result.summary };
-  if (result.status === "completed") {
-    const completed = { ...current, nodeId, status: "completed", progress: 100, details, output: result, completedAt: Date.now() };
+  if (result.status === "completed" || result.status === "waiting") {
+    // waiting = 人工闸说明项，无续跑交互；按成功入时间线，waiting 字段留给 UI 待办。
+    const completed = {
+      ...current,
+      nodeId,
+      status: "completed",
+      progress: 100,
+      details,
+      output: result,
+      completedAt: Date.now(),
+      error: "",
+      failedAt: undefined,
+      ...(result.status === "waiting"
+        ? { waiting: result.waiting || { reason: result.summary || "待人工处理" } }
+        : {}),
+    };
     state.pending = state.pending.filter((_item, itemIndex) => itemIndex !== index);
     state.timeline = [...state.timeline.filter((item) => item.id !== completed.id && item.nodeId !== nodeId), completed];
     return { state, advance: true, retryable: false, result };
@@ -143,7 +263,6 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
     status: result.status,
     progress: 0,
     details,
-    ...(result.status === "waiting" ? { waiting: result.waiting || { reason: result.summary || "等待人工确认" } } : {}),
     ...(result.status === "failed" ? { error: result.summary || "发版 Agent 执行失败", failedAt: Date.now() } : {}),
   };
   if (index >= 0) state.pending[index] = pending; else state.pending.push(pending);
@@ -541,7 +660,7 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
       if (composite.promptTemplate || !Array.isArray(composite.actions)) {
         const capabilityId = String(composite.id || compositeId).trim();
         result.push({
-          id: `composite:${capabilityId}`,
+          id: composite.nodeId || `composite:${capabilityId}`,
           kind: "composite",
           compositeId: capabilityId,
           title: composite.title || capabilityId,
@@ -654,6 +773,49 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
       });
       seen.add(composite.id);
     }
+  }
+  // 用户需求点: 自由 Agent 等可插入任意阶段的能力要进入目录，但不占用状态机默认推荐位。
+  for (const composite of insertableReleaseCapabilities(context, config)) {
+    const capabilityId = String(composite.id || "").trim();
+    if (!capabilityId || seen.has(capabilityId)) continue;
+    const stage = (workflow.stages || []).find((item) => String(item?.id || "") === String(composite.stageId || ""))
+      || (workflow.stages || [])[0]
+      || { id: "entry", title: "发版入口", order: 0 };
+    result.push({
+      id: composite.nodeId || `composite:${capabilityId}`,
+      kind: "composite",
+      compositeId: capabilityId,
+      title: composite.title || capabilityId,
+      description: composite.description || "",
+      skill: "release-composite",
+      action: capabilityId,
+      category: "助手驱动",
+      businessLines: [...(composite.businessLines || [])],
+      platforms: [...(composite.platforms || [])],
+      allowedBatches: [...(composite.batches || [])],
+      requiresConfirmation: composite.requiresConfirmation === true,
+      insertableInAnyStage: true,
+      skillHints: [...(composite.skillHints || [])],
+      promptTemplate: String(composite.promptTemplate || composite.description || composite.title || ""),
+      inputs: Array.isArray(composite.inputs) ? composite.inputs : [],
+      outputs: Array.isArray(composite.outputs) ? composite.outputs : [],
+      inputSchema: Array.isArray(composite.inputs) ? composite.inputs : [],
+      nextNodeIds: [],
+      workflowId: workflow.id,
+      processId: composite.stageId || stage.id,
+      processTitle: stage.title,
+      processOrder: Number.isFinite(Number(stage.order)) ? Number(stage.order) : 0,
+      workflowStageId: stage.id,
+      workflowStageTitle: stage.title,
+      workflowStageOrder: (workflow.stages || []).indexOf(stage),
+      workflowActionOrder: 0,
+      contextSnapshot: { ...context },
+      scopeKey: releaseContextKey(context),
+      runnable: true,
+      error: "",
+      source: { compositeId: capabilityId },
+    });
+    seen.add(capabilityId);
   }
   return result;
 }

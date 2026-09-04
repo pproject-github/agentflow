@@ -77,17 +77,36 @@ export function resolveStageArtifacts(item) {
   return inferArtifactsFromText(resolveStageSummary(item), listed);
 }
 
+export function humanizeWaitingMatter(waiting) {
+  const bag = asRecord(waiting) || {};
+  const reason = String(bag.reason || "").trim();
+  const iid = bag.merge_request_iid ?? bag.mergeRequestIid ?? bag.iid;
+  const state = String(bag.merge_request_state || bag.mergeRequestState || "").trim();
+  const required = Array.isArray(bag.required_inputs) ? bag.required_inputs.filter(Boolean) : [];
+  if (reason === "managed_topic_mr_open" || reason === "managed_mr_open") {
+    const mr = iid != null && String(iid).trim() ? `MR !${iid}` : "topic MR";
+    const stateHint = state && state !== "opened" ? `（${state}）` : "";
+    return `待合入 ${mr}${stateHint}`;
+  }
+  if (reason === "version_required") return "待填写版本号";
+  if (reason === "publish_date_required") return "待填写发布日期";
+  if (reason === "prompt_required") return "待填写任务说明";
+  if (reason === "approval_operator_invalid") return "待更正审核申请人为 OA 拼音账号";
+  if (required.length) return `待填写：${required.join("、")}`;
+  if (reason) return reason;
+  return "待人工处理";
+}
+
 export function resolveWaitingInfo(item) {
-  if (String(item?.status || "").toLowerCase() !== "waiting") return null;
   const waiting = asRecord(item?.waiting)
     || asRecord(asRecord(item?.output)?.waiting)
     || asRecord(asRecord(item?.details)?.waiting);
-  if (!waiting) return null;
-  const reason = String(waiting.reason || "").trim();
-  if (!reason) return null;
+  if (!waiting && String(item?.status || "").toLowerCase() !== "waiting") return null;
+  if (!waiting) return { reason: "待人工处理", label: "待人工处理", operatorUrl: "" };
   const rawUrl = typeof waiting.operator_url === "string" ? waiting.operator_url.trim() : "";
   const operatorUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : "";
-  return { reason, operatorUrl };
+  const label = humanizeWaitingMatter(waiting);
+  return { reason: String(waiting.reason || "").trim() || label, label, operatorUrl };
 }
 
 export function truncateSummary(text, max = 120) {

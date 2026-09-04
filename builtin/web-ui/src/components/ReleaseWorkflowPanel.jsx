@@ -3,14 +3,33 @@ import { getReleaseNodes, inferReleaseContext, runReleaseNode } from "../lib/rel
 import {
   artifactHref,
   artifactLabel,
+  humanizeWaitingMatter,
   resolveStageArtifacts,
   resolveStageSummary,
   resolveWaitingInfo,
   truncateSummary,
 } from "../lib/releaseStageOutcome.js";
 import { createCompletionMetadata, createInitializationNode, createInitializationPreparationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, filterDismissedPending, mergeRemoteCatalog, normalizeCompositeSteps, removePendingNode, resolveReleaseContext, seedInitializationPreparationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
-import { createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
+import { capabilityKeysForItem, createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
+
+function findBusyCapabilitySibling(pending, itemOrPreset, { excludeId } = {}) {
+  const keys = capabilityKeysForItem({
+    nodeId: itemOrPreset?.nodeId || itemOrPreset?.id,
+    sourcePresetId: itemOrPreset?.sourcePresetId || itemOrPreset?.id,
+    compositeId: itemOrPreset?.compositeId,
+  });
+  if (!keys.size) return null;
+  return (Array.isArray(pending) ? pending : []).find((entry) => {
+    if (!entry || (excludeId && entry.id === excludeId)) return false;
+    const status = String(entry.status || "").toLowerCase();
+    if (!["running"].includes(status)) return false;
+    for (const key of capabilityKeysForItem(entry)) {
+      if (keys.has(key)) return true;
+    }
+    return false;
+  }) || null;
+}
 
 function emptyState() {
   return { timeline: [], pending: [], dismissedNodeIds: [], customNodes: [] };
@@ -75,6 +94,7 @@ function normalizeTimelineItem(value, index) {
     kind: stringValue(value.kind),
     compositeId: stringValue(value.compositeId),
     sourcePresetId: stringValue(value.sourcePresetId),
+    waiting: isRecord(value.waiting) ? { ...value.waiting } : value.waiting,
     details: isRecord(value.details) ? { ...value.details, steps: normalizeCompositeSteps(value.details.steps) } : undefined,
   };
 }
@@ -219,9 +239,12 @@ function hydrateReleaseItemFromRuns(item, runs = {}) {
     if (run.details) next.details = { ...(item.details || {}), ...run.details };
     if (run.waiting) next.waiting = run.waiting;
     if (run.message) next.message = run.message;
+  } else if (!next.waiting && run.waiting) {
+    next.waiting = run.waiting;
   }
-  if (runStatus === "waiting" && String(item.status).toLowerCase() === "completed" && !hasSummary) {
-    next.status = "waiting";
+  // waiting 按成功展示：时间线条目保持 completed，待办挂在 waiting 字段。
+  if (runStatus === "waiting" && String(item.status).toLowerCase() === "completed") {
+    if (!next.waiting) next.waiting = run.waiting || run.output?.waiting || { reason: "待人工处理" };
   }
   return next;
 }
@@ -239,6 +262,18 @@ function runSaysWaitingForNode(nodeId, runId, runs = {}) {
   ));
 }
 
+function promoteWaitingItemToCompleted(item) {
+  return {
+    ...item,
+    status: "completed",
+    progress: 100,
+    completedAt: item.completedAt || item.lastEventAt || Date.now(),
+    error: "",
+    failedAt: undefined,
+    waiting: item.waiting || item.output?.waiting || { reason: item.message || "待人工处理" },
+  };
+}
+
 function mergeRemotePending(previous, remoteState, context, knownIds, localCustomPending = []) {
   const dismissedNodeIds = mergeDismissedNodeIds(previous.dismissedNodeIds, remoteState.dismissedNodeIds);
   const runs = isRecord(remoteState.runs) ? remoteState.runs : {};
@@ -251,47 +286,40 @@ function mergeRemotePending(previous, remoteState, context, knownIds, localCusto
     .map(normalizePendingItem)
     .filter(Boolean)
     .map((item) => hydrateReleaseItemFromRuns(item, runs));
-  const waitingNodeIds = new Set(
-    hydratedRemotePending
-      .filter((item) => String(item.status || "").toLowerCase() === "waiting")
-      .map((item) => item.nodeId),
-  );
-  for (const item of [...hydratedTimeline, ...hydratedRemotePending]) {
-    if (String(item.status || "").toLowerCase() === "waiting"
-      || runSaysWaitingForNode(item.nodeId, item.runId, runs)) {
-      waitingNodeIds.add(item.nodeId);
+  // 兼容旧快照：远端仍把 waiting 放在 pending 时，提升为时间线成功项。
+  const promotedFromPending = [];
+  const remotePendingKeep = [];
+  for (const item of hydratedRemotePending) {
+    if (String(item.status || "").toLowerCase() === "waiting") {
+      promotedFromPending.push(promoteWaitingItemToCompleted(item));
+      continue;
     }
+    remotePendingKeep.push(item);
   }
-  // hollow completed + waiting → 从时间线挪回待执行（已有 waiting pending 时直接丢掉 hollow）。
-  const movedWaitingFromTimeline = [];
   const remoteTimeline = [];
-  const pendingNodeIds = new Set(hydratedRemotePending.map((item) => item.nodeId));
   for (const item of hydratedTimeline) {
     const status = String(item.status || "").toLowerCase();
-    const preferWaiting = status === "waiting"
-      || (isHollowCompletedReleaseItem(item) && waitingNodeIds.has(item.nodeId));
-    if (preferWaiting) {
-      if (!pendingNodeIds.has(item.nodeId)) {
-        movedWaitingFromTimeline.push({
-          ...item,
-          status: "waiting",
-          progress: Math.min(Math.max(Number(item.progress) || 0, 0), 100),
-          createdAt: item.createdAt || Date.now(),
-        });
-        pendingNodeIds.add(item.nodeId);
-      }
+    if (status === "waiting") {
+      remoteTimeline.push(promoteWaitingItemToCompleted(item));
+      continue;
+    }
+    if (isHollowCompletedReleaseItem(item) && runSaysWaitingForNode(item.nodeId, item.runId, runs)) {
+      remoteTimeline.push(promoteWaitingItemToCompleted({
+        ...item,
+        waiting: item.waiting || runs[String(item.runId || "")]?.waiting || runs[String(item.runId || "")]?.output?.waiting,
+      }));
       continue;
     }
     remoteTimeline.push(item);
   }
-  // hollow completed 不能靠 completedIds 挤掉同 node 的 waiting pending。
-  const completedIds = new Set(
-    remoteTimeline
-      .filter((item) => !(isHollowCompletedReleaseItem(item) && waitingNodeIds.has(item.nodeId)))
-      .map((item) => item.nodeId),
-  );
+  for (const item of promotedFromPending) {
+    if (!remoteTimeline.some((entry) => entry.nodeId === item.nodeId || entry.id === item.id)) {
+      remoteTimeline.push(item);
+    }
+  }
+  const completedIds = new Set(remoteTimeline.map((item) => item.nodeId));
   const remotePending = filterDismissedPending(
-    [...hydratedRemotePending, ...movedWaitingFromTimeline]
+    remotePendingKeep
       .filter((item) => (knownIds.has(item.nodeId) || knownIds.has(item.sourcePresetId)) && itemMatchesContext(item, context) && !completedIds.has(item.nodeId)),
     dismissedNodeIds,
   );
@@ -355,7 +383,8 @@ function itemId(nodeId) {
 }
 
 function statusLabel(status) {
-  return { completed: "已完成", running: "执行中", failed: "失败", pending: "待执行", waiting: "等待中" }[status] || status;
+  // waiting 无 Agent 交互续跑：按成功展示，待办另述。
+  return { completed: "成功", running: "执行中", failed: "失败", pending: "待执行", waiting: "成功" }[status] || status;
 }
 
 /** Compact summary + artifact chips for timeline/pending cards (Inspector keeps full detail). */
@@ -370,7 +399,7 @@ function renderStageOutcome(item) {
     <div className="af-release-stage-outcome">
       {waiting ? (
         <div className="af-release-stage-outcome__waiting">
-          <span>{waiting.reason}</span>
+          <span>待办：{waiting.label || waiting.reason}</span>
           {waiting.operatorUrl ? (
             <a href={waiting.operatorUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>打开</a>
           ) : null}
@@ -838,20 +867,14 @@ export default function ReleaseWorkflowPanel({
       setState((previous) => {
         const dismissedNodeIds = mergeDismissedNodeIds(previous.dismissedNodeIds, merged.dismissedNodeIds);
         const remoteById = new Map(merged.pending.map((item) => [item.id, item]));
-        const waitingNodeIds = new Set(
-          merged.pending
-            .filter((item) => String(item.status || "").toLowerCase() === "waiting")
-            .map((item) => item.nodeId),
-        );
         const timelineCompletedIds = new Set(merged.timeline.map((entry) => entry.nodeId));
-        // 轮询合并时不能让本地 hollow completed 盖住已挪回 pending 的 waiting。
         const timeline = uniqueByNodeId([
-          ...previous.timeline.filter((item) => !waitingNodeIds.has(item.nodeId)),
+          ...previous.timeline,
           ...merged.timeline,
         ]);
         const pending = uniqueById(filterDismissedPending([
           ...previous.pending
-            .filter((item) => !timelineCompletedIds.has(item.nodeId))
+            .filter((item) => !timelineCompletedIds.has(item.nodeId) && String(item.status || "").toLowerCase() !== "waiting")
             .map((item) => {
               if (!remoteById.has(item.id)) return item;
               const remote = remoteById.get(item.id);
@@ -897,6 +920,11 @@ export default function ReleaseWorkflowPanel({
     if (!item || item.status === "completed" || controllers.current.has(item.id)) return;
     if (!canWrite) {
       setMessage("当前账号无发版操作权限");
+      return;
+    }
+    const busy = findBusyCapabilitySibling(state.pending, item, { excludeId: item.id });
+    if (busy) {
+      setMessage(`同能力已有「${busy.title || busy.nodeId}」处于${statusLabel(busy.status)}，请先等待或取消后再执行`);
       return;
     }
     const node = nodeById.get(item.nodeId)
@@ -947,9 +975,6 @@ export default function ReleaseWorkflowPanel({
         scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
         processId: node.processId || item.processId || "",
         processTitle: node.processTitle || item.processTitle || "",
-        ...(node.kind === "composite" && (item.status === "failed" || item.retrying)
-          ? { resumeFromStep: item.details?.steps?.find((step) => step.status === "failed")?.stepId || "" }
-          : {}),
       };
       let result;
       let runDetails;
@@ -1036,34 +1061,50 @@ export default function ReleaseWorkflowPanel({
       // 工作空间列表异步回填时可能只改变了前端 storage key；只要本次请求没有被取消，
       // 仍应提交 AgentFlow 已返回的结果，不能静默丢弃导致节点看起来没有反应。
       if (controller.signal.aborted) return;
-      // 用户需求点: waiting 必须留在待执行并展示原因，不能误标为已完成推进状态机。
+      // 用户需求点: waiting 无交互续跑——按成功写入时间线，卡片上只简明写出待办事项。
       if (String(result.status || "").toLowerCase() === "waiting") {
-        const waitingItem = {
+        const waitingPayload = result.waiting || result.output?.waiting || { reason: result.message || "待人工处理" };
+        const waitingLabel = humanizeWaitingMatter(waitingPayload);
+        const completedAt = Date.now();
+        const successItem = {
           ...executionItem,
           inputs: normalizedInputs,
-          status: "waiting",
-          progress: 0,
-          message: result.message || `${node.title} 等待确认`,
-          output: sanitizeReleaseNodeOutput(result),
-          waiting: result.waiting || result.output?.waiting || { reason: result.message || "等待人工确认" },
+          status: "completed",
+          progress: 100,
+          message: result.message || `${node.title} 已成功`,
+          output: sanitizeReleaseNodeOutput({ ...result, status: "waiting" }),
+          waiting: waitingPayload,
           details: compositeDetailsFromResult(result, node, { ...(executionItem.details || {}), ...(result.details || {}) }),
           runId: result.runId || executionItem.runId,
-          operator: operator,
+          operator,
           kind: executionItem.kind || node.kind || "",
           compositeId: executionItem.compositeId || node.compositeId || "",
+          ...createCompletionMetadata({
+            operator,
+            startedAt: executionItem.startedAt || startedAt,
+            completedAt,
+          }),
         };
-        setState((previous) => seedNextRecommendations({
-          ...previous,
-          pending: previous.pending.map((entry) => entry.id === item.id ? { ...entry, ...waitingItem, retrying: undefined } : entry),
-        }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
-        setInspector({ item: waitingItem, node, mode: "pending" });
-        setMessage(waitingItem.message);
+        setState((previous) => {
+          const withoutPending = previous.pending.filter((entry) => entry.id !== item.id);
+          const timeline = [
+            ...previous.timeline.filter((entry) => entry.id !== successItem.id && entry.nodeId !== successItem.nodeId),
+            successItem,
+          ];
+          return seedNextRecommendations({
+            ...previous,
+            timeline,
+            pending: withoutPending,
+          }, [initializationNode, initializationPreparationNode, ...catalogNodes]);
+        });
+        setInspector({ item: successItem, node, mode: "completed" });
+        setMessage(`${node.title} 已成功；${waitingLabel}`);
         return;
       }
       setState((previous) => {
         const completed = previous.timeline.some((entry) => (entry.nodeId || entry.id) === node.id);
         const currentItem = previous.pending.find((entry) => entry.id === item.id) || item;
-        const persistedItem = { ...currentItem, retrying: undefined };
+        const persistedItem = { ...currentItem };
         const completedAt = Date.now();
         const currentOperator = currentItem.operator && currentItem.operator !== "未记录" ? currentItem.operator : operator;
         const timeline = completed ? previous.timeline : [...previous.timeline, {
@@ -1131,7 +1172,7 @@ export default function ReleaseWorkflowPanel({
     } finally {
       if (controllers.current.get(item.id)?.token === runToken) controllers.current.delete(item.id);
     }
-  }, [canWrite, catalogNodes, context, initializationNode, initializationPreparationNode, key, nodeById, onReleaseAccess, operator, selfTestFailure, workspace]);
+  }, [canWrite, catalogNodes, context, initializationNode, initializationPreparationNode, key, nodeById, onReleaseAccess, operator, selfTestFailure, state.pending, workspace]);
 
   const cancelNode = useCallback((item) => {
     localMutationRef.current = true;
@@ -1150,15 +1191,24 @@ export default function ReleaseWorkflowPanel({
   const retryNode = useCallback((item) => {
     if (!item || item.status !== "failed") return;
     localMutationRef.current = true;
-    // 保留 failed 标记传给 executeNode，使复合流程可以携带 resumeFromStep；
-    // UI 状态仍立即切换为 pending，避免用户重复点击。
-    const retryItem = { ...item, status: "failed", retrying: true, error: "", failedAt: undefined, progress: 0 };
-    const pending = { ...retryItem, status: "pending" };
+    // 重试 = 全新执行：清空失败态与旧步骤详情，不携带 resumeFromStep。
+    const freshItem = {
+      ...item,
+      status: "pending",
+      error: "",
+      failedAt: undefined,
+      progress: 0,
+      details: item.kind === "composite" ? { steps: [] } : undefined,
+      output: undefined,
+      waiting: undefined,
+      message: "",
+      runId: "",
+    };
     setState((previous) => seedNextRecommendations({
       ...previous,
-      pending: previous.pending.map((entry) => entry.id === item.id ? pending : entry),
+      pending: previous.pending.map((entry) => entry.id === item.id ? freshItem : entry),
     }, [initializationNode, initializationPreparationNode, ...catalogNodes]));
-    void executeNode(retryItem);
+    void executeNode(freshItem);
   }, [catalogNodes, initializationNode, initializationPreparationNode, executeNode]);
 
   const deleteNode = useCallback(async (item) => {
@@ -1281,9 +1331,15 @@ export default function ReleaseWorkflowPanel({
     </div>
   ) : null;
 
-  // 用户需求点: 自定义添加阶段是补充流程的后路，同一预置节点可以反复选择并生成独立待执行卡片。
+  // 用户需求点: 自定义添加可重复开同能力卡片，但已有 running 实例时禁止再开并行副本。
   const addPresetNode = useCallback((preset) => {
     if (!preset) return;
+    const busy = findBusyCapabilitySibling(state.pending, preset);
+    if (busy) {
+      setMessage(`同能力已有「${busy.title || busy.nodeId}」处于${statusLabel(busy.status)}，请先完成或取消后再添加`);
+      setAddNodeOpen(false);
+      return;
+    }
     localMutationRef.current = true;
     const node = createPresetInstance(preset);
     setState((previous) => ({
@@ -1293,7 +1349,7 @@ export default function ReleaseWorkflowPanel({
     }));
     setAddNodeOpen(false);
     setMessage(`${node.title} 已加入待执行阶段`);
-  }, [context]);
+  }, [context, state.pending]);
 
   const openInspector = useCallback((item) => {
     const node = nodeById.get(item?.nodeId) || nodeById.get(item?.sourcePresetId);

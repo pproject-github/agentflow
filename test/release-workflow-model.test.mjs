@@ -14,8 +14,38 @@ import {
   selectPresetNodes,
   normalizeCompositeSteps,
   externalInputSchemaForNode,
+  defaultInputsForNode,
+  removePendingNode,
+  filterDismissedPending,
+  isPendingDismissed,
 } from "../builtin/web-ui/src/lib/releaseWorkflowModel.js";
 import { RELEASE_WORKFLOW_CONFIG } from "../shared/release-workflow-config.js";
+
+test("removes localization source paths so the Skill discovers the complete file set", () => {
+  const node = {
+    id: "release-localization:upload-source-file",
+    inputSchema: [{ key: "source_path", defaultValue: "iHeima/res/values/strings.xml" }],
+  };
+  assert.deepEqual(defaultInputsForNode(node, {
+    source_path: "/Users/duanfengyuan/migration-workspace/test/likee_android",
+  }), {});
+  assert.deepEqual(defaultInputsForNode(node, { source_path: "iHeima/reslive/values/livestrings.xml" }), {});
+  assert.equal(defaultInputsForNode({
+    id: "composite:localization-upload-notify",
+    platforms: ["android"],
+    inputSchema: [{ key: "source_path" }],
+  }, { source_path: "/legacy/project-root" }).source_path, undefined);
+});
+
+test("does not expose a source path for localization on either platform", () => {
+  const node = {
+    id: "custom-release-localization:upload-source-file-test",
+    platforms: ["ios", "android"],
+    inputSchema: [{ key: "source_path", defaultValue: "iHeima/res/values/strings.xml" }],
+  };
+  assert.equal(defaultInputsForNode(node, {}, { platform: "android" }).source_path, undefined);
+  assert.equal(defaultInputsForNode(node, {}, { platform: "ios" }).source_path, undefined);
+});
 
 test("uses navigation parameters as the immutable release context", () => {
   const context = resolveReleaseContext(
@@ -57,14 +87,15 @@ test("initialization exposes a configurable activity preparation step", () => {
   assert.equal(preparation.nodeId, undefined);
   assert.equal(preparation.id, "release-initialization:prepare-context");
   assert.equal(preparation.initializationActionId, "release-management:create-active-release");
-  assert.equal(preparation.inputSchema.some((input) => input.key === "publish_date"), true);
-  assert.match(preparation.inputs.publish_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(preparation.kind, "composite");
+  assert.equal(preparation.requiresConfirmation, false);
+  assert.deepEqual(preparation.inputSchema.map((item) => item.key), ["publish_date"]);
   const seeded = seedInitializationPreparationState({ timeline: [], pending: [], customNodes: [] }, node, preparation);
   assert.equal(seeded.timeline[0].nodeId, "release-initialization");
   assert.deepEqual(seeded.pending.map((item) => item.nodeId), [preparation.id]);
   assert.equal(seeded.initialization.status, "pending");
   const blocked = seedNextRecommendations(seeded, [node, {
-    id: "release-git:create-release-branch",
+    id: "composite:create-release-branch",
     title: "Create Release Branch",
     businessLines: ["likee"],
     platforms: ["android"],
@@ -76,7 +107,7 @@ test("initialization exposes a configurable activity preparation step", () => {
     timeline: [...seeded.timeline, { nodeId: preparation.id, status: "completed" }],
     pending: [],
   }, [node, {
-    id: "release-git:create-release-branch",
+    id: "composite:localization-upload-notify",
     title: "Create Release Branch",
     businessLines: ["likee"],
     platforms: ["android"],
@@ -85,10 +116,10 @@ test("initialization exposes a configurable activity preparation step", () => {
 
   const legacyEmptyInput = seedInitializationPreparationState({
     timeline: [seeded.timeline[0]],
-    pending: [{ id: "legacy", nodeId: preparation.id, status: "pending", inputs: { publish_date: "" } }],
+    pending: [{ id: "legacy", nodeId: preparation.id, status: "pending", inputs: {} }],
     customNodes: [],
   }, node, preparation);
-  assert.match(legacyEmptyInput.pending[0].inputs.publish_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(legacyEmptyInput.pending[0].inputs, {});
 });
 
 test("seeds initialization as completed when the release context has no state", () => {
@@ -130,7 +161,7 @@ test("does not re-block a legacy timeline that already has release actions", () 
 test("recommends the first available node after completed initialization", () => {
   const node = createInitializationNode({ businessLine: "likee", platform: "android", version: "5.63.2" });
   const next = {
-    id: "release-git:create-release-branch",
+    id: "composite:create-release-branch",
     title: "Create Release Branch",
     description: "create",
     category: "发版准备",
@@ -140,19 +171,74 @@ test("recommends the first available node after completed initialization", () =>
   const state = seedNextRecommendations(seedInitializationState({ timeline: [], pending: [], customNodes: [] }, node), [node, next]);
 
   assert.deepEqual(state.pending.map((item) => item.nodeId), [next.id]);
+  assert.equal(state.pending[0].id, `${next.id}-recommended`);
   assert.deepEqual(state.pending[0].inputs, { release_branch: "release/v5.63" });
   assert.equal(state.pending[0].scopeKey, "likee/android/5.63.2/initial");
+  const again = seedNextRecommendations(state, [node, next]);
+  assert.equal(again.pending.length, 1);
+  assert.equal(again.pending[0].id, state.pending[0].id);
+});
+
+test("removing a system recommendation records the dismissal and recommends the next node", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  const initialization = createInitializationNode(context);
+  const first = { id: "composite:localization-upload-notify", title: "多语言上传 & 通知", processId: "entry", processOrder: 10, businessLines: ["likee"], platforms: ["android"], contextSnapshot: context };
+  const second = { id: "composite:create-release-branch", title: "创建发版分支", processId: "entry", processOrder: 20, businessLines: ["likee"], platforms: ["android"], contextSnapshot: context };
+  const state = seedNextRecommendations(seedInitializationState({ timeline: [], pending: [], customNodes: [] }, initialization), [initialization, first, second]);
+  const removed = removePendingNode(state, state.pending[0]);
+  const next = seedNextRecommendations(removed, [initialization, first, second]);
+
+  assert.deepEqual(next.dismissedNodeIds, [first.id]);
+  assert.deepEqual(next.pending.map((item) => item.nodeId), [second.id]);
+});
+
+test("removing failed system and custom preset instances is allowed, but running nodes stay protected", () => {
+  const failed = { id: "failed-item", nodeId: "release-git:create-release-branch", status: "failed" };
+  const running = { id: "running-item", nodeId: "release-git:create-release-branch", status: "running" };
+  const custom = { id: "custom-item", nodeId: "custom-composite:localization-upload-notify-abc", status: "failed", sourcePresetId: "composite:localization-upload-notify" };
+  const state = { timeline: [], pending: [failed, running, custom], customNodes: [], dismissedNodeIds: [] };
+
+  assert.equal(removePendingNode(state, failed).pending.some((item) => item.id === failed.id), false);
+  assert.equal(removePendingNode(state, running), state);
+  const removedCustom = removePendingNode(state, custom);
+  assert.equal(removedCustom.pending.some((item) => item.id === custom.id), false);
+  assert.deepEqual(removedCustom.dismissedNodeIds, [custom.id]);
+});
+
+test("filterDismissedPending hides dismissed cards during server sync", () => {
+  const pending = [
+    { id: "old-failed", nodeId: "release-initialization:prepare-context", status: "failed" },
+    { id: "active", nodeId: "composite:localization-upload-notify", status: "running" },
+  ];
+  const filtered = filterDismissedPending(pending, ["release-initialization:prepare-context"]);
+  assert.deepEqual(filtered.map((item) => item.id), ["active"]);
+  assert.equal(isPendingDismissed(pending[0], ["release-initialization:prepare-context"]), true);
+});
+
+test("createPresetInstance pending cards keep sourcePresetId for execution and deletion", () => {
+  const preset = {
+    id: "composite:localization-upload-notify",
+    title: "多语言上传 & 通知",
+    kind: "composite",
+    compositeId: "localization-upload-notify",
+    businessLines: ["likee"],
+    platforms: ["android"],
+  };
+  const instance = createPresetInstance(preset);
+  assert.match(instance.id, /^custom-composite:localization-upload-notify-/);
+  assert.equal(instance.sourcePresetId, preset.id);
+  assert.notEqual(instance.id, preset.id);
 });
 
 test("seeds recommendations from the supplied workflow configuration", () => {
   const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
   const initialization = createInitializationNode(context);
-  const next = { id: "release-git:create-release-branch", title: "Create Release Branch", businessLines: ["likee"], platforms: ["android"] };
+  const next = { id: "composite:create-release-branch", title: "Create Release Branch", businessLines: ["likee"], platforms: ["android"] };
   const config = {
     ...RELEASE_WORKFLOW_CONFIG,
     workflows: RELEASE_WORKFLOW_CONFIG.workflows.map((workflow) => ({
       ...workflow,
-      stages: workflow.stages.map((stage) => ({ ...stage, nodes: stage.nodes.filter((entry) => entry.id !== next.id) })),
+      stages: workflow.stages.map((stage) => ({ ...stage, nodes: stage.nodes.filter((entry) => entry.id !== "create-release-branch") })),
     })),
   };
   const state = seedNextRecommendations(
@@ -168,7 +254,7 @@ test("ignores a pending node from another release scope when seeding recommendat
   const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
   const node = createInitializationNode(context);
   const next = {
-    id: "release-git:create-release-branch",
+    id: "composite:create-release-branch",
     title: "创建发版分支",
     processId: "preparation",
     processOrder: 10,
@@ -189,7 +275,7 @@ test("continues within a process before recommending the next process", () => {
   const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
   const initialization = createInitializationNode(context);
   const preparationNode = {
-    id: "release-git:create-release-branch",
+    id: "composite:localization-upload-notify",
     title: "创建发版分支",
     processId: "preparation",
     processOrder: 10,
@@ -198,16 +284,16 @@ test("continues within a process before recommending the next process", () => {
     contextSnapshot: context,
   };
   const preparationNext = {
-    id: "release-management:register-release-branch",
+    id: "composite:create-release-branch",
     title: "创建分支",
-    processId: "preparation",
+    processId: "entry",
     processOrder: 20,
     businessLines: ["likee"],
     platforms: ["android"],
     contextSnapshot: context,
   };
   const approval = {
-    id: "release-approval:create-initial-release-approval",
+    id: "composite:submit-approval",
     title: "全量审核",
     processId: "approval",
     processOrder: 10,
@@ -237,7 +323,7 @@ test("continues within a process before recommending the next process", () => {
     customNodes: [],
   }, nodes);
   assert.deepEqual(afterAllPreparation.pending.map((item) => item.nodeId), [approval.id]);
-  assert.equal(afterAllPreparation.processStates["preparation-initial"], "completed");
+  assert.equal(afterAllPreparation.processStates.entry, "completed");
 });
 
 test("does not recommend a node outside the selected release scope", () => {
@@ -338,11 +424,13 @@ test("normalizes composite internal step details for timeline persistence", () =
   const steps = normalizeCompositeSteps([
     { stepId: "upload", actionId: "release-localization:upload-source-file", status: "succeeded", startedAt: 10, completedAt: 25, output: { record_id: "r1" } },
     { stepId: "notify", actionId: "release-notification:send-notification", status: "failed", error: "webhook timeout" },
+    { action: "prepare-translation-archive", status: "skipped_already_succeeded", note: "already done" },
   ]);
-  assert.equal(steps.length, 2);
+  assert.equal(steps.length, 3);
   assert.deepEqual(steps[0], {
     stepId: "upload",
     actionId: "release-localization:upload-source-file",
+    title: "上传源多语言",
     status: "succeeded",
     startedAt: 10,
     completedAt: 25,
@@ -352,6 +440,11 @@ test("normalizes composite internal step details for timeline persistence", () =
   });
   assert.equal(steps[1].status, "failed");
   assert.equal(steps[1].error, "webhook timeout");
+  assert.equal(steps[1].title, "发送发版通知");
+  assert.equal(steps[2].action, "prepare-translation-archive");
+  assert.equal(steps[2].actionId, "prepare-translation-archive");
+  assert.equal(steps[2].title, "准备翻译归档");
+  assert.equal(steps[2].note, "already done");
 });
 
 test("composite input schema hides internal step mappings", () => {
@@ -367,4 +460,36 @@ test("composite input schema hides internal step mappings", () => {
     ],
   };
   assert.deepEqual(externalInputSchemaForNode(node).map((entry) => entry.key), ["source_path"]);
+});
+
+test("agent-driven composite input schema keeps declared external inputs", () => {
+  const node = {
+    kind: "composite",
+    compositeId: "free-prompt-agent",
+    inputSchema: [
+      { key: "prompt", label: "任务说明", type: "textarea", required: true },
+      { key: "skill_hints", label: "Skill 提示", type: "text" },
+    ],
+  };
+  assert.deepEqual(externalInputSchemaForNode(node).map((entry) => entry.key), ["prompt", "skill_hints"]);
+});
+
+test("static release catalog exposes free-prompt agent without putting it in default stage ids", async () => {
+  const { getReleaseNodes } = await import("../builtin/web-ui/src/lib/releaseNodeCatalog.js");
+  const nodes = getReleaseNodes({ businessLine: "likee", platform: "android", version: "1.3.0", batch: "initial" });
+  const free = nodes.find((node) => node.compositeId === "free-prompt-agent");
+  assert.ok(free);
+  assert.equal(free.insertableInAnyStage, true);
+  assert.equal(free.kind, "composite");
+  assert.ok(free.inputSchema.some((input) => input.key === "prompt"));
+});
+
+test("static release catalog exposes the preparation Agent once without duplicate capability entries", async () => {
+  const { getReleaseNodes } = await import("../builtin/web-ui/src/lib/releaseNodeCatalog.js");
+  const nodes = getReleaseNodes({ businessLine: "likee", platform: "android", version: "1.3.0", batch: "initial" });
+  const preparation = nodes.filter((node) => node.id === "release-initialization:prepare-context");
+  assert.equal(preparation.length, 1);
+  assert.equal(preparation[0].kind, "composite");
+  assert.equal(nodes.some((node) => node.id === "release-initialization"), false);
+  assert.equal(nodes.some((node) => node.id === "localization-upload-notify"), false);
 });

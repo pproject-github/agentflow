@@ -1,0 +1,32 @@
+{
+  "projects": [
+    {
+      "id": "likee-android-prod",
+      "businessLine": "likee",
+      "platform": "android",
+      "workspaceRoot": "/srv/release-projects/likee_android",
+      "skillRoots": ["/opt/release-skills/2026-09-01"]
+    },
+    {
+      "id": "likee-ios-prod",
+      "businessLine": "likee",
+      "platform": "ios",
+      "workspaceRoot": "/srv/release-projects/likee_ios",
+      "skillRoots": ["/opt/release-skills/2026-09-01"]
+    }
+  ],
+  "operators": {
+    "likee": {
+      "android": ["duanfengyuan", "suruijia", "wangfang"],
+      "ios": ["liangjiajian", "yangcaimu"]
+    },
+    "bigolive": {
+      "android": [],
+      "ios": []
+    },
+    "hello": {
+      "android": [],
+      "ios": []
+    }
+  }
+}

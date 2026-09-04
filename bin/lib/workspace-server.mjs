@@ -3776,6 +3776,14 @@ function workspaceDefaultHistoryRef(nodeId) {
   return `nodes/${workspaceSafeNodeFileName(nodeId)}/history.md`;
 }
 
+/** 发版复合节点共用 release_agent id，按 capability 隔离 history，避免上传记录污染建分支等节点。 */
+function workspaceReleaseHistoryNodeId(nodeId, instance = {}) {
+  const capabilityId = String(instance?.releaseAgent?.capabilityId || "").trim();
+  if (!capabilityId) return String(nodeId || "");
+  const safe = capabilityId.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 96);
+  return safe ? `${String(nodeId || "release_agent")}__${safe}` : String(nodeId || "");
+}
+
 function workspaceMaterializeNodeHistoryReference(nodeId, scopedRoot, runPackage = {}) {
   const historyRef = workspaceDefaultHistoryRef(nodeId);
   const abs = workspaceResolveFlowFile(scopedRoot, historyRef, "historyRef");
@@ -4204,7 +4212,8 @@ function workspacePersistNodeHistory(scopedRoot, graph, nodeId, opts = {}) {
   if (!current || String(current.definitionId || "") === "workspace_run" || String(current.definitionId || "") === "workspace_scheduled_run") {
     return { changed: false, wrote: false, instance: current };
   }
-  const historyRef = workspaceDefaultHistoryRef(nodeId);
+  const historyNodeId = workspaceReleaseHistoryNodeId(nodeId, current);
+  const historyRef = workspaceDefaultHistoryRef(historyNodeId);
   const abs = workspaceResolveFlowFile(scopedRoot, historyRef, "historyRef");
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const previous = fs.existsSync(abs) && fs.statSync(abs).isFile()
@@ -6771,7 +6780,12 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     }
 
     const isContextRunNode = isWorkspaceOneClickTaskDefinitionId(defId);
-    const nodeModelKey = workspaceNodeModelKey(instance, modelKey);
+    // 发版复合节点必须继续由 AgentFlow Agent 驱动，但本地 Cursor 未登录时不能
+    // 静默卡在 cursor-user 钥匙串；允许开发/部署环境通过专用变量切换已登录的 CLI。
+    const releaseModelRaw = opts.releaseRuntime ? String(process.env.AGENTFLOW_RELEASE_AGENT_MODEL || "").trim() : "";
+    const releaseModelKey = !releaseModelRaw || /^cursor\s*:\s*$/i.test(releaseModelRaw) ? "cursor:Auto" : releaseModelRaw;
+    const nodeModelKey = workspaceNodeModelKey(instance, modelKey)
+      || (opts.releaseRuntime ? releaseModelKey : "");
     const prepareStartedAt = Date.now();
     const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
     const relevantInputs = workspaceRelevantInputValues(instance.body || "", inputValues);
@@ -6784,10 +6798,13 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     );
     const ownSkillBlock = isContextRunNode ? loadSkillsBlockForKeys(selectedSkillKeysFromConfigSlots(instance)) : "";
     const promptSkillsBlock = mergeWorkspaceSkillBlocks(ownSkillBlock, upstreamSkillBlocks);
-    const promptMcpBlock = mergeWorkspaceSkillBlocks(
-      workspaceUpstreamMcpBlocks(graph, nodeId, outputs),
-      String(contextBundle.mcpContext || ""),
-    );
+    // 发版 Agent 隔离全局 MCP：不要把 mcpContext 塞进 prompt，避免模型去调用无关 MCP。
+    const promptMcpBlock = opts.releaseRuntime
+      ? ""
+      : mergeWorkspaceSkillBlocks(
+        workspaceUpstreamMcpBlocks(graph, nodeId, outputs),
+        String(contextBundle.mcpContext || ""),
+      );
     const resultOutputSpec = workspaceResultOutputSpec(graph, nodeId);
     const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
       scopedRoot: runtimeStorageRoot,
@@ -6812,7 +6829,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     } catch {
       // Best-effort debug artifact only.
     }
-    const historyBlock = workspaceNodeHistoryBlock(nodeId, scopedRoot, runPackage);
+    const historyNodeId = workspaceReleaseHistoryNodeId(nodeId, instance);
+    const historyBlock = workspaceNodeHistoryBlock(historyNodeId, scopedRoot, runPackage);
     let workspaceContextBlock = workspaceNodeWorkspaceContextBlock(graph, nodeId, outputs, scopedRoot, cwd, contextBundle);
     if (!isContextRunNode && workspaceBoolSlot(instance, "includeWorkspaceContext", true)) {
       const defaultWorkspaceBlock = workspaceDefaultWorkspaceContextBlock(scopedRoot, cwd);
@@ -6851,11 +6869,17 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         const handle = startComposerAgent({
           uiWorkspaceRoot: scopedRoot,
           cliWorkspace: runPackage.nodeRunDir,
-          writableDirs: [runPackage.outputsDir],
+          // 用户需求点: 仅发版 Agent 在临时节点目录运行时注入 OpenCode 外部目录授权，普通 Workspace 节点不扩大权限。
+          force: Boolean(opts.releaseRuntime),
+          releaseRuntime: Boolean(opts.releaseRuntime),
+          writableDirs: [runPackage.outputsDir, scopedRoot],
           prompt,
           modelKey: nodeModelKey,
           agentflowUserId: userCtx.userId || "",
           detached: process.platform !== "win32",
+          // 用户需求点: 发版 Agent 使用本地 release-skill，隔离全局 MCP，避免失效服务和 hook 阻塞执行。
+          disableMcp: Boolean(opts.releaseRuntime),
+          approveMcps: opts.releaseRuntime ? false : undefined,
           onChild: opts.onActiveChild,
           extraEnv: runtimeEnv({
             AGENTFLOW_WORKSPACE_TMP_ROOT: runTmpRoot,

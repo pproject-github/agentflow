@@ -110,7 +110,7 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(panel, /compositeId: currentItem\.compositeId \|\| node\.compositeId/);
   assert.match(panel, /details:[\s\S]*normalizeCompositeSteps/);
   assert.match(panel, /actionId = item\.sourcePresetId \|\| node\.sourcePresetId \|\| node\.id/);
-  assert.match(panel, /resumeFromStep: item\.details\?\.steps\?\.find/);
+  assert.doesNotMatch(panel, /resumeFromStep:/);
   assert.match(inspector, /内部执行步骤/);
   assert.match(inspector, /compositeSteps\.map/);
   assert.match(inspector, /externalInputSchemaForNode/);
@@ -118,7 +118,7 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(model, /export function externalInputSchemaForNode/);
 });
 
-test("client sanitizes graph output and keeps waiting nodes pending", async () => {
+test("client sanitizes graph output and treats waiting as timeline success", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /function sanitizeReleaseNodeOutput/);
   assert.match(source, /sanitizeReleaseNodeOutput\(/);
@@ -127,7 +127,10 @@ test("client sanitizes graph output and keeps waiting nodes pending", async () =
   assert.match(source, /af-release-node__checkbox/);
   assert.match(source, /type === "checkbox"/);
   assert.match(source, /String\(result\.status \|\| ""\)\.toLowerCase\(\) === "waiting"/);
-  assert.match(source, /status: "waiting"/);
+  assert.match(source, /status: "completed"/);
+  assert.match(source, /humanizeWaitingMatter/);
+  assert.match(source, /待办：/);
+  assert.match(source, /promoteWaitingItemToCompleted/);
   assert.match(source, /insertableInAnyStage/);
   assert.match(source, /free-prompt-agent/);
 });
@@ -169,12 +172,23 @@ test("write actions require canWrite and surface readonly state", async () => {
   assert.match(inspector, /mode === "completed" \|\| !canWrite/);
 });
 
-test("retry keeps failed execution context and does not bubble into card navigation", async () => {
+test("retry re-executes from a fresh pending item without resume", async () => {
   const source = await readFile(panelPath, "utf8");
-  assert.match(source, /const retryItem = \{ \.\.\.item, status: "failed", retrying: true/);
-  assert.match(source, /item\.status === "failed" \|\| item\.retrying/);
+  assert.match(source, /const freshItem = \{/);
+  assert.match(source, /status: "pending"/);
+  assert.match(source, /不携带 resumeFromStep/);
+  assert.doesNotMatch(source, /retrying: true/);
   assert.match(source, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); retryNode\(item\); \}\}/);
   assert.match(source, /setMessage\(`\$\{item\.title \|\| item\.nodeId \|\| "发版节点"\} 定义已失效/);
+});
+
+test("blocks adding or executing a second card while the same capability is running", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /capabilityKeysForItem/);
+  assert.match(source, /findBusyCapabilitySibling/);
+  assert.match(source, /同能力已有/);
+  assert.match(source, /if \(!\["running"\]\.includes\(status\)\) return false/);
+  assert.match(source, /findBusyCapabilitySibling\(state\.pending/);
 });
 
 test("pending stage cards delete through the server and stay removed during sync", async () => {

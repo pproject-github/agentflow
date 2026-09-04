@@ -141,6 +141,100 @@ function materializeWorkspaceCursorMcpPrivateConfig(workspaceRoot, userId) {
   };
 }
 
+// 用户需求点: 发版复合节点只依赖本地 release-skill，不应被用户全局 MCP 的失效服务拖住。
+function writeJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+/**
+ * Cursor 即使用 CURSOR_CONFIG_DIR，仍会加载 ~/.cursor/mcp.json 与 hooks.json。
+ * 发版 Agent 在运行期间临时覆写为空配置，结束后还原，避免 MCP/Hook 拖垮确定性 CLI。
+ */
+function materializeHomeCursorHermeticIsolation() {
+  const homeCursor = path.join(os.homedir(), ".cursor");
+  const replacements = [
+    { name: "mcp.json", contents: { mcpServers: {} } },
+    { name: "hooks.json", contents: { hooks: {} } },
+  ];
+  const snapshots = [];
+  for (const item of replacements) {
+    const filePath = path.join(homeCursor, item.name);
+    let original = null;
+    let existed = false;
+    try {
+      existed = fs.existsSync(filePath);
+      if (existed) original = fs.readFileSync(filePath);
+    } catch {
+      existed = false;
+      original = null;
+    }
+    snapshots.push({ filePath, existed, original });
+    try {
+      writeJsonFile(filePath, item.contents);
+    } catch {
+      // Best-effort; continue isolating other files.
+    }
+  }
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    for (const snap of snapshots) {
+      try {
+        if (snap.existed && snap.original != null) fs.writeFileSync(snap.filePath, snap.original);
+        else if (fs.existsSync(snap.filePath)) fs.rmSync(snap.filePath, { force: true });
+      } catch {
+        // Best-effort restore; an Agent result must not be masked by cleanup failure.
+      }
+    }
+  };
+}
+
+function materializeIsolatedCursorConfigDir(configDir) {
+  const root = path.resolve(configDir || "");
+  if (!root) return;
+  writeJsonFile(path.join(root, "mcp.json"), { mcpServers: {} });
+  writeJsonFile(path.join(root, "hooks.json"), { hooks: {} });
+  // Keep permissions unrestricted for headless release CLI execution.
+  writeJsonFile(path.join(root, "cli-config.json"), {
+    version: 1,
+    permissions: { allow: ["Shell(*)"], deny: [] },
+  });
+}
+
+function materializeWorkspaceCursorMcpIsolation(workspaceRoot) {
+  const workspace = path.resolve(workspaceRoot || process.cwd());
+  const filePath = path.join(workspace, ".cursor", "mcp.json");
+  const hooksPath = path.join(workspace, ".cursor", "hooks.json");
+  const existed = fs.existsSync(filePath);
+  const hooksExisted = fs.existsSync(hooksPath);
+  const original = existed ? fs.readFileSync(filePath, "utf-8") : "";
+  const hooksOriginal = hooksExisted ? fs.readFileSync(hooksPath, "utf-8") : "";
+  // 空 mcpServers：不要把全局 MCP 以 disabled 形式写入，Cursor 仍可能对其做 OAuth/握手。
+  writeJsonFile(filePath, { mcpServers: {} });
+  writeJsonFile(hooksPath, { hooks: {} });
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    try {
+      if (existed) fs.writeFileSync(filePath, original, "utf-8");
+      else if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+    } catch {
+      // Best-effort restore; an Agent result must not be masked by cleanup failure.
+    }
+    try {
+      if (hooksExisted) fs.writeFileSync(hooksPath, hooksOriginal, "utf-8");
+      else if (fs.existsSync(hooksPath)) fs.rmSync(hooksPath, { force: true });
+    } catch {
+      // Best-effort restore.
+    }
+  };
+}
+
 function tomlString(value) {
   return JSON.stringify(String(value ?? ""));
 }
@@ -285,10 +379,39 @@ function runCodexAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
 }
 
 function runCursorAgentWithPrivateMcp(cliWorkspace, prompt, options, userId) {
-  const restore = materializeWorkspaceCursorMcpPrivateConfig(cliWorkspace, userId);
+  // Cursor loads ~/.cursor/mcp.json and hooks even when workspace MCP is empty.
+  // Release runs must be hermetic, but keep real HOME for macOS Keychain auth.
+  const isolatedConfigDir = options?.disableMcp
+    ? fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-cursor-config-"))
+    : "";
+  if (isolatedConfigDir) {
+    try { materializeIsolatedCursorConfigDir(isolatedConfigDir); } catch {}
+  }
+  const isolatedOptions = isolatedConfigDir
+    ? {
+      ...options,
+      // Do not auto-approve MCP; release isolation should load none.
+      approveMcps: false,
+      env: {
+        ...(options?.env && typeof options.env === "object" ? options.env : {}),
+        CURSOR_CONFIG_DIR: isolatedConfigDir,
+      },
+    }
+    : options;
+  const restoreWorkspaceIsolation = options?.disableMcp ? materializeWorkspaceCursorMcpIsolation(cliWorkspace) : () => {};
+  const restoreHomeIsolation = options?.disableMcp ? materializeHomeCursorHermeticIsolation() : () => {};
+  const restorePrivate = options?.disableMcp ? () => {} : materializeWorkspaceCursorMcpPrivateConfig(cliWorkspace, userId);
+  const restore = () => {
+    restorePrivate();
+    restoreWorkspaceIsolation();
+    restoreHomeIsolation();
+    if (isolatedConfigDir) {
+      try { fs.rmSync(isolatedConfigDir, { recursive: true, force: true }); } catch {}
+    }
+  };
   let handle;
   try {
-    handle = runCursorAgentWithPrompt(cliWorkspace, prompt, options);
+    handle = runCursorAgentWithPrompt(cliWorkspace, prompt, isolatedOptions);
   } catch (e) {
     restore();
     throw e;
@@ -353,6 +476,8 @@ export function startComposerAgent(opts) {
     ...(typeof opts.approveMcps === "boolean" ? { approveMcps: opts.approveMcps } : {}),
     ...(opts.sandboxMode ? { sandboxMode: String(opts.sandboxMode) } : {}),
     ...(opts.allowDanger === false ? { allowDanger: false } : {}),
+    ...(typeof opts.disableMcp === "boolean" ? { disableMcp: opts.disableMcp } : {}),
+    ...(opts.releaseRuntime === true ? { releaseRuntime: true } : {}),
     ...(opts.includeJsonResult === true ? { includeJsonResult: true } : {}),
     env,
     addDirs: Array.isArray(opts.writableDirs)

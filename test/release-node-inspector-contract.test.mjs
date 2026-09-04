@@ -42,4 +42,7 @@ test("inspector shows artifacts for waiting and not only completed", async () =>
   const inspector = await fs.promises.readFile(componentPath, "utf8");
   assert.match(inspector, /artifacts\.length > 0/);
   assert.doesNotMatch(inspector, /completedView && artifacts\.length > 0 \? \(/);
+  assert.match(inspector, /待办事项/);
+  assert.match(inspector, /humanizeWaitingMatter|resolveWaitingInfo/);
+  assert.match(inspector, /return "成功"/);
 });

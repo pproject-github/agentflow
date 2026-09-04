@@ -121,6 +121,28 @@ test("does not expose create-active-release after release initialization", async
   }
 });
 
+test("keeps create-active-release hidden while exposing it through initialization preparation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-management-initialization-catalog-"));
+  try {
+    const management = path.join(root, "release-management");
+    fs.mkdirSync(path.join(management, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(management, "SKILL.md"), "---\nname: release-management\ndescription: Management\n---\n");
+    fs.writeFileSync(path.join(management, "scripts", "run.py"), "print('ok')\n");
+
+    const { discoverReleaseActions, discoverReleaseInitializationAction } = await import(`../bin/lib/release-runtime.mjs?initialization=${Date.now()}`);
+    const context = { businessLine: "likee", platform: "android", version: "1.1.0", batch: "initial" };
+    const regular = await discoverReleaseActions({ roots: [root], ...context });
+    assert.equal(regular.some((node) => node.id === "release-management:create-active-release"), false);
+    const initialization = await discoverReleaseInitializationAction(context, [root]);
+    assert.equal(initialization.id, "release-initialization:prepare-context");
+    assert.equal(initialization.action, "create-active-release");
+    assert.equal(initialization.requiresConfirmation, true);
+    assert.equal(initialization.inputSchema.some((input) => input.key === "publish_date"), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("exposes an editable release branch name for create-release-branch", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-git-branch-input-"));
   try {
@@ -142,6 +164,39 @@ test("exposes an editable release branch name for create-release-branch", async 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("provides a project-relative default source path for localization uploads", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-localization-source-input-"));
+  try {
+    const localization = path.join(root, "release-localization");
+    fs.mkdirSync(path.join(localization, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(localization, "SKILL.md"), `---\nname: release-localization\ndescription: Localization\nactions:\n  - name: upload-source-file\n    inputs: [source_path]\n    platforms: [android, ios]\n---\n`);
+    fs.writeFileSync(path.join(localization, "scripts", "run.py"), "print('ok')\n");
+
+    const { discoverReleaseActions } = await import(`../bin/lib/release-runtime.mjs?localization-source-input=${Date.now()}`);
+    const android = await discoverReleaseActions({ roots: [root], businessLine: "likee", platform: "android", version: "1.2.0" });
+    const ios = await discoverReleaseActions({ roots: [root], businessLine: "likee", platform: "ios", version: "1.2.0" });
+    assert.equal(android.find((node) => node.id === "release-localization:upload-source-file").inputSchema[0].defaultValue, "iHeima/res/values/strings.xml");
+    assert.equal(ios.find((node) => node.id === "release-localization:upload-source-file").inputSchema[0].defaultValue, "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("configured Likee iOS release notes action has an executable entrypoint", async () => {
+  const skillsRoot = "/Users/duanfengyuan/migration-workspace/test/likee_android/.workspace/release-skills";
+  const { discoverReleaseActions } = await import(`../bin/lib/release-runtime.mjs?release-notes-entrypoint=${Date.now()}`);
+  const nodes = await discoverReleaseActions({
+    roots: [skillsRoot],
+    businessLine: "likee",
+    platform: "ios",
+    version: "1.2.0",
+    batch: "initial",
+  });
+  const node = nodes.find((item) => item.id === "release-release-notes:upload-ios-release-notes");
+  assert.ok(node);
+  assert.equal(node.runnable, true, node.error);
 });
 
 test("prefers explicit process metadata supplied by a future workflow profile", async () => {
@@ -206,9 +261,22 @@ test("static fallback catalog contains configured action-level nodes for workflo
   const nodes = getReleaseNodes(context);
   assert.ok(nodes.some((node) => node.id === "release-git:create-release-branch"));
   assert.ok(nodes.some((node) => node.id === "release-management:register-release-branch"));
+  assert.equal(
+    nodes.find((node) => node.id === "release-localization:upload-source-file")?.inputSchema?.[0]?.defaultValue,
+    "iHeima/res/values/strings.xml",
+  );
   const machine = createReleaseProcessStateMachine({ context, nodes });
   assert.ok(machine.processes.length > 0);
   assert.ok(machine.nodes.some((node) => node.id === "release-git:create-release-branch"));
+});
+
+test("static fallback localization catalog keeps the complete iOS source file set", async () => {
+  const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?fallback-localization-files=${Date.now()}`);
+  const iosUpload = getReleaseNodes({ businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial" })
+    .find((node) => node.id === "release-localization:upload-source-file");
+  assert.ok(iosUpload);
+  assert.ok(iosUpload.sourceFiles.includes("yymeet/Resources/MultiLanguage/en.lproj/xib.strings"));
+  assert.equal(iosUpload.sourceFiles.length, 8);
 });
 
 test("static fallback honors approval batch scopes and Android gray input differences", async () => {
@@ -228,6 +296,7 @@ test("static fallback honors approval batch scopes and Android gray input differ
   const gray = supplementalAndroid.get("release-records:append-release-wiki-row")?.inputSchema?.[0];
   assert.equal(gray?.key, "gray_percent");
   assert.equal(gray?.required, true);
+  assert.equal(supplementalAndroid.get("release-records:record-store-approved")?.inputSchema?.some((item) => item.key === "gray_percent"), false);
   assert.equal(supplementalIos.get("release-records:append-release-wiki-row")?.inputSchema?.some((item) => item.key === "gray_percent"), false);
 });
 

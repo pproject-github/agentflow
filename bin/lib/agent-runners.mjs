@@ -98,6 +98,12 @@ export function isCursorAgentLoopingError(error = "") {
   return /agent looping detected|got stuck in a repeating response pattern/i.test(text);
 }
 
+// 用户需求点: 线上发版只能使用 Cursor；流在长任务中被 Cursor 关闭时，应切换同一账号的 Composer 通道恢复执行。
+export function isCursorStreamClosedError(error = "") {
+  const text = String(error?.message || error || "");
+  return /WritableIterable is closed/i.test(text) || /RetriableError:[\s\S]*WritableIterable/i.test(text);
+}
+
 function isCursorReadOnlyToolCall(toolName = "") {
   const name = String(toolName || "").trim();
   if (!name) return false;
@@ -462,6 +468,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
   args.push("--trust");
   if (options.sandboxDisabled !== false) args.push("--sandbox", "disabled");
   args.push("--workspace", ws);
+  // 用户需求点: 发版复合节点不传 sourcePath，由 Agent 在目标工程内读取最新 Skill 自行发现文件；
+  // 因此临时节点工作区之外的工程根目录必须显式加入 Cursor 可访问目录。
+  for (const dir of Array.isArray(options.addDirs) ? options.addDirs : []) {
+    const abs = path.resolve(String(dir || "").trim());
+    if (abs && abs !== ws) args.push("--add-dir", abs);
+  }
   const approveMcps = options.approveMcps ?? (process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "0" && process.env.AGENTFLOW_CURSOR_APPROVE_MCPS !== "false");
   if (approveMcps) args.push("--approve-mcps");
   if (options.force !== false) args.push("--force");
@@ -663,7 +675,8 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       const retryCursorFailure = (errorText) => {
         const quotaFailure = isCursorQuotaError(errorText);
         const loopingFailure = isCursorAgentLoopingError(errorText);
-        if (!quotaFailure && !loopingFailure) return false;
+        const streamClosedFailure = isCursorStreamClosedError(errorText);
+        if (!quotaFailure && !loopingFailure && !streamClosedFailure) return false;
         if (quotaFailure && hadToolActivity) return false;
         if (loopingFailure && hadMutatingToolActivity) return false;
         const errorCategory = quotaFailure ? classifyCursorApiKeyLimitError(errorText) : "agent_looping";
@@ -685,6 +698,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           && cursorModelSelection.lane === "auto"
           && (
             loopingFailure
+            || (streamClosedFailure && options.releaseRuntime === true)
             || (errorCategory === "explicit_limit" && isCursorAutoFallbackEligible(errorText))
           );
         const hasNextKey = quotaFailure && Boolean(cursorSelection) && cursorAttemptIndex < cursorAttempts.length - 1;
@@ -697,9 +711,11 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
               : "login session";
             emit({
               type: "status",
-              line: loopingFailure
-                ? `Cursor Auto on ${authLabel} entered a response loop; discovering Composer fallback...`
-                : `Cursor Auto on ${authLabel} is out of usage; discovering Composer fallback...`,
+              line: streamClosedFailure
+                ? `Cursor Auto on ${authLabel} closed its stream; discovering Composer fallback...`
+                : loopingFailure
+                  ? `Cursor Auto on ${authLabel} entered a response loop; discovering Composer fallback...`
+                  : `Cursor Auto on ${authLabel} is out of usage; discovering Composer fallback...`,
             });
             const catalog = await discoverCursorModels({
               keyId: cursorSelection?.id || `login:${cursorBaseEnv.AGENTFLOW_USER_ID || "default"}`,
@@ -724,7 +740,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
                 stream: "runner",
                 eventType: "model_fallback",
                 text: `auto -> ${fallbackSelection.modelId}`,
-                reason: loopingFailure ? "agent_looping" : "usage_limit",
+                reason: streamClosedFailure ? "stream_closed" : loopingFailure ? "agent_looping" : "usage_limit",
               });
               const fallback = runCursorAgentWithPrompt(
                 cliWorkspace,

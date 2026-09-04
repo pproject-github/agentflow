@@ -20,16 +20,16 @@ test("maps a completed Agent result into timeline details and release records", 
   assert.deepEqual(result.state.timeline[0].details.artifacts, [{ path: "reports/localization.json" }]);
 });
 
-test("keeps a waiting Agent capability pending without advancing the state machine", async () => {
+test("maps a waiting Agent result onto the timeline as success with waiting matter", async () => {
   const { applyReleaseAgentResult } = await import("../bin/lib/release-runtime.mjs?agent-waiting-contract");
   const state = { timeline: [], pending: [{ id: "cap-1", nodeId: "localization-upload-notify", status: "running" }] };
   const result = applyReleaseAgentResult(state, "localization-upload-notify", {
     status: "waiting", summary: "等待人工确认", waiting: { reason: "需要确认发送通知", confirmation: "confirm-1" },
   });
-  assert.equal(result.state.timeline.length, 0);
-  assert.equal(result.state.pending[0].status, "waiting");
-  assert.equal(result.state.pending[0].waiting.reason, "需要确认发送通知");
-  assert.equal(result.advance, false);
+  assert.equal(result.state.pending.length, 0);
+  assert.equal(result.state.timeline[0].status, "completed");
+  assert.equal(result.state.timeline[0].waiting.reason, "需要确认发送通知");
+  assert.equal(result.advance, true);
 });
 
 test("keeps a failed Agent capability retryable with a sanitized reason", async () => {
@@ -304,7 +304,7 @@ test("reconciles persisted release runs with AgentFlow manifests after a server 
   assert.equal(result.state.runs[staleRunId].status, "failed");
 });
 
-test("reconcileReleaseState keeps Agent waiting and does not write empty completed", async () => {
+test("reconcileReleaseState promotes Agent waiting onto the timeline as success", async () => {
   const { reconcileReleaseState } = await import("../bin/lib/release-runtime-store.mjs?release-state-reconcile-waiting");
   const workspaceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-reconcile-waiting-")));
   const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
@@ -345,9 +345,10 @@ test("reconcileReleaseState keeps Agent waiting and does not write empty complet
     },
   }, { now: Date.parse("2026-09-03T08:00:00.000Z") });
 
-  assert.equal(result.state.timeline.some((e) => e.runId === runId && e.status === "completed"), false);
-  assert.equal(result.state.pending[0].status, "waiting");
-  assert.match(result.state.pending[0].output?.summary || "", /MR !1142/);
+  assert.equal(result.state.pending.length, 0);
+  assert.equal(result.state.timeline[0].status, "completed");
+  assert.equal(result.state.timeline[0].waiting?.reason, "managed_topic_mr_open");
+  assert.match(result.state.timeline[0].output?.summary || "", /MR !1142/);
   assert.equal(result.state.runs[runId].status, "waiting");
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });

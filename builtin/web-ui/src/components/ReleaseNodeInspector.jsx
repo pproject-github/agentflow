@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { defaultInputsForNode, externalInputSchemaForNode, releaseActionTitle } from "../lib/releaseWorkflowModel.js";
+import { humanizeWaitingMatter, resolveWaitingInfo } from "../lib/releaseStageOutcome.js";
 
 function displayValue(value) {
   if (value == null || value === "") return "未记录";
@@ -191,17 +192,18 @@ function buildOutcomeMarkdown({ summary }) {
 
 function statusTone(mode, item) {
   if (mode === "failed" || item?.status === "failed") return "failed";
-  if (item?.status === "waiting") return "waiting";
+  // waiting 按成功展示；待办另节说明。
+  if (item?.status === "waiting") return "completed";
   if (mode === "completed" || item?.status === "completed") return "completed";
   if (item?.status === "running") return "running";
   return "pending";
 }
 
 function statusLabel(mode, item) {
-  if (mode === "completed") return "已完成";
   if (mode === "failed" || item?.status === "failed") return "失败";
-  if (item?.status === "waiting") return "等待中";
   if (item?.status === "running") return "执行中";
+  // waiting / completed 均标成功（无交互续跑闸）。
+  if (mode === "completed" || item?.status === "completed" || item?.status === "waiting") return "成功";
   return "待执行";
 }
 
@@ -357,8 +359,9 @@ export default function ReleaseNodeInspector({
     return merged;
   }, [item, artifacts]);
   const waiting = asRecord(item?.waiting) || asRecord(asRecord(item?.output)?.waiting) || asRecord(asRecord(item?.details)?.waiting);
+  const waitingInfo = resolveWaitingInfo(item) || (waiting ? { label: humanizeWaitingMatter(waiting), reason: String(waiting.reason || "").trim(), operatorUrl: "" } : null);
   const tone = statusTone(mode, item);
-  const completedView = mode === "completed" || item?.status === "completed";
+  const completedView = mode === "completed" || item?.status === "completed" || item?.status === "waiting";
   const outcomeMarkdown = useMemo(() => buildOutcomeMarkdown({ summary }), [summary]);
   const rawPayload = {
     status: item?.status || mode,
@@ -519,10 +522,13 @@ export default function ReleaseNodeInspector({
             </section>
           ) : null}
 
-          {waiting ? (
+          {waitingInfo ? (
             <section className="af-release-inspector__section is-waiting">
-              <div className="af-release-inspector__section-title"><h3>等待确认</h3><em>{waiting.reason || "需要人工处理"}</em></div>
-              <pre>{displayValue(waiting)}</pre>
+              <div className="af-release-inspector__section-title"><h3>待办事项</h3><em>{waitingInfo.label}</em></div>
+              <p className="af-release-inspector__todo">{waitingInfo.label}</p>
+              {waitingInfo.operatorUrl ? (
+                <p><a href={waitingInfo.operatorUrl} target="_blank" rel="noreferrer">打开相关链接</a></p>
+              ) : null}
             </section>
           ) : null}
 

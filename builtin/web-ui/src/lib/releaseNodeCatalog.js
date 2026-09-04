@@ -4,35 +4,10 @@
  * without changing the node lifecycle model.
  */
 
-import { selectReleaseWorkflow, selectReleaseCompositeWorkflow, workflowStageNodeIds } from "../../../../shared/release-workflow-config.js";
+import { selectReleaseWorkflow, selectReleaseCompositeWorkflow, workflowStageNodeIds, insertableReleaseCapabilities } from "../../../../shared/release-workflow-config.js";
 
 const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
-const FALLBACK_LOCALIZATION_SOURCE_FILES = Object.freeze({
-  android: Object.freeze([
-    "iHeima/res/values/strings.xml",
-    "iHeima/src/samsung/res/values/strings_samsung.xml",
-    "iHeima/src/xiaomi/res/values/strings_xiaomi.xml",
-    "iHeima/src/rustore/res/values/strings_rustore.xml",
-    "iHeima/reslive/values/livestrings.xml",
-    "modules/common/res/values/lib_strings.xml",
-    "modules/common/res/values/countries_strings.xml",
-    "effectone_modules/editor/editor-ui/src/main/res/values/eo_editor_ui_strings.xml",
-    "effectone_modules/record/recorder-ui/src/main/res/values/eo_recorder_ui_strings.xml",
-    "effectone_modules/base/base-ui/src/main/res/values/eo_base_ui_strings.xml",
-  ]),
-  ios: Object.freeze([
-    "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/countries.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/InfoPlist.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/Localizable.stringsdict",
-    "yymeet/Resources/MultiLanguage/en.lproj/PushExtensionLocalizable.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/TodayExtensionLocalizable.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/WidgetExtensionLocalizable.strings",
-    "yymeet/Resources/MultiLanguage/en.lproj/xib.strings",
-  ]),
-});
-
 function node(definition) {
   const result = {
     businessLines: ALL_BUSINESS_LINES,
@@ -206,13 +181,6 @@ function fallbackActionTitle(actionId) {
   return action.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function defaultLocalizationSourcePath(platform) {
-  // 用户需求点: 静态目录也要给多语言上传填入当前平台工程内的受审源文件相对路径。
-  return normalize(platform) === "ios"
-    ? "yymeet/Resources/MultiLanguage/en.lproj/Localizable.strings"
-    : "iHeima/res/values/strings.xml";
-}
-
 // 用户需求点: API 不可用时，静态目录也必须提供共享 workflow 引用的 action-level 节点。
 function configuredFallbackNodes(context = {}) {
   const workflow = selectReleaseWorkflow(context);
@@ -228,7 +196,7 @@ function configuredFallbackNodes(context = {}) {
       if (id === "release-git:create-release-branch") {
         inputSchema = [{ key: "release_branch", label: "Release 分支名", type: "text", required: false, placeholder: "例如 release/v1.1" }];
       } else if (id === "release-localization:upload-source-file") {
-        inputSchema = [{ key: "source_path", label: "源文件", type: "text", required: true, defaultValue: defaultLocalizationSourcePath(context.platform) }];
+        inputSchema = [];
       } else if (id === "release-records:append-release-wiki-row"
         && normalize(context.platform) === "android"
         && normalize(context.batch || "initial") === "supplemental") {
@@ -251,9 +219,6 @@ function configuredFallbackNodes(context = {}) {
         workflowId: workflow.id,
         businessLines: [...workflow.businessLines],
         platforms: [...workflow.platforms],
-        ...(id === "release-localization:upload-source-file"
-          ? { sourceFiles: [...(FALLBACK_LOCALIZATION_SOURCE_FILES[normalize(context.platform)] || [defaultLocalizationSourcePath(context.platform)])] }
-          : {}),
         inputSchema,
         nextNodeIds: [],
       });
@@ -276,7 +241,7 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
       if (!composite || seen.has(composite.id)) continue;
       if (!Array.isArray(composite.actions)) {
         result.push({
-          id: `composite:${composite.id}`, kind: "composite", compositeId: composite.id,
+          id: composite.nodeId || `composite:${composite.id}`, kind: "composite", compositeId: composite.id,
           title: composite.title, description: composite.description, skill: "release-composite",
           action: composite.id, category: stage.title || "发版阶段", processId: stage.id, processOrder: -1,
           processTitle: stage.title, workflowId: workflow.id, businessLines: [...workflow.businessLines], platforms: [...workflow.platforms],
@@ -344,6 +309,39 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
       seen.add(composite.id);
     }
   }
+  // 用户需求点: 自由 Agent 等可插入任意阶段的能力进入静态目录，但不进入状态机默认推荐。
+  for (const composite of insertableReleaseCapabilities(context)) {
+    if (!composite || seen.has(composite.id)) continue;
+    const stage = (workflow.stages || []).find((item) => String(item?.id || "") === String(composite.stageId || ""))
+      || (workflow.stages || [])[0]
+      || { id: "entry", title: "发版入口", order: 0 };
+    result.push({
+      id: composite.nodeId || `composite:${composite.id}`,
+      kind: "composite",
+      compositeId: composite.id,
+      title: composite.title,
+      description: composite.description,
+      skill: "release-composite",
+      action: composite.id,
+      category: "助手驱动",
+      processId: composite.stageId || stage.id,
+      processOrder: Number.isFinite(Number(stage.order)) ? Number(stage.order) : -1,
+      processTitle: stage.title,
+      workflowId: workflow.id,
+      businessLines: [...workflow.businessLines],
+      platforms: [...workflow.platforms],
+      insertableInAnyStage: true,
+      skillHints: [...(composite.skillHints || [])],
+      promptTemplate: composite.promptTemplate || "",
+      inputSchema: (composite.inputs || []).map((input) => ({ ...input })),
+      outputs: (composite.outputs || []).map((output) => ({ ...output })),
+      requiresConfirmation: composite.requiresConfirmation === true,
+      actions: undefined,
+      nextNodeIds: [],
+      scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+    });
+    seen.add(composite.id);
+  }
   return result;
 }
 
@@ -351,9 +349,11 @@ export function getReleaseNodes({ businessLine, platform, version = "1.0.0", bat
   const line = normalize(businessLine);
   const targetPlatform = normalize(platform);
   if (!selectReleaseWorkflow({ businessLine: line, platform: targetPlatform, batch })) return [];
-  const catalog = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, version, batch });
-  const composites = configuredFallbackCompositeNodes({ businessLine: line, platform: targetPlatform, version, batch }, catalog);
-  catalog.push(...composites);
+  const atomicFallback = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, version, batch });
+  const composites = configuredFallbackCompositeNodes({ businessLine: line, platform: targetPlatform, version, batch }, atomicFallback);
+  // 共享状态机声明的是 Agent 能力；静态回退也只暴露复合 Agent 节点，避免把同一能力
+  // 以 capability id 和旧原子 Action 两份同时展示在“自定义添加阶段”。
+  const catalog = composites.length ? composites : atomicFallback;
   const allIds = new Set(catalog.map((item) => item.id));
   return catalog
     .map((item) => {

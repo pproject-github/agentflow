@@ -93,6 +93,8 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
   const scope = contextScope(context);
   const eligibleNodes = (Array.isArray(nodes) ? nodes : [])
     .filter((node) => node && node.id && nodeMatchesContext(node, scope))
+    // 活动发版上下文准备是初始化后的固定前置 Agent，不属于可自由推荐/自定义选择的主流程节点。
+    .filter((node) => node.id !== "release-initialization:prepare-context")
     .filter((node) => !["release-management:guide-current-release", "release-management:create-active-release"].includes(node.id))
     .map((node) => ({
       ...node,
@@ -107,7 +109,12 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
   const configuredActionIds = workflowActionIds(workflow, scope, config);
   if (workflow) {
     // 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。
-    const configuredCompositeNodes = eligibleNodes.filter((node) => node.kind === "composite" && node.compositeId);
+    const configuredCompositeNodes = eligibleNodes
+      .filter((node) => node.kind === "composite" || String(node.id || "").startsWith("composite:"))
+      .map((node) => ({
+        ...node,
+        compositeId: node.compositeId || String(node.id || "").replace(/^composite:/, ""),
+      }));
     const configuredCompositeIds = new Set(configuredCompositeNodes
       .filter((node) => {
         const composite = selectReleaseCompositeWorkflow({ ...scope, compositeId: node.compositeId }, config);
@@ -235,27 +242,61 @@ export function selectWorkflowProcessNodes({ machine, nodes = [] } = {}) {
   return selected;
 }
 
-function recordStatusByNode(timeline, pending) {
-  const statuses = new Map();
-  for (const item of Array.isArray(timeline) ? timeline : []) {
-    if (item?.nodeId) statuses.set(item.nodeId, normalizeNodeStatus(item.status || "completed"));
-  }
-  for (const item of Array.isArray(pending) ? pending : []) {
-    if (!item?.nodeId || !item.status) continue;
-    // API hydrate 或旧本地数据可能同时保留完成 timeline 和过期 pending；完成事实优先。
-    const existing = statuses.get(item.nodeId);
-    if (!existing || existing === "pending") statuses.set(item.nodeId, normalizeNodeStatus(item.status));
-  }
-  return statuses;
+function capabilityKeysForItem(item = {}) {
+  const keys = new Set();
+  const add = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    keys.add(text);
+    if (text.startsWith("custom-")) add(text.slice("custom-".length));
+    if (text.startsWith("composite:")) keys.add(text.slice("composite:".length));
+    else if (!text.includes(":")) keys.add(`composite:${text}`);
+  };
+  add(item.nodeId);
+  add(item.sourcePresetId);
+  add(item.compositeId);
+  return keys;
 }
 
 function normalizeNodeStatus(status) {
   const value = normalize(status);
-  if (["completed", "succeeded", "skipped"].includes(value)) return "completed";
+  // waiting = Agent 已成功停在人工闸；无交互续跑逻辑，按完成推进，UI 另述待办。
+  if (["completed", "succeeded", "skipped", "waiting"].includes(value)) return "completed";
   if (["failed", "external_result_unknown"].includes(value)) return "failed";
   if (["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(value)) return "running";
   return "pending";
 }
+
+function statusRank(status) {
+  if (status === "failed") return 4;
+  if (status === "completed") return 2;
+  if (status === "running") return 1.5;
+  return 1;
+}
+
+function recordStatusByNode(timeline, pending) {
+  const statuses = new Map();
+  const apply = (item, fallbackStatus = "pending") => {
+    if (!item) return;
+    const next = normalizeNodeStatus(item.status || fallbackStatus);
+    for (const key of capabilityKeysForItem(item)) {
+      const existing = statuses.get(key);
+      if (!existing || statusRank(next) >= statusRank(existing)) statuses.set(key, next);
+    }
+  };
+  for (const item of Array.isArray(timeline) ? timeline : []) apply(item, "completed");
+  for (const item of Array.isArray(pending) ? pending : []) {
+    if (!item?.status) continue;
+    apply(item);
+  }
+  return statuses;
+}
+
+function isBlockingProcessStatus(status) {
+  return status === "running";
+}
+
+export { capabilityKeysForItem };
 
 // 用户需求点: 流程状态由流程内节点的实际执行状态推导，失败或执行中不能自动跨到下一流程。
 export function deriveProcessStates({ machine, timeline = [], pending = [] } = {}) {
@@ -267,7 +308,7 @@ export function deriveProcessStates({ machine, timeline = [], pending = [] } = {
     const optionalStatuses = process.nodeIds.filter((nodeId) => optionalIds.has(nodeId)).map((nodeId) => statuses.get(nodeId) || "pending");
     let state = "pending";
     if (nodeStatuses.some((status) => status === "failed") || optionalStatuses.some((status) => status === "failed")) state = "failed";
-    else if (nodeStatuses.some((status) => status === "running") || optionalStatuses.some((status) => status === "running")) state = "running";
+    else if (nodeStatuses.some(isBlockingProcessStatus) || optionalStatuses.some(isBlockingProcessStatus)) state = "running";
     else if (process.optional && optionalStatuses.every((status) => status === "pending") && nodeStatuses.every((status) => status === "pending")) state = "completed";
     else if (nodeStatuses.length > 0 && nodeStatuses.every((status) => status === "completed")) state = "completed";
     processStates.set(process.id, state);

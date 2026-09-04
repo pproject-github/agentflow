@@ -101,7 +101,7 @@
 
 - [ ] **Step 3: Replace hardcoded definitions with shared config adapters**
 
-  Remove the duplicated workflow array from `releaseWorkflowStateMachine.js`. Keep only generic normalization, status derivation and recommendation algorithms. Build processes by reading the selected config stages, resolving each configured Action ID against the filtered dynamic/static node catalog, preserving configured order and optional flags. Keep the compatibility fallback for contexts with no matching workflow. Ensure `selectWorkflowProcessNodes()` does not fall back to the entire catalog when a matching workflow exists.
+  Remove the duplicated workflow array from `releaseWorkflowStateMachine.js`. Keep only generic normalization, status derivation and recommendation algorithms. Build processes by reading the selected config stages, resolving each configured Action ID against the filtered dynamic/static node catalog, preserving configured order and optional flags. When no workflow matches, return an empty executable machine and ensure `selectWorkflowProcessNodes()` never falls back to the entire catalog.
 
   Add the requirement comment above the process builder: `// 用户需求点: 配置引用的节点才是当前业务线、平台和批次的可执行集合，自定义阶段不能平铺整个 catalog。`
 
@@ -172,7 +172,7 @@
 
 **Interfaces:**
 - `seedNextRecommendations()` and `selectWorkflowProcessNodes()` use the same machine-selected node set.
-- Generated pending/timeline records retain `workflowId`, `processId`, `processOrder` and `scopeKey` where available.
+- Generated pending/timeline records retain `workflowId`, `processId`, `processOrder`, `processTitle`, `scopeKey` and `contextSnapshot` where available.
 - Custom node creation copies only a node returned by `selectWorkflowProcessNodes()`; repeated selection remains allowed.
 
 - [ ] **Step 1: Write the failing integration/contract tests**

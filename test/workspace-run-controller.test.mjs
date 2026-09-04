@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-import { createWorkspaceRunController } from "../bin/lib/workspace-run-controller.mjs";
+import { createWorkspaceRunController, resolveWorkspaceRunTimeoutMs } from "../bin/lib/workspace-run-controller.mjs";
+
+test("release run timeout defaults to forty minutes and accepts a positive override", () => {
+  assert.equal(resolveWorkspaceRunTimeoutMs(undefined), 40 * 60 * 1000);
+  assert.equal(resolveWorkspaceRunTimeoutMs("90000"), 90_000);
+});
 
 function fakeChild(onKill = () => {}) {
   const signals = [];
@@ -86,6 +91,25 @@ test("workspace run stop reports timeout instead of claiming success", async () 
   assert.equal(result.stopped, false);
   assert.equal(result.timedOut, true);
   assert.equal(run.state, "stopping");
+});
+
+test("workspace run controller aborts a stuck run when its execution timeout expires", async () => {
+  let run;
+  const child = fakeChild((signal) => {
+    if (signal === "SIGKILL") setTimeout(() => run.finish("stopped"), 0);
+  });
+  run = createWorkspaceRunController({
+    timeoutMs: 10,
+    gracefulTimeoutMs: 5,
+    forceTimeoutMs: 100,
+  });
+  run.setChild(child);
+
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(run.timedOut, true);
+  assert.equal(run.abortController.signal.aborted, true);
+  assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });
 
 test("workspace run stop terminates the detached process group", {
