@@ -28,11 +28,11 @@ input:
     default: ""
   - type: text
     name: approvers
-    description: 可选。审批人 userId/用户名，支持 JSON 数组或逗号分隔
+    description: 可选。审批人 userId/用户名，支持 JSON 数组或逗号分隔；为空表示仅外部审核链接
     default: "[]"
   - type: text
     name: approvalMode
-    description: 审批模式：any 任一审批人通过
+    description: 审批模式：any 任一审批人通过（当前支持）
     default: "any"
 output:
   - type: node
