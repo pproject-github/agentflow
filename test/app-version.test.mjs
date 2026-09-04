@@ -11,6 +11,7 @@ test("normalizes app versions before comparing client and server", () => {
   assert.equal(normalizeAppVersion(" v0.1.104 "), "0.1.104");
   assert.equal(hasAppVersionChanged("0.1.104", "v0.1.104"), false);
   assert.equal(hasAppVersionChanged("0.1.103", "0.1.104"), true);
+  assert.equal(hasAppVersionChanged("0.1.180", "0.1.179"), false);
 });
 
 test("ignores incomplete version responses and scopes snooze by version pair", () => {

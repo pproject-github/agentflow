@@ -47,6 +47,14 @@
 - Inputs: 0. `prev`:node; 1. `prediction`:bool
 - Outputs: 0. `next1`:node; 1. `next2`:node
 
+### control_interrupt
+
+- Display: Interrupt
+- Description: 创建一个持久化人工中断。首次执行时把请求内容展示给外部渠道并暂停 Run； 通过同一个 runId 调用 resume 后，节点输出恢复值并继续下游。
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `value`:text; 2. `reason`:text = user_confirmation; 3. `resumeSchema`:text = {"type":"object"}; 4. `resumeToken`:text
+- Outputs: 0. `next`:node; 1. `resume`:text; 2. `interruptId`:text
+
 ### control_load_mcp
 
 - Display: Load MCP
@@ -111,7 +119,7 @@
 - Description: Create a public share link for upstream Display nodes
 - Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `title`:text; 2. `layout`:text = single; 3. `nodeIds`:text; 4. `baseUrl`:text
-- Outputs: 0. `next`:node; 1. `url`:text; 2. `shareId`:text; 3. `expiresAt`:text
+- Outputs: 0. `next`:node; 1. `url`:text; 2. `shareId`:text; 3. `expiresAt`:text; 4. `reviewToken`:text
 
 ### tool_git_checkout
 

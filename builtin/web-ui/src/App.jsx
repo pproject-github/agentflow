@@ -12,6 +12,7 @@ import AdminUsagePage from "./pages/AdminUsagePage.jsx";
 import AdminTeamsPage from "./pages/AdminTeamsPage.jsx";
 import AdminUsersPage from "./pages/AdminUsersPage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
+import ApprovalsPage from "./pages/ApprovalsPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import SchedulesPage from "./pages/SchedulesPage.jsx";
 import NodeStudioPage from "./pages/NodeStudioPage.jsx";
@@ -134,6 +135,7 @@ function RoutedContent({ authUser }) {
   if (path === "/admin/teams") return <AdminTeamsPage authUser={authUser} />;
   if (path === "/admin/users") return <AdminUsersPage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage authUser={authUser} />;
+  if (path === "/approvals") return <ApprovalsPage authUser={authUser} />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;
 }

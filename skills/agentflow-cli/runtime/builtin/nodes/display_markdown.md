@@ -20,5 +20,17 @@ output:
   - type: node
     name: next
     default: ""
+ui:
+  card:
+    template: details
+    icon: article
+    tone: green
+    sections:
+      - type: binding
+        label: 展示内容
+        input: content
+      - type: summary
+        label: 当前产物
+        output: content
 ---
 ${content}

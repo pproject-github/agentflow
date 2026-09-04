@@ -48,5 +48,20 @@ output:
     default: ""
     required: true
     showOnNode: true
+ui:
+  card:
+    template: details
+    icon: terminal
+    tone: neutral
+    sections:
+      - type: code
+        label: 执行脚本
+        field: body
+      - type: binding
+        label: 运行上下文
+        input: workspaceContext
+      - type: summary
+        label: 脚本输出
+        output: result
 ---
 ${USER_PROMPT}

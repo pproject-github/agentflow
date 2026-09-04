@@ -177,6 +177,81 @@ test("bootstrap 按运行时 env 契约调用 run()，输出槽写到指定绝�
   }
 });
 
+test("bootstrap exposes dirs.runState for node packages", () => {
+  const source = `import fs from "node:fs/promises";
+export default { id: "state_writer", version: "1.0.0", name: "state", inputs: {}, outputs: { result: { type: "text" } } };
+export async function run(inputs, outputs, dirs) { await dirs.runState.patch({ plan: { approved: true } }, { nodeId: "state_writer" }); const value = await dirs.runState.get("plan.approved"); await fs.writeFile(outputs.result, String(value)); }
+`;
+  const fx = makeFixture(source, "state-writer");
+  try {
+    const runDir = path.join(fx.root, "run");
+    const outDir = path.join(runDir, "outputs");
+    fs.mkdirSync(outDir, { recursive: true });
+    const runId = "bootstrap-state-test";
+    const result = spawnSync(process.execPath, [BOOTSTRAP, path.join(fx.pkgDir, "index.mjs")], {
+      cwd: runDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: fx.root,
+        AGENTFLOW_RUN_ID: runId,
+        AGENTFLOW_INPUTS_JSON: "{}",
+        AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify({ result: path.join(outDir, "result.txt") }),
+        AGENTFLOW_WORKSPACE_ROOT: fx.root,
+        AGENTFLOW_NODE_RUN_DIR: runDir,
+        AGENTFLOW_OUTPUTS_DIR: outDir,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(path.join(outDir, "result.txt"), "utf-8"), "true");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("bootstrap runState honors the Workspace-provided absolute state file", () => {
+  const source = `import fs from "node:fs/promises";
+export default { id: "state_writer_explicit", version: "1.0.0", name: "state", inputs: {}, outputs: { result: { type: "text" } } };
+export async function run(inputs, outputs, dirs) { await dirs.runState.patch({ plan: { approved: true } }, { nodeId: "state_writer_explicit" }); await fs.writeFile(outputs.result, JSON.stringify(await dirs.runState.snapshot())); }
+`;
+  const fx = makeFixture(source, "state-writer-explicit");
+  const explicitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-explicit-state-"));
+  try {
+    const runDir = path.join(fx.root, "run");
+    const outDir = path.join(runDir, "outputs");
+    fs.mkdirSync(outDir, { recursive: true });
+    const runId = "bootstrap-explicit-state-test";
+    const stateFile = path.join(explicitRoot, "state", `${runId}.json`);
+    const eventsFile = path.join(explicitRoot, "state-events", `${runId}.jsonl`);
+    const result = spawnSync(process.execPath, [BOOTSTRAP, path.join(fx.pkgDir, "index.mjs")], {
+      cwd: runDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AGENTFLOW_HOME: path.join(fx.root, "wrong-home"),
+        AGENTFLOW_RUN_ID: runId,
+        AGENTFLOW_RUN_STATE_FILE: stateFile,
+        AGENTFLOW_RUN_STATE_EVENTS_FILE: eventsFile,
+        AGENTFLOW_INPUTS_JSON: "{}",
+        AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify({ result: path.join(outDir, "result.txt") }),
+        AGENTFLOW_WORKSPACE_ROOT: fx.root,
+        AGENTFLOW_NODE_RUN_DIR: runDir,
+        AGENTFLOW_OUTPUTS_DIR: outDir,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const snapshot = JSON.parse(fs.readFileSync(path.join(outDir, "result.txt"), "utf-8"));
+    assert.equal(snapshot.revision, 1);
+    assert.equal(snapshot.state.plan.approved, true);
+    assert.equal(fs.existsSync(stateFile), true);
+    assert.equal(fs.existsSync(eventsFile), true);
+    assert.equal(fs.existsSync(path.join(fx.root, "wrong-home", "workspace-run-logs", "state", `${runId}.json`)), false);
+  } finally {
+    fx.cleanup();
+    fs.rmSync(explicitRoot, { recursive: true, force: true });
+  }
+});
+
 test("run() 抛错时 bootstrap 非零退出并把栈打到 stderr", () => {
   const fx = makeFixture(`export default { id: "boom", version: "1.0.0", inputs: {}, outputs: {} };
 export async function run() { throw new Error("节点自己失败了"); }

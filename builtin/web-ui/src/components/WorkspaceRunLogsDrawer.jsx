@@ -300,6 +300,11 @@ export default function WorkspaceRunLogsDrawer({
                   events={Array.isArray(detail?.events) ? detail.events : []}
                   loading={loadingDetail}
                   report={{ eventCount: detail?.events?.length || 0, stages: reportStages }}
+                  flowNodes={flowNodes}
+                  artifacts={reportStages.flatMap((stage) => (stage.artifacts || []).map((artifact) => ({ ...artifact, nodeId: stage.id })))}
+                  runState={detail?.runState}
+                  runStateEvents={detail?.runStateEvents || []}
+                  runStateHistory={detail?.runStateHistory || []}
                   waterfallOnly
                 />
               )}

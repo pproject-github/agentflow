@@ -169,6 +169,7 @@ export function graphToIr(graph) {
     edges: [...new Set(edges)].sort(),
     slotOrder,
     subflows: graph?.subflows && typeof graph.subflows === "object" ? graph.subflows : {},
+    runState: graph?.runState && typeof graph.runState === "object" ? graph.runState : null,
   };
 }
 
@@ -330,6 +331,7 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     edges,
     ui,
     subflows: ir?.subflows && typeof ir.subflows === "object" ? ir.subflows : {},
+    ...(ir?.runState && typeof ir.runState === "object" ? { runState: ir.runState } : {}),
   };
 }
 

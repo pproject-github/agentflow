@@ -39,6 +39,28 @@ output:
     name: response
     default: ""
     showOnNode: false
+ui:
+  card:
+    template: details
+    icon: send
+    tone: purple
+    sections:
+      - type: binding
+        label: 发送正文
+        input: markdown
+      - type: decision
+        label: 企业微信投递
+        output: sent
+        options:
+          - value: true
+            label: 已发送
+            tone: green
+          - value: false
+            label: 未发送
+            tone: red
+      - type: summary
+        label: 回执
+        output: message
 ---
 Send `${markdown}` to a WeCom group chat through a group robot webhook.
 

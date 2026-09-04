@@ -159,6 +159,12 @@ const DISPLAY_REF_PREFIX = "display-ref:";
 const DISPLAY_GROUP_REF_PREFIX = "display-group-ref:";
 const DEFAULT_WORKSPACE_SCHEDULE_CRON = "0 9 * * *";
 const DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE = "Asia/Shanghai";
+// 这些节点可能把 Run 挂起；进入它们的连线是“可暂停边界”，需要和普通数据/控制连线区分。
+const INTERRUPT_CAPABLE_DEFINITION_IDS = new Set([
+  "control_interrupt",
+  "control_while",
+  "tool_jenkins_build",
+]);
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
@@ -489,11 +495,13 @@ function workspaceRunSessionOptionLabel(session) {
   const label = String(session?.label || session?.runNodeId || "Run").trim();
   const timestamp = Number(session?.startedAt || 0);
   const time = Number.isFinite(timestamp) && timestamp > 0
-    ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(timestamp))
+    ? PRD_WORKFLOW_TIME_FORMATTER.format(new Date(timestamp))
     : "--:--:--";
   const status = {
     running: "运行中",
     stopping: "停止中",
+    waiting: "等待中",
+    polling: "等待中",
     paused: "等待中",
     failed: "失败",
     done: "完成",
@@ -774,6 +782,16 @@ const PRD_WORKFLOW_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
 });
 const PRD_WORKFLOW_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   timeZone: PRD_WORKFLOW_TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const WORKSPACE_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
@@ -2054,7 +2072,11 @@ function serializeScheduledRunConfig(config) {
 function formatScheduledRunTime(ts) {
   const value = Number(ts || 0);
   if (!Number.isFinite(value) || value <= 0) return "-";
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: DEFAULT_WORKSPACE_SCHEDULE_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function scheduleTypeLabel(type) {
@@ -2632,7 +2654,7 @@ function formatDisplayShareExpiry(share = {}) {
   if (!share.expiresAt) return "永久有效";
   const time = Date.parse(String(share.expiresAt || ""));
   if (!Number.isFinite(time)) return "永久有效";
-  return `有效期至 ${new Date(time).toLocaleString()}`;
+  return `有效期至 ${WORKSPACE_DATE_TIME_FORMATTER.format(new Date(time))}（北京时间）`;
 }
 
 function displayShareUrl(share = {}) {
@@ -10603,6 +10625,31 @@ function WorkspacePageInner() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) return;
       if (!json.running) {
+        // 外部审核页恢复 Run 后，原始流式请求不会回到当前标签页；从持久化日志
+        // 对齐最近运行状态，避免列表和详情一直停留在 waiting。
+        try {
+          const logsRes = await fetch(`/api/workspace/run-logs?${q.toString()}&limit=50`);
+          const logsJson = await logsRes.json().catch(() => ({}));
+          if (logsRes.ok && Array.isArray(logsJson.runs)) {
+            const logsById = new Map(logsJson.runs.map((item) => [String(item?.runId || ""), item]));
+            setComposerRunSessions((list) => list.map((session) => {
+              const log = logsById.get(String(session?.id || ""));
+              if (!log) return session;
+              const status = String(log.status || "").toLowerCase();
+              const nextStatus = status === "success" || status === "completed" ? "done"
+                : status === "failed" || status === "error" ? "failed"
+                  : status === "waiting" || status === "interrupted" ? "waiting"
+                    : session.status;
+              return {
+                ...session,
+                status: nextStatus,
+                ...(log.endedAt ? { endedAt: log.endedAt } : {}),
+              };
+            }));
+          }
+        } catch {
+          // 日志同步是增强体验，失败时保留本地状态。
+        }
         setRunningRunSessionsSynced((current) => {
           const next = { ...current };
           for (const [sessionId, session] of Object.entries(next)) {
@@ -11834,7 +11881,7 @@ function WorkspacePageInner() {
     const prev = nodeHandleSignaturesRef.current;
     const next = new Map();
     const changedIds = [];
-    for (const node of nodes) {
+    for (const node of hydratedNodes) {
       const signature = nodeHandleSignature(node);
       next.set(node.id, signature);
       if (prev.get(node.id) !== signature) changedIds.push(node.id);
@@ -13293,6 +13340,16 @@ function WorkspacePageInner() {
     };
   }, [flowParams, isWorkflowMode, loadFiles, refreshWorkspaceRunStatus, scheduleWorkspaceRemoteRefresh]);
 
+  // 人工审核可能在企业微信/分享页完成，当前 Workspace 不会收到本标签页的 SSE 事件；
+  // 定期拉取运行态，确保等待→完成/失败能及时反映在画布和最近运行列表中。
+  useEffect(() => {
+    if (!flowParams.flowId || isWorkflowMode) return undefined;
+    const timer = window.setInterval(() => {
+      void refreshWorkspaceRunStatus();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [flowParams.flowId, flowParams.flowSource, flowParams.archived, isWorkflowMode, refreshWorkspaceRunStatus]);
+
   useEffect(() => {
     if (workspaceCanvasInteractionActiveRef.current) return undefined;
     const prev = renderedNodeLayoutSignaturesRef.current;
@@ -13394,17 +13451,17 @@ function WorkspacePageInner() {
   const edgeNodeDataCacheRef = useRef({ refs: new Map(), nodeDataById: new Map() });
   const edgeNodeDataById = useMemo(() => {
     const previous = edgeNodeDataCacheRef.current;
-    let changed = previous.refs.size !== nodes.length;
+    let changed = previous.refs.size !== hydratedNodes.length;
     const nextRefs = new Map();
-    for (const node of nodes) {
+    for (const node of hydratedNodes) {
       nextRefs.set(node.id, node.data);
       if (!previous.refs.has(node.id) || previous.refs.get(node.id) !== node.data) changed = true;
     }
     if (!changed) return previous.nodeDataById;
-    const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
+    const nodeDataById = new Map(hydratedNodes.map((node) => [node.id, node.data]));
     edgeNodeDataCacheRef.current = { refs: nextRefs, nodeDataById };
     return nodeDataById;
-  }, [nodes]);
+  }, [hydratedNodes]);
 
   const coloredEdges = useMemo(() => {
     return edges.map((edge) => {
@@ -13415,7 +13472,18 @@ function WorkspacePageInner() {
       const srcSlot = srcData && sm ? srcData.outputs?.[parseInt(sm[1], 10)] : null;
       const tgtSlot = tgtData && tm ? tgtData.inputs?.[parseInt(tm[1], 10)] : null;
       const hue = srcSlot?.type ? getHandleColor(srcSlot.type) : tgtSlot?.type ? getHandleColor(tgtSlot.type) : "";
-      if (!hue) return edge;
+      const targetDefinitionId = String(tgtData?.definitionId || "").trim();
+      const isInterruptBoundary = INTERRUPT_CAPABLE_DEFINITION_IDS.has(targetDefinitionId);
+      const isAwaitingHuman = targetDefinitionId === "control_interrupt" && tgtData?.nodeStatus === "waiting";
+      if (!hue && !isInterruptBoundary) return edge;
+      if (isInterruptBoundary) {
+        return {
+          ...edge,
+          className: `${edge.className || ""} af-flow-edge--interrupt-boundary${isAwaitingHuman ? " af-flow-edge--awaiting-review" : ""}`.trim(),
+          style: { ...(edge.style || {}), stroke: "#f4c542", strokeWidth: isAwaitingHuman ? 3.2 : 2.6, strokeDasharray: "9 7" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#f4c542" },
+        };
+      }
       return {
         ...edge,
         style: { ...(edge.style || {}), stroke: hue, strokeWidth: 2 },

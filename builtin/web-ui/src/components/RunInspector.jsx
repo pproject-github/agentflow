@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   buildRunAuditTrace,
+  buildRunStateSnapshot,
   formatRunInspectorDuration,
   runInspectorTimelineRows,
 } from "../lib/runInspectorModel.js";
@@ -8,7 +9,13 @@ import {
 function clock(value) {
   const time = Number(value || 0);
   if (!Number.isFinite(time) || time <= 0) return "--:--:--";
-  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(time));
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(time));
 }
 
 function statusIcon(status) {
@@ -54,6 +61,18 @@ function reportStatusLabel(status) {
   if (value.includes("running")) return "执行中";
   if (value.includes("cancel") || value.includes("stop")) return "已停止";
   return status || "未知状态";
+}
+
+function stateStatusLabel(status) {
+  return ({
+    success: "已完成",
+    running: "执行中",
+    waiting: "等待处理",
+    error: "执行失败",
+    cancelled: "已停止",
+    skipped: "已跳过",
+    pending: "待执行",
+  })[status] || "未知状态";
 }
 
 function spanSearchText(span) {
@@ -132,11 +151,13 @@ function SpanInspector({ span }) {
   );
 }
 
-export default function RunInspector({ run, events = [], rawLines = [], loading = false, compact = false, report = null, waterfallOnly = false }) {
+export default function RunInspector({ run, events = [], rawLines = [], loading = false, compact = false, report = null, waterfallOnly = false, flowNodes = [], artifacts = [], runState: persistedRunState = null, runStateEvents = [], runStateHistory = [] }) {
   const [selectedSpanId, setSelectedSpanId] = useState("");
-  const [tab, setTab] = useState("trace");
+  const [tab, setTab] = useState("state");
   const [search, setSearch] = useState("");
   const trace = useMemo(() => buildRunAuditTrace(events, run), [events, run]);
+  const runState = useMemo(() => buildRunStateSnapshot(events, run, flowNodes, artifacts), [events, flowNodes, run, artifacts]);
+  const businessState = persistedRunState?.state && typeof persistedRunState.state === "object" ? persistedRunState.state : null;
   const timeline = useMemo(() => runInspectorTimelineRows(trace.spans, trace), [trace]);
   const primaryRows = trace.turns.length ? trace.turns : trace.nodes;
   const selectedSpan = trace.spans.find((span) => span.id === selectedSpanId) || primaryRows[0] || trace.spans[0] || null;
@@ -144,20 +165,20 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
 
   useEffect(() => {
     setSelectedSpanId("");
-    setTab("trace");
+    setTab("state");
     setSearch("");
   }, [run?.runId]);
 
   if (loading && !events.length) return <div className="af-run-inspector__empty">正在读取 Run Trace…</div>;
-  if (!events.length) return <div className="af-run-inspector__empty">这个 Run 暂无可审计事件。</div>;
 
   return (
     <section className={`af-run-inspector${compact ? " af-run-inspector--compact" : ""}${waterfallOnly ? " af-run-inspector--waterfall-only" : ""}`} aria-label="Run Inspector">
       <header className="af-run-inspector__toolbar">
         <div className="af-run-inspector__tabs">
+          <button type="button" className={tab === "state" ? "is-active" : ""} onClick={() => setTab("state")}>状态 <span>{runState.stages.length}</span></button>
           <button type="button" className={tab === "trace" ? "is-active" : ""} onClick={() => setTab("trace")}>Trace <span>{trace.spans.length}</span></button>
           <button type="button" className={tab === "raw" ? "is-active" : ""} onClick={() => setTab("raw")}>Raw <span>{rawLines.length || events.length}</span></button>
-          {report ? <button type="button" className={tab === "report" ? "is-active" : ""} onClick={() => setTab("report")}>报告</button> : null}
+          {report ? <button type="button" className={tab === "report" ? "is-active" : ""} onClick={() => setTab("report")}>摘要</button> : null}
         </div>
         <div className="af-run-inspector__evidence" aria-label="运行证据版本">
           <span>{run?.scheduled || run?.trigger === "scheduled" ? "SCHEDULE" : "MANUAL"}</span>
@@ -170,11 +191,55 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
         </label>
       </header>
 
-      {tab === "report" ? (
+      {tab === "state" ? (
+        <div className="af-run-state">
+          <section className={`af-run-state__hero is-${runState.status}`}>
+            <div>
+              <span className="af-run-state__eyebrow">RUN STATE · v{runState.version}</span>
+              <h2>{stateStatusLabel(runState.status)}</h2>
+              <code>{runState.runId || run?.runId || "-"}</code>
+            </div>
+            <span className="af-run-state__icon material-symbols-outlined">{statusIcon(runState.status)}</span>
+          </section>
+          <div className="af-run-state__facts">
+            <div><span>当前阶段</span><strong>{runState.currentStage?.label || "—"}</strong><small>{runState.currentStage ? stateStatusLabel(runState.currentStage.status) : "暂无"}</small></div>
+            <div><span>进度</span><strong>{runState.progress.completed} / {runState.progress.total || 0}</strong><small>{runState.progress.percent}%</small></div>
+            <div><span>等待项</span><strong>{runState.waiting.length}</strong><small>{runState.pending.length ? `${runState.pending.length} 个待执行` : "无"}</small></div>
+            <div><span>最近事件</span><strong>{runState.lastEvent?.type || "—"}</strong><small>{runState.lastEvent?.label || "暂无事件"}</small></div>
+          </div>
+          {businessState ? (
+            <section className="af-run-state__section af-run-state__business">
+              <div className="af-run-state__section-head"><h3>业务 Run State</h3><span>rev {persistedRunState.revision || 0} · 节点上报</span></div>
+              <pre>{JSON.stringify(businessState, null, 2)}</pre>
+              {runStateEvents.length ? <small className="af-run-state__state-events">最近更新：{runStateEvents.slice(-3).map((event) => `${event.operation || "update"} · ${event.nodeId || "node"}`).join("；")}</small> : null}
+            </section>
+          ) : null}
+          {runStateHistory.length ? (
+            <details className="af-run-state__history"><summary>Checkpoint 历史（{runStateHistory.length}）</summary>
+              <div>{runStateHistory.slice().reverse().map((checkpoint, index) => (
+                <div className="af-run-state__history-row" key={`${checkpoint.revision}-${checkpoint.ts}-${index}`}><strong>rev {checkpoint.revision}</strong><span>{checkpoint.nodeId || "Run"}</span><small>{checkpoint.status}</small></div>
+              ))}</div>
+            </details>
+          ) : null}
+          {runState.waiting.length ? <section className="af-run-state__notice is-waiting"><span className="material-symbols-outlined">hourglass_top</span><div><strong>Run 正在等待处理</strong><p>{runState.waiting.map((item) => item.label).join("、")}</p></div></section> : null}
+          {runState.status === "error" ? <section className="af-run-state__notice is-error"><span className="material-symbols-outlined">error</span><div><strong>Run 执行失败</strong><p>{run?.error || "请查看 Trace 或日志定位失败阶段。"}</p></div></section> : null}
+          <section className="af-run-state__section">
+            <div className="af-run-state__section-head"><h3>阶段状态</h3><span>{runState.stages.length} stages</span></div>
+            {runState.stages.length ? <div className="af-run-state__stages">{runState.stages.map((stage) => (
+              <div className={`af-run-state__stage is-${stage.status}`} key={stage.id}>
+                <span className="material-symbols-outlined">{statusIcon(stage.status)}</span>
+                <div><strong>{stage.label}</strong><small>{stateStatusLabel(stage.status)}{stage.lastEvent?.type ? ` · ${stage.lastEvent.type}` : ""}</small></div>
+                <span className="af-run-state__stage-duration">{stage.durationMs ? formatRunInspectorDuration(stage.durationMs) : "—"}</span>
+              </div>
+            ))}</div> : <p className="af-run-state__empty">流程图暂无节点；状态将在 Run 事件到达后补充。</p>}
+          </section>
+          <details className="af-run-state__snapshot"><summary>查看 State 快照（只读投影）</summary><pre>{JSON.stringify(runState, null, 2)}</pre></details>
+        </div>
+      ) : tab === "report" ? (
         <div className="af-run-report">
           <section className="af-run-report__hero">
             <div>
-              <span className="af-run-report__eyebrow">执行报告</span>
+              <span className="af-run-report__eyebrow">RUN 摘要</span>
               <h2>{report.label || run?.label || run?.runNodeId || "Workspace Run"}</h2>
               <code>{run?.runId || "-"}</code>
             </div>
