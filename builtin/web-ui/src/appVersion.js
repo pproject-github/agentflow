@@ -10,10 +10,22 @@ export function normalizeAppVersion(value) {
   return String(value || "").trim().replace(/^v/i, "");
 }
 
+function compareAppVersions(left, right) {
+  const a = normalizeAppVersion(left).split("-")[0].split(".").map((part) => Number(part) || 0);
+  const b = normalizeAppVersion(right).split("-")[0].split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) > (b[index] || 0) ? 1 : -1;
+  }
+  return 0;
+}
+
 export function hasAppVersionChanged(clientVersion, serverVersion) {
   const client = normalizeAppVersion(clientVersion);
   const server = normalizeAppVersion(serverVersion);
-  return Boolean(client && server && client !== server);
+  // An older backend can coexist briefly with a newer static bundle during a
+  // restart/deploy. It is not an update for the user and must not be shown as
+  // “newer → older”.
+  return Boolean(client && server && compareAppVersions(server, client) > 0);
 }
 
 export function appVersionSnoozeKey(clientVersion, serverVersion) {

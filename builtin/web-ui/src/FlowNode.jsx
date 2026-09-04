@@ -967,8 +967,13 @@ export function FlowNode({
           </span>
         )}
         {nodeStatus === "waiting" && (
-          <span className="af-flow-node__status-badge af-flow-node__status-badge--waiting">
-            {nodeRunDetail?.phase === "queued" ? "QUEUED" : nodeRunDetail?.phase === "triggering" ? "TRIGGERING" : "BUILDING"}
+          <span
+            className="af-flow-node__status-badge af-flow-node__status-badge--waiting"
+            title={definitionId === "control_interrupt" ? "等待人工确认" : undefined}
+          >
+            {definitionId === "control_interrupt"
+              ? "等待确认"
+              : nodeRunDetail?.phase === "queued" ? "QUEUED" : nodeRunDetail?.phase === "triggering" ? "TRIGGERING" : "BUILDING"}
           </span>
         )}
         {nodeStatus === "outcome_failed" && (

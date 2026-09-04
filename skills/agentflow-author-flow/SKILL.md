@@ -16,8 +16,13 @@ execution, publication, and schedule operations. Read those selected Skills comp
    `auth complete` after approval; never ask the user to paste a personal Token. The Runtime is
    bundled with the Skill; if unavailable, update/reinstall the SkillHub package instead of
    installing an npm CLI.
-2. Translate the user's idea into a local `workspace.flow.js`. Search the remote node catalog before
-   creating a custom node package.
+2. Translate the user's idea into a local `workspace.flow.js` using a catalog-first capability
+   resolution gate. Resolve every requested capability in this order:
+   **内置节点 → 已安装/线上 Marketplace 节点 → 自定义 Node DSL 节点**. Inspect the built-in
+   node catalog and then search the remote Marketplace; reuse a suitable existing definition before
+   writing `tool_nodejs` code or creating `nodes/<name>/`. Record the selected `definitionId` (and
+   Marketplace `specifier` when applicable) in the authoring notes. A generic NodeJS/webhook script
+   is not an acceptable substitute when a matching built-in or Marketplace node exists.
 3. Run DSL lint, then layout. Do not upload an invalid or unreadable graph.
 4. Create a private runnable Draft:
 

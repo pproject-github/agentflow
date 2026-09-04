@@ -73,7 +73,9 @@ import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
-import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory } from "./workspace-run-state.mjs";
+import { listWorkspaceInterrupts, readWorkspaceInterrupt } from "./workspace-interrupt.mjs";
+import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, readWorkspaceRunManifest, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import busboy from "busboy";
@@ -1159,6 +1161,46 @@ function paginateMarketplaceResources(items, url, defaultLimit = 24) {
 async function workspaceRoutes(req, res, ctx) {
   const { url, authUser, userCtx, root, host, MIME, adminWorkspaceRequestedUserContext, broadcastWorkspaceCollaborationEvent, findWorkspaceShareUser, isValidFlowSourceRead, readUserWorkspaces, requestPublicBaseUrl, resolveWorkspaceScopeRoot, teamSummaryWithUsers, listConfiguredWorkspaces } = ctx;
 
+    if (req.method === "GET" && (url.pathname === "/api/workspace/my-approvals" || url.pathname === "/api/v1/approvals")) {
+      const identity = new Set([
+        String(userCtx?.userId || "").trim(),
+        String(authUser?.userId || "").trim(),
+        String(authUser?.username || "").trim(),
+      ].filter(Boolean));
+      const statusFilter = String(url.searchParams.get("status") || "pending").trim().toLowerCase();
+      const approvals = listWorkspaceInterrupts()
+        .filter((item) => {
+          const status = String(item?.status || "").trim().toLowerCase();
+          if (statusFilter !== "all" && (statusFilter === "pending" ? !["waiting", "resuming"].includes(status) : status !== statusFilter)) return false;
+          const approvers = Array.isArray(item?.approvers) ? item.approvers.map((value) => String(value || "").trim()).filter(Boolean) : [];
+          return approvers.length > 0 && approvers.some((value) => identity.has(value));
+        })
+        .sort((left, right) => Date.parse(String(right?.createdAt || "")) - Date.parse(String(left?.createdAt || "")))
+        .map((item) => ({
+          interruptId: item.interruptId,
+          runId: item.runId,
+          flowId: item.flowId,
+          flowSource: item.flowSource,
+          nodeId: item.nodeId,
+          kind: item.kind,
+          reason: item.reason,
+          value: item.value,
+          requestedBy: item.requestedBy || item.userId || "",
+          approvers: item.approvers || [],
+          approvalMode: item.approvalMode || "any",
+          approvalStatus: item.approvalStatus || (item.status === "waiting" ? "pending" : item.status),
+          reviewer: item.reviewer || item.resolvedBy || "",
+          reviewComment: item.reviewComment || "",
+          resumeToken: item.resumeToken || "",
+          status: item.status,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+          resolvedAt: item.resolvedAt || "",
+        }));
+      json(res, 200, { ok: true, approvals, count: approvals.length, user: { userId: userCtx?.userId || authUser?.userId || "", username: authUser?.username || "" } });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/node-packages") {
       try {
         const packages = listMarketplacePackages(root, { ...userCtx, marketplaceScope: "all" });
@@ -1172,6 +1214,9 @@ async function workspaceRoutes(req, res, ctx) {
             baseDefinitionId: node.baseDefinitionId,
             inputs: node.inputs,
             outputs: node.outputs,
+            // Node UI Kit 是节点包清单的一部分；不能只在发布/存储侧保留，
+            // 画布 palette 接口也必须透传，否则普通 tool 节点会退化成只有标题。
+            ui: node.ui,
             ownerUserId: node.ownerUserId || node.createdBy || "",
             visibility: node.visibility || "public",
             useCount: Number(node.useCount || 0),
@@ -2925,6 +2970,13 @@ async function workspaceRoutes(req, res, ctx) {
       return;
     }
 
+    // Shared by the run-plan and run/resume handlers. Keep this declaration
+    // before either branch: run-plan also needs to recognize an external
+    // resume request, and a later const declaration would trigger a TDZ error.
+    const externalResumeMatch = req.method === "POST"
+      ? url.pathname.match(/^\/api\/v1\/flows\/([^/]+)\/runs\/([^/]+)\/resume$/)
+      : null;
+
     if (req.method === "POST" && url.pathname === "/api/workspace/run/plan") {
       let payload;
       try {
@@ -2953,6 +3005,10 @@ async function workspaceRoutes(req, res, ctx) {
         if (!flowId) {
           json(res, 400, { error: "Missing flowId" });
           return;
+        }
+        if (externalResumeMatch && !String(payload.runNodeId || "").trim()) {
+          const manifest = readWorkspaceRunManifest(scoped.root, payload.runSessionId || payload.runId || "");
+          if (manifest?.runNodeId) payload.runNodeId = manifest.runNodeId;
         }
         const graph = hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || {}, userCtx);
         const runNodeId = String(payload.runNodeId || "").trim();
@@ -3045,13 +3101,32 @@ async function workspaceRoutes(req, res, ctx) {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/workspace/run") {
+    if (req.method === "POST" && (url.pathname === "/api/workspace/run" || externalResumeMatch)) {
       let payload;
       try {
         payload = JSON.parse(await readBody(req));
       } catch {
         json(res, 400, { error: "Invalid JSON body" });
         return;
+      }
+      if (externalResumeMatch) {
+        payload = {
+          ...payload,
+          flowId: decodeURIComponent(externalResumeMatch[1]),
+          runSessionId: decodeURIComponent(externalResumeMatch[2]),
+          runId: decodeURIComponent(externalResumeMatch[2]),
+          runNodeId: payload?.runNodeId || "run",
+          reviewToken: String(url.searchParams.get("reviewToken") || url.searchParams.get("token") || "").trim(),
+          resume: {
+            interruptId: payload?.interruptId || payload?.resume?.interruptId || "",
+            resume: payload?.input !== undefined ? payload.input : (
+              payload?.resume && Object.prototype.hasOwnProperty.call(payload.resume, "resume")
+                ? payload.resume.resume
+                : payload?.resume ?? null
+            ),
+            idempotencyKey: payload?.idempotencyKey || "",
+          },
+        };
       }
       try {
         const scoped = resolveWorkspaceScopeRoot(root, {
@@ -3100,7 +3175,18 @@ async function workspaceRoutes(req, res, ctx) {
         const runtimeGraph = scoped.collaboration
           ? canonicalGraph
           : hydrateWorkspaceGraphForRuntime(root, scoped, payload.graph || canonicalGraph, userCtx);
-        const runNodeId = String(payload.runNodeId || "").trim();
+        if (externalResumeMatch) payload.graph = runtimeGraph;
+        let runNodeId = String(payload.runNodeId || "").trim();
+        if (!runNodeId && payload.resume) {
+          const manifest = readWorkspaceRunManifest(scoped.root, payload.runSessionId || payload.runId || "");
+          const interruptRecord = readWorkspaceInterrupt(payload.runSessionId || payload.runId || "");
+          runNodeId = String(manifest?.runNodeId || interruptRecord?.cursor?.runNodeId || "").trim();
+          if (!runNodeId) {
+            runNodeId = Object.entries(runtimeGraph.instances || {})
+              .find(([, item]) => ["workspace_run", "workspace_scheduled_run"].includes(String(item?.definitionId || "")))?.[0] || "";
+          }
+          payload.runNodeId = runNodeId;
+        }
         const plan = workspaceRunPlan(runtimeGraph, runNodeId, scoped.root, {
           forceNodeIds: Array.isArray(payload.forceNodeIds) ? payload.forceNodeIds : [],
           ignoreCache: payload.ignoreCache === true,
@@ -3229,6 +3315,20 @@ async function workspaceRoutes(req, res, ctx) {
               res.end();
               return;
             }
+            if (Array.isArray(result.pauseNodeIds) && result.pauseNodeIds.length) {
+              runDeferred = true;
+              const endedAt = Date.now();
+              appendWorkspaceRunFinished({
+                ...runEntry,
+                endedAt,
+                durationMs: endedAt - runEntry.startedAt,
+                marketplaceResources: marketplaceResourcesForRun(scoped.root, runtimeGraph, result.order || Array.from(touchedIds)),
+              }, "waiting");
+              finishWorkspaceRunLogSession(runLog.runId, "waiting", { endedAt, durationMs: endedAt - runEntry.startedAt, runNodeId });
+              writeEvent({ type: "done", ok: true, paused: true, path: graphPath, graph: committed.graph, revision, runtimeRevision, order: result.order, touchedNodeIds: Array.from(touchedIds), pauseNodeIds: result.pauseNodeIds });
+              res.end();
+              return;
+            }
             const endedAt = Date.now();
             appendWorkspaceRunFinished({
               ...runEntry,
@@ -3325,6 +3425,19 @@ async function workspaceRoutes(req, res, ctx) {
             });
             return;
           }
+          if (Array.isArray(result.pauseNodeIds) && result.pauseNodeIds.length) {
+            runDeferred = true;
+            const endedAt = Date.now();
+            appendWorkspaceRunFinished({
+              ...runEntry,
+              endedAt,
+              durationMs: endedAt - runEntry.startedAt,
+              marketplaceResources: marketplaceResourcesForRun(scoped.root, runtimeGraph, result.order || Array.from(touchedIds)),
+            }, "waiting");
+            finishWorkspaceRunLogSession(runLog.runId, "waiting", { endedAt, durationMs: endedAt - runEntry.startedAt, runNodeId });
+            json(res, 200, { ok: true, paused: true, path: graphPath, ...result, graph: committed.graph, revision, runtimeRevision, runId, plannedNodeIds, touchedNodeIds: Array.from(touchedIds) });
+            return;
+          }
           const endedAt = Date.now();
           appendWorkspaceRunFinished({
             ...runEntry,
@@ -3381,6 +3494,70 @@ async function workspaceRoutes(req, res, ctx) {
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }
+      return;
+    }
+
+    const externalRunMatch = url.pathname.match(/^\/api\/v1\/flows\/([^/]+)\/runs\/([^/]+)(?:\/(interrupts|checkpoints))?$/);
+    if (req.method === "GET" && externalRunMatch) {
+      const flowId = decodeURIComponent(externalRunMatch[1]);
+      const runId = decodeURIComponent(externalRunMatch[2]);
+      const subresource = String(externalRunMatch[3] || "");
+      const flowSource = url.searchParams.get("flowSource") || "user";
+      const interrupt = readWorkspaceInterrupt(runId);
+      const reviewToken = String(url.searchParams.get("reviewToken") || url.searchParams.get("token") || "").trim();
+      if (reviewToken && (!interrupt || String(interrupt.resumeToken || "") !== reviewToken)) {
+        json(res, 403, { error: "Invalid review token" });
+        return;
+      }
+      if (interrupt && interrupt.userId && interrupt.userId !== String(userCtx?.userId || "") && !userCtx?.isAdmin && !reviewToken) {
+        json(res, 403, { error: "Run access denied" });
+        return;
+      }
+      const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
+      if (scoped.error) {
+        json(res, scoped.status || 400, { error: scoped.error });
+        return;
+      }
+      const run = listWorkspaceRunLogs({
+        userId: flowSource === "workspace" ? "" : workspaceScopedUserContext(scoped, userCtx).userId || "",
+        flowId,
+        flowSource,
+        limit: 200,
+      }).find((item) => String(item.runId || "") === runId) || null;
+      if (!run && !interrupt) {
+        json(res, 404, { error: "Run not found" });
+        return;
+      }
+      if (subresource === "interrupts") {
+        json(res, 200, { runId, flowId, interrupt: interrupt || null });
+        return;
+      }
+      if (subresource === "checkpoints") {
+        const checkpoints = readWorkspaceRunStateHistory(runId);
+        const checkpointId = String(url.searchParams.get("checkpointId") || "").trim();
+        if (checkpointId) {
+          const checkpoint = checkpoints.find((item) => String(item?.checkpointId || "") === checkpointId) || null;
+          if (!checkpoint) {
+            json(res, 404, { error: "Checkpoint not found", runId, checkpointId });
+            return;
+          }
+          json(res, 200, { runId, flowId, checkpoint });
+          return;
+        }
+        json(res, 200, { runId, flowId, checkpoints });
+        return;
+      }
+      json(res, 200, {
+        runId,
+        flowId,
+        flowSource,
+        run: run || { runId, flowId, flowSource, status: interrupt?.status || "unknown" },
+        interrupt: interrupt || null,
+        runState: readWorkspaceRunState(runId),
+        runStateEvents: readWorkspaceRunStateEvents(runId),
+        runStateHistory: readWorkspaceRunStateHistory(runId),
+        checkpoints: readWorkspaceRunStateHistory(runId),
+      });
       return;
     }
 
@@ -3452,6 +3629,10 @@ async function workspaceRoutes(req, res, ctx) {
         json(res, 200, {
           run,
           events: readWorkspaceRunLogEvents(runId),
+          runState: readWorkspaceRunState(runId),
+          runStateEvents: readWorkspaceRunStateEvents(runId),
+          runStateHistory: readWorkspaceRunStateHistory(runId),
+          checkpoints: readWorkspaceRunStateHistory(runId),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

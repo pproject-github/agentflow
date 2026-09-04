@@ -58,6 +58,15 @@ test("definitionId 与 DSL 调用名是双射", () => {
   }
 });
 
+test("runState schema is statically parsed and round-trips through Flow DSL", () => {
+  const source = `import { flow } from "agentflow/flow";\nexport const runState = { version: 1, initial: { tasks: [] }, reducers: { tasks: "append" } };\nexport const run = flow("Run");\n`;
+  const graph = flowFilesToGraph({ source, layout: {}, nodeMeta: {}, files: {} });
+  assert.deepEqual(graph.runState, { version: 1, initial: { tasks: [] }, reducers: { tasks: "append" } });
+  const generated = graphToFlowFiles(graph).source;
+  assert.match(generated, /export const runState =/);
+  assert.deepEqual(flowFilesToGraph({ source: generated, layout: {}, nodeMeta: {}, files: {} }).runState, graph.runState);
+});
+
 test("节点 id 与 DSL API 保留名冲突时给 import 起别名，实例 id 保持不变", () => {
   const long = "冲突名流程仍要代码化。".repeat(400);
   const provided = (value) => ({

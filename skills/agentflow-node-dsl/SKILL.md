@@ -30,7 +30,8 @@ node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs config
 跨端节点操作要求 `localRuntime.available: true` 和有效 token。Runtime 已包含在 companion
 Skill 中；缺失时重新安装或更新 `agentflow-cli`，不要另装 npm CLI。
 
-写新包之前，先搜索服务端目录，避免重复造已有节点：
+写新包之前，先按“内置节点 → 已安装/线上 Marketplace 节点 → 新包”的顺序搜索，避免重复造
+已有节点。只要已有节点满足需求，就必须复用，不能用 `tool_nodejs` 或脚本绕过：
 
 ```bash
 node <agentflow-cli-skill-dir>/scripts/agentflow-cli.mjs node-package-search --query "需要的能力"
@@ -160,9 +161,22 @@ export default {
 |------|------|
 | `inputs` | 槽位名 → 上游传来的值。`file` 槽拿到的是路径 |
 | `outputs` | 槽位名 → **要写入的绝对路径** |
-| `dirs` | `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir` |
+| `dirs` | `workspaceRoot` / `nodeRunDir` / `nodeTmpDir` / `outputsDir`；有 Run 上下文时还提供 `runState` |
 
 失败 = 抛异常或非零退出。不要用 JSON 包裹 stdout，也不要自己造结果文件。
+
+### Run State（可选）
+
+代码节点包在 Workspace Run 中可通过 `dirs.runState` 读取和更新本次 Run 的共享状态；它与跨 Run 的 Workflow `globalState` 完全隔离：
+
+```js
+const snapshot = await dirs.runState.snapshot();
+await dirs.runState.patch({ plan: { approved: true } }, { nodeId: "planner" });
+await dirs.runState.append("reviews", { taskId: "t1", status: "approved" });
+const approved = await dirs.runState.get("plan.approved");
+```
+
+可用方法是 `get(path)`、`snapshot()`、`patch(object)`、`replace(object)` 和 `append(path, value)`。状态会按 Run 持久化并在工作台“状态”页展示；敏感字段（token、password、secret、cookie 等）会脱敏。Agent 节点也可在结构化结果中返回 `runStatePatch`、`runStateReplace` 或 `runStateAppend`，由运行时代为写入。
 
 `index.mjs` 是**普通 Node 模块**，会被真执行：`for` / `if` / `await` 都可以写。复杂实现可拆到
 包内 `scripts/`，模板和资源可放 `templates/`、`assets/` 并用相对路径加载。不要提交

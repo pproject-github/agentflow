@@ -449,5 +449,9 @@ export function generateFlowSource(ir, opts = {}) {
     imports.push(`import ${binding.name} from ${JSON.stringify(binding.spec)};`);
   }
 
+  if (ir?.runState && typeof ir.runState === "object") {
+    out.unshift(`export const runState = ${JSON.stringify(ir.runState, null, 2)};\n`);
+  }
+
   return { source: `${imports.join("\n")}\n\n${out.join("\n")}`, files };
 }

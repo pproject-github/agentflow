@@ -157,6 +157,7 @@ export function parseFlowSource(source, opts = {}) {
   const destructures = [];
   const subflows = {};
   const subflowOf = new Map();
+  let runState = null;
 
   // 先扫一遍解构声明：`const { storyId } = node;` 让后面引用 storyId 时能还原成边
   for (const stmt of ast.body) {
@@ -373,6 +374,18 @@ export function parseFlowSource(source, opts = {}) {
   for (const stmt of ast.body) {
     if (stmt.type === "ImportDeclaration") continue;
     const decl = stmt.type === "ExportNamedDeclaration" ? stmt.declaration : stmt;
+
+    if (stmt.type === "ExportNamedDeclaration" && decl?.type === "VariableDeclaration"
+      && decl.declarations.length === 1 && decl.declarations[0]?.id?.type === "Identifier"
+      && decl.declarations[0].id.name === "runState") {
+      const parsed = staticJsonOf(decl.declarations[0].init);
+      if (!parsed.ok || !parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
+        unresolvedAt(decl, "runState 必须是可静态解析的对象字面量");
+      } else {
+        runState = parsed.value;
+      }
+      continue;
+    }
 
     if (decl?.type === "VariableDeclaration") {
       if (decl.declarations.length !== 1) {
@@ -691,5 +704,5 @@ export function parseFlowSource(source, opts = {}) {
     for (const nodeId of subflow.nodeIds) nodes[nodeId].attrs.subflowId = subflow.id;
   }
 
-  return { nodes, edges: [...new Set(edges)].sort(), subflows, unresolved };
+  return { nodes, edges: [...new Set(edges)].sort(), subflows, runState, unresolved };
 }

@@ -618,6 +618,143 @@ export function buildRunInspectorTurns(rawEvents = [], run = {}, now = Date.now(
   return buildRunAuditTrace(rawEvents, run, now).turns;
 }
 
+function stateStatus(value, fallback = "pending") {
+  const normalized = String(value || "").toLowerCase();
+  if (["success", "succeeded", "done", "completed", "complete"].includes(normalized)) return "success";
+  if (["failed", "failure", "error"].includes(normalized)) return "error";
+  if (["waiting", "paused", "blocked", "polling", "deferred"].includes(normalized)) return "waiting";
+  if (["queued", "queue", "created"].includes(normalized)) return "pending";
+  if (["running", "in_progress", "in-progress", "started"].includes(normalized)) return "running";
+  if (["cancelled", "canceled", "stopped", "stop"].includes(normalized)) return "cancelled";
+  if (["skipped", "skip", "disabled"].includes(normalized)) return "skipped";
+  return fallback;
+}
+
+function flowNodeLabel(node) {
+  return firstText(
+    node?.data?.label,
+    node?.data?.name,
+    node?.data?.title,
+    node?.label,
+    node?.name,
+    node?.definitionId,
+    node?.id,
+    "运行阶段",
+  );
+}
+
+function safeStateValue(value) {
+  if (value == null) return "";
+  const text = String(value);
+  if (/token|password|secret|authorization|cookie|api[-_]?key/i.test(text)) return "[已隐藏]";
+  return text.length > 240 ? `${text.slice(0, 237)}…` : text;
+}
+
+function stateEventSummary(event) {
+  return {
+    type: safeStateValue(event?.type || event?.rawType || "event"),
+    status: stateStatus(event?.status, "info"),
+    nodeId: safeStateValue(event?.nodeId),
+    label: safeStateValue(event?.label || event?.text || event?.type),
+    ts: Number.isFinite(event?.ts) ? event.ts : 0,
+  };
+}
+
+/**
+ * Builds a stable, UI-safe projection of the current Workspace Run state.
+ * This is an execution-state projection (events + graph), not a replacement
+ * for a future business Graph State/Reducer implementation.
+ */
+export function buildRunStateSnapshot(rawEvents = [], run = {}, flowNodes = [], artifacts = [], now = Date.now()) {
+  const trace = buildRunAuditTrace(rawEvents, run, now);
+  const events = trace.events;
+  const executed = new Map();
+  for (const node of trace.nodes) executed.set(String(node.nodeId || node.id), node);
+
+  // Run / Scheduled Run are entry triggers, not executable stages. Their
+  // run-start event carries the running status of the whole run and must not
+  // become a fake "当前阶段" or inflate the progress denominator.
+  const graphNodes = (Array.isArray(flowNodes) ? flowNodes : []).filter((node) => {
+    const definitionId = String(node?.data?.definitionId || node?.definitionId || "").trim();
+    return !["workspace_run", "workspace_scheduled_run"].includes(definitionId);
+  });
+  const stages = graphNodes.map((node) => {
+    const id = String(node?.id || node?.nodeId || node?.definitionId || "");
+    const execution = executed.get(id);
+    const nodeEvents = execution?.events || events.filter((event) => String(event.nodeId || "") === id);
+    const latest = [...nodeEvents].reverse().find(Boolean);
+    let status = execution?.status || "pending";
+    if (nodeEvents.some((event) => ["node-waiting", "run-waiting"].includes(event.type) || event.status === "waiting")) status = "waiting";
+    else if (nodeEvents.some((event) => event.type === "node-skipped" || event.status === "skipped")) status = "skipped";
+    else if (nodeEvents.some((event) => event.type === "node-error" || event.status === "error")) status = "error";
+    else if (nodeEvents.some((event) => event.type === "node-start" || event.status === "running")) status = execution?.status || "running";
+    const stageArtifacts = Array.isArray(artifacts)
+      ? artifacts.filter((item) => String(item?.id || item?.nodeId || item?.stageId || "") === id || String(item?.nodeId || "") === id)
+      : [];
+    return {
+      id,
+      label: flowNodeLabel(node),
+      status,
+      startedAt: execution?.startedAt || 0,
+      endedAt: execution?.endedAt || 0,
+      durationMs: execution?.durationMs || 0,
+      lastEvent: latest ? stateEventSummary(latest) : null,
+      artifacts: stageArtifacts.map((item) => ({
+        name: safeStateValue(item?.name || item?.path || item?.relativePath),
+        path: safeStateValue(item?.path || item?.relativePath),
+        href: safeStateValue(item?.href || item?.url),
+      })).filter((item) => item.name || item.path),
+    };
+  });
+  for (const node of trace.nodes) {
+    if (stages.some((stage) => stage.id === String(node.nodeId || node.id))) continue;
+    stages.push({
+      id: String(node.nodeId || node.id),
+      label: safeStateValue(node.label || node.nodeId || "运行阶段"),
+      status: node.status || "pending",
+      startedAt: node.startedAt || 0,
+      endedAt: node.endedAt || 0,
+      durationMs: node.durationMs || 0,
+      lastEvent: stateEventSummary(node.events?.at(-1)),
+      artifacts: [],
+    });
+  }
+
+  const runStatus = stateStatus(run?.status, "") || stateStatus(events.at(-1)?.status, "running");
+  // A backend/agent failure can terminate the Run before emitting node-error.
+  // Do not leave the last node looking active when the authoritative Run is terminal.
+  if (runStatus === "error") {
+    stages.forEach((stage) => {
+      if (["running", "incomplete"].includes(stage.status)) stage.status = "error";
+    });
+  } else if (runStatus === "cancelled") {
+    stages.forEach((stage) => {
+      if (["running", "incomplete"].includes(stage.status)) stage.status = "cancelled";
+    });
+  }
+  const current = [...stages].reverse().find((stage) => ["running", "waiting", "error"].includes(stage.status))
+    || [...stages].reverse().find((stage) => stage.status === "success")
+    || null;
+  const completed = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
+  const waiting = stages.filter((stage) => stage.status === "waiting").map((stage) => ({ id: stage.id, label: stage.label }));
+  const pending = stages.filter((stage) => stage.status === "pending").map((stage) => ({ id: stage.id, label: stage.label }));
+  const last = events.at(-1);
+  return {
+    version: 1,
+    runId: safeStateValue(run?.runId),
+    status: runStatus,
+    currentStage: current ? { id: current.id, label: current.label, status: current.status } : null,
+    progress: { completed, total: stages.length, percent: stages.length ? Math.round((completed / stages.length) * 100) : 0 },
+    pending,
+    waiting,
+    stages,
+    lastEvent: last ? stateEventSummary(last) : null,
+    startedAt: trace.startedAt,
+    endedAt: trace.endedAt,
+    durationMs: trace.durationMs,
+  };
+}
+
 export function runInspectorTimelineRows(spans = [], trace = null) {
   const startedAt = trace?.startedAt ?? Math.min(...spans.map((span) => span.startedAt));
   const duration = trace?.durationMs ?? Math.max(1, ...spans.map((span) => span.endedAt - startedAt));
