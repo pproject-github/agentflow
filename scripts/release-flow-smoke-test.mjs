@@ -89,7 +89,11 @@ function completedPresetIds(state) {
       if (title.includes("合回 master")) ids.add("composite:merge-release-to-master");
       if (title.includes("构建")) ids.add("composite:build-package");
       if (title.includes("审核")) ids.add("composite:submit-approval");
-      if (title.includes("发布")) ids.add("composite:publish-and-notify");
+      if (title.includes("发布")) {
+        if (title.includes("补包")) ids.add("composite:supplemental-publish-and-notify");
+        else ids.add("composite:initial-publish-and-notify");
+      }
+      if (title.includes("准备补包") || title.includes("补包通知")) ids.add("composite:prepare-supplemental-notification");
       if (title.includes("放量") && !title.includes("全量")) ids.add("composite:rollout");
       if (title.includes("全量")) ids.add("composite:full-rollout");
     }

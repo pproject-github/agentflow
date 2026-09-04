@@ -335,23 +335,40 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
     }
     return `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建首次发版审核草稿，审核申请人为 ${operator}。`;
   }
-  if (id.includes("publish-and-notify")) {
+  if (id.includes("initial-publish-and-notify")) {
     if (!version) {
       return [
-        `为 ${displayProduct} ${platformLabel} 执行商店发布并通知。`,
+        platform === "ios"
+          ? `为 ${displayProduct} ${platformLabel} 上传首包版本更新说明并通知。`
+          : `为 ${displayProduct} ${platformLabel} 执行首包商店发布并通知。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
-    return `为 ${displayProduct} ${platformLabel} 执行商店发布并通知（版本 ${version}，批次 ${batch}）。`;
+    return platform === "ios"
+      ? `为 ${displayProduct} ${platformLabel} 上传首包版本更新说明并通知（版本 ${version}，批次 initial）。`
+      : `为 ${displayProduct} ${platformLabel} 执行首包商店发布并通知（版本 ${version}，批次 initial）。`;
   }
-  if (id.includes("supplemental-notification")) {
+  if (id.includes("supplemental-publish-and-notify")) {
     if (!version) {
       return [
-        `为 ${displayProduct} ${platformLabel} 发送补包通知。`,
+        platform === "ios"
+          ? `为 ${displayProduct} ${platformLabel} 上传补包版本更新说明并通知。`
+          : `为 ${displayProduct} ${platformLabel} 执行补包商店发布并通知。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
-    return `为 ${displayProduct} ${platformLabel} 发送补包通知（版本 ${version}，批次 ${batch}）。`;
+    return platform === "ios"
+      ? `为 ${displayProduct} ${platformLabel} 上传补包版本更新说明并通知（版本 ${version}，批次 supplemental）。`
+      : `为 ${displayProduct} ${platformLabel} 执行补包商店发布并通知（版本 ${version}，批次 supplemental）。`;
+  }
+  if (id.includes("prepare-supplemental-notification")) {
+    if (!version) {
+      return [
+        `为 ${displayProduct} ${platformLabel} 发送进入补包流程通知。`,
+        "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
+      ].join("\n");
+    }
+    return `为 ${displayProduct} ${platformLabel} 发送进入补包流程通知（版本 ${version}，批次 ${batch}）。`;
   }
   if (id === "rollout" || (id.includes("rollout") && !id.includes("full-rollout"))) {
     if (!version) {
@@ -368,14 +385,11 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
   if (id.includes("full-rollout") && !id.includes("approval")) {
     if (!version) {
       return [
-        `为 ${displayProduct} ${platformLabel} 执行全量发布。`,
+        `为 ${displayProduct} ${platformLabel} 发送全量放量通知。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
-    const operator = resolveReleaseApprovalOperator(inputs?.operator, context?.operator);
-    return operator
-      ? `为 ${displayProduct} ${platformLabel} 执行全量发布（版本 ${version}，批次 ${batch}），审核相关操作人 ${operator}。`
-      : `为 ${displayProduct} ${platformLabel} 执行全量发布（版本 ${version}，批次 ${batch}）。`;
+    return `为 ${displayProduct} ${platformLabel} 发送全量放量通知（版本 ${version}，批次 ${batch}）。`;
   }
   if (id.includes("free-prompt")) {
     const userPrompt = String(inputs?.prompt || "").trim();

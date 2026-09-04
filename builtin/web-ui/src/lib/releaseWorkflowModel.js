@@ -42,9 +42,11 @@ const RELEASE_ACTION_TITLES = Object.freeze({
   "build-package": "构建发版包",
   "submit-approval": "提交发版审核单",
   "submit-full-rollout-approval": "全量审核单",
-  "publish-and-notify": "商店发布并通知",
+  "initial-publish-and-notify": "首包商店发布并通知",
+  "supplemental-publish-and-notify": "补包商店发布并通知",
+  "prepare-supplemental-notification": "准备补包通知",
   "rollout": "推进放量",
-  "full-rollout": "全量发布",
+  "full-rollout": "全量发布并通知",
 });
 
 export function releaseActionTitle(actionOrId) {

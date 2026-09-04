@@ -244,8 +244,9 @@ test("release capability intents stay lean and operator-guide shaped", async () 
     "merge-release-to-master",
     "build-package",
     "submit-approval",
-    "publish-and-notify",
-    "supplemental-notification",
+    "initial-publish-and-notify",
+    "supplemental-publish-and-notify",
+    "prepare-supplemental-notification",
     "rollout",
     "submit-full-rollout-approval",
     "full-rollout",
@@ -267,7 +268,7 @@ test("release capability intents stay lean and operator-guide shaped", async () 
     assert.doesNotMatch(prompt, /恢复摘要|勿重复 prepare|幂等成功/);
     assert.match(
       prompt,
-      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|发版包|首次发版审核草稿|全量发布审核草稿|商店发布|补包通知|观察灰度|全量发布/,
+      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|发版包|首次发版审核草稿|全量发布审核草稿|首包商店发布|补包商店发布|版本更新说明并通知|进入补包流程通知|观察灰度|全量放量通知/,
       id,
     );
     assert.ok(prompt.length < 3_500, `${id} prompt too long: ${prompt.length}`);
@@ -276,10 +277,14 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.match(buildReleaseCapabilityPlaybook("create-release-branch", ctx, {}), /创建标准发版分支并登记/);
   assert.match(buildReleaseCapabilityPlaybook("merge-release-to-master", ctx, {}), /合入主干/);
   assert.match(buildReleaseCapabilityPlaybook("build-package", ctx, { build_number: "7542" }), /构建号 7542/);
-  assert.match(buildReleaseCapabilityPlaybook("publish-and-notify", ctx, {}), /商店发布/);
-  assert.match(buildReleaseCapabilityPlaybook("supplemental-notification", ctx, {}), /补包通知/);
-  assert.match(buildReleaseCapabilityPlaybook("full-rollout", ctx, { operator: "duanfengyuan" }), /全量发布/);
-  assert.match(buildReleaseCapabilityPlaybook("full-rollout", ctx, { operator: "duanfengyuan" }), /duanfengyuan/);
+  assert.match(buildReleaseCapabilityPlaybook("initial-publish-and-notify", ctx, {}), /首包商店发布/);
+  assert.match(buildReleaseCapabilityPlaybook("initial-publish-and-notify", { ...ctx, platform: "ios" }, {}), /首包版本更新说明/);
+  assert.match(buildReleaseCapabilityPlaybook("supplemental-publish-and-notify", { ...ctx, batch: "supplemental" }, {}), /补包商店发布/);
+  assert.match(buildReleaseCapabilityPlaybook("supplemental-publish-and-notify", { ...ctx, platform: "ios", batch: "supplemental" }, {}), /补包版本更新说明/);
+  assert.match(buildReleaseCapabilityPlaybook("prepare-supplemental-notification", { ...ctx, batch: "supplemental" }, {}), /进入补包流程通知/);
+  assert.doesNotMatch(buildReleaseCapabilityPlaybook("prepare-supplemental-notification", { ...ctx, batch: "supplemental" }, {}), /send-rollout-notification|patch-flow-entered|uv run|gray_percent/);
+  assert.match(buildReleaseCapabilityPlaybook("full-rollout", ctx, {}), /全量放量通知/);
+  assert.doesNotMatch(buildReleaseCapabilityPlaybook("full-rollout", ctx, { operator: "duanfengyuan" }), /send-rollout-notification|gray_percent|uv run/);
   assert.match(buildReleaseCapabilityPlaybook("rollout", ctx, { gray_percent: "50" }), /放量到 50%/);
   assert.match(buildReleaseCapabilityPlaybook("rollout", ctx, {}), /观察灰度并推进放量/);
   const freePrompt = buildReleaseCapabilityPlaybook("free-prompt-agent", ctx, { prompt: "帮我查一下当前发版分支" });

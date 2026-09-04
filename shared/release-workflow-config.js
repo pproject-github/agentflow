@@ -55,15 +55,19 @@ const capabilityDefinitions = [
   capability("merge-release-to-master", "发版分支合回 master", "按 release-git Skill 的安全流程将发版分支合回 master。", "merge-master", ["initial"], ["release-git"]),
   capability("build-package", "构建发版包", "根据当前平台、批次和 Skill 配置构建发版包并记录产物（Android 渠道/商店包，iOS 走 release-build）。", "build", ["initial", "supplemental"], ["release-build", "release-channel-packages", "release-google-play"], [{ key: "build_number", type: "text", required: false, label: "构建号", placeholder: "未填则读活动发版清单" }]),
   capability("submit-approval", "提交发版审核单", "为首包创建首次发版审核草稿（release-approval）。", "approval", ["initial"], ["release-approval", "release-records"]),
-  capability("publish-and-notify", "首包/补包发布 & 通知", "检查当前 Skill 是否提供商店发布能力；具备能力时按确认流程发布并通知，否则返回 waiting 或 failed。", "publish", ["initial", "supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
-  capability("supplemental-notification", "补包通知", "通知协作者当前补包批次已创建并准备继续发布。", "entry", ["supplemental"], ["release-notification", "release-management"]),
+  // 用户需求点: 首包与补包商店发布是不同流程，须拆成独立能力与独立意图，避免 Agent 混用事件。
+  capability("initial-publish-and-notify", "首包发布 & 通知", "按首包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["initial"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
+  capability("supplemental-publish-and-notify", "补包发布 & 通知", "按补包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
+  // 用户需求点: release-notification 支持进入补包流程通知；补包入口单独触发，编排由 Skill operator-guide 决定。
+  capability("prepare-supplemental-notification", "准备补包通知", "发送进入补包流程通知，告知协作者准备继续补包发布。", "entry", ["supplemental"], ["release-notification", "release-management"]),
   // 用户需求点: 灰度放量仅 Likee Android；iOS 无此阶段。
   capability("rollout", "放量", "观察灰度指标并按确认要求推进当前版本放量。", "rollout", ["initial", "supplemental"], ["release-gray-observe", "release-metrics", "release-notification"], [
     { key: "gray_percent", type: "text", required: false, label: "目标灰度 %", placeholder: "如 5 / 50 / 100" },
   ], { platforms: ["android"] }),
   // 用户需求点: 全量审核单排在全量发布前；对齐 release-approval operator-guide（指标快照/构建号/发布日期/OA 申请人）。
   capability("submit-full-rollout-approval", "全量审核单", "创建全量发布审核草稿；目标批次须已有构建号、发布日期与已确认指标快照（见 release-approval 操作指南）。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-records"]),
-  capability("full-rollout", "全量发布", "在满足审核和指标条件后执行全量发布并记录结果。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-gray-observe", "release-notification", "release-records"]),
+  // 用户需求点: 全量发布须同步发送全量放量通知（release-notification：灰度/全量放量通知）；编排见 Skill operator-guide。
+  capability("full-rollout", "全量发布 & 通知", "发送全量放量通知并完成全量发布相关登记。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-gray-observe", "release-notification", "release-records"]),
   // 用户需求点: 自由 Agent 只保留一个添加入口（不复制到每个阶段），不进入状态机默认推荐。
   capability("free-prompt-agent", "自由 Agent", "按操作员给出的任务说明，在锁定的发版上下文与 skillRoot 下执行发版相关操作。", "entry", ["initial", "supplemental"], ["release-runtime", "release-management"], [
     { key: "prompt", type: "textarea", required: true, label: "任务说明", placeholder: "描述要执行的发版任务，可点名 Skill / CLI…" },
@@ -104,12 +108,12 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-android-release", title: "Likee Android 发版", businessLines: freeze(["likee"]), platforms: freeze(["android"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),
         stage("approval", "提审单", ["submit-approval"], { order: 4 }),
-        stage("publish", "发布并通知", ["publish-and-notify"], { order: 5 }),
+        stage("publish", "发布并通知", ["initial-publish-and-notify", "supplemental-publish-and-notify"], { order: 5 }),
         stage("rollout", "放量", ["rollout"], { order: 6 }),
         stage("full-rollout", "全量发布", ["submit-full-rollout-approval", "full-rollout"], { order: 7 }),
       ]),
@@ -122,12 +126,12 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-ios-release", title: "Likee iOS 发版", businessLines: freeze(["likee"]), platforms: freeze(["ios"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),
         stage("approval", "提审单", ["submit-approval"], { order: 4 }),
-        stage("publish", "发布并通知", ["publish-and-notify"], { order: 5 }),
+        stage("publish", "发布并通知", ["initial-publish-and-notify", "supplemental-publish-and-notify"], { order: 5 }),
         stage("full-rollout", "全量发布", ["submit-full-rollout-approval", "full-rollout"], { order: 6 }),
       ]),
       transitions: freeze([
