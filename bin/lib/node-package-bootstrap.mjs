@@ -17,6 +17,13 @@
  */
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  appendWorkspaceRunState,
+  getWorkspaceRunStateValue,
+  patchWorkspaceRunState,
+  readWorkspaceRunState,
+  replaceWorkspaceRunState,
+} from "./workspace-run-state.mjs";
 
 function parseJsonEnv(name) {
   const raw = process.env[name];
@@ -62,6 +69,16 @@ const dirs = {
   nodeTmpDir: process.env.AGENTFLOW_NODE_TMP_DIR || process.cwd(),
   outputsDir: process.env.AGENTFLOW_OUTPUTS_DIR || process.cwd(),
 };
+const runId = String(process.env.AGENTFLOW_RUN_ID || "").trim();
+if (runId) {
+  dirs.runState = {
+    get: async (key = "") => getWorkspaceRunStateValue(runId, key),
+    snapshot: async () => readWorkspaceRunState(runId),
+    patch: async (patch, meta = {}) => patchWorkspaceRunState(runId, patch, { ...meta, nodeId: meta.nodeId || process.env.AGENTFLOW_RUN_STATE_NODE_ID || "" }),
+    replace: async (state, meta = {}) => replaceWorkspaceRunState(runId, state, { ...meta, nodeId: meta.nodeId || process.env.AGENTFLOW_RUN_STATE_NODE_ID || "" }),
+    append: async (key, value, meta = {}) => appendWorkspaceRunState(runId, key, value, { ...meta, nodeId: meta.nodeId || process.env.AGENTFLOW_RUN_STATE_NODE_ID || "" }),
+  };
+}
 
 try {
   await run(inputs, outputs, dirs);

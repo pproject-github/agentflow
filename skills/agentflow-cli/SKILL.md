@@ -151,7 +151,9 @@ node <skill-dir>/scripts/agentflow-cli.mjs node-package-install \
   --workspace-root "$PWD"
 ```
 
-Before authoring a new code node, search the remote catalog. The result is structured JSON with the
+Before authoring a new code node, resolve the capability in this strict order: **built-in node
+catalog → installed/remote Marketplace node → new code node**. Search the built-in catalog first,
+then search the remote catalog. The result is structured JSON with the
 exact import specifier, input/output slots, content hash, visibility, install hint, and server-owned
 `useCount` / `installCount` / `uniqueUserCount` statistics:
 
@@ -160,7 +162,9 @@ node <skill-dir>/scripts/agentflow-cli.mjs node-package-search --query "read csv
 ```
 
 Prefer an existing suitable exact version. Install it and import its returned `specifier`; create a
-new local package only when no result meets the requested behavior.
+new local package only when neither the built-in catalog nor Marketplace has a result meeting the
+requested behavior. Do not replace a matching built-in/Marketplace integration with an ad-hoc
+`tool_nodejs` script (for example, a webhook sender).
 
 ## Marketplace resources
 

@@ -207,6 +207,7 @@ import {
   writeWorkspaceGraph,
 } from "./workspace-server.mjs";
 import { handleWorkspaceRoutes, workspaceGraphWithScheduleMode } from "./workspace-routes.mjs";
+import { findWorkspaceInterruptByToken } from "./workspace-interrupt.mjs";
 import {
   createSpace,
   deleteSpacePage,
@@ -1620,7 +1621,7 @@ function html(res, status, content, headers = {}) {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Cache-Control": "no-store, max-age=0",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     ...headers,
@@ -2402,14 +2403,21 @@ export function startUiServer({
     }
 
     if (url.pathname === "/api/auth/me" && req.method === "GET") {
-      const user = getAuthUserFromRequest(req);
+      // 本地开发服务默认绑定 loopback；开发模式下免登录，便于直接验收 Draft。
+      // 生产服务不设置 AGENTFLOW_DEV，因此仍严格要求 CAS/管理员会话。
+      const user = getAuthUserFromRequest(req) || (process.env.AGENTFLOW_DEV === "1" ? {
+        userId: "local-dev",
+        username: "local-dev",
+        isAdmin: true,
+        authProvider: "local-dev",
+      } : null);
       const allowed = user ? isAuthUserAllowed(user) : true;
       const allowlist = readUserAllowlist();
       const cas = readCasAuthConfig(serverPublicBaseUrl(req, host, uiPort));
       json(res, 200, {
         authenticated: Boolean(user && allowed),
         user: user && allowed ? user : null,
-        setupRequired: authSetupRequired(),
+        setupRequired: process.env.AGENTFLOW_DEV === "1" ? false : authSetupRequired(),
         allowlistEnabled: allowlist.enabled,
         forbidden: Boolean(user && !allowed),
         error: user && !allowed ? "用户不在白名单中，请联系管理员开通访问权限" : "",
@@ -2590,12 +2598,71 @@ export function startUiServer({
       return;
     }
 
-    const authUser = getAuthUserFromRequest(req);
+    // AGENTFLOW_DEV 仅用于本机开发服务：构造一个管理员上下文，避免本地 Draft
+    // 验收被 CAS/首次管理员初始化挡住。生产环境不会进入此分支。
+    const publicResumeMatch = req.method === "POST"
+      ? url.pathname.match(/^\/api\/v1\/flows\/([^/]+)\/runs\/([^/]+)\/resume$/)
+      : null;
+    const publicReviewToken = publicResumeMatch
+      ? String(url.searchParams.get("reviewToken") || url.searchParams.get("token") || "").trim()
+      : "";
+    const publicReviewInterrupt = publicReviewToken ? findWorkspaceInterruptByToken(publicReviewToken) : null;
+    if (publicResumeMatch && publicReviewToken && (!publicReviewInterrupt || String(publicReviewInterrupt.runId || "") !== decodeURIComponent(publicResumeMatch[2]))) {
+      json(res, 403, { error: "Review token does not match run" });
+      return;
+    }
+    const authUser = getAuthUserFromRequest(req) || (publicReviewInterrupt ? {
+      userId: publicReviewInterrupt.userId || "public-review",
+      username: "public-review",
+      isAdmin: false,
+      authProvider: "public-review",
+    } : null) || (process.env.AGENTFLOW_DEV === "1" ? {
+      userId: "local-dev",
+      username: "local-dev",
+      isAdmin: true,
+      authProvider: "local-dev",
+    } : null);
     const userCtx = authUser ? {
       userId: authUser.userId,
+      username: authUser.username || "",
       isAdmin: Boolean(authUser.isAdmin),
       adminOwnerId: String(url.searchParams.get("adminOwnerId") || "").trim(),
     } : {};
+    if (req.method === "GET" && url.pathname === "/review/plan") {
+      const token = String(url.searchParams.get("token") || "").trim();
+      const interrupt = findWorkspaceInterruptByToken(token);
+      if (!interrupt) {
+        html(res, 404, "<!doctype html><meta charset=\"utf-8\"><title>审核链接不可用</title><main style=\"font:16px sans-serif;padding:32px\">审核链接已失效或已处理。</main>");
+        return;
+      }
+      const signedInReviewer = getAuthUserFromRequest(req);
+      const configuredApprovers = Array.isArray(interrupt.approvers)
+        ? interrupt.approvers.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      if (configuredApprovers.length && signedInReviewer && !signedInReviewer.isAdmin) {
+        const identities = new Set([
+          String(signedInReviewer.userId || "").trim(),
+          String(signedInReviewer.username || "").trim(),
+        ].filter(Boolean));
+        if (!configuredApprovers.some((item) => identities.has(item))) {
+          html(res, 403, "<!doctype html><meta charset=\"utf-8\"><title>无审批权限</title><main style=\"font:16px sans-serif;padding:32px\">当前账号不在该审批的审批人列表中。</main>");
+          return;
+        }
+      }
+      const serializedToken = JSON.stringify(token).replace(/</g, "\\u003c");
+      const serializedValue = JSON.stringify(interrupt.value?.content || "").replace(/</g, "\\u003c");
+      const flowId = JSON.stringify(interrupt.flowId || "");
+      const runId = JSON.stringify(interrupt.runId || "");
+      html(res, 200, `<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Plan 审核</title><style>body{margin:0;background:#f5f7fb;color:#172033;font:15px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.wrap{max-width:860px;margin:0 auto;padding:28px 18px 48px}.card{background:#fff;border:1px solid #dde3ef;border-radius:14px;padding:22px;box-shadow:0 8px 30px #17203312}h1{margin:0 0 6px;font-size:24px}.meta{color:#667085;margin-bottom:18px}.plan{white-space:pre-wrap;background:#f8fafc;border:1px solid #e5eaf2;border-radius:10px;padding:16px;min-height:220px}.actions{display:flex;gap:10px;margin-top:18px}button{border:0;border-radius:9px;padding:11px 18px;font:inherit;cursor:pointer}.primary{background:#2563eb;color:#fff}.secondary{background:#eef2f7;color:#334155}textarea{width:100%;min-height:110px;margin-top:14px;border:1px solid #d7deea;border-radius:9px;padding:12px;font:inherit;display:none}.status{margin-top:14px;color:#667085}</style></head><body><main class=\"wrap\"><section class=\"card\"><h1>确认执行 Plan</h1><div class=\"meta\">流程：${String(interrupt.flowId || "").replace(/[<>&\"']/g, "")}</div><div class=\"plan\" id=\"plan\"></div><textarea id=\"note\" placeholder=\"可选：填写修改意见或确认说明\"></textarea><div class=\"actions\"><button class=\"primary\" id=\"approve\">确认 Plan 并继续</button><button class=\"secondary\" id=\"edit\">填写修改意见</button></div><div class=\"status\" id=\"status\"></div></section></main><script>const token=${serializedToken},flowId=${flowId},runId=${runId},plan=${serializedValue};document.getElementById('plan').textContent=plan;const note=document.getElementById('note'),status=document.getElementById('status');document.getElementById('edit').onclick=()=>{note.style.display=note.style.display==='none'?'block':'none'};document.getElementById('approve').onclick=async()=>{status.textContent='正在提交…';document.getElementById('approve').disabled=true;try{const input={decision:'approve',plan,comment:note.value||''};const r=await fetch('/api/v1/flows/'+encodeURIComponent(flowId)+'/runs/'+encodeURIComponent(runId)+'/resume?reviewToken='+encodeURIComponent(token),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input,idempotencyKey:'review-'+token})});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'提交失败');status.textContent='已确认，Run 正在继续。';}catch(e){status.textContent=e.message||String(e);document.getElementById('approve').disabled=false;}}</script></body></html>`);
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/v1/public/reviews/")) {
+      const token = decodeURIComponent(url.pathname.slice("/api/v1/public/reviews/".length));
+      const interrupt = findWorkspaceInterruptByToken(token);
+      if (!interrupt) { json(res, 404, { error: "Review link not found or expired" }); return; }
+      json(res, 200, { ok: true, flowId: interrupt.flowId, runId: interrupt.runId, interruptId: interrupt.interruptId, value: interrupt.value, status: interrupt.status });
+      return;
+    }
     const legacyFlowManagementPath = new Set([
       "/api/flow/run-config",
       "/api/flow/schedule",
@@ -2922,7 +2989,7 @@ export function startUiServer({
       json(res, 401, { error: "Authentication required", setupRequired: authSetupRequired() });
       return;
     }
-    if (url.pathname.startsWith("/api/") && authUser && !isAuthUserAllowed(authUser)) {
+    if (url.pathname.startsWith("/api/") && authUser && !publicReviewInterrupt && !isAuthUserAllowed(authUser)) {
       json(res, 403, { error: "用户不在白名单中，请联系管理员开通访问权限" });
       return;
     }

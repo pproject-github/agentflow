@@ -9,6 +9,7 @@ const CARD_TEMPLATES = new Set(["details", "state-machine"]);
 const TONES = new Set(["neutral", "blue", "purple", "green", "amber", "red"]);
 const SECTION_TYPES = new Set(["binding", "code", "decision", "metrics", "summary", "history", "subflow", "loop"]);
 const CODE_FIELDS = new Set(["script", "scriptRef", "body", "implementationRef"]);
+const SUMMARY_FORMATS = new Set(["datetime"]);
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -102,6 +103,9 @@ function normalizeSection(raw) {
       type,
       label,
       output,
+      ...(type === "summary" && SUMMARY_FORMATS.has(shortText(item.format, 30).toLowerCase())
+        ? { format: shortText(item.format, 30).toLowerCase() }
+        : {}),
       ...(type === "history" ? { limit: Math.min(8, Math.max(1, Number(item.limit) || 3)) } : {}),
     };
   }

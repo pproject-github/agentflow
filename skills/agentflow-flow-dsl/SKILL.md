@@ -93,6 +93,18 @@ const chart   = display.chart("规模分布", { content: analyse.result });
 export const run = flow("Run", collect, analyse, chart);
 ```
 
+Run 级业务状态可以在流程文件中声明为纯字面量；运行时会用 `initial` 初始化，并按字段 `reducers` 应用节点上报：
+
+```js
+export const runState = {
+  version: 1,
+  initial: { plan: {}, tasks: [], reviews: [] },
+  reducers: { plan: "merge", tasks: "append", reviews: "append" },
+};
+```
+
+支持的 reducer 是 `merge`、`replace`、`append`。这是一次 Run 内的状态，不等同于跨 Run 的 Workflow `globalState`。
+
 | 位置 | 含义 |
 |------|------|
 | 第 1 个参数（字符串） | 节点显示名。可省略 |

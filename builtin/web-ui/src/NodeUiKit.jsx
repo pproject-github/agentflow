@@ -27,6 +27,26 @@ function parseHistory(value) {
   }
 }
 
+function formatSummary(value, format) {
+  if (format !== "datetime") return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return `${new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(date)}（北京时间）`;
+  } catch {
+    return value;
+  }
+}
+
 function SectionHeading({ label }) {
   return <div className="af-node-ui-kit__section-heading">{label}</div>;
 }
@@ -146,14 +166,32 @@ function LoopSection({ section, data }) {
 }
 
 function DecisionSection({ section, data }) {
-  const current = slotText(data?.outputs, section.output, "").toLowerCase();
+  const rawCurrent = slotText(data?.outputs, section.output, "");
+  const current = rawCurrent.toLowerCase();
+  let resumeDecision = "";
+  try {
+    const resume = JSON.parse(rawCurrent);
+    resumeDecision = String(resume?.decision || resume?.status || "").toLowerCase();
+  } catch {
+    // 非 JSON 的恢复值仍按原始文本展示。
+  }
   const source = data?.whileSubflowInfo?.condition ? "Condition.decision" : section.source;
   const options = Array.isArray(section.options) ? section.options : [];
-  const currentOption = options.find((option) => option.value === current);
+  const currentOption = options.find((option) => option.value === current || option.value === resumeDecision);
+  const isInterruptWaiting = data?.definitionId === "control_interrupt" && data?.nodeStatus === "waiting" && !current;
+  const isInterruptResolved = data?.definitionId === "control_interrupt" && Boolean(current);
   const isFinal = current === "done" || current === "fail";
-  const phase = current ? (isFinal ? "FINAL DECISION" : "CURRENT DECISION") : "AWAITING DECISION";
-  const value = currentOption?.label || current || "尚未运行";
-  const description = currentOption?.description || (current
+  const phase = isInterruptWaiting
+    ? "WAITING FOR HUMAN"
+    : isInterruptResolved
+      ? "HUMAN RESPONSE RECEIVED"
+      : current ? (isFinal ? "FINAL DECISION" : "CURRENT DECISION") : "AWAITING DECISION";
+  const value = isInterruptWaiting
+    ? "等待人工确认"
+    : currentOption?.label || (isInterruptResolved ? "已收到确认结果" : current || "尚未运行");
+  const description = isInterruptWaiting
+    ? "已发送审核入口；确认或提交修改意见后继续。"
+    : currentOption?.description || (current
     ? `Condition 返回了 ${current}`
     : `等待 ${source || section.output} 返回结果`);
   const help = options.length
@@ -165,9 +203,9 @@ function DecisionSection({ section, data }) {
         <SectionHeading label={section.label} />
         {source ? <code>{source}</code> : null}
       </div>
-      <div className={`af-node-ui-kit__decision-status af-node-ui-kit__tone--${currentOption?.tone || "neutral"}`}>
+      <div className={`af-node-ui-kit__decision-status af-node-ui-kit__tone--${isInterruptWaiting ? "amber" : currentOption?.tone || "neutral"}`}>
         <span className="af-node-ui-kit__decision-phase">{phase}</span>
-        <strong className={current ? "is-resolved" : ""}>{value}</strong>
+        <strong className={current || isInterruptWaiting ? "is-resolved" : ""}>{value}</strong>
         <em title={description}>{description}</em>
         <span
           className="material-symbols-outlined af-node-ui-kit__decision-help nodrag"
@@ -218,7 +256,8 @@ function MetricsSection({ section, data }) {
 }
 
 function SummarySection({ section, data }) {
-  const summary = slotText(data?.outputs, section.output, "尚未运行");
+  const rawSummary = slotText(data?.outputs, section.output, "尚未运行");
+  const summary = formatSummary(rawSummary, section.format);
   return (
     <section className="af-node-ui-kit__section af-node-ui-kit__summary">
       <SectionHeading label={section.label} />

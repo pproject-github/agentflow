@@ -46,6 +46,8 @@ import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
 import { createWorkspaceRunController, terminateWorkspaceChild } from "./workspace-run-controller.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
+import { appendWorkspaceRunState, appendWorkspaceRunStateCheckpoint, createWorkspaceRunState, patchWorkspaceRunState, readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory, replaceWorkspaceRunState, workspaceRunStateEventsPath, workspaceRunStatePath } from "./workspace-run-state.mjs";
+import { consumeWorkspaceInterrupt, createWorkspaceInterrupt, readWorkspaceInterrupt, resolveWorkspaceInterrupt, requeueWorkspaceInterrupt } from "./workspace-interrupt.mjs";
 import { mergeWorkspaceState, splitWorkspaceGraph } from "./workspace-state.mjs";
 import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
@@ -1308,7 +1310,7 @@ const RUN_LEDGER_STALE_MS = 6 * 60 * 60 * 1000;
 
 export function runStatusBucket(status) {
   const s = String(status || "unknown");
-  if (s === "success" || s === "failed" || s === "running" || s === "stopped" || s === "interrupted") return s;
+  if (s === "success" || s === "failed" || s === "running" || s === "waiting" || s === "stopped" || s === "interrupted") return s;
   return "unknown";
 }
 
@@ -1515,7 +1517,7 @@ function normalizeDisplayShareLayout(layout, fallback = "canvas") {
   return ["canvas", "gallery", "slides", "document", "single"].includes(text) ? text : fallback;
 }
 
-export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt, visibility = "public" }) {
+export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt, visibility = "public", reviewToken = "" }) {
   const shares = readDisplayShares();
   let id = createDisplayShareId();
   while (shares[id]) id = createDisplayShareId();
@@ -1531,6 +1533,7 @@ export function createDisplayShareRecord({ userId, flowId, flowSource, archived,
     title: String(title || "").trim() || "AgentFlow Display",
     layout: normalizeDisplayShareLayout(layout, "canvas"),
     nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
+    reviewToken: String(reviewToken || crypto.randomBytes(24).toString("base64url")),
     visibility: String(visibility || "").trim().toLowerCase() === "private" ? "private" : "public",
     createdAt: now,
     updatedAt: now,
@@ -5140,6 +5143,17 @@ function workspaceWriteRunManifest(scopedRoot, runId, value = {}) {
   return next;
 }
 
+export function readWorkspaceRunManifest(scopedRoot, runId) {
+  const filePath = workspaceRunManifestPath(scopedRoot, runId);
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function cleanupWorkspaceRunResources(scopedRoot, runId, { force = false, status = "stopped", emit = () => {} } = {}) {
   const filePath = workspaceRunManifestPath(scopedRoot, runId);
   if (!fs.existsSync(filePath)) return { cleaned: [], preserved: [], manifestPath: filePath };
@@ -5191,7 +5205,7 @@ function workspaceCreateNodeTmpDir(runTmpRoot, nodeId) {
   return dir;
 }
 
-function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, sourceRoot = "", cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {}, durableOutputs = false } = {}) {
+function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, sourceRoot = "", cwd = "", task = "", inputValues = {}, skillsBlock = "", mcpBlock = "", resultFile = "", outParamFiles = {}, durableOutputs = false, runId = "", runState = null } = {}) {
   const nodeRunDir = workspaceCreateNodeTmpDir(runTmpRoot, nodeId);
   const nodeTmpDir = path.join(nodeRunDir, "tmp");
   const legacyOutputsDir = path.join(nodeRunDir, "outputs");
@@ -5234,6 +5248,9 @@ function workspaceCreateNodeRunPackage(runTmpRoot, nodeId, { scopedRoot, sourceR
     resultFileAbs,
     outParamFiles: safeOutParamFiles,
     createdAt: new Date().toISOString(),
+    runId: String(runId || ""),
+    runStateFile: runState?.path || "",
+    runStateEventsFile: runState?.eventsPath || "",
   };
   const materializedInputs = workspaceMaterializeNodeInputFiles(nodeRunDir, workspaceRoot, inputValues);
   const runtimeInputValues = { ...(inputValues || {}), ...(materializedInputs.values || {}) };
@@ -5501,6 +5518,10 @@ async function workspaceRunToolNodejsScript({
     AGENTFLOW_INPUTS_JSON: JSON.stringify(inputValues || {}),
     AGENTFLOW_OUTPUTS_JSON: JSON.stringify(outputRefs),
     AGENTFLOW_OUTPUTS_ABS_JSON: JSON.stringify(outputAbs),
+    AGENTFLOW_RUN_ID: String(runPackage.runId || ""),
+    AGENTFLOW_RUN_STATE_FILE: String(runPackage.runStateFile || ""),
+    AGENTFLOW_RUN_STATE_EVENTS_FILE: String(runPackage.runStateEventsFile || ""),
+    AGENTFLOW_RUN_STATE_NODE_ID: String(runPackage.nodeId || ""),
   });
 
   return await new Promise((resolve, reject) => {
@@ -5795,7 +5816,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const forceNodeIds = new Set((Array.isArray(payload?.forceNodeIds) ? payload.forceNodeIds : [])
     .map((nodeId) => String(nodeId || "").trim())
     .filter(Boolean));
-  const { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot, {
+  let { order, pauseNodeIds } = workspaceRunPlan(graph, runNodeId, scopedRoot, {
     forceNodeIds,
     ignoreCache: payload?.ignoreCache === true,
   });
@@ -5851,6 +5872,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   };
   const outputs = new Map();
   const events = [];
+  const completedNodeIds = new Set();
   const runStartedAt = Date.now();
   const emit = (event) => {
     // 一个节点成功跑完，就把它这次的输入指纹盖到实例上——下一次运行靠它判断缓存还算不算数。
@@ -5858,6 +5880,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     // 不盖，它压根没产出。
     if (event?.type === "node-done" && !event.skipped) {
       const nodeId = String(event.nodeId || "");
+      if (nodeId) completedNodeIds.add(nodeId);
       const instance = graph.instances?.[nodeId];
       if (instance && plannedFingerprints.has(nodeId)) instance.runFingerprint = plannedFingerprints.get(nodeId);
     }
@@ -5867,6 +5890,26 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       ts: Number(event?.ts) || now,
       runElapsedMs: Number.isFinite(event?.runElapsedMs) ? event.runElapsedMs : Math.max(0, now - runStartedAt),
     };
+    if (runState && (event?.type === "node-done" || event?.type === "paused" || event?.type === "waiting")) {
+      enriched.runStateRevision = Number(readWorkspaceRunState(runtimeRunId)?.revision || 0);
+      const currentNodeId = String(event.nodeId || "");
+      const currentIndex = currentNodeId ? order.indexOf(currentNodeId) : -1;
+      const nextNodeIds = currentIndex >= 0
+        ? order.slice(currentIndex + 1).filter((id) => !completedNodeIds.has(id))
+        : order.filter((id) => !completedNodeIds.has(id));
+      const checkpoint = appendWorkspaceRunStateCheckpoint(runtimeRunId, {
+        nodeId: event.nodeId || "",
+        status: event.type === "node-done" ? "running" : (event.type === "waiting" ? "waiting" : "paused"),
+        eventType: event.type,
+        graphRevision: workspaceDesignRevision(graph),
+        cursor: {
+          currentNodeId,
+          completedNodeIds: Array.from(completedNodeIds),
+          nextNodeIds,
+        },
+      });
+      if (checkpoint?.checkpointId) enriched.checkpointId = checkpoint.checkpointId;
+    }
     events.push(enriched);
     if (typeof opts.onEvent === "function") opts.onEvent(enriched);
   };
@@ -5882,6 +5925,28 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const autoCleanupWorktrees = [];
   const runTmpRoot = workspaceCreateRunTmpRoot(runtimeStorageRoot, runNodeId);
   const runtimeRunId = String(opts.runId || payload?.runId || "").trim() || runLedgerId("workspace-execution");
+  const requestedResume = payload?.resume && typeof payload.resume === "object" && !Array.isArray(payload.resume)
+    ? payload.resume
+    : null;
+  // A resume request continues from the waiting interrupt. The original run
+  // already committed its prefix (including any display/link/notification
+  // outputs); replaying that prefix would hit the same interrupt again and
+  // produce "already been resumed" instead of reaching downstream nodes.
+  // Keep the interrupt node itself in the plan so it consumes the resume
+  // payload, then execute only the suffix after it.
+  if (requestedResume) {
+    const resumeRecord = readWorkspaceInterrupt(runtimeRunId);
+    const resumeNodeId = String(resumeRecord?.nodeId || requestedResume.nodeId || "").trim();
+    const resumeIndex = resumeNodeId ? order.indexOf(resumeNodeId) : -1;
+    if (resumeIndex >= 0) {
+      order = order.slice(resumeIndex);
+      pauseNodeIds = pauseNodeIds.filter((id) => order.includes(id));
+    }
+  }
+  let resumedInterruptId = "";
+  const runStateSchema = payload?.runStateSchema || payload?.graph?.runState || graph?.runState || null;
+  const runState = createWorkspaceRunState(runtimeRunId, payload?.runState || {}, { nodeId: runNodeId, schema: runStateSchema });
+  const runStateMeta = runState ? { path: workspaceRunStatePath(runtimeRunId), eventsPath: workspaceRunStateEventsPath(runtimeRunId) } : null;
   const ownsRunManifest = !(Array.isArray(opts?.subflowCallStack) && opts.subflowCallStack.length);
   const persistRunManifest = (status, extra = {}) => {
     if (!ownsRunManifest) return null;
@@ -5896,7 +5961,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       ...extra,
     });
   };
-  persistRunManifest("running", { startedAt: new Date().toISOString() });
+  persistRunManifest("running", { startedAt: new Date().toISOString(), runStateRevision: runState?.revision || 0, runStatePath: runStateMeta?.path || "" });
   const controlBranches = new Map();
   const skippedNodes = new Set();
   const runtimePauseNodeIds = [];
@@ -5938,6 +6003,22 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     recordNodeOutput(nodeId, content);
     return propagateNodeOutputDisplays(nodeId, content, options);
   };
+  const applyRunStateReport = (nodeId, structured) => {
+    const parsed = structured?.parsed;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    let updated = null;
+    if (parsed.runStatePatch && typeof parsed.runStatePatch === "object" && !Array.isArray(parsed.runStatePatch)) {
+      updated = patchWorkspaceRunState(runtimeRunId, parsed.runStatePatch, { nodeId });
+    } else if (parsed.runStateReplace && typeof parsed.runStateReplace === "object" && !Array.isArray(parsed.runStateReplace)) {
+      updated = replaceWorkspaceRunState(runtimeRunId, parsed.runStateReplace, { nodeId });
+    }
+    const appends = Array.isArray(parsed.runStateAppend) ? parsed.runStateAppend : [];
+    for (const item of appends) {
+      if (!item || typeof item !== "object") continue;
+      updated = appendWorkspaceRunState(runtimeRunId, item.path || item.key, item.value, { nodeId });
+    }
+    if (updated) emit({ type: "run-state-updated", nodeId, revision: updated.revision, changedKeys: Object.keys(updated.state || {}) });
+  };
 
   try {
   for (const nodeId of order) {
@@ -5955,6 +6036,128 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     emit({ type: "node-start", nodeId, definitionId: defId });
 
     if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
+      continue;
+    }
+
+    if (defId === "control_interrupt") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const rawValue = String(inputValues.value || "").trim();
+      let displayValue = rawValue;
+      if (rawValue) {
+        // Inline Markdown/text is the normal case. Only attempt file resolution
+        // for an explicit relative file-looking value; arbitrary content such as
+        // `# Plan` must never be rejected as an invalid path.
+        const looksLikeFile = !/[\r\n]/.test(rawValue) &&
+          (/^(?:\.\.\/|\.\/|[A-Za-z0-9._-]+\/)/.test(rawValue) || /\.(?:md|txt|json|html?)$/i.test(rawValue));
+        if (looksLikeFile) {
+          try {
+            const resolved = workspaceResolveFlowFile(scopedRoot, rawValue, "interrupt value");
+            if (resolved && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+              displayValue = fs.readFileSync(resolved, "utf8").slice(0, 120000);
+            }
+          } catch {
+            displayValue = rawValue;
+          }
+        }
+      }
+      const currentInterrupt = readWorkspaceInterrupt(runtimeRunId);
+      const resumeMatches = requestedResume && (
+        (!requestedResume.interruptId || String(requestedResume.interruptId) === String(currentInterrupt?.interruptId || "")) &&
+        (!requestedResume.nodeId || String(requestedResume.nodeId) === nodeId)
+      );
+      if (!resumeMatches) {
+        let resumeSchema = { type: "object" };
+        try {
+          if (inputValues.resumeSchema) resumeSchema = JSON.parse(String(inputValues.resumeSchema));
+        } catch (error) {
+          throw new Error(`control.interrupt ${nodeId} resumeSchema must be valid JSON: ${error.message}`);
+        }
+        let approvers = [];
+        const rawApprovers = String(inputValues.approvers || "").trim();
+        if (rawApprovers) {
+          try {
+            const parsedApprovers = JSON.parse(rawApprovers);
+            if (!Array.isArray(parsedApprovers)) throw new Error("approvers must be a JSON array");
+            approvers = [...new Set(parsedApprovers.map((item) => String(item || "").trim()).filter(Boolean))];
+          } catch (error) {
+            approvers = [...new Set(rawApprovers.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean))];
+            if (!approvers.length) throw new Error(`control.interrupt ${nodeId} approvers must be a JSON array or comma-separated users: ${error.message}`);
+          }
+        }
+        const pending = createWorkspaceInterrupt(runtimeRunId, {
+          flowId: payload?.flowId || "",
+          flowSource: payload?.flowSource || "user",
+          userId: userCtx?.userId || "",
+          requestedBy: userCtx?.userId || "",
+          approvers,
+          approvalMode: inputValues.approvalMode || "any",
+          nodeId,
+          kind: inputValues.kind || "user_input",
+          reason: inputValues.reason || "user_confirmation",
+          resumeToken: inputValues.resumeToken || "",
+          value: { content: displayValue, format: "markdown" },
+          resumeSchema,
+          cursor: {
+            runNodeId,
+            nextNodeId: "",
+            runStateRevision: Number(readWorkspaceRunState(runtimeRunId)?.revision || 0),
+            graphRevision: workspaceDesignRevision(graph),
+          },
+        });
+        graph.instances[nodeId] = workspaceSetOutputSlot(
+          workspaceSetOutputSlot(instance, "interruptId", pending.interruptId),
+          "resume",
+          "",
+        );
+        emit({ type: "node-waiting", nodeId, definitionId: defId, interruptId: pending.interruptId, reason: pending.reason, value: pending.value });
+        runtimePauseNodeIds.push(nodeId);
+        break;
+      }
+      const configuredApprovers = Array.isArray(currentInterrupt?.approvers)
+        ? currentInterrupt.approvers.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      if (configuredApprovers.length) {
+        const identities = new Set([
+          String(userCtx?.userId || "").trim(),
+          String(userCtx?.username || "").trim(),
+        ].filter(Boolean));
+        const tokenAuthorized = String(payload?.reviewToken || "").trim()
+          && String(payload.reviewToken) === String(currentInterrupt?.resumeToken || "");
+        const approverAuthorized = configuredApprovers.some((item) => identities.has(item));
+        if (!tokenAuthorized && !approverAuthorized && !userCtx?.isAdmin) {
+          throw new Error("当前用户不在审批人列表中");
+        }
+      }
+      const resolved = resolveWorkspaceInterrupt(runtimeRunId, currentInterrupt?.interruptId || requestedResume.interruptId || "", requestedResume.resume, {
+        expectedRunStateRevision: payload?.expectedRunStateRevision,
+        resolvedBy: userCtx?.userId || "",
+        idempotencyKey: requestedResume.idempotencyKey || payload?.idempotencyKey || "",
+      });
+      const resumeValue = resolved.resume;
+      const serialized = typeof resumeValue === "string" ? resumeValue : JSON.stringify(resumeValue ?? null);
+      const runPackage = workspaceCreateNodeRunPackage(runTmpRoot, nodeId, {
+        scopedRoot: runtimeStorageRoot,
+        sourceRoot: scopedRoot,
+        cwd,
+        task: "interrupt-resume",
+        inputValues: {},
+        durableOutputs: true,
+        runId: runtimeRunId,
+      });
+      // Durable interrupt outputs already have a node-scoped outputsDir. The
+      // generic output-path helper expects an `outputs/...` graph-relative
+      // path, so passing just `resume.json` returns an empty path and causes
+      // `ENOENT: open ''` during external resume.
+      const outPath = path.join(runPackage.outputsDir || "", "resume.json");
+      if (!outPath) throw new Error("control.interrupt resume output directory is unavailable");
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, serialized, "utf8");
+      let nextInstance = workspaceSetOutputSlot(instance, "interruptId", currentInterrupt?.interruptId || requestedResume.interruptId || "");
+      nextInstance = workspaceSetOutputSlot(nextInstance, "resume", path.posix.join("outputs", workspaceSanitizeTmpSegment(nodeId, "node"), "resume.json"));
+      graph.instances[nodeId] = nextInstance;
+      resumedInterruptId = currentInterrupt?.interruptId || requestedResume.interruptId || "";
+      emit({ type: "interrupt-resolved", nodeId, definitionId: defId, interruptId: currentInterrupt?.interruptId || requestedResume.interruptId || "" });
+      emit({ type: "node-done", nodeId, definitionId: defId });
       continue;
     }
 
@@ -6309,6 +6512,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
             cwd,
             task: stepScript || stepScriptRef,
             inputValues: iterationInputs,
+            runId: runtimeRunId,
+            runState: runStateMeta,
           });
           const runtimeInputValues = { ...iterationInputs, ...(runPackage.inputValues || {}) };
           let activeStepChild = null;
@@ -6866,10 +7071,13 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         expiresInDays: payload.expiresInDays,
         permanent: payload.permanent,
         expiresAt: payload.expiresAt,
+        reviewToken: inputValues.reviewToken || "",
       });
-      const url = displayShareOutputUrl(share.id, baseUrl);
+      const reviewPath = `/review/plan?token=${encodeURIComponent(share.reviewToken)}`;
+      const url = baseUrl ? new URL(reviewPath, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).href : reviewPath;
       let nextInstance = workspaceSetOutputSlot(instance, "url", url);
       nextInstance = workspaceSetOutputSlot(nextInstance, "shareId", share.id);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "reviewToken", share.reviewToken);
       nextInstance = workspaceSetOutputSlot(nextInstance, "expiresAt", share.expiresAt);
       graph.instances[nodeId] = nextInstance;
       const updatedDisplays = publishNodeOutput(nodeId, url);
@@ -6889,6 +7097,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         task: String(instance.script || instance.scriptRef || instance.body || "").trim(),
         inputValues,
         durableOutputs: true,
+        runId: runtimeRunId,
+        runState: runStateMeta,
       });
       const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
       emitTiming(nodeId, "prepare-script", prepareStartedAt, {
@@ -6908,6 +7118,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         onActiveChild: opts.onActiveChild,
       });
       const structuredAgentOutput = workspaceStructuredAgentOutput(content);
+      applyRunStateReport(nodeId, structuredAgentOutput);
       const nodeOutput = String(instance.marketplaceRef || "").trim()
         ? workspaceMaterializeNodePackageOutputValues(structuredAgentOutput, runPackage, instance)
         : structuredAgentOutput;
@@ -6976,6 +7187,8 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       resultFile: resultOutputSpec.resultFile,
       outParamFiles: workspaceOutParamFileSpecs(graph, nodeId),
       durableOutputs: true,
+      runId: runtimeRunId,
+      runState: runStateMeta,
     });
     const runtimeInputValues = { ...inputValues, ...(runPackage.inputValues || {}) };
     const body = workspaceResolveBodyPlaceholders(instance.body || "", runtimeInputValues).trim();
@@ -6999,7 +7212,12 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         workspaceContextBlock = [workspaceContextBlock, defaultWorkspaceBlock].filter(Boolean).join("\n\n");
       }
     }
-    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, workspaceContextBlock);
+    const currentRunState = readWorkspaceRunState(runtimeRunId);
+    const runStateBlock = currentRunState
+      ? `## Run State（本次运行共享，可通过代码节点 dirs.runState 更新）\n${JSON.stringify(currentRunState.state || {}, null, 2).slice(0, 20000)}`
+      : "";
+    const promptContext = [workspaceContextBlock, runStateBlock].filter(Boolean).join("\n\n");
+    const prompt = workspaceNodePrompt(graph, nodeId, promptUpstreamText, promptSkillsBlock, promptMcpBlock, runtimeInputValues, runPackage, historyBlock, promptContext);
     try {
       fs.writeFileSync(path.join(runPackage.nodeRunDir, "prompt.md"), prompt.trimEnd() + "\n", "utf-8");
     } catch {
@@ -7147,6 +7365,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       }
     }
     const materializedAgentOutput = workspaceMaterializeAgentResultFile(workspaceStructuredAgentOutput(content), runPackage);
+    applyRunStateReport(nodeId, materializedAgentOutput);
     const normalizedAgentOutput = workspacePublishAgentOutputFiles(materializedAgentOutput, runPackage);
     const resultContent = normalizedAgentOutput.result || content;
     recordNodeOutput(nodeId, resultContent);
@@ -7183,6 +7402,25 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     throw error;
   } finally {
     const retainForResume = Boolean(deferred || runtimePauseNodeIds.length);
+    if (resumedInterruptId) {
+      if (runFailure || retainForResume) {
+        requeueWorkspaceInterrupt(runtimeRunId, resumedInterruptId, { reason: runFailure?.message || "run paused again" });
+      } else {
+        consumeWorkspaceInterrupt(runtimeRunId, resumedInterruptId);
+      }
+    }
+    appendWorkspaceRunStateCheckpoint(runtimeRunId, {
+      nodeId: "",
+      status: retainForResume ? "waiting" : (runFailure ? "failed" : "completed"),
+      eventType: retainForResume ? "waiting" : (runFailure ? "failed" : "completed"),
+      error: runFailure ? (runFailure?.message || String(runFailure)) : "",
+      graphRevision: workspaceDesignRevision(graph),
+      cursor: {
+        currentNodeId: "",
+        completedNodeIds: Array.from(completedNodeIds),
+        nextNodeIds: order.filter((id) => !completedNodeIds.has(id)),
+      },
+    });
     const trackedWorktrees = autoCleanupWorktrees.map((entry) => ({ ...entry }));
     let cleanup = { cleaned: [], preserved: [] };
     if (retainForResume) {
@@ -7225,7 +7463,16 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     emit({ type: "paused", nodeIds: finalPauseNodeIds, message: `Workspace run paused at ${finalPauseNodeIds.join(", ")}` });
   }
   graph.updatedAt = new Date().toISOString();
-  return { graph, events, order, pauseNodeIds: finalPauseNodeIds, deferred };
+  return {
+    graph,
+    events,
+    order,
+    pauseNodeIds: finalPauseNodeIds,
+    deferred,
+    runState: readWorkspaceRunState(runtimeRunId),
+    runStateEvents: readWorkspaceRunStateEvents(runtimeRunId),
+    runStateHistory: readWorkspaceRunStateHistory(runtimeRunId),
+  };
 }
 
 export function isWorkspaceRunAbortError(err) {

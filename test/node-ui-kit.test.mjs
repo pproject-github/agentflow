@@ -53,6 +53,21 @@ test("Node UI Kit 只保留声明式白名单组件", () => {
   });
 });
 
+test("summary 的 datetime 格式为白名单声明，未知格式安全忽略", () => {
+  const ui = normalizeNodeUi({
+    card: {
+      sections: [
+        { type: "summary", label: "Expires", output: "expiresAt", format: "datetime" },
+        { type: "summary", label: "Unsafe", output: "value", format: "<script>" },
+      ],
+    },
+  });
+  assert.deepEqual(ui.card.sections, [
+    { type: "summary", label: "Expires", output: "expiresAt", format: "datetime" },
+    { type: "summary", label: "Unsafe", output: "value" },
+  ]);
+});
+
 test("control.while 的 builtin frontmatter 提供可解释状态机卡片", () => {
   const source = fs.readFileSync(path.join(repoRoot, "builtin", "nodes", "control_while.md"), "utf-8");
   const def = parseNodeFrontmatter(source);

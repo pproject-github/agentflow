@@ -14,6 +14,7 @@ const ITEMS = [
   { to: "/skills", labelKey: "common:nav.skills", icon: "extension" },
   { to: "/mcps", labelKey: "common:nav.mcps", icon: "hub" },
   { to: "/schedules", label: "定时任务", icon: "event_busy" },
+  { to: "/approvals", label: "我的审批", icon: "task_alt" },
   { to: "/admin/usage", label: "管理看板", icon: "query_stats", adminOnly: true },
   { to: "/admin/teams", label: "团队管理", icon: "groups", adminOnly: true },
   { to: "/admin/users", label: "用户与归属", icon: "manage_accounts", adminOnly: true },

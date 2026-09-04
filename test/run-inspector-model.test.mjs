@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildRunAuditTrace,
   buildRunInspectorTurns,
+  buildRunStateSnapshot,
   normalizeRunInspectorEvents,
   runInspectorTimelineRows,
 } from "../builtin/web-ui/src/lib/runInspectorModel.js";
@@ -102,4 +103,82 @@ test("Run Inspector exposes Agent looping recovery and safe retry decisions", ()
   assert.deepEqual(events.map((event) => event.label), ["Agent 新 Attempt", "恢复 Agent 产物"]);
   assert.deepEqual(events.map((event) => event.status), ["retrying", "success"]);
   assert.match(events[1].text, /outputs\/result\.html/);
+});
+
+test("Run State projects graph nodes, progress, waiting state and pending nodes", () => {
+  const startedAt = 1_000;
+  const flowNodes = [
+    { id: "plan", data: { label: "Plan" } },
+    { id: "review", data: { label: "用户确认" } },
+    { id: "publish", data: { label: "发布" } },
+  ];
+  const events = [
+    { type: "run-start", status: "running", ts: startedAt },
+    { type: "node-start", nodeId: "plan", definitionId: "plan", ts: startedAt + 10 },
+    { type: "node-done", nodeId: "plan", definitionId: "plan", status: "success", ts: startedAt + 100 },
+    { type: "node-start", nodeId: "review", definitionId: "review", status: "running", ts: startedAt + 110 },
+    { type: "node-waiting", nodeId: "review", definitionId: "review", status: "waiting", ts: startedAt + 120 },
+  ];
+  const state = buildRunStateSnapshot(events, { runId: "r-1", status: "waiting", startedAt }, flowNodes, [], startedAt + 200);
+  assert.equal(state.status, "waiting");
+  assert.deepEqual(state.progress, { completed: 1, total: 3, percent: 33 });
+  assert.deepEqual(state.currentStage, { id: "review", label: "用户确认", status: "waiting" });
+  assert.deepEqual(state.waiting, [{ id: "review", label: "用户确认" }]);
+  assert.deepEqual(state.pending, [{ id: "publish", label: "发布" }]);
+  assert.deepEqual(state.stages.map((stage) => stage.status), ["success", "waiting", "pending"]);
+});
+
+test("Run trigger nodes do not appear as an executing stage or inflate progress", () => {
+  const flowNodes = [
+    { id: "run", data: { label: "Run", definitionId: "workspace_run" } },
+    { id: "plan", data: { label: "Plan", definitionId: "provide_str" } },
+    { id: "finish", data: { label: "完成", definitionId: "display_markdown" } },
+  ];
+  const events = [
+    { type: "run-start", nodeId: "run", status: "running", ts: 10 },
+    { type: "node-start", nodeId: "plan", definitionId: "provide_str", ts: 20 },
+    { type: "node-done", nodeId: "plan", definitionId: "provide_str", status: "success", ts: 30 },
+    { type: "run-finish", nodeId: "run", status: "success", ts: 40 },
+  ];
+  const state = buildRunStateSnapshot(events, { runId: "trigger-1", status: "success", startedAt: 10, endedAt: 40 }, flowNodes);
+  assert.equal(state.status, "success");
+  assert.deepEqual(state.progress, { completed: 1, total: 2, percent: 50 });
+  assert.equal(state.currentStage.id, "plan");
+  assert.equal(state.currentStage.status, "success");
+  assert.equal(state.stages.some((stage) => stage.id === "run"), false);
+});
+
+test("Run State handles failed and skipped stages without exposing secret values", () => {
+  const flowNodes = [{ id: "a", data: { label: "A" } }, { id: "b", data: { label: "B" } }];
+  const events = [
+    { type: "node-start", nodeId: "a", ts: 10 },
+    { type: "node-error", nodeId: "a", status: "error", text: "token=do-not-leak", ts: 20 },
+    { type: "node-skipped", nodeId: "b", status: "skipped", ts: 30 },
+  ];
+  const state = buildRunStateSnapshot(events, { runId: "r-2", status: "failed", startedAt: 0, endedAt: 40 }, flowNodes);
+  assert.equal(state.status, "error");
+  assert.deepEqual(state.stages.map((stage) => stage.status), ["error", "skipped"]);
+  assert.equal(JSON.stringify(state).includes("do-not-leak"), false);
+  assert.equal(state.lastEvent.type, "node-skipped");
+});
+
+test("Run State remains renderable before the first event arrives", () => {
+  const state = buildRunStateSnapshot([], { runId: "queued-1", status: "queued", startedAt: 100 }, [{ id: "first", data: { label: "第一阶段" } }], [], 200);
+  assert.equal(state.status, "pending");
+  assert.deepEqual(state.progress, { completed: 0, total: 1, percent: 0 });
+  assert.deepEqual(state.pending, [{ id: "first", label: "第一阶段" }]);
+  assert.equal(state.lastEvent, null);
+});
+
+test("Run-level failure closes an active stage when node-error is missing", () => {
+  const state = buildRunStateSnapshot([
+    { type: "run-start", status: "running", ts: 10 },
+    { type: "node-start", nodeId: "agent", definitionId: "agent_subAgent", ts: 20 },
+    { type: "error", status: "error", message: "authentication required", ts: 30 },
+  ], { runId: "failed-1", status: "failed", startedAt: 10, endedAt: 30 }, [
+    { id: "agent", data: { label: "子 Agent" } },
+  ]);
+  assert.equal(state.status, "error");
+  assert.equal(state.currentStage.status, "error");
+  assert.equal(state.stages[0].status, "error");
 });

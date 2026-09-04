@@ -43,5 +43,25 @@ output:
     name: expiresAt
     default: ""
     showOnNode: false
+  - type: text
+    name: reviewToken
+    default: ""
+    showOnNode: false
+ui:
+  card:
+    template: details
+    icon: link
+    tone: blue
+    sections:
+      - type: binding
+        label: 审核页标题
+        input: title
+      - type: summary
+        label: 一次性审核入口
+        output: url
+      - type: summary
+        label: 有效期
+        output: expiresAt
+        format: datetime
 ---
 Create a share link for connected Display nodes. Connect a Display node to this node, optionally set title, and use the url output.
