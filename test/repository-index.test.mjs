@@ -99,3 +99,71 @@ test("流程仓库区分 Draft、Stable 与 Stable 后的未发布调整", () =>
     else process.env.AGENTFLOW_HOME = previousHome;
   }
 });
+
+test("多入口流程预览按入口子图校验版本，不会误判整图变更为过期", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-repository-index-multi-entry-")));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  process.env.AGENTFLOW_HOME = path.join(root, "data");
+  try {
+    const flowRoot = path.join(process.env.AGENTFLOW_HOME, "users", "owner-1", "pipelines", "multi-entry-flow");
+    fs.mkdirSync(flowRoot, { recursive: true });
+    const graph = {
+      version: 1,
+      instances: {
+        run_a: { instanceId: "run_a", definitionId: "workspace_run", label: "A", input: [], output: [{ name: "next", type: "node" }] },
+        work_a: { instanceId: "work_a", definitionId: "provide_text", label: "Work A", input: [{ name: "prev", type: "node" }], output: [] },
+        run_b: { instanceId: "run_b", definitionId: "workspace_run", label: "B", input: [], output: [{ name: "next", type: "node" }] },
+        work_b: { instanceId: "work_b", definitionId: "provide_text", label: "Work B", input: [{ name: "prev", type: "node" }], output: [] },
+      },
+      edges: [
+        { source: "run_a", sourceHandle: "output-0", target: "work_a", targetHandle: "input-0" },
+        { source: "run_b", sourceHandle: "output-0", target: "work_b", targetHandle: "input-0" },
+      ],
+    };
+    fs.writeFileSync(path.join(flowRoot, "workspace.graph.json"), `${JSON.stringify(graph, null, 2)}\n`, "utf-8");
+
+    const index = rebuildRepositoryIndex(root);
+    assert.equal(index.flows.length, 2);
+    for (const item of index.flows) {
+      const preview = indexedProjectFlowPreview(root, item);
+      assert.equal(preview?.stale, undefined, `${item.id} should use its entry revision`);
+      assert.ok(preview?.graph, `${item.id} should return its entry graph`);
+    }
+  } finally {
+    clearRepositoryIndexMemoryForTest(root);
+    if (previousHome == null) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+  }
+});
+
+test("流程预览版本计算包含入口引用的 subflow，避免索引与预览哈希不一致", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-repository-index-subflow-")));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  process.env.AGENTFLOW_HOME = path.join(root, "data");
+  try {
+    const flowRoot = path.join(process.env.AGENTFLOW_HOME, "users", "owner-1", "pipelines", "subflow-flow");
+    fs.mkdirSync(flowRoot, { recursive: true });
+    const graph = {
+      version: 1,
+      instances: {
+        run: { instanceId: "run", definitionId: "workspace_run", label: "Run", input: [], output: [{ name: "next", type: "node" }] },
+        call: { instanceId: "call", definitionId: "workspace_call_subflow", label: "Call", input: [{ name: "prev", type: "node" }], output: [], subflowId: "child" },
+        childWork: { instanceId: "childWork", definitionId: "provide_text", label: "Child", input: [], output: [] },
+      },
+      edges: [{ source: "run", sourceHandle: "output-0", target: "call", targetHandle: "input-0" }],
+      subflows: { child: { id: "child", nodeIds: ["childWork"], entryNodeId: "childWork" } },
+    };
+    fs.writeFileSync(path.join(flowRoot, "workspace.graph.json"), `${JSON.stringify(graph, null, 2)}\n`, "utf-8");
+
+    const index = rebuildRepositoryIndex(root);
+    assert.equal(index.flows.length, 1);
+    const preview = indexedProjectFlowPreview(root, index.flows[0]);
+    assert.equal(preview?.stale, undefined);
+    assert.ok(preview?.graph?.subflows?.child);
+    assert.ok(preview?.graph?.instances?.childWork);
+  } finally {
+    clearRepositoryIndexMemoryForTest(root);
+    if (previousHome == null) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+  }
+});

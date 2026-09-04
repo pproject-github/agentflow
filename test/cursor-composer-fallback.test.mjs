@@ -387,6 +387,75 @@ test("generic 429 rotates to the next key without switching models", async () =>
   assert.equal(calls.some((call) => call.args.includes("--model")), false);
 });
 
+test("Cursor adds --force only for trusted unattended execution", async () => {
+  resetCursorApiKeyPoolForTests();
+  clearCursorModelCatalogCache();
+  const fixture = createMockCursorAgent();
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.CURSOR_AGENT_CMD = fixture.command;
+  try {
+    const interactive = runCursorAgentWithPrompt(fixture.directory, "interactive", {
+      force: true,
+      env: { MOCK_CURSOR_LOG: fixture.logPath },
+    });
+    await interactive.finished;
+    const scheduled = runCursorAgentWithPrompt(fixture.directory, "scheduled", {
+      execution: { unattended: true },
+      env: {
+        MOCK_CURSOR_LOG: fixture.logPath,
+        MOCK_CURSOR_MODE: "approved-tools",
+      },
+    });
+    await scheduled.finished;
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+
+  const calls = readJsonLines(fixture.logPath);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].args.includes("--force"), false, "legacy force must not bypass interactive permissions");
+  assert.equal(calls[1].args.includes("--force"), true, "trusted unattended execution must approve tools");
+});
+
+test("Cursor rejects a final success after a required tool was rejected or errored", async () => {
+  const modes = ["tool-rejected", "tool-error", "interaction-rejected"];
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  try {
+    for (const mode of modes) {
+      resetCursorApiKeyPoolForTests();
+      clearCursorModelCatalogCache();
+      const fixture = createMockCursorAgent();
+      process.env.CURSOR_AGENT_CMD = fixture.command;
+      const handle = runCursorAgentWithPrompt(fixture.directory, mode, {
+        env: {
+          MOCK_CURSOR_LOG: fixture.logPath,
+          MOCK_CURSOR_MODE: mode,
+        },
+      });
+      await assert.rejects(handle.finished, /Required tool .* (?:rejected|denied|error)/i, mode);
+    }
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+});
+
+test("Cursor keeps a final success after an optional read-only tool errors", async () => {
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  const previousMode = process.env.MOCK_CURSOR_MODE;
+  const fixture = createMockCursorAgent();
+  try {
+    process.env.CURSOR_AGENT_CMD = fixture.command;
+    process.env.MOCK_CURSOR_MODE = "read-only-tool-error";
+    const handle = runCursorAgentWithPrompt(fixture.directory, "Read optional context and produce the result.", {
+      env: { MOCK_CURSOR_MODE: "read-only-tool-error", MOCK_CURSOR_LOG: fixture.logPath },
+    });
+    await assert.doesNotReject(handle.finished);
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+    restoreEnv("MOCK_CURSOR_MODE", previousMode);
+  }
+});
+
 function createMockCursorAgent() {
   const directory = mkdtempSync(path.join(tmpdir(), "agentflow-cursor-fallback-"));
   const command = path.join(directory, "mock-cursor-agent.mjs");
@@ -427,6 +496,23 @@ if (mode === "stream-closed" && !args.includes("--model")) {
   console.error("RetriableError: WritableIterable is closed");
   console.error("Error: command failed unexpectedly.");
   process.exit(1);
+}
+if (mode === "approved-tools") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { shellToolCall: { result: { success: true } } } }));
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { WebSearch: { result: { success: true } } } }));
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { mcpToolCall: { result: { success: true } } } }));
+}
+if (mode === "tool-rejected") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { shellToolCall: { result: { rejected: true } } } }));
+}
+if (mode === "tool-error") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { mcpToolCall: { result: { error: { message: "denied" } } } } }));
+}
+if (mode === "read-only-tool-error") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { readToolCall: { result: { error: { message: "not found" } } } } }));
+}
+if (mode === "interaction-rejected") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { interaction_query: { result: "rejected" } } }));
 }
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }));
 `, "utf8");

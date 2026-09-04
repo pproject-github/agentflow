@@ -15,12 +15,14 @@ import { onRepositoryRunFinished } from "./repository-index-events.mjs";
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
 import {
   readWorkspaceGraph,
+  workspaceReleaseEntryGraph,
+  readWorkspaceReleaseStatus,
   readWorkspaceRunUsageRecords,
   readWorkspaceStableRelease,
   workspaceRunPlan,
 } from "./workspace-server.mjs";
 
-const REPOSITORY_INDEX_VERSION = 2;
+const REPOSITORY_INDEX_VERSION = 3;
 const REPOSITORY_INDEX_FILENAME = "repository-index.json";
 const REPOSITORY_INDEX_MAX_AGE_MS = 5 * 60 * 1000;
 const memoryIndexes = new Map();
@@ -166,30 +168,30 @@ function scanProjectFlows(workspaceRoot, usageStats) {
   const resources = [];
   const appendFlow = (ownerId, flow, flowSource = "user", workspaceId = "") => {
     if (!ownerId || flow.archived || !flow.path) return;
-    let stable;
     let draftGraph;
-    let graph;
+    let releaseStatus;
     try {
       draftGraph = readWorkspaceGraph(flow.path, workspaceRoot).graph;
-      stable = readWorkspaceStableRelease(flow.path, workspaceRoot);
-      graph = stable?.graph || draftGraph;
+      releaseStatus = readWorkspaceReleaseStatus(flow.path, workspaceRoot, draftGraph);
     } catch {
       return;
     }
-    const runnableEntries = runnableProjectFlowEntries(graph, flow.path);
+    const runnableEntries = (releaseStatus.entries || []).map((entryStatus) => {
+      const stable = readWorkspaceStableRelease(flow.path, workspaceRoot, entryStatus.entryNodeId);
+      const graph = stable?.graph || draftGraph;
+      const runnable = runnableProjectFlowEntries(graph, stable?.root || flow.path)
+        .find((item) => item.entryId === entryStatus.entryNodeId);
+      return runnable ? { runnable, entryStatus, stable, graph } : null;
+    }).filter(Boolean);
     if (runnableEntries.length === 0) return;
     const metadata = readProjectFlowMarketplaceMetadata(flow.path);
-    for (const runnable of runnableEntries) {
+    for (const resolved of runnableEntries) {
+      const { runnable, entryStatus, stable, graph } = resolved;
       const baseId = projectFlowRepositoryId(ownerId, flowSource, flow.id);
       const id = runnableEntries.length === 1 ? baseId : `${baseId}:${runnable.entryId}`;
-      const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
+      const version = stable?.release?.id || `current-${String(entryStatus.draftRevision || workspaceDesignRevision(graph)).slice(0, 12)}`;
       const releaseState = stable?.release?.id ? "stable" : "draft";
-      const draftRevision = workspaceDesignRevision(draftGraph);
-      const stableRevisions = new Set([
-        stable?.release?.designRevision || "",
-        stable?.graph ? workspaceDesignRevision(stable.graph) : "",
-      ].filter(Boolean));
-      const hasUnpublishedChanges = Boolean(stable?.release?.id && !stableRevisions.has(draftRevision));
+      const hasUnpublishedChanges = Boolean(entryStatus.hasDraftChanges);
       const rawEntryLabel = String(runnable.entry?.label || "").trim();
       const genericLabel = ["", "Run", "Scheduled Run", "运行", "定时运行"].includes(rawEntryLabel);
       const exactOwner = flowSource === "user" ? ownerId : "";
@@ -506,17 +508,20 @@ export function indexedProjectFlowPreview(workspaceRoot, indexedFlow) {
   let stable;
   let graph;
   try {
-    stable = readWorkspaceStableRelease(indexedFlow.flowRoot, workspaceRoot);
+    stable = readWorkspaceStableRelease(indexedFlow.flowRoot, workspaceRoot, indexedFlow.liveEntryId);
     graph = stable?.graph || readWorkspaceGraph(indexedFlow.flowRoot, workspaceRoot).graph;
   } catch {
     return null;
   }
-  const version = stable?.release?.id || `current-${workspaceDesignRevision(graph).slice(0, 12)}`;
+  const entryId = String(indexedFlow.liveEntryId || "").trim();
+  const entryGraph = workspaceReleaseEntryGraph(graph, entryId, stable?.root || indexedFlow.flowRoot);
+  if (!entryGraph) return null;
+  // Marketplace entries are versioned per runnable entry. Comparing against the
+  // full workspace graph makes every multi-entry flow look stale because edits
+  // belonging to a different Run entry change the full-graph revision too.
+  const version = stable?.release?.id || `current-${workspaceDesignRevision(entryGraph).slice(0, 12)}`;
   if (version !== indexedFlow.version) return { stale: true, version };
-  const runnable = runnableProjectFlowEntries(graph, indexedFlow.flowRoot, { includeGraph: true })
-    .find((item) => item.entryId === indexedFlow.liveEntryId);
-  if (!runnable) return null;
-  return { graph: runnable.graph, version };
+  return { graph: entryGraph, version };
 }
 
 export function clearRepositoryIndexMemoryForTest(workspaceRoot = "") {

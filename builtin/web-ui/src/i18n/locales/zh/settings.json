@@ -75,10 +75,10 @@
     "newValue": "值（密钥请谨慎）"
   },
   "allowlist": {
-    "title": "用户白名单",
-    "description": "只控制 username 是否允许注册或登录，密码由用户首次登录时自行设置。",
-    "enabled": "白名单已启用",
-    "open": "开放注册",
+    "title": "本地密码用户白名单",
+    "description": "只控制旧用户名密码账号是否允许注册或登录；CAS 用户由 CAS 授权策略统一控制，不受此白名单限制。",
+    "enabled": "本地白名单已启用",
+    "open": "本地账号开放注册",
     "refreshing": "刷新中...",
     "saving": "保存中...",
     "file": "文件",
@@ -87,7 +87,7 @@
     "readonly": "只读",
     "userCount": "{{count}} 个用户",
     "remove": "删除 {{username}}",
-    "emptyFile": "未配置文件白名单；如果环境变量也为空，则所有用户可注册。",
+    "emptyFile": "未配置文件白名单；如果环境变量也为空，则所有本地密码用户可注册。",
     "emptyEnv": "未配置 AGENTFLOW_USER_WHITELIST / AGENTFLOW_ALLOWED_USERS",
     "unionHint": "文件白名单与环境变量白名单取并集；这里只会保存用户名，不保存密码。",
     "add": "添加"

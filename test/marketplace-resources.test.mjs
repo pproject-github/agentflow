@@ -201,6 +201,11 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
         { source: "run_b", sourceHandle: "output-0", target: "work_b", targetHandle: "input-0" },
       ],
     }, null, 2)}\n`, "utf-8");
+    const multiStable = publishWorkspaceRelease(multiRunnableProjectDir, root, {
+      createdBy: owner.user.userId,
+      runNodeId: "run_a",
+    });
+    assert.equal(multiStable.ok, true);
     const sharedRunnableDir = path.join(root, PIPELINES_DIR, "shared-runnable-flow");
     fs.mkdirSync(sharedRunnableDir, { recursive: true });
     fs.writeFileSync(path.join(sharedRunnableDir, "flow.yaml"), "version: 1\ninstances: {}\nedges: []\n", "utf-8");
@@ -279,6 +284,8 @@ test("流程仓库只列可运行流程，并提供流程与节点的只读 Work
     assert.equal(multiFlows.length, 2, "each connected Run entry must become one flow card");
     assert.deepEqual(multiFlows.map((item) => item.nodeCount).sort(), [2, 2]);
     assert.deepEqual(new Set(multiFlows.map((item) => item.runModeLabel)), new Set(["手动运行", "定时运行"]));
+    assert.equal(multiFlows.find((item) => item.liveEntryId === "run_a").releaseState, "stable");
+    assert.equal(multiFlows.find((item) => item.liveEntryId === "run_b").releaseState, "draft");
 
     const stableOnlyResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/marketplace/resources?kind=flow&releaseState=stable`, {
       headers: { Authorization: `Bearer ${consumer.token}` },

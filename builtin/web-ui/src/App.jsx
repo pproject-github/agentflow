@@ -10,6 +10,7 @@ import DisplayPage from "./pages/DisplayPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import AdminUsagePage from "./pages/AdminUsagePage.jsx";
 import AdminTeamsPage from "./pages/AdminTeamsPage.jsx";
+import AdminUsersPage from "./pages/AdminUsersPage.jsx";
 import FeedbackPage from "./pages/FeedbackPage.jsx";
 import McpPage from "./pages/McpPage.jsx";
 import SchedulesPage from "./pages/SchedulesPage.jsx";
@@ -133,13 +134,23 @@ function RoutedContent({ authUser }) {
   if (path === "/settings") return <SettingsPage authUser={authUser} />;
   if (path === "/admin/usage") return <AdminUsagePage authUser={authUser} />;
   if (path === "/admin/teams") return <AdminTeamsPage authUser={authUser} />;
+  if (path === "/admin/users") return <AdminUsersPage authUser={authUser} />;
   if (path === "/feedback") return <FeedbackPage authUser={authUser} />;
   if (isLikeeContextPath(path)) return <LikeeContextPage />;
   return <ProjectsPage />;
 }
 
 function AuthGate({ children }) {
-  const [auth, setAuth] = useState({ loading: true, authenticated: false, user: null, setupRequired: false });
+  const { path, navigate } = useRoute();
+  const adminLogin = path === "/admin/login";
+  const [auth, setAuth] = useState({
+    loading: true,
+    authenticated: false,
+    user: null,
+    setupRequired: false,
+    casEnabled: false,
+    casLoginUrl: "/api/auth/cas/login",
+  });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -154,10 +165,12 @@ function AuthGate({ children }) {
         authenticated: Boolean(j.authenticated),
         user: j.user || null,
         setupRequired: Boolean(j.setupRequired),
+        casEnabled: Boolean(j.casEnabled),
+        casLoginUrl: String(j.casLoginUrl || "/api/auth/cas/login"),
       });
       setError(j.error ? String(j.error) : "");
     } catch (e) {
-      setAuth({ loading: false, authenticated: false, user: null, setupRequired: false });
+      setAuth({ loading: false, authenticated: false, user: null, setupRequired: false, casEnabled: false, casLoginUrl: "/api/auth/cas/login" });
       setError(String(e.message || e));
     }
   };
@@ -166,12 +179,24 @@ function AuthGate({ children }) {
     loadMe();
   }, []);
 
+  useEffect(() => {
+    if (!auth.loading && auth.authenticated && adminLogin) navigate("/projects");
+  }, [adminLogin, auth.authenticated, auth.loading, navigate]);
+
+  useEffect(() => {
+    if (auth.loading || auth.authenticated || adminLogin || !auth.casEnabled) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("authError")) return;
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.replace(`${auth.casLoginUrl}?returnTo=${encodeURIComponent(returnTo)}`);
+  }, [adminLogin, auth.authenticated, auth.casEnabled, auth.casLoginUrl, auth.loading]);
+
   const submit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     setError("");
     try {
-      const r = await fetch("/api/auth/login", {
+      const r = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -196,6 +221,25 @@ function AuthGate({ children }) {
     return <AppLoading />;
   }
   if (!auth.authenticated) {
+    const authError = new URLSearchParams(window.location.search).get("authError") || "";
+    if (!adminLogin) {
+      return (
+        <div className="af-auth-screen">
+          <div className="af-auth-panel af-auth-panel--cas">
+            <div className="af-auth-brand">
+              <span className="material-symbols-outlined">shield_person</span>
+              <div><h1>AgentFlow</h1><p>{!auth.casEnabled ? "CAS 登录尚未配置" : authError ? "CAS 登录未完成" : "正在前往 CAS 统一认证"}</p></div>
+            </div>
+            {!auth.casEnabled ? <p className="af-auth-error">普通用户仅支持 CAS 登录，请联系管理员启用 CAS。</p> : authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "该账号是 AgentFlow 管理员，请从管理员入口使用密码登录。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
+            <button className="af-auth-submit" type="button" disabled={!auth.casEnabled} onClick={() => {
+              const returnTo = `${window.location.pathname}${window.location.hash}`;
+              window.location.assign(`${auth.casLoginUrl}?returnTo=${encodeURIComponent(returnTo)}`);
+            }}>{authError ? "重新使用 CAS 登录" : "使用 CAS 登录"}</button>
+            <a className="af-auth-admin-link" href="/admin/login">管理员登录</a>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="af-auth-screen">
         <form className="af-auth-panel" onSubmit={submit} autoComplete="on">
@@ -203,7 +247,7 @@ function AuthGate({ children }) {
             <span className="material-symbols-outlined">account_circle</span>
             <div>
               <h1>AgentFlow</h1>
-              <p>{auth.setupRequired ? "初始化管理员账号" : "登录或创建用户"}</p>
+              <p>{auth.setupRequired ? "初始化管理员账号" : "管理员登录"}</p>
             </div>
           </div>
           <label className="af-auth-field">
@@ -231,15 +275,21 @@ function AuthGate({ children }) {
           </label>
           {error ? <p className="af-auth-error">{error}</p> : null}
           <button className="af-auth-submit" type="submit" disabled={submitting || !username.trim() || password.length < 4}>
-            {submitting ? "处理中..." : auth.setupRequired ? "创建并登录" : "登录"}
+            {submitting ? "处理中..." : auth.setupRequired ? "创建管理员并登录" : "管理员登录"}
           </button>
+          <a className="af-auth-admin-link" href="/projects">返回 CAS 用户入口</a>
         </form>
       </div>
     );
   }
   return children({ user: auth.user, onLogout: async () => {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-    setAuth({ loading: false, authenticated: false, user: null, setupRequired: false });
+    if (auth.user?.authProvider === "cas") {
+      window.location.assign("/api/auth/cas/logout");
+      return;
+    }
+    setAuth((current) => ({ ...current, loading: false, authenticated: false, user: null, setupRequired: false }));
+    window.location.replace("/admin/login");
   }});
 }
 

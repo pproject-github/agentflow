@@ -29,8 +29,9 @@ function pageShell(title, body) {
     label { display: block; margin: 14px 0 6px; color: #c9c2d7; font-size: 13px; font-weight: 700; }
     input { width: 100%; padding: 12px 13px; border: 1px solid #514a60; border-radius: 10px; color: #fff; background: #15131a; font: inherit; }
     .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
-    button { min-width: 112px; padding: 11px 18px; border: 1px solid #554d66; border-radius: 999px; color: #fff; background: #302b39; font: inherit; font-weight: 750; cursor: pointer; }
-    button.primary { border-color: #8d72ff; background: #7352ef; }
+    .button, button { min-width: 112px; padding: 11px 18px; border: 1px solid #554d66; border-radius: 999px; color: #fff; background: #302b39; font: inherit; font-weight: 750; cursor: pointer; }
+    .button { display: inline-block; text-align: center; text-decoration: none; }
+    .button.primary, button.primary { border-color: #8d72ff; background: #7352ef; }
     button.danger { color: #ffc8c8; }
     .error { padding: 12px 14px; border: 1px solid #8b454d; border-radius: 10px; color: #ffd1d4; background: #351d22; }
     .identity { color: #8edcb5; }
@@ -60,18 +61,16 @@ export function renderCliAuthorizationPage({ authorization, approvalNonce = "", 
   const code = escapeHtml(authorization.userCode || "");
   const errorBlock = error ? `<div class="error">${escapeHtml(error)}</div>` : "";
   if (!user) {
+    const returnTo = `/cli/authorize?request=${encodeURIComponent(String(authorization.requestId || ""))}`;
+    const casLoginUrl = `/api/auth/cas/login?returnTo=${encodeURIComponent(returnTo)}`;
     return pageShell("登录并授权", `
       <div class="brand">AgentFlow CLI Authorization</div>
       <h1>登录后授权 ${clientName}</h1>
       <p>请求代码</p><div class="code">${code}</div>
       ${errorBlock}
-      <form method="post" action="/cli/authorize/login">
-        <input type="hidden" name="request" value="${requestId}" />
-        <label for="username">用户名</label><input id="username" name="username" autocomplete="username" required />
-        <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required />
-        <div class="actions"><button class="primary" type="submit">登录并继续</button></div>
-      </form>
-      <div class="fine">密码只提交给当前 AgentFlow 服务，不会传给 CLI。</div>`);
+      <p>普通用户仅支持 CAS 统一认证。</p>
+      <div class="actions"><a class="button primary" href="${escapeHtml(casLoginUrl)}">使用 CAS 登录</a></div>
+      <div class="fine">管理员密码入口仅用于 AgentFlow 管理后台，不能作为普通用户授权入口。</div>`);
   }
   const scopes = (authorization.scopes || []).map((scope) => `<li>${escapeHtml(SCOPE_LABELS.get(scope) || scope)}</li>`).join("");
   return pageShell("确认 CLI 授权", `
