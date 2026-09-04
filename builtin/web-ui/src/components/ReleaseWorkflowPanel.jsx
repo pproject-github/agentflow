@@ -706,25 +706,22 @@ export default function ReleaseWorkflowPanel({
       }
       group.nodes.push(node);
     }
-    // 用户需求点: 自由 Agent 可插入任意发版阶段；每个流程分组都挂一份同能力入口。
+    // 用户需求点: 自由 Agent 只出现一次（助手驱动），不要复制到每个发版阶段分组。
     const freePrompt = catalogNodes.find((node) => node.insertableInAnyStage === true || node.compositeId === "free-prompt-agent");
     if (freePrompt) {
-      for (const group of groups) {
-        if (group.nodes.some((node) => node.compositeId === freePrompt.compositeId || node.id === freePrompt.id)) continue;
-        group.nodes.push({
-          ...freePrompt,
-          processId: group.id,
-          processTitle: group.title,
-          workflowProcessId: group.id,
-          workflowProcessTitle: group.title,
-          category: group.title,
-        });
-      }
-      if (groups.length === 0) {
+      const alreadyListed = groups.some((group) => group.nodes.some((node) => node.compositeId === freePrompt.compositeId || node.id === freePrompt.id));
+      if (!alreadyListed) {
         groups.push({
-          id: freePrompt.processId || "entry",
-          title: freePrompt.processTitle || "助手驱动",
-          nodes: [freePrompt],
+          id: "assistant",
+          title: "助手驱动",
+          nodes: [{
+            ...freePrompt,
+            processId: freePrompt.processId || "entry",
+            processTitle: freePrompt.processTitle || "发版入口",
+            workflowProcessId: "assistant",
+            workflowProcessTitle: "助手驱动",
+            category: "助手驱动",
+          }],
         });
       }
     }

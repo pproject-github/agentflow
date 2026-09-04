@@ -8,7 +8,7 @@ import {
   recommendNextProcessNodes,
   selectWorkflowProcessNodes,
 } from "../builtin/web-ui/src/lib/releaseWorkflowStateMachine.js";
-import { RELEASE_WORKFLOW_CONFIG, workflowActionIds } from "../shared/release-workflow-config.js";
+import { RELEASE_WORKFLOW_CONFIG, selectReleaseWorkflow, workflowActionIds } from "../shared/release-workflow-config.js";
 
 const initialContext = {
   businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial", batchIndex: 0,
@@ -27,12 +27,12 @@ function node(id, context = initialContext, extra = {}) {
   };
 }
 
-function machine(context = initialContext, ids = workflowActionIds(
-  RELEASE_WORKFLOW_CONFIG.workflows[0], context,
-)) {
+function machine(context = initialContext, ids) {
+  const workflow = selectReleaseWorkflow(context) || RELEASE_WORKFLOW_CONFIG.workflows[0];
+  const resolvedIds = ids || workflowActionIds(workflow, context);
   return createReleaseProcessStateMachine({
     context,
-    nodes: [...ids].map((id) => node(id, context)),
+    nodes: [...resolvedIds].map((id) => node(id, context)),
   });
 }
 
@@ -49,8 +49,25 @@ test("uses the same Likee Android workflow for initial and supplemental batches"
   assert.equal(machine(initialContext).workflow.id, "likee-android-release");
   assert.equal(machine(supplementalContext).workflow.id, "likee-android-release");
   assert.deepEqual(machine(supplementalContext).processes.map((process) => process.id), [
-    "entry", "build", "approval", "publish", "rollout", "full-rollout",
+    "entry", "build", "publish", "rollout", "full-rollout",
   ]);
+});
+
+test("uses Likee iOS workflow without rollout for initial and supplemental batches", () => {
+  const iosInitial = { businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial", batchIndex: 0 };
+  const iosSupplemental = { ...iosInitial, batch: "supplemental", batchIndex: 1 };
+  assert.equal(machine(iosInitial).workflow.id, "likee-ios-release");
+  assert.equal(machine(iosSupplemental).workflow.id, "likee-ios-release");
+  assert.deepEqual(machine(iosInitial).processes.map((process) => process.id), [
+    "entry", "localization", "merge-master", "build", "approval", "publish", "full-rollout",
+  ]);
+  assert.deepEqual(machine(iosSupplemental).processes.map((process) => process.id), [
+    "entry", "build", "publish", "full-rollout",
+  ]);
+  const transitions = machine(iosInitial).workflow.transitions;
+  assert.ok(transitions.some((item) => item.from === "publish" && item.to === "create_supplemental_batch"));
+  assert.ok(transitions.some((item) => item.from === "full-rollout" && item.to === "create_supplemental_batch"));
+  assert.equal(transitions.some((item) => item.from === "rollout"), false);
 });
 
 test("recommends the next capability within the current stage before advancing", () => {

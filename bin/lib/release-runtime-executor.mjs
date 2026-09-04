@@ -291,31 +291,49 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
   if (id.includes("build-package")) {
     if (!version) {
       return [
-        `准备 ${displayProduct} ${platformLabel} 渠道包。`,
+        `准备 ${displayProduct} ${platformLabel} 发版包。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
     const buildNumber = String(inputs?.build_number || "").trim();
     return buildNumber
-      ? `准备 ${displayProduct} ${platformLabel} 渠道包（版本 ${version}，批次 ${batch}，构建号 ${buildNumber}）。`
-      : `准备 ${displayProduct} ${platformLabel} 渠道包（版本 ${version}，批次 ${batch}）。`;
+      ? `准备 ${displayProduct} ${platformLabel} 发版包（版本 ${version}，批次 ${batch}，构建号 ${buildNumber}）。`
+      : `准备 ${displayProduct} ${platformLabel} 发版包（版本 ${version}，批次 ${batch}）。`;
   }
-  if (id.includes("submit-approval")) {
+  if (id.includes("submit-full-rollout-approval")) {
     const operator = resolveReleaseApprovalOperator(inputs?.operator, context?.operator);
-    const taskLabel = batch === "initial" ? "首次发版审核草稿" : "全量发布审核草稿";
     if (!version) {
       return [
-        `为 ${displayProduct} ${platformLabel} 创建${taskLabel}。`,
+        `为 ${displayProduct} ${platformLabel} 创建全量发布审核草稿。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
     if (!operator) {
       return [
-        `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建${taskLabel}。`,
+        `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建全量发布审核草稿。`,
         "审核申请人无效：须为 OA 拼音账号（如 yangcaimu）。返回 status=waiting，waiting.reason=approval_operator_invalid，不要执行。",
       ].join("\n");
     }
-    return `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建${taskLabel}，审核申请人为 ${operator}。`;
+    return [
+      `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建全量发布审核草稿，审核申请人为 ${operator}。`,
+      "按 release-approval 操作指南：目标批次须已有构建号、发布日期与已确认指标快照；读 Skill 自行编排 create-full-rollout-approval。",
+    ].join("\n");
+  }
+  if (id.includes("submit-approval")) {
+    const operator = resolveReleaseApprovalOperator(inputs?.operator, context?.operator);
+    if (!version) {
+      return [
+        `为 ${displayProduct} ${platformLabel} 创建首次发版审核草稿。`,
+        "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
+      ].join("\n");
+    }
+    if (!operator) {
+      return [
+        `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建首次发版审核草稿。`,
+        "审核申请人无效：须为 OA 拼音账号（如 yangcaimu）。返回 status=waiting，waiting.reason=approval_operator_invalid，不要执行。",
+      ].join("\n");
+    }
+    return `为 ${displayProduct} ${platformLabel} ${version}（${batch}）创建首次发版审核草稿，审核申请人为 ${operator}。`;
   }
   if (id.includes("publish-and-notify")) {
     if (!version) {
@@ -347,7 +365,7 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
       ? `为 ${displayProduct} ${platformLabel} 观察灰度并推进放量到 ${grayPercent}%（版本 ${version}，批次 ${batch}）。`
       : `为 ${displayProduct} ${platformLabel} 观察灰度并推进放量（版本 ${version}，批次 ${batch}）。`;
   }
-  if (id.includes("full-rollout")) {
+  if (id.includes("full-rollout") && !id.includes("approval")) {
     if (!version) {
       return [
         `为 ${displayProduct} ${platformLabel} 执行全量发布。`,

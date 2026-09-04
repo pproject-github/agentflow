@@ -272,32 +272,31 @@ test("static fallback catalog contains configured action-level nodes for workflo
 
 test("static fallback localization catalog keeps the complete iOS source file set", async () => {
   const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?fallback-localization-files=${Date.now()}`);
-  const iosUpload = getReleaseNodes({ businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial" })
-    .find((node) => node.id === "release-localization:upload-source-file");
-  assert.ok(iosUpload);
-  assert.ok(iosUpload.sourceFiles.includes("yymeet/Resources/MultiLanguage/en.lproj/xib.strings"));
-  assert.equal(iosUpload.sourceFiles.length, 8);
+  const iosNodes = getReleaseNodes({ businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial" });
+  // 静态目录现只暴露 Agent 能力；源文件集合由 Skill 自行发现，不再嵌在 catalog。
+  assert.ok(iosNodes.some((node) => node.compositeId === "localization-upload-notify" || node.id === "composite:localization-upload-notify"));
+  assert.equal(iosNodes.some((node) => /rollout/.test(node.compositeId || node.id) && !/full-rollout/.test(node.compositeId || node.id)), false);
+  assert.ok(iosNodes.every((node) => node.workflowId === "likee-ios-release"));
 });
 
 test("static fallback honors approval batch scopes and Android gray input differences", async () => {
   const { getReleaseNodes } = await import(`../builtin/web-ui/src/lib/releaseNodeCatalog.js?approval-batches=${Date.now()}`);
-  const initialAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "initial" }).map((node) => [node.id, node]));
-  const supplementalAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "supplemental" }).map((node) => [node.id, node]));
-  const initialIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "initial" }).map((node) => [node.id, node]));
-  const supplementalIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "supplemental" }).map((node) => [node.id, node]));
-  assert.equal(initialAndroid.has("release-approval:create-initial-release-approval"), true);
-  assert.equal(initialAndroid.has("release-approval:create-full-rollout-approval"), true);
-  assert.equal(supplementalAndroid.has("release-approval:create-initial-release-approval"), false);
-  assert.equal(supplementalAndroid.has("release-approval:create-full-rollout-approval"), true);
-  assert.equal(initialIos.has("release-approval:create-initial-release-approval"), true);
-  assert.equal(initialIos.has("release-approval:create-full-rollout-approval"), true);
-  assert.equal(supplementalIos.has("release-approval:create-initial-release-approval"), false);
-  assert.equal(supplementalIos.has("release-approval:create-full-rollout-approval"), true);
-  const gray = supplementalAndroid.get("release-records:append-release-wiki-row")?.inputSchema?.[0];
-  assert.equal(gray?.key, "gray_percent");
-  assert.equal(gray?.required, true);
-  assert.equal(supplementalAndroid.get("release-records:record-store-approved")?.inputSchema?.some((item) => item.key === "gray_percent"), false);
-  assert.equal(supplementalIos.get("release-records:append-release-wiki-row")?.inputSchema?.some((item) => item.key === "gray_percent"), false);
+  const initialAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "initial" }).map((node) => [node.compositeId || node.id, node]));
+  const supplementalAndroid = new Map(getReleaseNodes({ businessLine: "likee", platform: "android", batch: "supplemental" }).map((node) => [node.compositeId || node.id, node]));
+  const initialIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "initial" }).map((node) => [node.compositeId || node.id, node]));
+  const supplementalIos = new Map(getReleaseNodes({ businessLine: "likee", platform: "ios", batch: "supplemental" }).map((node) => [node.compositeId || node.id, node]));
+  assert.equal(initialAndroid.has("submit-approval"), true);
+  assert.equal(initialAndroid.has("submit-full-rollout-approval"), true);
+  assert.equal(initialAndroid.has("rollout"), true);
+  assert.equal(supplementalAndroid.has("submit-approval"), false);
+  assert.equal(supplementalAndroid.has("submit-full-rollout-approval"), true);
+  assert.equal(supplementalAndroid.has("rollout"), true);
+  assert.equal(initialIos.has("submit-approval"), true);
+  assert.equal(initialIos.has("submit-full-rollout-approval"), true);
+  assert.equal(initialIos.has("rollout"), false);
+  assert.equal(supplementalIos.has("submit-approval"), false);
+  assert.equal(supplementalIos.has("submit-full-rollout-approval"), true);
+  assert.equal(supplementalIos.has("rollout"), false);
 });
 
 test("static fallback catalog is empty when no workflow matches the requested scope", async () => {

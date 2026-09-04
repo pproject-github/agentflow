@@ -41,6 +41,7 @@ const RELEASE_ACTION_TITLES = Object.freeze({
   "merge-release-to-master": "发版分支合回 master",
   "build-package": "构建发版包",
   "submit-approval": "提交发版审核单",
+  "submit-full-rollout-approval": "全量审核单",
   "publish-and-notify": "商店发布并通知",
   "rollout": "推进放量",
   "full-rollout": "全量发布",

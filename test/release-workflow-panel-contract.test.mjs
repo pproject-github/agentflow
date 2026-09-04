@@ -118,6 +118,15 @@ test("composite nodes are sent by composite identity and persist internal step d
   assert.match(model, /export function externalInputSchemaForNode/);
 });
 
+test("free-prompt appears once under assistant group, not every stage", async () => {
+  const source = await readFile(panelPath, "utf8");
+  assert.match(source, /insertableInAnyStage/);
+  assert.match(source, /free-prompt-agent/);
+  assert.match(source, /助手驱动/);
+  assert.match(source, /只出现一次/);
+  assert.doesNotMatch(source, /每个流程分组都挂一份/);
+});
+
 test("client sanitizes graph output and treats waiting as timeline success", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /function sanitizeReleaseNodeOutput/);
@@ -131,8 +140,6 @@ test("client sanitizes graph output and treats waiting as timeline success", asy
   assert.match(source, /humanizeWaitingMatter/);
   assert.match(source, /待办：/);
   assert.match(source, /promoteWaitingItemToCompleted/);
-  assert.match(source, /insertableInAnyStage/);
-  assert.match(source, /free-prompt-agent/);
 });
 
 test("hydrates hollow timeline entries from runs", async () => {

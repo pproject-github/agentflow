@@ -247,10 +247,11 @@ test("release capability intents stay lean and operator-guide shaped", async () 
     "publish-and-notify",
     "supplemental-notification",
     "rollout",
+    "submit-full-rollout-approval",
     "full-rollout",
   ];
   for (const id of ids) {
-    const extra = /submit-approval|full-rollout/.test(id) ? { operator: "duanfengyuan" } : {};
+    const extra = /submit-approval|submit-full-rollout-approval|full-rollout/.test(id) ? { operator: "duanfengyuan" } : {};
     const playbook = buildReleaseCapabilityPlaybook(id, ctx, extra);
     assert.doesNotMatch(playbook, /uv run python skills\//, id);
     assert.doesNotMatch(playbook, /勿重复|禁止 --rerun|恢复摘要/, id);
@@ -266,7 +267,7 @@ test("release capability intents stay lean and operator-guide shaped", async () 
     assert.doesNotMatch(prompt, /恢复摘要|勿重复 prepare|幂等成功/);
     assert.match(
       prompt,
-      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|渠道包|首次发版审核草稿|全量发布审核草稿|商店发布|补包通知|观察灰度|全量发布/,
+      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|发版包|首次发版审核草稿|全量发布审核草稿|商店发布|补包通知|观察灰度|全量发布/,
       id,
     );
     assert.ok(prompt.length < 3_500, `${id} prompt too long: ${prompt.length}`);
@@ -310,8 +311,12 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.match(approval, /为 Likee android 5\.64\.0（initial）创建首次发版审核草稿/);
   assert.match(approval, /审核申请人为 duanfengyuan/);
   assert.doesNotMatch(approval, /uv run|--input operator=/);
-  const supplemental = buildReleaseCapabilityPlaybook("submit-approval", { ...ctx, batch: "supplemental" }, { operator: "duanfengyuan" });
-  assert.match(supplemental, /全量发布审核草稿/);
+  const fullApproval = buildReleaseCapabilityPlaybook("submit-full-rollout-approval", ctx, { operator: "duanfengyuan" });
+  assert.match(fullApproval, /创建全量发布审核草稿/);
+  assert.match(fullApproval, /已确认指标快照|create-full-rollout-approval/);
+  assert.match(fullApproval, /duanfengyuan/);
+  const fullApprovalSupplemental = buildReleaseCapabilityPlaybook("submit-full-rollout-approval", { ...ctx, batch: "supplemental" }, { operator: "duanfengyuan" });
+  assert.match(fullApprovalSupplemental, /supplemental.*全量发布审核草稿|全量发布审核草稿.*supplemental/);
   const { isReleaseApprovalOperatorUsername, resolveReleaseApprovalOperator } = await import("../bin/lib/release-runtime-executor.mjs?oa-operator");
   assert.equal(isReleaseApprovalOperatorUsername("duanfengyuan"), true);
   assert.equal(isReleaseApprovalOperatorUsername("yangcaimu"), true);

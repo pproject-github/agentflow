@@ -7,9 +7,10 @@ const processTitles = {
   approval: "提审单", publish: "发布并通知", rollout: "放量", "full-rollout": "全量发布",
 };
 const skillProcessMap = {
-  "release-localization": "localization", "release-git": "merge-master", "release-channel-packages": "build",
-  "release-approval": "approval", "release-google-play": "publish", "release-notification": "publish",
-  "release-gray-observe": "rollout",
+  "release-localization": "localization", "release-git": "merge-master",
+  "release-channel-packages": "build", "release-build": "build",
+  "release-approval": "approval", "release-google-play": "publish", "release-release-notes": "publish",
+  "release-notification": "publish", "release-gray-observe": "rollout",
 };
 const actionOrder = Object.freeze({
   "release-localization:upload-source-file": 10,
@@ -37,8 +38,9 @@ const promptTemplate = (goal) => [
   "必须只返回 JSON：{status:\"completed|waiting|failed\",summary,steps,records,artifacts,waiting,next_action}。",
 ].join("\n");
 
+// platforms 默认双端；灰度放量等能力通过 extra.platforms 收窄到 Android。
 const capability = (id, title, description, stageId, batches, skillHints, inputs = [], extra = {}) => ({
-  id, title, description, capabilityGoal: description, businessLines: ["likee"], platforms: ["android"], batches, stageId, skillHints, inputs,
+  id, title, description, capabilityGoal: description, businessLines: ["likee"], platforms: ["android", "ios"], batches, stageId, skillHints, inputs,
   outputs: resultOutputs.map((item) => ({ ...item })), promptTemplate: promptTemplate(description), ...extra,
 });
 
@@ -51,15 +53,18 @@ const capabilityDefinitions = [
     { key: "force_rerun", type: "checkbox", required: false, label: "强制重新下载", placeholder: "忽略历史成功，重新 prepare/apply 并合入" },
   ]),
   capability("merge-release-to-master", "发版分支合回 master", "按 release-git Skill 的安全流程将发版分支合回 master。", "merge-master", ["initial"], ["release-git"]),
-  capability("build-package", "构建发版包", "根据当前批次和 Skill 配置构建 Android 发版包并记录产物。", "build", ["initial", "supplemental"], ["release-channel-packages", "release-google-play"], [{ key: "build_number", type: "text", required: false, label: "构建号", placeholder: "未填则读活动发版清单" }]),
-  capability("submit-approval", "提交发版审核单", "创建当前批次的发版审核草稿并返回审核记录。", "approval", ["initial", "supplemental"], ["release-approval", "release-records"]),
-  capability("publish-and-notify", "首包/补包发布 & 通知", "检查当前 Skill 是否提供商店发布能力；具备能力时按确认流程发布并通知，否则返回 waiting 或 failed。", "publish", ["initial", "supplemental"], ["release-google-play", "release-notification", "release-records"]),
+  capability("build-package", "构建发版包", "根据当前平台、批次和 Skill 配置构建发版包并记录产物（Android 渠道/商店包，iOS 走 release-build）。", "build", ["initial", "supplemental"], ["release-build", "release-channel-packages", "release-google-play"], [{ key: "build_number", type: "text", required: false, label: "构建号", placeholder: "未填则读活动发版清单" }]),
+  capability("submit-approval", "提交发版审核单", "为首包创建首次发版审核草稿（release-approval）。", "approval", ["initial"], ["release-approval", "release-records"]),
+  capability("publish-and-notify", "首包/补包发布 & 通知", "检查当前 Skill 是否提供商店发布能力；具备能力时按确认流程发布并通知，否则返回 waiting 或 failed。", "publish", ["initial", "supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
   capability("supplemental-notification", "补包通知", "通知协作者当前补包批次已创建并准备继续发布。", "entry", ["supplemental"], ["release-notification", "release-management"]),
+  // 用户需求点: 灰度放量仅 Likee Android；iOS 无此阶段。
   capability("rollout", "放量", "观察灰度指标并按确认要求推进当前版本放量。", "rollout", ["initial", "supplemental"], ["release-gray-observe", "release-metrics", "release-notification"], [
     { key: "gray_percent", type: "text", required: false, label: "目标灰度 %", placeholder: "如 5 / 50 / 100" },
-  ]),
+  ], { platforms: ["android"] }),
+  // 用户需求点: 全量审核单排在全量发布前；对齐 release-approval operator-guide（指标快照/构建号/发布日期/OA 申请人）。
+  capability("submit-full-rollout-approval", "全量审核单", "创建全量发布审核草稿；目标批次须已有构建号、发布日期与已确认指标快照（见 release-approval 操作指南）。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-records"]),
   capability("full-rollout", "全量发布", "在满足审核和指标条件后执行全量发布并记录结果。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-gray-observe", "release-notification", "release-records"]),
-  // 用户需求点: 自由 Agent 可插入任意发版阶段，不进入状态机默认推荐；任务正文由操作员填写。
+  // 用户需求点: 自由 Agent 只保留一个添加入口（不复制到每个阶段），不进入状态机默认推荐。
   capability("free-prompt-agent", "自由 Agent", "按操作员给出的任务说明，在锁定的发版上下文与 skillRoot 下执行发版相关操作。", "entry", ["initial", "supplemental"], ["release-runtime", "release-management"], [
     { key: "prompt", type: "textarea", required: true, label: "任务说明", placeholder: "描述要执行的发版任务，可点名 Skill / CLI…" },
     { key: "skill_hints", type: "text", required: false, label: "Skill 提示（可选）", placeholder: "release-git,release-localization" },
@@ -78,6 +83,12 @@ const capabilityDefinitions = [
 ];
 
 const stage = (id, title, ids, extra = {}) => ({ id, title, nodes: ids.map((capabilityId) => ({ id: capabilityId })), ...extra });
+const freezeStages = (items) => freeze(items.map((item) => freeze({
+  ...item,
+  nodes: freeze(item.nodes.map((node) => freeze({ ...node }))),
+  nodeIds: freeze(item.nodes.map((node) => node.id)),
+  optionalNodeIds: freeze([]),
+})));
 const frozenCapabilities = freeze(capabilityDefinitions.map((item) => freeze({
   ...item, businessLines: freeze([...item.businessLines]), platforms: freeze([...item.platforms]), batches: freeze([...item.batches]),
   skillHints: freeze([...item.skillHints]), inputs: freeze(item.inputs.map((input) => freeze({ ...input }))),
@@ -89,23 +100,42 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
   actionOrder, statusAliases: freeze({ succeeded: "completed", managed_mr_merged: "merged" }),
   capabilities: frozenCapabilities,
   compositeWorkflows: frozenCapabilities,
-  workflows: freeze([freeze({
-    id: "likee-android-release", title: "Likee Android 发版", businessLines: freeze(["likee"]), platforms: freeze(["android"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
-    stages: freeze([
-      stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "supplemental-notification"], { order: 0 }),
-      stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
-      stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
-      stage("build", "构建包", ["build-package"], { order: 3 }),
-      stage("approval", "提审单", ["submit-approval"], { order: 4 }),
-      stage("publish", "发布并通知", ["publish-and-notify"], { order: 5 }),
-      stage("rollout", "放量", ["rollout"], { order: 6 }),
-      stage("full-rollout", "全量发布", ["full-rollout"], { order: 7 }),
-    ].map((item) => freeze({ ...item, nodes: freeze(item.nodes.map((node) => freeze({ ...node }))), nodeIds: freeze(item.nodes.map((node) => node.id)), optionalNodeIds: freeze([]) }))),
-    transitions: freeze([
-      freeze({ id: "create_supplemental_batch", from: "rollout", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
-      freeze({ id: "create_supplemental_batch", from: "full-rollout", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
-    ]),
-  })]),
+  workflows: freeze([
+    freeze({
+      id: "likee-android-release", title: "Likee Android 发版", businessLines: freeze(["likee"]), platforms: freeze(["android"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
+      stages: freezeStages([
+        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "supplemental-notification"], { order: 0 }),
+        stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
+        stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
+        stage("build", "构建包", ["build-package"], { order: 3 }),
+        stage("approval", "提审单", ["submit-approval"], { order: 4 }),
+        stage("publish", "发布并通知", ["publish-and-notify"], { order: 5 }),
+        stage("rollout", "放量", ["rollout"], { order: 6 }),
+        stage("full-rollout", "全量发布", ["submit-full-rollout-approval", "full-rollout"], { order: 7 }),
+      ]),
+      transitions: freeze([
+        freeze({ id: "create_supplemental_batch", from: "rollout", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
+        freeze({ id: "create_supplemental_batch", from: "full-rollout", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
+      ]),
+    }),
+    // 用户需求点: Likee iOS 与 Android 同步，无灰度放量；补包可从发布或全量开。
+    freeze({
+      id: "likee-ios-release", title: "Likee iOS 发版", businessLines: freeze(["likee"]), platforms: freeze(["ios"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
+      stages: freezeStages([
+        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "supplemental-notification"], { order: 0 }),
+        stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
+        stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
+        stage("build", "构建包", ["build-package"], { order: 3 }),
+        stage("approval", "提审单", ["submit-approval"], { order: 4 }),
+        stage("publish", "发布并通知", ["publish-and-notify"], { order: 5 }),
+        stage("full-rollout", "全量发布", ["submit-full-rollout-approval", "full-rollout"], { order: 6 }),
+      ]),
+      transitions: freeze([
+        freeze({ id: "create_supplemental_batch", from: "publish", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
+        freeze({ id: "create_supplemental_batch", from: "full-rollout", to: "create_supplemental_batch", targetBatch: "supplemental", entryStageId: "entry", repeatable: true }),
+      ]),
+    }),
+  ]),
 });
 
 // Compatibility name retained while callers migrate from “composite workflow” to capability terminology.

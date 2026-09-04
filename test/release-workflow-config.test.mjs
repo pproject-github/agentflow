@@ -47,7 +47,7 @@ function workflow(overrides = {}) {
 
 test("defines exactly the supported Likee Android capabilities", () => {
   const ids = compositeWorkflows.map((item) => item.id);
-  assert.equal(ids.length, 12);
+  assert.equal(ids.length, 13);
   assert.deepEqual(ids, [
     "release-initialization:prepare-context",
     "localization-upload-notify",
@@ -59,6 +59,7 @@ test("defines exactly the supported Likee Android capabilities", () => {
     "publish-and-notify",
     "supplemental-notification",
     "rollout",
+    "submit-full-rollout-approval",
     "full-rollout",
     "free-prompt-agent",
   ]);
@@ -94,10 +95,12 @@ test("selects one Likee Android workflow for both initial and supplemental batch
   assert.deepEqual([...workflowActionIds(initial, initialContext)], [
     "release-initialization:prepare-context",
     "localization-upload-notify", "create-release-branch", "localization-download-merge-notify",
-    "merge-release-to-master", "build-package", "submit-approval", "publish-and-notify", "rollout", "full-rollout",
+    "merge-release-to-master", "build-package", "submit-approval", "publish-and-notify", "rollout",
+    "submit-full-rollout-approval", "full-rollout",
   ]);
   assert.deepEqual([...workflowActionIds(supplemental, supplementalContext)], [
-    "release-initialization:prepare-context", "supplemental-notification", "build-package", "submit-approval", "publish-and-notify", "rollout", "full-rollout",
+    "release-initialization:prepare-context", "supplemental-notification", "build-package", "publish-and-notify", "rollout",
+    "submit-full-rollout-approval", "full-rollout",
   ]);
 });
 
@@ -106,7 +109,8 @@ test("selects scoped capabilities and stage-specific capabilities", () => {
   assert.equal(selectReleaseCompositeWorkflow({ ...initialContext, capabilityId: "supplemental-notification" }), null);
   const stage = RELEASE_WORKFLOW_CONFIG.workflows[0].stages.find((item) => item.id === "localization");
   assert.equal(selectReleaseCompositeForStage({ ...initialContext }, stage)?.id, "localization-download-merge-notify");
-  assert.equal(selectReleaseCompositeWorkflow({ ...initialContext, capabilityId: "build-package", platform: "ios" }), null);
+  assert.equal(selectReleaseCompositeWorkflow({ ...initialContext, capabilityId: "build-package", platform: "ios" })?.id, "build-package");
+  assert.equal(selectReleaseCompositeWorkflow({ ...initialContext, capabilityId: "rollout", platform: "ios" }), null);
 });
 
 test("resolves process metadata from the configured capability stage", () => {
@@ -188,5 +192,37 @@ test("validates batch-loop transitions", () => {
 
 test("does not select a workflow outside the configured business line or platform", () => {
   assert.equal(selectReleaseWorkflow({ ...initialContext, businessLine: "bigolive" }), null);
-  assert.equal(selectReleaseWorkflow({ ...initialContext, platform: "ios" }), null);
+  assert.equal(selectReleaseWorkflow({ ...initialContext, platform: "web" }), null);
+});
+
+test("selects Likee iOS workflow without gray rollout and with publish supplemental transitions", () => {
+  const iosInitial = { businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial" };
+  const iosSupplemental = { ...iosInitial, batch: "supplemental", batchIndex: 1 };
+  const initial = selectReleaseWorkflow(iosInitial);
+  const supplemental = selectReleaseWorkflow(iosSupplemental);
+  assert.equal(initial?.id, "likee-ios-release");
+  assert.equal(supplemental?.id, initial?.id);
+  assert.deepEqual(initial.stages.map((item) => item.id), [
+    "entry", "localization", "merge-master", "build", "approval", "publish", "full-rollout",
+  ]);
+  assert.equal(initial.stages.some((item) => item.id === "rollout"), false);
+  assert.deepEqual([...workflowActionIds(initial, iosInitial)], [
+    "release-initialization:prepare-context",
+    "localization-upload-notify", "create-release-branch", "localization-download-merge-notify",
+    "merge-release-to-master", "build-package", "submit-approval", "publish-and-notify",
+    "submit-full-rollout-approval", "full-rollout",
+  ]);
+  assert.equal(workflowActionIds(initial, iosInitial).has("rollout"), false);
+  assert.deepEqual([...workflowActionIds(supplemental, iosSupplemental)], [
+    "release-initialization:prepare-context", "supplemental-notification", "build-package", "publish-and-notify",
+    "submit-full-rollout-approval", "full-rollout",
+  ]);
+  assert.ok(initial.transitions.some((item) => item.from === "publish" && item.to === "create_supplemental_batch"));
+  assert.ok(initial.transitions.some((item) => item.from === "full-rollout" && item.to === "create_supplemental_batch"));
+  assert.equal(initial.transitions.some((item) => item.from === "rollout"), false);
+  assert.ok(compositeWorkflows.find((item) => item.id === "rollout")?.platforms.includes("android"));
+  assert.equal(compositeWorkflows.find((item) => item.id === "rollout")?.platforms.includes("ios"), false);
+  assert.ok(compositeWorkflows.find((item) => item.id === "build-package")?.platforms.includes("ios"));
+  assert.ok(compositeWorkflows.find((item) => item.id === "build-package")?.skillHints.includes("release-build"));
+  assert.ok(compositeWorkflows.find((item) => item.id === "publish-and-notify")?.skillHints.includes("release-release-notes"));
 });
