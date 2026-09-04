@@ -106,6 +106,7 @@ test("release operators parse membership and authorize writes per business line 
     resolveReleaseOperatorMembership,
     canWriteRelease,
     validateReleaseOperators,
+    buildReleaseAccessPayload,
   } = await import("../shared/release-deployment-config.js?operators-acl");
   const config = readReleaseDeploymentConfig({
     NODE_ENV: "production",
@@ -128,6 +129,13 @@ test("release operators parse membership and authorize writes per business line 
   assert.equal(canWriteRelease("duanfengyuan", { businessLine: "likee", platform: "ios" }, config), false);
   assert.equal(canWriteRelease("guest", { businessLine: "likee", platform: "android" }, config), false);
   assert.equal(validateReleaseOperators(config.operators).valid, true);
+  const allowed = buildReleaseAccessPayload("duanfengyuan", {}, config);
+  assert.equal(allowed.operable, true);
+  assert.equal(allowed.message, "");
+  assert.deepEqual(allowed.membership, { businessLine: "likee", platform: "android" });
+  const denied = buildReleaseAccessPayload("nobody", {}, config);
+  assert.equal(denied.operable, false);
+  assert.equal(denied.message, "无法操作");
 });
 
 test("release operators reject duplicate membership across platforms", async () => {

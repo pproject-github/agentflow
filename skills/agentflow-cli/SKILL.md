@@ -1,6 +1,6 @@
 ---
 name: agentflow-cli
-description: Direct AgentFlow operation through a bundled browser-authorized CLI, without MCP or npm. Use when Codex needs to authorize AgentFlow access, create, update, run, or publish temporary Workspace drafts; search usage-ranked Marketplace Flow templates and nodes; publish, install, privatize, or synchronize versioned resources; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; or read logs and display outputs through AgentFlow HTTP APIs.
+description: Direct AgentFlow operation through a bundled browser-authorized CLI, without MCP or npm. Use when Codex needs to authorize AgentFlow access, create, update, run, or publish temporary Workspace drafts; search usage-ranked Marketplace Flow templates and nodes; publish, install, privatize, or synchronize versioned resources; pull or publish portable Workspace DSL flows; manage scheduled runs; upload read-only previews; run or inspect Workspace graphs; operate release workflows via release-access/state/catalog/run; or read logs and display outputs through AgentFlow HTTP APIs.
 ---
 
 # AgentFlow CLI
@@ -452,6 +452,44 @@ The only admin write exception is audited version-membership repair. Read its st
 `workflow-report --admin-operation repair-version-membership` request as defined by
 `agentflow-workflow-report`. This flag does not grant general Workflow read or write access.
 
+## Release workflow (assistant)
+
+Use these commands when the user asks to operate AgentFlow 发版（版本活动、补包、自由 Agent 等）. Business line and platform come from `release-projects.json` `operators` membership for the authenticated user — do not invent them.
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs release-access
+```
+
+- If `releaseAccess.operable` is false (or CLI exits 1), reply **无法操作** and stop.
+- If operable, take `releaseAccess.membership.businessLine` / `platform` (and optional `projects[0].id` as `--workspace-id`).
+- Parse **version** from the user message (`5.64.0` / `v5.64.0`). If missing, ask for it.
+- Parse **batch**: `补包` → `supplemental`; otherwise default `initial`.
+- `release-run` 未传 `--workspace-id` 时会先调 `release-access` 自动补工程 id；服务端未传 `itemId` 时会生成 `custom-…` 实例并写入该版本时间线。
+
+Inspect state / catalog:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs release-state \
+  --business-line likee --platform android --version 5.64.0 --batch supplemental
+
+node <skill-dir>/scripts/agentflow-cli.mjs release-catalog \
+  --business-line likee --platform android --version 5.64.0 --batch supplemental
+```
+
+Run a capability (including free-prompt at any stage). Shorthand action ids are expanded to `composite:<id>`:
+
+```bash
+node <skill-dir>/scripts/agentflow-cli.mjs release-run \
+  --action-id free-prompt-agent \
+  --business-line likee --platform android --version 5.64.0 --batch supplemental \
+  --process-id entry \
+  --input prompt='v5.64.0 开始补包'
+```
+
+Stop a long run with `release-stop --run-id <id>`. Read run payload with `release-run-logs`.
+
+Server write APIs still enforce the same operators ACL; a 403 with `RELEASE_OPERATOR_FORBIDDEN` also means **无法操作**.
+
 ## Workflow
 
 1. Check authorization with `config`. If missing, use `auth start`, give the URL to the user, then
@@ -460,6 +498,7 @@ The only admin write exception is audited version-membership repair. Read its st
 3. For a new user-authored Flow, prefer `draft-create` → `draft-run`/`draft-update` → explicit user confirmation → `draft-publish`. Keep `workspace-preview` for read-only sharing.
 4. Use `run` to start a published flow. If the task needs the generated page/text, inspect returned `displayOutputs` or call `display-outputs`.
 5. Use `status`, `list-run-by-workspace`, and `logs` when a run is active, failed, or needs debugging. Use `schedule-list` after every schedule mutation or scheduled publish.
+6. For 发版助手请求, follow **Release workflow (assistant)** above (`release-access` → scope → `release-run`).
 
 ## Failure Handling
 
@@ -469,5 +508,6 @@ The only admin write exception is audited version-membership repair. Read its st
 - If `publish-flow` returns 409, do not add `--replace` automatically. Ask the user to confirm updating the existing Flow.
 - If team publishing says no active team is assigned, keep the local draft and ask the user to choose personal/workspace or have an admin assign the account to a team.
 - If the API returns 401/403, do not retry with a printed token. Ask the user to refresh the token.
+- If `release-access` is not operable or release write returns `RELEASE_OPERATOR_FORBIDDEN`, tell the user **无法操作**.
 - If `run` fails because a flow is already running, call `status` and `list-run-by-workspace` before retrying.
 - If local debugging is needed, override `AGENTFLOW_BASE_URL`; otherwise keep the default internal URL.

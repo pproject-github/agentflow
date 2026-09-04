@@ -222,12 +222,16 @@ export function buildReleaseAccessPayload(username, context = {}, config = {}) {
   const businessLine = normalized(context.businessLine) || membership?.businessLine || "";
   const platform = normalizePlatformKey(context.platform) || membership?.platform || "";
   const scoped = { businessLine, platform };
+  const canWrite = Boolean(businessLine && platform && canWriteRelease(username, scoped, config));
+  // 用户需求点: 助手侧用 operators 反查业务线/平台；不在名单则直接提示无法操作。
   return {
     username: normalized(username) || "",
     membership,
-    canWrite: Boolean(businessLine && platform && canWriteRelease(username, scoped, config)),
+    canWrite,
+    operable: Boolean(membership),
     businessLine: businessLine || null,
     platform: platform || null,
+    message: membership ? "" : "无法操作",
   };
 }
 

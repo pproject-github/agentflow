@@ -1257,6 +1257,15 @@ function releasePendingNodeId(action, payload = {}, existing = {}) {
   return String(action?.id || itemId || "").trim();
 }
 
+/** 自定义实例（含助手触发）必须带回 catalog 预置 id，否则页面 knownIds 过滤会丢掉时间线条目。 */
+function releaseSourcePresetId(action, payload = {}, existing = {}) {
+  const existingPreset = String(existing.sourcePresetId || "").trim();
+  if (existingPreset) return existingPreset;
+  const itemId = String(payload.itemId || existing.id || "").trim();
+  if (itemId.startsWith("custom-")) return String(action?.id || "").trim();
+  return String(action?.id || "").trim();
+}
+
 function readReleaseStateForRequest(stateRoot, context, workspaceId, workspacePath, skillRoots = []) {
   const state = readReleaseState(stateRoot, context, workspaceId, workspacePath);
   const activeRunIds = [...activeReleaseRuns.entries()]
@@ -1354,7 +1363,10 @@ async function workspaceRoutes(req, res, ctx) {
     }
     const isNodeExecutionRequest = req.method === "POST"
       && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run");
-    const requiresWorkspaceResolution = !isNodeExecutionRequest && url.pathname !== "/api/release/runs/stop";
+    // 用户需求点: /api/release/access 仅做 operators 归属查询，不解析发版工程目录。
+    const requiresWorkspaceResolution = !isNodeExecutionRequest
+      && url.pathname !== "/api/release/runs/stop"
+      && url.pathname !== "/api/release/access";
     const resolvedRequest = requiresWorkspaceResolution ? resolveReleaseRequestWorkspace(url, {}, root, readUserWorkspaces(userCtx)) : null;
     if (resolvedRequest && !resolvedRequest.ok) {
       json(res, resolvedRequest.status || 503, { error: resolvedRequest.error, code: resolvedRequest.code });
@@ -1365,6 +1377,21 @@ async function workspaceRoutes(req, res, ctx) {
     const workspacePath = resolvedRequest?.workspacePath || "";
     const roots = resolvedRequest?.roots || [];
     try {
+      if (req.method === "GET" && url.pathname === "/api/release/access") {
+        const releaseAccess = releaseAccessForRequest(authUser, {});
+        const projects = releaseConfiguredWorkspaceEntries().filter((entry) => (
+          releaseAccess.membership
+          && entry.businessLine === releaseAccess.membership.businessLine
+          && entry.platform === releaseAccess.membership.platform
+        ));
+        json(res, 200, {
+          ok: true,
+          releaseAccess,
+          projects,
+          ...(releaseAccess.operable ? {} : { code: "RELEASE_OPERATOR_FORBIDDEN", error: releaseAccess.message || "无法操作" }),
+        });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/release/catalog") {
         const discoveredNodes = await discoverReleaseActions({ roots, ...context });
         const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
@@ -1472,6 +1499,10 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
           return;
         }
+        // 用户需求点: 助手/CLI 未传 itemId 时生成 custom 实例 id，写入时间线且不与同能力其它卡片互相覆盖。
+        if (!String(payload.itemId || "").trim()) {
+          payload.itemId = `custom-${action.id}-${Date.now().toString(36)}-${crypto.randomBytes(2).toString("hex")}`;
+        }
         const requestedProcessId = String(payload.processId || "").trim().toLowerCase();
         const actionProcessId = String(action.processId || "other").trim().toLowerCase();
         // 自由 Agent 可挂到任意发版阶段；允许请求 processId 与能力默认 stage 不同。
@@ -1571,7 +1602,7 @@ async function workspaceRoutes(req, res, ctx) {
             workflowId: action.workflowId || existing.workflowId || "",
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
-            sourcePresetId: existing.sourcePresetId || (String(payload.itemId || "").startsWith("custom-") ? action.id : existing.sourcePresetId) || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "running",
@@ -1648,6 +1679,7 @@ async function workspaceRoutes(req, res, ctx) {
             workflowId: action.workflowId || existing.workflowId || "",
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "failed",
@@ -1692,6 +1724,7 @@ async function workspaceRoutes(req, res, ctx) {
             workflowId: action.workflowId || existing.workflowId || "",
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "failed",
@@ -1728,6 +1761,7 @@ async function workspaceRoutes(req, res, ctx) {
             workflowId: action.workflowId || existing.workflowId || "",
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "completed",
@@ -1769,6 +1803,7 @@ async function workspaceRoutes(req, res, ctx) {
             workflowId: action.workflowId || existing.workflowId || "",
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
             status: "failed",
@@ -1800,6 +1835,7 @@ async function workspaceRoutes(req, res, ctx) {
           workflowId: action.workflowId || "",
           kind: action.kind || "",
           compositeId: action.compositeId || "",
+          sourcePresetId: releaseSourcePresetId(action, payload, {}),
           scopeKey: requestedScopeKey || expectedScopeKey,
           contextSnapshot: { ...requestContext },
           status: "completed",

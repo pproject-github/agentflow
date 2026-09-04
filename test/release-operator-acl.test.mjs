@@ -69,6 +69,13 @@ test("release write APIs require operators membership while reads stay open", as
     assert.equal(guestState.body.releaseAccess?.canWrite, false);
     assert.equal(guestState.body.releaseAccess?.membership, null);
 
+    const guestAccess = await request(guest.token, "GET", "/api/release/access");
+    assert.equal(guestAccess.status, 200, guestAccess.text);
+    assert.equal(guestAccess.body.releaseAccess?.operable, false);
+    assert.equal(guestAccess.body.releaseAccess?.message, "无法操作");
+    assert.equal(guestAccess.body.code, "RELEASE_OPERATOR_FORBIDDEN");
+    assert.deepEqual(guestAccess.body.projects, []);
+
     const guestRun = await request(guest.token, "POST", "/api/release/nodes/run", {
       workspaceId: "likee-android-prod",
       businessLine: "likee",
@@ -86,6 +93,12 @@ test("release write APIs require operators membership while reads stay open", as
     assert.equal(writerState.status, 200, writerState.text);
     assert.equal(writerState.body.releaseAccess?.canWrite, true);
     assert.deepEqual(writerState.body.releaseAccess?.membership, { businessLine: "likee", platform: "android" });
+
+    const writerAccess = await request(writer.token, "GET", "/api/release/access");
+    assert.equal(writerAccess.status, 200, writerAccess.text);
+    assert.equal(writerAccess.body.releaseAccess?.operable, true);
+    assert.equal(writerAccess.body.releaseAccess?.message, "");
+    assert.equal(writerAccess.body.projects?.[0]?.id, "likee-android-prod");
 
     const crossPlatform = await request(writer.token, "POST", "/api/release/nodes/run", {
       workspaceId: "likee-android-prod",
