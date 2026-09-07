@@ -5295,9 +5295,38 @@ finishedAt: "${new Date().toISOString()}"
     }
     const ext = path.extname(filePath).toLowerCase();
     const type = MIME[ext] || "application/octet-stream";
-    const data = fs.readFileSync(filePath);
-    res.writeHead(200, { "Content-Type": type, "Content-Length": data.length });
-    res.end(data);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    // 构建产物文件名带内容哈希（index-Drbndb0x.js），改内容必然换文件名，可以永久缓存。
+    // 其余文件（index.html、图标）走 ETag 协商，改了就是 200，没改就是 304。
+    // 判定用真正落到的 filePath，避免未知路径回退成 index.html 后被打上 immutable。
+    const relFromRoot = path.relative(safeRoot, filePath);
+    const isHashedAsset = relFromRoot.startsWith(`assets${path.sep}`)
+      && /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(path.basename(filePath));
+    const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    const cacheHeaders = {
+      ETag: etag,
+      "Last-Modified": stat.mtime.toUTCString(),
+      "Cache-Control": isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
+    };
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, cacheHeaders);
+      res.end();
+      return;
+    }
+    // 流式下发：同步读 1.9MB 的 bundle 会把事件循环按住，所有并发请求跟着一起等。
+    res.writeHead(200, { ...cacheHeaders, "Content-Type": type, "Content-Length": stat.size });
+    const stream = fs.createReadStream(filePath);
+    stream.on("error", () => {
+      res.destroy();
+    });
+    stream.pipe(res);
   });
 
   if (enableWorkspaceScheduler) {
