@@ -7,6 +7,7 @@ import {
   deriveWorkflowCursor,
   recommendNextProcessNodes,
   selectWorkflowProcessNodes,
+  createSupplementalBatch,
 } from "../builtin/web-ui/src/lib/releaseWorkflowStateMachine.js";
 import { RELEASE_WORKFLOW_CONFIG, selectReleaseWorkflow, workflowActionIds } from "../shared/release-workflow-config.js";
 
@@ -51,6 +52,41 @@ test("uses the same Likee Android workflow for initial and supplemental batches"
   assert.deepEqual(machine(supplementalContext).processes.map((process) => process.id), [
     "entry", "build", "publish", "rollout", "full-rollout",
   ]);
+});
+
+test("supplemental entry recommends start-supplemental-release-notify after initialization", () => {
+  const stateMachine = machine(supplementalContext);
+  assert.deepEqual(recommendNextProcessNodes({
+    machine: stateMachine,
+    timeline: [{ nodeId: "release-initialization", status: "completed", contextPreparationStatus: "deferred" }],
+    pending: [],
+  }).map((item) => item.id), ["start-supplemental-release-notify"]);
+});
+
+test("supplemental entry remains executable when the platform timeline has no history", () => {
+  const stateMachine = machine(supplementalContext);
+  assert.deepEqual(recommendNextProcessNodes({
+    machine: stateMachine,
+    timeline: [],
+    pending: [],
+  }).map((item) => item.id), ["start-supplemental-release-notify"]);
+});
+
+test("creating a supplemental batch keeps the major-version timeline and advances the minor version", () => {
+  const completedInitial = { id: "initial-build", nodeId: "build-package", status: "completed" };
+  const next = createSupplementalBatch({
+    context: initialContext,
+    timeline: [completedInitial],
+    pending: [],
+    runs: { old: { status: "completed" } },
+  });
+  assert.equal(next.context.version, "5.63.1");
+  assert.equal(next.context.batch, "supplemental");
+  assert.deepEqual(next.state.timeline, [completedInitial]);
+
+  const nextAgain = createSupplementalBatch({ context: next.context, timeline: next.state.timeline, pending: [] });
+  assert.equal(nextAgain.context.version, "5.63.2");
+  assert.equal(nextAgain.context.batchIndex, 2);
 });
 
 test("uses Likee iOS workflow without rollout for initial and supplemental batches", () => {

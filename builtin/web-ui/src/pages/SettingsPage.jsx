@@ -481,6 +481,9 @@ export default function SettingsPage({ authUser }) {
       platform: String(entry?.platform || "android"),
       workspaceRoot: String(entry?.workspaceRoot || ""),
       skillRootsText: Array.isArray(entry?.skillRoots) ? entry.skillRoots.join("\n") : "",
+      tapdWorkspaceId: String(entry?.tapd?.workspaceId || ""),
+      tapdCategoryName: String(entry?.tapd?.categoryName || ""),
+      tapdIterationName: String(entry?.tapd?.iterationName || ""),
     })));
     const likee = document.operators?.likee || {};
     setReleaseOperatorsDraft({
@@ -518,6 +521,11 @@ export default function SettingsPage({ authUser }) {
           platform: entry.platform.trim() || "android",
           workspaceRoot: entry.workspaceRoot.trim(),
           skillRoots: String(entry.skillRootsText || "").split(/\n+/).map((item) => item.trim()).filter(Boolean),
+          tapd: {
+            ...(entry.tapdWorkspaceId.trim() ? { workspaceId: entry.tapdWorkspaceId.trim() } : {}),
+            ...(entry.tapdCategoryName.trim() ? { categoryName: entry.tapdCategoryName.trim() } : {}),
+            ...(entry.tapdIterationName.trim() ? { iterationName: entry.tapdIterationName.trim() } : {}),
+          },
         })),
         operators: {
           likee: {
@@ -1690,7 +1698,7 @@ export default function SettingsPage({ authUser }) {
                       </div>
                       <div>
                         <h2 className="af-set-h2">发版工程</h2>
-                        <p className="af-set-card-subtitle">配置 Likee Android / iOS 产品工程路径、release-skills 根目录与写权限名单。保存到 Data Root 下的 release-projects.json。</p>
+                        <p className="af-set-card-subtitle">配置 Likee Android / iOS 产品工程路径、release-skills 根目录、TAPD 迭代来源与写权限名单。保存到 Data Root 下的 release-projects.json。</p>
                       </div>
                     </div>
                     <span className={"af-set-badge" + (releaseProjectsConfig?.envLocked ? " af-set-badge--err" : " af-set-badge--ok")}>
@@ -1773,6 +1781,30 @@ export default function SettingsPage({ authUser }) {
                           onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, skillRootsText: e.target.value } : row)))}
                           placeholder="/data1/services/mengmai/agentflow/workspaces/repos/ws_xxx"
                         />
+                        <label className="af-set-label-sm">TAPD workspace ID（自动同步版本必填）</label>
+                        <input
+                          className="af-set-input af-set-input--mono"
+                          value={project.tapdWorkspaceId}
+                          disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                          onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, tapdWorkspaceId: e.target.value } : row)))}
+                          placeholder="33202860"
+                        />
+                        <label className="af-set-label-sm">TAPD 分类名称（可选）</label>
+                        <input
+                          className="af-set-input"
+                          value={project.tapdCategoryName}
+                          disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                          onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, tapdCategoryName: e.target.value } : row)))}
+                          placeholder="版本"
+                        />
+                        <label className="af-set-label-sm">TAPD 迭代名称过滤（可选）</label>
+                        <input
+                          className="af-set-input"
+                          value={project.tapdIterationName}
+                          disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                          onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, tapdIterationName: e.target.value } : row)))}
+                          placeholder="Likee Android&iOS"
+                        />
                       </div>
                     ))}
                   </div>
@@ -1788,6 +1820,9 @@ export default function SettingsPage({ authUser }) {
                       platform: "android",
                       workspaceRoot: "",
                       skillRootsText: "",
+                      tapdWorkspaceId: "",
+                      tapdCategoryName: "",
+                      tapdIterationName: "",
                     }])}
                   >
                     添加工程

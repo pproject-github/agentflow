@@ -126,7 +126,7 @@ import {
   updateAdminBuiltinPipelineConfig,
 } from "./admin-builtin-pipelines.mjs";
 import { readAdminStorageConfig, writeAdminStorageConfig } from "./admin-storage-config.mjs";
-import { ensureReleaseProjectsFileSeeded, readAdminReleaseProjectsConfig, writeAdminReleaseProjectsConfig } from "./admin-release-projects.mjs";
+import { ensureReleaseProjectsFileSeeded, readAdminReleaseProjectsConfig, readReleaseDeploymentConfigWithDataRoot, writeAdminReleaseProjectsConfig } from "./admin-release-projects.mjs";
 import { readAdminRunDetail } from "./admin-run-detail.mjs";
 import {
   deleteWorkspaceCollaborationById,
@@ -156,7 +156,8 @@ import {
 } from "./prd-workflow-server.mjs";
 import { handlePrdWorkflowRoutes } from "./prd-workflow-routes.mjs";
 import { json, readBody } from "./http-util.mjs";
-import { createReleaseQueued, listReleases, PROJECTS as RELEASE_PROJECTS, PLATFORMS as RELEASE_PLATFORMS } from "./release-registry.mjs";
+import { createReleaseQueued, listReleases, upsertReleaseFromTapdQueued, PROJECTS as RELEASE_PROJECTS, PLATFORMS as RELEASE_PLATFORMS } from "./release-registry.mjs";
+import { syncTapdReleases } from "./release-tapd.mjs";
 
 // 从 ui-server 拆出去的 Workspace 子系统；路由仍在下面的 startUiServer 里
 import {
@@ -3072,6 +3073,29 @@ export function startUiServer({
           json(res, 200, { projects: RELEASE_PROJECTS, platforms: RELEASE_PLATFORMS });
           return;
         }
+        // 用户需求点: 发版列表默认展示 TAPD 中最新迭代版本，读取时自动幂等同步而无需额外按钮。
+        if (url.searchParams.get("syncTapd") === "1" && !String(url.searchParams.get("query") || "").trim()) {
+          const businessLine = String(url.searchParams.get("project") || "").trim().toLowerCase();
+          const platform = String(url.searchParams.get("platform") || "").trim().toLowerCase().replace(/^iphone$/, "ios");
+          const projectConfig = readReleaseDeploymentConfigWithDataRoot().projects.find((entry) => (
+            String(entry.businessLine || "").toLowerCase() === businessLine
+            && String(entry.platform || "").toLowerCase() === platform
+          ));
+          if (projectConfig?.tapd?.workspaceId) {
+            const project = RELEASE_PROJECTS.find((entry) => entry.toLowerCase() === businessLine) || "";
+            try {
+              await syncTapdReleases({
+                project,
+                platform: platform === "ios" ? "iOS" : "Android",
+                tapd: projectConfig.tapd,
+                upsertRelease: upsertReleaseFromTapdQueued,
+              });
+            } catch (error) {
+              json(res, 502, { error: error?.message || String(error) });
+              return;
+            }
+          }
+        }
         json(res, 200, {
           releases: listReleases({
             project: url.searchParams.get("project"),
@@ -3100,6 +3124,48 @@ export function startUiServer({
         return;
       }
       json(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    // 用户需求点: 发版列表支持按当前业务线/平台从 TAPD 自动发现版本，并把迭代日期同步到共享注册表。
+    if (url.pathname === "/api/releases/sync-tapd") {
+      if (req.method !== "POST") {
+        json(res, 405, { error: "Method not allowed" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(await readBody(req));
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const businessLine = String(payload?.businessLine || payload?.project || "").trim().toLowerCase();
+      const platform = String(payload?.platform || "").trim().toLowerCase().replace(/^iphone$/, "ios");
+      const projectConfig = readReleaseDeploymentConfigWithDataRoot().projects.find((entry) => (
+        String(entry.businessLine || "").toLowerCase() === businessLine
+        && String(entry.platform || "").toLowerCase() === platform
+      ));
+      const project = RELEASE_PROJECTS.find((entry) => entry.toLowerCase() === businessLine) || "";
+      if (!project || !RELEASE_PLATFORMS.some((entry) => entry.toLowerCase() === platform)) {
+        json(res, 400, { error: "业务线或平台不受支持" });
+        return;
+      }
+      if (!projectConfig?.tapd?.workspaceId) {
+        json(res, 400, { error: `未配置 ${businessLine}/${platform} 的 TAPD workspaceId` });
+        return;
+      }
+      try {
+        const result = await syncTapdReleases({
+          project,
+          platform: platform === "ios" ? "iOS" : "Android",
+          tapd: projectConfig.tapd,
+          upsertRelease: upsertReleaseFromTapdQueued,
+        });
+        json(res, 200, { ok: true, ...result });
+      } catch (error) {
+        json(res, 502, { error: error?.message || String(error) });
+      }
       return;
     }
 

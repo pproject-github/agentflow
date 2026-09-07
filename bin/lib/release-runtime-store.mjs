@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { selectReleaseWorkflow } from "../../shared/release-workflow-config.js";
+import { inferReleaseBatch, normalizeReleaseMinorVersion, releaseMajorVersion, selectReleaseWorkflow } from "../../shared/release-workflow-config.js";
 
 function safePart(value, fallback = "unknown") {
   const text = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -9,7 +9,7 @@ function safePart(value, fallback = "unknown") {
 }
 
 export function releaseStateKey(context = {}, workspaceId = "workspace") {
-  return [workspaceId, context.businessLine, context.platform, context.version, context.batch || "initial"].map((value) => safePart(value)).join("__");
+  return [workspaceId, context.businessLine, context.platform, releaseMajorVersion(context.version)].map((value) => safePart(value)).join("__");
 }
 
 export function releaseStatePath(workspaceRoot, context = {}, workspaceId = "workspace") {
@@ -19,10 +19,11 @@ export function releaseStatePath(workspaceRoot, context = {}, workspaceId = "wor
 export function createReleaseInitialization(context = {}, workspacePath = "") {
   const businessLine = String(context.businessLine || "likee");
   const platform = String(context.platform || "android");
-  const version = String(context.version || "1.0.0");
+  const version = normalizeReleaseMinorVersion(context.version || "1.0.0");
+  const batch = inferReleaseBatch(version, context.batch || "");
   const timestamp = Date.now();
   const workflow = selectReleaseWorkflow(context);
-  const scopeKey = `${String(context.businessLine || businessLine).toLowerCase()}/${String(context.platform || platform).toLowerCase()}/${version}/${String(context.batch || "initial").toLowerCase()}`;
+  const scopeKey = `${String(context.businessLine || businessLine).toLowerCase()}/${String(context.platform || platform).toLowerCase()}/${version}/${batch}`;
   return {
     id: "release-initialization",
     nodeId: "release-initialization",
@@ -30,6 +31,9 @@ export function createReleaseInitialization(context = {}, workspacePath = "") {
     description: `初始化发版上下文：${businessLine} / ${platform} / ${version}`,
     category: "发版初始化",
     status: "completed",
+    // 活动发版上下文由服务端在首次读取状态时同步准备；完成后由 bootstrap 回填结果。
+    // 用户需求点: 首包初始化自动准备活动上下文；补包必须由“开始补包 & 发送通知”节点显式触发上下文。
+    contextPreparationStatus: batch === "supplemental" ? "deferred" : "pending",
     progress: 100,
     createdAt: timestamp,
     startedAt: timestamp,
@@ -38,15 +42,20 @@ export function createReleaseInitialization(context = {}, workspacePath = "") {
     operator: "系统初始化",
     workflowId: workflow?.id || "",
     scopeKey,
-    contextSnapshot: { ...context, businessLine, platform, version, batch: context.batch || "initial" },
+    contextSnapshot: { ...context, businessLine, platform, version, batch },
     inputs: { businessLine, platform, version, workspace: workspacePath },
   };
 }
 
 export function emptyReleaseState(context = {}, workspacePath = "") {
-  const initialization = createReleaseInitialization(context, workspacePath);
+  const normalizedContext = {
+    ...context,
+    version: normalizeReleaseMinorVersion(context.version || "1.0.0"),
+  };
+  normalizedContext.batch = inferReleaseBatch(normalizedContext.version, context.batch || "");
+  const initialization = createReleaseInitialization(normalizedContext, workspacePath);
   return {
-    context: { ...context },
+    context: normalizedContext,
     // 用户需求点: 首次进入页面时上下文已完成声明，初始化节点直接作为已完成时间线的起点。
     timeline: [initialization],
     pending: [],
@@ -56,15 +65,22 @@ export function emptyReleaseState(context = {}, workspacePath = "") {
   };
 }
 
+// 用户需求点: 首包和补包共用大版本时间线，但每次读取仍需规范化当前小版本/批次供状态机隔离执行。
 export function readReleaseState(workspaceRoot, context = {}, workspaceId = "workspace", workspacePath = "") {
   const filePath = releaseStatePath(workspaceRoot, context, workspaceId);
+  const normalizedContext = {
+    ...context,
+    version: normalizeReleaseMinorVersion(context.version || "1.0.0"),
+  };
+  normalizedContext.batch = inferReleaseBatch(normalizedContext.version, context.batch || "");
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (!parsed || typeof parsed !== "object") return emptyReleaseState(context, workspacePath);
+    if (!parsed || typeof parsed !== "object") return emptyReleaseState(normalizedContext, workspacePath);
     const state = {
-      ...emptyReleaseState(context, workspacePath),
+      ...emptyReleaseState(normalizedContext, workspacePath),
       ...parsed,
-      context: { ...context, ...(parsed.context || {}) },
+      // 同一大版本文件会被首包和补包共同读取，当前请求上下文应覆盖旧批次上下文；历史节点自身仍保留 contextSnapshot。
+      context: { ...(parsed.context || {}), ...normalizedContext },
       timeline: Array.isArray(parsed.timeline) ? parsed.timeline : [],
       pending: Array.isArray(parsed.pending) ? parsed.pending : [],
       dismissedNodeIds: Array.isArray(parsed.dismissedNodeIds)
@@ -75,7 +91,7 @@ export function readReleaseState(workspaceRoot, context = {}, workspaceId = "wor
     };
     return state;
   } catch {
-    return emptyReleaseState(context, workspacePath);
+    return emptyReleaseState(normalizedContext, workspacePath);
   }
 }
 

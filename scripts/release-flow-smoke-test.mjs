@@ -93,7 +93,7 @@ function completedPresetIds(state) {
         if (title.includes("补包")) ids.add("composite:supplemental-publish-and-notify");
         else ids.add("composite:initial-publish-and-notify");
       }
-      if (title.includes("准备补包") || title.includes("补包通知")) ids.add("composite:prepare-supplemental-notification");
+      if (title.includes("开始补包") || title.includes("补包通知")) ids.add("composite:start-supplemental-release-notify");
       if (title.includes("放量") && !title.includes("全量")) ids.add("composite:rollout");
       if (title.includes("全量")) ids.add("composite:full-rollout");
     }

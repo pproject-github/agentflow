@@ -46,12 +46,22 @@ function normalizeProject(entry, fallbackId = "") {
   const skillRoots = Array.isArray(entry.skillRoots)
     ? entry.skillRoots.map((item) => text(item)).filter(Boolean).map((item) => path.resolve(item))
     : [];
+  const tapdSource = entry.tapd && typeof entry.tapd === "object" && !Array.isArray(entry.tapd) ? entry.tapd : {};
+  const tapd = {
+    ...(text(tapdSource.workspaceId || tapdSource.workspace_id) ? { workspaceId: text(tapdSource.workspaceId || tapdSource.workspace_id) } : {}),
+    ...(text(tapdSource.categoryId || tapdSource.category_id) ? { categoryId: text(tapdSource.categoryId || tapdSource.category_id) } : {}),
+    ...(text(tapdSource.categoryName || tapdSource.category_name) ? { categoryName: text(tapdSource.categoryName || tapdSource.category_name) } : {}),
+    ...(text(tapdSource.iterationName || tapdSource.iteration_name) ? { iterationName: text(tapdSource.iterationName || tapdSource.iteration_name) } : {}),
+    ...(text(tapdSource.apiBaseUrl || tapdSource.api_base_url) ? { apiBaseUrl: text(tapdSource.apiBaseUrl || tapdSource.api_base_url) } : {}),
+    ...(text(tapdSource.accessTokenEnv || tapdSource.access_token_env) ? { accessTokenEnv: text(tapdSource.accessTokenEnv || tapdSource.access_token_env) } : {}),
+  };
   return {
     id,
     businessLine,
     platform: platform === "ios" || platform === "iphone" ? "ios" : platform,
     workspaceRoot: path.resolve(workspaceRoot),
     ...(skillRoots.length ? { skillRoots: [...new Set(skillRoots)] } : {}),
+    ...(Object.keys(tapd).length ? { tapd } : {}),
     ...(entry.enabled === false ? { enabled: false } : {}),
   };
 }
@@ -253,6 +263,7 @@ export function emptyReleaseProjectsDocument() {
         platform: "android",
         workspaceRoot: "",
         skillRoots: [],
+        tapd: { workspaceId: "33202860" },
       },
       {
         id: "likee-ios-prod",
@@ -260,6 +271,7 @@ export function emptyReleaseProjectsDocument() {
         platform: "ios",
         workspaceRoot: "",
         skillRoots: [],
+        tapd: { workspaceId: "33202860" },
       },
     ],
     operators: {
@@ -280,6 +292,7 @@ export function defaultReleaseProjectsSeedDocument() {
         platform: "android",
         workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_android",
         skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+        tapd: { workspaceId: "33202860" },
       },
       {
         id: "likee-ios-prod",
@@ -287,6 +300,7 @@ export function defaultReleaseProjectsSeedDocument() {
         platform: "ios",
         workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_ios",
         skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+        tapd: { workspaceId: "33202860" },
       },
     ],
     operators: {
@@ -324,6 +338,7 @@ export function normalizeReleaseProjectsDocument(raw = {}) {
         platform: entry.platform,
         workspaceRoot: entry.workspaceRoot,
         ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+        ...(entry.tapd ? { tapd: { ...entry.tapd } } : {}),
         ...(entry.enabled === false ? { enabled: false } : {}),
       })),
       operators,

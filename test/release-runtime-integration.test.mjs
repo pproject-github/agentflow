@@ -18,16 +18,10 @@ test("activity release context preparation is routed through the release runtime
     import("node:fs/promises").then(({ readFile }) => readFile(new URL("../shared/release-workflow-config.js", import.meta.url), "utf8")),
     import("../bin/lib/release-runtime-executor.mjs"),
   ]);
-  assert.match(config, /release-initialization:prepare-context/);
-  assert.match(config, /publish_date/);
-  assert.match(routes, /buildCompositeReleaseRunGraph\(action/);
+  assert.doesNotMatch(config, /release-initialization:prepare-context/);
+  assert.doesNotMatch(config, /publish_date/);
+  assert.match(routes, /bootstrapReleasePrepareContext/);
   assert.match(routes, /releaseAgentResultFromWorkspaceRun\(/);
-  const graph = executor.buildCompositeReleaseRunGraph({
-    id: "release-initialization:prepare-context",
-    title: "准备活动发版上下文",
-    promptTemplate: "prepare",
-  }, [], { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" }, {}, { skillRoots: ["/tmp/release-skills"] });
-  assert.equal(graph.meta.prepareContextFastPath, true);
   assert.doesNotMatch(routes, /existingInitializationManifest/);
 });
 
@@ -46,6 +40,63 @@ test("runtime store initial state preserves workflow identity and scope", async 
   assert.equal(state.timeline[0].workflowId, "likee-android-release");
   assert.equal(state.timeline[0].scopeKey, "likee/android/5.63.2/initial");
   assert.deepEqual(state.timeline[0].contextSnapshot, context);
+});
+
+test("release runtime stores one timeline per major version regardless of batch", async () => {
+  const { releaseStateKey, releaseStatePath, readReleaseState, writeReleaseState } = await import("../bin/lib/release-runtime-store.mjs?major-timeline-key");
+  const initial = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const supplemental = { businessLine: "likee", platform: "android", version: "5.64.1", batch: "supplemental" };
+  assert.equal(releaseStateKey(initial, "workspace"), releaseStateKey(supplemental, "workspace"));
+  assert.equal(releaseStatePath("/tmp/release", initial, "workspace"), releaseStatePath("/tmp/release", supplemental, "workspace"));
+  const tempRoot = fs.mkdtempSync("/tmp/release-major-timeline-");
+  writeReleaseState(tempRoot, initial, "workspace", { context: initial, timeline: [{ id: "initial", nodeId: "build-package", contextSnapshot: initial }], pending: [], runs: {} });
+  const loaded = readReleaseState(tempRoot, supplemental, "workspace");
+  assert.equal(loaded.context.batch, "supplemental");
+  assert.equal(loaded.timeline.length, 1);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("runtime state normalizes an omitted batch from a two-level version", async () => {
+  const { emptyReleaseState, readReleaseState, writeReleaseState } = await import("../bin/lib/release-runtime-store.mjs?normalize-major-context");
+  const tempRoot = fs.mkdtempSync("/tmp/release-major-context-");
+  const initial = emptyReleaseState({ businessLine: "likee", platform: "android", version: "5.64" }, "/workspace/likee");
+  assert.equal(initial.context.version, "5.64.0");
+  writeReleaseState(tempRoot, { businessLine: "likee", platform: "android", version: "5.64" }, "workspace", initial);
+  const loaded = readReleaseState(tempRoot, { businessLine: "likee", platform: "android", version: "5.64" }, "workspace");
+  assert.equal(loaded.context.version, "5.64.0");
+  assert.equal(loaded.context.batch, "initial");
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("runtime advances repeated supplemental batches from the minor-version suffix", async () => {
+  const { createSupplementalBatch } = await import("../bin/lib/release-runtime.mjs?repeat-supplemental-batch");
+  const first = createSupplementalBatch({ context: { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" }, timeline: [] });
+  const second = createSupplementalBatch({ context: { ...first.context, batchIndex: undefined }, timeline: first.state.timeline });
+  assert.equal(first.context.version, "5.64.1");
+  assert.equal(second.context.version, "5.64.2");
+  assert.equal(second.context.batchIndex, 2);
+});
+
+test("supplemental initialization defers context execution to the start-supplemental node", async () => {
+  const { emptyReleaseState } = await import("../bin/lib/release-runtime-store.mjs");
+  const context = { businessLine: "likee", platform: "android", version: "5.63.1", batch: "supplemental" };
+  const state = emptyReleaseState(context, "/workspace/likee");
+  assert.equal(state.timeline[0].status, "completed");
+  assert.equal(state.timeline[0].contextPreparationStatus, "deferred");
+});
+
+test("supplemental bootstrap does not run the initial context script", async () => {
+  const { bootstrapReleasePrepareContext } = await import("../bin/lib/release-runtime-executor.mjs?defer-supplemental-bootstrap");
+  const context = { businessLine: "likee", platform: "android", version: "5.63.1", batch: "supplemental" };
+  const state = {
+    context,
+    timeline: [{ nodeId: "release-initialization", status: "completed", contextPreparationStatus: "pending" }],
+    pending: [],
+  };
+  const result = bootstrapReleasePrepareContext(state, context, ["/path/that/must/not/be/executed"]);
+  assert.equal(result.changed, true);
+  assert.equal(result.state.timeline[0].contextPreparationStatus, "deferred");
+  assert.equal(result.state.timeline[0].summary, "补包上下文将在开始补包节点中准备");
 });
 
 test("initialization preparation maps the selected minor version to a root major version", async () => {

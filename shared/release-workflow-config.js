@@ -1,6 +1,27 @@
 const freeze = (value) => Object.freeze(value);
 const normalize = (value) => String(value ?? "").trim().toLowerCase();
 
+// 页面可以只携带大版本；Skill 仍需要完整的小版本来区分首包和补包。
+export function normalizeReleaseMinorVersion(value, fallback = "1.0.0") {
+  const text = String(value ?? "").trim().replace(/^v/i, "");
+  if (/^\d+\.\d+$/.test(text)) return `${text}.0`;
+  return text || fallback;
+}
+
+export function releaseMajorVersion(value, fallback = "1.0") {
+  const text = String(value ?? "").trim().replace(/^v/i, "");
+  const match = text.match(/^(\d+\.\d+)(?:\.\d+)?$/);
+  return match ? match[1] : fallback;
+}
+
+export function inferReleaseBatch(value, explicitBatch = "") {
+  const explicit = normalize(explicitBatch);
+  if (explicit === "initial" || explicit === "supplemental") return explicit;
+  const text = normalizeReleaseMinorVersion(value, "1.0.0");
+  const suffix = Number(text.split(".")[2]);
+  return Number.isInteger(suffix) && suffix > 0 ? "supplemental" : "initial";
+}
+
 const processOrder = ["entry", "localization", "merge-master", "build", "approval", "publish", "rollout", "full-rollout"];
 const processTitles = {
   entry: "发版入口", localization: "多语言处理", "merge-master": "合回 master", build: "构建包",
@@ -46,11 +67,10 @@ const capability = (id, title, description, stageId, batches, skillHints, inputs
 
 // 用户需求点: 复合发版节点只声明能力和提示词，原子 Skill 的编排由 Agent 读取最新 Skill 后完成。
 const capabilityDefinitions = [
-  capability("release-initialization:prepare-context", "准备活动发版上下文", "读取并准备当前业务线、平台、版本和批次的活动发版上下文；已有活动发版时复用，否则按 release-management Skill 的安全流程创建。", "entry", ["initial", "supplemental"], ["release-management", "release-runtime"], [{ key: "publish_date", type: "text", required: false, label: "发布日期", placeholder: "YYYY-MM-DD" }], { requiresConfirmation: false, nodeId: "release-initialization:prepare-context" }),
   capability("localization-upload-notify", "多语言上传 & 通知", "读取 release-localization Skill 维护的当前业务线与平台受审源文件集合，上传全部源多语言并发送通知；文件集合由 Skill 自行发现。", "entry", ["initial"], ["release-localization", "release-notification"]),
   capability("create-release-branch", "创建/复用发版分支", "创建或复用当前版本的 release 分支并登记结果。", "entry", ["initial"], ["release-git", "release-management"], [{ key: "release_branch", type: "text", required: false }]),
-  capability("localization-download-merge-notify", "多语言下载 & 合入代码 & 提交 MR & 通知", "拉回翻译、应用到工程、提交受管理变更并发送通知。", "localization", ["initial"], ["release-localization", "release-git", "release-notification"], [
-    { key: "force_rerun", type: "checkbox", required: false, label: "强制重新下载", placeholder: "忽略历史成功，重新 prepare/apply 并合入" },
+  capability("localization-download-merge-notify", "多语言下载 & 创建 MR", "使用 release-localization 拉回并应用翻译；有变更时由 Skill 内部交接 release-git 完成受管理提交、推送和创建或复用 MR。MR 创建或复用成功即完成，不等待合入，不发送合入通知。", "localization", ["initial"], ["release-localization", "release-git"], [
+    { key: "force_rerun", type: "checkbox", required: false, label: "强制重新下载", placeholder: "忽略历史成功，重新 prepare/apply 并创建或复用 MR" },
   ]),
   capability("merge-release-to-master", "发版分支合回 master", "按 release-git Skill 的安全流程将发版分支合回 master。", "merge-master", ["initial"], ["release-git"]),
   capability("build-package", "构建发版包", "根据当前平台、批次和 Skill 配置构建发版包并记录产物（Android 渠道/商店包，iOS 走 release-build）。", "build", ["initial", "supplemental"], ["release-build", "release-channel-packages", "release-google-play"], [{ key: "build_number", type: "text", required: false, label: "构建号", placeholder: "未填则读活动发版清单" }]),
@@ -58,8 +78,8 @@ const capabilityDefinitions = [
   // 用户需求点: 首包与补包商店发布是不同流程，须拆成独立能力与独立意图，避免 Agent 混用事件。
   capability("initial-publish-and-notify", "首包发布 & 通知", "按首包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["initial"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
   capability("supplemental-publish-and-notify", "补包发布 & 通知", "按补包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
-  // 用户需求点: release-notification 支持进入补包流程通知；补包入口单独触发，编排由 Skill operator-guide 决定。
-  capability("prepare-supplemental-notification", "准备补包通知", "发送进入补包流程通知，告知协作者准备继续补包发布。", "entry", ["supplemental"], ["release-notification", "release-management"]),
+  // 用户需求点: 补包入口必须先触发发版上下文，再发送开始通知；平台时间线没有历史记录也不能阻止执行。
+  capability("start-supplemental-release-notify", "开始补包 & 发送通知", "读取或建立当前补包的发版上下文，完成补包批次准备并发送补包开始通知。", "entry", ["supplemental"], ["release-management", "release-notification"]),
   // 用户需求点: 灰度放量仅 Likee Android；iOS 无此阶段。
   capability("rollout", "放量", "观察灰度指标并按确认要求推进当前版本放量。", "rollout", ["initial", "supplemental"], ["release-gray-observe", "release-metrics", "release-notification"], [
     { key: "gray_percent", type: "text", required: false, label: "目标灰度 %", placeholder: "如 5 / 50 / 100" },
@@ -108,7 +128,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-android-release", title: "Likee Android 发版", businessLines: freeze(["likee"]), platforms: freeze(["android"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["localization-upload-notify", "create-release-branch", "start-supplemental-release-notify"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),
@@ -126,7 +146,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-ios-release", title: "Likee iOS 发版", businessLines: freeze(["likee"]), platforms: freeze(["ios"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["localization-upload-notify", "create-release-branch", "start-supplemental-release-notify"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),

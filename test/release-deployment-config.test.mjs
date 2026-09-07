@@ -18,6 +18,14 @@ test("release deployment config resolves a business/platform project and indepen
   assert.deepEqual(releaseSkillRoots(config, resolved.project, resolved.workspaceRoot), [path.resolve("/opt/release-skills")]);
 });
 
+test("release project config preserves TAPD synchronization settings", async () => {
+  const { readReleaseDeploymentConfig } = await import(`../shared/release-deployment-config.js?tapd-config=${Date.now()}`);
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_RELEASE_PROJECTS_JSON: JSON.stringify({
+    projects: [{ id: "likee-android", businessLine: "likee", platform: "android", workspaceRoot: "/srv/releases/likee-android", tapd: { workspaceId: "33202860", categoryName: "版本", iterationName: "Likee Android", apiBaseUrl: "https://api.tapd.cn", accessTokenEnv: "TAPD_ACCESS_TOKEN", accessToken: "do-not-persist" } }],
+  }) });
+  assert.deepEqual(config.projects[0].tapd, { workspaceId: "33202860", categoryName: "版本", iterationName: "Likee Android", apiBaseUrl: "https://api.tapd.cn", accessTokenEnv: "TAPD_ACCESS_TOKEN" });
+});
+
 test("release deployment config rejects arbitrary paths and malformed production config", async () => {
   const { readReleaseDeploymentConfig, resolveReleaseWorkspace } = await import("../shared/release-deployment-config.js?config-security");
   const config = readReleaseDeploymentConfig({ NODE_ENV: "production", AGENTFLOW_RELEASE_PROJECTS_JSON: "not-json" });

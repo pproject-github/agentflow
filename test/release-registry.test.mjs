@@ -34,6 +34,11 @@ test("createRelease persists and filters by project/platform", () => {
   assert.equal(listed[0].version, "5.64");
 });
 
+test("release versions are shared across authenticated identities", () => {
+  const listed = listReleases({ project: "Likee", platform: "Android", userId: "another-user" });
+  assert.equal(listed.some((item) => item.version === "5.64"), true);
+});
+
 test.after(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });

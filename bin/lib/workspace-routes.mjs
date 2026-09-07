@@ -85,6 +85,7 @@ import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, bootstrapReleasePr
 import { filterDismissedReleasePending, isCustomReleasePendingItem, readReleaseState, reconcileReleaseState, releasePendingDismissalKey, writeReleaseState } from "./release-runtime-store.mjs";
 import { releaseSkillRoots, resolveReleaseWorkspace, assertReleaseSkillRootsConfigured, assertReleaseWriteAccess, buildReleaseAccessPayload } from "../../shared/release-deployment-config.js";
 import { readReleaseDeploymentConfigWithDataRoot } from "./admin-release-projects.mjs";
+import { inferReleaseBatch, normalizeReleaseMinorVersion } from "../../shared/release-workflow-config.js";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -1170,12 +1171,14 @@ function releaseRuntimeRoots(workspacePath = "", deploymentConfig = {}, project 
   return checked.ok ? checked.roots : [];
 }
 
+// 用户需求点: 页面可省略 batch 并只传大版本；权限查询也必须使用与运行态一致的规范化批次。
 function releaseContextFromUrl(url) {
+  const version = normalizeReleaseMinorVersion(url.searchParams.get("version") || "1.0.0");
   return {
     businessLine: String(url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
     platform: /ios|iphone/i.test(String(url.searchParams.get("platform") || "")) ? "ios" : "android",
-    version: String(url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
-    batch: String(url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+    version,
+    batch: inferReleaseBatch(version, url.searchParams.get("batch") || ""),
   };
 }
 
@@ -1347,11 +1350,13 @@ function releaseRunId() {
 
 function releaseRequestContext(url, payload = {}) {
   const source = payload && typeof payload === "object" ? payload : {};
+  const version = normalizeReleaseMinorVersion(source.version || url.searchParams.get("version") || "1.0.0");
+  const explicitBatch = source.batch || url.searchParams.get("batch") || "";
   return {
     businessLine: String(source.businessLine || url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
     platform: /ios|iphone/i.test(String(source.platform || url.searchParams.get("platform") || "")) ? "ios" : "android",
-    version: String(source.version || url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
-    batch: String(source.batch || url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+    version,
+    batch: inferReleaseBatch(version, explicitBatch),
     ...(source.batchIndex != null || url.searchParams.get("batchIndex") != null ? { batchIndex: Number(source.batchIndex ?? url.searchParams.get("batchIndex") ?? 0) || 0 } : {}),
   };
 }

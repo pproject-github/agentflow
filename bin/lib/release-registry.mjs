@@ -31,7 +31,11 @@ function publicRelease(item) { return { ...item }; }
 // 用户需求点: 版本必须按固定项目和平台归属，并持久化供页面真实读写。
 export function listReleases({ project = "", platform = "", query = "", userId = "", isAdmin = false } = {}) {
   const p = normalizeProject(project), pf = normalizePlatform(platform), q = String(query || "").trim().toLowerCase();
-  return Object.values(readRegistry().releases).filter((item) => (isAdmin || !item.ownerId || item.ownerId === userId) && (!p || item.project === p) && (!pf || item.platform === pf) && (!q || String(item.version || "").toLowerCase().includes(q))).sort((a, b) => String(b.releaseDate).localeCompare(String(a.releaseDate))).map(publicRelease);
+  // 用户需求点: 发版版本是团队共享事实，不能因为创建人不同而让其他身份看不到同一版本。
+  return Object.values(readRegistry().releases).filter((item) => (!p || item.project === p) && (!pf || item.platform === pf) && (!q || String(item.version || "").toLowerCase().includes(q))).sort((a, b) => {
+    const dateOrder = String(b.releaseDate).localeCompare(String(a.releaseDate));
+    return dateOrder || String(b.version).localeCompare(String(a.version), undefined, { numeric: true });
+  }).map(publicRelease);
 }
 
 // 用户需求点: 新建版本需要校验两级版本号、项目和平台，避免写入无效数据。
@@ -53,6 +57,57 @@ export function createRelease(input = {}) {
 // 用户需求点: 并发创建版本不能互相覆盖，所有读改写操作必须在进程内串行执行。
 export function createReleaseQueued(input = {}) {
   const task = writeQueue.then(() => createRelease(input));
+  writeQueue = task.catch(() => {});
+  return task;
+}
+
+/**
+ * 用户需求点: TAPD 同步得到的版本需要和手工创建版本共用同一注册表，并按业务线/平台/版本幂等更新。
+ */
+export function upsertReleaseFromTapd(input = {}) {
+  const project = normalizeProject(input.project), platform = normalizePlatform(input.platform);
+  const version = String(input.version || "").trim().replace(/^v/i, "");
+  const releaseDate = String(input.releaseDate || "").trim();
+  const parsedDate = new Date(`${releaseDate}T00:00:00Z`);
+  if (!project || !platform || !/^\d+\.\d+$/.test(version) || !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
+    || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== releaseDate) {
+    return { error: "TAPD 版本数据缺少有效的项目、平台、两级版本号或发版日期", status: 400 };
+  }
+  const id = `${project.toLowerCase()}:${platform.toLowerCase()}:${version}`;
+  const registry = readRegistry();
+  const previous = registry.releases[id];
+  const now = new Date().toISOString();
+  const next = {
+    ...(previous || {}),
+    id,
+    project,
+    platform,
+    version,
+    releaseDate,
+    ...(input.tapdWorkspaceId ? { tapdWorkspaceId: String(input.tapdWorkspaceId) } : {}),
+    ...(input.tapdIterationId ? { tapdIterationId: String(input.tapdIterationId) } : {}),
+    ...(input.tapdIterationName ? { tapdIterationName: String(input.tapdIterationName) } : {}),
+    ...(input.tapdIterationStartDate ? { tapdIterationStartDate: String(input.tapdIterationStartDate) } : {}),
+    ...(input.tapdIterationEndDate ? { tapdIterationEndDate: String(input.tapdIterationEndDate) } : {}),
+    updatedAt: now,
+    ...(previous ? {} : { ownerId: "", progress: 0, status: "planning", createdAt: now }),
+  };
+  const comparable = (value) => {
+    if (!value) return null;
+    const { updatedAt: _updatedAt, ...rest } = value;
+    return rest;
+  };
+  const changed = JSON.stringify(comparable(previous)) !== JSON.stringify(comparable(next));
+  if (changed) {
+    registry.releases[id] = next;
+    writeRegistry(registry);
+  }
+  return { release: publicRelease(next), created: !previous, updated: Boolean(previous && changed), skipped: Boolean(previous && !changed) };
+}
+
+/** 用户需求点: 并发点击 TAPD 同步不能互相覆盖版本注册表。 */
+export function upsertReleaseFromTapdQueued(input = {}) {
+  const task = writeQueue.then(() => upsertReleaseFromTapd(input));
   writeQueue = task.catch(() => {});
   return task;
 }

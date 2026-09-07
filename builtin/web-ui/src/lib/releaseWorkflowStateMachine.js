@@ -7,6 +7,7 @@ import {
   selectReleaseCompositeWorkflow,
   compositeActionIds,
 } from "../../../../shared/release-workflow-config.js";
+import { releaseMajorVersion } from "../../../../shared/release-workflow-config.js";
 
 const PROCESS_ORDER = RELEASE_WORKFLOW_CONFIG.processOrder;
 const PROCESS_TITLES = RELEASE_WORKFLOW_CONFIG.processTitles;
@@ -382,10 +383,16 @@ export function recommendNextProcessNodes({ machine, timeline = [], pending = []
 
 export { PROCESS_ORDER, PROCESS_TITLES };
 
-// 创建补包批次时生成独立状态容器，保留旧批次历史供只读查看。
+// 创建补包批次时沿用同一大版本状态容器，保留所有批次历史供只读查看。
 export function createSupplementalBatch(previous = {}) {
-  const batchIndex = Number(previous.batchIndex ?? previous.context?.batchIndex ?? 0) + 1;
-  const context = { ...(previous.context || {}), batch: "supplemental", batchIndex };
+  const currentVersion = String(previous.context?.version || "1.0.0").trim();
+  const versionSuffix = Number(currentVersion.split(".")[2]);
+  const currentIndex = Number(previous.batchIndex ?? previous.context?.batchIndex);
+  const baseIndex = Number.isInteger(currentIndex) && currentIndex >= 0
+    ? currentIndex
+    : (Number.isInteger(versionSuffix) && versionSuffix > 0 ? versionSuffix : 0);
+  const batchIndex = baseIndex + 1;
+  const context = { ...(previous.context || {}), version: `${releaseMajorVersion(currentVersion)}.${batchIndex}`, batch: "supplemental", batchIndex };
   return {
     context,
     state: {
@@ -393,9 +400,14 @@ export function createSupplementalBatch(previous = {}) {
       context,
       batch: "supplemental",
       batchIndex,
-      timeline: [],
+      // 首包与后续补包共享同一条大版本时间线；当前批次的节点用 batch/version 做执行隔离。
+      timeline: Array.isArray(sourceTimeline(previous)) ? [...sourceTimeline(previous)] : [],
       pending: [],
-      runs: {},
+      runs: { ...(previous.runs || previous.state?.runs || {}) },
     },
   };
+}
+
+function sourceTimeline(previous = {}) {
+  return Array.isArray(previous.timeline) ? previous.timeline : previous.state?.timeline;
 }

@@ -27,7 +27,7 @@ function toWorkflowPlatform(platform) {
   return value;
 }
 
-// 用户需求点: 列表存两级大版本（如 5.64），发版流程页沿用三级版本号。
+// 用户需求点: 列表存两级大版本（如 5.64），流程页内部自动补齐首包小版本。
 function toWorkflowVersion(version) {
   const value = String(version || "").trim().replace(/^v/i, "");
   if (/^\d+\.\d+$/.test(value)) return `${value}.0`;
@@ -39,7 +39,6 @@ function buildWorkflowHref({ project, platform, version }) {
     businessLine: toBusinessLine(project),
     platform: toWorkflowPlatform(platform),
     version: toWorkflowVersion(version),
-    batch: "initial",
   });
   return `/releases/run?${params.toString()}`;
 }
@@ -65,7 +64,7 @@ export default function ReleasesPage() {
       const [metaResponse, dataResponse] = await Promise.all([
         fetch("/api/release/projects", { signal }),
         fetch(
-          `/api/releases?project=${encodeURIComponent(project)}&platform=${encodeURIComponent(platform)}&query=${encodeURIComponent(query)}`,
+          `/api/releases?project=${encodeURIComponent(project)}&platform=${encodeURIComponent(platform)}&query=${encodeURIComponent(query)}${query ? "" : "&syncTapd=1"}`,
           { signal },
         ),
       ]);

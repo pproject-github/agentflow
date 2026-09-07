@@ -3,6 +3,9 @@ import path from "node:path";
 import yaml from "js-yaml";
 import {
   RELEASE_WORKFLOW_CONFIG,
+  inferReleaseBatch,
+  normalizeReleaseMinorVersion,
+  releaseMajorVersion,
   releaseActionProcessMetadata,
   selectReleaseWorkflow,
   workflowActionIds,
@@ -76,19 +79,27 @@ const ACTION_DESCRIPTIONS = Object.freeze({
   "release-notification:send-rollout-notification": "发送灰度或全量发布通知。",
 });
 
-function contextSnapshot({ businessLine = "likee", platform = "android", version = "1.0.0", batch = "initial" } = {}) {
-  return {
+function contextSnapshot({ businessLine = "likee", platform = "android", version = "1.0.0", batch = "", batchIndex } = {}) {
+  const snapshot = {
     businessLine: String(businessLine || "likee").trim().toLowerCase() || "likee",
     platform: String(platform || "android").trim().toLowerCase() || "android",
-    version: String(version || "1.0.0").trim() || "1.0.0",
-    batch: String(batch || "initial").trim().toLowerCase() || "initial",
+    version: normalizeReleaseMinorVersion(version),
+    batch: inferReleaseBatch(version, batch),
   };
+  const normalizedBatchIndex = Number(batchIndex);
+  if (Number.isInteger(normalizedBatchIndex) && normalizedBatchIndex > 0) snapshot.batchIndex = normalizedBatchIndex;
+  return snapshot;
 }
 
 // 用户需求点: 节点只能在初始化选定的业务、平台、版本和批次范围内运行，因此所有运行请求使用同一稳定范围键。
 export function releaseContextKey(context = {}) {
   const snapshot = contextSnapshot(context);
   return [snapshot.businessLine, snapshot.platform, snapshot.version, snapshot.batch].join("/");
+}
+
+export function releaseTimelineKey(context = {}) {
+  const snapshot = contextSnapshot(context);
+  return [snapshot.businessLine, snapshot.platform, releaseMajorVersion(snapshot.version)].join("/");
 }
 
 const RELEASE_SECRET_KEY = /(token|secret|password|passwd|webhook|authorization|cookie|api[-_]?key)/i;
@@ -271,7 +282,14 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
 
 export function createSupplementalBatch(stateInput = {}) {
   const source = stateInput && typeof stateInput === "object" ? stateInput : {};
-  const context = { ...(source.context || {}), batch: "supplemental", batchIndex: Number(source.context?.batchIndex ?? source.batchIndex ?? 0) + 1 };
+  const currentVersion = normalizeReleaseMinorVersion(source.context?.version || "1.0.0");
+  const versionSuffix = Number(currentVersion.split(".")[2]);
+  const currentIndex = Number(source.context?.batchIndex ?? source.batchIndex);
+  const baseIndex = Number.isInteger(currentIndex) && currentIndex >= 0
+    ? currentIndex
+    : (Number.isInteger(versionSuffix) && versionSuffix > 0 ? versionSuffix : 0);
+  const batchIndex = baseIndex + 1;
+  const context = { ...(source.context || {}), version: `${releaseMajorVersion(currentVersion)}.${batchIndex}`, batch: "supplemental", batchIndex };
   return {
     context,
     state: {
@@ -279,9 +297,10 @@ export function createSupplementalBatch(stateInput = {}) {
       context,
       batch: "supplemental",
       batchIndex: context.batchIndex,
-      timeline: [],
+      // 首包与后续补包共享同一条大版本时间线；当前批次节点通过 version/batch 隔离。
+      timeline: Array.isArray(source.timeline) ? [...source.timeline] : [],
       pending: [],
-      runs: {},
+      runs: { ...(source.runs || {}) },
     },
   };
 }

@@ -19,3 +19,9 @@ test("release page derives membership context and switches version via query", (
   assert.match(source, /canWrite/);
   assert.match(source, /无发版操作权限/);
 });
+
+test("release list automatically requests TAPD-backed versions", () => {
+  const source = fs.readFileSync(new URL("../builtin/web-ui/src/pages/ReleasesPage.jsx", import.meta.url), "utf8");
+  assert.match(source, /syncTapd=1/);
+  assert.doesNotMatch(source, /从 TAPD 同步/);
+});

@@ -1,5 +1,5 @@
 import { createReleaseProcessStateMachine, deriveProcessStates, deriveWorkflowCursor, processTitleForId, recommendNextProcessNodes } from "./releaseWorkflowStateMachine.js";
-import { selectReleaseWorkflow } from "../../../../shared/release-workflow-config.js";
+import { inferReleaseBatch, normalizeReleaseMinorVersion, releaseMajorVersion, selectReleaseWorkflow } from "../../../../shared/release-workflow-config.js";
 
 function workspaceValue(workspace) {
   if (typeof workspace === "string") return workspace;
@@ -44,7 +44,7 @@ const RELEASE_ACTION_TITLES = Object.freeze({
   "submit-full-rollout-approval": "全量审核单",
   "initial-publish-and-notify": "首包商店发布并通知",
   "supplemental-publish-and-notify": "补包商店发布并通知",
-  "prepare-supplemental-notification": "准备补包通知",
+  "start-supplemental-release-notify": "开始补包 & 发送通知",
   "rollout": "推进放量",
   "full-rollout": "全量发布并通知",
 });
@@ -126,14 +126,15 @@ export function defaultInputsForNode(node, inputs = {}, context = {}) {
 export function resolveReleaseContext(workspace = {}, params = "") {
   const businessLine = paramValue(params, "businessLine") || workspace?.businessLine || "likee";
   const platformValue = paramValue(params, "platform") || workspace?.platform || "android";
-  const version = paramValue(params, "version") || workspace?.version || workspace?.releaseVersion || "1.0.0";
+  const rawVersion = paramValue(params, "version") || workspace?.version || workspace?.releaseVersion || "1.0.0";
   const explicitBatch = paramValue(params, "batch") || workspace?.batch || "";
+  const version = normalizeReleaseMinorVersion(rawVersion);
   const result = {
     businessLine: String(businessLine).trim().toLowerCase() || "likee",
     platform: /ios|iphone/i.test(String(platformValue)) ? "ios" : "android",
-    version: String(version).trim() || "1.0.0",
+    version,
+    batch: inferReleaseBatch(version, explicitBatch),
   };
-  if (explicitBatch) result.batch = String(explicitBatch).trim().toLowerCase() || "initial";
   return result;
 }
 
@@ -141,6 +142,8 @@ export function resolveReleaseContext(workspace = {}, params = "") {
 export function createInitializationNode(context = {}, workspace) {
   const businessLine = String(context.businessLine || "likee");
   const platform = String(context.platform || "android");
+  // 页面传入的 releaseContext 已由 resolveReleaseContext 规范化；保留直接调用
+  // 该工厂时的旧语义（未提供 batch 视为首包），避免把普通三段版本误标为补包。
   const version = String(context.version || "1.0.0");
   const batch = String(context.batch || "initial");
   const inputs = {
@@ -328,6 +331,31 @@ export function nodeMatchesContext(node, context) {
     && (!snapshot.batch || String(snapshot.batch).toLowerCase() === String(context.batch || "initial").toLowerCase());
 }
 
+// 大版本时间线展示所有批次，状态机计算则只消费当前批次的小版本记录。
+export function releaseTimelineItemMatchesContext(item, context = {}) {
+  if (!item) return false;
+  const snapshot = item.contextSnapshot || {};
+  const scope = String(item.scopeKey || "").split("/");
+  const businessLine = String(context.businessLine || "").toLowerCase();
+  const platform = String(context.platform || "").toLowerCase();
+  const majorVersion = releaseMajorVersion(context.version);
+  if (scope.length >= 3 && scope[0].toLowerCase() === businessLine && scope[1].toLowerCase() === platform) {
+    return releaseMajorVersion(scope[2]) === majorVersion;
+  }
+  return (!snapshot.businessLine || String(snapshot.businessLine).toLowerCase() === businessLine)
+    && (!snapshot.platform || String(snapshot.platform).toLowerCase() === platform)
+    && (!snapshot.version || releaseMajorVersion(snapshot.version) === majorVersion);
+}
+
+export function releaseExecutionItemMatchesContext(item, context = {}) {
+  if (!item) return false;
+  if (item.nodeId === "release-initialization") return true;
+  const snapshot = item.contextSnapshot || {};
+  return (!snapshot.version || String(snapshot.version) === String(context.version))
+    && (!snapshot.batch || String(snapshot.batch).toLowerCase() === String(context.batch || "initial").toLowerCase())
+    && releaseTimelineItemMatchesContext(item, context);
+}
+
 // 用户需求点: 前端推荐节点与自定义候选必须使用当前业务线、平台和批次的共享状态机配置。
 export function seedNextRecommendations(state, nodes = [], config) {
   if (!state || !Array.isArray(nodes) || nodes.length === 0) return state;
@@ -341,7 +369,9 @@ export function seedNextRecommendations(state, nodes = [], config) {
     if (!preparationDone) return state;
   }
   const initializationTimeline = timeline.find((item) => item?.nodeId === "release-initialization") || timeline[0];
+  if (["pending", "waiting", "failed"].includes(String(initializationTimeline?.contextPreparationStatus || "").toLowerCase())) return state;
   const context = state.context || initializationTimeline?.contextSnapshot || initializationTimeline?.inputs || {};
+  const scopedTimeline = timeline.filter((item) => releaseExecutionItemMatchesContext(item, context));
   const machine = createReleaseProcessStateMachine({
     context,
     config,
@@ -362,12 +392,14 @@ export function seedNextRecommendations(state, nodes = [], config) {
   const dismissedNodeIds = Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : [];
   const recommendations = systemPending.length > 0
     ? []
-    : recommendNextProcessNodes({ machine, timeline, pending: eligiblePending, excludedNodeIds: dismissedNodeIds });
-  const processStates = Object.fromEntries(deriveProcessStates({ machine, timeline, pending: eligiblePending }));
-  const workflowCursor = deriveWorkflowCursor({ machine, timeline, pending: eligiblePending });
+    : recommendNextProcessNodes({ machine, timeline: scopedTimeline, pending: eligiblePending, excludedNodeIds: dismissedNodeIds });
+  const processStates = Object.fromEntries(deriveProcessStates({ machine, timeline: scopedTimeline, pending: eligiblePending }));
+  const workflowCursor = deriveWorkflowCursor({ machine, timeline: scopedTimeline, pending: eligiblePending });
   const workflowId = machine.workflowId || machine.workflow?.id || "";
   if (recommendations.length === 0) return { ...state, processStates, workflowCursor, workflowId };
-  const existingNodeIds = new Set(pending.map((item) => item.nodeId));
+  // pending 与大版本时间线共用存储；首包遗留的待办不能阻止补包在当前批次
+  // 重新推荐同一能力（例如 build-package / rollout）。
+  const existingNodeIds = new Set(eligiblePending.map((item) => item.nodeId));
   const fresh = recommendations.filter((node) => node?.id && !existingNodeIds.has(node.id));
   if (fresh.length === 0) return { ...state, processStates, workflowCursor, workflowId };
   return {
