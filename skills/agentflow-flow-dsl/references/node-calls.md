@@ -14,7 +14,7 @@
 | `context.workspace` | workspaceId:text, access:text | workspaceContext:text |
 | `control.cdWorkspace` | path:text, label:text, knowledgeContext:text, workspaceContext:text | knowledgeContext:text, workspaceContext:text, cwd:file |
 | `control.if` | prediction:bool | — |
-| `control.interrupt` | value:text, reason:text, resumeSchema:text, resumeToken:text | resume:text, interruptId:text |
+| `control.interrupt` | value:text, reason:text, resumeSchema:text, resumeToken:text, approvers:text, approvalMode:text | resume:text, interruptId:text |
 | `control.loadMcp` | serverNames:text | mcpContext:text |
 | `control.loadSkills` | skillKeys:text | skillsContext:text |
 | `control.parseJson` | value:text | result:json |

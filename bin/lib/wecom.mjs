@@ -1,3 +1,45 @@
+// 企业微信按 UTF-8 字节数限长，超一个字节就整条 40058 打回：群机器人 markdown 4096、应用消息 2048。
+const WECOM_GROUP_MARKDOWN_MAX_BYTES = 4096;
+const WECOM_APP_MARKDOWN_MAX_BYTES = 2048;
+// 多段时每段要加 "（i/n）\n" 前缀，预留够宽的余量。
+const WECOM_CHUNK_LABEL_RESERVE_BYTES = 24;
+
+function utf8Bytes(text) {
+  return Buffer.byteLength(String(text ?? ""), "utf8");
+}
+
+// 返回在 maxBytes 预算内能容纳的最长前缀长度（按码点切，不切碎字符）。
+function takeWithinBytes(text, maxBytes) {
+  let bytes = 0;
+  let end = 0;
+  for (const ch of text) {
+    const size = utf8Bytes(ch);
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += ch.length;
+  }
+  return end;
+}
+
+export function chunkMarkdownByBytes(content, maxBytes) {
+  if (utf8Bytes(content) <= maxBytes) return [content];
+  const budget = Math.max(1, maxBytes - WECOM_CHUNK_LABEL_RESERVE_BYTES);
+  const chunks = [];
+  let rest = content;
+  while (utf8Bytes(rest) > budget) {
+    let end = takeWithinBytes(rest, budget);
+    if (end <= 0) end = 1;
+    // 尽量在换行处断开，但不要为了对齐行边界把这一段切得太短。
+    const newline = rest.lastIndexOf("\n", end - 1);
+    if (newline > 0 && newline >= Math.floor(end / 2)) end = newline + 1;
+    chunks.push(rest.slice(0, end).replace(/\s+$/, ""));
+    rest = rest.slice(end).replace(/^\n+/, "");
+  }
+  if (rest.trim()) chunks.push(rest);
+  const total = chunks.length;
+  return chunks.map((chunk, index) => `（${index + 1}/${total}）\n${chunk}`);
+}
+
 function requireValue(value, name) {
   const text = String(value || "").trim();
   if (!text) throw new Error(`${name} is required`);
@@ -53,18 +95,29 @@ function assertWecomOk(json, action) {
 export async function sendWecomGroupMarkdown(params = {}, env = {}) {
   const content = requireValue(params.markdown ?? params.content, "markdown");
   const webhookUrl = buildWebhookUrl(params.webhookUrl, params.webhookKey, env);
-  const json = await requestJson(webhookUrl, {
-    method: "POST",
-    body: JSON.stringify({
-      msgtype: "markdown",
-      markdown: { content },
-    }),
-  });
-  assertWecomOk(json, "send wecom group markdown");
+  const chunks = chunkMarkdownByBytes(content, WECOM_GROUP_MARKDOWN_MAX_BYTES);
+  const responses = [];
+  for (const [index, chunk] of chunks.entries()) {
+    const action = chunks.length > 1
+      ? `send wecom group markdown part ${index + 1}/${chunks.length}`
+      : "send wecom group markdown";
+    const json = await requestJson(webhookUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        msgtype: "markdown",
+        markdown: { content: chunk },
+      }),
+    });
+    assertWecomOk(json, action);
+    responses.push(json);
+  }
   return {
     ok: true,
-    message: "企业微信群 Markdown 已发送",
-    response: json,
+    message: chunks.length > 1
+      ? `企业微信群 Markdown 已分 ${chunks.length} 段发送`
+      : "企业微信群 Markdown 已发送",
+    parts: chunks.length,
+    response: chunks.length > 1 ? responses : responses[0],
   };
 }
 
@@ -84,19 +137,30 @@ export async function sendWecomAppMarkdown(params = {}, env = {}) {
   const agentId = Number(agentIdRaw);
   if (!Number.isFinite(agentId) || agentId <= 0) throw new Error(`Invalid agentId: ${agentIdRaw}`);
   const accessToken = String(params.accessToken || "").trim() || await getWecomAccessToken(params, env);
-  const json = await requestJson(`https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(accessToken)}`, {
-    method: "POST",
-    body: JSON.stringify({
-      touser: toUser,
-      msgtype: "markdown",
-      agentid: agentId,
-      markdown: { content },
-    }),
-  });
-  assertWecomOk(json, "send wecom app markdown");
+  const chunks = chunkMarkdownByBytes(content, WECOM_APP_MARKDOWN_MAX_BYTES);
+  const responses = [];
+  for (const [index, chunk] of chunks.entries()) {
+    const action = chunks.length > 1
+      ? `send wecom app markdown part ${index + 1}/${chunks.length}`
+      : "send wecom app markdown";
+    const json = await requestJson(`https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(accessToken)}`, {
+      method: "POST",
+      body: JSON.stringify({
+        touser: toUser,
+        msgtype: "markdown",
+        agentid: agentId,
+        markdown: { content: chunk },
+      }),
+    });
+    assertWecomOk(json, action);
+    responses.push(json);
+  }
   return {
     ok: true,
-    message: "企业微信应用 Markdown 已发送",
-    response: json,
+    message: chunks.length > 1
+      ? `企业微信应用 Markdown 已分 ${chunks.length} 段发送`
+      : "企业微信应用 Markdown 已发送",
+    parts: chunks.length,
+    response: chunks.length > 1 ? responses : responses[0],
   };
 }

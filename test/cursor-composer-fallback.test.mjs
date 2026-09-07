@@ -417,8 +417,8 @@ test("Cursor adds --force only for trusted unattended execution", async () => {
   assert.equal(calls[1].args.includes("--force"), true, "trusted unattended execution must approve tools");
 });
 
-test("Cursor rejects a final success after a required tool was rejected or errored", async () => {
-  const modes = ["tool-rejected", "tool-error", "interaction-rejected"];
+test("Cursor rejects a final success after a required tool was rejected", async () => {
+  const modes = ["tool-rejected", "interaction-rejected"];
   const previousCommand = process.env.CURSOR_AGENT_CMD;
   try {
     for (const mode of modes) {
@@ -432,10 +432,53 @@ test("Cursor rejects a final success after a required tool was rejected or error
           MOCK_CURSOR_MODE: mode,
         },
       });
-      await assert.rejects(handle.finished, /Required tool .* (?:rejected|denied|error)/i, mode);
+      await assert.rejects(handle.finished, /Required tool .* rejected/i, mode);
     }
   } finally {
     restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+  }
+});
+
+// 用户需求点: shell 的非 0 退出（git status 探路、grep 没命中、文件不存在）是 Agent 能自行恢复的
+// 常态，不该在 Agent 已经交出最终结果之后回头把整个 run 判死。
+test("Cursor keeps a final success after a mutating tool fails and the Agent recovers", async () => {
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  const previousMode = process.env.MOCK_CURSOR_MODE;
+  const fixture = createMockCursorAgent();
+  try {
+    resetCursorApiKeyPoolForTests();
+    clearCursorModelCatalogCache();
+    process.env.CURSOR_AGENT_CMD = fixture.command;
+    process.env.MOCK_CURSOR_MODE = "shell-tool-failure";
+    const handle = runCursorAgentWithPrompt(fixture.directory, "Probe the repo and produce the result.", {
+      env: { MOCK_CURSOR_MODE: "shell-tool-failure", MOCK_CURSOR_LOG: fixture.logPath },
+    });
+    await assert.doesNotReject(handle.finished);
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+    restoreEnv("MOCK_CURSOR_MODE", previousMode);
+  }
+});
+
+test("Cursor fails on a tool failure with no final result and reports the shell exit code", async () => {
+  const previousCommand = process.env.CURSOR_AGENT_CMD;
+  const previousMode = process.env.MOCK_CURSOR_MODE;
+  const fixture = createMockCursorAgent();
+  try {
+    resetCursorApiKeyPoolForTests();
+    clearCursorModelCatalogCache();
+    process.env.CURSOR_AGENT_CMD = fixture.command;
+    process.env.MOCK_CURSOR_MODE = "shell-tool-failure-no-result";
+    const handle = runCursorAgentWithPrompt(fixture.directory, "Probe the repo and stop.", {
+      env: { MOCK_CURSOR_MODE: "shell-tool-failure-no-result", MOCK_CURSOR_LOG: fixture.logPath },
+    });
+    await assert.rejects(
+      handle.finished,
+      /Required tool shellToolCall exit 128: fatal: not a git repository/i,
+    );
+  } finally {
+    restoreEnv("CURSOR_AGENT_CMD", previousCommand);
+    restoreEnv("MOCK_CURSOR_MODE", previousMode);
   }
 });
 
@@ -507,6 +550,10 @@ if (mode === "tool-rejected") {
 }
 if (mode === "tool-error") {
   console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { mcpToolCall: { result: { error: { message: "denied" } } } } }));
+}
+if (mode === "shell-tool-failure" || mode === "shell-tool-failure-no-result") {
+  console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { shellToolCall: { args: { command: "git status" }, result: { failure: { command: "git status", exitCode: 128, signal: "", stdout: "fatal: not a git repository", stderr: "" } } } } }));
+  if (mode === "shell-tool-failure-no-result") process.exit(0);
 }
 if (mode === "read-only-tool-error") {
   console.log(JSON.stringify({ type: "tool_call", subtype: "completed", tool_call: { readToolCall: { result: { error: { message: "not found" } } } } }));

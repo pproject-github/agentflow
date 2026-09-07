@@ -250,3 +250,55 @@ test("does not recover a missing or invalid result artifact", (t) => {
   fs.writeFileSync(runPackage.resultFileAbs, "not html", "utf-8");
   assert.equal(workspaceRecoverAgentLoopingOutput(error, runPackage), null);
 });
+
+// 用户需求点: 节点面对两套都以 outputs/ 开头的路径命名空间（AGENTFLOW_OUTPUTS_DIR 与发布后的
+// outputs/<nodeId>/），Agent 多写或漏写 nodeId 段时产物已经落地，不该判成"没产出"。
+test("publishes a durable result written into the legacy outputs/<nodeId>/ layout", (t) => {
+  const runPackage = createDurableRunPackage(t);
+  const strayDir = path.join(runPackage.nodeRunDir, "outputs", "subAgent_5");
+  fs.mkdirSync(strayDir, { recursive: true });
+  fs.writeFileSync(path.join(strayDir, "result.md"), "stray but real", "utf-8");
+  const structured = workspaceStructuredAgentOutput([
+    "---agentflow",
+    "resultFile: outputs/result.md",
+    "---end",
+  ].join("\n"));
+  const materialized = workspaceMaterializeAgentResultFile(structured, runPackage);
+  const published = workspacePublishAgentOutputFiles(materialized, runPackage);
+  assert.equal(published.resultFile, "outputs/subAgent_5/result.md");
+  assert.equal(fs.readFileSync(path.join(runPackage.outputsDir, "result.md"), "utf-8"), "stray but real");
+});
+
+test("publishes a durable result declared with the published outputs/<nodeId>/ prefix", (t) => {
+  const runPackage = createDurableRunPackage(t);
+  fs.writeFileSync(path.join(runPackage.outputsDir, "result.md"), "declared with node prefix", "utf-8");
+  const structured = workspaceStructuredAgentOutput([
+    "---agentflow",
+    "resultFile: outputs/subAgent_5/result.md",
+    "---end",
+  ].join("\n"));
+  const materialized = workspaceMaterializeAgentResultFile(structured, runPackage);
+  const published = workspacePublishAgentOutputFiles(materialized, runPackage);
+  assert.equal(published.resultFile, "outputs/subAgent_5/result.md");
+  assert.equal(
+    fs.readFileSync(path.join(runPackage.outputsDir, "result.md"), "utf-8"),
+    "declared with node prefix",
+  );
+  assert.equal(fs.existsSync(path.join(runPackage.outputsDir, "subAgent_5")), false);
+});
+
+test("keeps a real output subdirectory that happens to match the node id", (t) => {
+  const runPackage = createDurableRunPackage(t);
+  const realSubDir = path.join(runPackage.outputsDir, "subAgent_5");
+  fs.mkdirSync(realSubDir, { recursive: true });
+  fs.writeFileSync(path.join(realSubDir, "result.md"), "real subdirectory", "utf-8");
+  const structured = workspaceStructuredAgentOutput([
+    "---agentflow",
+    "resultFile: outputs/subAgent_5/result.md",
+    "---end",
+  ].join("\n"));
+  const materialized = workspaceMaterializeAgentResultFile(structured, runPackage);
+  const published = workspacePublishAgentOutputFiles(materialized, runPackage);
+  assert.equal(published.resultFile, "outputs/subAgent_5/subAgent_5/result.md");
+  assert.equal(fs.readFileSync(path.join(realSubDir, "result.md"), "utf-8"), "real subdirectory");
+});
