@@ -9136,7 +9136,9 @@ function WorkspacePageInner() {
   const instancesRef = useRef({});
   const subflowsRef = useRef({});
   const [activeSubflowId, setActiveSubflowId] = useState("");
-  const [activeSubflowRole, setActiveSubflowRole] = useState("");
+  // Navigation history for nested subflows. Keep this separate from the graph so
+  // entering/leaving a child canvas never mutates the parent flow definition.
+  const [subflowStack, setSubflowStack] = useState([]);
   const loadedRef = useRef(false);
   const saveTimerRef = useRef(null);
   const workspaceRevisionRef = useRef("");
@@ -12745,13 +12747,26 @@ function WorkspacePageInner() {
       setStatus("子流程不存在");
       return;
     }
+    const nextRole = String(role || "");
+    setSubflowStack((current) => {
+      const next = current.slice();
+      const last = next[next.length - 1];
+      if (!last || last.id !== id || last.role !== nextRole) next.push({ id, role: nextRole });
+      return next;
+    });
     setActiveSubflowId(id);
-    setActiveSubflowRole(String(role || ""));
     setSelectedNodeId("");
     setConnectionMenu(null);
     setComposerSidebarOpen(false);
     window.setTimeout(() => reactFlow.fitView({ padding: 0.16, duration: 320 }), 0);
   }, [reactFlow]);
+
+  // A different flow must always start at its root canvas; never carry a
+  // breadcrumb from the previous workspace into a newly loaded graph.
+  useEffect(() => {
+    setSubflowStack([]);
+    setActiveSubflowId("");
+  }, [flowParams.flowId]);
 
   const focusSubflowNode = useCallback((nodeId) => {
     const id = String(nodeId || "").trim();
@@ -12769,13 +12784,24 @@ function WorkspacePageInner() {
     }, 0);
   }, [reactFlow, setNodes]);
 
-  const exitSubflowEditor = useCallback(() => {
-    setActiveSubflowId("");
-    setActiveSubflowRole("");
+  const navigateSubflowBreadcrumb = useCallback((index) => {
+    const targetIndex = Number(index);
+    if (!Number.isInteger(targetIndex) || targetIndex < -1) return;
+    if (targetIndex < 0) {
+      setSubflowStack([]);
+      setActiveSubflowId("");
+    } else {
+      setSubflowStack((current) => current.slice(0, targetIndex + 1));
+      setActiveSubflowId(subflowStack[targetIndex]?.id || "");
+    }
     setSelectedNodeId("");
     setConnectionMenu(null);
     window.setTimeout(() => reactFlow.fitView({ padding: 0.12, duration: 320 }), 0);
-  }, [reactFlow]);
+  }, [reactFlow, subflowStack]);
+
+  const exitSubflowEditor = useCallback(() => {
+    navigateSubflowBreadcrumb(-1);
+  }, [navigateSubflowBreadcrumb]);
 
   const changeNodeInputValue = useCallback((nodeId, inputName, value) => {
     if (!workspaceWritable) return;
@@ -16411,15 +16437,30 @@ function WorkspacePageInner() {
         >
           {activeSubflowId ? (
             <div className="af-subflow-editor-bar nodrag">
-              <button type="button" onClick={exitSubflowEditor}>
-                <span className="material-symbols-outlined" aria-hidden>arrow_back</span>
-                父流程
+              <button type="button" onClick={exitSubflowEditor} title="返回父流程">
+                <span className="material-symbols-outlined" aria-hidden>account_tree</span>
+                工作流
               </button>
-              <span className="af-subflow-editor-bar__separator">/</span>
-              <span className="af-subflow-editor-bar__kind">WHILE</span>
-              <strong>{activeSubflowRole === "condition" ? "Condition" : activeSubflowRole === "body" ? "Body" : "Subflow"}</strong>
-              <span className="af-subflow-editor-bar__separator">·</span>
-              <span>{activeSubflow?.label || activeSubflowId}</span>
+              {subflowStack.map((entry, index) => {
+                const label = subflowsRef.current?.[entry.id]?.label || entry.id;
+                const roleLabel = entry.role === "condition" ? "Condition" : entry.role === "body" ? "Body" : "Subflow";
+                const current = index === subflowStack.length - 1;
+                return (
+                  <React.Fragment key={`${entry.id}:${index}`}>
+                    <span className="af-subflow-editor-bar__separator">/</span>
+                    <button
+                      type="button"
+                      className={current ? "af-subflow-editor-bar__crumb af-subflow-editor-bar__crumb--current" : "af-subflow-editor-bar__crumb"}
+                      onClick={() => navigateSubflowBreadcrumb(index)}
+                      aria-current={current ? "page" : undefined}
+                      title={current ? "当前子流程" : `返回 ${label}`}
+                    >
+                      <span className="af-subflow-editor-bar__kind">{roleLabel}</span>
+                      <strong>{label}</strong>
+                    </button>
+                  </React.Fragment>
+                );
+              })}
               <em>拖入节点会自动加入当前子流程；连接 START / RETURN 即定义契约</em>
             </div>
           ) : null}

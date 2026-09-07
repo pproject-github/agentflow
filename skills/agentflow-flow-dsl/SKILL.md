@@ -218,7 +218,8 @@ export const run = flow("Run", read, advance, show);
 - `flow.subflow(label, inputs, flow(...), outputs)` 的输入值引用 `flow.input`，输出值引用内部节点输出。
 - `flow.call(label, subflow, pins)` 是父流程里的真实控制节点，动态引脚由契约生成。
 - 禁止父流程和内部节点直接跨边界连线；所有值必须经过 `flow.call`。
-- 禁止递归调用。当前第一版也不允许子流程内部 `wait/deferred`；调用帧恢复能力补齐前会明确失败。
+- 禁止递归调用。子流程内部可以触发 `wait/deferred`；运行时会把等待冒泡到父流程的
+  `flow.call` 节点，并在同一 `callFrameId` 下保存 checkpoint，恢复后继续执行。
 - Context 需要跨边界时，显式声明 `const contextIn = flow.input("context", "context")`，加入子流程
   inputs，并由父图 `flow.call(..., { context: prdContext })` 传入；禁止直接从父图连接内部 Agent。
 

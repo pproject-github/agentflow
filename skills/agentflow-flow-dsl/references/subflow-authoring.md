@@ -61,7 +61,8 @@ export const run = flow("Run", callInspect, showSummary);
 - 每个契约输出绑定内部成员节点的输出槽。
 - `flow.call(label, subflow, pins)` 是父流程里的真实执行节点；动态数据引脚来自子流程契约。
 - 一个内部节点只能属于一个子流程。禁止直接跨边界连线、跨子流程连线和递归调用。
-- 当前子流程内部不接受 `wait/deferred`。需要暂停 While 时，由 Condition 返回 `wait`。
+- 子流程内部可以使用 `control.interrupt` 或支持 deferred 的节点。等待会冒泡为父流程
+  `flow.call` 的 waiting 状态，并复用同一调用帧恢复；While 仍应由 Condition 返回 `wait`。
 
 执行上下文跨子流程时使用强类型契约，不要拆回四根文本线，也不要跨边界直连：
 
