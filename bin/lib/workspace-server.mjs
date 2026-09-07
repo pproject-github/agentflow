@@ -2829,18 +2829,38 @@ function workspaceNodeOutputCandidates(runPackage, relPath) {
   const legacy = runPackage?.nodeRunDir
     ? workspaceResolveOutputChild(runPackage.nodeRunDir, clean)
     : "";
-  const ordered = runPackage?.directWorkspaceOutputs ? [direct, legacy] : [legacy, direct];
+  // 节点面对两套都以 outputs/ 开头的命名空间：AGENTFLOW_OUTPUTS_DIR（节点私有，槽位名相对它）
+  // 与发布后的 outputs/<nodeId>/（Workspace Files 的相对路径）。Agent 经常把 nodeId 段多写或漏写，
+  // 产物明明已经落地却被判成没产出，所以两种写法都认。
+  const nodePart = workspaceSanitizeTmpSegment(runPackage?.nodeId || "node", "node");
+  const suffixParts = suffix.split("/").filter(Boolean);
+  const suffixWithoutNode = suffixParts[0] === nodePart ? suffixParts.slice(1).join("/") : "";
+  const directWithoutNode = runPackage?.outputsDir && suffixWithoutNode
+    ? workspaceResolveOutputChild(runPackage.outputsDir, suffixWithoutNode)
+    : "";
+  const legacyWithNode = runPackage?.nodeRunDir && suffix
+    ? workspaceResolveOutputChild(runPackage.nodeRunDir, path.posix.join("outputs", nodePart, suffix))
+    : "";
+  const ordered = runPackage?.directWorkspaceOutputs
+    ? [direct, directWithoutNode, legacy, legacyWithNode]
+    : [legacy, legacyWithNode, direct, directWithoutNode];
   return ordered.filter((candidate, index, list) => candidate && list.indexOf(candidate) === index);
 }
 
 function workspaceDescribeNodeOutputsDir(runPackage, maxEntries = 30) {
+  // 两个 root 的条目以前都被印成 outputs/xxx，看起来像"文件就在期望位置"，
+  // 和上一行的 Expected file 自相矛盾。按 root 分别标注。
   const outputDirs = [
-    runPackage?.outputsDir,
-    runPackage?.nodeRunDir ? path.resolve(runPackage.nodeRunDir, "outputs") : "",
-  ].filter((dir, index, list) => dir && list.indexOf(dir) === index && fs.existsSync(dir));
+    { dir: runPackage?.outputsDir ? path.resolve(runPackage.outputsDir) : "", label: "AGENTFLOW_OUTPUTS_DIR" },
+    {
+      dir: runPackage?.nodeRunDir ? path.resolve(runPackage.nodeRunDir, "outputs") : "",
+      label: "AGENTFLOW_NODE_RUN_DIR/outputs",
+    },
+  ].filter((entry, index, list) =>
+    entry.dir && list.findIndex((other) => other.dir === entry.dir) === index && fs.existsSync(entry.dir));
   if (!outputDirs.length) return "Current node outputs directory is missing.";
   const entries = [];
-  const walk = (dir, rel = "") => {
+  const walk = (dir, label, rel = "") => {
     if (entries.length >= maxEntries) return;
     let children = [];
     try {
@@ -2851,14 +2871,14 @@ function workspaceDescribeNodeOutputsDir(runPackage, maxEntries = 30) {
     for (const child of children) {
       if (entries.length >= maxEntries) break;
       const childRel = rel ? path.posix.join(rel, child.name) : child.name;
-      entries.push(child.isDirectory() ? `${childRel}/` : childRel);
-      if (child.isDirectory()) walk(path.join(dir, child.name), childRel);
+      entries.push(`${label}/${childRel}${child.isDirectory() ? "/" : ""}`);
+      if (child.isDirectory()) walk(path.join(dir, child.name), label, childRel);
     }
   };
-  for (const outputDir of outputDirs) walk(outputDir);
+  for (const outputDir of outputDirs) walk(outputDir.dir, outputDir.label);
   if (!entries.length) return "Current node outputs directory is empty.";
   const suffix = entries.length >= maxEntries ? `\n...showing first ${maxEntries} entries` : "";
-  return `Current node outputs entries:\n${entries.map((entry) => `- outputs/${entry}`).join("\n")}${suffix}`;
+  return `Current node outputs entries:\n${entries.map((entry) => `- ${entry}`).join("\n")}${suffix}`;
 }
 
 function workspacePublishNodeOutputFile(runPackage, relPath) {
@@ -2879,7 +2899,17 @@ function workspacePublishNodeOutputFile(runPackage, relPath) {
     );
   }
   const nodePart = workspaceSanitizeTmpSegment(runPackage?.nodeId || "node", "node");
-  const destRel = workspaceNodeOutputSuffix(clean);
+  const rawDestRel = workspaceNodeOutputSuffix(clean);
+  const rawDestParts = rawDestRel.split("/").filter(Boolean);
+  // 声明路径按字面就能命中时（含真有个与 nodeId 同名的子目录）保持原样；只有靠"多写了一段 nodeId"
+  // 的宽容匹配才落地的，才把那段去掉，免得发布成 outputs/<nodeId>/<nodeId>/x。
+  const literalMatch = [
+    runPackage?.outputsDir ? workspaceResolveOutputChild(runPackage.outputsDir, rawDestRel) : "",
+    runPackage?.nodeRunDir ? workspaceResolveOutputChild(runPackage.nodeRunDir, clean) : "",
+  ].includes(src);
+  const destRel = !literalMatch && rawDestParts[0] === nodePart && rawDestParts.length > 1
+    ? rawDestParts.slice(1).join("/")
+    : rawDestRel;
   const publishedBase = String(runPackage?.outputsRel || "").trim() || path.posix.join("outputs", nodePart);
   const publishedRel = path.posix.join(publishedBase, ...destRel.split("/").filter(Boolean));
   const dest = runPackage?.directWorkspaceOutputs && runPackage?.outputsDir
