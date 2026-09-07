@@ -11,7 +11,7 @@ input:
     name: markdown
     default: ""
     required: true
-    description: "企业微信机器人 markdown.content。请输出企业微信 Markdown 正文，不要包裹 agentflow envelope 或额外解释；支持标题、列表、链接、引用、代码等企业微信 Markdown 子集。"
+    description: "企业微信机器人 markdown.content。请输出企业微信 Markdown 正文，不要包裹 agentflow envelope 或额外解释；支持标题、列表、链接、引用、代码等企业微信 Markdown 子集。超过企业微信 4096 字节上限时会自动按行拆成多条依次发送。"
     showOnNode: true
   - type: text
     name: webhookUrl

@@ -11,7 +11,7 @@ input:
     name: markdown
     default: ""
     required: true
-    description: "企业微信应用消息 markdown.content。请输出企业微信 Markdown 正文，不要包裹 agentflow envelope 或额外解释；适合通知、告警、任务摘要等个人消息。"
+    description: "企业微信应用消息 markdown.content。请输出企业微信 Markdown 正文，不要包裹 agentflow envelope 或额外解释；适合通知、告警、任务摘要等个人消息。超过企业微信 2048 字节上限时会自动按行拆成多条依次发送。"
     showOnNode: true
   - type: text
     name: toUser
