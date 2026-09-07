@@ -101,7 +101,24 @@ function cursorToolResultErrorText(value) {
     const text = cursorToolResultErrorText(candidate);
     if (text) return text;
   }
-  return "";
+  return cursorShellFailureText(value);
+}
+
+// shellToolCall 的 failure 结构是 {command, exitCode, signal, stdout, stderr}，
+// 没有 message/error 字段；不单独解释就只剩一个没有信息量的 "error"。
+function cursorShellFailureText(value) {
+  if (!value || typeof value !== "object") return "";
+  const signal = typeof value.signal === "string" ? value.signal.trim() : "";
+  const rawExit = value.exitCode;
+  const exitCode = rawExit === "" || rawExit == null ? null : Number(rawExit);
+  const output = [value.stderr, value.stdout]
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .find((entry) => entry) || "";
+  const parts = [];
+  if (signal) parts.push(`killed by ${signal}`);
+  else if (Number.isFinite(exitCode)) parts.push(`exit ${exitCode}`);
+  if (output) parts.push(output.replace(/\s+/g, " ").slice(-200));
+  return parts.join(": ");
 }
 
 function cursorRejectedStatus(value) {
@@ -134,13 +151,13 @@ function cursorRequiredToolFailure(event) {
     for (const [key, nested] of Object.entries(value)) {
       if (key === "result" && nested && typeof nested === "object") {
         if (nested.rejected === true || cursorRejectedStatus(nested.status) || cursorRejectedStatus(nested.state)) {
-          return { toolName, reason: "rejected" };
+          return { toolName, reason: "rejected", rejected: true };
         }
         if (nested.error) {
-          return { toolName, reason: cursorToolResultErrorText(nested.error) || "error" };
+          return { toolName, reason: cursorToolResultErrorText(nested.error) || "error", rejected: false };
         }
         if (nested.failure) {
-          return { toolName, reason: cursorToolResultErrorText(nested.failure) || "error" };
+          return { toolName, reason: cursorToolResultErrorText(nested.failure) || "error", rejected: false };
         }
       }
       if (nested && typeof nested === "object") queue.push(nested);
@@ -150,7 +167,7 @@ function cursorRequiredToolFailure(event) {
     normalizedToolName === "interactionquery"
     && (cursorRejectedStatus(event.subtype) || cursorInteractionQueryRejected(toolPayload))
   ) {
-    return { toolName, reason: "rejected" };
+    return { toolName, reason: "rejected", rejected: true };
   }
   return null;
 }
@@ -170,6 +187,15 @@ function isCursorReadOnlyToolCall(toolName = "") {
   const name = String(toolName || "").trim().replace(/[-_]/g, "");
   if (!name) return false;
   return /^(read|glob|grep|search|semanticsearch|list|find|fetch|websearch|webfetch|view|inspect)/i.test(name);
+}
+
+// 只有"被拒绝"才说明 Agent 压根没能力做这件事，它通常会闷声给一个空洞的 success。
+// 工具自身报错（shell 非 0 退出、grep 没命中、文件不存在……）是 Agent 能自行恢复的常态，
+// 只有它最终没交出结果时才算失败；被拒绝的只读工具同样可以被最终结果覆盖。
+function cursorToolFailureIsFatal(failure, { hasResult = false } = {}) {
+  if (!failure) return false;
+  if (!hasResult) return true;
+  return Boolean(failure.rejected) && !isCursorReadOnlyToolCall(failure.toolName);
 }
 
 function annotateCursorFailure(error, { hadToolActivity = false, hadMutatingToolActivity = false } = {}) {
@@ -656,13 +682,12 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
           const toolFailure = cursorRequiredToolFailure(event);
           if (toolFailure && !requiredToolFailure) {
             requiredToolFailure = toolFailure;
-            const readOnlyToolFailure = isCursorReadOnlyToolCall(toolFailure.toolName);
             emit({
               type: "natural",
-              kind: readOnlyToolFailure ? "warning" : "error",
-              text: readOnlyToolFailure
-                ? `Optional read-only tool ${toolFailure.toolName} ${toolFailure.reason}; continuing.`
-                : `Required tool ${toolFailure.toolName} ${toolFailure.reason}.`,
+              kind: cursorToolFailureIsFatal(toolFailure, { hasResult: true }) ? "error" : "warning",
+              text: cursorToolFailureIsFatal(toolFailure, { hasResult: true })
+                ? `Required tool ${toolFailure.toolName} ${toolFailure.reason}.`
+                : `Optional tool ${toolFailure.toolName} ${toolFailure.reason}; continuing.`,
             });
           }
           const statusLine = `工具 ${toolName}${subtype ? ` (${subtype})` : ""}`;
@@ -862,8 +887,7 @@ export function runCursorAgentWithPrompt(cliWorkspace, promptText, options = {})
       }
       if (requiredToolFailure) {
         const message = `Required tool ${requiredToolFailure.toolName} ${requiredToolFailure.reason}.`;
-        const readOnlyToolFailure = isCursorReadOnlyToolCall(requiredToolFailure.toolName);
-        if (!readOnlyToolFailure || !lastResult) {
+        if (cursorToolFailureIsFatal(requiredToolFailure, { hasResult: Boolean(lastResult) })) {
           emit({ type: "status", line: truncateComposerLine(message) });
           reject(annotateFailure(new Error(message)));
           return;
